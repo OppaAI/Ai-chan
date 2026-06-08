@@ -6,6 +6,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 ---
 
 ## Phase 1 — Soul ✅
+![Phase 1](../assets/phase-1.0.png)
 
 *The foundation. A working local AI companion you can have a real conversation with.*
 
@@ -22,6 +23,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 ---
 
 ## Phase 1.5 — Stream ✅
+![Phase 1.5](../assets/phase-1.5.png)
 
 *Make the experience feel alive. Replace the CLI with a full curses TUI and overhaul the streaming pipeline.*
 
@@ -46,6 +48,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 ---
 
 ## Phase 2 — Voice 🔲
+![Phase 2](../assets/phase-2.0.png)
 
 *Go fully hands-free. Aiko listens and speaks without any keyboard involvement.*
 
