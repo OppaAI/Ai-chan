@@ -15,7 +15,7 @@
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04_LTS-orange?logo=ubuntu&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900?logo=nvidia)
 
-![Aiko-chan](assets/phase-1.5.png)
+![Aiko-chan](assets/phase-2.0.png)
 
 ---
 
