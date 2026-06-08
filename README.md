@@ -22,8 +22,9 @@ This project currently serves as:
 | Document | Description |
 |---|---|
 | [docs/INSTALL.md](docs/INSTALL.md) | Step-by-step installation for every component |
-| [docs/TESTS.md](docs/TESTS.md) | Manual smoke-test checklist for each phase |
+| [docs/HISTORY.md](docs/HISTORY.md) | How Aiko evolved from a chatbot into a companion |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Detailed phase-by-phase feature roadmap |
+| [docs/TESTS.md](docs/TESTS.md) | Manual smoke-test checklist for each phase |
 
 ---
 
