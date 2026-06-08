@@ -304,14 +304,15 @@
         // Each axis uses a different irrational frequency so they never sync
         let t = 0; // global idle time accumulator
 
-        // Resting pose offsets — VRM1 upper arms point down the Y axis in bind pose,
-        // so we rotate them DOWN with a negative x tilt and gentle z pinch inward.
-        // Tune z values if arms still flare: more negative = closer to body sides.
-        const REST = {
-            leftUpperArm: { x: 0.1, z: -1.2 },  // pull left arm down toward side
-            rightUpperArm: { x: 0.1, z: 1.2 },  // pull right arm down toward side
-            leftLowerArm: { z: -0.1, x: 0.2 },  // slight natural forearm hang
-            rightLowerArm: { z: 0.1, x: 0.2 },
+        // Resting pose — arms held behind back (parade rest / hands clasped)
+        // Upper arms swing back and slightly inward; lower arms bend toward each other behind hips
+        const REST = window._REST = {
+            leftUpperArm: { x: -1.1, z: -0.6 },  // swing back + inward
+            rightUpperArm: { x: -1.1, z: 0.6 },
+            leftLowerArm: { x: -0.5, z: -0.4 },  // forearm crosses behind hips
+            rightLowerArm: { x: -0.5, z: 0.4 },
+            leftHand: { y: 0.4 },             // palms face each other
+            rightHand: { y: -0.4 },
         };
 
         function applyIdle(dt) {
@@ -358,16 +359,26 @@
             const rUA = get('rightUpperArm');
             const lLA = get('leftLowerArm');
             const rLA = get('rightLowerArm');
-            if (lUA) lUA.rotation.z = REST.leftUpperArm.z + Math.sin(t * 0.47) * 0.018;
-            if (rUA) rUA.rotation.z = REST.rightUpperArm.z + Math.sin(t * 0.53 + 0.9) * 0.018;
+            const lH = get('leftHand');
+            const rH = get('rightHand');
+            if (lUA) {
+                lUA.rotation.x = REST.leftUpperArm.x + Math.sin(t * 0.47) * 0.012; // subtle sway
+                lUA.rotation.z = REST.leftUpperArm.z + Math.sin(t * 0.41) * 0.008;
+            }
+            if (rUA) {
+                rUA.rotation.x = REST.rightUpperArm.x + Math.sin(t * 0.53 + 0.9) * 0.012;
+                rUA.rotation.z = REST.rightUpperArm.z + Math.sin(t * 0.37 + 0.7) * 0.008;
+            }
             if (lLA) {
-                lLA.rotation.z = REST.leftLowerArm.z + Math.sin(t * 0.61) * 0.012;
-                lLA.rotation.x = REST.leftLowerArm.x + Math.sin(t * 0.37) * 0.008;
+                lLA.rotation.x = REST.leftLowerArm.x + Math.sin(t * 0.61) * 0.010;
+                lLA.rotation.z = REST.leftLowerArm.z + Math.sin(t * 0.43) * 0.006;
             }
             if (rLA) {
-                rLA.rotation.z = REST.rightLowerArm.z + Math.sin(t * 0.57 + 1.4) * 0.012;
-                rLA.rotation.x = REST.rightLowerArm.x + Math.sin(t * 0.43 + 0.5) * 0.008;
+                rLA.rotation.x = REST.rightLowerArm.x + Math.sin(t * 0.57 + 1.4) * 0.010;
+                rLA.rotation.z = REST.rightLowerArm.z + Math.sin(t * 0.51 + 0.5) * 0.006;
             }
+            if (lH) lH.rotation.y = REST.leftHand.y + Math.sin(t * 0.33) * 0.008; // fingers settle
+            if (rH) rH.rotation.y = REST.rightHand.y + Math.sin(t * 0.29 + 1.2) * 0.008;
         }
 
         function applyBlink(dt) {
@@ -437,6 +448,8 @@
                 fill.style.width = '95%';
                 loadMsg.textContent = 'building model…';
                 vrm = gltf.userData.vrm;
+                window._vrm = vrm; // expose for console debugging
+                window._REST = REST;   // expose REST so console can live-tune pose
 
                 // v3: removeUnnecessaryVertices is the only VRMUtils call needed;
                 // combineSkeletons and rotateVRM0 were removed — v3 handles both internally
