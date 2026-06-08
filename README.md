@@ -19,7 +19,7 @@
 
 ## Demo
 
-> Click the thumbnail to watch on YouTube ▶
+> Click the following image to watch on YouTube ▶
 
 [![Watch the demo](https://img.youtube.com/vi/9ZkuYCL6vP0/maxresdefault.jpg)](https://www.youtube.com/watch?v=9ZkuYCL6vP0)
  
