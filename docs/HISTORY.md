@@ -32,6 +32,7 @@ That observation shaped every phase that followed.
 ---
 
 # Phase 1 — Soul
+![Phase 1](../assets/phase-1.0.png)
 
 Goal:
 
@@ -55,6 +56,7 @@ Lessons learned:
 ---
 
 # Phase 1.5 — Stream
+![Phase 1.5](../assets/phase-1.5.png)
 
 Goal:
 
@@ -80,6 +82,7 @@ Lessons learned:
 ---
 
 # Phase 2 — Voice
+![Phase 2](../assets/phase-2.0.png)
 
 Goal:
 
