@@ -587,6 +587,18 @@ class _MemoryBackend:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def get_since(self, since: datetime, user_id: str = USER_ID) -> list[dict]:
+        """Return memories created on or after `since`, newest first."""
+        rows = self._conn.execute(
+            """
+            SELECT * FROM memories
+            WHERE user_id = ? AND created_at >= ?
+            ORDER BY created_at DESC
+            """,
+            (user_id, since.isoformat()),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     # ── delete ────────────────────────────────────────────────────────────────
 
     def delete(self, memory_id: str) -> None:
