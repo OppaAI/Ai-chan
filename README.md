@@ -81,7 +81,7 @@ flowchart TD
 
 ## Quickstart
 
-**Prerequisites:** Python 3.12, [uv](https://astral.sh/uv), CUDA 12.6, Docker + Compose, [Ollama](https://ollama.com), a pulled chat model (7B+ recommended).
+**Prerequisites:** Python 3.12, [uv](https://astral.sh/uv), CUDA 12.6, Docker + Compose, [Ollama](https://ollama.com), a pulled chat model (3B+ recommended).
 
 > Full installation walkthrough → **[docs/INSTALL.md](docs/INSTALL.md)**
 
