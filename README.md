@@ -3,6 +3,18 @@
 > A local-first AI companion with a curses TUI, persistent memory, web search, microphone input, and MioTTS voice output.
 > Optimised for constrained hardware — runs on a Jetson Orin Nano with 8 GB VRAM.
 
+**Author:** [OppaAI](https://github.com/OppaAI) · Beautiful British Columbia, Canada
+ 
+[![Repo](https://img.shields.io/badge/Repo-OppaAI%2FAiko--chan-967BB6?logo=github&logoColor=white)](https://github.com/OppaAI/Aiko-chan)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+![Status](https://img.shields.io/badge/Status-experimental-orange.svg)
+
+ 
+![LLM](https://img.shields.io/badge/Model-Ministral--3B-967BB6?logo=ai&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
+![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04_LTS-orange?logo=ubuntu&logoColor=white)
+![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900?logo=nvidia)
+
 ![Aiko-chan](assets/phase-1.5.png)
 
 ---
@@ -63,7 +75,7 @@ flowchart TD
 
 ## Quickstart
 
-**Prerequisites:** Python 3.10, [uv](https://astral.sh/uv), Docker + Compose, [Ollama](https://ollama.com), a pulled chat model (7B+ recommended).
+**Prerequisites:** Python 3.12, [uv](https://astral.sh/uv), CUDA 12.6, Docker + Compose, [Ollama](https://ollama.com), a pulled chat model (7B+ recommended).
 
 > Full installation walkthrough → **[docs/INSTALL.md](docs/INSTALL.md)**
 
