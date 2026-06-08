@@ -304,12 +304,14 @@
         // Each axis uses a different irrational frequency so they never sync
         let t = 0; // global idle time accumulator
 
-        // Resting pose offsets applied on top of procedural motion
+        // Resting pose offsets — VRM1 upper arms point down the Y axis in bind pose,
+        // so we rotate them DOWN with a negative x tilt and gentle z pinch inward.
+        // Tune z values if arms still flare: more negative = closer to body sides.
         const REST = {
-            leftUpperArm: { z: 0.42 },  // arm hanging naturally
-            rightUpperArm: { z: -0.42 },
-            leftLowerArm: { z: 0.08, x: 0.12 },
-            rightLowerArm: { z: -0.08, x: 0.12 },
+            leftUpperArm: { x: 0.1, z: -1.2 },  // pull left arm down toward side
+            rightUpperArm: { x: 0.1, z: 1.2 },  // pull right arm down toward side
+            leftLowerArm: { z: -0.1, x: 0.2 },  // slight natural forearm hang
+            rightLowerArm: { z: 0.1, x: 0.2 },
         };
 
         function applyIdle(dt) {
