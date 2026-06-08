@@ -3,7 +3,7 @@
 > A local-first AI companion with a curses TUI, persistent memory, web search, microphone input, and MioTTS voice output.
 > Optimised for constrained hardware — runs on a Jetson Orin Nano with 8 GB VRAM.
 
-![Aiko-chan](assets/phase-1.5.jpg)
+![Aiko-chan](assets/phase-1.5.png)
 
 ---
 
