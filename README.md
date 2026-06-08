@@ -15,8 +15,14 @@
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04_LTS-orange?logo=ubuntu&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900?logo=nvidia)
 
-![Aiko-chan](assets/phase-2.0.png)
+---
 
+## Demo
+
+> Click the thumbnail to watch on YouTube ▶
+
+[![Watch the demo](https://img.youtube.com/vi/9ZkuYCL6vP0/maxresdefault.jpg)](https://www.youtube.com/watch?v=9ZkuYCL6vP0)
+ 
 ---
 
 ## Purpose
