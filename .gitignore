@@ -218,8 +218,9 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Aiko specific
-Aiko.mp3
-Aiko.mp4
-Aiko.wav
+*.mp3
+*.mp4
+*.wav
 logs/
 models/
+node_modules/

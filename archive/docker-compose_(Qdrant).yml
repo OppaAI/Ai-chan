@@ -1,0 +1,29 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.1
+    container_name: aiko_qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+
+  searxng:
+    image: searxng/searxng:2026.5.31-300695de5
+    container_name: aiko_searxng
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    env_file:
+      - .env
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8081
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+
+volumes:
+  qdrant_data:

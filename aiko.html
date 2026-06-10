@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Aiko-chan</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0a0f;
+            font-family: 'Courier New', monospace;
+            color: #c8b8e8;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 20px;
+            background: linear-gradient(180deg, rgba(10, 10, 15, 0.95) 0%, transparent 100%);
+            pointer-events: none;
+        }
+
+        #title {
+            font-size: 13px;
+            letter-spacing: 0.2em;
+            color: #9b7fd4;
+            text-transform: uppercase;
+        }
+
+        #status-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 11px;
+            color: #5a4a7a;
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #2a1a4a;
+            transition: background 0.3s;
+        }
+
+        .status-dot.connected {
+            background: #7b4fd4;
+            box-shadow: 0 0 6px #7b4fd4;
+        }
+
+        .status-dot.speaking {
+            background: #c87bd4;
+            box-shadow: 0 0 8px #c87bd4;
+            animation: pulse 0.6s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1
+            }
+
+            50% {
+                opacity: 0.5
+            }
+        }
+
+        #canvas-container {
+            flex: 1;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        #overlay {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 16px 24px;
+            background: linear-gradient(0deg, rgba(10, 10, 15, 0.9) 0%, transparent 100%);
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 16px;
+            pointer-events: none;
+        }
+
+        #emotion-display {
+            font-size: 11px;
+            color: #5a4a7a;
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            transition: color 0.3s;
+        }
+
+        #emotion-display.active {
+            color: #9b7fd4;
+        }
+
+        #log {
+            font-size: 10px;
+            color: #3a2a5a;
+            text-align: right;
+            max-width: 300px;
+            line-height: 1.6;
+        }
+
+        #load-overlay {
+            position: fixed;
+            inset: 0;
+            background: #0a0a0f;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 100;
+            transition: opacity 0.8s;
+        }
+
+        #load-overlay.fade {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        #load-title {
+            font-size: 24px;
+            letter-spacing: 0.3em;
+            color: #9b7fd4;
+            text-transform: uppercase;
+        }
+
+        #load-sub {
+            font-size: 11px;
+            color: #4a3a6a;
+            letter-spacing: 0.2em;
+        }
+
+        #progress-bar {
+            width: 200px;
+            height: 1px;
+            background: #1a1a2f;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #progress-fill {
+            height: 100%;
+            background: #7b4fd4;
+            width: 0%;
+            transition: width 0.3s;
+            box-shadow: 0 0 8px #7b4fd4;
+        }
+
+        #ws-hint {
+            font-size: 10px;
+            color: #3a2a5a;
+            text-align: center;
+            line-height: 1.8;
+        }
+
+        #ws-hint span {
+            color: #5a4a8a;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="load-overlay">
+        <div id="load-title">Aiko-chan</div>
+        <div id="load-sub">VRM VIEWER // OPPAAI</div>
+        <div id="progress-bar">
+            <div id="progress-fill"></div>
+        </div>
+        <div id="load-msg" style="font-size:10px;color:#3a2a5a;letter-spacing:0.15em;">initializing…</div>
+        <div id="ws-hint">
+            WebSocket listens on <span>ws://localhost:8765</span><br>
+            send JSON: <span>{"expression":"happy","intensity":0.8}</span><br>
+            or lipsync: <span>{"viseme":"A","weight":0.6}</span>
+        </div>
+    </div>
+
+    <div id="header">
+        <div id="title">Aiko-chan · OppaAI</div>
+        <div id="status-bar">
+            <div class="status-dot" id="ws-dot"></div>
+            <span id="ws-label">ws offline</span>
+            <div class="status-dot" id="speak-dot"></div>
+            <span id="speak-label">idle</span>
+        </div>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <div id="overlay">
+        <div id="emotion-display">—</div>
+        <div id="log"></div>
+    </div>
+
+    <script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.min.js"
+  }
+}
+</script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+        const canvas = document.getElementById('canvas');
+        const container = document.getElementById('canvas-container');
+        const fill = document.getElementById('progress-fill');
+        const loadMsg = document.getElementById('load-msg');
+
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.setClearColor(0x0a0a0f);
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+        camera.position.set(0, 1.4, 3.2);
+
+        const controls = new OrbitControls(camera, canvas);
+        controls.target.set(0, 1.2, 0);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.08;
+        controls.minDistance = 0.8;
+        controls.maxDistance = 8;
+        controls.update();
+
+        scene.add(new THREE.AmbientLight(0xc8b0ff, 0.6));
+        const dir = new THREE.DirectionalLight(0xffffff, 1.2);
+        dir.position.set(1, 3, 2); scene.add(dir);
+        const rim = new THREE.DirectionalLight(0x7b4fd4, 0.4);
+        rim.position.set(-2, 1, -1); scene.add(rim);
+        const fillL = new THREE.DirectionalLight(0xd4b0ff, 0.3);
+        fillL.position.set(0, -1, 2); scene.add(fillL);
+        scene.add(new THREE.GridHelper(10, 20, 0x1a0a2a, 0x100820));
+
+        function resize() {
+            const w = container.clientWidth, h = container.clientHeight;
+            renderer.setSize(w, h, false);
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        let vrm = null;
+        const clock = new THREE.Clock();
+
+        // --- Expression state ---
+        const exprTargets = {}, exprCurrent = {};
+        const EXPR_LERP = 6;
+
+        // Auto-return to neutral if Python goes quiet
+        let exprResetTimer = null;
+        const EXPR_RESET_DELAY = 4000; // ms
+
+        // --- Blink state ---
+        let blinkTimer = 0;
+        let blinkPhase = 'wait'; // 'wait' | 'closing' | 'opening'
+        let blinkT = 0;
+        const BLINK_CLOSE_DUR = 0.07;  // seconds to close
+        const BLINK_OPEN_DUR = 0.10;  // seconds to open
+        function nextBlinkWait() {
+            // random 3–7s, irrational so it never feels like a loop
+            return 3.0 + Math.random() * 4.0;
+        }
+        blinkTimer = nextBlinkWait();
+
+        // --- Idle procedural animation ---
+        // Each axis uses a different irrational frequency so they never sync
+        let t = 0; // global idle time accumulator
+
+        // Resting pose — arms held behind back (parade rest / hands clasped)
+        // Upper arms swing back and slightly inward; lower arms bend toward each other behind hips
+        const REST = window._REST = {
+            leftUpperArm: { x: -1.1, z: -0.6 },  // swing back + inward
+            rightUpperArm: { x: -1.1, z: 0.6 },
+            leftLowerArm: { x: -0.5, z: -0.4 },  // forearm crosses behind hips
+            rightLowerArm: { x: -0.5, z: 0.4 },
+            leftHand: { y: 0.4 },             // palms face each other
+            rightHand: { y: -0.4 },
+        };
+
+        function applyIdle(dt) {
+            if (!vrm || !vrm.humanoid) return;
+            t += dt;
+
+            const h = vrm.humanoid;
+            const get = name => h.getRawBoneNode(name);
+
+            // Breathing — chest expansion + belly
+            const breath = Math.sin(t * 0.83) * 0.013;
+            const chest = get('chest');
+            const spine = get('spine');
+            if (chest) chest.rotation.x = breath;
+            if (spine) spine.rotation.x = breath * 0.5;
+
+            // Hip sway — slow side-to-side + subtle forward rock
+            const hips = get('hips');
+            if (hips) {
+                hips.rotation.z = Math.sin(t * 0.41) * 0.012;
+                hips.rotation.x = Math.sin(t * 0.67) * 0.008;
+                hips.position.x = Math.sin(t * 0.41) * 0.003; // tiny lateral drift
+            }
+
+            // Head — slow wander, occasional tilt; counter-rotates hips slightly
+            const head = get('head');
+            if (head) {
+                head.rotation.y = Math.sin(t * 0.31) * 0.055   // slow look around
+                    + Math.sin(t * 1.13) * 0.012;  // micro-jitter
+                head.rotation.z = Math.sin(t * 0.27 + 1.1) * 0.018  // gentle tilt
+                    + Math.sin(t * 0.71) * 0.006;
+                head.rotation.x = Math.sin(t * 0.53) * 0.012;  // slight nod
+            }
+
+            // Neck — follows head at reduced scale
+            const neck = get('neck');
+            if (neck && head) {
+                neck.rotation.y = head.rotation.y * 0.3;
+                neck.rotation.z = head.rotation.z * 0.3;
+            }
+
+            // Arms — rest offset + subtle drift (weight-shift feel)
+            const lUA = get('leftUpperArm');
+            const rUA = get('rightUpperArm');
+            const lLA = get('leftLowerArm');
+            const rLA = get('rightLowerArm');
+            const lH = get('leftHand');
+            const rH = get('rightHand');
+            if (lUA) {
+                lUA.rotation.x = REST.leftUpperArm.x + Math.sin(t * 0.47) * 0.012; // subtle sway
+                lUA.rotation.z = REST.leftUpperArm.z + Math.sin(t * 0.41) * 0.008;
+            }
+            if (rUA) {
+                rUA.rotation.x = REST.rightUpperArm.x + Math.sin(t * 0.53 + 0.9) * 0.012;
+                rUA.rotation.z = REST.rightUpperArm.z + Math.sin(t * 0.37 + 0.7) * 0.008;
+            }
+            if (lLA) {
+                lLA.rotation.x = REST.leftLowerArm.x + Math.sin(t * 0.61) * 0.010;
+                lLA.rotation.z = REST.leftLowerArm.z + Math.sin(t * 0.43) * 0.006;
+            }
+            if (rLA) {
+                rLA.rotation.x = REST.rightLowerArm.x + Math.sin(t * 0.57 + 1.4) * 0.010;
+                rLA.rotation.z = REST.rightLowerArm.z + Math.sin(t * 0.51 + 0.5) * 0.006;
+            }
+            if (lH) lH.rotation.y = REST.leftHand.y + Math.sin(t * 0.33) * 0.008; // fingers settle
+            if (rH) rH.rotation.y = REST.rightHand.y + Math.sin(t * 0.29 + 1.2) * 0.008;
+        }
+
+        function applyBlink(dt) {
+            if (!vrm || !vrm.expressionManager) return;
+            const em = vrm.expressionManager;
+
+            if (blinkPhase === 'wait') {
+                blinkTimer -= dt;
+                if (blinkTimer <= 0) {
+                    blinkPhase = 'closing';
+                    blinkT = 0;
+                }
+            } else if (blinkPhase === 'closing') {
+                blinkT += dt;
+                const w = Math.min(blinkT / BLINK_CLOSE_DUR, 1.0);
+                try { em.setValue('blink', w); } catch (_) { }
+                if (blinkT >= BLINK_CLOSE_DUR) { blinkPhase = 'opening'; blinkT = 0; }
+            } else if (blinkPhase === 'opening') {
+                blinkT += dt;
+                const w = 1.0 - Math.min(blinkT / BLINK_OPEN_DUR, 1.0);
+                try { em.setValue('blink', w); } catch (_) { }
+                if (blinkT >= BLINK_OPEN_DUR) {
+                    blinkPhase = 'wait';
+                    blinkTimer = nextBlinkWait();
+                    try { em.setValue('blink', 0); } catch (_) { }
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.05); // cap dt to avoid jump on tab-switch
+            controls.update();
+            if (vrm) {
+                vrm.update(dt);
+
+                // Lerp expression targets
+                const em = vrm.expressionManager;
+                if (em) {
+                    for (const [name, target] of Object.entries(exprTargets)) {
+                        const cur = exprCurrent[name] ?? 0;
+                        const next = cur + (target - cur) * Math.min(1, EXPR_LERP * dt);
+                        exprCurrent[name] = next;
+                        // blink is driven separately — don't clobber it
+                        if (name !== 'blink') {
+                            try { em.setValue(name, next); } catch (_) { }
+                        }
+                    }
+                }
+
+                applyBlink(dt);
+                applyIdle(dt);
+            }
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        const loader = new GLTFLoader();
+        loader.register(parser => new VRMLoaderPlugin(parser));
+
+        loadMsg.textContent = 'loading Aiko.vrm…';
+        fill.style.width = '5%';
+
+        loader.load(
+            './assets/Aiko.vrm',
+            (gltf) => {
+                fill.style.width = '95%';
+                loadMsg.textContent = 'building model…';
+                vrm = gltf.userData.vrm;
+                window._vrm = vrm; // expose for console debugging
+                window._REST = REST;   // expose REST so console can live-tune pose
+
+                // v3: removeUnnecessaryVertices is the only VRMUtils call needed;
+                // combineSkeletons and rotateVRM0 were removed — v3 handles both internally
+                VRMUtils.removeUnnecessaryVertices(vrm.scene);
+
+                vrm.scene.traverse(o => { if (o.frustumCulled) o.frustumCulled = false; });
+                scene.add(vrm.scene);
+
+                if (vrm.expressionManager) {
+                    vrm.expressionManager.expressions.forEach(ex => {
+                        exprTargets[ex.expressionName] = 0;
+                        exprCurrent[ex.expressionName] = 0;
+                    });
+                }
+                fill.style.width = '100%';
+                document.getElementById('log').textContent = 'loaded: Aiko.vrm';
+                setTimeout(() => {
+                    const ov = document.getElementById('load-overlay');
+                    ov.classList.add('fade');
+                    setTimeout(() => ov.style.display = 'none', 800);
+                }, 300);
+            },
+            (prog) => {
+                const p = prog.total ? prog.loaded / prog.total : 0;
+                fill.style.width = (5 + p * 88) + '%';
+            },
+            (err) => {
+                loadMsg.textContent = 'error: ' + err.message;
+                console.error('[aiko-vrm]', err);
+            }
+        );
+
+        // Expression / viseme API
+        const VISEME = { A: 'aa', I: 'ih', U: 'ou', E: 'ee', O: 'oh' };
+
+        window.aikoSetExpression = (name, intensity = 1.0) => {
+            // clear all expression targets except blink (driven separately)
+            for (const k of Object.keys(exprTargets)) {
+                if (k !== 'blink') exprTargets[k] = 0;
+            }
+            if (name && name !== 'neutral') exprTargets[name] = intensity;
+
+            const el = document.getElementById('emotion-display');
+            el.textContent = name ? `${name} · ${Math.round(intensity * 100)}%` : '—';
+            el.className = (name && name !== 'neutral') ? 'active' : '';
+
+            // auto-return to neutral after delay if Python goes quiet
+            clearTimeout(exprResetTimer);
+            if (name && name !== 'neutral') {
+                exprResetTimer = setTimeout(() => {
+                    window.aikoSetExpression('neutral');
+                }, EXPR_RESET_DELAY);
+            }
+        };
+
+        window.aikoSetViseme = (viseme, weight = 1.0) => {
+            const v = VISEME[viseme] ?? viseme;
+            ['aa', 'ih', 'ou', 'ee', 'oh'].forEach(k => exprTargets[k] = 0);
+            exprTargets[v] = weight;
+            const dot = document.getElementById('speak-dot');
+            const lbl = document.getElementById('speak-label');
+            dot.className = 'status-dot speaking';
+            lbl.textContent = viseme;
+            clearTimeout(window._vt);
+            window._vt = setTimeout(() => {
+                dot.className = 'status-dot';
+                lbl.textContent = 'idle';
+            }, 300);
+        };
+
+        // WebSocket
+        function connectWS() {
+            const ws = new WebSocket('ws://localhost:8765');
+            const dot = document.getElementById('ws-dot');
+            const lbl = document.getElementById('ws-label');
+            ws.onopen = () => { dot.className = 'status-dot connected'; lbl.textContent = 'ws connected'; };
+            ws.onmessage = (e) => {
+                try {
+                    const msg = JSON.parse(e.data);
+                    if (msg.expression !== undefined) window.aikoSetExpression(msg.expression, msg.intensity ?? 1.0);
+                    if (msg.viseme !== undefined) window.aikoSetViseme(msg.viseme, msg.weight ?? 1.0);
+                } catch (_) { }
+            };
+            ws.onclose = () => { dot.className = 'status-dot'; lbl.textContent = 'ws offline'; setTimeout(connectWS, 3000); };
+            ws.onerror = () => ws.close();
+        }
+        connectWS();
+    </script>
+</body>
+
+</html>

@@ -9,13 +9,14 @@ Usage — call start() once during Aiko startup (e.g. in UI):
 The scheduler runs in a background daemon thread and fires dream() at midnight.
 It does NOT block startup or conversation flow.
 
-VRAM safety:
-    dream() does zero LLM calls — only Qdrant vector ops and mem0 deletes.
-    No Ollama contention. Safe to fire even if a conversation is mid-flight,
-    though a _dream_lock flag is checked to avoid overlapping passes.
+ VRAM safety:
+     dream() does zero LLM calls — only sqlite-vec ops and memory deletes.
+     No Ollama contention. Safe to fire even if a conversation is mid-flight,
+     though a _dream_lock flag is checked to avoid overlapping passes.
 """
 
 from datetime import datetime, timedelta, timezone
+import os
 import threading
 import time
 
@@ -55,9 +56,30 @@ def _dream_loop(memorize) -> None:
             log.info(f"Firing dream() at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             result = memorize.dream()
             log.info(f"Pass complete: {result}")
-            memories = memorize.get_all()
-            yesterday = datetime.now(timezone.utc) - timedelta(days=1)
-            generate_and_post(memories, date=yesterday)
+            
+            # anchor: yesterday 00:00 UTC
+            yesterday_start = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            
+            # get yesterday's memories first, sorted newest-first
+            memories = memorize.get_since(yesterday_start)
+            
+            # backfill with older memories if yesterday was quiet
+            if len(memories) < int(os.getenv("REFLECT_MAX_MEMS", 20)):
+                seen_ids  = {m["id"] for m in memories}
+                all_mems  = sorted(
+                    memorize.get_all(),
+                    key=lambda m: m.get("created_at", ""),
+                    reverse=True,
+                )
+                for m in all_mems:
+                    if m["id"] not in seen_ids:
+                        memories.append(m)
+                    if len(memories) >= int(os.getenv("REFLECT_MAX_MEMS", 20)):
+                        break
+            
+            generate_and_post(memories, date=yesterday_start)
         except Exception as e:
             log.error(f"dream() raised: {e}")
         finally:

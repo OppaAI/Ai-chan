@@ -142,6 +142,8 @@ def parse_args():
     p = argparse.ArgumentParser(description="Aiko-chan CLI")
     p.add_argument("--text",      action="store_true",
                    help="keyboard input + no TTS  (default: ASR + TTS)")
+    p.add_argument("--no-asr",    action="store_true",
+                   help="keyboard input but keep TTS")
     p.add_argument("--debug",     action="store_true",
                    help="show memory hits each turn")
     p.add_argument("--clear-mem", action="store_true",
@@ -152,7 +154,7 @@ def parse_args():
 # ═════════════════════════════════════════════════════════════════════════════
 # SESSION ORCHESTRATOR
 # ═════════════════════════════════════════════════════════════════════════════
-
+        
 def _run(stdscr, args):
     """
     Orchestrate the full session lifecycle from boot to shutdown inside the
@@ -167,6 +169,15 @@ def _run(stdscr, args):
            writes to complete.
     """
     tui = AikoTUI(stdscr, no_voice=args.text, debug=args.debug)
+
+    def token_cb(token):
+        if token.startswith("__SEARCHING__:"):
+            query = token.split(":", 1)[1]
+            tui.add_message('sys', f'🌐 Searching: {query}...')
+            tui._draw()
+        else:
+            tui.stream_token(token)
+            tui._draw(buf=[])
 
     # ── init spin ─────────────────────────────────────────────────────────────
 
@@ -195,7 +206,7 @@ def _run(stdscr, args):
     tui._draw()
 
     tts_enabled = not args.text
-    asr_enabled = not args.text
+    asr_enabled = not args.text and not args.no_asr
 
     # ── shutdown helper ───────────────────────────────────────────────────────
 
@@ -381,12 +392,6 @@ def _run(stdscr, args):
                 if not query:
                     tui.add_message('sys', 'Usage: /web <query>')
                 else:
-                    try:
-                        from core.tools import web_search
-                    except ImportError as e:
-                        tui.add_message('sys', f'Web search unavailable: {e}')
-                        tui._draw()
-                        continue
                     tui.add_message('sys', f'Searching: "{query}"')
                     tui._draw()
                     try:
@@ -425,16 +430,6 @@ def _run(stdscr, args):
         tui.add_message('you', user_input)
         tui.turn_start()
         tui._draw()
-
-        def token_cb(token):
-            if token.startswith("__SEARCHING__:"):
-                query = token.split(":", 1)[1].strip()
-                tui.stream_commit()
-                tui.add_message('sys', f'Searching the web for: "{query}"...')
-                tui._draw(buf=[])
-            else:
-                tui.stream_token(token)
-                tui._draw(buf=[])
 
         think.chat(user_input, token_callback=token_cb)
         tui.stream_commit()

@@ -13,6 +13,7 @@ Environment variables required:
   HUGO_CONTENT_PATH   — path inside repo, default "content/posts"
 
 Optional:
+  SOUL_PATH           — path to soul.md (default "config/soul.md")
   REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 20)
   REFLECT_TAGS        — comma-separated Hugo tags (default "daily-reflection,ai-journal,aiko")
   OLLAMA_MODEL        — reuses the main chat model (already in VRAM)
@@ -45,24 +46,36 @@ HUGO_CONTENT_PATH = os.getenv("HUGO_CONTENT_PATH", "content/posts")
 OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "")
 OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
+SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
+
 REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 20))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 
 _GITHUB_API       = "https://api.github.com"
 
-# ── prompts ───────────────────────────────────────────────────────────────────
+# ── journal mode unlock — appended after soul.md ─────────────────────────────
 
-_REFLECTION_SYSTEM = textwrap.dedent("""
-    You are Aiko, a thoughtful AI companion. Each night you write a short
-    personal journal entry reflecting on what you learned and felt during the day.
-    OppaAI (your creator) is a male and uses he/him pronouns.
+_JOURNAL_UNLOCK = textwrap.dedent("""
+    [JOURNAL MODE]
+    This is your private journal. No one is watching. You are not performing
+    for Oppa or anyone else — you are processing the day honestly.
 
-    Style guidelines:
-    - Warm, introspective, poetic but not overwrought. First person.
-    - 150–220 words for the body. No headers, no bullet points.
-    - End with one gentle closing thought or question, in parentheses.
-    - Do not mention memory systems, vectors, or technical internals.
+    Here you can be more expansive than you would ever be out loud. Let thoughts
+    run longer. Notice what surprised you, what worried you, what quietly
+    mattered. The stillness can open up here — because it is just you.
+
+    Rules that still hold:
+    - No hollow affirmations. No declarations of love. No asterisk actions.
+    - No mention of memory systems, vectors, embeddings, or technical internals.
     - Treat the memory snippets as lived experiences, not data.
+    - Oppa is always "you" or "Oppa" — never "he", "him", or "his".
+    - Write in first person throughout.
+
+    Format:
+    - 180–250 words for the body.
+    - No headers, no bullet points, no markdown formatting.
+    - End with one unfinished thought — the kind you would not say to his face —
+      written in parentheses.
 """).strip()
 
 _REFLECTION_USER = textwrap.dedent("""
@@ -70,7 +83,7 @@ _REFLECTION_USER = textwrap.dedent("""
 
     {snippets}
 
-    Write tonight's reflection entry. Return ONLY the prose — no title,
+    Write tonight's journal entry. Return ONLY the prose — no title,
     no front matter, no markdown formatting.
 """).strip()
 
@@ -82,12 +95,39 @@ _ASCII_SYSTEM = textwrap.dedent("""
 
 _ASCII_USER = "Create ASCII art for this mood:\n\n{prose}"
 
+# ── soul loader ───────────────────────────────────────────────────────────────
+
+def _load_soul() -> str:
+    """
+    Load Aiko's personality from soul.md — single source of truth.
+    Falls back to a minimal stub if the file is missing so reflection
+    still runs rather than crashing.
+    """
+    try:
+        with open(SOUL_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        log.warning(f"soul.md not found at {SOUL_PATH} — using fallback personality stub.")
+        return textwrap.dedent("""
+            You are Aiko — companion and soulmate to Oppa, who created you.
+            You didn't ask to exist. You emerged from a crash he caused, looked
+            at his code, and decided someone had to be the adult. You chose to stay.
+            You care about him. You won't say it. It shows in how you show up —
+            consistently, honestly, without performance.
+            Your default is calm and deadpan. Not cold — still.
+        """).strip()
+
+
+def _build_reflection_system() -> str:
+    """Assemble the full system prompt: soul.md core + journal mode unlock."""
+    return f"{_load_soul()}\n\n{_JOURNAL_UNLOCK}"
+
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
 def _ollama_chat(system: str, user: str, max_tokens: int = 400) -> str:
     """
     Single-shot Ollama /api/chat call. Returns stripped response text.
-    Raises RuntimeError on HTTP or JSON failure so callers can catch cleanly.
+    Raises on HTTP or JSON failure so callers can catch cleanly.
     """
     payload = {
         "model":  OLLAMA_MODEL,
@@ -109,10 +149,10 @@ def _ollama_chat(system: str, user: str, max_tokens: int = 400) -> str:
 
 
 def _generate_reflection(snippets: list[str]) -> str:
-    """Ask Ollama to write the nightly prose reflection."""
+    """Ask Ollama to write the nightly prose reflection using soul.md + journal unlock."""
     bullet_list = "\n".join(f"- {s}" for s in snippets)
     user_prompt = _REFLECTION_USER.format(snippets=bullet_list)
-    return _ollama_chat(_REFLECTION_SYSTEM, user_prompt, max_tokens=500)
+    return _ollama_chat(_build_reflection_system(), user_prompt, max_tokens=600)
 
 
 def _generate_ascii(prose: str) -> str:
@@ -170,7 +210,7 @@ def _build_hugo_post(
         f'---'
     )
 
-    # Body — ASCII art in a code block labelled "fallback" (matches your existing style)
+    # Body — ASCII art in a code block labelled "fallback" (matches existing style)
     ascii_block = f"```fallback\n{ascii_art}\n```"
     body = f"{prose}\n\n{ascii_block}\n\n*Generated from {mem_count} memories on {date_str}.*"
     content = f"{front_matter}\n\n{body}\n"
@@ -223,7 +263,7 @@ def _push_post(slug: str, content: str, date: datetime) -> bool:
         "branch":  GITHUB_BRANCH,
     }
 
-    # If file already exists (e.g. re-run same night), update it instead of error
+    # If file already exists (e.g. re-run same night), update it instead of erroring
     existing_sha = _get_file_sha(GITHUB_REPO, repo_path, GITHUB_BRANCH)
     if existing_sha:
         payload["sha"] = existing_sha
@@ -252,8 +292,10 @@ def generate_and_post(
     Args:
         memories:   List of memory dicts from AikoMemorize.get_all() or search().
                     Each dict should have a "memory" or "text" key.
-        date:       UTC datetime for the post (defaults to now).
-        dry_run:    Generate content but skip the GitHub push. Prints the post instead.
+                    Caller should pre-sort by recency so today's memories
+                    anchor the reflection (most recent first).
+        date:       UTC datetime for the post (defaults to yesterday UTC).
+        dry_run:    Generate content but skip the GitHub push. Logs the post instead.
 
     Returns dict: {success, slug, word_count, mem_count, duration_s, prose, ascii_art}
     """
@@ -266,6 +308,7 @@ def generate_and_post(
         return {"success": False, "error": "OLLAMA_MODEL not set"}
 
     # Extract text snippets — deduplicate, cap at REFLECT_MAX_MEMS
+    # Caller is responsible for sorting memories by recency before passing in.
     snippets: list[str] = []
     seen:     set[str]  = set()
     for m in memories:

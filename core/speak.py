@@ -52,19 +52,35 @@ MIOTTS_DEVICE  = int(os.getenv("MIOTTS_DEVICE", "-1"))
 # ── text sanitization ─────────────────────────────────────────────────────────
 
 _REPLACEMENTS = [
-    (r'\*',    ''),
+    (r'\*+',   ''),
     (r'—',     ', '),
     (r'–',     ', '),
     (r'`',     ''),
     (r'#+ ',   ''),
     (r'\[|\]', ''),
+    (r'\(|\)', ''),
+    (r'~',     ''),
+    (r'_',     ' '),
+    (r'/',     ' '),
+    (r'\\',    ''),
+    (r'[<>{}|@#$%^&+=]', ''),
 ]
 
 _RE_REPLACEMENTS = [(re.compile(p), r) for p, r in _REPLACEMENTS]
 
-
 def sanitize_for_tts(text: str) -> str:
     """Strip/replace symbols the MioTTS phonemizer cannot handle."""
+    # Strip emoji and non-BMP unicode (emoticons, symbols, pictographs)
+    text = re.sub(
+        r'[\U00010000-\U0010ffff'       # non-BMP (most emoji)
+        r'\U0001F000-\U0001FFFF'        # extra emoji blocks
+        r'\u2600-\u27BF'               # misc symbols, dingbats
+        r'\u2300-\u23FF'               # misc technical
+        r'\u25A0-\u25FF'               # geometric shapes
+        r'\u2700-\u27BF'               # dingbats
+        r']',
+        '', text, flags=re.UNICODE
+    )
     for pattern, replacement in _RE_REPLACEMENTS:
         text = pattern.sub(replacement, text)
     text = re.sub(r',\s*,', ',', text)
@@ -122,6 +138,7 @@ class AikoSpeak:
         """
         import json
         import urllib.request
+        text = text[:300]  # MioTTS hard limit
         payload = json.dumps({
             "text": text,
             "reference": {"type": "preset", "preset_id": MIOTTS_PRESET},
@@ -144,26 +161,15 @@ class AikoSpeak:
     # ── playback ──────────────────────────────────────────────────────────────
 
     def _play_wav_bytes(self, wav_bytes: bytes) -> None:
-        """
-        Decode WAV and play via sounddevice on a daemon thread.
-        Sets _playing for the duration; honours _stop_flag.
-        """
-        import wave
-        sd = self._load_sd()
+        """Play WAV bytes via sounddevice."""
+        import scipy.io.wavfile as wav_io
         self._playing.set()
         self._stop_flag.clear()
         try:
-            with wave.open(io.BytesIO(wav_bytes)) as wf:
-                samplerate = wf.getframerate()
-                channels   = wf.getnchannels()
-                frames     = wf.readframes(wf.getnframes())
-                import numpy as np
-                audio = np.frombuffer(frames, dtype=np.int16).reshape(-1, channels)
-            kwargs = {"samplerate": samplerate, "blocking": False}
-            if MIOTTS_DEVICE >= 0:
-                kwargs["device"] = MIOTTS_DEVICE
-            with silent_stderr():
-                sd.play(audio, **kwargs)
+            sd = self._load_sd()
+            rate, data = wav_io.read(io.BytesIO(wav_bytes))
+            device = MIOTTS_DEVICE if MIOTTS_DEVICE >= 0 else None
+            sd.play(data, rate, device=device)
             while sd.get_stream().active:
                 if self._stop_flag.is_set():
                     sd.stop()
@@ -172,13 +178,44 @@ class AikoSpeak:
         except Exception as e:
             print(f"[speak] playback error: {e}")
         finally:
+            try:
+                sd = self._load_sd()
+                sd.stop()
+            except Exception:
+                pass
             self._playing.clear()
 
     def _speak_thread(self, text: str) -> None:
-        """Synthesis + playback on a background thread."""
-        wav = self._synthesize(text)
-        if wav:
-            self._play_wav_bytes(wav)
+        """Split into sentence chunks ≤300 chars, synthesize and play each."""
+        for chunk in self._chunk_text(text):
+            if self._stop_flag.is_set():
+                break
+            wav = self._synthesize(chunk)
+            if wav:
+                self._play_wav_bytes(wav)
+
+    @staticmethod
+    def _chunk_text(text: str, max_chars: int = 280) -> list[str]:
+        """Split text at sentence boundaries into chunks under max_chars."""
+        import re
+        sentences = re.split(r'(?<=[.!?。！？])\s+', text.strip())
+        chunks = []
+        current = ""
+        for sentence in sentences:
+            if len(sentence) > max_chars:
+                while sentence:
+                    chunks.append(sentence[:max_chars])
+                    sentence = sentence[max_chars:]
+                continue
+            if len(current) + len(sentence) + 1 <= max_chars:
+                current = (current + " " + sentence).strip()
+            else:
+                if current:
+                    chunks.append(current)
+                current = sentence
+        if current:
+            chunks.append(current)
+        return chunks
 
     # ── public api ────────────────────────────────────────────────────────────
 
@@ -193,10 +230,7 @@ class AikoSpeak:
         return True
 
     def feed(self, token: str) -> None:
-        """
-        Accumulate a token for deferred synthesis.
-        MioTTS has no streaming feed — tokens are batched until play_async().
-        """
+        """Accumulate a token for deferred synthesis."""
         if token:
             self._token_buf.append(token)
 
@@ -232,23 +266,15 @@ class AikoSpeak:
 
     def wait_or_barge_in(self, barge_in_event: threading.Event) -> bool:
         """
-        Block until TTS finishes naturally OR barge_in_event is set by the
-        always-on VAD monitor in listen.py.
-
-        Calls stop() internally if interrupted so the caller never needs to.
-        Returns True if the user barging in interrupted playback, False if TTS
-        finished on its own.
-
-        Args:
-            barge_in_event: threading.Event set by AikoListen._barge_in_loop
-                            when speech is detected during playback.
+        Block until TTS finishes naturally OR barge_in_event is set.
+        Returns True if interrupted, False if finished naturally.
         """
         while self.is_playing():
             if barge_in_event.is_set():
-                self.stop()                    # halt audio immediately
-                return True                    # interrupted
+                self.stop()
+                return True
             time.sleep(0.02)
-        return False                           # finished naturally
+        return False
 
     def stop(self) -> None:
         if self.is_playing():
