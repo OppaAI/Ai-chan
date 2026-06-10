@@ -16,7 +16,6 @@ dependencies = [
     "ollama>=0.3.0",
     "pyopenjtalk>=0.4.1",
     "python-dotenv>=1.0.0",
-    "realtimetts[jp,kokoro]>=0.7.3",
     "requests>=2.34.2",
     "scipy>=1.15.3",
     "silero-vad>=6.2.1",
