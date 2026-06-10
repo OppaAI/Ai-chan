@@ -1,33 +1,22 @@
 [project]
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.12,<3.13"
 name = "Aiko-chan"
 version = "0.1.5"
 description = "Aiko-chan: AI companion with persistent memory, web search, and conversational interface"
 readme = "README.md"
 dependencies = [
     "click>=8.4.1",
-    "ctranslate2",
     "fastembed>=0.8.0",
     "faster-whisper>=1.2.1",
-    "fugashi>=1.5.2",
-    "jaconv>=0.5.0",
-    "mojimoji>=0.0.13",
     "numpy<2",
     "ollama>=0.3.0",
-    "pyopenjtalk>=0.4.1",
     "python-dotenv>=1.0.0",
-    "realtimetts[jp,kokoro]>=0.7.3",
     "requests>=2.34.2",
     "scipy>=1.15.3",
     "silero-vad>=6.2.1",
     "sounddevice>=0.5.5",
     "soundfile>=0.13.1",
-    "spacy>=3.8.14",
     "sqlite-vec>=0.1.9",
-    "torch",
-    "torchaudio>=2.10.0",
-    "torchvision>=0.26.0",
-    "unidic>=1.1.0",
 ]
 
 

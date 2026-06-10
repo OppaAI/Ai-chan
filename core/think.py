@@ -333,7 +333,6 @@ class AikoThink:
             stream = self._client.chat(
                 model=OLLAMA_MODEL,
                 messages=all_messages,
-                messages=all_messages,
                 stream=True,
                 keep_alive=-1,
                 options={
