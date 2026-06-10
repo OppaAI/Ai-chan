@@ -218,7 +218,7 @@ class AikoThink:
         trimmed = self._sanitize_history(trimmed)
 
         # 8. stream LLM response (silent — display handled in _emit)
-        raw_response = self._stream_response(trimmed, system=system, silent=True)
+        raw_response = self._stream_response(trimmed, system=system)
 
         # 9. emit to callback + TTS
         self._emit(raw_response)
@@ -291,6 +291,28 @@ class AikoThink:
         self._mem_queue.join()
 
     # ── internal ──────────────────────────────────────────────────────────────
+
+    def _emit(self, text: str) -> None:
+        """
+        Send display text to token_callback (TUI) or stdout, and feed TTS.
+        Streams word-by-word to token_callback for a natural typing feel,
+        even though the LLM has already finished (silent mode).
+        TTS receives the full text at once for uninterrupted audio.
+        """
+        if not text:
+            return
+
+        if self._token_callback:
+            words = text.split(" ")
+            for i, word in enumerate(words):
+                chunk = word if i == 0 else " " + word
+                self._token_callback(chunk)
+                time.sleep(0.012)  # ~80 wpm feel
+        else:
+            print(f"\nAiko-chan: {text}", flush=True)
+
+        if self._speak:
+            self._speak.feed(text)
 
     def _stream_response(self, messages: list[dict], system: str = "") -> str:
         """
