@@ -394,10 +394,22 @@ def _run(stdscr, args):
                 else:
                     tui.add_message('sys', f'Searching: "{query}"')
                     tui._draw()
-                    tui.turn_start()
-                    think.web_search(query, token_cb)
-                    tui.stream_commit()
-                tui._draw()
+                    try:
+                        results = web_search(query)
+                    except Exception as e:
+                        tui.add_message('sys', f'Search failed: {e}')
+                        tui._draw()
+                        continue
+                        tui.turn_start()
+                        def _web_token_cb(token):
+                            tui.stream_token(token)
+                            tui._draw(buf=[])
+                        think.chat(
+                            f"Use these web search results to answer the question: {query}\n\n{results}",
+                            token_callback=_web_token_cb,
+                        )
+                        tui.stream_commit()
+                    tui._draw()
 
             else:
                 tui.add_message('sys', f'Unknown command: {user_input}')

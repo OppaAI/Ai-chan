@@ -292,48 +292,37 @@ class AikoThink:
 
     # ── internal ──────────────────────────────────────────────────────────────
 
-    def _emit(self, text: str) -> None:
+    def _stream_response(self, messages: list[dict], system: str = "") -> str:
         """
-        Send display text to token_callback (TUI) or stdout, and feed TTS.
-        Streams word-by-word to token_callback for a natural typing feel,
-        even though the LLM has already finished (silent mode).
-        TTS receives the full text at once for uninterrupted audio.
+        Stream LLM response to console and TTS simultaneously.
+        Console printing is the single source of truth — speak.py is silent.
+        TTS skipped if response is a search trigger.
+
+        Tokens are buffered at the start of each response to detect a
+        [SEARCH: ...] trigger before any output is committed to the console
+        or TTS queue. num_predict is scaled by _REASONING_SCALE when
+        reasoning mode is active to budget for the <think> scratchpad.
+
+        Args:
+            messages: Full message list (system prompt + trimmed history).
+            system:   Optional system prompt to inject.
+
+        Returns:
+            The complete response text assembled from all streamed tokens.
         """
-        if not text:
-            return
+        full_response    = []
+        tts_started      = False
+        buffer           = ""
+        is_searching     = False
+        buffering_active = True
 
-        if self._token_callback:
-            words = text.split(" ")
-            for i, word in enumerate(words):
-                chunk = word if i == 0 else " " + word
-                self._token_callback(chunk)
-                time.sleep(0.012)  # ~80 wpm feel
-        else:
-            print(f"\nAiko-chan: {text}", flush=True)
-
-        if self._speak:
-            self._speak.feed(text)
-            self._speak.play_async()
-
-    def _stream_response(
-        self,
-        messages: list[dict],
-        system:   str  = "",
-        silent:   bool = False,
-    ) -> str:
-        """
-        Stream LLM response and return the full assembled text.
-
-        When silent=True (default for chat()), no output is sent during streaming —
-        the caller handles display via _emit after the full response is ready.
-
-        When silent=False (used by /think), tokens stream live to callback/stdout.
-
-        num_predict is scaled by _REASONING_SCALE when reasoning mode is active.
-        """
-        full_response = []
-
+        # triple token budget in reasoning mode to fit the <think> scratchpad
         num_predict = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
+
+        all_messages = (
+            [{"role": "system", "content": system}] + messages
+            if system else messages
+        )
 
         all_messages = (
             [{"role": "system", "content": system}] + messages
@@ -343,6 +332,7 @@ class AikoThink:
         try:
             stream = self._client.chat(
                 model=OLLAMA_MODEL,
+                messages=all_messages,
                 messages=all_messages,
                 stream=True,
                 keep_alive=-1,
