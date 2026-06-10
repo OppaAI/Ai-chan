@@ -314,7 +314,7 @@ class AikoThink:
         if self._speak:
             self._speak.feed(text)
 
-    def _stream_response(self, messages: list[dict], system: str = "") -> str:
+    def _stream_response(self, messages: list[dict], system: str = "", silent: bool = True) -> str:
         """
         Stream LLM response to console and TTS simultaneously.
         Console printing is the single source of truth — speak.py is silent.
