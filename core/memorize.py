@@ -1054,6 +1054,10 @@ class AikoMemorize:
         """Return all stored memories for a user."""
         return self._mem.get_all(user_id=user_id)
 
+    def get_since(self, since: datetime, user_id: str = USER_ID) -> list[dict]:
+        """Return memories created on or after `since`, newest first."""
+        return self._mem.get_since(since, user_id=user_id)
+
     def clear(self, user_id: str = USER_ID) -> None:
         """Wipe all memories for a user. Use carefully."""
         self._mem.delete_all(user_id=user_id)
