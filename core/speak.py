@@ -102,7 +102,9 @@ class AikoSpeak:
         self._playing   = threading.Event()
         self._stop_flag = threading.Event()
         self._silent    = silent
-        self._sd        = None                 # sounddevice, lazy-loaded
+        with silent_stderr():
+            import sounddevice as _sd
+            self._sd = _sd                 # eagerly loaded to avoid curses fd conflict
         self._token_buf: list[str] = []        # accumulate feed() tokens
         if not silent:
             print(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
@@ -246,6 +248,7 @@ class AikoSpeak:
         if not text:
             return
         self.stop()
+        self._playing.set()
         t = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
         t.start()
 
