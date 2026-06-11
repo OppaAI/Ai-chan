@@ -313,6 +313,7 @@ class AikoThink:
 
         if self._speak:
             self._speak.feed(text)
+            self._speak.play_async()
 
     def _stream_response(self, messages: list[dict], system: str = "", silent: bool = True) -> str:
         """
