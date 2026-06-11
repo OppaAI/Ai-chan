@@ -187,12 +187,17 @@ class AikoSpeak:
 
     def _speak_thread(self, text: str) -> None:
         """Split into sentence chunks ≤300 chars, synthesize and play each."""
-        for chunk in self._chunk_text(text):
-            if self._stop_flag.is_set():
-                break
-            wav = self._synthesize(chunk)
-            if wav:
-                self._play_wav_bytes(wav)
+        self._playing.set()
+        self._stop_flag.clear()
+        try:
+            for chunk in self._chunk_text(text):
+                if self._stop_flag.is_set():
+                    break
+                wav = self._synthesize(chunk)
+                if wav:
+                    self._play_wav_bytes(wav)
+        finally:
+            self._playing.clear()
 
     @staticmethod
     def _chunk_text(text: str, max_chars: int = 280) -> list[str]:
