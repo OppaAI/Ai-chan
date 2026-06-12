@@ -6,10 +6,11 @@ Preset-based voice reference: "jp_female", "en_female", or a custom registered p
 
 Server setup (run separately):
     # 1. Start LLM backend (Ollama example):
-    OLLAMA_HOST=localhost:8000 ollama serve
-    OLLAMA_HOST=localhost:8000 ollama run hf.co/Aratako/MioTTS-GGUF:MioTTS-0.1B-BF16.gguf
+    ollama serve
+    ollama run hf.co/Aratako/MioTTS-GGUF:MioTTS-0.6B-Q4_K_M.gguf
     # 2. Start MioTTS synthesis API:
-    python run_server.py --llm-base-url http://localhost:8000/v1
+    python run_server.py --llm-base-url http://localhost:11434/v1 \
+        --llm-model "hf.co/Aratako/MioTTS-GGUF:MioTTS-0.6B-Q4_K_M.gguf"
 
 Standalone test:
     python core/speak.py
@@ -171,6 +172,18 @@ class AikoSpeak:
             sd = self._load_sd()
             rate, data = wav_io.read(io.BytesIO(wav_bytes))
             device = MIOTTS_DEVICE if MIOTTS_DEVICE >= 0 else None
+
+            # Resample if output device doesn't natively support the source rate
+            # (e.g. cheap USB DACs locked to 48000 Hz while MioTTS outputs 44100)
+            if device is not None:
+                dev_info = sd.query_devices(device)
+                target_rate = int(dev_info["default_samplerate"])
+                if target_rate != rate:
+                    from scipy.signal import resample
+                    num_samples = int(len(data) * target_rate / rate)
+                    data = resample(data, num_samples).astype(data.dtype)
+                    rate = target_rate
+
             sd.play(data, rate, device=device)
             while sd.get_stream().active:
                 if self._stop_flag.is_set():
