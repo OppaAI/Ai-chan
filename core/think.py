@@ -5,7 +5,7 @@ Aiko's cognitive loop.
   - Drains memory write queue before each recall (prevents write-lag misses)
   - Retrieves relevant memories before each turn
   - Proactively searches the web for data-intent queries before LLM speaks
-  - Streams Ollama response to console + TTS simultaneously
+  - Streams llama.cpp response to console + TTS simultaneously
   - Stores the turn into long-term memory after each response (background thread)
   - Supports single-shot reasoning mode via set_reasoning(True) / /think command
 """
@@ -21,7 +21,7 @@ logging.getLogger("torch").setLevel(logging.ERROR)
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 from datetime import datetime
-from ollama import Client
+from openai import OpenAI
 from pathlib import Path
 import queue
 import re
@@ -37,18 +37,18 @@ log = get_logger(__name__)
 # ── boot labels ───────────────────────────────────────────────────────────────
 
 BOOT_LABELS = {
-    'think_start':  'Loading Ollama client + persona...',
+    'think_start':  'Loading llama.cpp client + persona...',
     'think_warmup': 'Warming up language model...',
 }
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-OLLAMA_BASE_URL      = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL         = os.getenv("OLLAMA_MODEL",    "ministral-3:3b-instruct-2512-q4_K_M")
+LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
+LLAMACPP_MODEL    = os.getenv("LLAMACPP_MODEL",    "ministral-3b-instruct")
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
 _BASE_PREDICT    = 280   # normal token budget — soul.md says 2–3 sentences default
-_REASONING_SCALE = 3     # multiplier applied to num_predict in reasoning mode
+_REASONING_SCALE = 3     # multiplier applied to max_tokens in reasoning mode
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 
@@ -95,7 +95,7 @@ class AikoThink:
     """
 
     def __init__(self, memorize: AikoMemorize, speak: AikoSpeak | None = None) -> None:
-        self._client    = Client(host=OLLAMA_BASE_URL)
+        self._client    = OpenAI(base_url=LLAMACPP_BASE_URL, api_key="not-needed")
         self._memorize  = memorize
         self._speak     = speak
         self._persona   = _load_persona()
@@ -110,18 +110,14 @@ class AikoThink:
 
     def _warmup_llm(self) -> None:
         try:
-            self._client.chat(
-                model=OLLAMA_MODEL,
+            self._client.chat.completions.create(
+                model=LLAMACPP_MODEL,
                 messages=[{"role": "user", "content": "hi"}],
                 stream=False,
-                keep_alive=-1,
-                options={
-                    "num_predict": 1,
-                    "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", 4096)),
-                },
+                max_tokens=1,
             )
         except Exception as e:
-            log.warning("LLM warmup failed — Ollama may not be running: %s", e)
+            log.warning("LLM warmup failed — llama-server may not be running: %s", e)
 
     def join_warmup(self) -> None:
         """Block until LLM warmup completes. Called by wakeup.py before boot finishes."""
@@ -145,7 +141,7 @@ class AikoThink:
           7. Append to history and enqueue async memory write.
 
         Reasoning mode (set via set_reasoning(True) / /think command) wraps the
-        user prompt with a step-by-step instruction and triples num_predict.
+        user prompt with a step-by-step instruction and triples max_tokens.
         Auto-resets to False after each turn — single-shot by design.
         """
         self._token_callback = token_callback
@@ -323,7 +319,7 @@ class AikoThink:
 
         Tokens are buffered at the start of each response to detect a
         [SEARCH: ...] trigger before any output is committed to the console
-        or TTS queue. num_predict is scaled by _REASONING_SCALE when
+        or TTS queue. max_tokens is scaled by _REASONING_SCALE when
         reasoning mode is active to budget for the <think> scratchpad.
 
         Args:
@@ -340,12 +336,7 @@ class AikoThink:
         buffering_active = True
 
         # triple token budget in reasoning mode to fit the <think> scratchpad
-        num_predict = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
-
-        all_messages = (
-            [{"role": "system", "content": system}] + messages
-            if system else messages
-        )
+        max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
 
         all_messages = (
             [{"role": "system", "content": system}] + messages
@@ -353,30 +344,24 @@ class AikoThink:
         )
 
         try:
-            stream = self._client.chat(
-                model=OLLAMA_MODEL,
+            stream = self._client.chat.completions.create(
+                model=LLAMACPP_MODEL,
                 messages=all_messages,
                 stream=True,
-                keep_alive=-1,
-                options={
-                    "num_ctx":        int(os.getenv("OLLAMA_NUM_CTX", 4096)),
-                    "temperature":    float(os.getenv("OLLAMA_TEMPERATURE", 0.72)),
-                    "repeat_penalty": float(os.getenv("OLLAMA_REPEAT_PENALTY", 1.15)),
-                    "repeat_last_n":  int(os.getenv("OLLAMA_REPEAT_LAST_N", 64)),
-                    "num_predict":    num_predict,
-                    "top_p":          float(os.getenv("OLLAMA_TOP_P", 0.90)),
-                    "top_k":          int(os.getenv("OLLAMA_TOP_K", 40)),
-                    "tfs_z":          1.0,
-                    "stop":           ["<|im_end|>", "</s>", "[INST]"],
-                }
+                max_tokens=max_tokens,
+                temperature=float(os.getenv("TEMPERATURE", 0.72)),
+                top_p=float(os.getenv("TOP_P", 0.90)),
+                stop=["<|im_end|>", "</s>", "[INST]"],
+                extra_body={
+                    "repeat_penalty": float(os.getenv("REPEAT_PENALTY", 1.15)),
+                    "repeat_last_n":  int(os.getenv("REPEAT_LAST_N", 64)),
+                    "top_k":          int(os.getenv("TOP_K", 40)),
+                },
             )
 
             for chunk in stream:
-                token = (
-                    chunk.message.content
-                    if hasattr(chunk, "message")
-                    else chunk.get("message", {}).get("content", "")
-                ) or ""
+                delta = chunk.choices[0].delta if chunk.choices else None
+                token = (delta.content or "") if delta else ""
 
                 full_response.append(token)
 
@@ -395,7 +380,7 @@ class AikoThink:
         except Exception as e:
             msg = f"Stream failed: {e}"
             log.error(msg)
-            
+
             # remove the dangling user turn so next call doesn't create a consecutive pair
             if self._history and self._history[-1]["role"] == "user":
                 self._history.pop()
@@ -432,8 +417,8 @@ class AikoThink:
 
         # ambiguous — ask the LLM for a 1-token classification
         try:
-            resp = self._client.chat(
-                model=OLLAMA_MODEL,
+            resp = self._client.chat.completions.create(
+                model=LLAMACPP_MODEL,
                 messages=[{
                     "role": "user",
                     "content": (
@@ -445,10 +430,10 @@ class AikoThink:
                     )
                 }],
                 stream=False,
-                keep_alive=-1,
-                options={"num_predict": 4, "temperature": 0.0},
+                max_tokens=4,
+                temperature=0.0,
             )
-            answer = resp.message.content.strip().lower()
+            answer = resp.choices[0].message.content.strip().lower()
             result = "data" in answer
             log.debug(f"[intent] LLM classified {'DATA' if result else 'SOCIAL'}: {user_input!r}")
             return result
@@ -474,8 +459,8 @@ class AikoThink:
             )
             if last_user and last_user != user_input:
                 try:
-                    resp = self._client.chat(
-                        model=OLLAMA_MODEL,
+                    resp = self._client.chat.completions.create(
+                        model=LLAMACPP_MODEL,
                         messages=[{
                             "role": "user",
                             "content": (
@@ -486,10 +471,10 @@ class AikoThink:
                             )
                         }],
                         stream=False,
-                        keep_alive=-1,
-                        options={"num_predict": 20, "temperature": 0.0},
+                        max_tokens=20,
+                        temperature=0.0,
                     )
-                    resolved = resp.message.content.strip()
+                    resolved = resp.choices[0].message.content.strip()
                     log.debug(f"[search_query] {user_input!r} → {resolved!r}")
                     return resolved
                 except Exception as e:
