@@ -183,9 +183,7 @@ class AikoSpeak:
                     num_samples = int(len(data) * target_rate / rate)
                     data = resample(data, num_samples).astype(data.dtype)
                     rate = target_rate
-                    
-            print(f"[debug] device={device}, rate={rate}, data.shape={data.shape}, dtype={data.dtype}")
-            sd.play(data, rate, device=device)
+
             sd.play(data, rate, device=device)
             while sd.get_stream().active:
                 if self._stop_flag.is_set():
