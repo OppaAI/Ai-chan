@@ -84,7 +84,7 @@ BOOT_LABELS = {
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-EMBED_MODEL = "BAAI/bge-base-en-v1.5"
+EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
 EMBED_DIMS  = 768
 RRF_K       = 60          # standard RRF constant — dampens outlier ranks
 KNN_LIMIT   = 20          # candidates fetched before RRF re-rank
