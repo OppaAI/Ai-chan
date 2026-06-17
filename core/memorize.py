@@ -608,9 +608,18 @@ class _MemoryBackend:
         return [dict(r) for r in rows_sorted]
 
     def get_all(self, user_id: str) -> list[dict]:
-        """Return all memory records for a user."""
+        """
+        Return memory records for a user.
+
+        Projected to (id, memory, created_at) only — the three fields
+        actually read off get_all() results anywhere in this codebase.
+        access_count/last_accessed_at/pinned are intentionally NOT included
+        here; callers that need fresh values for those fetch them via
+        _sqlite_batch_get_payloads()/_sqlite_is_pinned() instead, since
+        get_all() snapshots can be stale by the time those checks run.
+        """
         rows = self._conn.execute(
-            "SELECT * FROM memories WHERE user_id = ?",
+            "SELECT id, memory, created_at FROM memories WHERE user_id = ?",
             (user_id,),
         ).fetchall()
         return [dict(r) for r in rows]
