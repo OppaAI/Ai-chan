@@ -102,22 +102,37 @@ WRITE_DEDUP_THRESHOLD = float(os.getenv("WRITE_DEDUP_THRESHOLD", 0.95))
 DREAM_BOOST_AMOUNT = int(os.getenv("DREAM_BOOST_AMOUNT", 2))
 
 # Salience keywords — memories containing these are boosted during dream pass.
+# Matched on word boundaries (see _SALIENCE_RE) so "works" doesn't match
+# "networks"/"fireworks" and "lives" doesn't match "olives".
 _SALIENCE_KEYWORDS = frozenset([
     "name", "called", "likes", "loves", "hates", "dislikes", "always", "never",
     "important", "remember", "favourite", "favorite", "birthday", "works",
     "lives", "studying", "job", "afraid", "dream", "goal",
 ])
 
+_SALIENCE_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(k) for k in _SALIENCE_KEYWORDS) + r')\b',
+    re.IGNORECASE,
+)
+
 # Minimum conversation size (chars) worth sending to LLM for extraction.
 _EXTRACT_MIN_CHARS = int(os.getenv("MEMORY_EXTRACT_MIN_CHARS", 80))
 
 # Language that signals the LLM is guessing rather than stating a known fact.
 # Facts containing these signals are dropped before persistence.
+# Matched on word/phrase boundaries (see _HEDGE_RE) so e.g. "Oppa believes in
+# ghosts" isn't missed and "Oppa said I believe in hard work" isn't wrongly
+# dropped just because "believe" overlaps with a substring of "believes".
 _HEDGE_SIGNALS = frozenset([
     "might", "probably", "seems", "i think", "perhaps", "maybe",
     "appears", "possibly", "could be", "not sure", "i believe",
     "it sounds like", "it seems like",
 ])
+
+_HEDGE_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(h) for h in _HEDGE_SIGNALS) + r')\b',
+    re.IGNORECASE,
+)
 
 # Extraction prompt — temperature 0.0, explicit only-stated-facts rule.
 _EXTRACT_PROMPT = """\
@@ -321,7 +336,7 @@ class _MemoryBackend:
 
     Changes from original:
       - Extraction LLM runs at temperature=0.0 for deterministic fact output.
-      - _extract_facts() filters hedging language via _HEDGE_SIGNALS before
+      - _extract_facts() filters hedging language via _HEDGE_RE before
         returning — uncertain facts are never persisted.
       - add() runs a dedup check per fact before insert: if a near-identical
         vector already exists (cosine >= WRITE_DEDUP_THRESHOLD), the fact is
@@ -349,6 +364,7 @@ class _MemoryBackend:
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")  # wait up to 5s on lock contention
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
@@ -363,6 +379,10 @@ class _MemoryBackend:
     def _embed(self, text: str) -> list[float]:
         """Embed a single string with fastembed. Returns a plain float list."""
         return list(self._embedder.embed([text]))[0].tolist()
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed multiple strings in a single batched fastembed call."""
+        return [v.tolist() for v in self._embedder.embed(texts)]
 
     # ── extraction ────────────────────────────────────────────────────────────
 
@@ -383,7 +403,7 @@ class _MemoryBackend:
         Changes from original:
           - temperature=0.0 for deterministic output — reduces confabulation.
           - Post-parse hedge filter: facts containing uncertain language
-            (_HEDGE_SIGNALS) are dropped before returning.
+            (_HEDGE_RE, word-boundary matched) are dropped before returning.
           - Only user/assistant turns with real content are sent.
         """
         if not self._should_extract(messages):
@@ -454,11 +474,10 @@ class _MemoryBackend:
             log.warning(f"Failed to parse extraction JSON: {raw[:200]!r}")
             return []
 
-        # drop facts containing hedging/uncertain language
+        # drop facts containing hedging/uncertain language (word-boundary match)
         clean_facts = []
         for fact in facts:
-            fact_lower = fact.lower()
-            if any(hedge in fact_lower for hedge in _HEDGE_SIGNALS):
+            if _HEDGE_RE.search(fact):
                 log.debug(f"Dropped hedging fact: {fact!r}")
                 continue
             clean_facts.append(fact)
@@ -476,6 +495,9 @@ class _MemoryBackend:
         Duplicates are skipped to prevent redundant entries that compound into
         false confidence during recall.
 
+        Embeddings for all extracted facts are computed in a single batched
+        call rather than one-by-one.
+
         Returns list of new memory IDs. Empty list if nothing extracted.
         """
         facts = self._extract_facts(messages)
@@ -485,11 +507,15 @@ class _MemoryBackend:
         now = datetime.now(timezone.utc).isoformat()
         ids = []
 
-        for fact in facts:
+        try:
+            vectors = self._embed_batch(facts)
+        except Exception as e:
+            log.warning(f"Batch embedding failed, aborting write: {e}")
+            return []
+
+        for fact, vector in zip(facts, vectors):
             mem_id = str(uuid.uuid4())
             try:
-                vector = self._embed(fact)
-
                 # dedup check — skip if near-identical vector already exists
                 existing = _sqlite_knn_search(
                     self._conn, vector, user_id,
@@ -699,33 +725,28 @@ class AikoMemorize:
         Returns True on success, False on any failure.
         """
         try:
-            before  = {str(m["id"]) for m in self.get_all(user_id=user_id)}
-            ok      = self.add(messages, user_id=user_id)
-            if not ok:
-                return False
-            after   = {str(m["id"]) for m in self.get_all(user_id=user_id)}
-            pin_ids = list(after - before)
+            ids = self._mem.add(messages, user_id=user_id)
 
-            if not pin_ids:
+            if not ids:
                 query = "\n".join(
                     (m.get("content") or "").strip()
                     for m in messages
                     if (m.get("content") or "").strip()
                 )
-                pin_ids = [
+                ids = [
                     str(m.get("id"))
                     for m in self.search(query, user_id=user_id, limit=3)
                     if m.get("id")
                 ]
 
-            if not pin_ids:
+            if not ids:
                 log.warning("pin(): add succeeded but no memory IDs were found to pin.")
                 return False
 
-            for mem_id in pin_ids:
+            for mem_id in ids:
                 _sqlite_set_payload(self._conn, mem_id, {"pinned": 1})
 
-            log.info(f"Pinned {len(pin_ids)} memories: {pin_ids}")
+            log.info(f"Pinned {len(ids)} memories: {ids}")
             return True
         except Exception as e:
             log.error(f"Pin failed: {e}")
@@ -736,25 +757,29 @@ class AikoMemorize:
     def search(self, query: str, user_id: str = USER_ID, limit: int = 5) -> list[dict]:
         """
         Retrieve top-k memories relevant to the current query.
-        Side-effect: increments access_count and updates last_accessed_at.
+        Side-effect: increments access_count and updates last_accessed_at
+        for all returned memories in a single batched UPDATE.
         """
         results = self._mem.search(query, user_id=user_id, limit=limit)
 
         if results:
             now = datetime.now(timezone.utc).isoformat()
-            for r in results:
-                mem_id = str(r.get("id", ""))
-                if not mem_id:
-                    continue
+            mem_ids = [str(r.get("id", "")) for r in results if r.get("id")]
+            if mem_ids:
                 try:
-                    payload       = _sqlite_get_payload(self._conn, mem_id)
-                    current_count = payload.get("access_count", 0) or 0
-                    _sqlite_set_payload(self._conn, mem_id, {
-                        "access_count":     min(current_count + 1, 255),
-                        "last_accessed_at": now,
-                    })
+                    placeholders = ",".join("?" * len(mem_ids))
+                    self._conn.execute(
+                        f"""
+                        UPDATE memories
+                        SET access_count = MIN(access_count + 1, 255),
+                            last_accessed_at = ?
+                        WHERE id IN ({placeholders})
+                        """,
+                        [now] + mem_ids,
+                    )
+                    self._conn.commit()
                 except Exception as e:
-                    log.warning(f"Access tracking failed for {mem_id}: {e}")
+                    log.warning(f"Access tracking failed for {mem_ids}: {e}")
 
         return results
 
@@ -811,6 +836,9 @@ class AikoMemorize:
           2. Merge  — near-duplicate pairs (cosine >= threshold) are collapsed.
           3. Prune  — standard decay cleanup runs last.
 
+        all_mems is fetched once and passed through to cleanup() so the
+        prune stage doesn't re-scan the table from scratch.
+
         Returns dict: {boosted, merged, pruned, duration_s}
         """
         t_start = time.perf_counter()
@@ -826,7 +854,7 @@ class AikoMemorize:
 
         boosted      = self._dream_boost(all_mems, payload_map, dry_run=dry_run)
         merged       = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, dry_run=dry_run)
-        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run)
+        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run, _all_mems=all_mems)
         pruned       = prune_result.get("deleted", 0)
 
         duration = round(time.perf_counter() - t_start, 2)
@@ -858,7 +886,7 @@ class AikoMemorize:
             if _sqlite_is_pinned(self._conn, mem_id):
                 continue
 
-            text     = (m.get("memory") or "").lower()
+            text     = m.get("memory") or ""
             ac, _la  = payload_map.get(mem_id, (0, "never"))
 
             is_recent  = False
@@ -871,7 +899,7 @@ class AikoMemorize:
                     pass
 
             is_salient = (
-                any(kw in text for kw in _SALIENCE_KEYWORDS)
+                bool(_SALIENCE_RE.search(text))
                 or ac >= 3
                 or is_recent
             )
@@ -992,14 +1020,19 @@ class AikoMemorize:
         user_id:   str   = USER_ID,
         threshold: float = CLEANUP_THRESHOLD,
         dry_run:   bool  = False,
+        _all_mems: Optional[list[dict]] = None,
     ) -> dict:
         """
         Prune decayed memories below threshold score.
         Grace period (14 days) protects newly created memories.
         Pinned memories are unconditionally kept.
+
+        _all_mems: internal — when called from dream(), the already-fetched
+        memory list is passed through here to avoid a redundant get_all() scan.
+
         Returns dict: {deleted, kept, failed, candidates (dry_run only)}.
         """
-        all_mems = self.get_all(user_id=user_id)
+        all_mems = _all_mems if _all_mems is not None else self.get_all(user_id=user_id)
         if not all_mems:
             return {"deleted": 0, "kept": 0, "failed": 0}
 
