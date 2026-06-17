@@ -10,7 +10,6 @@ Aiko's cognitive loop.
   - Supports single-shot reasoning mode via set_reasoning(True) / /think command
 """
 
-from email import message
 import logging
 import os
 import warnings
@@ -66,14 +65,15 @@ def _load_persona() -> str:
 # ── intent signals ────────────────────────────────────────────────────────────
 
 # Inputs matching ANY of these are immediately classified as social — no search.
+# NOTE: checked only when no factual signal matches first (see _is_data_intent).
 _SOCIAL_SIGNALS = frozenset([
-    "wanna", "want to", "would you", "do you", "shall we",
+    "wanna", "want to", "would you", "shall we",
     "let's", "lets", "together", "with me", "join me",
     "how are you", "what do you think", "do you like",
-    "are you", "can you", "will you",
 ])
 
 # Inputs matching ANY of these are immediately classified as data — search fires.
+# Matched on word boundaries to avoid "win" matching "winter"/"wind"/"wine", etc.
 _FACTUAL_SIGNALS = frozenset([
     "who", "what", "when", "where", "how many", "how much",
     "score", "result", "latest", "news", "current", "today",
@@ -82,6 +82,15 @@ _FACTUAL_SIGNALS = frozenset([
     "standing", "ranking", "bitcoin", "crypto", "stock",
     "temperature", "forecast", "match", "series",
 ])
+
+_FACTUAL_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(s) for s in _FACTUAL_SIGNALS) + r')\b',
+    re.IGNORECASE,
+)
+_SOCIAL_RE = re.compile(
+    r'\b(?:' + '|'.join(re.escape(s) for s in _SOCIAL_SIGNALS) + r')\b',
+    re.IGNORECASE,
+)
 
 
 # ── think ─────────────────────────────────────────────────────────────────────
@@ -100,6 +109,7 @@ class AikoThink:
         self._speak     = speak
         self._persona   = _load_persona()
         self._history:  list[dict] = []
+        self._history_lock = threading.Lock()
         self._reasoning = False
         self._mem_queue  = queue.Queue()
         self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
@@ -126,7 +136,13 @@ class AikoThink:
 
     # ── public api ────────────────────────────────────────────────────────────
 
-    def chat(self, user_input: str, token_callback=None) -> str:
+    def chat(
+        self,
+        user_input: str,
+        token_callback=None,
+        _skip_search: bool = False,
+        _history_label: str | None = None,
+    ) -> str:
         """
         Process one conversational turn and return the full assistant response.
 
@@ -143,6 +159,22 @@ class AikoThink:
         Reasoning mode (set via set_reasoning(True) / /think command) wraps the
         user prompt with a step-by-step instruction and triples max_tokens.
         Auto-resets to False after each turn — single-shot by design.
+
+        Args:
+            user_input:      The text to process as this turn's input. When
+                              called internally from web_search(), this is the
+                              full search-results blob, not what Oppa typed.
+            token_callback:  Optional per-token/per-chunk display callback.
+            _skip_search:    Internal flag. When True, step 4 (proactive web
+                              search) is skipped entirely. Set by web_search()
+                              to prevent the search-results text from itself
+                              triggering a second, recursive search.
+            _history_label:  Internal override. When given, this string is
+                              stored in conversation history and long-term
+                              memory instead of the raw user_input — used by
+                              web_search() so history/memory record the
+                              original query ("nba scores") rather than the
+                              full scraped results blob.
         """
         self._token_callback = token_callback
 
@@ -171,47 +203,70 @@ class AikoThink:
                 "</memory_context>"
             )
 
-        # 4. proactive web search — fires before LLM speaks so no guessing
-        if self._is_data_intent(user_input):
-            from core.tools import web_search_context
-            search_query = self._build_search_query(user_input)
+        # 4. proactive web search — fires before LLM speaks so no guessing.
+        #    Skipped when this turn IS already search-results text (web_search()
+        #    path) to prevent recursive searching.
+        if not _skip_search and self._is_data_intent(user_input):
+            try:
+                from core.tools import web_search_context
+                search_query = self._build_search_query(user_input)
 
-            log.debug(f"[intent] DATA — searching: {search_query!r}")
+                log.debug(f"[intent] DATA — searching: {search_query!r}")
 
-            # notify UI before the blocking search call
-            if token_callback:
-                token_callback(f"__SEARCHING__:{search_query}")
+                # notify UI before the blocking search call
+                if token_callback:
+                    token_callback(f"__SEARCHING__:{search_query}")
 
-            context = web_search_context(search_query)
-            log.debug(f"[intent] context={'found' if context else 'NONE'}")
+                context = web_search_context(search_query)
+                log.debug(f"[intent] context={'found' if context else 'NONE'}")
 
-            if context:
-                system = (
-                    f"{system}\n\n"
-                    f"<search_results query='{search_query}'>\n"
-                    f"Answer using ONLY the information in these search results. "
-                    f"Do not add anything from your training data. "
-                    f"If the results don't contain the answer, say so plainly.\n\n"
-                    f"{context}\n"
-                    f"</search_results>"
-                )
+                if context:
+                    system = (
+                        f"{system}\n\n"
+                        f"<search_results query='{search_query}'>\n"
+                        f"Answer using ONLY the information in these search results. "
+                        f"Do not add anything from your training data. "
+                        f"If the results don't contain the answer, say so plainly.\n\n"
+                        f"{context}\n"
+                        f"</search_results>"
+                    )
+            except Exception as e:
+                # never let a broken search path crash the whole turn —
+                # degrade to no-search-context instead
+                log.error(f"Web search step failed, continuing without it: {e}")
 
-        # 5. wrap user turn with reasoning instruction if active
+        # 5. wrap user turn with reasoning instruction if active.
+        #    The wrapper is applied ONLY to the message sent to the LLM —
+        #    history stores the clean, unwrapped input so future turns don't
+        #    see stale "think step by step" instructions baked into old turns.
         if self._reasoning:
-            prompt = (
+            llm_prompt = (
                 f"{user_input}\n\n"
                 "Think through this carefully before answering. "
                 "Show your reasoning inside <think> tags, then give your final answer."
             )
         else:
-            prompt = user_input
+            llm_prompt = user_input
 
-        # 6. append user turn
-        self._history.append({"role": "user", "content": prompt})
+        # what gets stored in history/memory: the label if given (original
+        # query, for web_search() calls), otherwise the raw user_input —
+        # never the reasoning-wrapped or search-results version.
+        history_entry = _history_label if _history_label is not None else user_input
 
-        # 7. trim history to context window
-        trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
+        with self._history_lock:
+            # 6. append user turn (clean label, not the wrapped/blob version)
+            self._history.append({"role": "user", "content": history_entry})
+
+            # 7. trim history to context window
+            trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
+
         trimmed = self._sanitize_history(trimmed)
+
+        # swap the last message's content to the full LLM-facing prompt
+        # (reasoning wrapper or full search-results blob) for this call only —
+        # history itself keeps the clean label set above.
+        if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != history_entry:
+            trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
 
         # 8. stream LLM response (silent — display handled in _emit)
         raw_response = self._stream_response(trimmed, system=system)
@@ -219,11 +274,13 @@ class AikoThink:
         # 9. emit to callback + TTS
         self._emit(raw_response)
 
-        # 10. append assistant turn to history
-        self._history.append({"role": "assistant", "content": raw_response})
+        with self._history_lock:
+            # 10. append assistant turn to history
+            self._history.append({"role": "assistant", "content": raw_response})
 
-        # 11. persist to memory (background) — store original input, not wrapped prompt
-        self._store_async(user_input, raw_response)
+        # 11. persist to memory (background) — store the clean label, never
+        #     the reasoning-wrapped prompt or raw search-results blob
+        self._store_async(history_entry, raw_response)
 
         # 12. auto-reset reasoning mode
         self._reasoning = False
@@ -234,6 +291,11 @@ class AikoThink:
         """
         Run a web search and feed results into a normal chat turn.
         Called by the /web command — no search logic leaks out.
+
+        Passes _skip_search=True so the search-results text injected as
+        user_input doesn't itself trigger a second, recursive search, and
+        _history_label=query so history/memory record the original query
+        rather than the full scraped results blob.
         """
         from core.tools import web_search_context
         context = web_search_context(query)
@@ -242,34 +304,37 @@ class AikoThink:
             if token_callback:
                 token_callback(msg)
             return msg
-        return self.chat(context, token_callback=token_callback)
+        return self.chat(
+            context,
+            token_callback=token_callback,
+            _skip_search=True,
+            _history_label=query,
+        )
 
     def reset_context(self) -> None:
         """Clear the in-memory conversation history for a fresh session."""
-        self._history.clear()
+        with self._history_lock:
+            self._history.clear()
 
     def last_turn(self) -> tuple[str, str] | None:
         """
         Return the latest complete user/assistant exchange, if one exists.
-        Walks history in reverse to find the most recent assistant reply
-        and its paired user message.
         Returns (user_text, assistant_text) or None.
         """
-        assistant_text: str | None = None
+        with self._history_lock:
+            history_snapshot = list(self._history)
 
-        for message in reversed(self._history):
-            role    = message.get("role")
-            content = (message.get("content") or "").strip()
-            if not content:
-                continue
-            if assistant_text is None:
-                if role == "assistant":
-                    assistant_text = content
-                continue
-            if role == "user":
-                return content, assistant_text
-
-        return None
+        users = [
+            m["content"].strip() for m in history_snapshot
+            if m.get("role") == "user" and (m.get("content") or "").strip()
+        ]
+        assistants = [
+            m["content"].strip() for m in history_snapshot
+            if m.get("role") == "assistant" and (m.get("content") or "").strip()
+        ]
+        if not users or not assistants:
+            return None
+        return users[-1], assistants[-1]
 
     def set_reasoning(self, enabled: bool) -> None:
         """
@@ -303,7 +368,7 @@ class AikoThink:
             for i, word in enumerate(words):
                 chunk = word if i == 0 else " " + word
                 self._token_callback(chunk)
-                time.sleep(0.012)  # ~80 wpm feel
+                time.sleep(float(os.getenv("EMIT_DELAY", 0.012)))  # ~80 wpm feel
         else:
             print(f"\nAiko-chan: {text}", flush=True)
 
@@ -313,14 +378,14 @@ class AikoThink:
 
     def _stream_response(self, messages: list[dict], system: str = "", silent: bool = True) -> str:
         """
-        Stream LLM response to console and TTS simultaneously.
-        Console printing is the single source of truth — speak.py is silent.
-        TTS skipped if response is a search trigger.
+        Collect the full LLM response from a stream.
+        Live token-by-token printing only happens when silent=False; by
+        default (silent=True) the response is gathered in full and replayed
+        word-by-word via _emit() afterward, so console/TTS output and the
+        actual generation are decoupled.
 
-        Tokens are buffered at the start of each response to detect a
-        [SEARCH: ...] trigger before any output is committed to the console
-        or TTS queue. max_tokens is scaled by _REASONING_SCALE when
-        reasoning mode is active to budget for the <think> scratchpad.
+        max_tokens is scaled by _REASONING_SCALE when reasoning mode is
+        active to budget for the <think> scratchpad.
 
         Args:
             messages: Full message list (system prompt + trimmed history).
@@ -329,11 +394,7 @@ class AikoThink:
         Returns:
             The complete response text assembled from all streamed tokens.
         """
-        full_response    = []
-        tts_started      = False
-        buffer           = ""
-        is_searching     = False
-        buffering_active = True
+        full_response = []
 
         # triple token budget in reasoning mode to fit the <think> scratchpad
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
@@ -352,6 +413,7 @@ class AikoThink:
                 temperature=float(os.getenv("TEMPERATURE", 0.72)),
                 top_p=float(os.getenv("TOP_P", 0.90)),
                 stop=["<|im_end|>", "</s>", "[INST]"],
+                timeout=float(os.getenv("LLAMACPP_TIMEOUT", 120)),
                 extra_body={
                     "repeat_penalty": float(os.getenv("REPEAT_PENALTY", 1.15)),
                     "repeat_last_n":  int(os.getenv("REPEAT_LAST_N", 64)),
@@ -382,8 +444,9 @@ class AikoThink:
             log.error(msg)
 
             # remove the dangling user turn so next call doesn't create a consecutive pair
-            if self._history and self._history[-1]["role"] == "user":
-                self._history.pop()
+            with self._history_lock:
+                if self._history and self._history[-1]["role"] == "user":
+                    self._history.pop()
             if self._token_callback:
                 self._token_callback(f"[think] {msg}")
             else:
@@ -397,23 +460,26 @@ class AikoThink:
         Classify whether user_input warrants a live web search.
 
         Priority order:
-          1. Social signal fast-path  → False  (no search)
-          2. Factual signal fast-path → True   (search)
+          1. Factual signal fast-path (word-boundary match) → True (search)
+          2. Social signal fast-path  (word-boundary match) → False (no search)
           3. LLM classifier fallback  → True/False (ambiguous inputs only)
+
+        Factual signals are checked FIRST so a query like "what's the score,
+        do you know?" — which contains both a factual cue ("score") and a
+        conversational cue ("do you know") — still triggers a search rather
+        than being silently swallowed by the social fast-path.
 
         The LLM fallback is cheap: 1-token answer, temperature=0.0.
         """
-        lowered = user_input.lower()
-
-        # fast path: social phrasing — never search
-        if any(sig in lowered for sig in _SOCIAL_SIGNALS):
-            log.debug(f"[intent] SOCIAL (fast-path): {user_input!r}")
-            return False
-
-        # fast path: factual signals — always search
-        if any(sig in lowered for sig in _FACTUAL_SIGNALS):
+        # fast path: factual signals — always search (checked first, see above)
+        if _FACTUAL_RE.search(user_input):
             log.debug(f"[intent] DATA (fast-path): {user_input!r}")
             return True
+
+        # fast path: social phrasing — never search
+        if _SOCIAL_RE.search(user_input):
+            log.debug(f"[intent] SOCIAL (fast-path): {user_input!r}")
+            return False
 
         # ambiguous — ask the LLM for a 1-token classification
         try:
@@ -451,12 +517,13 @@ class AikoThink:
 
         Falls back to raw user_input on any error or if no prior context exists.
         """
-        if len(user_input.split()) <= 6 and self._history:
-            last_user = next(
-                (m["content"] for m in reversed(self._history)
-                 if m["role"] == "user"),
-                ""
-            )
+        if len(user_input.split()) <= 6:
+            with self._history_lock:
+                last_user = next(
+                    (m["content"] for m in reversed(self._history)
+                     if m["role"] == "user"),
+                    ""
+                )
             if last_user and last_user != user_input:
                 try:
                     resp = self._client.chat.completions.create(
