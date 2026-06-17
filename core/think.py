@@ -110,6 +110,7 @@ class AikoThink:
         self._persona   = _load_persona()
         self._history:  list[dict] = []
         self._history_lock = threading.Lock()
+        self._pending_search_query: str | None = None
         self._reasoning = False
         self._mem_queue  = queue.Queue()
         self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
@@ -251,9 +252,22 @@ class AikoThink:
         # never the reasoning-wrapped or search-results version.
         history_entry = _history_label if _history_label is not None else user_input
 
+        # cap on raw growth of self._history itself — independent of
+        # CONTEXT_WINDOW_TURNS, which only controls how much gets sent to the
+        # LLM each turn. Without this, self._history grows by 2 entries every
+        # turn for the life of the process. Kept generously above the LLM
+        # context window so last_turn()/_build_search_query() still have
+        # recent-but-not-in-window turns to look back on if needed.
+        _HISTORY_HARD_CAP = CONTEXT_WINDOW_TURNS * 10
+
         with self._history_lock:
             # 6. append user turn (clean label, not the wrapped/blob version)
             self._history.append({"role": "user", "content": history_entry})
+
+            # prevent unbounded growth — truncate the actual list, not just
+            # a slice of it, so old turns are freed rather than retained
+            if len(self._history) > _HISTORY_HARD_CAP:
+                self._history = self._history[-_HISTORY_HARD_CAP:]
 
             # 7. trim history to context window
             trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
@@ -275,6 +289,8 @@ class AikoThink:
         with self._history_lock:
             # 10. append assistant turn to history
             self._history.append({"role": "assistant", "content": raw_response})
+            if len(self._history) > _HISTORY_HARD_CAP:
+                self._history = self._history[-_HISTORY_HARD_CAP:]
 
         # 11. persist to memory (background) — store the clean label, never
         #     the reasoning-wrapped prompt or raw search-results blob
@@ -472,14 +488,18 @@ class AikoThink:
         Priority order:
           1. Factual signal fast-path (word-boundary match) → True (search)
           2. Social signal fast-path  (word-boundary match) → False (no search)
-          3. LLM classifier fallback  → True/False (ambiguous inputs only)
+          3. Combined LLM classifier  → True/False (ambiguous inputs only)
 
         Factual signals are checked FIRST so a query like "what's the score,
         do you know?" — which contains both a factual cue ("score") and a
         conversational cue ("do you know") — still triggers a search rather
         than being silently swallowed by the social fast-path.
 
-        The LLM fallback is cheap: 1-token answer, temperature=0.0.
+        For ambiguous inputs (no fast-path match), this delegates to
+        _classify_and_resolve(), which does intent classification AND query
+        resolution in a single LLM call instead of two sequential ones. The
+        resolved query is cached on self._pending_search_query so
+        _build_search_query() can reuse it without a second call.
         """
         # fast path: factual signals — always search (checked first, see above)
         if _FACTUAL_RE.search(user_input):
@@ -491,42 +511,88 @@ class AikoThink:
             log.debug(f"[intent] SOCIAL (fast-path): {user_input!r}")
             return False
 
-        # ambiguous — ask the LLM for a 1-token classification
+        # ambiguous — single combined LLM call does both jobs at once
+        is_data, resolved_query = self._classify_and_resolve(user_input)
+        self._pending_search_query = resolved_query if is_data else None
+        return is_data
+
+    def _classify_and_resolve(self, user_input: str) -> tuple[bool, str]:
+        """
+        Single LLM call that both classifies intent AND resolves the query
+        (pronoun/reference resolution against the previous turn) in one shot,
+        replacing what used to be two sequential LLM calls
+        (_is_data_intent's old fallback + _build_search_query's old fallback).
+
+        Returns (is_data_intent, resolved_query). resolved_query is only
+        meaningful when is_data_intent is True; it falls back to the raw
+        user_input if resolution wasn't needed/possible.
+        """
+        with self._history_lock:
+            last_user = next(
+                (m["content"] for m in reversed(self._history)
+                 if m["role"] == "user"),
+                ""
+            )
+        has_context = bool(last_user and last_user != user_input)
+
+        context_block = (
+            f'Previous question: "{last_user}"\n' if has_context else ""
+        )
+
         try:
             resp = self._client.chat.completions.create(
                 model=LLAMACPP_MODEL,
                 messages=[{
                     "role": "user",
                     "content": (
+                        f'{context_block}'
+                        f'Message: "{user_input}"\n\n'
                         f'Is this message asking for factual external data '
                         f'(news, scores, prices, current events), or is it '
                         f'conversational/social?\n\n'
-                        f'Message: "{user_input}"\n\n'
-                        f'Reply with exactly one word: data OR social'
+                        f'If it is a data request, also resolve any pronouns '
+                        f'or references against the previous question (if given) '
+                        f'into a single self-contained search query.\n\n'
+                        f'Reply in EXACTLY this format, nothing else:\n'
+                        f'data|<search query>\n'
+                        f'or:\n'
+                        f'social|none'
                     )
                 }],
                 stream=False,
-                max_tokens=4,
+                max_tokens=32,
                 temperature=0.0,
             )
-            answer = resp.choices[0].message.content.strip().lower()
-            result = "data" in answer
-            log.debug(f"[intent] LLM classified {'DATA' if result else 'SOCIAL'}: {user_input!r}")
-            return result
+            answer = resp.choices[0].message.content.strip()
+            label, _, rest = answer.partition("|")
+            label = label.strip().lower()
+            rest  = rest.strip()
+
+            is_data = "data" in label
+            resolved = rest if (is_data and rest and rest.lower() != "none") else user_input
+
+            log.debug(f"[intent+query] {user_input!r} → is_data={is_data}, query={resolved!r}")
+            return is_data, resolved
         except Exception as e:
-            log.warning(f"Intent gate failed, defaulting to search: {e}")
-            return True
+            log.warning(f"Combined intent/query classification failed, defaulting to search: {e}")
+            return True, user_input
 
     def _build_search_query(self, user_input: str) -> str:
         """
         Build a self-contained search query from user_input.
 
-        For short follow-up messages (≤6 words), resolves pronouns and
-        references using the previous user turn as context.
-        Example: "How about Game 2?" → "NBA Finals 2026 Game 2 score"
-
-        Falls back to raw user_input on any error or if no prior context exists.
+        If _is_data_intent() already resolved the query via the combined
+        classifier (ambiguous-input path), that cached result is reused here
+        with no extra LLM call. Otherwise (fast-path matches don't resolve
+        queries), falls back to the original behavior: for short follow-up
+        messages (≤6 words) with prior history, makes a single LLM call to
+        resolve pronouns/references; otherwise returns user_input unchanged.
         """
+        pending = self._pending_search_query
+        if pending is not None:
+            self._pending_search_query = None  # consume — one-shot cache
+            return pending
+
         if len(user_input.split()) <= 6:
             with self._history_lock:
                 last_user = next(
