@@ -176,8 +176,6 @@ class AikoThink:
                               original query ("nba scores") rather than the
                               full scraped results blob.
         """
-        self._token_callback = token_callback
-
         # interrupt any ongoing speech before processing new input
         if self._speak and self._speak.is_playing():
             self._speak.stop()
@@ -269,10 +267,10 @@ class AikoThink:
             trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
 
         # 8. stream LLM response (silent — display handled in _emit)
-        raw_response = self._stream_response(trimmed, system=system)
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
 
         # 9. emit to callback + TTS
-        self._emit(raw_response)
+        self._emit(raw_response, token_callback=token_callback)
 
         with self._history_lock:
             # 10. append assistant turn to history
@@ -353,21 +351,24 @@ class AikoThink:
 
     # ── internal ──────────────────────────────────────────────────────────────
 
-    def _emit(self, text: str) -> None:
+    def _emit(self, text: str, token_callback=None) -> None:
         """
         Send display text to token_callback (TUI) or stdout, and feed TTS.
         Streams word-by-word to token_callback for a natural typing feel,
         even though the LLM has already finished (silent mode).
         TTS receives the full text at once for uninterrupted audio.
+
+        token_callback is taken as a parameter (not read from self) so
+        concurrent chat() calls can't crossfire on which callback fires.
         """
         if not text:
             return
 
-        if self._token_callback:
+        if token_callback:
             words = text.split(" ")
             for i, word in enumerate(words):
                 chunk = word if i == 0 else " " + word
-                self._token_callback(chunk)
+                token_callback(chunk)
                 time.sleep(float(os.getenv("EMIT_DELAY", 0.012)))  # ~80 wpm feel
         else:
             print(f"\nAiko-chan: {text}", flush=True)
@@ -376,7 +377,13 @@ class AikoThink:
             self._speak.feed(text)
             self._speak.play_async()
 
-    def _stream_response(self, messages: list[dict], system: str = "", silent: bool = True) -> str:
+    def _stream_response(
+        self,
+        messages: list[dict],
+        system: str = "",
+        silent: bool = True,
+        token_callback=None,
+    ) -> str:
         """
         Collect the full LLM response from a stream.
         Live token-by-token printing only happens when silent=False; by
@@ -386,6 +393,9 @@ class AikoThink:
 
         max_tokens is scaled by _REASONING_SCALE when reasoning mode is
         active to budget for the <think> scratchpad.
+
+        token_callback is taken as a parameter (not read from self) so
+        concurrent chat() calls can't crossfire on which callback fires.
 
         Args:
             messages: Full message list (system prompt + trimmed history).
@@ -429,14 +439,14 @@ class AikoThink:
 
                 # live streaming only when silent=False
                 if not silent:
-                    if self._token_callback:
-                        self._token_callback(token)
+                    if token_callback:
+                        token_callback(token)
                     else:
                         if len(full_response) == 1:
                             print("\nAiko-chan: ", end="", flush=True)
                         print(token, end="", flush=True)
 
-            if not silent and not self._token_callback:
+            if not silent and not token_callback:
                 print(flush=True)
 
         except Exception as e:
@@ -447,8 +457,8 @@ class AikoThink:
             with self._history_lock:
                 if self._history and self._history[-1]["role"] == "user":
                     self._history.pop()
-            if self._token_callback:
-                self._token_callback(f"[think] {msg}")
+            if token_callback:
+                token_callback(f"[think] {msg}")
             else:
                 print(f"\n[think] {msg}")
             return ""
