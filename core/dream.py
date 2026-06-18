@@ -79,7 +79,7 @@ def _dream_loop(memorize) -> None:
                     if len(memories) >= int(os.getenv("REFLECT_MAX_MEMS", 20)):
                         break
             
-            generate_and_post(memories, date=yesterday_start)
+            generate_and_post(memories, date=yesterday_start, memorize=memorize)
         except Exception as e:
             log.error(f"dream() raised: {e}")
         finally:

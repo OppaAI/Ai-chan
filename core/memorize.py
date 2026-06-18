@@ -108,6 +108,8 @@ _SALIENCE_KEYWORDS = frozenset([
     "name", "called", "likes", "loves", "hates", "dislikes", "always", "never",
     "important", "remember", "favourite", "favorite", "birthday", "works",
     "lives", "studying", "job", "afraid", "dream", "goal",
+    "deadline", "due", "appointment", "event", "hackathon", "wallet",
+    "lost", "passport", "license", "meeting", "interview", "project",
 ])
 
 _SALIENCE_RE = re.compile(
@@ -149,7 +151,7 @@ Rules:
 Return ONLY a JSON array of short strings. No markdown. No explanation.
 
 Good examples:
-["Oppa's birthday is June 3", "Oppa is building a robot called GRACE", "Oppa dislikes mushrooms"]
+["Oppa's birthday is June 3", "Oppa is building a robot called GRACE", "Oppa joined the Hugging Face Hackathon", "Oppa lost his wallet", "Oppa has a deadline on Friday", "Oppa dislikes mushrooms"]
 
 Bad examples (do not produce these):
 ["Oppa might like cats", "It seems Oppa is tired", "Aiko should remember this"]
