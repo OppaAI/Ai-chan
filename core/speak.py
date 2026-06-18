@@ -17,6 +17,7 @@ Standalone test:
     python core/speak.py "Hello, I'm Aiko!"
     python core/speak.py --devices
     python core/speak.py --wait "Block until done."
+    python core/speak.py --synced --wait "Watch the words land with the voice."
 """
 
 import base64
@@ -96,6 +97,13 @@ class AikoSpeak:
     MioTTS inference server client.
     Synthesis is a single HTTP round-trip; playback uses sounddevice.
     Printing to console is the caller's responsibility — speak.py is silent.
+
+    Two playback modes:
+      - speak()        fire-and-forget, no on-screen pacing.
+      - speak_synced()  same playback, but also calls an on_word callback
+                         paced to roughly track each chunk's real audio
+                         duration (karaoke-style), instead of a fixed
+                         artificial per-word delay decoupled from the voice.
     """
 
     def __init__(self, silent: bool = False) -> None:
@@ -161,13 +169,30 @@ class AikoSpeak:
             print(f"[speak] synthesis error: {e}")
             return None
 
+    @staticmethod
+    def _wav_duration(wav_bytes: bytes) -> float:
+        """Return the duration (seconds) of a WAV blob, or 0.0 if unreadable."""
+        import wave
+        try:
+            with wave.open(io.BytesIO(wav_bytes), "rb") as w:
+                frames = w.getnframes()
+                rate   = w.getframerate()
+                return frames / float(rate) if rate else 0.0
+        except Exception:
+            return 0.0
+
     # ── playback ──────────────────────────────────────────────────────────────
 
     def _play_wav_bytes(self, wav_bytes: bytes) -> None:
-        """Play WAV bytes via sounddevice."""
+        """
+        Play WAV bytes via sounddevice.
+        NOTE: this does not set/clear self._playing or self._stop_flag —
+        the calling entry point (_speak_thread / _speak_thread_synced) owns
+        those flags for the whole utterance. Touching them per-chunk here
+        used to cause is_playing() to flicker false between chunks, and
+        could wipe a stop() request that landed between chunks.
+        """
         import scipy.io.wavfile as wav_io
-        self._playing.set()
-        self._stop_flag.clear()
         try:
             sd = self._load_sd()
             rate, data = wav_io.read(io.BytesIO(wav_bytes))
@@ -198,7 +223,6 @@ class AikoSpeak:
                 sd.stop()
             except Exception:
                 pass
-            self._playing.clear()
 
     def _speak_thread(self, text: str) -> None:
         """Split into sentence chunks ≤300 chars, synthesize and play each."""
@@ -211,6 +235,70 @@ class AikoSpeak:
                 wav = self._synthesize(chunk)
                 if wav:
                     self._play_wav_bytes(wav)
+        finally:
+            self._playing.clear()
+
+    def _emit_words_timed(self, text: str, duration: float, on_word) -> None:
+        """
+        Call on_word() for each word in `text`, paced so the words land
+        roughly across `duration` seconds — the real audio length of this
+        chunk — instead of a fixed artificial delay. Weighted by word length
+        (longer words ≈ longer to say) rather than splitting time evenly.
+
+        This is an estimate, not forced phoneme alignment (MioTTS doesn't
+        expose word/phoneme timestamps), but it tracks the actual pace of
+        the chunk instead of an arbitrary one.
+        """
+        words = text.split()
+        if not words:
+            return
+        if duration <= 0:
+            # couldn't determine audio length — just emit immediately
+            for i, word in enumerate(words):
+                on_word(word if i == 0 else " " + word)
+            return
+
+        weights = [len(w) + 1 for w in words]   # +1 ≈ trailing space/breath
+        total   = sum(weights)
+        start   = time.monotonic()
+        elapsed = 0.0
+        for i, (word, weight) in enumerate(zip(words, weights)):
+            if self._stop_flag.is_set():
+                break
+            on_word(word if i == 0 else " " + word)
+            elapsed += duration * (weight / total)
+            sleep_time = (start + elapsed) - time.monotonic()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    def _speak_thread_synced(self, text: str, on_word=None) -> None:
+        """
+        Like _speak_thread, but for each chunk: synthesize first (so the
+        real audio duration is known), then play the audio and pace
+        on-screen word emission to that chunk's duration in parallel —
+        karaoke-style — instead of typing the whole response out at a fixed
+        pace and only starting audio afterward.
+        """
+        self._playing.set()
+        self._stop_flag.clear()
+        try:
+            for chunk in self._chunk_text(text):
+                if self._stop_flag.is_set():
+                    break
+                wav = self._synthesize(chunk)
+                if not wav:
+                    continue
+                duration = self._wav_duration(wav)
+
+                play_thread = threading.Thread(
+                    target=self._play_wav_bytes, args=(wav,), daemon=True
+                )
+                play_thread.start()
+
+                if on_word:
+                    self._emit_words_timed(chunk, duration, on_word)
+
+                play_thread.join()
         finally:
             self._playing.clear()
 
@@ -246,6 +334,25 @@ class AikoSpeak:
             return False
         self.stop()
         t = threading.Thread(target=self._speak_thread, args=(clean,), daemon=True)
+        t.start()
+        return True
+
+    def speak_synced(self, text: str, on_word=None) -> bool:
+        """
+        Synthesize and play `text`, calling on_word(word_chunk) timed to
+        track each chunk's real TTS audio duration (karaoke-style) instead
+        of printing the whole response immediately and starting audio
+        afterward. Non-blocking — runs in a background thread, same as
+        speak(). on_word receives each word pre-padded with a leading space
+        except the first, e.g. "Hello", " I'm", " Aiko".
+        """
+        clean = sanitize_for_tts(text)
+        if not clean:
+            return False
+        self.stop()
+        t = threading.Thread(
+            target=self._speak_thread_synced, args=(clean, on_word), daemon=True
+        )
         t.start()
         return True
 
@@ -323,6 +430,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--devices", action="store_true")
     parser.add_argument("--preset", default=None)
     parser.add_argument("--wait",   action="store_true")
+    parser.add_argument("--synced", action="store_true",
+        help="demo karaoke-style synced typing instead of plain speak()")
     return parser.parse_args()
 
 
@@ -340,7 +449,18 @@ if __name__ == "__main__":
     MIOTTS_PRESET = os.getenv("MIOTTS_PRESET", "jp_female")
 
     voice = AikoSpeak()
-    ok    = voice.speak(args.text)
-    if args.wait:
-        voice.wait()
+
+    if args.synced:
+        def _print_word(w: str) -> None:
+            print(w, end="", flush=True)
+        print("Aiko-chan: ", end="", flush=True)
+        ok = voice.speak_synced(args.text, on_word=_print_word)
+        if args.wait:
+            voice.wait()
+        print()
+    else:
+        ok = voice.speak(args.text)
+        if args.wait:
+            voice.wait()
+
     sys.exit(0 if ok else 1)
