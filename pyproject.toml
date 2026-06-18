@@ -8,9 +8,12 @@ dependencies = [
     "click>=8.4.1",
     "fastembed>=0.8.0",
     "numpy<2",
+    "onnxruntime>=1.23.2",
     "python-dotenv>=1.0.0",
+    "reazonspeech-k2-asr",
     "requests>=2.34.2",
     "scipy>=1.15.3",
+    "sherpa-onnx>=1.13.3",
     "silero-vad>=6.2.1",
     "sounddevice>=0.5.5",
     "soundfile>=0.13.1",
@@ -18,3 +21,7 @@ dependencies = [
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
 ]
+
+[tool.uv.sources]
+reazonspeech-k2-asr = { path = "../reazonspeech/pkg/k2-asr" }
+sherpa-onnx = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl" }
