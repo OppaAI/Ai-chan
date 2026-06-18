@@ -3,7 +3,7 @@ core/reflect.py
 Aiko's nightly experience-summary writer.
 
 Called after dream() completes at 00:00. Pulls the day's chat turns and
-memory snippets, asks Ollama to write a factual daily summary, pins that
+memory snippets, asks the local llama-server to write a factual daily summary, pins that
 summary to persistent memory, then pushes a Hugo-format markdown post to
 GitHub via the REST API (no local clone needed).
 
@@ -18,8 +18,9 @@ Optional:
   REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 20)
   REFLECT_MAX_TURNS   — max chat turns to feed the LLM (default 40)
   REFLECT_TAGS        — comma-separated Hugo tags (default "daily-summary,ai-journal,aiko")
-  OLLAMA_MODEL        — reuses the main chat model (already in VRAM)
-  OLLAMA_BASE_URL     — default http://localhost:11434
+  LLAMACPP_MODEL      — reuses the main chat model (already in VRAM)
+  LLAMACPP_BASE_URL   — default http://localhost:8080/v1
+  REFLECT_ASCII      — true/false toggle for ASCII art generation (default true)
 """
 from dotenv import load_dotenv
 load_dotenv()
@@ -33,6 +34,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
+from openai import OpenAI
 
 from core.log import get_logger
 from core.experience import load_chat_turns
@@ -46,14 +48,16 @@ GITHUB_REPO       = os.getenv("GITHUB_REPO", "")          # e.g. "OppaAI/oppaai.
 GITHUB_BRANCH     = os.getenv("GITHUB_BRANCH", "main")
 HUGO_CONTENT_PATH = os.getenv("HUGO_CONTENT_PATH", "content/posts")
 
-OLLAMA_MODEL      = os.getenv("OLLAMA_MODEL", "")
-OLLAMA_BASE_URL   = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+LLAMACPP_MODEL    = os.getenv("LLAMACPP_MODEL", os.getenv("OLLAMA_MODEL", "ministral-3b-instruct"))
+LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
+_LLM_CLIENT       = OpenAI(base_url=LLAMACPP_BASE_URL, api_key="not-needed")
 
 SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
 
 REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 20))
 REFLECT_MAX_TURNS = int(os.getenv("REFLECT_MAX_TURNS", 40))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-summary,ai-journal,aiko")
+REFLECT_ASCII     = os.getenv("REFLECT_ASCII", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 _GITHUB_API       = "https://api.github.com"
 
@@ -129,32 +133,27 @@ def _build_reflection_system() -> str:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def _ollama_chat(system: str, user: str, max_tokens: int = 400) -> str:
+def _llm_chat(system: str, user: str, max_tokens: int = 400) -> str:
     """
-    Single-shot Ollama /api/chat call. Returns stripped response text.
-    Raises on HTTP or JSON failure so callers can catch cleanly.
+    Single-shot OpenAI-compatible llama-server chat call.
+    Raises on API failure so callers can catch cleanly.
     """
-    payload = {
-        "model":  OLLAMA_MODEL,
-        "stream": False,
-        "options": {"num_predict": max_tokens, "temperature": 0.75},
-        "messages": [
+    resp = _LLM_CLIENT.chat.completions.create(
+        model=LLAMACPP_MODEL,
+        messages=[
             {"role": "system", "content": system},
-            {"role": "user",   "content": user},
+            {"role": "user", "content": user},
         ],
-    }
-    resp = requests.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
-        json=payload,
+        stream=False,
+        max_tokens=max_tokens,
+        temperature=0.75,
         timeout=120,
     )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["message"]["content"].strip()
+    return (resp.choices[0].message.content or "").strip()
 
 
 def _generate_reflection(snippets: list[str], turns: list[dict], date: datetime) -> str:
-    """Ask Ollama for a factual daily summary using chats + memories."""
+    """Ask llama-server for a factual daily summary using chats + memories."""
     bullet_list = "\n".join(f"- {s}" for s in snippets) or "- No memory snippets available."
     turn_lines = []
     for turn in turns[:REFLECT_MAX_TURNS]:
@@ -168,13 +167,13 @@ def _generate_reflection(snippets: list[str], turns: list[dict], date: datetime)
         turns=turns_text,
         snippets=bullet_list,
     )
-    return _ollama_chat(_build_reflection_system(), user_prompt, max_tokens=500)
+    return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500)
 
 
 def _generate_ascii(prose: str) -> str:
-    """Ask Ollama to draw ASCII art matching the reflection's mood."""
+    """Ask llama-server to draw ASCII art matching the reflection's mood."""
     user_prompt = _ASCII_USER.format(prose=prose[:600])  # truncate for token budget
-    raw = _ollama_chat(_ASCII_SYSTEM, user_prompt, max_tokens=200)
+    raw = _llm_chat(_ASCII_SYSTEM, user_prompt, max_tokens=200)
 
     # Strip any accidental code fences the model may have added
     raw = re.sub(r"^```[a-z]*\n?", "", raw, flags=re.MULTILINE)
@@ -220,7 +219,7 @@ def _build_hugo_post(
         f'draft: false\n'
         f'tags:\n'
         f'{tags_yaml}\n'
-        f'summary: "{prose[:120].replace(chr(34), chr(39))}…"\n'
+        f'summary: "{prose[:120].replace('"', "'")}…"\n'
         f'word_count: {word_count}\n'
         f'read_time: {read_mins} min\n'
         f'---'
@@ -321,9 +320,6 @@ def generate_and_post(
     write_time = datetime.now(timezone.utc)
     date       = date or write_time - timedelta(days=1)
 
-    if not OLLAMA_MODEL:
-        log.error("OLLAMA_MODEL not set.")
-        return {"success": False, "error": "OLLAMA_MODEL not set"}
 
     # Extract text snippets — deduplicate, cap at REFLECT_MAX_MEMS
     # Caller is responsible for sorting memories by recency before passing in.
@@ -354,10 +350,13 @@ def generate_and_post(
         return {"success": False, "error": str(e)}
 
     # Step 2: ASCII art
-    try:
-        ascii_art = _generate_ascii(prose)
-    except Exception as e:
-        log.warning(f"ASCII art generation failed ({e}) — using fallback.")
+    if REFLECT_ASCII:
+        try:
+            ascii_art = _generate_ascii(prose)
+        except Exception as e:
+            log.warning(f"ASCII art generation failed ({e}) — using fallback.")
+            ascii_art = "  ~  ( Aiko )  ~\n   `-- * --'"
+    else:
         ascii_art = "  ~  ( Aiko )  ~\n   `-- * --'"
 
     # Step 3: Build Hugo post

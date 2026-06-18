@@ -31,11 +31,26 @@ from core.tools import (
 log = get_logger(__name__)
 
 MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
+AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 280)))
+
+
+def _tool(schema: dict):
+    """Decorator used to keep schemas and dispatch handlers in one registry."""
+    def decorator(func):
+        _TOOLS[schema["function"]["name"]] = (schema, func)
+        return func
+    return decorator
+
+
+_TOOLS: dict[str, tuple[dict, object]] = {}
 
 
 def tool_schemas() -> list[dict]:
     """Return OpenAI-compatible tool schemas for autonomous task mode."""
-    return [
+    return [schema for schema, _handler in _TOOLS.values()]
+
+
+_TOOL_SCHEMAS = [
         {"type": "function", "function": {
             "name": "web_search", "description": "Search web.",
             "parameters": {"type": "object", "properties": {
@@ -121,35 +136,36 @@ def tool_schemas() -> list[dict]:
     ]
 
 
+def _register_tools() -> None:
+    handlers = {
+        "web_search": lambda args: deep_search(args.get("query", "")),
+        "fetch_page": lambda args: fetch_and_extract(args.get("url", "")),
+        "make_plan": lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
+        "create_checklist": lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
+        "save_note": lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
+        "read_workspace_file": lambda args: read_workspace_file(args.get("relative_path", "")),
+        "summarize_task_state": lambda args: summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", "")),
+        "schedule_job": lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic")),
+        "list_schedule": lambda args: list_schedule(bool(args.get("include_disabled", False))),
+        "cancel_schedule": lambda args: cancel_schedule(args.get("job_id", "")),
+        "schedule_reminder": lambda args: schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone")),
+        "list_reminders": lambda args: list_reminders(bool(args.get("include_disabled", False))),
+        "cancel_reminder": lambda args: cancel_reminder(args.get("reminder_id", "")),
+    }
+    for schema in _TOOL_SCHEMAS:
+        name = schema["function"]["name"]
+        _TOOLS[name] = (schema, handlers.get(name, lambda _args, n=name: f"[unknown tool: {n}]"))
+
+
+_register_tools()
+
+
 def dispatch_tool(name: str, args: dict) -> str:
     """Run one named tool with already-decoded JSON args."""
-    if name == "web_search":
-        return deep_search(args.get("query", ""))
-    if name == "fetch_page":
-        return fetch_and_extract(args.get("url", ""))
-    if name == "make_plan":
-        return make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8))
-    if name == "create_checklist":
-        return create_checklist(args.get("title", "Checklist"), args.get("items", ""))
-    if name == "save_note":
-        return save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes"))
-    if name == "read_workspace_file":
-        return read_workspace_file(args.get("relative_path", ""))
-    if name == "summarize_task_state":
-        return summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", ""))
-    if name == "schedule_job":
-        return schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"))
-    if name == "list_schedule":
-        return list_schedule(bool(args.get("include_disabled", False)))
-    if name == "cancel_schedule":
-        return cancel_schedule(args.get("job_id", ""))
-    if name == "schedule_reminder":
-        return schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone"))
-    if name == "list_reminders":
-        return list_reminders(bool(args.get("include_disabled", False)))
-    if name == "cancel_reminder":
-        return cancel_reminder(args.get("reminder_id", ""))
-    return f"[unknown tool: {name}]"
+    entry = _TOOLS.get(name)
+    if not entry:
+        return f"[unknown tool: {name}]"
+    return entry[1](args)
 
 
 def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
@@ -176,6 +192,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
 
     final_text = ""
     last_content = ""
+    seen_calls: set[tuple[str, str]] = set()
 
     for step in range(MAX_AGENT_ITER):
         if token_callback:
@@ -184,7 +201,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         try:
             resp = owner._client.chat.completions.create(
                 model=owner._llm_model, messages=messages, tools=tools,
-                tool_choice="auto", stream=False, max_tokens=1024,
+                tool_choice="auto", stream=False, max_tokens=AGENT_MAX_TOKENS,
                 temperature=0.3,
             )
             msg = resp.choices[0].message
@@ -206,6 +223,15 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 args = {}
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
+            call_key = (name, json.dumps(args, sort_keys=True))
+            if call_key in seen_calls:
+                result = f"[loop guard: repeated tool call skipped for {name}]"
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": result,
+                })
+                continue
+            seen_calls.add(call_key)
             if token_callback:
                 token_callback(f"__TOOL__:{name}({args})\n")
 

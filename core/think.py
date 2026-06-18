@@ -51,8 +51,10 @@ LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
 LLAMACPP_MODEL    = os.getenv("LLAMACPP_MODEL",    "ministral-3b-instruct")
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
-_BASE_PREDICT    = 280
+_BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
+_AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
 _REASONING_SCALE = 3
+_IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -115,6 +117,7 @@ class AikoThink:
         self._history:  list[dict] = []
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
+        self._route_chat_classified: str | None = None
         self._reasoning = False
         self._mem_queue  = queue.Queue()
         self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
@@ -163,6 +166,8 @@ class AikoThink:
             return "keyword"
         if re.search(r"\b(wake me|remind me|alarm|timer|every morning|every day|daily)\b", text):
             return "reminder"
+        if _FACTUAL_RE.search(user_input):
+            return "chat"
         if _SOCIAL_RE.search(user_input):
             return "chat"
         return self._classify_agent_intent(user_input)
@@ -181,10 +186,13 @@ class AikoThink:
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
-            return label if label in {
+            if label in {
                 "research", "planning", "writing", "coding",
                 "decision", "reminder", "ongoing_task",
-            } else "chat"
+            }:
+                return label
+            self._route_chat_classified = user_input
+            return "chat"
         except Exception as e:
             log.warning("Intent routing failed: %s", e)
             return "chat"
@@ -318,7 +326,7 @@ class AikoThink:
         """Background autonomous learning loop."""
         while True:
             time.sleep(300)  # check every 5 minutes
-            if time.time() - self._last_chat_time < 300:
+            if time.time() - self._last_chat_time < _IDLE_LEARN_SECONDS:
                 continue  # user has been active recently, don't interrupt
                 
             if self._speak and self._speak.is_playing():
@@ -334,13 +342,18 @@ class AikoThink:
                     continue
                     
                 topic = candidates[-1] # simplistic: look at last user query
+                learned_tag = f"[self-learned:{topic}]"
+                if any(learned_tag in (m.get("content") or "") for m in self._history):
+                    continue
+                if self._memorize.search(learned_tag, limit=1):
+                    continue
                 
                 # Run silent agentic research
                 result = self.agentic_chat(f"Research this topic briefly: {topic}")
                 
                 # Store as self-learned memory
                 self._memorize.add([
-                    {"role": "system", "content": f"[self-learned:{topic}]"},
+                    {"role": "system", "content": learned_tag},
                     {"role": "assistant", "content": result[:800]}
                 ])
                 log.info(f"[learner] Successfully learned about: {topic}")
@@ -366,7 +379,7 @@ class AikoThink:
                 self._speak.feed(text)
                 self._speak.play_async()
 
-    def _stream_response(self, messages: list[dict], system: str = "", silent: bool = True, token_callback=None) -> str:
+    def _stream_response(self, messages: list[dict], system: str = "", token_callback=None) -> str:
         full_response = []
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
         all_messages = [{"role": "system", "content": system}] + messages if system else messages
@@ -389,7 +402,7 @@ class AikoThink:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
                 full_response.append(token)
-                if not silent and token_callback: token_callback(token)
+                # Streaming is collected here; user-facing emission is centralized in _emit().
         except Exception as e:
             msg = f"Stream failed: {e}"
             log.error(msg)
@@ -402,6 +415,9 @@ class AikoThink:
     def _is_data_intent(self, user_input: str) -> bool:
         if _FACTUAL_RE.search(user_input): return True
         if _SOCIAL_RE.search(user_input): return False
+        if self._route_chat_classified == user_input:
+            self._route_chat_classified = None
+            return False
         is_data, resolved_query = self._classify_and_resolve(user_input)
         self._pending_search_query = resolved_query if is_data else None
         return is_data
