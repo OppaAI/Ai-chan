@@ -154,7 +154,8 @@ class AikoThink:
           4. If data intent detected, search web and inject results into system
              prompt before the LLM speaks — LLM never guesses live data.
           5. Stream LLM response silently (full text collected).
-          6. Emit display text to token_callback + TTS (word-by-word for feel).
+          6. Emit display text to token_callback + TTS (karaoke-synced to the
+             actual TTS audio when both are available — see _emit).
           7. Append to history and enqueue async memory write.
 
         Reasoning mode (set via set_reasoning(True) / /think command) wraps the
@@ -370,14 +371,30 @@ class AikoThink:
     def _emit(self, text: str, token_callback=None) -> None:
         """
         Send display text to token_callback (TUI) or stdout, and feed TTS.
-        Streams word-by-word to token_callback for a natural typing feel,
-        even though the LLM has already finished (silent mode).
-        TTS receives the full text at once for uninterrupted audio.
+
+        When both a token_callback and TTS are available, this hands the
+        full text to AikoSpeak.speak_synced(): each sentence chunk is
+        synthesized first, then played while the on-screen words for that
+        chunk are paced to roughly match the chunk's real audio duration
+        (karaoke-style). This replaces the old behavior of typing the whole
+        response at a fixed artificial pace and only starting audio
+        afterward — the two were never actually in sync. speak_synced()
+        runs in a background thread, so this returns immediately; the
+        words/audio continue to land asynchronously, same as the previous
+        play_async() behavior for audio alone.
+
+        Falls back to a fixed-pace typewriter effect when there's no TTS to
+        sync against, and to a single print when there's no token_callback
+        at all (console-only mode).
 
         token_callback is taken as a parameter (not read from self) so
         concurrent chat() calls can't crossfire on which callback fires.
         """
         if not text:
+            return
+
+        if token_callback and self._speak:
+            self._speak.speak_synced(text, on_word=token_callback)
             return
 
         if token_callback:
@@ -388,10 +405,9 @@ class AikoThink:
                 time.sleep(float(os.getenv("EMIT_DELAY", 0.012)))  # ~80 wpm feel
         else:
             print(f"\nAiko-chan: {text}", flush=True)
-
-        if self._speak:
-            self._speak.feed(text)
-            self._speak.play_async()
+            if self._speak:
+                self._speak.feed(text)
+                self._speak.play_async()
 
     def _stream_response(
         self,
