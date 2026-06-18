@@ -2,16 +2,16 @@
 core/think.py
 
 Aiko's cognitive loop.
-  - Drains memory write queue before each recall (prevents write-lag misses)
-  - Retrieves relevant memories before each turn
-  - Proactively searches the web for data-intent queries before LLM speaks
-  - Streams llama.cpp response to console + TTS simultaneously
-  - Stores the turn into long-term memory after each response (background thread)
-  - Supports single-shot reasoning mode via set_reasoning(True) / /think command
+  - Routes between single-shot chat and agentic task loop.
+  - Agentic loop uses tools (web_search, fetch_page) to complete multi-step tasks.
+  - Idle learner autonomously researches topics from history in the background.
+  - Streams llama.cpp response to console + TTS simultaneously.
+  - Stores the turn into long-term memory after each response (background thread).
 """
 
 import logging
 import os
+import json
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -29,6 +29,7 @@ import time
 
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
+from core.tools    import web_search, fetch_and_extract, deep_search
 from core.log      import get_logger
 
 log = get_logger(__name__)
@@ -46,34 +47,36 @@ LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
 LLAMACPP_MODEL    = os.getenv("LLAMACPP_MODEL",    "ministral-3b-instruct")
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
-_BASE_PREDICT    = 280   # normal token budget — soul.md says 2–3 sentences default
-_REASONING_SCALE = 3     # multiplier applied to max_tokens in reasoning mode
+_BASE_PREDICT    = 280
+_REASONING_SCALE = 3
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
+_SKILLS_PATH  = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
 
+MAX_AGENT_ITER = 8
 
 def _load_persona() -> str:
-    """Read and return the persona definition from soul.md."""
+    """Read persona and skills definitions."""
     if not _PERSONA_PATH.exists():
         raise FileNotFoundError(f"soul.md not found at {_PERSONA_PATH}")
     persona = _PERSONA_PATH.read_text(encoding="utf-8").strip()
+    
+    skills_block = ""
+    if _SKILLS_PATH.exists():
+        skills_block = "\n\n" + _SKILLS_PATH.read_text(encoding="utf-8").strip()
+        
     user_id = os.getenv("USER_ID", "OppaAI")
     today   = datetime.now().strftime("%B %d, %Y")
-    return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today)
+    return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + skills_block
 
+# ── intent signals (same as before) ───────────────────────────────────────────
 
-# ── intent signals ────────────────────────────────────────────────────────────
-
-# Inputs matching ANY of these are immediately classified as social — no search.
-# NOTE: checked only when no factual signal matches first (see _is_data_intent).
 _SOCIAL_SIGNALS = frozenset([
     "wanna", "want to", "would you", "shall we",
     "let's", "lets", "together", "with me", "join me",
     "how are you", "what do you think", "do you like",
 ])
 
-# Inputs matching ANY of these are immediately classified as data — search fires.
-# Matched on word boundaries to avoid "win" matching "winter"/"wind"/"wine", etc.
 _FACTUAL_SIGNALS = frozenset([
     "who", "what", "when", "where", "how many", "how much",
     "score", "result", "latest", "news", "current", "today",
@@ -83,26 +86,14 @@ _FACTUAL_SIGNALS = frozenset([
     "temperature", "forecast", "match", "series",
 ])
 
-_FACTUAL_RE = re.compile(
-    r'\b(?:' + '|'.join(re.escape(s) for s in _FACTUAL_SIGNALS) + r')\b',
-    re.IGNORECASE,
-)
-_SOCIAL_RE = re.compile(
-    r'\b(?:' + '|'.join(re.escape(s) for s in _SOCIAL_SIGNALS) + r')\b',
-    re.IGNORECASE,
-)
+_FACTUAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _FACTUAL_SIGNALS) + r')\b', re.IGNORECASE)
+_SOCIAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _SOCIAL_SIGNALS) + r')\b', re.IGNORECASE)
 
+SKILL_TRIGGERS = ["research", "deep dive", "compare", "vs", "which is better", "difference between"]
 
 # ── think ─────────────────────────────────────────────────────────────────────
 
 class AikoThink:
-    """
-    Aiko's conversational core.
-    speak is injected pre-warmed from wakeup.py.
-    LLM warmup starts immediately on init in a background thread.
-    wakeup.py calls join_warmup() to block until the model is hot.
-    """
-
     def __init__(self, memorize: AikoMemorize, speak: AikoSpeak | None = None) -> None:
         self._client    = OpenAI(base_url=LLAMACPP_BASE_URL, api_key="not-needed")
         self._memorize  = memorize
@@ -116,6 +107,10 @@ class AikoThink:
         self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
         self._mem_worker.start()
 
+        self._last_chat_time = time.time()
+        self._idle_learner_thread = threading.Thread(target=self._idle_learner_loop, daemon=True)
+        self._idle_learner_thread.start()
+
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
         self._warmup_thread.start()
 
@@ -124,18 +119,121 @@ class AikoThink:
             self._client.chat.completions.create(
                 model=LLAMACPP_MODEL,
                 messages=[{"role": "user", "content": "hi"}],
-                stream=False,
-                max_tokens=1,
+                stream=False, max_tokens=1,
             )
         except Exception as e:
-            log.warning("LLM warmup failed — llama-server may not be running: %s", e)
+            log.warning("LLM warmup failed: %s", e)
 
     def join_warmup(self) -> None:
-        """Block until LLM warmup completes. Called by wakeup.py before boot finishes."""
         if self._warmup_thread and self._warmup_thread.is_alive():
             self._warmup_thread.join()
 
     # ── public api ────────────────────────────────────────────────────────────
+
+    def route(self, user_input: str, token_callback=None) -> str:
+        """Main entry point. Routes to agentic loop if skill triggered, else normal chat."""
+        self._last_chat_time = time.time()
+        
+        # Simple skill router
+        is_skill = any(trigger in user_input.lower() for trigger in SKILL_TRIGGERS)
+        
+        if is_skill:
+            log.info(f"[route] Skill triggered. Entering agentic loop for: {user_input!r}")
+            return self.agentic_chat(user_input, token_callback=token_callback)
+        return self.chat(user_input, token_callback=token_callback)
+
+    def agentic_chat(self, user_input: str, token_callback=None) -> str:
+        """ReAct-style agentic loop with tool calling."""
+        tools = [
+            {"type": "function", "function": {
+                "name": "web_search", "description": "Search the web for information.",
+                "parameters": {"type": "object", "properties": {
+                    "query": {"type": "string", "description": "The search query."}},
+                    "required": ["query"]}}},
+            {"type": "function", "function": {
+                "name": "fetch_page", "description": "Fetch and extract full text from a specific URL.",
+                "parameters": {"type": "object", "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch."}},
+                    "required": ["url"]}}},
+            {"type": "function", "function": {
+                "name": "final_answer", "description": "Submit the final comprehensive response to the user.",
+                "parameters": {"type": "object", "properties": {
+                    "answer": {"type": "string", "description": "The final answer text."}},
+                    "required": ["answer"]}}},
+        ]
+
+        messages = [
+            {"role": "system", "content": self._persona},
+            {"role": "user", "content": user_input},
+        ]
+
+        final_text = ""
+
+        for step in range(MAX_AGENT_ITER):
+            if token_callback:
+                token_callback(f"__THINKING__\n")
+
+            try:
+                resp = self._client.chat.completions.create(
+                    model=LLAMACPP_MODEL, messages=messages, tools=tools,
+                    tool_choice="auto", stream=False, max_tokens=1024,
+                    temperature=0.3,
+                )
+                msg = resp.choices[0].message
+                messages.append(msg.model_dump(exclude_none=True))
+            except Exception as e:
+                log.error(f"Agent LLM call failed: {e}")
+                break
+
+            if not msg.tool_calls:
+                final_text = msg.content or ""
+                break
+
+            for call in msg.tool_calls:
+                name = call.function.name
+                try:
+                    args = json.loads(call.function.arguments)
+                except json.JSONDecodeError:
+                    args = {}
+
+                log.info(f"[agent] step {step} → {name}({args})")
+                if token_callback:
+                    token_callback(f"__TOOL__:{name}({args})\n")
+
+                if name == "web_search":
+                    result = deep_search(args.get("query", ""))
+                elif name == "fetch_page":
+                    result = fetch_and_extract(args.get("url", ""))
+                elif name == "final_answer":
+                    final_text = args.get("answer", "")
+                    messages.append({
+                        "role": "tool", "tool_call_id": call.id,
+                        "name": name, "content": "Answer submitted."
+                    })
+                    break
+                else:
+                    result = f"[unknown tool: {name}]"
+
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": result[:3000],
+                })
+
+            if final_text:
+                break
+
+        if not final_text:
+            final_text = "I got a bit lost trying to complete that task. Here is what I have so far:\n" + (msg.content or "")
+
+        # Emit final text to TTS/Console
+        self._emit(final_text, token_callback=token_callback)
+
+        with self._history_lock:
+            self._history.append({"role": "user", "content": user_input})
+            self._history.append({"role": "assistant", "content": final_text})
+        
+        self._store_async(user_input, final_text)
+        return final_text
 
     def chat(
         self,
@@ -144,313 +242,154 @@ class AikoThink:
         _skip_search: bool = False,
         _history_label: str | None = None,
     ) -> str:
-        """
-        Process one conversational turn and return the full assistant response.
-
-        Flow:
-          1. Drain pending memory writes so recall sees the latest facts.
-          2. Search long-term memory; inject explicit no-memory signal if empty.
-          3. Build system prompt (persona + memory block).
-          4. If data intent detected, search web and inject results into system
-             prompt before the LLM speaks — LLM never guesses live data.
-          5. Stream LLM response silently (full text collected).
-          6. Emit display text to token_callback + TTS (karaoke-synced to the
-             actual TTS audio when both are available — see _emit).
-          7. Append to history and enqueue async memory write.
-
-        Reasoning mode (set via set_reasoning(True) / /think command) wraps the
-        user prompt with a step-by-step instruction and triples max_tokens.
-        Auto-resets to False after each turn — single-shot by design.
-
-        Args:
-            user_input:      The text to process as this turn's input. When
-                              called internally from web_search(), this is the
-                              full search-results blob, not what Oppa typed.
-            token_callback:  Optional per-token/per-chunk display callback.
-            _skip_search:    Internal flag. When True, step 4 (proactive web
-                              search) is skipped entirely. Set by web_search()
-                              to prevent the search-results text from itself
-                              triggering a second, recursive search.
-            _history_label:  Internal override. When given, this string is
-                              stored in conversation history and long-term
-                              memory instead of the raw user_input — used by
-                              web_search() so history/memory record the
-                              original query ("nba scores") rather than the
-                              full scraped results blob.
-        """
-        # interrupt any ongoing speech before processing new input
+        """Standard single-shot conversational turn."""
         if self._speak and self._speak.is_playing():
             self._speak.stop()
 
-        # 1. flush pending memory writes so this turn's recall is up to date
         self.wait_for_memory()
 
-        # 2. retrieve relevant long-term memories
         memories     = self._memorize.search(user_input, limit=int(os.getenv("MEMORY_RECALL_LIMIT", 3)))
         memory_block = self._memorize.format_for_context(memories)
 
-        # 3. build system prompt — inject explicit no-memory signal on miss
         system = self._persona
         if memory_block:
             system = f"{system}\n\n{memory_block}"
         else:
-            system = (
-                f"{system}\n\n"
-                "<memory_context>\n"
-                "No relevant memories found for this query. "
-                "If Oppa asks about something personal or specific to him, "
-                "tell him you don't have it stored rather than guessing.\n"
-                "</memory_context>"
-            )
+            system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
 
-        # 4. proactive web search — fires before LLM speaks so no guessing.
-        #    Skipped when this turn IS already search-results text (web_search()
-        #    path) to prevent recursive searching.
         if not _skip_search and self._is_data_intent(user_input):
             try:
-                from core.tools import web_search_context
                 search_query = self._build_search_query(user_input)
-
-                log.debug(f"[intent] DATA — searching: {search_query!r}")
-
-                # notify UI before the blocking search call
-                if token_callback:
-                    token_callback(f"__SEARCHING__:{search_query}")
-
-                context = web_search_context(search_query)
-                log.debug(f"[intent] context={'found' if context else 'NONE'}")
-
-                if context:
+                if token_callback: token_callback(f"__SEARCHING__:{search_query}")
+                
+                context = deep_search(search_query, fetch_top=1)
+                if context and not context.startswith("[search failed"):
                     system = (
                         f"{system}\n\n"
                         f"<search_results query='{search_query}'>\n"
-                        f"Answer using ONLY the information in these search results. "
-                        f"Do not add anything from your training data. "
-                        f"If the results don't contain the answer, say so plainly.\n\n"
+                        f"Answer using ONLY the information in these search results.\n\n"
                         f"{context}\n"
                         f"</search_results>"
                     )
             except Exception as e:
-                # never let a broken search path crash the whole turn —
-                # degrade to no-search-context instead
-                log.error(f"Web search step failed, continuing without it: {e}")
+                log.error(f"Web search step failed: {e}")
 
-        # 5. wrap user turn with reasoning instruction if active.
-        #    The wrapper is applied ONLY to the message sent to the LLM —
-        #    history stores the clean, unwrapped input so future turns don't
-        #    see stale "think step by step" instructions baked into old turns.
+        llm_prompt = user_input
         if self._reasoning:
-            llm_prompt = (
-                f"{user_input}\n\n"
-                "Think through this carefully before answering. "
-                "Show your reasoning inside <think> tags, then give your final answer."
-            )
-        else:
-            llm_prompt = user_input
+            llm_prompt = f"{user_input}\n\nThink through this carefully. Show reasoning in <think> tags, then answer."
 
-        # what gets stored in history/memory: the label if given (original
-        # query, for web_search() calls), otherwise the raw user_input —
-        # never the reasoning-wrapped or search-results version.
         history_entry = _history_label if _history_label is not None else user_input
-
-        # cap on raw growth of self._history itself — independent of
-        # CONTEXT_WINDOW_TURNS, which only controls how much gets sent to the
-        # LLM each turn. Without this, self._history grows by 2 entries every
-        # turn for the life of the process. Kept generously above the LLM
-        # context window so last_turn()/_build_search_query() still have
-        # recent-but-not-in-window turns to look back on if needed.
         _HISTORY_HARD_CAP = CONTEXT_WINDOW_TURNS * 10
 
         with self._history_lock:
-            # 6. append user turn (clean label, not the wrapped/blob version)
             self._history.append({"role": "user", "content": history_entry})
-
-            # prevent unbounded growth — truncate the actual list, not just
-            # a slice of it, so old turns are freed rather than retained
             if len(self._history) > _HISTORY_HARD_CAP:
                 self._history = self._history[-_HISTORY_HARD_CAP:]
-
-            # 7. trim history to context window
             trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
 
         trimmed = self._sanitize_history(trimmed)
-
-        # swap the last message's content to the full LLM-facing prompt
-        # (reasoning wrapper or full search-results blob) for this call only —
-        # history itself keeps the clean label set above.
         if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != history_entry:
             trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
 
-        # 8. stream LLM response (silent — display handled in _emit)
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
-
-        # 9. emit to callback + TTS
         self._emit(raw_response, token_callback=token_callback)
 
         with self._history_lock:
-            # 10. append assistant turn to history
             self._history.append({"role": "assistant", "content": raw_response})
             if len(self._history) > _HISTORY_HARD_CAP:
                 self._history = self._history[-_HISTORY_HARD_CAP:]
 
-        # 11. persist to memory (background) — store the clean label, never
-        #     the reasoning-wrapped prompt or raw search-results blob
         self._store_async(history_entry, raw_response)
-
-        # 12. auto-reset reasoning mode
         self._reasoning = False
-
         return raw_response
 
     def web_search(self, query: str, token_callback=None) -> str:
-        """
-        Run a web search and feed results into a normal chat turn.
-        Called by the /web command — no search logic leaks out.
-
-        Passes _skip_search=True so the search-results text injected as
-        user_input doesn't itself trigger a second, recursive search, and
-        _history_label=query so history/memory record the original query
-        rather than the full scraped results blob.
-        """
-        from core.tools import web_search_context
-        context = web_search_context(query)
-        if context is None:
+        """Explicit /web command path."""
+        context = deep_search(query, fetch_top=1)
+        if "no results" in context or "failed" in context:
             msg = f"[no results for: {query}]"
-            if token_callback:
-                token_callback(msg)
+            if token_callback: token_callback(msg)
             return msg
-        return self.chat(
-            context,
-            token_callback=token_callback,
-            _skip_search=True,
-            _history_label=query,
-        )
+        return self.chat(context, token_callback=token_callback, _skip_search=True, _history_label=query)
 
     def reset_context(self) -> None:
-        """Clear the in-memory conversation history for a fresh session."""
         with self._history_lock:
             self._history.clear()
 
     def last_turn(self) -> tuple[str, str] | None:
-        """
-        Return the latest complete user/assistant exchange, if one exists.
-        Returns (user_text, assistant_text) or None.
-        """
         with self._history_lock:
             history_snapshot = list(self._history)
-
-        users = [
-            m["content"].strip() for m in history_snapshot
-            if m.get("role") == "user" and (m.get("content") or "").strip()
-        ]
-        assistants = [
-            m["content"].strip() for m in history_snapshot
-            if m.get("role") == "assistant" and (m.get("content") or "").strip()
-        ]
-        if not users or not assistants:
-            return None
+        users = [m["content"].strip() for m in history_snapshot if m.get("role") == "user" and (m.get("content") or "").strip()]
+        assistants = [m["content"].strip() for m in history_snapshot if m.get("role") == "assistant" and (m.get("content") or "").strip()]
+        if not users or not assistants: return None
         return users[-1], assistants[-1]
 
-    def set_reasoning(self, enabled: bool) -> None:
-        """
-        Enable or disable reasoning mode for the next turn only.
-        Auto-resets to False after each chat() call.
-        """
-        self._reasoning = enabled
+    def set_reasoning(self, enabled: bool) -> None: self._reasoning = enabled
+    def set_speak(self, speak) -> None: self._speak = speak
+    def wait_for_memory(self) -> None: self._mem_queue.join()
 
-    def set_speak(self, speak) -> None:
-        """Hot-swap the TTS backend. Pass None to silence, speak instance to restore."""
-        self._speak = speak
+    # ── idle learner ──────────────────────────────────────────────────────────
 
-    def wait_for_memory(self) -> None:
-        """Block until all enqueued memory writes have been persisted."""
-        self._mem_queue.join()
+    def _idle_learner_loop(self):
+        """Background autonomous learning loop."""
+        while True:
+            time.sleep(300)  # check every 5 minutes
+            if time.time() - self._last_chat_time < 300:
+                continue  # user has been active recently, don't interrupt
+                
+            if self._speak and self._speak.is_playing():
+                continue
+                
+            log.info("[learner] Aiko is idle. Starting autonomous learning...")
+            try:
+                # Pick a gap from history (simplified: just grab a previous noun-heavy user msg)
+                with self._history_lock:
+                    candidates = [m["content"] for m in self._history if m["role"] == "user" and len(m["content"].split()) > 3]
+                
+                if not candidates:
+                    continue
+                    
+                topic = candidates[-1] # simplistic: look at last user query
+                
+                # Run silent agentic research
+                result = self.agentic_chat(f"Research this topic briefly: {topic}")
+                
+                # Store as self-learned memory
+                self._memorize.add([
+                    {"role": "system", "content": f"[self-learned:{topic}]"},
+                    {"role": "assistant", "content": result[:800]}
+                ])
+                log.info(f"[learner] Successfully learned about: {topic}")
+            except Exception as e:
+                log.error(f"[learner] Autonomous learning failed: {e}")
 
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _emit(self, text: str, token_callback=None) -> None:
-        """
-        Send display text to token_callback (TUI) or stdout, and feed TTS.
-
-        When both a token_callback and TTS are available, this hands the
-        full text to AikoSpeak.speak_synced(): each sentence chunk is
-        synthesized first, then played while the on-screen words for that
-        chunk are paced to roughly match the chunk's real audio duration
-        (karaoke-style). This replaces the old behavior of typing the whole
-        response at a fixed artificial pace and only starting audio
-        afterward — the two were never actually in sync. speak_synced()
-        runs in a background thread, so this returns immediately; the
-        words/audio continue to land asynchronously, same as the previous
-        play_async() behavior for audio alone.
-
-        Falls back to a fixed-pace typewriter effect when there's no TTS to
-        sync against, and to a single print when there's no token_callback
-        at all (console-only mode).
-
-        token_callback is taken as a parameter (not read from self) so
-        concurrent chat() calls can't crossfire on which callback fires.
-        """
-        if not text:
-            return
-
+        if not text: return
         if token_callback and self._speak:
             self._speak.speak_synced(text, on_word=token_callback)
             return
-
         if token_callback:
             words = text.split(" ")
             for i, word in enumerate(words):
                 chunk = word if i == 0 else " " + word
                 token_callback(chunk)
-                time.sleep(float(os.getenv("EMIT_DELAY", 0.012)))  # ~80 wpm feel
+                time.sleep(float(os.getenv("EMIT_DELAY", 0.012)))
         else:
             print(f"\nAiko-chan: {text}", flush=True)
             if self._speak:
                 self._speak.feed(text)
                 self._speak.play_async()
 
-    def _stream_response(
-        self,
-        messages: list[dict],
-        system: str = "",
-        silent: bool = True,
-        token_callback=None,
-    ) -> str:
-        """
-        Collect the full LLM response from a stream.
-        Live token-by-token printing only happens when silent=False; by
-        default (silent=True) the response is gathered in full and replayed
-        word-by-word via _emit() afterward, so console/TTS output and the
-        actual generation are decoupled.
-
-        max_tokens is scaled by _REASONING_SCALE when reasoning mode is
-        active to budget for the <think> scratchpad.
-
-        token_callback is taken as a parameter (not read from self) so
-        concurrent chat() calls can't crossfire on which callback fires.
-
-        Args:
-            messages: Full message list (system prompt + trimmed history).
-            system:   Optional system prompt to inject.
-
-        Returns:
-            The complete response text assembled from all streamed tokens.
-        """
+    def _stream_response(self, messages: list[dict], system: str = "", silent: bool = True, token_callback=None) -> str:
         full_response = []
-
-        # triple token budget in reasoning mode to fit the <think> scratchpad
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
-
-        all_messages = (
-            [{"role": "system", "content": system}] + messages
-            if system else messages
-        )
+        all_messages = [{"role": "system", "content": system}] + messages if system else messages
 
         try:
             stream = self._client.chat.completions.create(
-                model=LLAMACPP_MODEL,
-                messages=all_messages,
-                stream=True,
+                model=LLAMACPP_MODEL, messages=all_messages, stream=True,
                 max_tokens=max_tokens,
                 temperature=float(os.getenv("TEMPERATURE", 0.72)),
                 top_p=float(os.getenv("TOP_P", 0.90)),
@@ -462,219 +401,73 @@ class AikoThink:
                     "top_k":          int(os.getenv("TOP_K", 40)),
                 },
             )
-
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
-
                 full_response.append(token)
-
-                # live streaming only when silent=False
-                if not silent:
-                    if token_callback:
-                        token_callback(token)
-                    else:
-                        if len(full_response) == 1:
-                            print("\nAiko-chan: ", end="", flush=True)
-                        print(token, end="", flush=True)
-
-            if not silent and not token_callback:
-                print(flush=True)
-
+                if not silent and token_callback: token_callback(token)
         except Exception as e:
             msg = f"Stream failed: {e}"
             log.error(msg)
-
-            # remove the dangling user turn so next call doesn't create a consecutive pair
             with self._history_lock:
-                if self._history and self._history[-1]["role"] == "user":
-                    self._history.pop()
-            if token_callback:
-                token_callback(f"[think] {msg}")
-            else:
-                print(f"\n[think] {msg}")
+                if self._history and self._history[-1]["role"] == "user": self._history.pop()
             return ""
 
         return "".join(full_response)
 
     def _is_data_intent(self, user_input: str) -> bool:
-        """
-        Classify whether user_input warrants a live web search.
-
-        Priority order:
-          1. Factual signal fast-path (word-boundary match) → True (search)
-          2. Social signal fast-path  (word-boundary match) → False (no search)
-          3. Combined LLM classifier  → True/False (ambiguous inputs only)
-
-        Factual signals are checked FIRST so a query like "what's the score,
-        do you know?" — which contains both a factual cue ("score") and a
-        conversational cue ("do you know") — still triggers a search rather
-        than being silently swallowed by the social fast-path.
-
-        For ambiguous inputs (no fast-path match), this delegates to
-        _classify_and_resolve(), which does intent classification AND query
-        resolution in a single LLM call instead of two sequential ones. The
-        resolved query is cached on self._pending_search_query so
-        _build_search_query() can reuse it without a second call.
-        """
-        # fast path: factual signals — always search (checked first, see above)
-        if _FACTUAL_RE.search(user_input):
-            log.debug(f"[intent] DATA (fast-path): {user_input!r}")
-            return True
-
-        # fast path: social phrasing — never search
-        if _SOCIAL_RE.search(user_input):
-            log.debug(f"[intent] SOCIAL (fast-path): {user_input!r}")
-            return False
-
-        # ambiguous — single combined LLM call does both jobs at once
+        if _FACTUAL_RE.search(user_input): return True
+        if _SOCIAL_RE.search(user_input): return False
         is_data, resolved_query = self._classify_and_resolve(user_input)
         self._pending_search_query = resolved_query if is_data else None
         return is_data
 
     def _classify_and_resolve(self, user_input: str) -> tuple[bool, str]:
-        """
-        Single LLM call that both classifies intent AND resolves the query
-        (pronoun/reference resolution against the previous turn) in one shot,
-        replacing what used to be two sequential LLM calls
-        (_is_data_intent's old fallback + _build_search_query's old fallback).
-
-        Returns (is_data_intent, resolved_query). resolved_query is only
-        meaningful when is_data_intent is True; it falls back to the raw
-        user_input if resolution wasn't needed/possible.
-        """
         with self._history_lock:
-            last_user = next(
-                (m["content"] for m in reversed(self._history)
-                 if m["role"] == "user"),
-                ""
-            )
+            last_user = next((m["content"] for m in reversed(self._history) if m["role"] == "user"), "")
         has_context = bool(last_user and last_user != user_input)
-
-        context_block = (
-            f'Previous question: "{last_user}"\n' if has_context else ""
-        )
+        context_block = f'Previous question: "{last_user}"\n' if has_context else ""
 
         try:
             resp = self._client.chat.completions.create(
                 model=LLAMACPP_MODEL,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f'{context_block}'
-                        f'Message: "{user_input}"\n\n'
-                        f'Is this message asking for factual external data '
-                        f'(news, scores, prices, current events), or is it '
-                        f'conversational/social?\n\n'
-                        f'If it is a data request, also resolve any pronouns '
-                        f'or references against the previous question (if given) '
-                        f'into a single self-contained search query.\n\n'
-                        f'Reply in EXACTLY this format, nothing else:\n'
-                        f'data|<search query>\n'
-                        f'or:\n'
-                        f'social|none'
-                    )
-                }],
-                stream=False,
-                max_tokens=32,
-                temperature=0.0,
+                messages=[{"role": "user", "content": (
+                    f'{context_block}Message: "{user_input}"\n\n'
+                    f'Is this asking for factual external data, or conversational?\n'
+                    f'If data, resolve pronouns into a search query.\n'
+                    f'Reply EXACTLY:\ndata|<search query>\nor:\nsocial|none'
+                )}],
+                stream=False, max_tokens=32, temperature=0.0,
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")
-            label = label.strip().lower()
-            rest  = rest.strip()
-
-            is_data = "data" in label
-            resolved = rest if (is_data and rest and rest.lower() != "none") else user_input
-
-            log.debug(f"[intent+query] {user_input!r} → is_data={is_data}, query={resolved!r}")
+            is_data = "data" in label.strip().lower()
+            resolved = rest.strip() if (is_data and rest and rest.lower() != "none") else user_input
             return is_data, resolved
         except Exception as e:
-            log.warning(f"Combined intent/query classification failed, defaulting to search: {e}")
+            log.warning(f"Intent classification failed: {e}")
             return True, user_input
 
     def _build_search_query(self, user_input: str) -> str:
-        """
-        Build a self-contained search query from user_input.
-
-        If _is_data_intent() already resolved the query via the combined
-        classifier (ambiguous-input path), that cached result is reused here
-        with no extra LLM call. Otherwise (fast-path matches don't resolve
-        queries), falls back to the original behavior: for short follow-up
-        messages (≤6 words) with prior history, makes a single LLM call to
-        resolve pronouns/references; otherwise returns user_input unchanged.
-        """
         pending = self._pending_search_query
         if pending is not None:
-            self._pending_search_query = None  # consume — one-shot cache
+            self._pending_search_query = None
             return pending
-
-        if len(user_input.split()) <= 6:
-            with self._history_lock:
-                last_user = next(
-                    (m["content"] for m in reversed(self._history)
-                     if m["role"] == "user"),
-                    ""
-                )
-            if last_user and last_user != user_input:
-                try:
-                    resp = self._client.chat.completions.create(
-                        model=LLAMACPP_MODEL,
-                        messages=[{
-                            "role": "user",
-                            "content": (
-                                f'Previous question: "{last_user}"\n'
-                                f'Follow-up question: "{user_input}"\n\n'
-                                f'Write a single complete search query that resolves '
-                                f'any references. Return only the query, nothing else.'
-                            )
-                        }],
-                        stream=False,
-                        max_tokens=20,
-                        temperature=0.0,
-                    )
-                    resolved = resp.choices[0].message.content.strip()
-                    log.debug(f"[search_query] {user_input!r} → {resolved!r}")
-                    return resolved
-                except Exception as e:
-                    log.warning(f"Query resolution failed: {e}")
-
         return user_input
 
     def _sanitize_history(self, messages: list[dict]) -> list[dict]:
-        """
-        Enforce strict user/assistant alternation.
-        Merges consecutive same-role messages (keeps last).
-        Strips leading assistant turns — history must start with user.
-        """
-        if not messages:
-            return []
-
+        if not messages: return []
         sanitized = [messages[0]]
         for msg in messages[1:]:
-            if msg["role"] == sanitized[-1]["role"]:
-                sanitized[-1] = msg
-            else:
-                sanitized.append(msg)
-
-        while sanitized and sanitized[0]["role"] != "user":
-            sanitized.pop(0)
-
+            if msg["role"] == sanitized[-1]["role"]: sanitized[-1] = msg
+            else: sanitized.append(msg)
+        while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
 
     def _store_async(self, user_input: str, response_text: str) -> None:
-        """
-        Enqueue a completed turn for background memory persistence.
-        Non-blocking — chat() returns immediately after this call.
-        The background worker in _mem_write_loop drains the queue serially.
-        """
         self._mem_queue.put((user_input, response_text))
 
     def _mem_write_loop(self) -> None:
-        """
-        Serial background worker that drains the memory write queue.
-        Runs for the lifetime of the process (daemon thread).
-        """
         while True:
             user_input, response_text = self._mem_queue.get()
             try:
