@@ -1,12 +1,11 @@
 """
 core/think.py
 
-Aiko's cognitive loop.
-  - Routes between single-shot chat and agentic task loop.
-  - Agentic loop uses tools (web_search, fetch_page) to complete multi-step tasks.
-  - Idle learner autonomously researches topics from history in the background.
+Aiko's chat facade.
+  - Routes between single-shot chat and the agentic task loop in core.agentic.
   - Streams llama.cpp response to console + TTS simultaneously.
-  - Stores the turn into long-term memory after each response (background thread).
+  - Records daily experience turns and queues long-term memory writes.
+  - Owns scheduled-job callbacks and idle learner handoff.
 """
 
 import logging
@@ -29,24 +28,12 @@ import time
 
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
-from core.tools    import (
-    web_search,
-    fetch_and_extract,
-    deep_search,
-    make_plan,
-    create_checklist,
-    save_note,
-    read_workspace_file,
-    summarize_task_state,
-    schedule_job,
-    list_schedule,
-    cancel_schedule,
-    schedule_reminder,
-    list_reminders,
-    cancel_reminder,
-)
+from core.tools    import deep_search
+from core.agentic  import run_agentic_chat
+from core.skills   import load_skills
 from core.log      import get_logger
 from core.schedule import DueJob, ScheduleRunner
+from core.experience import append_chat_turn
 
 log = get_logger(__name__)
 
@@ -72,8 +59,6 @@ _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
 _SKILLS_PATH  = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
 _SCHEDULE_PATH = Path(__file__).resolve().parent.parent / "persona" / "schedule.md"
 
-MAX_AGENT_ITER = 8
-
 def _load_persona() -> str:
     """Read persona and skills definitions."""
     if not _PERSONA_PATH.exists():
@@ -83,7 +68,7 @@ def _load_persona() -> str:
     context_blocks = []
     for path in (_USER_PATH, _SKILLS_PATH, _SCHEDULE_PATH):
         if path.exists():
-            context_blocks.append(path.read_text(encoding="utf-8").strip())
+            context_blocks.append(load_skills(path).strip())
     skills_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
 
     user_id = os.getenv("USER_ID", "OppaAI")
@@ -123,6 +108,7 @@ SKILL_TRIGGERS = [
 class AikoThink:
     def __init__(self, memorize: AikoMemorize, speak: AikoSpeak | None = None) -> None:
         self._client    = OpenAI(base_url=LLAMACPP_BASE_URL, api_key="not-needed")
+        self._llm_model = LLAMACPP_MODEL
         self._memorize  = memorize
         self._speak     = speak
         self._persona   = _load_persona()
@@ -204,197 +190,9 @@ class AikoThink:
             return "chat"
 
 
-    def _agent_tools(self) -> list[dict]:
-        """Return OpenAI-compatible tool schemas for autonomous task mode."""
-        return [
-            {"type": "function", "function": {
-                "name": "web_search", "description": "Search web.",
-                "parameters": {"type": "object", "properties": {
-                    "query": {"type": "string", "description": "The search query."}},
-                    "required": ["query"]}}},
-            {"type": "function", "function": {
-                "name": "fetch_page", "description": "Fetch page text.",
-                "parameters": {"type": "object", "properties": {
-                    "url": {"type": "string", "description": "The URL to fetch."}},
-                    "required": ["url"]}}},
-            {"type": "function", "function": {
-                "name": "make_plan", "description": "Make plan.",
-                "parameters": {"type": "object", "properties": {
-                    "goal": {"type": "string"},
-                    "constraints": {"type": "string"},
-                    "max_steps": {"type": "integer"}},
-                    "required": ["goal"]}}},
-            {"type": "function", "function": {
-                "name": "create_checklist", "description": "Make checklist.",
-                "parameters": {"type": "object", "properties": {
-                    "title": {"type": "string"},
-                    "items": {"type": "string", "description": "Newline-separated checklist items."}},
-                    "required": ["title", "items"]}}},
-            {"type": "function", "function": {
-                "name": "save_note", "description": "Save note/draft.",
-                "parameters": {"type": "object", "properties": {
-                    "title": {"type": "string"},
-                    "content": {"type": "string"},
-                    "folder": {"type": "string"}},
-                    "required": ["title", "content"]}}},
-            {"type": "function", "function": {
-                "name": "read_workspace_file", "description": "Read workspace file.",
-                "parameters": {"type": "object", "properties": {
-                    "relative_path": {"type": "string"}},
-                    "required": ["relative_path"]}}},
-            {"type": "function", "function": {
-                "name": "summarize_task_state", "description": "Summarize task state.",
-                "parameters": {"type": "object", "properties": {
-                    "goal": {"type": "string"}, "done": {"type": "string"},
-                    "next_action": {"type": "string"}, "risks": {"type": "string"}},
-                    "required": ["goal"]}}},
-            {"type": "function", "function": {
-                "name": "schedule_job", "description": "Schedule local job/alarm. HH:MM. Frequencies: once,daily,weekdays,weekly,biweekly,monthly,custom_weekdays.",
-                "parameters": {"type": "object", "properties": {
-                    "title": {"type": "string"}, "task": {"type": "string"},
-                    "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"},
-                    "frequency": {"type": "string", "enum": ["once", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]},
-                    "timezone": {"type": "string"},
-                    "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"},
-                    "action": {"type": "string", "enum": ["announce", "agentic"], "description": "announce only, or agentic to let Aiko perform a local autonomous task"}},
-                    "required": ["title", "task", "time_of_day"]}}},
-            {"type": "function", "function": {
-                "name": "list_schedule", "description": "List schedule.",
-                "parameters": {"type": "object", "properties": {
-                    "include_disabled": {"type": "boolean"}}}}},
-            {"type": "function", "function": {
-                "name": "cancel_schedule", "description": "Cancel schedule item.",
-                "parameters": {"type": "object", "properties": {
-                    "job_id": {"type": "string"}},
-                    "required": ["job_id"]}}},
-            {"type": "function", "function": {
-                "name": "schedule_reminder", "description": "Simple once/daily reminder.",
-                "parameters": {"type": "object", "properties": {
-                    "title": {"type": "string"}, "message": {"type": "string"},
-                    "time_of_day": {"type": "string"},
-                    "repeat": {"type": "string", "enum": ["once", "daily"]},
-                    "timezone": {"type": "string"}},
-                    "required": ["title", "message", "time_of_day"]}}},
-            {"type": "function", "function": {
-                "name": "list_reminders", "description": "List reminders.",
-                "parameters": {"type": "object", "properties": {
-                    "include_disabled": {"type": "boolean"}}}}},
-            {"type": "function", "function": {
-                "name": "cancel_reminder", "description": "Cancel reminder by id.",
-                "parameters": {"type": "object", "properties": {
-                    "reminder_id": {"type": "string"}},
-                    "required": ["reminder_id"]}}},
-            {"type": "function", "function": {
-                "name": "final_answer", "description": "Final answer.",
-                "parameters": {"type": "object", "properties": {
-                    "answer": {"type": "string", "description": "The final answer text."}},
-                    "required": ["answer"]}}},
-        ]
-
     def agentic_chat(self, user_input: str, token_callback=None) -> str:
-        """ReAct-style agentic loop with tool calling."""
-        tools = self._agent_tools()
-
-        agent_system = (
-            f"{self._persona}\n\n"
-            "[TASK MODE] Plan briefly, use tools only when useful, and finish "
-            "with final_answer. Keep private reasoning private. Never claim work "
-            "outside available tools was completed."
-        )
-        messages = [
-            {"role": "system", "content": agent_system},
-            {"role": "user", "content": user_input},
-        ]
-
-        final_text = ""
-
-        for step in range(MAX_AGENT_ITER):
-            if token_callback:
-                token_callback(f"__THINKING__\n")
-
-            try:
-                resp = self._client.chat.completions.create(
-                    model=LLAMACPP_MODEL, messages=messages, tools=tools,
-                    tool_choice="auto", stream=False, max_tokens=1024,
-                    temperature=0.3,
-                )
-                msg = resp.choices[0].message
-                messages.append(msg.model_dump(exclude_none=True))
-            except Exception as e:
-                log.error(f"Agent LLM call failed: {e}")
-                break
-
-            if not msg.tool_calls:
-                final_text = msg.content or ""
-                break
-
-            for call in msg.tool_calls:
-                name = call.function.name
-                try:
-                    args = json.loads(call.function.arguments)
-                except json.JSONDecodeError:
-                    args = {}
-
-                log.info(f"[agent] step {step} → {name}({args})")
-                if token_callback:
-                    token_callback(f"__TOOL__:{name}({args})\n")
-
-                if name == "web_search":
-                    result = deep_search(args.get("query", ""))
-                elif name == "fetch_page":
-                    result = fetch_and_extract(args.get("url", ""))
-                elif name == "make_plan":
-                    result = make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8))
-                elif name == "create_checklist":
-                    result = create_checklist(args.get("title", "Checklist"), args.get("items", ""))
-                elif name == "save_note":
-                    result = save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes"))
-                elif name == "read_workspace_file":
-                    result = read_workspace_file(args.get("relative_path", ""))
-                elif name == "summarize_task_state":
-                    result = summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", ""))
-                elif name == "schedule_job":
-                    result = schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"))
-                elif name == "list_schedule":
-                    result = list_schedule(bool(args.get("include_disabled", False)))
-                elif name == "cancel_schedule":
-                    result = cancel_schedule(args.get("job_id", ""))
-                elif name == "schedule_reminder":
-                    result = schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone"))
-                elif name == "list_reminders":
-                    result = list_reminders(bool(args.get("include_disabled", False)))
-                elif name == "cancel_reminder":
-                    result = cancel_reminder(args.get("reminder_id", ""))
-                elif name == "final_answer":
-                    final_text = args.get("answer", "")
-                    messages.append({
-                        "role": "tool", "tool_call_id": call.id,
-                        "name": name, "content": "Answer submitted."
-                    })
-                    break
-                else:
-                    result = f"[unknown tool: {name}]"
-
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": result[:3000],
-                })
-
-            if final_text:
-                break
-
-        if not final_text:
-            final_text = "I got a bit lost trying to complete that task. Here is what I have so far:\n" + (msg.content or "")
-
-        # Emit final text to TTS/Console
-        self._emit(final_text, token_callback=token_callback)
-
-        with self._history_lock:
-            self._history.append({"role": "user", "content": user_input})
-            self._history.append({"role": "assistant", "content": final_text})
-        
-        self._store_async(user_input, final_text)
-        return final_text
+        """Delegate task-mode execution to core.agentic."""
+        return run_agentic_chat(self, user_input, token_callback=token_callback)
 
     def chat(
         self,
@@ -460,6 +258,7 @@ class AikoThink:
             if len(self._history) > _HISTORY_HARD_CAP:
                 self._history = self._history[-_HISTORY_HARD_CAP:]
 
+        self._record_experience(history_entry, raw_response)
         self._store_async(history_entry, raw_response)
         self._reasoning = False
         return raw_response
@@ -648,6 +447,12 @@ class AikoThink:
             else: sanitized.append(msg)
         while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
+
+    def _record_experience(self, user_input: str, response_text: str) -> None:
+        try:
+            append_chat_turn(user_input, response_text, user_id=os.getenv("USER_ID", "OppaAI"))
+        except Exception as e:
+            log.warning("Daily experience logging failed: %s", e)
 
     def _store_async(self, user_input: str, response_text: str) -> None:
         self._mem_queue.put((user_input, response_text))
