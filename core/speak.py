@@ -274,7 +274,7 @@ class AikoSpeak:
         usable_duration = max(0.05, duration - 0.08)
         start = time.monotonic() + 0.02
         elapsed = 0.0
-        for i, (word, weight) in enumerate(zip(words, weights)):
+        for i, (word, weight) in enumerate(zip(words, weights, strict=True)):
             if self._stop_flag.is_set():
                 break
             sleep_time = (start + elapsed) - time.monotonic()

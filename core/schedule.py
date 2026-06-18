@@ -354,6 +354,8 @@ class ScheduleRunner:
             tz_name = job.get("timezone") or DEFAULT_TIMEZONE
             try:
                 due = datetime.fromisoformat(job["next_due"])
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=_timezone(tz_name))
             except Exception:
                 due = calculate_next_due(
                     job.get("time_of_day", "06:00"),
