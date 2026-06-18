@@ -258,18 +258,30 @@ class AikoSpeak:
                 on_word(word if i == 0 else " " + word)
             return
 
-        weights = [len(w) + 1 for w in words]   # +1 ≈ trailing space/breath
-        total   = sum(weights)
-        start   = time.monotonic()
+        # Keep a small lead-in so the first word appears when audio begins,
+        # then distribute later words by a speech-ish duration estimate.
+        # Punctuation receives extra time because TTS usually pauses there.
+        weights = []
+        for word in words:
+            weight = max(1.0, len(re.sub(r"[^\w]", "", word)) * 0.75) + 0.8
+            if re.search(r"[.!?。！？]$", word):
+                weight += 3.0
+            elif re.search(r"[,;:、]$", word):
+                weight += 1.5
+            weights.append(weight)
+
+        total = sum(weights) or 1.0
+        usable_duration = max(0.05, duration - 0.08)
+        start = time.monotonic() + 0.02
         elapsed = 0.0
         for i, (word, weight) in enumerate(zip(words, weights)):
             if self._stop_flag.is_set():
                 break
-            on_word(word if i == 0 else " " + word)
-            elapsed += duration * (weight / total)
             sleep_time = (start + elapsed) - time.monotonic()
             if sleep_time > 0:
                 time.sleep(sleep_time)
+            on_word(word if i == 0 else " " + word)
+            elapsed += usable_duration * (weight / total)
 
     def _speak_thread_synced(self, text: str, on_word=None) -> None:
         """
