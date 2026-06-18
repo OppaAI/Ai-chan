@@ -163,9 +163,9 @@ class AikoWakeup:
             from core.listen import AikoListen
             listen = AikoListen()
 
-            on_loading('listen_whisper')
-            listen.load_whisper()
-            on_done('listen_whisper')
+            on_loading('listen_asr')
+            listen.load_asr()
+            on_done('listen_asr')
 
             on_loading('listen_silero')
             listen.load_vad()              # also kicks off warmup thread
