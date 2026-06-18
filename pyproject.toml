@@ -9,6 +9,7 @@ dependencies = [
     "fastembed>=0.8.0",
     "numpy<2",
     "onnxruntime>=1.23.2",
+    "openai>=2.43.0",
     "python-dotenv>=1.0.0",
     "reazonspeech-k2-asr",
     "requests>=2.34.2",
