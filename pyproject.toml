@@ -18,8 +18,3 @@ dependencies = [
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
 ]
-
-
-
-[tool.uv.sources]
-ctranslate2 = { path = "/home/oppa-ai/.local/lib/python3.12/site-packages/ctranslate2-4.8.0-py3.12-linux-aarch64.egg" }
