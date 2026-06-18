@@ -42,6 +42,8 @@ from core.tools    import (
     list_schedule,
     cancel_schedule,
     schedule_reminder,
+    list_reminders,
+    cancel_reminder,
 )
 from core.log      import get_logger
 from core.schedule import DueJob, ScheduleRunner
@@ -274,6 +276,15 @@ class AikoThink:
                     "timezone": {"type": "string"}},
                     "required": ["title", "message", "time_of_day"]}}},
             {"type": "function", "function": {
+                "name": "list_reminders", "description": "List reminders.",
+                "parameters": {"type": "object", "properties": {
+                    "include_disabled": {"type": "boolean"}}}}},
+            {"type": "function", "function": {
+                "name": "cancel_reminder", "description": "Cancel reminder by id.",
+                "parameters": {"type": "object", "properties": {
+                    "reminder_id": {"type": "string"}},
+                    "required": ["reminder_id"]}}},
+            {"type": "function", "function": {
                 "name": "final_answer", "description": "Final answer.",
                 "parameters": {"type": "object", "properties": {
                     "answer": {"type": "string", "description": "The final answer text."}},
@@ -350,6 +361,10 @@ class AikoThink:
                     result = cancel_schedule(args.get("job_id", ""))
                 elif name == "schedule_reminder":
                     result = schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone"))
+                elif name == "list_reminders":
+                    result = list_reminders(bool(args.get("include_disabled", False)))
+                elif name == "cancel_reminder":
+                    result = cancel_reminder(args.get("reminder_id", ""))
                 elif name == "final_answer":
                     final_text = args.get("answer", "")
                     messages.append({
