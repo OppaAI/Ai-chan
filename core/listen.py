@@ -18,20 +18,18 @@ Dependencies:
     git clone https://github.com/reazon-research/ReazonSpeech
     pip install ReazonSpeech/pkg/k2-asr   # pulls in sherpa-onnx
     pip install numpy silero-vad scipy
-    (CUDA optional via sherpa-onnx's CUDA build — falls back to CPU
-    automatically. NOTE: on AuRoRA the Jetson GPU stack is currently down
-    — missing /dev/nvhost-gpu — so this will resolve to cpu until that's
-    fixed; no code change will be needed once it is)
     parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
 """
 
 from reazonspeech.k2.asr import load_model, transcribe, audio_from_numpy, TranscribeConfig
 from silero_vad import load_silero_vad
+import huggingface_hub as hf
 import logging
 from math import gcd
 import numpy as np
 import os
 from scipy.signal import resample_poly
+import sherpa_onnx
 import subprocess
 import threading
 import time
@@ -55,8 +53,21 @@ BOOT_LABELS = {
 # ── config ────────────────────────────────────────────────────────────────────
 
 ASR_DEVICE          = os.getenv("ASR_DEVICE",            "auto")    # cpu, cuda, coreml, auto
-ASR_PRECISION        = os.getenv("ASR_PRECISION",        "int8")    # fp32, int8, int8-fp32
+ASR_PRECISION        = os.getenv("ASR_PRECISION",        "int8")    # fp32, int8, int8-fp32 (+ fp16 for ja-en mirror)
 ASR_LANGUAGE         = os.getenv("ASR_LANGUAGE",          "ja-en")  # ja, ja-en (bilingual JA/EN)
+# NOTE: reazon-research/reazonspeech-k2-v2-ja-en (the repo
+# reazonspeech.k2.asr.load_model() hardcodes for language="ja-en") 404s —
+# it existed publicly through Jan 2025 per HF's commit history but appears
+# to have been pulled/quarantined since (likely the same malicious-ONNX-file
+# scanner flag that hit the ja-only model, see upstream issue #57/#58).
+# csukuangfj/reazonspeech-k2-v2-ja-en is a working mirror of the same
+# epoch-35 checkpoint (confirmed live 2026-06-18), so language="ja-en"
+# below loads from that mirror via _load_bilingual_mirror() instead of the
+# package's own load_model(). If Reazon ever republishes their own repo,
+# just delete _load_bilingual_mirror() and let load_model() handle it.
+_JA_EN_MIRROR_REPO   = "csukuangfj/reazonspeech-k2-v2-ja-en"
+_JA_EN_MIRROR_EPOCHS = 35
+
 VAD_SILENCE_MS      = int(os.getenv("LISTEN_VAD_SILENCE_MS", 300))
 VAD_PAD_MS          = int(os.getenv("LISTEN_VAD_PAD_MS",     100))
 
@@ -103,6 +114,68 @@ def _resolve_asr_device(device_hint: str) -> tuple[str, str]:
     return "cpu", ASR_PRECISION
 
 
+def _load_bilingual_mirror(device: str, precision: str):
+    """Load the ja-en bilingual K2 model from csukuangfj's mirror.
+
+    This mirrors the internal logic of reazonspeech.k2.asr's own
+    load_model() (see pkg/k2-asr/src/huggingface.py upstream) but targets
+    _JA_EN_MIRROR_REPO instead of the now-404 reazon-research repo, since
+    load_model() has no parameter to override which HF repo it pulls from.
+
+    Returns:
+        sherpa_onnx.OfflineRecognizer
+    """
+    epochs = _JA_EN_MIRROR_EPOCHS
+    hf_repo_files = {
+        "fp32": {
+            "tokens":  "tokens.txt",
+            "encoder": f"encoder-epoch-{epochs}-avg-1.onnx",
+            "decoder": f"decoder-epoch-{epochs}-avg-1.onnx",
+            "joiner":  f"joiner-epoch-{epochs}-avg-1.onnx",
+        },
+        "fp16": {
+            "tokens":  "tokens.txt",
+            "encoder": f"encoder-epoch-{epochs}-avg-1.fp16.onnx",
+            "decoder": f"decoder-epoch-{epochs}-avg-1.fp16.onnx",
+            "joiner":  f"joiner-epoch-{epochs}-avg-1.fp16.onnx",
+        },
+        "int8": {
+            "tokens":  "tokens.txt",
+            "encoder": f"encoder-epoch-{epochs}-avg-1.int8.onnx",
+            "decoder": f"decoder-epoch-{epochs}-avg-1.int8.onnx",
+            "joiner":  f"joiner-epoch-{epochs}-avg-1.int8.onnx",
+        },
+        "int8-fp32": {
+            "tokens":  "tokens.txt",
+            "encoder": f"encoder-epoch-{epochs}-avg-1.int8.onnx",
+            "decoder": f"decoder-epoch-{epochs}-avg-1.onnx",
+            "joiner":  f"joiner-epoch-{epochs}-avg-1.int8.onnx",
+        },
+    }
+
+    if precision not in hf_repo_files:
+        raise ValueError(f"Unknown precision for ja-en mirror: '{precision}'")
+
+    files = hf_repo_files[precision]
+
+    try:
+        basedir = hf.snapshot_download(_JA_EN_MIRROR_REPO, local_files_only=True)
+    except hf.utils.LocalEntryNotFoundError:
+        basedir = hf.snapshot_download(_JA_EN_MIRROR_REPO)
+
+    return sherpa_onnx.OfflineRecognizer.from_transducer(
+        tokens=os.path.join(basedir, files["tokens"]),
+        encoder=os.path.join(basedir, files["encoder"]),
+        decoder=os.path.join(basedir, files["decoder"]),
+        joiner=os.path.join(basedir, files["joiner"]),
+        num_threads=1,
+        sample_rate=16000,
+        feature_dim=80,
+        decoding_method="greedy_search",
+        provider=device,
+    )
+
+
 # ── listen ────────────────────────────────────────────────────────────────────
 
 class AikoListen:
@@ -140,11 +213,14 @@ class AikoListen:
     # ── staged init ───────────────────────────────────────────────────────────
 
     def load_asr(self) -> None:
-        self._model = load_model(
-            device=self._device,
-            precision=self._precision,
-            language=ASR_LANGUAGE,
-        )
+        if ASR_LANGUAGE == "ja-en":
+            self._model = _load_bilingual_mirror(self._device, self._precision)
+        else:
+            self._model = load_model(
+                device=self._device,
+                precision=self._precision,
+                language=ASR_LANGUAGE,
+            )
 
     load_whisper = load_asr  # backward-compat alias for existing wakeup.py call sites
 
