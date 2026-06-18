@@ -3,21 +3,29 @@ core/listen.py
 
 Aiko's speech-to-text input layer.
   - Captures microphone audio with Silero VAD (neural, energy-independent)
-  - Transcribes via faster-whisper in a background thread
+  - Transcribes via ReazonSpeech K2 ASR (sherpa-onnx, Zipformer RNN-T) in a
+    background thread
   - Exposes listen() (blocking) and listen_async() (callback) for UI
-  - Staged init: load_whisper() → load_vad() → join_warmup() for granular
+  - Staged init: load_asr() → load_vad() → join_warmup() for granular
     boot progress reporting via wakeup.py
+    (load_whisper() is kept as an alias of load_asr() so existing
+    wakeup.py call sites don't need to change)
   - Always-on barge-in VAD monitor: start_barge_in_monitor() runs a
     lightweight Silero-only daemon that sets _barge_in_event when speech is
     detected during TTS playback, enabling speak.wait_or_barge_in()
 
 Dependencies:
-    pip install faster-whisper numpy silero-vad scipy
-    (CUDA optional — falls back to CPU automatically)
+    git clone https://github.com/reazon-research/ReazonSpeech
+    pip install ReazonSpeech/pkg/k2-asr   # pulls in sherpa-onnx
+    pip install numpy silero-vad scipy
+    (CUDA optional via sherpa-onnx's CUDA build — falls back to CPU
+    automatically. NOTE: on AuRoRA the Jetson GPU stack is currently down
+    — missing /dev/nvhost-gpu — so this will resolve to cpu until that's
+    fixed; no code change will be needed once it is)
     parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
 """
 
-from faster_whisper import WhisperModel
+from reazonspeech.k2.asr import load_model, transcribe, audio_from_numpy, TranscribeConfig
 from silero_vad import load_silero_vad
 import logging
 from math import gcd
@@ -31,12 +39,13 @@ import torch
 import warnings
 
 warnings.filterwarnings("ignore")
-logging.getLogger("faster_whisper").setLevel(logging.ERROR)
+logging.getLogger("sherpa_onnx").setLevel(logging.ERROR)
 
 # ── boot labels ───────────────────────────────────────────────────────────────
 
 BOOT_LABELS = {
-    'listen_whisper': 'Loading Whisper model...',
+    'listen_whisper': 'Loading ReazonSpeech ASR model...',   # key kept for wakeup.py compat
+    'listen_asr':     'Loading ReazonSpeech ASR model...',
     'listen_silero':  'Loading Silero VAD...',
     'listen_warmup':  'Warming up ASR pipeline...',
     'listen_ready':   'Microphone ready',
@@ -45,21 +54,20 @@ BOOT_LABELS = {
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-WHISPER_MODEL_SIZE  = os.getenv("WHISPER_MODEL",      "turbo")
-WHISPER_DEVICE      = os.getenv("WHISPER_DEVICE",     "auto")
-WHISPER_COMPUTE     = os.getenv("WHISPER_COMPUTE",    "float16")
-WHISPER_LANG        = os.getenv("WHISPER_LANG",       "") or None
+ASR_DEVICE          = os.getenv("ASR_DEVICE",            "auto")    # cpu, cuda, coreml, auto
+ASR_PRECISION        = os.getenv("ASR_PRECISION",        "int8")    # fp32, int8, int8-fp32
+ASR_LANGUAGE         = os.getenv("ASR_LANGUAGE",          "ja-en")  # ja, ja-en (bilingual JA/EN)
 VAD_SILENCE_MS      = int(os.getenv("LISTEN_VAD_SILENCE_MS", 300))
 VAD_PAD_MS          = int(os.getenv("LISTEN_VAD_PAD_MS",     100))
 
-SAMPLE_RATE         = 16000                                          # Whisper + Silero target
+SAMPLE_RATE         = 16000                                          # ASR + Silero target
 LISTEN_DEVICE       = os.getenv("LISTEN_DEVICE", None)              # None = default
 
 CHUNK_DURATION_MS   = int(os.getenv("LISTEN_CHUNK_MS",         30))  # Silero minimum
 VAD_THRESHOLD       = float(os.getenv("LISTEN_VAD_THRESHOLD", 0.5))  # Silero speech prob cutoff
 SILENCE_CHUNKS      = int(os.getenv("LISTEN_SILENCE_CHUNKS",   20))
 MIN_SPEECH_CHUNKS   = int(os.getenv("LISTEN_MIN_CHUNKS",       10))
-MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))
+MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))  # K2 model caps ~30s/clip
 
 BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.65"))
 BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "2"))
@@ -78,29 +86,34 @@ _PAREC_CMD = [
 ]
 
 
-def _resolve_device(device_hint: str) -> tuple[str, str]:
-    """Return (device, compute_type) resolving 'auto' to cuda if available."""
+def _resolve_asr_device(device_hint: str) -> tuple[str, str]:
+    """Return (device, precision) resolving 'auto' to cuda if available.
+
+    'auto' currently lands on cpu on AuRoRA because the Jetson GPU stack
+    (missing /dev/nvhost-gpu) is unresolved — once that's fixed this will
+    pick cuda back up with no code change.
+    """
     if device_hint != "auto":
-        return device_hint, WHISPER_COMPUTE
+        return device_hint, ASR_PRECISION
     try:
         if torch.cuda.is_available():
-            return "cuda", ("float16" if WHISPER_COMPUTE == "default" else WHISPER_COMPUTE)
+            return "cuda", ASR_PRECISION
     except Exception:
         pass
-    return "cpu", "int8" if WHISPER_COMPUTE == "default" else WHISPER_COMPUTE
+    return "cpu", ASR_PRECISION
 
 
 # ── listen ────────────────────────────────────────────────────────────────────
 
 class AikoListen:
     """
-    Microphone capture + faster-whisper transcription.
+    Microphone capture + ReazonSpeech K2 ASR transcription.
     Uses parec (PulseAudio) for mic capture — no PortAudio/sounddevice.
     Silero VAD gates recording for robust, noise-resilient speech detection.
 
     Staged init:
         listen = AikoListen()   # no heavy loading
-        listen.load_whisper()   # loads WhisperModel
+        listen.load_asr()       # loads the ReazonSpeech K2 model (alias: load_whisper())
         listen.load_vad()       # loads Silero VAD + kicks off warmup thread
         listen.join_warmup()    # blocks until warmup completes
 
@@ -110,8 +123,8 @@ class AikoListen:
     """
 
     def __init__(self) -> None:
-        self._device, self._compute = _resolve_device(WHISPER_DEVICE)
-        self._model:      WhisperModel | None = None
+        self._device, self._precision = _resolve_asr_device(ASR_DEVICE)
+        self._model:      object | None       = None  # sherpa_onnx.OfflineRecognizer
         self._vad_model:  object | None       = None
         self._lock        = threading.Lock()
         self._warmup_done = threading.Event()
@@ -126,12 +139,14 @@ class AikoListen:
 
     # ── staged init ───────────────────────────────────────────────────────────
 
-    def load_whisper(self) -> None:
-        self._model = WhisperModel(
-            WHISPER_MODEL_SIZE,
+    def load_asr(self) -> None:
+        self._model = load_model(
             device=self._device,
-            compute_type=self._compute,
+            precision=self._precision,
+            language=ASR_LANGUAGE,
         )
+
+    load_whisper = load_asr  # backward-compat alias for existing wakeup.py call sites
 
     def load_vad(self) -> None:
         self._vad_model = load_silero_vad()
@@ -300,25 +315,17 @@ class AikoListen:
 
     def _transcribe(self, audio: np.ndarray) -> str:
         with self._lock:
-            segments, _ = self._model.transcribe(
-                audio,
-                language=WHISPER_LANG,
-                beam_size=5,
-                vad_filter=True,
-                vad_parameters={
-                    "min_silence_duration_ms": VAD_SILENCE_MS,
-                    "speech_pad_ms":           VAD_PAD_MS,
-                },
-                condition_on_previous_text=False,
-            )
-            return " ".join(seg.text.strip() for seg in segments).strip()
+            audio_data = audio_from_numpy(audio, SAMPLE_RATE)
+            ret = transcribe(self._model, audio_data, TranscribeConfig(verbose=False))
+            return ret.text.strip()
 
     # ── warmup ────────────────────────────────────────────────────────────────
 
     def _warmup(self) -> None:
         try:
             silence = np.zeros(int(SAMPLE_RATE * 0.1), dtype=np.float32)
-            self._model.transcribe(silence, language="en")
+            audio_data = audio_from_numpy(silence, SAMPLE_RATE)
+            transcribe(self._model, audio_data, TranscribeConfig(verbose=False))
             tensor = torch.zeros(1, _CHUNK_SAMPLES_VAD)
             with torch.no_grad():
                 self._vad_model(tensor, SAMPLE_RATE)
