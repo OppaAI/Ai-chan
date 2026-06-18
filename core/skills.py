@@ -55,12 +55,21 @@ def search_skills(query: str, path: str | Path = DEFAULT_SKILLS_PATH, limit: int
     terms = [t.casefold() for t in query.split() if t.strip()]
     if not terms:
         return []
+    lines = [line.strip() for line in load_skills(path).splitlines() if line.strip()]
     results: list[str] = []
-    for line in load_skills(path).splitlines():
-        text = line.strip()
+    for text in lines:
         folded = text.casefold()
-        if text and all(term in folded for term in terms):
+        if all(term in folded for term in terms):
             results.append(text)
         if len(results) >= limit:
-            break
+            return results
+
+    # Fallback: tolerate one typo/extra term by matching any term when AND yields nothing.
+    if not results:
+        for text in lines:
+            folded = text.casefold()
+            if any(term in folded for term in terms):
+                results.append(text)
+            if len(results) >= limit:
+                break
     return results

@@ -1,6 +1,6 @@
 """
 core/memorize.py
-Aiko's persistent memory — custom backend via sqlite-vec + fastembed + Ollama.
+Aiko's persistent memory — custom backend via sqlite-vec + fastembed + llama.cpp.
 Abstracts all memory calls so think.py stays clean.
 
 Memory lifecycle:
@@ -65,8 +65,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-import httpx
 import sqlite_vec
+from openai import OpenAI
 from fastembed import TextEmbedding
 
 from core.forget import compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
@@ -289,6 +289,20 @@ def _sqlite_is_pinned(conn: sqlite3.Connection, mem_id: str) -> bool:
     return bool(row and row[0])
 
 
+
+
+def _sqlite_pinned_ids(conn: sqlite3.Connection, mem_ids: list[str]) -> set[str]:
+    """Batch fetch pinned memory IDs from the canonical table."""
+    ids = [str(mem_id) for mem_id in mem_ids if mem_id]
+    if not ids:
+        return set()
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"SELECT id FROM memories WHERE pinned = 1 AND id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    return {str(row["id"]) for row in rows}
+
 def _sqlite_knn_search(
     conn: sqlite3.Connection,
     vector: list[float],
@@ -348,14 +362,15 @@ class _MemoryBackend:
     def __init__(
         self,
         db_path:         str,
-        ollama_base_url: str,
+        llm_base_url:    str,
         model:           str,
         fastembed_cache: Optional[str] = None,
     ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path  = db_path
-        self._ollama   = ollama_base_url.rstrip("/")
+        self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
+        self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
         self._embedder = TextEmbedding(
             model_name=EMBED_MODEL,
             cache_dir=fastembed_cache,
@@ -400,7 +415,7 @@ class _MemoryBackend:
 
     def _extract_facts(self, messages: list[dict]) -> list[str]:
         """
-        Send conversation to Ollama LLM and parse the returned JSON fact array.
+        Send conversation to the OpenAI-compatible local LLM and parse the returned JSON fact array.
 
         Changes from original:
           - temperature=0.0 for deterministic output — reduces confabulation.
@@ -440,22 +455,15 @@ class _MemoryBackend:
         prompt = _EXTRACT_PROMPT.format(conversation=convo)
 
         try:
-            resp = httpx.post(
-                f"{self._ollama}/api/chat",
-                json={
-                    "model":    self._model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream":   False,
-                    "options": {
-                        "temperature": 0.0,   # deterministic — reduces hallucinated facts
-                        "num_predict": 512,
-                        "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", 4096)),
-                    },
-                },
+            resp = self._client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+                stream=False,
+                max_tokens=512,
+                temperature=0.0,  # deterministic — reduces hallucinated facts
                 timeout=45,
             )
-            resp.raise_for_status()
-            raw = resp.json()["message"]["content"].strip()
+            raw = (resp.choices[0].message.content or "").strip()
         except Exception as e:
             log.warning(f"Extraction LLM call failed: {e}")
             return []
@@ -700,8 +708,8 @@ class AikoMemorize:
 
         self._mem = _MemoryBackend(
             db_path=db_path,
-            ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            model=os.getenv("EXTRACT_MODEL") or os.getenv("OLLAMA_MODEL"),
+            llm_base_url=os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1"),
+            model=os.getenv("EXTRACT_MODEL") or os.getenv("LLAMACPP_MODEL", "ministral-3b-instruct"),
             fastembed_cache=os.getenv("FASTEMBED_CACHE_PATH"),
         )
         self._conn = self._mem._conn
@@ -809,7 +817,9 @@ class AikoMemorize:
             "",
         ]
         for m in memories:
-            text       = m.get("memory") or m.get("text") or str(m)
+            text       = m.get("memory") or m.get("text")
+            if not text:
+                continue
             created_at = m.get("created_at")
             if created_at:
                 try:
@@ -862,10 +872,15 @@ class AikoMemorize:
 
         mem_ids     = [str(m.get("id", "")) for m in all_mems if m.get("id")]
         payload_map = self._batch_get_payloads(mem_ids)
+        pinned_ids  = _sqlite_pinned_ids(self._conn, mem_ids)
 
-        boosted      = self._dream_boost(all_mems, payload_map, dry_run=dry_run)
-        merged       = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, dry_run=dry_run)
-        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run, _all_mems=all_mems)
+        boosted      = self._dream_boost(all_mems, payload_map, pinned_ids=pinned_ids, dry_run=dry_run)
+        merged       = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
+        if merged > 0 and not dry_run:
+            all_mems = self.get_all(user_id=user_id)
+            mem_ids = [str(m.get("id", "")) for m in all_mems if m.get("id")]
+            pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
+        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run, _all_mems=all_mems, _pinned_ids=pinned_ids)
         pruned       = prune_result.get("deleted", 0)
 
         duration = round(time.perf_counter() - t_start, 2)
@@ -880,6 +895,7 @@ class AikoMemorize:
         self,
         all_mems:    list[dict],
         payload_map: dict,
+        pinned_ids:  set[str] | None = None,
         dry_run:     bool = False,
     ) -> int:
         """
@@ -888,13 +904,14 @@ class AikoMemorize:
         Returns count of memories boosted.
         """
         now     = datetime.now(timezone.utc)
-        boosted = 0
+        boost_ids: list[str] = []
+        pinned_ids = pinned_ids or set()
 
         for m in all_mems:
             mem_id = str(m.get("id", ""))
             if not mem_id:
                 continue
-            if _sqlite_is_pinned(self._conn, mem_id):
+            if mem_id in pinned_ids:
                 continue
 
             text     = m.get("memory") or ""
@@ -918,17 +935,26 @@ class AikoMemorize:
             if not is_salient:
                 continue
 
-            if not dry_run:
-                try:
-                    _sqlite_set_payload(self._conn, mem_id, {
-                        "access_count": min(ac + DREAM_BOOST_AMOUNT, 255)
-                    })
-                except Exception as e:
-                    log.warning(f"Boost failed for {mem_id}: {e}")
-                    continue
+            boost_ids.append(mem_id)
 
-            boosted += 1
+        if boost_ids and not dry_run:
+            try:
+                placeholders = ",".join("?" * len(boost_ids))
+                self._conn.execute(
+                    f"""
+                    UPDATE memories
+                    SET access_count = MIN(access_count + ?, 255)
+                    WHERE id IN ({placeholders})
+                    """,
+                    [DREAM_BOOST_AMOUNT] + boost_ids,
+                )
+                self._conn.commit()
+            except Exception as e:
+                log.warning(f"Batch boost failed for {len(boost_ids)} memories: {e}")
+                self._conn.rollback()
+                return 0
 
+        boosted = len(boost_ids)
         if boosted:
             log.info(f"{'(dry-run) ' if dry_run else ''}Boosted {boosted} memories.")
         return boosted
@@ -938,6 +964,7 @@ class AikoMemorize:
         mem_ids:   list[str],
         user_id:   str,
         threshold: float = DREAM_MERGE_THRESHOLD,
+        pinned_ids: set[str] | None = None,
         dry_run:   bool  = False,
     ) -> int:
         """
@@ -946,12 +973,13 @@ class AikoMemorize:
         Returns count of memories deleted as duplicates.
         """
         deleted_ids: set[str] = set()
+        pinned_ids = pinned_ids or set()
         merged = 0
 
         for mem_id in mem_ids:
             if mem_id in deleted_ids:
                 continue
-            if _sqlite_is_pinned(self._conn, mem_id):
+            if mem_id in pinned_ids:
                 continue
 
             vector = _sqlite_get_vector(self._conn, mem_id)
@@ -975,7 +1003,7 @@ class AikoMemorize:
 
                 similarity = 1.0 - row["dist"]
                 n_merged = self._resolve_duplicate(
-                    mem_id, neighbor_id, similarity, dry_run=dry_run
+                    mem_id, neighbor_id, similarity, pinned_ids=pinned_ids, dry_run=dry_run
                 )
                 if n_merged:
                     deleted_ids.add(neighbor_id)
@@ -990,6 +1018,7 @@ class AikoMemorize:
         id_a:    str,
         id_b:    str,
         score:   float,
+        pinned_ids: set[str] | None = None,
         dry_run: bool = False,
     ) -> bool:
         """
@@ -997,14 +1026,24 @@ class AikoMemorize:
         Pinned memories are never deleted. Tie goes to id_a (query origin).
         Returns True if a deletion occurred.
         """
-        if _sqlite_is_pinned(self._conn, id_a) or _sqlite_is_pinned(self._conn, id_b):
+        pinned_ids = pinned_ids or set()
+        if id_a in pinned_ids or id_b in pinned_ids:
             log.info(f"Skipping merge: one or both of ({id_a}, {id_b}) is pinned.")
             return False
 
         payload_map = self._batch_get_payloads([id_a, id_b])
         ac_a, _     = payload_map.get(id_a, (0, "never"))
         ac_b, _     = payload_map.get(id_b, (0, "never"))
-        loser       = id_b if ac_a >= ac_b else id_a
+        row_map = {
+            row["id"]: row["created_at"]
+            for row in self._conn.execute(
+                "SELECT id, created_at FROM memories WHERE id IN (?, ?)", (id_a, id_b)
+            ).fetchall()
+        }
+        if ac_a == ac_b:
+            loser = id_b if row_map.get(id_a, "") >= row_map.get(id_b, "") else id_a
+        else:
+            loser = id_b if ac_a > ac_b else id_a
 
         if dry_run:
             log.info(
@@ -1032,6 +1071,7 @@ class AikoMemorize:
         threshold: float = CLEANUP_THRESHOLD,
         dry_run:   bool  = False,
         _all_mems: Optional[list[dict]] = None,
+        _pinned_ids: Optional[set[str]] = None,
     ) -> dict:
         """
         Prune decayed memories below threshold score.
@@ -1049,6 +1089,7 @@ class AikoMemorize:
 
         mem_ids     = [str(m.get("id", "")) for m in all_mems if m.get("id")]
         payload_map = self._batch_get_payloads(mem_ids)
+        pinned_ids  = _pinned_ids if _pinned_ids is not None else _sqlite_pinned_ids(self._conn, mem_ids)
 
         candidates = []
         kept       = 0
@@ -1058,7 +1099,7 @@ class AikoMemorize:
             ac, la     = payload_map.get(mem_id, (0, "never"))
             created_at = m.get("created_at", "")
 
-            if _sqlite_is_pinned(self._conn, mem_id):
+            if mem_id in pinned_ids:
                 kept += 1
                 continue
 
