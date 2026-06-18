@@ -7,9 +7,7 @@ readme = "README.md"
 dependencies = [
     "click>=8.4.1",
     "fastembed>=0.8.0",
-    "faster-whisper>=1.2.1",
     "numpy<2",
-    "ollama>=0.3.0",
     "python-dotenv>=1.0.0",
     "requests>=2.34.2",
     "scipy>=1.15.3",
