@@ -29,8 +29,24 @@ import time
 
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
-from core.tools    import web_search, fetch_and_extract, deep_search
+from core.tools    import (
+    web_search,
+    fetch_and_extract,
+    deep_search,
+    make_plan,
+    create_checklist,
+    save_note,
+    read_workspace_file,
+    summarize_task_state,
+    schedule_job,
+    list_schedule,
+    cancel_schedule,
+    schedule_reminder,
+    list_reminders,
+    cancel_reminder,
+)
 from core.log      import get_logger
+from core.schedule import DueJob, ScheduleRunner
 
 log = get_logger(__name__)
 
@@ -39,6 +55,7 @@ log = get_logger(__name__)
 BOOT_LABELS = {
     'think_start':  'Loading llama.cpp client + persona...',
     'think_warmup': 'Warming up language model...',
+    'think_reminders': 'Starting reminder scheduler...',
 }
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -51,7 +68,9 @@ _BASE_PREDICT    = 280
 _REASONING_SCALE = 3
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
+_USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
 _SKILLS_PATH  = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
+_SCHEDULE_PATH = Path(__file__).resolve().parent.parent / "persona" / "schedule.md"
 
 MAX_AGENT_ITER = 8
 
@@ -61,10 +80,12 @@ def _load_persona() -> str:
         raise FileNotFoundError(f"soul.md not found at {_PERSONA_PATH}")
     persona = _PERSONA_PATH.read_text(encoding="utf-8").strip()
     
-    skills_block = ""
-    if _SKILLS_PATH.exists():
-        skills_block = "\n\n" + _SKILLS_PATH.read_text(encoding="utf-8").strip()
-        
+    context_blocks = []
+    for path in (_USER_PATH, _SKILLS_PATH, _SCHEDULE_PATH):
+        if path.exists():
+            context_blocks.append(path.read_text(encoding="utf-8").strip())
+    skills_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
+
     user_id = os.getenv("USER_ID", "OppaAI")
     today   = datetime.now().strftime("%B %d, %Y")
     return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + skills_block
@@ -89,7 +110,13 @@ _FACTUAL_SIGNALS = frozenset([
 _FACTUAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _FACTUAL_SIGNALS) + r')\b', re.IGNORECASE)
 _SOCIAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _SOCIAL_SIGNALS) + r')\b', re.IGNORECASE)
 
-SKILL_TRIGGERS = ["research", "deep dive", "compare", "vs", "which is better", "difference between"]
+SKILL_TRIGGERS = [
+    "research", "deep dive", "compare", "vs", "which is better", "difference between",
+    "plan", "step by step", "help me", "organize", "checklist", "schedule",
+    "draft", "write", "make a", "create a", "build", "debug", "fix", "learn",
+    "apply", "prepare", "autonomous", "agent", "task",
+    "every monday", "weekly", "biweekly", "monthly", "weekdays",
+]
 
 # ── think ─────────────────────────────────────────────────────────────────────
 
@@ -111,6 +138,9 @@ class AikoThink:
         self._idle_learner_thread = threading.Thread(target=self._idle_learner_loop, daemon=True)
         self._idle_learner_thread.start()
 
+        self._reminders = ScheduleRunner(on_due=self._on_scheduled_job_due)
+        self._reminders.start()
+
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
         self._warmup_thread.start()
 
@@ -131,39 +161,148 @@ class AikoThink:
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
-        """Main entry point. Routes to agentic loop if skill triggered, else normal chat."""
+        """Main entry point. Uses keyword + semantic intent routing."""
         self._last_chat_time = time.time()
-        
-        # Simple skill router
-        is_skill = any(trigger in user_input.lower() for trigger in SKILL_TRIGGERS)
-        
-        if is_skill:
-            log.info(f"[route] Skill triggered. Entering agentic loop for: {user_input!r}")
+
+        intent = self._route_intent(user_input)
+        if intent != "chat":
+            log.info("[route] Agent intent=%s for: %r", intent, user_input)
             return self.agentic_chat(user_input, token_callback=token_callback)
         return self.chat(user_input, token_callback=token_callback)
 
-    def agentic_chat(self, user_input: str, token_callback=None) -> str:
-        """ReAct-style agentic loop with tool calling."""
-        tools = [
+    def _route_intent(self, user_input: str) -> str:
+        """Classify whether a turn needs autonomous task mode or normal chat."""
+        text = user_input.lower()
+        if any(trigger in text for trigger in SKILL_TRIGGERS):
+            return "keyword"
+        if re.search(r"\b(wake me|remind me|alarm|timer|every morning|every day|daily)\b", text):
+            return "reminder"
+        if _SOCIAL_RE.search(user_input):
+            return "chat"
+        return self._classify_agent_intent(user_input)
+
+    def _classify_agent_intent(self, user_input: str) -> str:
+        """Ask the local model for a compact route label when keywords miss."""
+        try:
+            resp = self._client.chat.completions.create(
+                model=LLAMACPP_MODEL,
+                messages=[{"role": "user", "content": (
+                    "Route message. Labels: chat, research, planning, writing, coding, "
+                    "decision, reminder, ongoing_task. Reply one label only.\n"
+                    f"Message: {user_input!r}"
+                )}],
+                stream=False, max_tokens=8, temperature=0.0,
+            )
+            label = (resp.choices[0].message.content or "chat").strip().lower()
+            label = re.sub(r"[^a-z_].*$", "", label)
+            return label if label in {
+                "research", "planning", "writing", "coding",
+                "decision", "reminder", "ongoing_task",
+            } else "chat"
+        except Exception as e:
+            log.warning("Intent routing failed: %s", e)
+            return "chat"
+
+
+    def _agent_tools(self) -> list[dict]:
+        """Return OpenAI-compatible tool schemas for autonomous task mode."""
+        return [
             {"type": "function", "function": {
-                "name": "web_search", "description": "Search the web for information.",
+                "name": "web_search", "description": "Search web.",
                 "parameters": {"type": "object", "properties": {
                     "query": {"type": "string", "description": "The search query."}},
                     "required": ["query"]}}},
             {"type": "function", "function": {
-                "name": "fetch_page", "description": "Fetch and extract full text from a specific URL.",
+                "name": "fetch_page", "description": "Fetch page text.",
                 "parameters": {"type": "object", "properties": {
                     "url": {"type": "string", "description": "The URL to fetch."}},
                     "required": ["url"]}}},
             {"type": "function", "function": {
-                "name": "final_answer", "description": "Submit the final comprehensive response to the user.",
+                "name": "make_plan", "description": "Make plan.",
+                "parameters": {"type": "object", "properties": {
+                    "goal": {"type": "string"},
+                    "constraints": {"type": "string"},
+                    "max_steps": {"type": "integer"}},
+                    "required": ["goal"]}}},
+            {"type": "function", "function": {
+                "name": "create_checklist", "description": "Make checklist.",
+                "parameters": {"type": "object", "properties": {
+                    "title": {"type": "string"},
+                    "items": {"type": "string", "description": "Newline-separated checklist items."}},
+                    "required": ["title", "items"]}}},
+            {"type": "function", "function": {
+                "name": "save_note", "description": "Save note/draft.",
+                "parameters": {"type": "object", "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "folder": {"type": "string"}},
+                    "required": ["title", "content"]}}},
+            {"type": "function", "function": {
+                "name": "read_workspace_file", "description": "Read workspace file.",
+                "parameters": {"type": "object", "properties": {
+                    "relative_path": {"type": "string"}},
+                    "required": ["relative_path"]}}},
+            {"type": "function", "function": {
+                "name": "summarize_task_state", "description": "Summarize task state.",
+                "parameters": {"type": "object", "properties": {
+                    "goal": {"type": "string"}, "done": {"type": "string"},
+                    "next_action": {"type": "string"}, "risks": {"type": "string"}},
+                    "required": ["goal"]}}},
+            {"type": "function", "function": {
+                "name": "schedule_job", "description": "Schedule local job/alarm. HH:MM. Frequencies: once,daily,weekdays,weekly,biweekly,monthly,custom_weekdays.",
+                "parameters": {"type": "object", "properties": {
+                    "title": {"type": "string"}, "task": {"type": "string"},
+                    "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"},
+                    "frequency": {"type": "string", "enum": ["once", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]},
+                    "timezone": {"type": "string"},
+                    "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"},
+                    "action": {"type": "string", "enum": ["announce", "agentic"], "description": "announce only, or agentic to let Aiko perform a local autonomous task"}},
+                    "required": ["title", "task", "time_of_day"]}}},
+            {"type": "function", "function": {
+                "name": "list_schedule", "description": "List schedule.",
+                "parameters": {"type": "object", "properties": {
+                    "include_disabled": {"type": "boolean"}}}}},
+            {"type": "function", "function": {
+                "name": "cancel_schedule", "description": "Cancel schedule item.",
+                "parameters": {"type": "object", "properties": {
+                    "job_id": {"type": "string"}},
+                    "required": ["job_id"]}}},
+            {"type": "function", "function": {
+                "name": "schedule_reminder", "description": "Simple once/daily reminder.",
+                "parameters": {"type": "object", "properties": {
+                    "title": {"type": "string"}, "message": {"type": "string"},
+                    "time_of_day": {"type": "string"},
+                    "repeat": {"type": "string", "enum": ["once", "daily"]},
+                    "timezone": {"type": "string"}},
+                    "required": ["title", "message", "time_of_day"]}}},
+            {"type": "function", "function": {
+                "name": "list_reminders", "description": "List reminders.",
+                "parameters": {"type": "object", "properties": {
+                    "include_disabled": {"type": "boolean"}}}}},
+            {"type": "function", "function": {
+                "name": "cancel_reminder", "description": "Cancel reminder by id.",
+                "parameters": {"type": "object", "properties": {
+                    "reminder_id": {"type": "string"}},
+                    "required": ["reminder_id"]}}},
+            {"type": "function", "function": {
+                "name": "final_answer", "description": "Final answer.",
                 "parameters": {"type": "object", "properties": {
                     "answer": {"type": "string", "description": "The final answer text."}},
                     "required": ["answer"]}}},
         ]
 
+    def agentic_chat(self, user_input: str, token_callback=None) -> str:
+        """ReAct-style agentic loop with tool calling."""
+        tools = self._agent_tools()
+
+        agent_system = (
+            f"{self._persona}\n\n"
+            "[TASK MODE] Plan briefly, use tools only when useful, and finish "
+            "with final_answer. Keep private reasoning private. Never claim work "
+            "outside available tools was completed."
+        )
         messages = [
-            {"role": "system", "content": self._persona},
+            {"role": "system", "content": agent_system},
             {"role": "user", "content": user_input},
         ]
 
@@ -204,6 +343,28 @@ class AikoThink:
                     result = deep_search(args.get("query", ""))
                 elif name == "fetch_page":
                     result = fetch_and_extract(args.get("url", ""))
+                elif name == "make_plan":
+                    result = make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8))
+                elif name == "create_checklist":
+                    result = create_checklist(args.get("title", "Checklist"), args.get("items", ""))
+                elif name == "save_note":
+                    result = save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes"))
+                elif name == "read_workspace_file":
+                    result = read_workspace_file(args.get("relative_path", ""))
+                elif name == "summarize_task_state":
+                    result = summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", ""))
+                elif name == "schedule_job":
+                    result = schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"))
+                elif name == "list_schedule":
+                    result = list_schedule(bool(args.get("include_disabled", False)))
+                elif name == "cancel_schedule":
+                    result = cancel_schedule(args.get("job_id", ""))
+                elif name == "schedule_reminder":
+                    result = schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone"))
+                elif name == "list_reminders":
+                    result = list_reminders(bool(args.get("include_disabled", False)))
+                elif name == "cancel_reminder":
+                    result = cancel_reminder(args.get("reminder_id", ""))
                 elif name == "final_answer":
                     final_text = args.get("answer", "")
                     messages.append({
@@ -327,6 +488,30 @@ class AikoThink:
     def set_reasoning(self, enabled: bool) -> None: self._reasoning = enabled
     def set_speak(self, speak) -> None: self._speak = speak
     def wait_for_memory(self) -> None: self._mem_queue.join()
+
+    def _on_scheduled_job_due(self, job: DueJob) -> None:
+        """Announce or execute a due scheduled job without blocking the scheduler."""
+        text = f"{job.title}. {job.task}"
+        log.info("[schedule] due %s action=%s: %s", job.id, job.action, text)
+        if job.action == "announce":
+            if self._speak:
+                self._speak.speak(text)
+            else:
+                print(f"\nAiko scheduled job: {text}", flush=True)
+            return
+        threading.Thread(target=self._run_scheduled_agentic_job, args=(job,), daemon=True).start()
+
+    def _run_scheduled_agentic_job(self, job: DueJob) -> None:
+        """Run a scheduled autonomous task through Aiko's agent loop."""
+        prompt = (
+            "Scheduled job due. Use only local available tools. If external action "
+            "is unavailable, draft/save the best local artifact and state next step.\n\n"
+            f"Title: {job.title}\nTask: {job.task}"
+        )
+        try:
+            self.agentic_chat(prompt)
+        except Exception as e:
+            log.error("Scheduled agentic job failed: %s", e)
 
     # ── idle learner ──────────────────────────────────────────────────────────
 
