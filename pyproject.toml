@@ -23,4 +23,7 @@ dependencies = [
 
 [tool.uv.sources]
 reazonspeech-k2-asr = { path = "../reazonspeech/pkg/k2-asr" }
-sherpa-onnx = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl" }
+sherpa-onnx = [
+    { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
+    { index = "pypi", marker = "platform_machine != 'aarch64'" },
+]
