@@ -45,7 +45,7 @@ requires-dist = [
     { name = "sherpa-onnx", marker = "platform_machine == 'aarch64'", url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl" },
     { name = "silero-vad", specifier = ">=6.2.1" },
     { name = "sounddevice", specifier = ">=0.5.5" },
-    { name = "soundfile", specifier = ">=0.13.1" },
+    { name = "soundfile", specifier = ">=0.14.0" },
     { name = "sqlite-vec", specifier = ">=0.1.9" },
     { name = "torch", specifier = ">=2.11.0" },
     { name = "torchaudio", specifier = ">=2.11.0" },
