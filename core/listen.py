@@ -98,21 +98,35 @@ _PAREC_CMD = [
 ]
 
 
-def _resolve_asr_device(device_hint: str) -> tuple[str, str]:
-    """Return (device, precision) resolving 'auto' to cuda if available.
-
-    'auto' currently lands on cpu on AuRoRA because the Jetson GPU stack
-    (missing /dev/nvhost-gpu) is unresolved — once that's fixed this will
-    pick cuda back up with no code change.
-    """
-    if device_hint != "auto":
-        return device_hint, ASR_PRECISION
+def _sherpa_cuda_available() -> bool:
+    """Return True only when the ONNX runtime used by Sherpa exposes CUDA."""
     try:
-        if torch.cuda.is_available():
-            return "cuda", ASR_PRECISION
+        import onnxruntime as ort
+        return "CUDAExecutionProvider" in ort.get_available_providers()
     except Exception:
-        pass
-    return "cpu", ASR_PRECISION
+        return False
+
+
+def _resolve_asr_device(device_hint: str) -> tuple[str, str]:
+    """Return (device, precision), avoiding CUDA unless Sherpa can use it."""
+    hint = (device_hint or "auto").strip().lower()
+    if hint == "auto":
+        return ("cuda" if _sherpa_cuda_available() else "cpu", ASR_PRECISION)
+    if hint == "cuda" and not _sherpa_cuda_available():
+        logging.getLogger(__name__).warning(
+            "ASR_DEVICE=cuda requested, but sherpa-onnx has no CUDA provider; falling back to CPU."
+        )
+        return "cpu", ASR_PRECISION
+    return hint, ASR_PRECISION
+
+
+def _is_sherpa_gpu_error(exc: Exception) -> bool:
+    text = str(exc)
+    return (
+        "SHERPA_ONNX_ENABLE_GPU" in text
+        or "CUDAExecutionProvider" in text
+        or "Available providers:" in text
+    )
 
 
 def _load_bilingual_mirror(device: str, precision: str):
@@ -215,14 +229,26 @@ class AikoListen:
     # ── staged init ───────────────────────────────────────────────────────────
 
     def load_asr(self) -> None:
+        try:
+            self._model = self._load_asr_model(self._device, self._precision)
+        except Exception as exc:
+            if self._device == "cuda" and _is_sherpa_gpu_error(exc):
+                logging.getLogger(__name__).warning(
+                    "Sherpa ASR GPU load failed; retrying on CPU: %s", exc
+                )
+                self._device = "cpu"
+                self._model = self._load_asr_model(self._device, self._precision)
+            else:
+                raise
+
+    def _load_asr_model(self, device: str, precision: str):
         if ASR_LANGUAGE == "ja-en":
-            self._model = _load_bilingual_mirror(self._device, self._precision)
-        else:
-            self._model = load_model(
-                device=self._device,
-                precision=self._precision,
-                language=ASR_LANGUAGE,
-            )
+            return _load_bilingual_mirror(device, precision)
+        return load_model(
+            device=device,
+            precision=precision,
+            language=ASR_LANGUAGE,
+        )
 
     load_whisper = load_asr  # backward-compat alias for existing wakeup.py call sites
 
