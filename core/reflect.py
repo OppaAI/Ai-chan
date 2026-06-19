@@ -48,7 +48,7 @@ GITHUB_REPO       = os.getenv("GITHUB_REPO", "")          # e.g. "OppaAI/oppaai.
 GITHUB_BRANCH     = os.getenv("GITHUB_BRANCH", "main")
 HUGO_CONTENT_PATH = os.getenv("HUGO_CONTENT_PATH", "content/posts")
 
-LLM_MODEL    = os.getenv("LLM_MODEL", "ministral-3b-instruct")
+LLM_MODEL    = os.getenv("LLM_MODEL", "ministral")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 _LLM_CLIENT  = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 

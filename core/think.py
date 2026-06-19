@@ -48,7 +48,7 @@ BOOT_LABELS = {
 # ── config ────────────────────────────────────────────────────────────────────
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
-LLM_MODEL    = os.getenv("LLM_MODEL",    "ministral-3b-instruct")
+LLM_MODEL    = os.getenv("LLM_MODEL",    "ministral")
 LLM_TIMEOUT  = float(os.getenv("LLM_TIMEOUT", 120))
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 

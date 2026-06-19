@@ -5,12 +5,10 @@ Aiko's voice output via MioTTS inference server.
 Preset-based voice reference: "jp_female", "en_female", or a custom registered preset.
 
 Server setup (run separately):
-    # 1. Start LLM backend (Ollama example):
-    ollama serve
-    ollama run hf.co/Aratako/MioTTS-GGUF:MioTTS-0.6B-Q4_K_M.gguf
+    # 1. Start the local OpenAI-compatible model server with the miotts model.
     # 2. Start MioTTS synthesis API:
-    python run_server.py --llm-base-url http://localhost:11434/v1 \
-        --llm-model "hf.co/Aratako/MioTTS-GGUF:MioTTS-0.6B-Q4_K_M.gguf"
+    python run_server.py --llm-base-url http://localhost:8080/v1 \
+        --llm-model "miotts"
 
 Standalone test:
     python core/speak.py
