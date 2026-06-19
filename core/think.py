@@ -79,7 +79,32 @@ def _load_persona() -> str:
     today   = datetime.now().strftime("%B %d, %Y")
     return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + skills_block
 
-# ── intent signals (same as before) ───────────────────────────────────────────
+# ── intent signals ────────────────────────────────────────────────────────────
+#
+# Routing for "does this turn need live web data" is layered:
+#
+#   1. _SOCIAL_RE   — conversational / relational framing. Checked FIRST so a
+#                      message like "what do you think, wanna grab coffee
+#                      today?" doesn't get hijacked by stray factual-looking
+#                      words. If this matches, we short-circuit to chat.
+#
+#   2. _FACTUAL_RE  — narrow, genuinely data-specific nouns (prices, scores,
+#                      weather, news, rankings, etc). These rarely show up in
+#                      normal conversation or code talk, so a bare match is a
+#                      reliable signal on its own.
+#
+#   3. _PHRASE_PATTERNS — bare interrogatives (who/what/when/where/how much/
+#                      how many) are NOT reliable signals by themselves
+#                      (they're some of the most common words in English:
+#                      "what do you think", "where should I put this config",
+#                      "today I finished the migration"). They're only
+#                      re-admitted as a search signal when paired with a
+#                      data-specific anchor word in the same message, e.g.
+#                      "who won the game", "what's the weather", "when does
+#                      the new model release".
+#
+# If none of these match, intent falls through to the LLM classifier (when
+# AIKO_ROUTE_LLM is enabled) or defaults to plain chat.
 
 _SOCIAL_SIGNALS = frozenset([
     "wanna", "want to", "would you", "shall we",
@@ -87,17 +112,46 @@ _SOCIAL_SIGNALS = frozenset([
     "how are you", "what do you think", "do you like",
 ])
 
+# Narrow: words that are specific enough to data lookups that a bare match is
+# trustworthy on its own. Generic interrogatives and overloaded common words
+# (what/who/when/where/today/current/game/won/win/lost/beat/final/match/
+# series) were removed from this list — they false-positive constantly on
+# ordinary statements and code/project talk. See _PHRASE_PATTERNS below for
+# how those are re-admitted only in genuinely data-seeking phrasing.
 _FACTUAL_SIGNALS = frozenset([
-    "who", "what", "when", "where", "how many", "how much",
-    "score", "result", "latest", "news", "current", "today",
-    "price", "weather", "won", "win", "lost", "beat",
-    "game", "final", "finals", "points", "scored",
-    "standing", "ranking", "bitcoin", "crypto", "stock",
-    "temperature", "forecast", "match", "series",
+    "score", "result", "results", "latest", "news",
+    "price", "weather", "forecast", "temperature",
+    "standing", "standings", "ranking", "rankings",
+    "bitcoin", "crypto", "stock", "stocks",
 ])
 
 _FACTUAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _FACTUAL_SIGNALS) + r')\b', re.IGNORECASE)
 _SOCIAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _SOCIAL_SIGNALS) + r')\b', re.IGNORECASE)
+
+# Phrase-level patterns: an interrogative/time word only counts as a data
+# signal when it's anchored to something that's actually looked up, not just
+# discussed. Each pattern requires both halves in the same message, in either
+# order, within a short span.
+_PHRASE_PATTERNS = [
+    # who/when + sports or competition outcome
+    re.compile(r'\b(who|when)\b.{0,30}\b(won|win|wins|winning|lost|losing|beat|playing|plays)\b', re.IGNORECASE),
+    re.compile(r'\b(won|win|wins|winning|lost|losing|beat|playing|plays)\b.{0,30}\b(who|when)\b', re.IGNORECASE),
+    # what/how much + price, weather, score, odds
+    re.compile(r'\b(what|how much|how many)\b.{0,30}\b(price|cost|weather|temperature|score|odds|rate|exchange rate)\b', re.IGNORECASE),
+    re.compile(r'\b(price|cost|weather|temperature|score|odds|rate|exchange rate)\b.{0,30}\b(what|how much|how many)\b', re.IGNORECASE),
+    # when + release/happen/start/launch (events, not general planning)
+    re.compile(r'\b(when)\b.{0,30}\b(release|releases|released|launch|launches|launched|happen|happens|happened|start|starts|started|come out|coming out)\b', re.IGNORECASE),
+    # what's the current/today's + state-of-the-world nouns
+    re.compile(r"\b(what'?s|what is)\b.{0,15}\b(current|today'?s|latest)\b", re.IGNORECASE),
+    # game/match/series/final explicitly tied to a result/score word
+    re.compile(r'\b(game|match|series|final|finals)\b.{0,30}\b(score|result|won|win|lost|beat|standing|ranking)\b', re.IGNORECASE),
+    re.compile(r'\b(score|result|won|win|lost|beat|standing|ranking)\b.{0,30}\b(game|match|series|final|finals)\b', re.IGNORECASE),
+]
+
+
+def _matches_phrase_pattern(text: str) -> bool:
+    return any(p.search(text) for p in _PHRASE_PATTERNS)
+
 
 SKILL_TRIGGERS = [
     "research", "deep dive", "compare", "vs", "which is better", "difference between",
@@ -168,9 +222,12 @@ class AikoThink:
             return "keyword"
         if re.search(r"\b(wake me|remind me|alarm|timer|every morning|every day|daily)\b", text):
             return "reminder"
-        if _FACTUAL_RE.search(user_input):
-            return "chat"
+        # Social/conversational framing wins even if a factual-looking word
+        # also appears in the same message (e.g. "what do you think, wanna
+        # grab coffee today?").
         if _SOCIAL_RE.search(user_input):
+            return "chat"
+        if _FACTUAL_RE.search(user_input) or _matches_phrase_pattern(user_input):
             return "chat"
         if not _ROUTE_LLM:
             return "chat"
@@ -442,8 +499,13 @@ class AikoThink:
         return f"[LLM error] {reason}"
 
     def _is_data_intent(self, user_input: str) -> bool:
-        if _FACTUAL_RE.search(user_input): return True
-        if _SOCIAL_RE.search(user_input): return False
+        # Social/conversational framing wins outright, same ordering as
+        # _route_intent above, so /web-search step-in inside chat() stays
+        # consistent with the routing decision that got us here.
+        if _SOCIAL_RE.search(user_input):
+            return False
+        if _FACTUAL_RE.search(user_input) or _matches_phrase_pattern(user_input):
+            return True
         if self._route_chat_classified == user_input:
             self._route_chat_classified = None
             return False
