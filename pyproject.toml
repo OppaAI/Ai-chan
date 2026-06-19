@@ -8,7 +8,7 @@ dependencies = [
     "click>=8.4.1",
     "fastembed>=0.8.0",
     "numpy>=2.4.6",
-    "onnxruntime>=1.23.2",
+    "onnxruntime==1.24.4",
     "openai>=2.43.0",
     "python-dotenv>=1.0.0",
     "reazonspeech-k2-asr",
