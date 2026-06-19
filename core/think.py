@@ -55,6 +55,7 @@ _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280
 _AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
 _REASONING_SCALE = 3
 _IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
+_ROUTE_LLM = os.getenv("AIKO_ROUTE_LLM", "0").lower() in {"1", "true", "yes", "on"}
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -170,6 +171,8 @@ class AikoThink:
             return "chat"
         if _SOCIAL_RE.search(user_input):
             return "chat"
+        if not _ROUTE_LLM:
+            return "chat"
         return self._classify_agent_intent(user_input)
 
     def _classify_agent_intent(self, user_input: str) -> str:
@@ -212,8 +215,6 @@ class AikoThink:
         """Standard single-shot conversational turn."""
         if self._speak and self._speak.is_playing():
             self._speak.stop()
-
-        self.wait_for_memory()
 
         memories     = self._memorize.search(user_input, limit=int(os.getenv("MEMORY_RECALL_LIMIT", 3)))
         memory_block = self._memorize.format_for_context(memories)

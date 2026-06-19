@@ -57,7 +57,9 @@ def load_chat_turns(start: datetime, end: datetime, user_id: str | None = None) 
             except Exception:
                 continue
             created_at = _coerce_utc(created_at)
-            if created_at < start or created_at >= end:
+            if created_at >= end:
+                break
+            if created_at < start:
                 continue
             if user_id is not None and record.get("user_id") != user_id:
                 continue

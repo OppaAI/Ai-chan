@@ -56,6 +56,8 @@ load_dotenv()
 
 import json
 import os
+from collections import OrderedDict
+import threading
 import re
 import sqlite3
 import struct
@@ -89,6 +91,9 @@ EMBED_DIMS  = 768
 RRF_K       = 60          # standard RRF constant — dampens outlier ranks
 KNN_LIMIT   = 20          # candidates fetched before RRF re-rank
 FTS_LIMIT   = 20          # candidates fetched before RRF re-rank
+SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
+SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
+LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 
 USER_ID = os.getenv("USER_ID", "OppaAI")
 
@@ -382,6 +387,7 @@ class _MemoryBackend:
         conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")  # wait up to 5s on lock contention
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
@@ -617,6 +623,26 @@ class _MemoryBackend:
 
         return [dict(r) for r in rows_sorted]
 
+    def iter_all(self, user_id: str, batch_size: int = LIFECYCLE_BATCH_SIZE):
+        """Yield memory records for a user in rowid order without one giant list."""
+        last_rowid = 0
+        while True:
+            rows = self._conn.execute(
+                """
+                SELECT rowid, id, memory, created_at
+                FROM memories
+                WHERE user_id = ? AND rowid > ?
+                ORDER BY rowid ASC
+                LIMIT ?
+                """,
+                (user_id, last_rowid, batch_size),
+            ).fetchall()
+            if not rows:
+                break
+            for row in rows:
+                last_rowid = row["rowid"]
+                yield {"id": row["id"], "memory": row["memory"], "created_at": row["created_at"]}
+
     def get_all(self, user_id: str) -> list[dict]:
         """
         Return memory records for a user.
@@ -628,11 +654,7 @@ class _MemoryBackend:
         _sqlite_batch_get_payloads()/_sqlite_is_pinned() instead, since
         get_all() snapshots can be stale by the time those checks run.
         """
-        rows = self._conn.execute(
-            "SELECT id, memory, created_at FROM memories WHERE user_id = ?",
-            (user_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return list(self.iter_all(user_id=user_id))
 
     def get_since(self, since: datetime, user_id: str = USER_ID) -> list[dict]:
         """Return memories created on or after `since`, newest first."""
@@ -713,6 +735,8 @@ class AikoMemorize:
             fastembed_cache=os.getenv("FASTEMBED_CACHE_PATH"),
         )
         self._conn = self._mem._conn
+        self._search_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
+        self._search_cache_lock = threading.RLock()
 
         if not silent:
             log.info("Ready.")
@@ -729,6 +753,7 @@ class AikoMemorize:
             ids     = self._mem.add(messages, user_id=user_id)
             elapsed = time.perf_counter() - t
             if ids:
+                self._clear_search_cache()
                 log.info(f"Saved {len(ids)} memories in {elapsed:.2f}s")
             else:
                 log.debug(f"No facts extracted ({elapsed:.2f}s) — nothing saved.")
@@ -765,6 +790,7 @@ class AikoMemorize:
             for mem_id in ids:
                 _sqlite_set_payload(self._conn, mem_id, {"pinned": 1})
 
+            self._clear_search_cache()
             log.info(f"Pinned {len(ids)} memories: {ids}")
             return True
         except Exception as e:
@@ -779,28 +805,55 @@ class AikoMemorize:
         Side-effect: increments access_count and updates last_accessed_at
         for all returned memories in a single batched UPDATE.
         """
-        results = self._mem.search(query, user_id=user_id, limit=limit)
+        cache_key = (user_id, " ".join((query or "").lower().split()), int(limit))
+        now_s = time.monotonic()
 
-        if results:
-            now = datetime.now(timezone.utc).isoformat()
-            mem_ids = [str(r.get("id", "")) for r in results if r.get("id")]
-            if mem_ids:
-                try:
-                    placeholders = ",".join("?" * len(mem_ids))
-                    self._conn.execute(
-                        f"""
-                        UPDATE memories
-                        SET access_count = MIN(access_count + 1, 255),
-                            last_accessed_at = ?
-                        WHERE id IN ({placeholders})
-                        """,
-                        [now] + mem_ids,
-                    )
-                    self._conn.commit()
-                except Exception as e:
-                    log.warning(f"Access tracking failed for {mem_ids}: {e}")
+        with self._search_cache_lock:
+            cached = self._search_cache.get(cache_key)
+            if cached and now_s - cached[0] <= SEARCH_CACHE_TTL:
+                self._search_cache.move_to_end(cache_key)
+                results = [dict(r) for r in cached[1]]
+                self._touch_memories(results)
+                return results
+            if cached:
+                self._search_cache.pop(cache_key, None)
+
+        results = self._mem.search(query, user_id=user_id, limit=limit)
+        self._touch_memories(results)
+
+        with self._search_cache_lock:
+            self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
+            while len(self._search_cache) > SEARCH_CACHE_SIZE:
+                self._search_cache.popitem(last=False)
 
         return results
+
+    def _touch_memories(self, results: list[dict]) -> None:
+        """Update decay access metadata for a search result set."""
+        if not results:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        mem_ids = [str(r.get("id", "")) for r in results if r.get("id")]
+        if not mem_ids:
+            return
+        try:
+            placeholders = ",".join("?" * len(mem_ids))
+            self._conn.execute(
+                f"""
+                UPDATE memories
+                SET access_count = MIN(access_count + 1, 255),
+                    last_accessed_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                [now] + mem_ids,
+            )
+            self._conn.commit()
+        except Exception as e:
+            log.warning(f"Access tracking failed for {mem_ids}: {e}")
+
+    def _clear_search_cache(self) -> None:
+        with self._search_cache_lock:
+            self._search_cache.clear()
 
     def format_for_context(self, memories: list[dict]) -> Optional[str]:
         """
@@ -865,23 +918,26 @@ class AikoMemorize:
         t_start = time.perf_counter()
         log.info(f"{'(dry-run) ' if dry_run else ''}Starting consolidation pass...")
 
-        all_mems = self.get_all(user_id=user_id)
-        if not all_mems:
+        mem_ids: list[str] = []
+        boosted = 0
+
+        for batch in self._iter_memory_batches(user_id):
+            batch_ids = [str(m.get("id", "")) for m in batch if m.get("id")]
+            if not batch_ids:
+                continue
+            mem_ids.extend(batch_ids)
+            payload_map = self._batch_get_payloads(batch_ids)
+            pinned_ids = _sqlite_pinned_ids(self._conn, batch_ids)
+            boosted += self._dream_boost(batch, payload_map, pinned_ids=pinned_ids, dry_run=dry_run)
+
+        if not mem_ids:
             log.info("No memories found — nothing to do.")
             return {"boosted": 0, "merged": 0, "pruned": 0, "duration_s": 0.0}
 
-        mem_ids     = [str(m.get("id", "")) for m in all_mems if m.get("id")]
-        payload_map = self._batch_get_payloads(mem_ids)
-        pinned_ids  = _sqlite_pinned_ids(self._conn, mem_ids)
-
-        boosted      = self._dream_boost(all_mems, payload_map, pinned_ids=pinned_ids, dry_run=dry_run)
-        merged       = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
-        if merged > 0 and not dry_run:
-            all_mems = self.get_all(user_id=user_id)
-            mem_ids = [str(m.get("id", "")) for m in all_mems if m.get("id")]
-            pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
-        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run, _all_mems=all_mems, _pinned_ids=pinned_ids)
-        pruned       = prune_result.get("deleted", 0)
+        pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
+        merged = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
+        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run)
+        pruned = prune_result.get("deleted", 0)
 
         duration = round(time.perf_counter() - t_start, 2)
         log.info(
@@ -1083,10 +1139,66 @@ class AikoMemorize:
 
         Returns dict: {deleted, kept, failed, candidates (dry_run only)}.
         """
-        all_mems = _all_mems if _all_mems is not None else self.get_all(user_id=user_id)
-        if not all_mems:
+        source = [_all_mems] if _all_mems is not None else self._iter_memory_batches(user_id)
+
+        kept = 0
+        deleted: list[str] = []
+        failed: list[dict] = []
+        dry_candidates: list[dict] = []
+        saw_any = False
+
+        for batch in source:
+            if not batch:
+                continue
+            saw_any = True
+            batch_kept, candidates = self._cleanup_candidates(
+                batch,
+                _pinned_ids=_pinned_ids,
+            )
+            kept += batch_kept
+
+            if dry_run:
+                dry_candidates.extend(candidates)
+                continue
+
+            for c in candidates:
+                try:
+                    self._mem.delete(memory_id=c["id"])
+                    deleted.append(c["id"])
+                except Exception as e:
+                    failed.append({"id": c["id"], "error": str(e)})
+
+        if not saw_any:
             return {"deleted": 0, "kept": 0, "failed": 0}
 
+        if dry_run:
+            dry_candidates.sort(key=lambda x: x["weighted_score"])
+            log.info(f"Dry run: {len(dry_candidates)} candidates for deletion, {kept} kept.")
+            return {"deleted": 0, "kept": kept, "failed": 0, "candidates": dry_candidates}
+
+        if deleted:
+            self._clear_search_cache()
+            self.optimize()
+
+        log.info(f"Cleanup: deleted={len(deleted)}, kept={kept}, failed={len(failed)}")
+        return {"deleted": len(deleted), "kept": kept, "failed": len(failed)}
+
+    def _iter_memory_batches(self, user_id: str, batch_size: int = LIFECYCLE_BATCH_SIZE):
+        """Yield lifecycle scan batches without retaining the full table."""
+        batch: list[dict] = []
+        for mem in self._mem.iter_all(user_id=user_id, batch_size=batch_size):
+            batch.append(mem)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+    def _cleanup_candidates(
+        self,
+        all_mems: list[dict],
+        _pinned_ids: Optional[set[str]] = None,
+    ) -> tuple[int, list[dict]]:
         mem_ids     = [str(m.get("id", "")) for m in all_mems if m.get("id")]
         payload_map = self._batch_get_payloads(mem_ids)
         pinned_ids  = _pinned_ids if _pinned_ids is not None else _sqlite_pinned_ids(self._conn, mem_ids)
@@ -1116,22 +1228,15 @@ class AikoMemorize:
                 kept += 1
 
         candidates.sort(key=lambda x: x["weighted_score"])
+        return kept, candidates
 
-        if dry_run:
-            log.info(f"Dry run: {len(candidates)} candidates for deletion, {kept} kept.")
-            return {"deleted": 0, "kept": kept, "failed": 0, "candidates": candidates}
-
-        deleted = []
-        failed  = []
-        for c in candidates:
-            try:
-                self._mem.delete(memory_id=c["id"])
-                deleted.append(c["id"])
-            except Exception as e:
-                failed.append({"id": c["id"], "error": str(e)})
-
-        log.info(f"Cleanup: deleted={len(deleted)}, kept={kept}, failed={len(failed)}")
-        return {"deleted": len(deleted), "kept": kept, "failed": len(failed)}
+    def optimize(self) -> None:
+        """Run SQLite's lightweight planner/index maintenance hook."""
+        try:
+            self._conn.execute("PRAGMA optimize")
+            self._conn.commit()
+        except Exception as e:
+            log.debug(f"SQLite optimize skipped: {e}")
 
     # ── debug ─────────────────────────────────────────────────────────────────
 
@@ -1146,6 +1251,7 @@ class AikoMemorize:
     def clear(self, user_id: str = USER_ID) -> None:
         """Wipe all memories for a user. Use carefully."""
         self._mem.delete_all(user_id=user_id)
+        self._clear_search_cache()
         log.info(f"Cleared all memories for user '{user_id}'.")
 
     # ── internal ──────────────────────────────────────────────────────────────

@@ -83,6 +83,7 @@ MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))  # K2 model 
 BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.65"))
 BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "2"))
 BARGE_IN_COOLDOWN_MS   = int(os.getenv("BARGE_IN_COOLDOWN_MS",     "800"))
+BARGE_IN_ALWAYS_ON      = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "true", "yes", "on"}
 
 _CHUNK_SAMPLES_VAD = 512                                            # at 16 kHz, ~32 ms
 _MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / CHUNK_DURATION_MS)
@@ -204,6 +205,7 @@ class AikoListen:
         self._warmup_thread: threading.Thread | None = None
 
         self._barge_in_event:  threading.Event = threading.Event()
+        self._barge_in_armed:   threading.Event = threading.Event()
         self._barge_in_active: bool             = False
         self._barge_in_thread: threading.Thread | None = None
 
@@ -255,8 +257,9 @@ class AikoListen:
             proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
             consecutive = 0
             while self._barge_in_active:
-                # pause while main recording is active — avoid mic conflict
-                if self._recording.is_set():
+                # pause while main recording is active, and while no TTS is waiting
+                # for interruption unless continuous barge-in was explicitly enabled.
+                if self._recording.is_set() or (not BARGE_IN_ALWAYS_ON and not self._barge_in_armed.is_set()):
                     time.sleep(0.05)
                     consecutive = 0
                     continue
@@ -302,7 +305,11 @@ class AikoListen:
     ) -> str:
         if speak is not None and speak.is_playing():
             _cb(status_callback, "__WAITING__")
-            interrupted = speak.wait_or_barge_in(self._barge_in_event)
+            self._barge_in_armed.set()
+            try:
+                interrupted = speak.wait_or_barge_in(self._barge_in_event)
+            finally:
+                self._barge_in_armed.clear()
             if interrupted:
                 self._barge_in_event.clear()
         elif wait_fn is not None:

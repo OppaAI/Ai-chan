@@ -18,6 +18,9 @@ import subprocess
 import time
 import urllib.request
 
+_DB_SIZE_CACHE: tuple[float, str] = (0.0, "? mem")
+_DB_SIZE_TTL = float(os.getenv("AIKO_DB_SIZE_TTL", "1.0"))
+
 
 def _read_sys_info() -> dict:
     """
@@ -121,20 +124,34 @@ def _ram_used_str() -> str:
 def _db_size_str() -> str:
     """
     Probe the sqlite-vec memory store and return the number of living engrams.
-    Queries the memories table directly for the current row count,
-    providing a real-time measure of long-term memory depth.
+    Cached briefly so the vitals refresh loop does not open SQLite every draw.
     Returns a string of the form 'N entries', or '? mem' on any error.
     """
+    global _DB_SIZE_CACHE
+    now = time.monotonic()
+    cached_at, cached_value = _DB_SIZE_CACHE
+    if now - cached_at < _DB_SIZE_TTL:
+        return cached_value
+
+    conn = None
     try:
         import sqlite3, sqlite_vec
         db_path = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
         conn = sqlite3.connect(db_path)
         sqlite_vec.load(conn)
         count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-        conn.close()
-        return f"{count} entries"
-    except Exception as e:
-        return f"? mem)"
+        value = f"{count} entries"
+    except Exception:
+        value = "? mem"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    _DB_SIZE_CACHE = (now, value)
+    return value
 
 
 def _fmt_uptime(seconds: float) -> str:

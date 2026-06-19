@@ -52,6 +52,7 @@ from tui.tui import AikoTUI
 
 AI_NAME = os.getenv("AI_NAME", "Aiko")
 USER_ID = os.getenv("USER_ID", "")
+STREAM_DRAW_INTERVAL = float(os.getenv("AIKO_STREAM_DRAW_INTERVAL", "0.05"))
 
 
 # ── voice command map ─────────────────────────────────────────────────────────
@@ -170,14 +171,20 @@ def _run(stdscr, args):
     """
     tui = AikoTUI(stdscr, no_voice=args.text, debug=args.debug)
 
+    last_stream_draw = 0.0
+
     def token_cb(token):
+        nonlocal last_stream_draw
         if token.startswith("__SEARCHING__:"):
             query = token.split(":", 1)[1]
-            tui.add_message('sys', f'🌐 Searching: {query}...')
+            tui.add_message('sys', f'Searching: {query}...')
             tui._draw()
         else:
             tui.stream_token(token)
-            tui._draw(buf=[])
+            now = time.monotonic()
+            if now - last_stream_draw >= STREAM_DRAW_INTERVAL:
+                tui._draw(buf=[])
+                last_stream_draw = now
 
     # ── init spin ─────────────────────────────────────────────────────────────
 
@@ -293,7 +300,7 @@ def _run(stdscr, args):
                     ]
                     ok = memorize.pin(msgs)
                     if ok:
-                        tui.add_message('sys', "Got it — I'll remember that forever. 📌")
+                        tui.add_message('sys', "Got it — I'll remember that forever.")
                     else:
                         tui.add_message('sys', 'Failed to pin memory — check logs.')
 
@@ -431,7 +438,7 @@ def _run(stdscr, args):
         tui.turn_start()
         tui._draw()
 
-        think.chat(user_input, token_callback=token_cb)
+        think.route(user_input, token_callback=token_cb)
         tui.stream_commit()
         tui._draw()
 
