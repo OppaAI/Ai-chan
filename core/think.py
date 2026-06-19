@@ -366,20 +366,18 @@ class AikoThink:
 
     def _emit(self, text: str, token_callback=None) -> None:
         if not text: return
-        if token_callback and self._speak:
-            self._speak.speak_synced(text, on_word=token_callback)
-            return
+
+        # Always drive the TUI callback directly, regardless of TTS
         if token_callback:
             words = text.split(" ")
             for i, word in enumerate(words):
-                chunk = word if i == 0 else " " + word
-                token_callback(chunk)
+                token_callback(word if i == 0 else " " + word)
                 time.sleep(float(os.getenv("EMIT_DELAY", 0.012)))
-        else:
-            print(f"\nAiko-chan: {text}", flush=True)
-            if self._speak:
-                self._speak.feed(text)
-                self._speak.play_async()
+
+        # TTS runs independently
+        if self._speak:
+            self._speak.feed(text)
+            self._speak.play_async()
 
     def _stream_response(self, messages: list[dict], system: str = "", token_callback=None) -> str:
         full_response = []
