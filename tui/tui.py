@@ -284,12 +284,11 @@ class AikoTUI:
 
     def _draw_clock_only(self):
         """Refresh only the clock and cursor position without redrawing the full frame."""
-        self._draw(buf=list(self._input_buf))
         with self._lock:
             h, w = self._dims()
             wh = curses.color_pair(CP_WHITE) | curses.A_BOLD
             clock_str = f" {time.strftime('%B %d, %Y  %I:%M:%S %p')} "
-            self._wr(1, w - 1 - len(clock_str), clock_str, wh)
+            self._wr(1, w - 1 - len(clock_str), clock_str, wh)   # row 1 = banner row
             rx    = LEFT_W + 1
             inp_r = self._chat_bot(h) + 4
             content = self.INPUT_PROMPT + ''.join(self._input_buf)
