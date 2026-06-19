@@ -730,8 +730,8 @@ class AikoMemorize:
 
         self._mem = _MemoryBackend(
             db_path=db_path,
-            llm_base_url=os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1"),
-            model=os.getenv("EXTRACT_MODEL") or os.getenv("LLAMACPP_MODEL", "ministral-3b-instruct"),
+            llm_base_url=os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"),
+            model=os.getenv("EXTRACT_MODEL") or os.getenv("LLM_MODEL", "ministral-3b-instruct"),
             fastembed_cache=os.getenv("FASTEMBED_CACHE_PATH"),
         )
         self._conn = self._mem._conn

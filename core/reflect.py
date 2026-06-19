@@ -18,8 +18,8 @@ Optional:
   REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 20)
   REFLECT_MAX_TURNS   — max chat turns to feed the LLM (default 40)
   REFLECT_TAGS        — comma-separated Hugo tags (default "daily-summary,ai-journal,aiko")
-  LLAMACPP_MODEL      — reuses the main chat model (already in VRAM)
-  LLAMACPP_BASE_URL   — default http://localhost:8080/v1
+  LLM_MODEL          — reuses the main chat model (already in VRAM)
+  LLM_BASE_URL       — default http://localhost:8080/v1
   REFLECT_ASCII      — true/false toggle for ASCII art generation (default true)
 """
 from dotenv import load_dotenv
@@ -48,9 +48,9 @@ GITHUB_REPO       = os.getenv("GITHUB_REPO", "")          # e.g. "OppaAI/oppaai.
 GITHUB_BRANCH     = os.getenv("GITHUB_BRANCH", "main")
 HUGO_CONTENT_PATH = os.getenv("HUGO_CONTENT_PATH", "content/posts")
 
-LLAMACPP_MODEL    = os.getenv("LLAMACPP_MODEL", os.getenv("OLLAMA_MODEL", "ministral-3b-instruct"))
-LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
-_LLM_CLIENT       = OpenAI(base_url=LLAMACPP_BASE_URL, api_key="not-needed")
+LLM_MODEL    = os.getenv("LLM_MODEL", "ministral-3b-instruct")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
+_LLM_CLIENT  = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
 
@@ -139,7 +139,7 @@ def _llm_chat(system: str, user: str, max_tokens: int = 400) -> str:
     Raises on API failure so callers can catch cleanly.
     """
     resp = _LLM_CLIENT.chat.completions.create(
-        model=LLAMACPP_MODEL,
+        model=LLM_MODEL,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},

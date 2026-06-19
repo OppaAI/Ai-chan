@@ -47,8 +47,9 @@ BOOT_LABELS = {
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-LLAMACPP_BASE_URL = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8080/v1")
-LLAMACPP_MODEL    = os.getenv("LLAMACPP_MODEL",    "ministral-3b-instruct")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
+LLM_MODEL    = os.getenv("LLM_MODEL",    "ministral-3b-instruct")
+LLM_TIMEOUT  = float(os.getenv("LLM_TIMEOUT", 120))
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
 _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
@@ -110,8 +111,8 @@ SKILL_TRIGGERS = [
 
 class AikoThink:
     def __init__(self, memorize: AikoMemorize, speak: AikoSpeak | None = None) -> None:
-        self._client    = OpenAI(base_url=LLAMACPP_BASE_URL, api_key="not-needed")
-        self._llm_model = LLAMACPP_MODEL
+        self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+        self._llm_model = LLM_MODEL
         self._memorize  = memorize
         self._speak     = speak
         self._persona   = _load_persona()
@@ -137,7 +138,7 @@ class AikoThink:
     def _warmup_llm(self) -> None:
         try:
             self._client.chat.completions.create(
-                model=LLAMACPP_MODEL,
+                model=self._llm_model,
                 messages=[{"role": "user", "content": "hi"}],
                 stream=False, max_tokens=1,
             )
@@ -179,7 +180,7 @@ class AikoThink:
         """Ask the local model for a compact route label when keywords miss."""
         try:
             resp = self._client.chat.completions.create(
-                model=LLAMACPP_MODEL,
+                model=self._llm_model,
                 messages=[{"role": "user", "content": (
                     "Route message. Labels: chat, research, planning, writing, coding, "
                     "decision, reminder, ongoing_task. Reply one label only.\n"
@@ -387,12 +388,12 @@ class AikoThink:
 
         try:
             stream = self._client.chat.completions.create(
-                model=LLAMACPP_MODEL, messages=all_messages, stream=True,
+                model=self._llm_model, messages=all_messages, stream=True,
                 max_tokens=max_tokens,
                 temperature=float(os.getenv("TEMPERATURE", 0.72)),
                 top_p=float(os.getenv("TOP_P", 0.90)),
                 stop=["<|im_end|>", "</s>", "[INST]"],
-                timeout=float(os.getenv("LLAMACPP_TIMEOUT", 120)),
+                timeout=LLM_TIMEOUT,
                 extra_body={
                     "repeat_penalty": float(os.getenv("REPEAT_PENALTY", 1.15)),
                     "repeat_last_n":  int(os.getenv("REPEAT_LAST_N", 64)),
@@ -405,13 +406,42 @@ class AikoThink:
                 full_response.append(token)
                 # Streaming is collected here; user-facing emission is centralized in _emit().
         except Exception as e:
-            msg = f"Stream failed: {e}"
+            msg = f"LLM stream failed: {e}"
             log.error(msg)
-            with self._history_lock:
-                if self._history and self._history[-1]["role"] == "user": self._history.pop()
-            return ""
+            return self._fallback_completion(all_messages, max_tokens, msg)
 
-        return "".join(full_response)
+        text = "".join(full_response).strip()
+        if text:
+            return text
+        return self._fallback_completion(
+            all_messages,
+            max_tokens,
+            "LLM stream completed without content",
+        )
+
+    def _fallback_completion(self, messages: list[dict], max_tokens: int, reason: str) -> str:
+        """Try one non-streaming completion before surfacing the LLM error in chat."""
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._llm_model,
+                messages=messages,
+                stream=False,
+                max_tokens=max_tokens,
+                temperature=float(os.getenv("TEMPERATURE", 0.72)),
+                top_p=float(os.getenv("TOP_P", 0.90)),
+                stop=["<|im_end|>", "</s>", "[INST]"],
+                timeout=LLM_TIMEOUT,
+            )
+            text = (resp.choices[0].message.content or "").strip()
+            if text:
+                log.warning("%s; recovered with non-streaming completion", reason)
+                return text
+            reason = f"{reason}; non-streaming completion was also empty"
+        except Exception as e:
+            reason = f"{reason}; non-streaming fallback failed: {e}"
+
+        log.error(reason)
+        return f"[LLM error] {reason}"
 
     def _is_data_intent(self, user_input: str) -> bool:
         if _FACTUAL_RE.search(user_input): return True
@@ -431,7 +461,7 @@ class AikoThink:
 
         try:
             resp = self._client.chat.completions.create(
-                model=LLAMACPP_MODEL,
+                model=self._llm_model,
                 messages=[{"role": "user", "content": (
                     f'{context_block}Message: "{user_input}"\n\n'
                     f'Is this asking for factual external data, or conversational?\n'
