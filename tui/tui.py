@@ -39,8 +39,9 @@ from core.health import _ram_used_str, _db_size_str, _fmt_uptime
 
 # ── env ───────────────────────────────────────────────────────────────────────
 
-OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL",  "unknown")
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "distil-large-v3.5")
+LLM_BASE_URL  = os.getenv("LLM_BASE_URL", "unknown")
+LLAMA_MODEL   = os.getenv("LLAMA_MODEL", "unknown")
+ASR_MODEL     = os.getenv("ASR_MODEL", os.getenv("ASR_MODE", "csukuangfj/reazonspeech-k2-v2-ja-en"))
 SEARXNG_URL   = os.getenv("SEARXNG_URL",   "localhost:8080")
 AI_NAME       = os.getenv("AI_NAME", "Aiko")
 USER_ID       = os.getenv("USER_ID", "")
@@ -118,13 +119,13 @@ ARCH_SECTIONS = [
     ]),
     ("COGNITION", [
         ("Inference engine", "Ollama  (local, offline)"),
-        ("Active model",     OLLAMA_MODEL),
+        ("Active model",     LLAMA_MODEL),
         ("Web search",       SEARXNG_URL),
     ]),
     ("VOICE ENGINE", [
-        ("TTS backend",   "MioTTS 0.1B"),
+        ("TTS backend",   "MioTTS 0.4B"),
         ("Voice preset",  os.getenv("MIOTTS_PRESET", "jp_female")),
-        ("ASR model",     WHISPER_MODEL),
+        ("ASR model",     ASR_MODEL),
     ]),
 ]
 
@@ -132,7 +133,7 @@ ARCH_ROWS = sum(1 + len(items) for _, items in ARCH_SECTIONS) + 2
 db_path = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
 
 INIT_STEPS = {
-    'think_start':      ('Inference Engine', f'Spawning Ollama worker  ·  {OLLAMA_MODEL}'),
+    'think_start':      ('Inference Engine', f'Spawning Ollama worker  ·  {LLAMA_MODEL}'),
     'think_warmup':     ('Model Warm-up',    'Loading weights, running prefill pass …'),
     'mem_sqlite_vec':   ('Vector Database',  f'Connecting to SQLite-vec  ·  {db_path}'),
     'mem_embed':        ('Embedding Model',  'Loading BGE-base-en-v1.5  ·  768-dim vectors'),
@@ -141,7 +142,7 @@ INIT_STEPS = {
     'speak_miotts':     ('TTS Engine',       f'Initializing MioTTS  ·  {os.getenv("MIOTTS_PRESET", "jp_female")}'),
     'speak_ready':      ('Voice Output',     'Audio pipeline ready  ·  24 kHz'),
     'speak_skip':       ('Voice Output',     'TTS disabled  (--text mode)'),
-    'listen_ready':     ('Speech Input',     f'faster-whisper ready  ·  {WHISPER_MODEL}'),
+    'listen_ready':     ('Speech Input',     f'ReazonSpeech ready  ·  {ASR_MODEL}'),
     'listen_skip':      ('Speech Input',     'ASR disabled  (--text mode)'),
 }
 
@@ -283,6 +284,7 @@ class AikoTUI:
 
     def _draw_clock_only(self):
         """Refresh only the clock and cursor position without redrawing the full frame."""
+        self._draw(buf=list(self._input_buf))
         with self._lock:
             h, w = self._dims()
             wh = curses.color_pair(CP_WHITE) | curses.A_BOLD
@@ -513,6 +515,7 @@ class AikoTUI:
                 wrp = textwrap.wrap(text, avail - len(pre)) or [""]
                 out.append(('Y', pre + wrp[0]))
                 for l in wrp[1:]: out.append(('Y', ind + l))
+                out.append(('S', ''))
             elif sender == 'aiko':
                 pre = f" {AI_NAME}: "
                 ind = " " * len(pre)
@@ -748,7 +751,7 @@ class AikoTUI:
             __WAITING__      — Aiko is speaking; waiting for her to finish or
                                for the user to barge in
             __LISTENING__    — mic is open, capturing audio
-            __TRANSCRIBING__ — Whisper is processing the recorded audio
+            __TRANSCRIBING__ — ASR is processing the recorded audio
             __IDLE__         — pipeline idle, nothing captured
 
         Args:

@@ -55,7 +55,7 @@ flowchart TD
     THINK <-->|async| MEM[Memory\nsqlite-vec + fastembed]
     THINK <-->|on demand| SEARCH[Web search\nSearXNG]
     THINK --> SPEAK[Speak\nMioTTS]
-    LISTEN[Listen\nfaster-whisper + VAD] --> THINK
+    LISTEN[Listen\nReazonSpeech K2 + VAD] --> THINK
     THINK -.->|nightly| DREAM[Dream\nconsolidation]
     DREAM -.->|optional| REFLECT[Reflect\nHugo + GitHub]
 ```
@@ -74,7 +74,7 @@ flowchart TD
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
 | Web search | local SearXNG instance |
 | TTS | external MioTTS HTTP server |
-| ASR | faster-whisper with Silero VAD |
+| ASR | ReazonSpeech K2 with Silero VAD |
 | Reflection publishing | optional GitHub REST API + Hugo markdown |
 
 ---
@@ -131,7 +131,7 @@ Aiko-chan/
 │   ├── dream.py         # midnight consolidation scheduler
 │   ├── reflect.py       # Hugo/GitHub reflection publisher
 │   ├── speak.py         # MioTTS HTTP client
-│   ├── listen.py        # faster-whisper + Silero VAD
+│   ├── listen.py        # ReazonSpeech K2 + Silero VAD
 │   ├── tools.py         # SearXNG helper
 │   ├── health.py        # TUI vitals
 │   ├── log.py           # rotating log setup
@@ -165,7 +165,7 @@ Aiko-chan/
 |---|---|---|
 | 1 | Soul — CLI, Ollama, mem0 + Qdrant, SearXNG | ✅ Done |
 | 1.5 | Stream — curses TUI, streaming pipeline, MioTTS, persona | ✅ Done |
-| 2 | Voice — faster-whisper ASR, Silero VAD, hands-free talk | 🔲 Next |
+| 2 | Voice — ReazonSpeech K2 ASR, Silero VAD, hands-free talk | 🔲 Next |
 | 3 | Face — VRM avatar, three-vrm, expressions, lip-sync | 🔲 Planned |
 | 4 | Presence — emotional state, mood, relationship progression | 🔲 Planned |
 | 5 | Mobile — React Native / Flutter, WAN, push notifications | 🔲 Planned |

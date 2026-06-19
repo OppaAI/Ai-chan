@@ -62,7 +62,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Feature | Status |
 |---|---|
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
-| Microphone capture with faster-whisper | 🔲 Planned |
+| Microphone capture with ReazonSpeech K2 | 🔲 Planned |
 | Voice Activity Detection via Silero VAD | 🔲 Planned |
 | Interactive Talk mode (hands-free conversation) | 🔲 Planned |
 | Interrupt handling — speak over Aiko mid-response | 🔲 Planned |

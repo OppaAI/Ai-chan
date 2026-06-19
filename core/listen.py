@@ -8,8 +8,6 @@ Aiko's speech-to-text input layer.
   - Exposes listen() (blocking) and listen_async() (callback) for UI
   - Staged init: load_asr() → load_vad() → join_warmup() for granular
     boot progress reporting via wakeup.py
-    (load_whisper() is kept as an alias of load_asr() so existing
-    wakeup.py call sites don't need to change)
   - Always-on barge-in VAD monitor: start_barge_in_monitor() runs a
     lightweight Silero-only daemon that sets _barge_in_event when speech is
     detected during TTS playback, enabling speak.wait_or_barge_in()
@@ -42,7 +40,6 @@ logging.getLogger("sherpa_onnx").setLevel(logging.ERROR)
 # ── boot labels ───────────────────────────────────────────────────────────────
 
 BOOT_LABELS = {
-    'listen_whisper': 'Loading ReazonSpeech ASR model...',   # key kept for wakeup.py compat
     'listen_asr':     'Loading ReazonSpeech ASR model...',
     'listen_silero':  'Loading Silero VAD...',
     'listen_warmup':  'Warming up ASR pipeline...',
@@ -65,7 +62,10 @@ ASR_LANGUAGE         = os.getenv("ASR_LANGUAGE",          "ja-en")  # ja, ja-en 
 # below loads from that mirror via _load_bilingual_mirror() instead of the
 # package's own load_model(). If Reazon ever republishes their own repo,
 # just delete _load_bilingual_mirror() and let load_model() handle it.
-_JA_EN_MIRROR_REPO   = "csukuangfj/reazonspeech-k2-v2-ja-en"
+_JA_EN_MIRROR_REPO   = os.getenv(
+    "ASR_MODEL",
+    os.getenv("ASR_MODE", "csukuangfj/reazonspeech-k2-v2-ja-en"),
+)
 _JA_EN_MIRROR_EPOCHS = 35
 
 VAD_SILENCE_MS      = int(os.getenv("LISTEN_VAD_SILENCE_MS", 300))
@@ -201,7 +201,7 @@ class AikoListen:
 
     Staged init:
         listen = AikoListen()   # no heavy loading
-        listen.load_asr()       # loads the ReazonSpeech K2 model (alias: load_whisper())
+        listen.load_asr()       # loads the ReazonSpeech K2 model
         listen.load_vad()       # loads Silero VAD + kicks off warmup thread
         listen.join_warmup()    # blocks until warmup completes
 
@@ -249,8 +249,6 @@ class AikoListen:
             precision=precision,
             language=ASR_LANGUAGE,
         )
-
-    load_whisper = load_asr  # backward-compat alias for existing wakeup.py call sites
 
     def load_vad(self) -> None:
         self._vad_model = load_silero_vad()

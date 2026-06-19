@@ -89,7 +89,7 @@ Run before any phase tests. All items must pass.
 
 ## Phase 2 — Voice
 
-*faster-whisper ASR, Silero VAD, hands-free talk mode.*
+*ReazonSpeech K2 ASR, Silero VAD, hands-free talk mode.*
 
 ### Memory Backend Migration (sqlite-vec)
 
@@ -98,7 +98,7 @@ Run before any phase tests. All items must pass.
 - [ ] KNN + FTS5 RRF recall returns relevant results: run `--debug` and confirm memory hits appear each turn
 - [ ] `cleanup()` runs on startup and logs `deleted=N, kept=N` without error
 
-### ASR — faster-whisper
+### ASR — ReazonSpeech K2
 
 - [ ] Aiko launches in full voice mode (no `--text` flag) without errors
 - [ ] Speaking clearly into the microphone produces a transcription in the chat panel

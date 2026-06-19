@@ -4,7 +4,7 @@ main.py
 Aiko-chan CLI — entry point and session orchestrator.
 
 Usage:
-    python main.py               # full voice — ASR (faster-whisper) + TTS (MioTTS)
+    python main.py               # full voice — ASR (ReazonSpeech K2) + TTS (MioTTS)
     python main.py --text        # keyboard input + no TTS
     python main.py --debug       # show memory debug info each turn
     python main.py --clear-mem   # wipe all stored memories and exit
@@ -58,11 +58,11 @@ STREAM_DRAW_INTERVAL = float(os.getenv("AIKO_STREAM_DRAW_INTERVAL", "0.05"))
 # ── voice command map ─────────────────────────────────────────────────────────
 #
 # Maps spoken phrases to their slash-command equivalents.
-# Whisper often prepends filler words ("uh", "um", "okay", "hey aiko") — the
+# ASR can prepend filler words ("uh", "um", "okay", "hey aiko") — the
 # matcher strips these before comparison. Fuzzy matching handles minor
 # transcription drift (e.g. "reset context" → /reset).
 #
-# Keep phrases short and phonetically distinct so Whisper nails them reliably.
+# Keep phrases short and phonetically distinct so ASR catches them reliably.
 
 _VOICE_COMMANDS: dict[str, str] = {
     # session control
@@ -98,7 +98,7 @@ _VOICE_COMMANDS: dict[str, str] = {
     "what can you do":   "/help",
 }
 
-# Filler words Whisper prepends that we should strip before matching
+# Filler words ASR may prepend that we should strip before matching
 _FILLER_RE = re.compile(
     r"^\s*(uh+|um+|ah+|okay|hey\s+aiko|aiko)[,.]?\s*",
     flags=re.IGNORECASE,
