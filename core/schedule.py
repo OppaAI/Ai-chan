@@ -32,11 +32,11 @@ from core.log import get_logger
 
 log = get_logger(__name__)
 
-WORKSPACE_ROOT = Path(os.getenv("AIKO_WORKSPACE_ROOT", "workspace")).resolve()
-SCHEDULE_PATH = Path(os.getenv("AIKO_SCHEDULE_PATH", WORKSPACE_ROOT / "schedule.json")).resolve()
-LEGACY_REMINDERS_PATH = Path(os.getenv("AIKO_REMINDERS_PATH", WORKSPACE_ROOT / "reminders.json")).resolve()
-DEFAULT_TIMEZONE = os.getenv("AIKO_TIMEZONE", os.getenv("TZ", "UTC"))
-POLL_SECONDS = float(os.getenv("AIKO_SCHEDULE_POLL_SECONDS", os.getenv("AIKO_REMINDER_POLL_SECONDS", 15)))
+WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
+SCHEDULE_PATH = Path(os.getenv("SCHEDULE_PATH", WORKSPACE_ROOT / "schedule.json")).resolve()
+LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH", WORKSPACE_ROOT / "reminders.json")).resolve()
+DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
+POLL_SECONDS = float(os.getenv("SCHEDULE_POLL_SECONDS", os.getenv("REMINDER_POLL_SECONDS", 15)))
 
 FREQUENCIES = {"once", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 _WEEKDAYS = {

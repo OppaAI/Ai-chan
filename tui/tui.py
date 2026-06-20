@@ -184,6 +184,7 @@ class AikoTUI:
         self._messages: list[tuple[str, str]] = []
         self._scroll    = 0
         self._streaming = ''
+        self._tool_status = None
 
         self._init_log: list[tuple[str, str, str]] = []
         self._frame     = 0
@@ -585,6 +586,11 @@ class AikoTUI:
             hint = f" ↑{self._scroll}  PgDn↓ "
             self._wr(ct, w - len(hint) - 2, hint, pu)
 
+        if self._tool_status:
+            status_row = ct + len(visible)
+            if status_row < cb:
+                self._wr(status_row, rx, f"  ⚙ {self._tool_status}"[:rw-1], dim)
+
     # ── master draw ───────────────────────────────────────────────────────────
 
     def _draw(self, buf=None):
@@ -646,8 +652,28 @@ class AikoTUI:
             self._scroll = 0
 
     def stream_token(self, token):
-        """Ingest an incoming token into the live streaming buffer."""
+        """Ingest an incoming token into the live streaming buffer.
+
+        Intercepts agentic control sentinels (__THINKING__, __TOOL__:name(args),
+        __SEARCHING__:query) so they drive the status display instead of leaking
+        into the visible chat text.
+        """
         with self._lock:
+            if token.startswith('__THINKING__'):
+                self._tool_status = 'thinking'
+                return
+            if token.startswith('__TOOL__:'):
+                call = token[len('__TOOL__:'):].strip()
+                name = call.split('(', 1)[0]
+                self._tool_status = f'using {name}'
+                return
+            if token.startswith('__SEARCHING__:'):
+                query = token[len('__SEARCHING__:'):].strip()
+                self._tool_status = f'searching: {query}'
+                return
+
+            # normal visible token
+            self._tool_status = None
             self._streaming += token
             count = len(token)
             self._stats['tokens']   += count
