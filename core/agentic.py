@@ -32,6 +32,8 @@ log = get_logger(__name__)
 
 MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 280)))
+AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25))
+AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
 
 
 def _tool(schema: dict):
@@ -172,8 +174,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     """Run task mode using the owning AikoThink instance for model/memory/output."""
     tools = tool_schemas()
 
-    owner.wait_for_memory()
-    memories = owner._memorize.search(user_input, limit=int(os.getenv("MEMORY_RECALL_LIMIT", 3)))
+    if not owner.wait_for_memory(timeout=AGENT_MEMORY_DRAIN_TIMEOUT):
+        log.debug("Agent memory queue still draining; continuing without blocking turn start.")
+    memories = owner._memorize.search(user_input, limit=AGENT_MEMORY_RECALL_LIMIT)
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
 

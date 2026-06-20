@@ -56,6 +56,8 @@ _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280
 _AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
 _REASONING_SCALE = 3
 _IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
+_MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
+_MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 _ROUTE_LLM = os.getenv("AIKO_ROUTE_LLM", "0").lower() in {"1", "true", "yes", "on"}
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
@@ -187,6 +189,7 @@ class AikoThink:
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
         self._route_chat_classified: str | None = None
+        self._active_turn = threading.Event()
         self._reasoning = False
         self._mem_queue  = queue.Queue()
         self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
@@ -221,12 +224,16 @@ class AikoThink:
     def route(self, user_input: str, token_callback=None) -> str:
         """Main entry point. Uses keyword + semantic intent routing."""
         self._last_chat_time = time.time()
-
-        intent = self._route_intent(user_input)
-        if intent != "chat":
-            log.info("[route] Agent intent=%s for: %r", intent, user_input)
-            return self.agentic_chat(user_input, token_callback=token_callback)
-        return self.chat(user_input, token_callback=token_callback)
+        self._active_turn.set()
+        try:
+            intent = self._route_intent(user_input)
+            if intent != "chat":
+                log.info("[route] Agent intent=%s for: %r", intent, user_input)
+                return self.agentic_chat(user_input, token_callback=token_callback)
+            return self.chat(user_input, token_callback=token_callback)
+        finally:
+            self._last_chat_time = time.time()
+            self._active_turn.clear()
 
     def _route_intent(self, user_input: str) -> str:
         """Classify whether a turn needs autonomous task mode or normal chat."""
@@ -366,7 +373,18 @@ class AikoThink:
 
     def set_reasoning(self, enabled: bool) -> None: self._reasoning = enabled
     def set_speak(self, speak) -> None: self._speak = speak
-    def wait_for_memory(self) -> None: self._mem_queue.join()
+    def wait_for_memory(self, timeout: float | None = None) -> bool:
+        if timeout is None:
+            self._mem_queue.join()
+            return True
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._mem_queue.all_tasks_done:
+            while self._mem_queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._mem_queue.all_tasks_done.wait(remaining)
+        return True
 
     def _on_scheduled_job_due(self, job: DueJob) -> None:
         """Announce or execute a due scheduled job without blocking the scheduler."""
@@ -582,6 +600,7 @@ class AikoThink:
         while True:
             user_input, response_text = self._mem_queue.get()
             try:
+                self._wait_for_memory_write_window()
                 self._memorize.add([
                     {"role": "user",      "content": user_input[:500]},
                     {"role": "assistant", "content": response_text[:800]},
@@ -590,3 +609,19 @@ class AikoThink:
                 log.error(f"Async memory write failed: {e}")
             finally:
                 self._mem_queue.task_done()
+
+    def _wait_for_memory_write_window(self) -> None:
+        """Wait until chat has been idle before using the shared LLM for extraction."""
+        deadline = time.monotonic() + max(0.0, _MEMORY_WRITE_MAX_WAIT)
+        while True:
+            idle_for = time.time() - self._last_chat_time
+            if not self._active_turn.is_set() and idle_for >= _MEMORY_WRITE_IDLE_GRACE:
+                return
+            if (
+                _MEMORY_WRITE_MAX_WAIT > 0
+                and time.monotonic() >= deadline
+                and not self._active_turn.is_set()
+            ):
+                return
+            sleep_for = min(0.5, max(0.05, _MEMORY_WRITE_IDLE_GRACE - idle_for))
+            time.sleep(sleep_for)
