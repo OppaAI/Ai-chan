@@ -10,6 +10,7 @@ dependencies = [
     "fastembed>=0.8.0",
     "flatbuffers>=25.12.19",
     "numpy>=2.4.6",
+    "onnxruntime-gpu>=1.27.0.dev0",
     "openai>=2.43.0",
     "packaging>=26.2",
     "protobuf>=6.33.6",
@@ -30,3 +31,9 @@ dependencies = [
 [tool.uv.sources]
 reazonspeech-k2-asr = { path = "../reazonspeech/pkg/k2-asr" }
 sherpa-onnx = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" }
+onnxruntime-gpu = { index = "ort-cuda-13-nightly" }
+
+[[tool.uv.indexes]]
+name = "ort-cuda-13-nightly"
+url = "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/"
+explicit = true
