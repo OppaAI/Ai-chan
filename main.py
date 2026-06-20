@@ -35,7 +35,6 @@ warnings.filterwarnings("ignore")
 
 import curses
 import logging
-logging.disable(logging.WARNING)
 
 from core.silence import silent_stderr
 from core.log     import get_logger
