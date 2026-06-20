@@ -33,7 +33,7 @@ reazonspeech-k2-asr = { path = "../reazonspeech/pkg/k2-asr" }
 sherpa-onnx = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" }
 onnxruntime-gpu = { index = "ort-cuda-13-nightly" }
 
-[[tool.uv.indexes]]
+[[tool.uv.index]]
 name = "ort-cuda-13-nightly"
 url = "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/"
 explicit = true
