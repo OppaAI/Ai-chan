@@ -13,5 +13,20 @@
     "enabled": true,
     "kind": "scheduled_job",
     "action": "announce"
+  },
+  {
+    "id": "62a511876f9c",
+    "title": "Beep test 2",
+    "task": "Second beep test",
+    "time_of_day": "01:15",
+    "frequency": "daily",
+    "days_of_week": [],
+    "timezone": "America/Vancouver",
+    "next_due": "2026-06-21T01:15:00-07:00",
+    "created_at": "2026-06-20T01:14:24.936436-07:00",
+    "last_ran_at": "2026-06-20T01:15:03.304649-07:00",
+    "enabled": true,
+    "kind": "scheduled_job",
+    "action": "announce"
   }
 ]
