@@ -16,6 +16,7 @@ dependencies = [
     { name = "fastembed" },
     { name = "flatbuffers" },
     { name = "numpy" },
+    { name = "onnxruntime-gpu" },
     { name = "openai" },
     { name = "packaging" },
     { name = "protobuf" },
@@ -41,6 +42,7 @@ requires-dist = [
     { name = "fastembed", specifier = ">=0.8.0" },
     { name = "flatbuffers", specifier = ">=25.12.19" },
     { name = "numpy", specifier = ">=2.4.6" },
+    { name = "onnxruntime-gpu", specifier = ">=1.27.0.dev0", index = "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/" },
     { name = "openai", specifier = ">=2.43.0" },
     { name = "packaging", specifier = ">=26.2" },
     { name = "protobuf", specifier = ">=6.33.6" },
@@ -799,6 +801,22 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/6d/ab/5b68110e0460d73fad814d5bd11c7b1ddcce5c37b10177eb264d6a36e331/onnxruntime-1.24.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0d640eb9f3782689b55cfa715094474cd5662f2f137be6a6f847a594b6e9705c", size = 17244912, upload-time = "2026-03-17T22:04:37.251Z" },
     { url = "https://files.pythonhosted.org/packages/8b/f4/6b89e297b93704345f0f3f8c62229bee323ef25682a3f9b4f89a39324950/onnxruntime-1.24.4-cp312-cp312-win_amd64.whl", hash = "sha256:535b29475ca42b593c45fbb2152fbf1cdf3f287315bf650e6a724a0a1d065cdb", size = 12596856, upload-time = "2026-03-17T22:05:41.224Z" },
     { url = "https://files.pythonhosted.org/packages/43/06/8b8ec6e9e6a474fcd5d772453f627ad4549dfe3ab8c0bf70af5afcde551b/onnxruntime-1.24.4-cp312-cp312-win_arm64.whl", hash = "sha256:e6214096e14b7b52e3bee1903dc12dc7ca09cb65e26664668a4620cc5e6f9a90", size = 12270275, upload-time = "2026-03-17T22:05:31.132Z" },
+]
+
+[[package]]
+name = "onnxruntime-gpu"
+version = "1.27.0.dev20260511001"
+source = { registry = "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/" }
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/22685817-9e91-4967-bafe-94c9843c26a9/pypi/download/onnxruntime-gpu/1.27.dev20260511001/onnxruntime_gpu-1.27.0.dev20260511001-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9a747bfcff3dacbec22130cd491d88cf83347a5723baf2860d3b3fec23f3cb0c" },
+    { url = "https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/22685817-9e91-4967-bafe-94c9843c26a9/pypi/download/onnxruntime-gpu/1.27.dev20260511001/onnxruntime_gpu-1.27.0.dev20260511001-cp312-cp312-manylinux_2_34_aarch64.whl", hash = "sha256:7379851e695bc9a09cd70cab3a0c6b55dcaad8e76b3f794df70361863561e893" },
+    { url = "https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/22685817-9e91-4967-bafe-94c9843c26a9/pypi/download/onnxruntime-gpu/1.27.dev20260511001/onnxruntime_gpu-1.27.0.dev20260511001-cp312-cp312-win_amd64.whl", hash = "sha256:ebaaa145107ce4c4f7c1c3b0a5a244f892743c8b7b0888eeb467b9879f30320b" },
 ]
 
 [[package]]
