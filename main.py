@@ -441,6 +441,8 @@ def _run(stdscr, args):
         think.route(user_input, token_callback=token_cb)
         tui.stream_commit()
         tui._draw()
+        if speak and tts_enabled:
+            speak.wait()
 
 
 # ═════════════════════════════════════════════════════════════════════════════

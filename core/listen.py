@@ -18,6 +18,8 @@ Dependencies:
     pip install numpy silero-vad scipy
     parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
 """
+import onnxruntime as _ort
+_ort.set_default_logger_severity(3)  # 0=verbose, 1=info, 2=warning, 3=error, 4=fatal
 
 from reazonspeech.k2.asr import load_model, transcribe, audio_from_numpy, TranscribeConfig
 from silero_vad import load_silero_vad
