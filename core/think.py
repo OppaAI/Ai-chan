@@ -148,6 +148,17 @@ _PHRASE_PATTERNS = [
     re.compile(r'\b(score|result|won|win|lost|beat|standing|ranking)\b.{0,30}\b(game|match|series|final|finals)\b', re.IGNORECASE),
 ]
 
+import subprocess
+
+def _play_beep() -> None:
+    """Play a short system notification sound before a scheduled job announcement."""
+    try:
+        subprocess.run(
+            ["paplay", "/usr/share/sounds/freedesktop/stereo/bell.oga"],
+            check=False, timeout=3,
+        )
+    except Exception as e:
+        log.warning("Beep playback failed: %s", e)
 
 def _matches_phrase_pattern(text: str) -> bool:
     return any(p.search(text) for p in _PHRASE_PATTERNS)
@@ -360,6 +371,7 @@ class AikoThink:
         text = f"{job.title}. {job.task}"
         log.info("[schedule] due %s action=%s: %s", job.id, job.action, text)
         if job.action == "announce":
+            _play_beep()
             if self._speak:
                 self._speak.speak(text)
             else:

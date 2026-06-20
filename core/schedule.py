@@ -36,7 +36,7 @@ WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
 SCHEDULE_PATH = Path(os.getenv("SCHEDULE_PATH", WORKSPACE_ROOT / "schedule.json")).resolve()
 LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH", WORKSPACE_ROOT / "reminders.json")).resolve()
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
-POLL_SECONDS = float(os.getenv("SCHEDULE_POLL_SECONDS", os.getenv("REMINDER_POLL_SECONDS", 15)))
+POLL_SECONDS = float(os.getenv("SCHEDULE_POLL_SECONDS", 15))
 
 FREQUENCIES = {"once", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 _WEEKDAYS = {
