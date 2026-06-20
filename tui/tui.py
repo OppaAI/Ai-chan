@@ -40,8 +40,9 @@ from core.health import _ram_used_str, _db_size_str, _fmt_uptime
 # ── env ───────────────────────────────────────────────────────────────────────
 
 LLM_BASE_URL  = os.getenv("LLM_BASE_URL", "unknown")
-LLAMA_MODEL   = os.getenv("LLAMA_MODEL", "unknown")
+LLM_MODEL     = os.getenv("LLM_MODEL", "unknown")
 ASR_MODEL     = os.getenv("ASR_MODEL", os.getenv("ASR_MODE", "csukuangfj/reazonspeech-k2-v2-ja-en"))
+MIOTTS_MODEL  = os.getenv("MIOTTS_MODEL", "MioTTS 0.4B")
 SEARXNG_URL   = os.getenv("SEARXNG_URL",   "localhost:8080")
 AI_NAME       = os.getenv("AI_NAME", "Aiko")
 USER_ID       = os.getenv("USER_ID", "")
@@ -119,11 +120,11 @@ ARCH_SECTIONS = [
     ]),
     ("COGNITION", [
         ("Inference engine", "Ollama  (local, offline)"),
-        ("Active model",     LLAMA_MODEL),
+        ("Active model",     LLM_MODEL),
         ("Web search",       SEARXNG_URL),
     ]),
     ("VOICE ENGINE", [
-        ("TTS backend",   "MioTTS 0.4B"),
+        ("TTS backend",   MIOTTS_MODEL),
         ("Voice preset",  os.getenv("MIOTTS_PRESET", "jp_female")),
         ("ASR model",     ASR_MODEL),
     ]),
@@ -133,7 +134,7 @@ ARCH_ROWS = sum(1 + len(items) for _, items in ARCH_SECTIONS) + 2
 db_path = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
 
 INIT_STEPS = {
-    'think_start':      ('Inference Engine', f'Spawning Ollama worker  ·  {LLAMA_MODEL}'),
+    'think_start':      ('Inference Engine', f'Spawning Ollama worker  ·  {LLM_MODEL}'),
     'think_warmup':     ('Model Warm-up',    'Loading weights, running prefill pass …'),
     'mem_sqlite_vec':   ('Vector Database',  f'Connecting to SQLite-vec  ·  {db_path}'),
     'mem_embed':        ('Embedding Model',  'Loading BGE-base-en-v1.5  ·  768-dim vectors'),
