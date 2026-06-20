@@ -28,6 +28,11 @@ dependencies = [
     "torchaudio>=2.11.0",
 ]
 
+[tool.uv]
+override-dependencies = [
+    "sherpa-onnx @ https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl ; platform_machine == 'aarch64'",
+]
+
 [tool.uv.sources]
 reazonspeech-k2-asr = { path = "../reazonspeech/pkg/k2-asr" }
 sherpa-onnx = { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" }
