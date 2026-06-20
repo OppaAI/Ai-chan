@@ -63,11 +63,11 @@ def _setup() -> None:
     fh.setFormatter(fmt)
     root.addHandler(fh)
 
-    # Console handler — INFO and above only, so DEBUG stays file-only
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(fmt)
-    root.addHandler(ch)
+    # Console handler removed per user request
+    # ch = logging.StreamHandler()
+    # ch.setLevel(logging.INFO)
+    # ch.setFormatter(fmt)
+    # root.addHandler(ch)
 
     _initialized = True
 

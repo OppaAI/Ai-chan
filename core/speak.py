@@ -34,6 +34,9 @@ except ImportError:
     pass
 
 from core.silence import silent_stderr
+from core.log import get_logger
+
+log = get_logger(__name__)
 
 # ── boot labels ───────────────────────────────────────────────────────────────
 
@@ -114,7 +117,7 @@ class AikoSpeak:
             self._sd = _sd                 # eagerly loaded to avoid curses fd conflict
         self._token_buf: list[str] = []        # accumulate feed() tokens
         if not silent:
-            print(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
+            log.info(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
 
     def warmup(self) -> bool:
         """Health-check the MioTTS server — called from wakeup.py during boot."""
@@ -127,7 +130,7 @@ class AikoSpeak:
             with urllib.request.urlopen(f"{MIOTTS_API_URL}/health", timeout=5) as r:
                 return r.status == 200
         except Exception as e:
-            print(f"[speak] MioTTS server not reachable: {e}")
+            log.warning(f"[speak] MioTTS server not reachable: {e}")
             return False
 
     def _load_sd(self):
@@ -164,7 +167,7 @@ class AikoSpeak:
                 body = json.loads(r.read())
                 return base64.b64decode(body["audio"])
         except Exception as e:
-            print(f"[speak] synthesis error: {e}")
+            log.error(f"[speak] synthesis error: {e}")
             return None
 
     @staticmethod
@@ -214,7 +217,7 @@ class AikoSpeak:
                     break
                 time.sleep(0.05)
         except Exception as e:
-            print(f"[speak] playback error: {e}")
+            log.error(f"[speak] playback error: {e}")
         finally:
             try:
                 sd = self._load_sd()

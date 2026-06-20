@@ -363,7 +363,7 @@ class AikoThink:
             if self._speak:
                 self._speak.speak(text)
             else:
-                print(f"\nAiko scheduled job: {text}", flush=True)
+                log.info(f"Aiko scheduled job: {text}")
             return
         threading.Thread(target=self._run_scheduled_agentic_job, args=(job,), daemon=True).start()
 
