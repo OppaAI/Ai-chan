@@ -152,13 +152,15 @@ import subprocess
 
 def _play_beep() -> None:
     """Play a short system notification sound before a scheduled job announcement."""
-    try:
-        subprocess.run(
-            ["paplay", "/usr/share/sounds/freedesktop/stereo/bell.oga"],
-            check=False, timeout=3,
-        )
-    except Exception as e:
-        log.warning("Beep playback failed: %s", e)
+    def _run():
+        try:
+            subprocess.run(
+                ["paplay", "/usr/share/sounds/freedesktop/stereo/bell.oga"],
+                check=False, timeout=6,
+            )
+        except Exception as e:
+            log.warning("Beep playback failed: %s", e)
+    threading.Thread(target=_run, daemon=True).start()
 
 def _matches_phrase_pattern(text: str) -> bool:
     return any(p.search(text) for p in _PHRASE_PATTERNS)

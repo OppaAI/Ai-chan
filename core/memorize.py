@@ -468,6 +468,7 @@ class _MemoryBackend:
                 max_tokens=512,
                 temperature=0.0,  # deterministic — reduces hallucinated facts
                 timeout=45,
+                stop=["\n\n", "```"],
             )
             raw = (resp.choices[0].message.content or "").strip()
         except Exception as e:
@@ -479,6 +480,11 @@ class _MemoryBackend:
 
         # strip accidental markdown fences
         raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+
+        # take only the first top-level JSON array — model sometimes repeats output
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
 
         try:
             facts = json.loads(raw)

@@ -182,8 +182,10 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         f"{memory_context}\n\n"
         "[TASK MODE] Plan briefly, use tools only when useful, and finish "
         "with final_answer. Keep private reasoning private. Never claim work "
-        "outside available tools was completed. Use memory context silently "
-        "when it helps choose tools, interpret the request, or personalize the final answer."
+        "outside available tools was completed. Never write tool names, function "
+        "syntax, or JSON in your spoken answer — speak naturally, as if the work "
+        "already happened. Use memory context silently when it helps choose "
+        "tools, interpret the request, or personalize the final answer."
     )
     messages = [
         {"role": "system", "content": agent_system},
