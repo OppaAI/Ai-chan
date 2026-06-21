@@ -27,6 +27,7 @@ import sys
 import time
 import threading
 import argparse
+import unicodedata
 
 try:
     from dotenv import load_dotenv
@@ -67,13 +68,32 @@ _REPLACEMENTS = [
     (r'_',     ' '),
     (r'/',     ' '),
     (r'\\',    ''),
-    (r'[<>{}|@#$%^&+=]', ''),
+    (r'[<>{}|@#$%^&+=]', ' '),
 ]
 
 _RE_REPLACEMENTS = [(re.compile(p), r) for p, r in _REPLACEMENTS]
 
+_TTS_PUNCTUATION = set(".,!?;:'\"-")
+_UNICODE_PUNCTUATION = {
+    '…': '...',
+    '“': '"',
+    '”': '"',
+    '‘': "'",
+    '’': "'",
+    '。': '.',
+    '、': ',',
+    '？': '?',
+    '！': '!',
+    '：': ':',
+    '；': ';',
+    '「': '"',
+    '」': '"',
+    '『': '"',
+    '』': '"',
+}
+
 def sanitize_for_tts(text: str) -> str:
-    """Strip/replace symbols the MioTTS phonemizer cannot handle."""
+    """Keep only text and common punctuation the MioTTS phonemizer handles."""
     # Strip emoji and non-BMP unicode (emoticons, symbols, pictographs)
     text = re.sub(
         r'[\U00010000-\U0010ffff'       # non-BMP (most emoji)
@@ -87,7 +107,24 @@ def sanitize_for_tts(text: str) -> str:
     )
     for pattern, replacement in _RE_REPLACEMENTS:
         text = pattern.sub(replacement, text)
+
+    filtered = []
+    for char in text:
+        char = _UNICODE_PUNCTUATION.get(char, char)
+        if char in _TTS_PUNCTUATION:
+            filtered.append(char)
+        elif char.isspace():
+            filtered.append(' ')
+        elif unicodedata.category(char)[0] in {'L', 'N'}:
+            filtered.append(char)
+        elif unicodedata.category(char)[0] == 'P':
+            filtered.append(' ')
+    text = ''.join(filtered)
+
     text = re.sub(r',\s*,', ',', text)
+    text = re.sub(r'\s+([.,!?;:])', r'\1', text)
+    text = re.sub(r'([.,;:])\1+', r'\1', text)
+    text = re.sub(r'([!?]){3,}', r'\1\1', text)
     text = re.sub(r'\s{2,}', ' ', text)
     return text.strip()
 
