@@ -94,34 +94,60 @@ _UNICODE_PUNCTUATION = {
     '』': '"',
 }
 
+_EMOJI_SEQUENCE_CHARS = {
+    "\u200d",  # zero-width joiner
+    "\ufe0e",  # text presentation selector
+    "\ufe0f",  # emoji presentation selector
+    "\u20e3",  # combining enclosing keycap
+}
+
+
+def _is_tts_noise(char: str) -> bool:
+    """Return True for emoji fragments and symbols that confuse MioTTS."""
+    codepoint = ord(char)
+    if char in _EMOJI_SEQUENCE_CHARS:
+        return True
+    if 0x1F000 <= codepoint <= 0x1FFFF:
+        return True
+    if 0x2600 <= codepoint <= 0x27BF:
+        return True
+    if 0x2300 <= codepoint <= 0x23FF:
+        return True
+    if 0x2B00 <= codepoint <= 0x2BFF:
+        return True
+    if 0xFE00 <= codepoint <= 0xFE0F:
+        return True
+    if 0xE0100 <= codepoint <= 0xE01EF:
+        return True
+
+    category = unicodedata.category(char)
+    return category[0] == "S" or category in {"Cf", "Cc", "Cs", "Co"}
+
+
+def _split_oversized_text(text: str, max_chars: int) -> list[str]:
+    """Split a long run on natural boundaries without discarding remainder."""
+    parts = []
+    remaining = text.strip()
+    while len(remaining) > max_chars:
+        window = remaining[:max_chars + 1]
+        split_at = -1
+        for pattern in (r"[\s,;:]\S*$", r"\S+$"):
+            match = re.search(pattern, window)
+            if match and match.start() > 0:
+                split_at = match.start()
+                break
+        if split_at <= 0:
+            split_at = max_chars
+        parts.append(remaining[:split_at].strip())
+        remaining = remaining[split_at:].strip()
+    if remaining:
+        parts.append(remaining)
+    return parts
+
+
 def sanitize_for_tts(text: str) -> str:
     """Keep only text and common punctuation the MioTTS phonemizer handles."""
-    # Strip any leading emoji (and optional colon/whitespace) at the very start of the text
     text = text.lstrip()
-    text = re.sub(
-        r'^(?:[\U00010000-\U0010FFFF'
-        r'\u2600-\u27BF'
-        r'\u2300-\u23FF'
-        r'\u2B00-\u2BFF'
-        r'\u25A0-\u25FF'
-        r'\u2700-\u27BF'
-        r'\U0001FA00-\U0001FFFF'
-        r'\U0001F000-\U0001FFFF'
-        r']\s*)+:?\s*',
-        '', text, flags=re.UNICODE
-    )
-
-    # Strip emoji and non-BMP unicode (emoticons, symbols, pictographs)
-    text = re.sub(
-        r'[\U00010000-\U0010ffff'       # non-BMP (most emoji)
-        r'\U0001F000-\U0001FFFF'        # extra emoji blocks
-        r'\u2600-\u27BF'               # misc symbols, dingbats
-        r'\u2300-\u23FF'               # misc technical
-        r'\u25A0-\u25FF'               # geometric shapes
-        r'\u2700-\u27BF'               # dingbats
-        r']',
-        '', text, flags=re.UNICODE
-    )
     for pattern, replacement in _RE_REPLACEMENTS:
         text = pattern.sub(replacement, text)
 
@@ -134,10 +160,13 @@ def sanitize_for_tts(text: str) -> str:
             filtered.append(' ')
         elif unicodedata.category(char)[0] in {'L', 'N'}:
             filtered.append(char)
+        elif _is_tts_noise(char):
+            filtered.append(' ')
         elif unicodedata.category(char)[0] == 'P':
             filtered.append(' ')
     text = ''.join(filtered)
 
+    text = re.sub(r'^\s*[:;,.!?-]+\s*', '', text)
     text = re.sub(r"(?<!\w)'|'(?!\w)", ' ', text)
     text = re.sub(r',\s*,', ',', text)
     text = re.sub(r'\s+([.,!?;:])', r'\1', text)
@@ -379,15 +408,19 @@ class AikoSpeak:
     @staticmethod
     def _chunk_text(text: str, max_chars: int = 280) -> list[str]:
         """Split text at sentence boundaries into chunks under max_chars."""
-        import re
-        sentences = re.split(r'(?<=[.!?。！？])\s+', text.strip())
+        sentences = [
+            match.group(0).strip()
+            for match in re.finditer(r'[^.!?。！？\n\r]+[.!?。！？]+|[^.!?。！？\n\r]+', text.strip())
+            if match.group(0).strip()
+        ]
         chunks = []
         current = ""
         for sentence in sentences:
             if len(sentence) > max_chars:
-                while sentence:
-                    chunks.append(sentence[:max_chars])
-                    sentence = sentence[max_chars:]
+                if current:
+                    chunks.append(current)
+                    current = ""
+                chunks.extend(_split_oversized_text(sentence, max_chars))
                 continue
             if len(current) + len(sentence) + 1 <= max_chars:
                 current = (current + " " + sentence).strip()

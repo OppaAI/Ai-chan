@@ -25,6 +25,7 @@ import queue
 import re
 import threading
 import time
+import unicodedata
 
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
@@ -651,31 +652,65 @@ class AikoThink:
             time.sleep(sleep_for)
 
 
+_STREAM_SENTENCE_END = set(".?!。？！")
+_STREAM_CLOSERS = set("\"')]}」』”’")
+
+
+def _is_stream_noise(char: str) -> bool:
+    codepoint = ord(char)
+    if char in {"\u200d", "\ufe0e", "\ufe0f", "\u20e3"}:
+        return True
+    if 0x1F000 <= codepoint <= 0x1FFFF:
+        return True
+    if 0x2600 <= codepoint <= 0x27BF:
+        return True
+    if 0x2300 <= codepoint <= 0x23FF:
+        return True
+    if 0x2B00 <= codepoint <= 0x2BFF:
+        return True
+    return unicodedata.category(char)[0] == "S"
+
+
 def split_stream_sentences(buffer: str) -> tuple[list[str], str]:
     """
     Parse the streaming buffer, extract completed sentences, and return
     a list of completed sentences and the remaining partial sentence text.
     """
-    pattern = r'([^.?!。？！\n\r]*[.?!。？！]+(?:\s+|\Z)|[^.?!。？！\n\r]*[\n\r]+)'
-    
-    matches = list(re.finditer(pattern, buffer))
-    if not matches:
-        if len(buffer) > 150:
-            split_pts = [m.start() for m in re.finditer(r'[\s,、]', buffer)]
-            if split_pts:
-                split_pt = max([p for p in split_pts if p <= 150] or [split_pts[-1]])
-                sentence = buffer[:split_pt + 1]
-                remaining = buffer[split_pt + 1:]
-                return [sentence], remaining
-        return [], buffer
-        
     sentences = []
-    last_end = 0
-    for match in matches:
-        sentence = match.group(0)
-        sentences.append(sentence)
-        last_end = match.end()
-        
-    remaining = buffer[last_end:]
+    start = 0
+    i = 0
+    while i < len(buffer):
+        char = buffer[i]
+        if char in "\n\r":
+            end = i + 1
+        elif char in _STREAM_SENTENCE_END:
+            end = i + 1
+            while end < len(buffer) and buffer[end] in _STREAM_CLOSERS:
+                end += 1
+            if end == len(buffer):
+                break
+            if not (buffer[end].isspace() or _is_stream_noise(buffer[end])):
+                i += 1
+                continue
+            while end < len(buffer) and (buffer[end].isspace() or _is_stream_noise(buffer[end])):
+                end += 1
+        else:
+            i += 1
+            continue
+
+        sentence = buffer[start:end].strip()
+        if sentence:
+            sentences.append(sentence)
+        start = end
+        i = end
+
+    remaining = buffer[start:]
+    if not sentences and len(remaining) > 150:
+        split_pts = [m.start() for m in re.finditer(r'[\s,、;:]', remaining)]
+        if split_pts:
+            split_pt = max([p for p in split_pts if p <= 150] or [split_pts[-1]])
+            sentence = remaining[:split_pt + 1].strip()
+            tail = remaining[split_pt + 1:]
+            return ([sentence] if sentence else []), tail
     return sentences, remaining
 
