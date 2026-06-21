@@ -103,7 +103,7 @@ def _load_sense_voice_recognizer() -> sherpa_onnx.OfflineRecognizer:
     """Load SenseVoice as a sherpa-onnx OfflineRecognizer."""
     model_path, tokens_path = _resolve_sense_voice_files()
 
-    sense_voice_config = sherpa_onnx.SherpaOnnxOfflineSenseVoiceModelConfig(
+    sense_voice_config = sherpa_onnx.OfflineSenseVoiceModelConfig(
         model=model_path,
         language=ASR_LANGUAGE,
         use_itn=True,
