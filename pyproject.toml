@@ -18,7 +18,6 @@ dependencies = [
     "reazonspeech-k2-asr",
     "requests>=2.34.2",
     "scipy>=1.17.1",
-    "sherpa-onnx>=1.13.3",
     "silero-vad>=6.2.1",
     "sounddevice>=0.5.5",
     "soundfile>=0.14.0",
@@ -33,10 +32,6 @@ dependencies = [
 
 [tool.uv.sources]
 reazonspeech-k2-asr = { path = "../reazonspeech/pkg/k2-asr" }
-sherpa-onnx = [
-  { url = "https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.2/sherpa_onnx-1.13.2+cuda-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" },
-  { index = "pypi", marker = "platform_machine == 'x86_64'" },
-]
 onnxruntime-gpu = { index = "ort-cuda-13-nightly" }
 
 [[tool.uv.index]]
