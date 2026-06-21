@@ -96,6 +96,21 @@ _UNICODE_PUNCTUATION = {
 
 def sanitize_for_tts(text: str) -> str:
     """Keep only text and common punctuation the MioTTS phonemizer handles."""
+    # Strip any leading emoji (and optional colon/whitespace) at the very start of the text
+    text = text.lstrip()
+    text = re.sub(
+        r'^(?:[\U00010000-\U0010FFFF'
+        r'\u2600-\u27BF'
+        r'\u2300-\u23FF'
+        r'\u2B00-\u2BFF'
+        r'\u25A0-\u25FF'
+        r'\u2700-\u27BF'
+        r'\U0001FA00-\U0001FFFF'
+        r'\U0001F000-\U0001FFFF'
+        r']\s*)+:?\s*',
+        '', text, flags=re.UNICODE
+    )
+
     # Strip emoji and non-BMP unicode (emoticons, symbols, pictographs)
     text = re.sub(
         r'[\U00010000-\U0010ffff'       # non-BMP (most emoji)
