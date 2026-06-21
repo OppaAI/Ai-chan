@@ -338,7 +338,6 @@ class AikoThink:
             trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
 
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
-        self._emit(raw_response, token_callback=token_callback)
 
         with self._history_lock:
             self._history.append({"role": "assistant", "content": raw_response})
@@ -473,6 +472,11 @@ class AikoThink:
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
         all_messages = [{"role": "system", "content": system}] + messages if system else messages
 
+        if self._speak:
+            self._speak.start_speech_stream()
+
+        sentence_buffer = ""
+        stream_success = False
         try:
             stream = self._client.chat.completions.create(
                 model=self._llm_model, messages=all_messages, stream=True,
@@ -490,21 +494,39 @@ class AikoThink:
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
+                
+                if token_callback and token:
+                    token_callback(token)
+                
                 full_response.append(token)
-                # Streaming is collected here; user-facing emission is centralized in _emit().
-        except Exception as e:
-            msg = f"LLM stream failed: {e}"
-            log.error(msg)
-            return self._fallback_completion(all_messages, max_tokens, msg)
+                
+                if self._speak and token:
+                    sentence_buffer += token
+                    sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
+                    for sentence in sentences:
+                        self._speak.feed_speech_stream(sentence)
 
-        text = "".join(full_response).strip()
-        if text:
+            text = "".join(full_response).strip()
+            if text:
+                stream_success = True
+                if self._speak and sentence_buffer.strip():
+                    self._speak.feed_speech_stream(sentence_buffer)
+        except Exception as e:
+            log.error(f"LLM stream failed: {e}")
+        finally:
+            if self._speak:
+                self._speak.stop_speech_stream()
+
+        if stream_success:
             return text
-        return self._fallback_completion(
+
+        fallback_text = self._fallback_completion(
             all_messages,
             max_tokens,
-            "LLM stream completed without content",
+            "LLM stream failed or completed without content",
         )
+        self._emit(fallback_text, token_callback=token_callback)
+        return fallback_text
 
     def _fallback_completion(self, messages: list[dict], max_tokens: int, reason: str) -> str:
         """Try one non-streaming completion before surfacing the LLM error in chat."""
@@ -540,6 +562,8 @@ class AikoThink:
             return True
         if self._route_chat_classified == user_input:
             self._route_chat_classified = None
+            return False
+        if not _ROUTE_LLM:
             return False
         is_data, resolved_query = self._classify_and_resolve(user_input)
         self._pending_search_query = resolved_query if is_data else None
@@ -625,3 +649,33 @@ class AikoThink:
                 return
             sleep_for = min(0.5, max(0.05, _MEMORY_WRITE_IDLE_GRACE - idle_for))
             time.sleep(sleep_for)
+
+
+def split_stream_sentences(buffer: str) -> tuple[list[str], str]:
+    """
+    Parse the streaming buffer, extract completed sentences, and return
+    a list of completed sentences and the remaining partial sentence text.
+    """
+    pattern = r'([^.?!。？！\n\r]*[.?!。？！]+(?:\s+|\Z)|[^.?!。？！\n\r]*[\n\r]+)'
+    
+    matches = list(re.finditer(pattern, buffer))
+    if not matches:
+        if len(buffer) > 150:
+            split_pts = [m.start() for m in re.finditer(r'[\s,、]', buffer)]
+            if split_pts:
+                split_pt = max([p for p in split_pts if p <= 150] or [split_pts[-1]])
+                sentence = buffer[:split_pt + 1]
+                remaining = buffer[split_pt + 1:]
+                return [sentence], remaining
+        return [], buffer
+        
+    sentences = []
+    last_end = 0
+    for match in matches:
+        sentence = match.group(0)
+        sentences.append(sentence)
+        last_end = match.end()
+        
+    remaining = buffer[last_end:]
+    return sentences, remaining
+

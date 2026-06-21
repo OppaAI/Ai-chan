@@ -21,6 +21,7 @@ Standalone test:
 import base64
 import io
 import os
+import queue
 import re
 import sys
 import time
@@ -116,6 +117,9 @@ class AikoSpeak:
             import sounddevice as _sd
             self._sd = _sd                 # eagerly loaded to avoid curses fd conflict
         self._token_buf: list[str] = []        # accumulate feed() tokens
+        self._stream_queue = None
+        self._stream_thread = None
+        self._streaming_active = False
         if not silent:
             log.info(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
 
@@ -397,6 +401,63 @@ class AikoSpeak:
         t = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
         t.start()
 
+    def start_speech_stream(self) -> None:
+        """Initialize and start the background streaming synthesis/playback loop."""
+        self.stop()
+        self._stream_queue = queue.Queue()
+        self._streaming_active = True
+        self._stop_flag.clear()
+        self._stream_thread = threading.Thread(
+            target=self._stream_worker, daemon=True
+        )
+        self._stream_thread.start()
+
+    def feed_speech_stream(self, text: str) -> None:
+        """Feed a text sentence/chunk to the speech stream queue."""
+        if self._streaming_active and text:
+            self._stream_queue.put(text)
+
+    def stop_speech_stream(self) -> None:
+        """Signal that no more text will be fed to the speech stream."""
+        if self._streaming_active:
+            self._streaming_active = False
+            try:
+                self._stream_queue.put(None)
+            except Exception:
+                pass
+
+    def _stream_worker(self) -> None:
+        self._playing.set()
+        try:
+            while self._streaming_active or not self._stream_queue.empty():
+                try:
+                    chunk = self._stream_queue.get(timeout=0.1)
+                except queue.Empty:
+                    if not self._streaming_active:
+                        break
+                    continue
+                
+                if chunk is None:
+                    self._stream_queue.task_done()
+                    break
+                    
+                if self._stop_flag.is_set():
+                    self._stream_queue.task_done()
+                    continue
+                    
+                clean = sanitize_for_tts(chunk)
+                if clean:
+                    wav = self._synthesize(clean)
+                    if wav and not self._stop_flag.is_set():
+                        self._play_wav_bytes(wav)
+                
+                self._stream_queue.task_done()
+        except Exception as e:
+            log.error(f"[speak] Stream worker exception: {e}")
+        finally:
+            self._playing.clear()
+            self._streaming_active = False
+
     def is_playing(self) -> bool:
         return self._playing.is_set()
 
@@ -418,10 +479,33 @@ class AikoSpeak:
         return False
 
     def stop(self) -> None:
-        if self.is_playing():
-            self._stop_flag.set()
-            while self.is_playing():
-                time.sleep(0.02)
+        self._stop_flag.set()
+        self._streaming_active = False
+        if self._stream_queue is not None:
+            while not self._stream_queue.empty():
+                try:
+                    self._stream_queue.get_nowait()
+                    self._stream_queue.task_done()
+                except Exception:
+                    break
+        
+        try:
+            sd = self._load_sd()
+            sd.stop()
+        except Exception:
+            pass
+
+        if self._stream_thread is not None:
+            if self._stream_thread.is_alive():
+                try:
+                    self._stream_queue.put_nowait(None)
+                except Exception:
+                    pass
+                self._stream_thread.join(timeout=2.0)
+            self._stream_thread = None
+
+        while self.is_playing():
+            time.sleep(0.02)
 
 
 # ── list audio devices ────────────────────────────────────────────────────────
