@@ -100,29 +100,18 @@ def _resolve_sense_voice_files() -> tuple[str, str]:
 
 
 def _load_sense_voice_recognizer() -> sherpa_onnx.OfflineRecognizer:
-    """Load SenseVoice as a sherpa-onnx OfflineRecognizer."""
+    """Load SenseVoice as a sherpa-onnx OfflineRecognizer via factory method."""
     model_path, tokens_path = _resolve_sense_voice_files()
 
-    sense_voice_config = sherpa_onnx.OfflineSenseVoiceModelConfig(
+    return sherpa_onnx.OfflineRecognizer.from_sense_voice(
         model=model_path,
+        tokens=tokens_path,
         language=ASR_LANGUAGE,
         use_itn=True,
-    )
-
-    model_config = sherpa_onnx.OfflineModelConfig(
-        sense_voice=sense_voice_config,
-        tokens=tokens_path,
         num_threads=ASR_NUM_THREADS,
         provider=ASR_DEVICE,
         debug=False,
     )
-
-    recognizer_config = sherpa_onnx.OfflineRecognizerConfig(
-        model_config=model_config,
-        decoding_method="greedy_search",
-    )
-
-    return sherpa_onnx.OfflineRecognizer(recognizer_config)
 
 
 # ── listen ────────────────────────────────────────────────────────────────────
@@ -337,7 +326,7 @@ class AikoListen:
         with self._lock:
             stream = self._model.create_stream()
             stream.accept_waveform(SAMPLE_RATE, audio)
-            self._model.decode(stream)
+            self._model.decode_stream(stream)  # decode_stream in sherpa-onnx >= 1.13.3
             result = stream.result
             text = result.text.strip()
             # SenseVoice prepends language/emotion tags like <|en|><|NEUTRAL|><|Speech|><|withitn|>
@@ -353,7 +342,7 @@ class AikoListen:
             silence = np.zeros(int(SAMPLE_RATE * 0.1), dtype=np.float32)
             stream = self._model.create_stream()
             stream.accept_waveform(SAMPLE_RATE, silence)
-            self._model.decode(stream)
+            self._model.decode_stream(stream)  # decode_stream in sherpa-onnx >= 1.13.3
             tensor = torch.zeros(1, _CHUNK_SAMPLES_VAD)
             with torch.no_grad():
                 self._vad_model(tensor, SAMPLE_RATE)

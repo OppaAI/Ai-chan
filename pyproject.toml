@@ -18,6 +18,7 @@ dependencies = [
     "reazonspeech-k2-asr",
     "requests>=2.34.2",
     "scipy>=1.17.1",
+    "sherpa-onnx>=1.13.3",
     "silero-vad>=6.2.1",
     "sounddevice>=0.5.5",
     "soundfile>=0.14.0",
