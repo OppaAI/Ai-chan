@@ -194,7 +194,9 @@ class AikoSpeak:
         """
         import json
         import urllib.request
-        text = text[:300]  # MioTTS hard limit
+        if len(text) > 300:
+            log.warning(f"[speak] truncating oversized TTS chunk: {len(text)} chars")
+            text = text[:300]  # MioTTS hard limit
         payload = json.dumps({
             "text": text,
             "reference": {"type": "preset", "preset_id": MIOTTS_PRESET},
@@ -487,9 +489,12 @@ class AikoSpeak:
                     
                 clean = sanitize_for_tts(chunk)
                 if clean:
-                    wav = self._synthesize(clean)
-                    if wav and not self._stop_flag.is_set():
-                        self._play_wav_bytes(wav)
+                    for tts_chunk in self._chunk_text(clean):
+                        if self._stop_flag.is_set():
+                            break
+                        wav = self._synthesize(tts_chunk)
+                        if wav and not self._stop_flag.is_set():
+                            self._play_wav_bytes(wav)
                 
                 self._stream_queue.task_done()
         except Exception as e:
