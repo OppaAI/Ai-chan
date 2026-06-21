@@ -3,8 +3,7 @@ core/listen.py
 
 Aiko's speech-to-text input layer.
   - Captures microphone audio with Silero VAD (neural, energy-independent)
-  - Transcribes via ReazonSpeech K2 ASR (sherpa-onnx, Zipformer RNN-T) in a
-    background thread
+  - Transcribes via SenseVoice (sherpa-onnx, int8 ONNX) in a background thread
   - Exposes listen() (blocking) and listen_async() (callback) for UI
   - Staged init: load_asr() → load_vad() → join_warmup() for granular
     boot progress reporting via wakeup.py
@@ -13,19 +12,16 @@ Aiko's speech-to-text input layer.
     detected during TTS playback, enabling speak.wait_or_barge_in()
 
 Dependencies:
-    git clone https://github.com/reazon-research/ReazonSpeech
-    pip install ReazonSpeech/pkg/k2-asr   # pulls in sherpa-onnx
-    pip install numpy silero-vad scipy
+    pip install sherpa-onnx numpy silero-vad scipy huggingface_hub
+    Model: auto-downloaded to HF cache on first use (see ASR_MODEL in .env)
     parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
 """
 import onnxruntime as _ort
 _ort.set_default_logger_severity(3)  # 0=verbose, 1=info, 2=warning, 3=error, 4=fatal
 
-from reazonspeech.k2.asr import load_model, transcribe, audio_from_numpy, TranscribeConfig
+from huggingface_hub import hf_hub_download
 from silero_vad import load_silero_vad
-import huggingface_hub as hf
 import logging
-from math import gcd
 import numpy as np
 import os
 from scipy.signal import resample_poly
@@ -42,7 +38,7 @@ logging.getLogger("sherpa_onnx").setLevel(logging.ERROR)
 # ── boot labels ───────────────────────────────────────────────────────────────
 
 BOOT_LABELS = {
-    'listen_asr':     'Loading ReazonSpeech ASR model...',
+    'listen_asr':     'Loading SenseVoice ASR model...',
     'listen_silero':  'Loading Silero VAD...',
     'listen_warmup':  'Warming up ASR pipeline...',
     'listen_ready':   'Microphone ready',
@@ -51,24 +47,15 @@ BOOT_LABELS = {
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-ASR_DEVICE          = os.getenv("ASR_DEVICE",            "auto")    # cpu, cuda, coreml, auto
-ASR_PRECISION        = os.getenv("ASR_PRECISION",        "int8")    # fp32, int8, int8-fp32 (+ fp16 for ja-en mirror)
-ASR_LANGUAGE         = os.getenv("ASR_LANGUAGE",          "ja-en")  # ja, ja-en (bilingual JA/EN)
-# NOTE: reazon-research/reazonspeech-k2-v2-ja-en (the repo
-# reazonspeech.k2.asr.load_model() hardcodes for language="ja-en") 404s —
-# it existed publicly through Jan 2025 per HF's commit history but appears
-# to have been pulled/quarantined since (likely the same malicious-ONNX-file
-# scanner flag that hit the ja-only model, see upstream issue #57/#58).
-# csukuangfj/reazonspeech-k2-v2-ja-en is a working mirror of the same
-# epoch-35 checkpoint (confirmed live 2026-06-18), so language="ja-en"
-# below loads from that mirror via _load_bilingual_mirror() instead of the
-# package's own load_model(). If Reazon ever republishes their own repo,
-# just delete _load_bilingual_mirror() and let load_model() handle it.
-_JA_EN_MIRROR_REPO   = os.getenv(
+ASR_DEVICE      = os.getenv("ASR_DEVICE", "cpu")       # cpu only for now (no CUDA EP on JP7.2)
+ASR_LANGUAGE    = os.getenv("ASR_LANGUAGE", "auto")    # auto, zh, en, ja, ko, yue, nospeech
+ASR_NUM_THREADS = int(os.getenv("ASR_NUM_THREADS", "4"))
+
+# HuggingFace repo — model.int8.onnx + tokens.txt downloaded on first use
+ASR_MODEL = os.getenv(
     "ASR_MODEL",
-    os.getenv("ASR_MODE", "csukuangfj/reazonspeech-k2-v2-ja-en"),
+    "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
 )
-_JA_EN_MIRROR_EPOCHS = 35
 
 VAD_SILENCE_MS      = int(os.getenv("LISTEN_VAD_SILENCE_MS", 300))
 VAD_PAD_MS          = int(os.getenv("LISTEN_VAD_PAD_MS",     100))
@@ -80,7 +67,7 @@ CHUNK_DURATION_MS   = int(os.getenv("LISTEN_CHUNK_MS",         30))  # Silero mi
 VAD_THRESHOLD       = float(os.getenv("LISTEN_VAD_THRESHOLD", 0.5))  # Silero speech prob cutoff
 SILENCE_CHUNKS      = int(os.getenv("LISTEN_SILENCE_CHUNKS",   20))
 MIN_SPEECH_CHUNKS   = int(os.getenv("LISTEN_MIN_CHUNKS",       10))
-MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))  # K2 model caps ~30s/clip
+MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))
 
 BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.65"))
 BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "2"))
@@ -100,110 +87,55 @@ _PAREC_CMD = [
 ]
 
 
-def _sherpa_cuda_available() -> bool:
-    """Return True only when the ONNX runtime used by Sherpa exposes CUDA."""
-    try:
-        import onnxruntime as ort
-        return "CUDAExecutionProvider" in ort.get_available_providers()
-    except Exception:
-        return False
-
-
-def _resolve_asr_device(device_hint: str) -> tuple[str, str]:
-    """Return (device, precision), avoiding CUDA unless Sherpa can use it."""
-    hint = (device_hint or "auto").strip().lower()
-    if hint == "auto":
-        return ("cuda" if _sherpa_cuda_available() else "cpu", ASR_PRECISION)
-    if hint == "cuda" and not _sherpa_cuda_available():
-        logging.getLogger(__name__).warning(
-            "ASR_DEVICE=cuda requested, but sherpa-onnx has no CUDA provider; falling back to CPU."
-        )
-        return "cpu", ASR_PRECISION
-    return hint, ASR_PRECISION
-
-
-def _is_sherpa_gpu_error(exc: Exception) -> bool:
-    text = str(exc)
-    return (
-        "SHERPA_ONNX_ENABLE_GPU" in text
-        or "CUDAExecutionProvider" in text
-        or "Available providers:" in text
-    )
-
-
-def _load_bilingual_mirror(device: str, precision: str):
-    """Load the ja-en bilingual K2 model from csukuangfj's mirror.
-
-    This mirrors the internal logic of reazonspeech.k2.asr's own
-    load_model() (see pkg/k2-asr/src/huggingface.py upstream) but targets
-    _JA_EN_MIRROR_REPO instead of the now-404 reazon-research repo, since
-    load_model() has no parameter to override which HF repo it pulls from.
-
-    Returns:
-        sherpa_onnx.OfflineRecognizer
+def _resolve_sense_voice_files() -> tuple[str, str]:
     """
-    epochs = _JA_EN_MIRROR_EPOCHS
-    hf_repo_files = {
-        "fp32": {
-            "tokens":  "tokens.txt",
-            "encoder": f"encoder-epoch-{epochs}-avg-1.onnx",
-            "decoder": f"decoder-epoch-{epochs}-avg-1.onnx",
-            "joiner":  f"joiner-epoch-{epochs}-avg-1.onnx",
-        },
-        "fp16": {
-            "tokens":  "tokens.txt",
-            "encoder": f"encoder-epoch-{epochs}-avg-1.fp16.onnx",
-            "decoder": f"decoder-epoch-{epochs}-avg-1.fp16.onnx",
-            "joiner":  f"joiner-epoch-{epochs}-avg-1.fp16.onnx",
-        },
-        "int8": {
-            "tokens":  "tokens.txt",
-            "encoder": f"encoder-epoch-{epochs}-avg-1.int8.onnx",
-            "decoder": f"decoder-epoch-{epochs}-avg-1.int8.onnx",
-            "joiner":  f"joiner-epoch-{epochs}-avg-1.int8.onnx",
-        },
-        "int8-fp32": {
-            "tokens":  "tokens.txt",
-            "encoder": f"encoder-epoch-{epochs}-avg-1.int8.onnx",
-            "decoder": f"decoder-epoch-{epochs}-avg-1.onnx",
-            "joiner":  f"joiner-epoch-{epochs}-avg-1.int8.onnx",
-        },
-    }
+    Resolve SenseVoice model + tokens from HF cache.
+    Downloads on first use; idempotent thereafter.
+    Set HF_HUB_OFFLINE=1 to prevent network access and serve from cache only.
+    Override the repo with ASR_MODEL in .env to swap models without code changes.
+    """
+    model_path  = hf_hub_download(repo_id=ASR_MODEL, filename="model.int8.onnx")
+    tokens_path = hf_hub_download(repo_id=ASR_MODEL, filename="tokens.txt")
+    return model_path, tokens_path
 
-    if precision not in hf_repo_files:
-        raise ValueError(f"Unknown precision for ja-en mirror: '{precision}'")
 
-    files = hf_repo_files[precision]
+def _load_sense_voice_recognizer() -> sherpa_onnx.OfflineRecognizer:
+    """Load SenseVoice as a sherpa-onnx OfflineRecognizer."""
+    model_path, tokens_path = _resolve_sense_voice_files()
 
-    try:
-        basedir = hf.snapshot_download(_JA_EN_MIRROR_REPO, local_files_only=True)
-    except hf.utils.LocalEntryNotFoundError:
-        basedir = hf.snapshot_download(_JA_EN_MIRROR_REPO)
-
-    return sherpa_onnx.OfflineRecognizer.from_transducer(
-        tokens=os.path.join(basedir, files["tokens"]),
-        encoder=os.path.join(basedir, files["encoder"]),
-        decoder=os.path.join(basedir, files["decoder"]),
-        joiner=os.path.join(basedir, files["joiner"]),
-        num_threads=1,
-        sample_rate=16000,
-        feature_dim=80,
-        decoding_method="greedy_search",
-        provider=device,
+    sense_voice_config = sherpa_onnx.SherpaOnnxOfflineSenseVoiceModelConfig(
+        model=model_path,
+        language=ASR_LANGUAGE,
+        use_itn=True,
     )
+
+    model_config = sherpa_onnx.OfflineModelConfig(
+        sense_voice=sense_voice_config,
+        tokens=tokens_path,
+        num_threads=ASR_NUM_THREADS,
+        provider=ASR_DEVICE,
+        debug=False,
+    )
+
+    recognizer_config = sherpa_onnx.OfflineRecognizerConfig(
+        model_config=model_config,
+        decoding_method="greedy_search",
+    )
+
+    return sherpa_onnx.OfflineRecognizer(recognizer_config)
 
 
 # ── listen ────────────────────────────────────────────────────────────────────
 
 class AikoListen:
     """
-    Microphone capture + ReazonSpeech K2 ASR transcription.
+    Microphone capture + SenseVoice ASR transcription.
     Uses parec (PulseAudio) for mic capture — no PortAudio/sounddevice.
     Silero VAD gates recording for robust, noise-resilient speech detection.
 
     Staged init:
         listen = AikoListen()   # no heavy loading
-        listen.load_asr()       # loads the ReazonSpeech K2 model
+        listen.load_asr()       # loads the SenseVoice model
         listen.load_vad()       # loads Silero VAD + kicks off warmup thread
         listen.join_warmup()    # blocks until warmup completes
 
@@ -213,8 +145,7 @@ class AikoListen:
     """
 
     def __init__(self) -> None:
-        self._device, self._precision = _resolve_asr_device(ASR_DEVICE)
-        self._model:      object | None       = None  # sherpa_onnx.OfflineRecognizer
+        self._model:      sherpa_onnx.OfflineRecognizer | None = None
         self._vad_model:  object | None       = None
         self._lock        = threading.Lock()
         self._warmup_done = threading.Event()
@@ -231,26 +162,7 @@ class AikoListen:
     # ── staged init ───────────────────────────────────────────────────────────
 
     def load_asr(self) -> None:
-        try:
-            self._model = self._load_asr_model(self._device, self._precision)
-        except Exception as exc:
-            if self._device == "cuda" and _is_sherpa_gpu_error(exc):
-                logging.getLogger(__name__).warning(
-                    "Sherpa ASR GPU load failed; retrying on CPU: %s", exc
-                )
-                self._device = "cpu"
-                self._model = self._load_asr_model(self._device, self._precision)
-            else:
-                raise
-
-    def _load_asr_model(self, device: str, precision: str):
-        if ASR_LANGUAGE == "ja-en":
-            return _load_bilingual_mirror(device, precision)
-        return load_model(
-            device=device,
-            precision=precision,
-            language=ASR_LANGUAGE,
-        )
+        self._model = _load_sense_voice_recognizer()
 
     def load_vad(self) -> None:
         self._vad_model = load_silero_vad()
@@ -283,8 +195,6 @@ class AikoListen:
             proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
             consecutive = 0
             while self._barge_in_active:
-                # pause while main recording is active, and while no TTS is waiting
-                # for interruption unless continuous barge-in was explicitly enabled.
                 if self._recording.is_set() or (not BARGE_IN_ALWAYS_ON and not self._barge_in_armed.is_set()):
                     time.sleep(0.05)
                     consecutive = 0
@@ -423,18 +333,27 @@ class AikoListen:
     # ── transcription ─────────────────────────────────────────────────────────
 
     def _transcribe(self, audio: np.ndarray) -> str:
+        """Transcribe float32 16kHz audio using SenseVoice via sherpa-onnx."""
         with self._lock:
-            audio_data = audio_from_numpy(audio, SAMPLE_RATE)
-            ret = transcribe(self._model, audio_data, TranscribeConfig(verbose=False))
-            return ret.text.strip()
+            stream = self._model.create_stream()
+            stream.accept_waveform(SAMPLE_RATE, audio)
+            self._model.decode(stream)
+            result = stream.result
+            text = result.text.strip()
+            # SenseVoice prepends language/emotion tags like <|en|><|NEUTRAL|><|Speech|><|withitn|>
+            # Strip them for clean output
+            import re
+            text = re.sub(r'<\|[^|]+\|>', '', text).strip()
+            return text
 
     # ── warmup ────────────────────────────────────────────────────────────────
 
     def _warmup(self) -> None:
         try:
             silence = np.zeros(int(SAMPLE_RATE * 0.1), dtype=np.float32)
-            audio_data = audio_from_numpy(silence, SAMPLE_RATE)
-            transcribe(self._model, audio_data, TranscribeConfig(verbose=False))
+            stream = self._model.create_stream()
+            stream.accept_waveform(SAMPLE_RATE, silence)
+            self._model.decode(stream)
             tensor = torch.zeros(1, _CHUNK_SAMPLES_VAD)
             with torch.no_grad():
                 self._vad_model(tensor, SAMPLE_RATE)
