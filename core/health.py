@@ -138,7 +138,9 @@ def _db_size_str() -> str:
         import sqlite3, sqlite_vec
         db_path = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
         conn = sqlite3.connect(db_path)
+        conn.enable_load_extension(True)
         sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
         count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
         value = f"{count} entries"
     except Exception:
