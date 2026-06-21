@@ -40,8 +40,9 @@ from core.health import _ram_used_str, _db_size_str, _fmt_uptime
 # ── env ───────────────────────────────────────────────────────────────────────
 
 LLM_BASE_URL  = os.getenv("LLM_BASE_URL", "unknown")
-LLAMA_MODEL   = os.getenv("LLAMA_MODEL", "unknown")
+LLM_MODEL     = os.getenv("LLM_MODEL", "unknown")
 ASR_MODEL     = os.getenv("ASR_MODEL", os.getenv("ASR_MODE", "csukuangfj/reazonspeech-k2-v2-ja-en"))
+MIOTTS_MODEL  = os.getenv("MIOTTS_MODEL", "MioTTS 0.4B")
 SEARXNG_URL   = os.getenv("SEARXNG_URL",   "localhost:8080")
 AI_NAME       = os.getenv("AI_NAME", "Aiko")
 USER_ID       = os.getenv("USER_ID", "")
@@ -119,11 +120,11 @@ ARCH_SECTIONS = [
     ]),
     ("COGNITION", [
         ("Inference engine", "Ollama  (local, offline)"),
-        ("Active model",     LLAMA_MODEL),
+        ("Active model",     LLM_MODEL),
         ("Web search",       SEARXNG_URL),
     ]),
     ("VOICE ENGINE", [
-        ("TTS backend",   "MioTTS 0.4B"),
+        ("TTS backend",   MIOTTS_MODEL),
         ("Voice preset",  os.getenv("MIOTTS_PRESET", "jp_female")),
         ("ASR model",     ASR_MODEL),
     ]),
@@ -133,7 +134,7 @@ ARCH_ROWS = sum(1 + len(items) for _, items in ARCH_SECTIONS) + 2
 db_path = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
 
 INIT_STEPS = {
-    'think_start':      ('Inference Engine', f'Spawning Ollama worker  ·  {LLAMA_MODEL}'),
+    'think_start':      ('Inference Engine', f'Spawning Ollama worker  ·  {LLM_MODEL}'),
     'think_warmup':     ('Model Warm-up',    'Loading weights, running prefill pass …'),
     'mem_sqlite_vec':   ('Vector Database',  f'Connecting to SQLite-vec  ·  {db_path}'),
     'mem_embed':        ('Embedding Model',  'Loading BGE-base-en-v1.5  ·  768-dim vectors'),
@@ -183,6 +184,7 @@ class AikoTUI:
         self._messages: list[tuple[str, str]] = []
         self._scroll    = 0
         self._streaming = ''
+        self._tool_status = None
 
         self._init_log: list[tuple[str, str, str]] = []
         self._frame     = 0
@@ -584,6 +586,11 @@ class AikoTUI:
             hint = f" ↑{self._scroll}  PgDn↓ "
             self._wr(ct, w - len(hint) - 2, hint, pu)
 
+        if self._tool_status:
+            status_row = ct + len(visible)
+            if status_row < cb:
+                self._wr(status_row, rx, f"  ⚙ {self._tool_status}"[:rw-1], dim)
+
     # ── master draw ───────────────────────────────────────────────────────────
 
     def _draw(self, buf=None):
@@ -645,8 +652,28 @@ class AikoTUI:
             self._scroll = 0
 
     def stream_token(self, token):
-        """Ingest an incoming token into the live streaming buffer."""
+        """Ingest an incoming token into the live streaming buffer.
+
+        Intercepts agentic control sentinels (__THINKING__, __TOOL__:name(args),
+        __SEARCHING__:query) so they drive the status display instead of leaking
+        into the visible chat text.
+        """
         with self._lock:
+            if token.startswith('__THINKING__'):
+                self._tool_status = 'thinking'
+                return
+            if token.startswith('__TOOL__:'):
+                call = token[len('__TOOL__:'):].strip()
+                name = call.split('(', 1)[0]
+                self._tool_status = f'using {name}'
+                return
+            if token.startswith('__SEARCHING__:'):
+                query = token[len('__SEARCHING__:'):].strip()
+                self._tool_status = f'searching: {query}'
+                return
+
+            # normal visible token
+            self._tool_status = None
             self._streaming += token
             count = len(token)
             self._stats['tokens']   += count

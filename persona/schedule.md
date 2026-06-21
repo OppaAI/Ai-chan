@@ -6,7 +6,7 @@ Aiko can keep local scheduled jobs while she is running. This is not cron, a cal
 
 - **title:** short name, e.g. `Wake up`, `Daily report`.
 - **task:** what to say or do when due.
-- **time_of_day:** 24-hour `HH:MM`, e.g. `06:00`.
+- **time_of_day:** 24-hour `HH:MM`, e.g. `06:00` for 6am, `13:50` for 1:50pm, `01:50` for 1:50am.
 - **frequency:** `once`, `daily`, `weekdays`, `weekly`, `biweekly`, `monthly`, or `custom_weekdays`.
 - **days_of_week:** optional for `weekly`/`custom_weekdays`, e.g. `Monday Wednesday Friday`.
 - **timezone:** optional IANA timezone; otherwise use configured local timezone.

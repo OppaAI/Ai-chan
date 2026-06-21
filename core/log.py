@@ -43,6 +43,10 @@ def _setup() -> None:
 
     os.makedirs(LOG_DIR, exist_ok=True)
 
+    # Let this module's configured levels decide what gets emitted. A previous
+    # process-wide disable() call can otherwise make the file logger look dead.
+    logging.disable(logging.NOTSET)
+
     root = logging.getLogger()
     root.setLevel(LOG_LEVEL)
 
@@ -55,14 +59,15 @@ def _setup() -> None:
         backupCount=LOG_BACKUP_COUNT,
         encoding="utf-8",
     )
+    fh.setLevel(LOG_LEVEL)
     fh.setFormatter(fmt)
     root.addHandler(fh)
 
-    # Console handler — INFO and above only, so DEBUG stays file-only
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(fmt)
-    root.addHandler(ch)
+    # Console handler removed per user request
+    # ch = logging.StreamHandler()
+    # ch.setLevel(logging.INFO)
+    # ch.setFormatter(fmt)
+    # root.addHandler(ch)
 
     _initialized = True
 

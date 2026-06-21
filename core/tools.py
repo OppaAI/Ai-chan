@@ -59,10 +59,10 @@ log = get_logger(__name__)
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8081")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
-WORKSPACE_ROOT = Path(os.getenv("AIKO_WORKSPACE_ROOT", "workspace")).resolve()
+WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
 NOTES_DIR = WORKSPACE_ROOT / "notes"
-MAX_WRITE_CHARS = int(os.getenv("AIKO_MAX_WRITE_CHARS", 20_000))
-MAX_READ_CHARS = int(os.getenv("AIKO_MAX_READ_CHARS", 12_000))
+MAX_WRITE_CHARS = int(os.getenv("MAX_WRITE_CHARS", 20_000))
+MAX_READ_CHARS = int(os.getenv("MAX_READ_CHARS", 12_000))
 
 # ── formatting helpers ────────────────────────────────────────────────────────
 

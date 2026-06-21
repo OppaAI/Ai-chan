@@ -93,6 +93,8 @@ KNN_LIMIT   = 20          # candidates fetched before RRF re-rank
 FTS_LIMIT   = 20          # candidates fetched before RRF re-rank
 SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
+MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
+MEMORY_CONTEXT_TOTAL_CHARS = int(os.getenv("MEMORY_CONTEXT_TOTAL_CHARS", 1200))
 LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 
 USER_ID = os.getenv("USER_ID", "OppaAI")
@@ -124,6 +126,14 @@ _SALIENCE_RE = re.compile(
 
 # Minimum conversation size (chars) worth sending to LLM for extraction.
 _EXTRACT_MIN_CHARS = int(os.getenv("MEMORY_EXTRACT_MIN_CHARS", 80))
+_EXTRACT_MAX_TOKENS = int(os.getenv("MEMORY_EXTRACT_MAX_TOKENS", 128))
+_EXTRACT_TIMEOUT = float(os.getenv("MEMORY_EXTRACT_TIMEOUT", 18))
+
+_BROAD_RECALL_RE = re.compile(
+    r"\b(what|anything|things|facts|memories?|remember|recall)\b.*\b(about me|about oppa|you remember|past|before)\b"
+    r"|\b(remember|recall)\b.*\b(me|oppa)\b",
+    re.IGNORECASE,
+)
 
 # Language that signals the LLM is guessing rather than stating a known fact.
 # Facts containing these signals are dropped before persistence.
@@ -465,9 +475,10 @@ class _MemoryBackend:
                 model=self._model,
                 messages=[{"role": "user", "content": prompt}],
                 stream=False,
-                max_tokens=512,
+                max_tokens=_EXTRACT_MAX_TOKENS,
                 temperature=0.0,  # deterministic — reduces hallucinated facts
-                timeout=45,
+                timeout=_EXTRACT_TIMEOUT,
+                stop=["\n\n", "```"],
             )
             raw = (resp.choices[0].message.content or "").strip()
         except Exception as e:
@@ -479,6 +490,11 @@ class _MemoryBackend:
 
         # strip accidental markdown fences
         raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+
+        # take only the first top-level JSON array — model sometimes repeats output
+        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
 
         try:
             facts = json.loads(raw)
@@ -805,6 +821,11 @@ class AikoMemorize:
         Side-effect: increments access_count and updates last_accessed_at
         for all returned memories in a single batched UPDATE.
         """
+        if _BROAD_RECALL_RE.search(query or ""):
+            results = self._recent_or_important_memories(user_id=user_id, limit=limit)
+            self._touch_memories(results)
+            return results
+
         cache_key = (user_id, " ".join((query or "").lower().split()), int(limit))
         now_s = time.monotonic()
 
@@ -827,6 +848,20 @@ class AikoMemorize:
                 self._search_cache.popitem(last=False)
 
         return results
+
+    def _recent_or_important_memories(self, user_id: str, limit: int) -> list[dict]:
+        """Return useful memories for broad recall prompts."""
+        rows = self._conn.execute(
+            """
+            SELECT *
+            FROM memories
+            WHERE user_id = ?
+            ORDER BY pinned DESC, created_at DESC, access_count DESC
+            LIMIT ?
+            """,
+            (user_id, int(limit)),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def _touch_memories(self, results: list[dict]) -> None:
         """Update decay access metadata for a search result set."""
@@ -873,6 +908,8 @@ class AikoMemorize:
             text       = m.get("memory") or m.get("text")
             if not text:
                 continue
+            if len(text) > MEMORY_CONTEXT_FACT_CHARS:
+                text = text[:MEMORY_CONTEXT_FACT_CHARS].rstrip() + "..."
             created_at = m.get("created_at")
             if created_at:
                 try:
@@ -892,7 +929,10 @@ class AikoMemorize:
                 lines.append(f"  - {text}")
 
         lines.append("</memory_context>")
-        return "\n".join(lines)
+        block = "\n".join(lines)
+        if len(block) > MEMORY_CONTEXT_TOTAL_CHARS:
+            block = block[:MEMORY_CONTEXT_TOTAL_CHARS].rstrip() + "\n</memory_context>"
+        return block
 
     # ── dream pass ────────────────────────────────────────────────────────────
 
