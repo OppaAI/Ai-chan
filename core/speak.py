@@ -60,10 +60,12 @@ _REPLACEMENTS = [
     (r'\*+',   ''),
     (r'—',     ', '),
     (r'–',     ', '),
+    (r'-{2,}', ', '),
     (r'`',     ''),
     (r'#+ ',   ''),
-    (r'\[|\]', ''),
-    (r'\(|\)', ''),
+    (r'"',      ' '),
+    (r'\[|\]', ' '),
+    (r'\(|\)', ' '),
     (r'~',     ''),
     (r'_',     ' '),
     (r'/',     ' '),
@@ -73,7 +75,7 @@ _REPLACEMENTS = [
 
 _RE_REPLACEMENTS = [(re.compile(p), r) for p, r in _REPLACEMENTS]
 
-_TTS_PUNCTUATION = set(".,!?;:'\"-")
+_TTS_PUNCTUATION = set(".,!?;:'-")
 _UNICODE_PUNCTUATION = {
     '…': '...',
     '“': '"',
@@ -121,6 +123,7 @@ def sanitize_for_tts(text: str) -> str:
             filtered.append(' ')
     text = ''.join(filtered)
 
+    text = re.sub(r"(?<!\w)'|'(?!\w)", ' ', text)
     text = re.sub(r',\s*,', ',', text)
     text = re.sub(r'\s+([.,!?;:])', r'\1', text)
     text = re.sub(r'([.,;:])\1+', r'\1', text)
