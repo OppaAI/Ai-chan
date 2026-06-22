@@ -1,0 +1,1 @@
+Best tokenizer for Jetson Orin Nano: llama.cpp (Q4/K4 quantization). Comparison table: llama.cpp > Ollama (ROCm issues) > vLLM (overkill). Setup steps: install dependencies, clone llama.cpp, build, download model, run with --chat.
