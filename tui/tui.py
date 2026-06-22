@@ -290,7 +290,7 @@ class AikoTUI:
             h, w = self._dims()
             wh = curses.color_pair(CP_WHITE) | curses.A_BOLD
             clock_str = f" {time.strftime('%B %d, %Y  %I:%M:%S %p')} "
-            self._wr(1, w - 1 - len(clock_str), clock_str, wh)   # row 1 = banner row
+            self._wr(1, w - 1 - len(clock_str), clock_str, wh)
             rx    = LEFT_W + 1
             inp_r = self._chat_bot(h) + 4
             content = self.INPUT_PROMPT + ''.join(self._input_buf)
@@ -709,7 +709,8 @@ class AikoTUI:
         submits with Enter or interrupts with Ctrl-C / Ctrl-D.
         """
         buf = []
-        self._input_buf = buf
+        with self._lock:
+            self._input_buf = buf
         curses.curs_set(1)
         self._scr.nodelay(True)
 
@@ -734,7 +735,8 @@ class AikoTUI:
                 if ch in ('\n', '\r', curses.KEY_ENTER):
                     break
                 elif ch in (curses.KEY_BACKSPACE, '\x7f', '\b'):
-                    if buf: buf.pop()
+                    with self._lock:
+                        if buf: buf.pop()
                 elif ch == curses.KEY_PPAGE:
                     with self._lock:
                         rw       = w - LEFT_W - 2
@@ -788,7 +790,8 @@ class AikoTUI:
             wait_fn: Legacy blocking callable; used when speak is None and TTS
                      is disabled at runtime. Ignored when speak is provided.
         """
-        self._input_buf = []
+        with self._lock:
+            self._input_buf = []
         result_holder   = [None]
         done_event      = threading.Event()
 

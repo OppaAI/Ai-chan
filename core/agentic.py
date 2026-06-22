@@ -34,6 +34,7 @@ MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 512)))
 AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25))
 AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
+AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", 1500))
 
 
 def _tool(schema: dict):
@@ -77,11 +78,17 @@ _TOOL_SCHEMAS = [
                 "items": {"type": "string", "description": "Newline-separated checklist items."}},
                 "required": ["title", "items"]}}},
         {"type": "function", "function": {
-            "name": "save_note", "description": "Save note/draft.",
+            "name": "save_note",
+            "description": (
+                "Save a note to a workspace file. "
+                "content MUST be plain text only, under 400 characters. "
+                "No markdown tables, no bullet lists, no backticks, no quotes. "
+                "Write a brief plain-text summary only."
+            ),
             "parameters": {"type": "object", "properties": {
-                "title": {"type": "string"},
-                "content": {"type": "string"},
-                "folder": {"type": "string"}},
+                "title": {"type": "string", "description": "Short filename title."},
+                "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."},
+                "folder": {"type": "string", "description": "Subfolder, default: notes"}},
                 "required": ["title", "content"]}}},
         {"type": "function", "function": {
             "name": "read_workspace_file", "description": "Read workspace file.",
@@ -167,6 +174,9 @@ def dispatch_tool(name: str, args: dict) -> str:
     entry = _TOOLS.get(name)
     if not entry:
         return f"[unknown tool: {name}]"
+    if name == "save_note":
+        args["content"] = args.get("content", "")[:AGENT_NOTE_MAX_CHARS]
+        args["title"] = args.get("title", "aiko-note")
     return entry[1](args)
 
 
@@ -188,7 +198,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "asks you to save, write, schedule, or search: call the tool first, then "
         "confirm with final_answer. Do not call final_answer until all requested "
         "tool calls are complete. Keep reasoning private. Never write tool names "
-        "or JSON in your spoken answer — speak naturally after the work is done."
+        "or JSON in your spoken answer — speak naturally after the work is done. "
+        "When writing notes after research: cross-check any hardware specs, "
+        "commands, or version numbers against fetched page content only — "
+        "never state technical facts from memory alone. If a fact cannot be "
+        "confirmed from fetched content, omit it or flag it as unverified."
     )
     messages = [
         {"role": "system", "content": agent_system},
