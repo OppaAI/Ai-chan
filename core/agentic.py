@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 
 from core.log import get_logger
+from core.skills import list_skillsets, load_skillset, search_skillsets_json, skill_context_for
 from core.tools import (
     fetch_and_extract,
     deep_search,
@@ -29,6 +30,12 @@ from core.tools import (
     schedule_reminder,
     list_reminders,
     cancel_reminder,
+    scan_photo_workspace,
+    propose_photo_ingestion,
+    write_photo_ingestion_report,
+    repo_file_tree,
+    repo_read_file,
+    repo_search_text,
 )
 
 log = get_logger(__name__)
@@ -234,6 +241,55 @@ _TOOL_SCHEMAS = [
                 "reminder_id": {"type": "string"}},
                 "required": ["reminder_id"]}}},
         {"type": "function", "function": {
+            "name": "list_skillsets", "description": "List Aiko's predefined local workflow skillsets.",
+            "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {
+            "name": "search_skillsets", "description": "Search Aiko's predefined workflow skillsets by task/query.",
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"}},
+                "required": ["query"]}}},
+        {"type": "function", "function": {
+            "name": "load_skillset", "description": "Load the full markdown instructions for one predefined skillset by id.",
+            "parameters": {"type": "object", "properties": {
+                "skill_id": {"type": "string"}},
+                "required": ["skill_id"]}}},
+        {"type": "function", "function": {
+            "name": "scan_photo_workspace", "description": "Scan a workspace photo inbox for wildlife/nature/astro image files.",
+            "parameters": {"type": "object", "properties": {
+                "inbox": {"type": "string", "description": "Workspace-relative inbox path, default photos/inbox."},
+                "limit": {"type": "integer"}}}}},
+        {"type": "function", "function": {
+            "name": "propose_photo_ingestion", "description": "Create a safe dry-run ingestion plan for photo files without moving or editing metadata.",
+            "parameters": {"type": "object", "properties": {
+                "inbox": {"type": "string"},
+                "library_root": {"type": "string"},
+                "rating_rule": {"type": "string"}}}}},
+        {"type": "function", "function": {
+            "name": "write_photo_ingestion_report", "description": "Write a photo workflow report under the workspace reports folder.",
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "report_dir": {"type": "string"}}}}},
+        {"type": "function", "function": {
+            "name": "repo_file_tree", "description": "List repository text files for Aiko architecture/code navigation.",
+            "parameters": {"type": "object", "properties": {
+                "prefix": {"type": "string"},
+                "limit": {"type": "integer"}}}}},
+        {"type": "function", "function": {
+            "name": "repo_read_file", "description": "Read one repository text file for architecture/code work.",
+            "parameters": {"type": "object", "properties": {
+                "relative_path": {"type": "string"},
+                "max_chars": {"type": "integer"}},
+                "required": ["relative_path"]}}},
+        {"type": "function", "function": {
+            "name": "repo_search_text", "description": "Search repository text files with simple substring matching.",
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string"},
+                "prefix": {"type": "string"},
+                "limit": {"type": "integer"}},
+                "required": ["query"]}}},
+        {"type": "function", "function": {
             "name": "final_answer", "description": "Final answer.",
             "parameters": {"type": "object", "properties": {
                 "answer": {"type": "string", "description": "The final answer text."}},
@@ -256,6 +312,15 @@ def _register_tools() -> None:
         "schedule_reminder": lambda args: schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone")),
         "list_reminders": lambda args: list_reminders(bool(args.get("include_disabled", False))),
         "cancel_reminder": lambda args: cancel_reminder(args.get("reminder_id", "")),
+        "list_skillsets": lambda args: list_skillsets(),
+        "search_skillsets": lambda args: search_skillsets_json(args.get("query", ""), int(args.get("limit", 3) or 3)),
+        "load_skillset": lambda args: load_skillset(args.get("skill_id", "")),
+        "scan_photo_workspace": lambda args: scan_photo_workspace(args.get("inbox", "photos/inbox"), int(args.get("limit", 100) or 100)),
+        "propose_photo_ingestion": lambda args: propose_photo_ingestion(args.get("inbox", "photos/inbox"), args.get("library_root", "photos/library"), args.get("rating_rule", "manual-review-first")),
+        "write_photo_ingestion_report": lambda args: write_photo_ingestion_report(args.get("title", "photo-ingestion"), args.get("content", ""), args.get("report_dir", "photos/reports")),
+        "repo_file_tree": lambda args: repo_file_tree(args.get("prefix", ""), int(args.get("limit", 200) or 200)),
+        "repo_read_file": lambda args: repo_read_file(args.get("relative_path", ""), int(args.get("max_chars", 20000) or 20000)),
+        "repo_search_text": lambda args: repo_search_text(args.get("query", ""), args.get("prefix", ""), int(args.get("limit", 50) or 50)),
     }
     for schema in _TOOL_SCHEMAS:
         name = schema["function"]["name"]
@@ -433,10 +498,12 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     memories = owner._memorize.search(user_input, limit=AGENT_MEMORY_RECALL_LIMIT)
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
+    skill_context = skill_context_for(user_input)
 
     agent_system = (
         f"{owner._persona}\n\n"
         f"{memory_context}\n\n"
+        f"{skill_context}\n\n"
         "[TASK MODE] You MUST use tools to complete tasks. Never describe or "
         "simulate tool results in text — always call the actual tool. If the user "
         "asks you to save, write, schedule, or search: call the tool first, then "
@@ -449,7 +516,10 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "When writing notes after research: cross-check any hardware specs, "
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
-        "confirmed from fetched content, omit it or flag it as unverified."
+        "confirmed from fetched content, omit it or flag it as unverified. "
+        "Use <skill_context> when it matches the task. For repeatable workflows, "
+        "prefer the predefined skill's workflow and tools over inventing a new process. "
+        "If no matching skill exists, continue with generic tools."
     )
     messages = [
         {"role": "system", "content": agent_system},
