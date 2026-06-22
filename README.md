@@ -55,7 +55,7 @@ flowchart TD
     THINK <-->|async| MEM[Memory\nsqlite-vec + fastembed]
     THINK <-->|on demand| SEARCH[Web search\nSearXNG]
     THINK --> SPEAK[Speak\nMioTTS]
-    LISTEN[Listen\nReazonSpeech K2 + VAD] --> THINK
+    LISTEN[Listen\nSenseVoice (sherpa-onnx) + Silero VAD] --> THINK
     THINK -.->|nightly| DREAM[Dream\nconsolidation]
     DREAM -.->|optional| REFLECT[Reflect\nHugo + GitHub]
 ```
@@ -74,7 +74,7 @@ flowchart TD
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
 | Web search | local SearXNG instance |
 | TTS | external MioTTS HTTP server |
-| ASR | ReazonSpeech K2 with Silero VAD |
+| ASR | SenseVoice via sherpa-onnx with Silero VAD |
 | Reflection publishing | optional GitHub REST API + Hugo markdown |
 
 ---
@@ -131,8 +131,11 @@ Aiko-chan/
 │   ├── dream.py         # midnight consolidation scheduler
 │   ├── reflect.py       # Hugo/GitHub reflection publisher
 │   ├── speak.py         # MioTTS HTTP client
-│   ├── listen.py        # ReazonSpeech K2 + Silero VAD
-│   ├── tools.py         # SearXNG helper
+│   ├── listen.py        # SenseVoice (sherpa-onnx) + Silero VAD
+│   ├── agentic.py       # ReAct task loop and tool dispatch
+│   ├── tools.py         # compatibility facade for toolkit tools
+│   ├── toolkit/         # focused tool modules: web, planning, scheduling, photo, architecture
+│   ├── skills.py        # skill registry and workflow retrieval
 │   ├── health.py        # TUI vitals
 │   ├── log.py           # rotating log setup
 │   └── silence.py       # stderr suppression
@@ -141,7 +144,11 @@ Aiko-chan/
 │   └── identity.py
 ├── persona/
 │   ├── soul.md          # personality, rules, and voice
+│   ├── skills.md        # human-readable skill index
 │   └── identity.md      # banner and ASCII art
+├── skills/
+│   ├── aiko_architect/  # architecture/code workflow skill
+│   └── wildlife_photo/  # photo-ingestion workflow skill
 ├── searxng/
 │   ├── settings.yml
 │   └── limiter.toml
@@ -165,7 +172,8 @@ Aiko-chan/
 |---|---|---|
 | 1 | Soul — CLI, Ollama, mem0 + Qdrant, SearXNG | ✅ Done |
 | 1.5 | Stream — curses TUI, streaming pipeline, MioTTS, persona | ✅ Done |
-| 2 | Voice — ReazonSpeech K2 ASR, Silero VAD, hands-free talk | 🔲 Next |
+| 2 | Voice — SenseVoice ASR, Silero VAD, hands-free talk | 🔲 Next |
+| 2.5 | Agent — tool registry, skill workflows, scheduled local tasks | 🔲 Planned |
 | 3 | Face — VRM avatar, three-vrm, expressions, lip-sync | 🔲 Planned |
 | 4 | Presence — emotional state, mood, relationship progression | 🔲 Planned |
 | 5 | Mobile — React Native / Flutter, WAN, push notifications | 🔲 Planned |
@@ -180,7 +188,8 @@ Full details → **[docs/ROADMAP.md](docs/ROADMAP.md)**
 
 - Memory uses a custom sqlite-vec backend — no Qdrant server or mem0 required. Qdrant + mem0 were dropped in Phase 2 due to OOM issues on the Jetson Orin Nano.
 - Entry point is `main.py`, not `cli.py` anymore.
-- TTS runtime is using MioTTS server. Kokoro/RealtimeTTS remnants is dropped due to OOM and quality issues.
+- TTS runtime is MioTTS server. Kokoro and RealtimeTTS were tried and removed due to Jetson OOM/latency/quality tradeoffs.
+- ASR runtime is SenseVoice via sherpa-onnx with Silero VAD. ReazonSpeech K2 and faster-whisper experiments are archived as trials rather than the active runtime.
 - Reflection publishing fails safely if `GITHUB_TOKEN` or `GITHUB_REPO` are missing.
 
 ---

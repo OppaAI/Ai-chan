@@ -62,12 +62,43 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Feature | Status |
 |---|---|
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
-| Microphone capture with ReazonSpeech K2 | 🔲 Planned |
+| Microphone capture with SenseVoice via sherpa-onnx | 🔲 Planned |
 | Voice Activity Detection via Silero VAD | 🔲 Planned |
 | Interactive Talk mode (hands-free conversation) | 🔲 Planned |
 | Interrupt handling — speak over Aiko mid-response | 🔲 Planned |
 | Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Planned |
-| TTS voice cloning exploration (XTTS, PocketTTS) | 🔲 Planned |
+| TTS voice/runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
+
+
+### Voice backend trial ledger
+
+| Area | Tried | Current decision | Reason |
+|---|---|---|---|
+| TTS | Kokoro, RealtimeTTS | Removed | OOM/latency/quality tradeoffs on Jetson; kept archived experiments only |
+| TTS | MioTTS | Active | Best current voice runtime for Aiko's local stack |
+| ASR | faster-whisper prototype | Removed from active runtime | Useful prototype, but heavier and less aligned with current Jetson constraints |
+| ASR | ReazonSpeech K2 | Removed from active runtime | Kept as trial/archive; current listener moved to SenseVoice via sherpa-onnx |
+| ASR | SenseVoice via sherpa-onnx + Silero VAD | Active | CPU-friendly int8 ONNX path with multilingual support and stable VAD gating |
+
+---
+
+## Phase 2.5 — Agent 🔲
+
+*Give Aiko a real task layer. Skills describe repeatable workflows; toolkit modules provide safe executable actions.*
+
+**Goal:** Let Aiko use predefined skillsets, local tools, schedules, and workspace artifacts to complete repeatable tasks without re-explaining every step.
+
+| Feature | Status |
+|---|---|
+| ReAct-style task loop with tool dispatch | ✅ Done |
+| Persistent schedule jobs with `action=agentic` | ✅ Done |
+| `core/toolkit/` focused tool modules | ✅ Done |
+| `skills/<id>/SKILL.md` workflow registry | ✅ Done |
+| Skill-context retrieval in agentic mode | ✅ Done |
+| Initial wildlife-photo and Aiko-architecture skills | ✅ Done |
+| Safer code-edit/review workflow for self-improvement | 🔲 Planned |
+| Optional MCP wrappers for stable long-running tools | 🔲 Planned |
+| 24/7 worker/watchers for queues and folders | 🔲 Planned |
 
 ---
 
@@ -182,6 +213,6 @@ The `dream()` consolidation system runs across all phases and improves continuou
 ## Notes
 
 - Phases are additive — each one requires the previous to be stable.
-- Phase numbering is fixed; scope within a phase may shift as implementation reveals constraints.
+- Phase numbering is mostly fixed; half-phases such as 1.5 and 2.5 are used when a major enabling layer belongs between two visible product phases.
 - Hardware target throughout: **Jetson Orin Nano** (8 GB), with x86 as secondary.
 - This roadmap reflects the Aiko-chan standalone project. The broader cognitive architecture lives in [GRACE / AuRoRA](https://github.com/OppaAI/AGi).

@@ -53,7 +53,7 @@ Run before any phase tests. All items must pass.
 
 ## Phase 1.5 — Stream
 
-*Curses TUI, streaming architecture, Kokoro/MioTTS TTS, persona system.*
+*Curses TUI, streaming architecture, MioTTS TTS, persona system.*
 
 ### TUI
 
@@ -89,7 +89,7 @@ Run before any phase tests. All items must pass.
 
 ## Phase 2 — Voice
 
-*ReazonSpeech K2 ASR, Silero VAD, hands-free talk mode.*
+*SenseVoice via sherpa-onnx, Silero VAD, hands-free talk mode.*
 
 ### Memory Backend Migration (sqlite-vec)
 
@@ -98,7 +98,7 @@ Run before any phase tests. All items must pass.
 - [ ] KNN + FTS5 RRF recall returns relevant results: run `--debug` and confirm memory hits appear each turn
 - [ ] `cleanup()` runs on startup and logs `deleted=N, kept=N` without error
 
-### ASR — ReazonSpeech K2
+### ASR — SenseVoice via sherpa-onnx
 
 - [ ] Aiko launches in full voice mode (no `--text` flag) without errors
 - [ ] Speaking clearly into the microphone produces a transcription in the chat panel
@@ -117,6 +117,32 @@ Run before any phase tests. All items must pass.
 - [ ] Full loop works: speak → transcribe → LLM response streams → TTS speaks the reply
 - [ ] Loop completes in an acceptable latency (target: < 3 s on Jetson for short replies)
 - [ ] Interrupting a TTS response and speaking again does not deadlock the pipeline
+
+---
+
+
+## Phase 2.5 — Agent
+
+*Agentic task loop, toolkit tools, skillset registry, scheduled local work.*
+
+### Toolkit & Skill Registry
+
+- [ ] `uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo` and `aiko_architect`
+- [ ] `uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes skill, photo, and repo tools
+- [ ] Asking Aiko to process wildlife photos loads/uses the `wildlife_photo` skill context
+- [ ] Asking Aiko to inspect her architecture loads/uses the `aiko_architect` skill context
+
+### Photo Workflow
+
+- [ ] `scan_photo_workspace` reports image counts without moving or modifying files
+- [ ] `propose_photo_ingestion` produces a dry-run destination plan
+- [ ] `write_photo_ingestion_report` writes a report under `workspace/photos/reports`
+
+### Architecture Workflow
+
+- [ ] `repo_file_tree` lists text files without entering skipped directories
+- [ ] `repo_search_text` finds known symbols such as `run_agentic_chat`
+- [ ] `repo_read_file` rejects path traversal outside the repository
 
 ---
 

@@ -4,7 +4,7 @@ main.py
 Aiko-chan CLI — entry point and session orchestrator.
 
 Usage:
-    python main.py               # full voice — ASR (ReazonSpeech K2) + TTS (MioTTS)
+    python main.py               # full voice — ASR (SenseVoice + Silero VAD) + TTS (MioTTS)
     python main.py --text        # keyboard input + no TTS
     python main.py --debug       # show memory debug info each turn
     python main.py --clear-mem   # wipe all stored memories and exit
