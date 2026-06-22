@@ -152,7 +152,12 @@ def sanitize_for_tts(text: str) -> str:
 
     filtered = []
     for char in text:
-        char = _UNICODE_PUNCTUATION.get(char, char)
+        substituted = _UNICODE_PUNCTUATION.get(char, char)
+        if len(substituted) > 1:
+            # Multi-char substitution (e.g. '…' → '...') — append directly
+            filtered.append(substituted)
+            continue
+        char = substituted
         if char in _TTS_PUNCTUATION:
             filtered.append(char)
         elif char.isspace():
