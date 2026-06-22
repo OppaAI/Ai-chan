@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
+from dataclasses import dataclass, field
 
 from core.log import get_logger
 from core.tools import (
@@ -35,6 +38,20 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS",
 AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25))
 AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", 1500))
+AGENT_TOOL_RESULT_MAX_CHARS = int(os.getenv("AGENT_TOOL_RESULT_MAX_CHARS", 3000))
+AGENT_VERIFY_FINAL = os.getenv("AGENT_VERIFY_FINAL", "1").lower() in {"1", "true", "yes", "on"}
+AGENT_VERIFY_LLM = os.getenv("AGENT_VERIFY_LLM", "1").lower() in {"1", "true", "yes", "on"}
+AGENT_MAX_FINAL_REPAIRS = int(os.getenv("AGENT_MAX_FINAL_REPAIRS", 2))
+AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
+
+_ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^\]:]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)
+_DISCLOSURE_RE = re.compile(
+    r"\b(couldn'?t|cannot|can't|failed|unavailable|not available|limitation|"
+    r"could not|wasn'?t able|unable|unverified|not verified|partial)\b",
+    re.IGNORECASE,
+)
+_EXTERNAL_ACTION_RE = re.compile(r"\b(send|sent|email|post|posted|buy|bought|book|booked|order|ordered|delete|deleted)\b", re.IGNORECASE)
+_LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|draft|note|workspace)\b", re.IGNORECASE)
 
 
 def _tool(schema: dict):
@@ -46,6 +63,85 @@ def _tool(schema: dict):
 
 
 _TOOLS: dict[str, tuple[dict, object]] = {}
+
+
+@dataclass
+class ToolResult:
+    """Structured outcome for one tool call attempt."""
+
+    ok: bool
+    tool: str
+    args: dict
+    content: str
+    error_type: str | None = None
+    retryable: bool = False
+    attempts: int = 1
+    metadata: dict = field(default_factory=dict)
+
+    def observation(self) -> str:
+        """Render a compact machine-readable observation for the next LLM step."""
+        payload = {
+            "ok": self.ok,
+            "tool": self.tool,
+            "attempts": self.attempts,
+            "retryable": self.retryable,
+            "error_type": self.error_type,
+            "args": self.args,
+            "content": self.content[:AGENT_TOOL_RESULT_MAX_CHARS],
+        }
+        if self.metadata:
+            payload["metadata"] = self.metadata
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@dataclass
+class TaskState:
+    """Runtime ledger of actions, evidence, and unresolved failures."""
+
+    goal: str
+    steps: list[dict] = field(default_factory=list)
+    evidence: list[str] = field(default_factory=list)
+    failures: list[ToolResult] = field(default_factory=list)
+
+    def record(self, result: ToolResult) -> None:
+        self.steps.append({
+            "tool": result.tool,
+            "ok": result.ok,
+            "attempts": result.attempts,
+            "error_type": result.error_type,
+            "args": result.args,
+        })
+        if result.ok:
+            self.evidence.append(f"{result.tool}: {result.content[:500]}")
+        else:
+            self.failures.append(result)
+
+    def summary(self) -> str:
+        payload = {
+            "goal": self.goal,
+            "completed_tools": [s for s in self.steps if s["ok"]],
+            "failed_tools": [s for s in self.steps if not s["ok"]],
+            "evidence_count": len(self.evidence),
+            "unresolved_failures": [
+                {
+                    "tool": f.tool,
+                    "error_type": f.error_type,
+                    "content": f.content[:300],
+                    "args": f.args,
+                }
+                for f in self.failures
+            ],
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@dataclass
+class VerificationResult:
+    """Final-answer verification verdict."""
+
+    ok: bool
+    feedback: str
+    score: float = 1.0
 
 
 def tool_schemas() -> list[dict]:
@@ -169,6 +265,56 @@ def _register_tools() -> None:
 _register_tools()
 
 
+def _required_args_for(name: str) -> list[str]:
+    entry = _TOOLS.get(name)
+    if not entry:
+        return []
+    return list(entry[0].get("function", {}).get("parameters", {}).get("required", []))
+
+
+def _validate_args(name: str, args: object) -> ToolResult | None:
+    """Return a validation error result, or None when args are safe to dispatch."""
+    if name == "final_answer":
+        return None
+    if not isinstance(args, dict):
+        return ToolResult(
+            ok=False, tool=name, args={},
+            content="Tool arguments must be a JSON object. Reissue the call with valid JSON.",
+            error_type="invalid_args", retryable=True,
+        )
+    missing = [
+        key for key in _required_args_for(name)
+        if args.get(key) is None or str(args.get(key)).strip() == ""
+    ]
+    if missing:
+        return ToolResult(
+            ok=False, tool=name, args=args,
+            content=f"Missing required argument(s): {', '.join(missing)}. Reissue the tool call with complete arguments.",
+            error_type="missing_args", retryable=True,
+        )
+    return None
+
+
+def _classify_result(name: str, args: dict, content: str, attempts: int = 1) -> ToolResult:
+    """Convert legacy string tool output into a structured result."""
+    text = content or ""
+    stripped = text.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        match = _ERROR_PREFIX_RE.match(stripped)
+        label = (match.group("label") if match else "tool failed").lower()
+        detail = match.group("detail") if match else stripped.strip("[]")
+        retryable = any(marker in label for marker in ("search failed", "fetch failed"))
+        retryable = retryable or any(marker in (detail or "").lower() for marker in ("timeout", "connection", "empty response"))
+        return ToolResult(
+            ok=False, tool=name, args=args, content=stripped,
+            error_type=label.replace(" ", "_"),
+            retryable=retryable,
+            attempts=attempts,
+            metadata={"detail": detail or label},
+        )
+    return ToolResult(ok=True, tool=name, args=args, content=text, attempts=attempts)
+
+
 def dispatch_tool(name: str, args: dict) -> str:
     """Run one named tool with already-decoded JSON args."""
     entry = _TOOLS.get(name)
@@ -178,6 +324,104 @@ def dispatch_tool(name: str, args: dict) -> str:
         args["content"] = args.get("content", "")[:AGENT_NOTE_MAX_CHARS]
         args["title"] = args.get("title", "aiko-note")
     return entry[1](args)
+
+
+def dispatch_tool_checked(name: str, args: dict) -> ToolResult:
+    """Run a tool and return a structured result, catching unexpected exceptions."""
+    try:
+        content = dispatch_tool(name, args)
+    except Exception as e:
+        log.exception("Tool %s raised unexpectedly", name)
+        return ToolResult(
+            ok=False, tool=name, args=args,
+            content=f"[tool exception: {e}]",
+            error_type="tool_exception",
+            retryable=False,
+        )
+    return _classify_result(name, args, str(content))
+
+
+def _max_attempts_for(name: str) -> int:
+    if name in {"web_search", "fetch_page"}:
+        return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
+    if name in {"save_note", "schedule_job", "schedule_reminder"}:
+        return max(1, int(os.getenv("AGENT_LOCAL_TOOL_ATTEMPTS", 1)))
+    return 1
+
+
+def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolResult:
+    """Validate, run, retry, and ledger one tool call."""
+    validation = _validate_args(name, args)
+    if validation is not None:
+        state.record(validation)
+        return validation
+
+    last = ToolResult(ok=False, tool=name, args=args, content="[tool did not run]", error_type="not_run")
+    for attempt in range(1, _max_attempts_for(name) + 1):
+        last = dispatch_tool_checked(name, dict(args))
+        last.attempts = attempt
+        if last.ok or not last.retryable:
+            break
+        if attempt < _max_attempts_for(name):
+            time.sleep(AGENT_TOOL_RETRY_BACKOFF * attempt)
+
+    state.record(last)
+    return last
+
+
+def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) -> VerificationResult:
+    """Check answer completeness and faithfulness before Aiko speaks it."""
+    issues: list[str] = []
+    stripped = (answer or "").strip()
+    lowered = stripped.lower()
+
+    if not stripped:
+        issues.append("The final answer is empty.")
+
+    if state.failures and not _DISCLOSURE_RE.search(stripped):
+        failed = ", ".join(f.tool for f in state.failures[-3:])
+        issues.append(f"Unresolved tool failure(s) were not disclosed: {failed}.")
+
+    if any(step["tool"] == "save_note" and step["ok"] for step in state.steps):
+        if "path" not in lowered and "workspace" not in lowered and ".md" not in lowered:
+            issues.append("A saved note was created, but the final answer does not mention where it was saved.")
+
+    if any(step["tool"] in {"schedule_job", "schedule_reminder"} and step["ok"] for step in state.steps):
+        if "scheduled" not in lowered and "reminder" not in lowered and "alarm" not in lowered:
+            issues.append("A schedule/reminder tool succeeded, but the final answer does not confirm it.")
+
+    if _EXTERNAL_ACTION_RE.search(user_input) and not _LOCAL_ARTIFACT_RE.search(stripped):
+        issues.append("The answer may imply an unsupported external action instead of a local draft/staged artifact.")
+
+    if issues or not AGENT_VERIFY_LLM:
+        return VerificationResult(ok=not issues, feedback="\n".join(issues) or "Verified by deterministic checks.", score=0.0 if issues else 1.0)
+
+    prompt = (
+        "You are Aiko's verifier. Check whether the candidate answer is accurate, complete, "
+        "and supported by the task ledger. Return ONLY compact JSON with keys: "
+        "pass (boolean), score (0-1), feedback (string). Do not add markdown.\n\n"
+        f"User request:\n{user_input}\n\n"
+        f"Task ledger:\n{state.summary()}\n\n"
+        f"Candidate answer:\n{stripped}"
+    )
+    try:
+        resp = owner._client.chat.completions.create(
+            model=owner._llm_model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            max_tokens=160,
+            temperature=0.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        data = json.loads(match.group(0) if match else raw)
+        ok = bool(data.get("pass"))
+        score = float(data.get("score", 1.0 if ok else 0.0))
+        feedback = str(data.get("feedback") or ("Verifier passed." if ok else "Verifier failed."))
+        return VerificationResult(ok=ok, feedback=feedback, score=score)
+    except Exception as e:
+        log.warning("Agent verifier failed; falling back to deterministic pass: %s", e)
+        return VerificationResult(ok=True, feedback="Verifier unavailable; deterministic checks passed.", score=0.75)
 
 
 def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
@@ -199,6 +443,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "confirm with final_answer. Do not call final_answer until all requested "
         "tool calls are complete. Keep reasoning private. Never write tool names "
         "or JSON in your spoken answer — speak naturally after the work is done. "
+        "Tool observations are structured JSON. If ok=false, do not pretend the "
+        "action succeeded: retry with corrected arguments, choose another tool or "
+        "query, or clearly disclose the limitation in the final answer. "
         "When writing notes after research: cross-check any hardware specs, "
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
@@ -212,6 +459,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     final_text = ""
     last_content = ""
     seen_calls: set[tuple[str, str]] = set()
+    state = TaskState(goal=user_input)
+    final_repairs = 0
 
     for step in range(MAX_AGENT_ITER):
         if token_callback:
@@ -231,48 +480,112 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             break
 
         if not msg.tool_calls:
-            final_text = msg.content or ""
+            candidate = msg.content or ""
+            if AGENT_VERIFY_FINAL:
+                verdict = _verify_final_answer(owner, user_input, candidate, state)
+                if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
+                    final_repairs += 1
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Verifier rejected the candidate final answer. "
+                            "Repair the task or answer before finalizing.\n"
+                            f"Verifier score: {verdict.score}\n"
+                            f"Feedback:\n{verdict.feedback}\n\n"
+                            f"Task ledger:\n{state.summary()}"
+                        ),
+                    })
+                    continue
+            final_text = candidate
             break
 
         for call in msg.tool_calls:
             name = call.function.name
             try:
                 args = json.loads(call.function.arguments)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
                 args = {}
+                result = ToolResult(
+                    ok=False, tool=name, args=args,
+                    content=f"Invalid JSON arguments: {e}. Reissue this tool call with valid JSON.",
+                    error_type="invalid_json",
+                    retryable=True,
+                )
+                state.record(result)
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": result.observation(),
+                })
+                continue
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
             call_key = (name, json.dumps(args, sort_keys=True))
-            if call_key in seen_calls:
-                result = f"[loop guard: repeated tool call skipped for {name}]"
+            if name != "final_answer" and call_key in seen_calls:
+                result = ToolResult(
+                    ok=False, tool=name, args=args,
+                    content=(
+                        f"Repeated tool call skipped for {name}. Choose a different "
+                        "query/argument/tool, or finalize with a disclosed limitation."
+                    ),
+                    error_type="repeated_tool_call",
+                    retryable=True,
+                )
+                state.record(result)
                 messages.append({
                     "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": result,
+                    "name": name, "content": result.observation(),
                 })
                 continue
-            seen_calls.add(call_key)
+            if name != "final_answer":
+                seen_calls.add(call_key)
             if token_callback:
                 token_callback(f"__TOOL__:{name}({args})\n")
 
             if name == "final_answer":
-                final_text = args.get("answer", "")
+                candidate = args.get("answer", "")
+                if AGENT_VERIFY_FINAL:
+                    verdict = _verify_final_answer(owner, user_input, candidate, state)
+                    if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
+                        final_repairs += 1
+                        messages.append({
+                            "role": "tool", "tool_call_id": call.id,
+                            "name": name,
+                            "content": json.dumps({
+                                "ok": False,
+                                "error_type": "verification_failed",
+                                "score": verdict.score,
+                                "feedback": verdict.feedback,
+                                "task_ledger": json.loads(state.summary()),
+                                "instruction": "Repair the missing/unsupported parts, then call final_answer again.",
+                            }, ensure_ascii=False, indent=2),
+                        })
+                        continue
+                final_text = candidate
                 messages.append({
                     "role": "tool", "tool_call_id": call.id,
                     "name": name, "content": "Answer submitted.",
                 })
                 break
 
-            result = dispatch_tool(name, args)
+            result = execute_tool_with_policy(name, args, state)
             messages.append({
                 "role": "tool", "tool_call_id": call.id,
-                "name": name, "content": result[:3000],
+                "name": name, "content": result.observation(),
             })
 
         if final_text:
             break
 
     if not final_text:
-        final_text = "I got a bit lost trying to complete that task. Here is what I have so far:\n" + last_content
+        if state.failures:
+            failed = "; ".join(f"{f.tool}: {f.content[:160]}" for f in state.failures[-3:])
+            final_text = (
+                "I got a bit lost trying to complete that task. "
+                f"Recent blocker(s): {failed}\n"
+                f"Here is what I have so far:\n{last_content}"
+            )
+        else:
+            final_text = "I got a bit lost trying to complete that task. Here is what I have so far:\n" + last_content
 
     owner._emit(final_text, token_callback=token_callback)
 
