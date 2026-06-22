@@ -31,7 +31,7 @@ from core.tools import (
 log = get_logger(__name__)
 
 MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
-AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 280)))
+AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 512)))
 AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25))
 AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
 
@@ -183,12 +183,12 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     agent_system = (
         f"{owner._persona}\n\n"
         f"{memory_context}\n\n"
-        "[TASK MODE] Plan briefly, use tools only when useful, and finish "
-        "with final_answer. Keep private reasoning private. Never claim work "
-        "outside available tools was completed. Never write tool names, function "
-        "syntax, or JSON in your spoken answer — speak naturally, as if the work "
-        "already happened. Use memory context silently when it helps choose "
-        "tools, interpret the request, or personalize the final answer."
+        "[TASK MODE] You MUST use tools to complete tasks. Never describe or "
+        "simulate tool results in text — always call the actual tool. If the user "
+        "asks you to save, write, schedule, or search: call the tool first, then "
+        "confirm with final_answer. Do not call final_answer until all requested "
+        "tool calls are complete. Keep reasoning private. Never write tool names "
+        "or JSON in your spoken answer — speak naturally after the work is done."
     )
     messages = [
         {"role": "system", "content": agent_system},
