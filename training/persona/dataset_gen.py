@@ -46,7 +46,10 @@ app = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.0-devel-ubuntu22.04",
+        add_python="3.11"
+    )
     .pip_install(
         "vllm>=0.4.3",
         "transformers>=4.43.0",
@@ -125,6 +128,8 @@ TOPICS: dict[str, list[str]] = {
         "Jon shares that he finished a hard task",
         "Jon asks Aiko what she thinks he should work on next",
         "Jon says he is going to bed",
+        "Jon asks a simple yes or no question",
+        "Jon confirms something Aiko already told him",
     ],
     # Aiko reacting to her own architecture / GRACE
     "architecture_aware": [
@@ -177,7 +182,11 @@ Rules:
 Example output:
 😑
 *crosses arms*
-That variable has been null since yesterday. You just noticed."""
+That variable has been null since yesterday. You just noticed.
+
+😐
+*stays still*
+The weather API is down."""
 
 GENERATION_PROMPT_TEMPLATE = """Generate a realistic Aiko response for this scenario:
 
@@ -249,7 +258,7 @@ def build_training_example(scenario: str, parsed: dict) -> dict:
 
 @app.function(
     image=image,
-    gpu="A10G",
+    gpu="A100-40GB",
     timeout=60 * 60 * 4,   # 4 hours max
     volumes={OUTPUTS_DIR: volume},
     secrets=[modal.Secret.from_name("huggingface-secret")],
