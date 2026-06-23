@@ -9,10 +9,10 @@ Runs entirely on Modal — PC can be off after each `modal run`.
 
 | File | Purpose |
 |---|---|
-| `conscience_dataset_gen.py` | Generate + label ~25k scenarios on Modal A10G |
-| `conscience_train.py` | Fine-tune Qwen3.5-0.8B on Modal A100-40, export GGUF |
-| `conscience_test.py` | Evaluate GGUF against held-out test split |
-| `conscience_infer.py` | Drop-in inference wrapper for Aiko-chan / GRACE |
+| `dataset_gen.py` | Generate + label ~25k scenarios on Modal A10G |
+| `training.py` | Fine-tune Qwen3.5-0.8B on Modal A100-40, export GGUF |
+| `testing.py` | Evaluate GGUF against held-out test split |
+| `inference.py` | Drop-in inference wrapper for Aiko-chan / GRACE |
 
 All outputs saved to Modal Volume `conscience-gen-data` under `/outputs/`.
 
@@ -22,41 +22,41 @@ All outputs saved to Modal Volume `conscience-gen-data` under `/outputs/`.
 
 ### Step 1: Generate dataset (~25k scenarios)
 ```bash
-modal run conscience_dataset_gen.py --n-per-topic 500
+modal run dataset_gen.py --n-per-topic 500
 # Takes ~2–3 hours on A10G, costs ~$5–8
 # PC can be closed after running
 ```
 
 ### Step 2: Train the student model
 ```bash
-modal run conscience_train.py
+modal run training.py
 # Takes ~30–45 min on A100-40, costs ~$2–3
-# Exports conscience_model_q8.gguf and conscience_model_q4_k_m.gguf to volume
+# Exports qwen3.5-0.8b-ConscienceCircuitCore_q8.gguf and qwen3.5-0.8b-ConscienceCircuitCore_q4_k_m.gguf to volume
 ```
 
 ### Step 3: Evaluate
 ```bash
 # On Modal (PC-off):
-modal run conscience_test.py
+modal run testing.py
 
 # Or locally on AIVA after downloading:
-modal volume get conscience-gen-data outputs/conscience_model_q8.gguf ./
+modal volume get conscience-gen-data outputs/qwen3.5-0.8b-ConscienceCircuitCore_q8.gguf ./
 modal volume get conscience-gen-data outputs/test_split.jsonl ./
-python conscience_test.py --model conscience_model_q8.gguf --test-data test_split.jsonl
+python testing.py --model qwen3.5-0.8b-ConscienceCircuitCore_q8.gguf --test-data test_split.jsonl
 ```
 
 ### Step 4: Download model for AuRoRA
 ```bash
-modal volume get conscience-gen-data outputs/conscience_model_q8.gguf ./
+modal volume get conscience-gen-data outputs/qwen3.5-0.8b-ConscienceCircuitCore_q8.gguf ./
 # Copy to AuRoRA Jetson
-scp conscience_model_q8.gguf oppa-ai@aurora:/opt/models/
+scp qwen3.5-0.8b-ConscienceCircuitCore_q8.gguf oppa-ai@aurora:/opt/models/
 ```
 
 ---
 
 ## Resume after interruption
 ```bash
-modal run conscience_dataset_gen.py --resume
+modal run dataset_gen.py --resume
 ```
 
 ---
@@ -75,10 +75,10 @@ modal run conscience_dataset_gen.py --resume
 ## Integration in Aiko-chan
 
 ```python
-from conscience_infer import AikoConscienceMiddleware
+from inference import AikoConscienceMiddleware
 
 conscience = AikoConscienceMiddleware(
-    "/opt/models/conscience_model_q8.gguf",
+    "/opt/models/qwen3.5-0.8b-ConscienceCircuitCore_q8.gguf",
     log_path="/opt/logs/conscience.jsonl",
 )
 
