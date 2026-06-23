@@ -60,11 +60,12 @@ _IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
 _MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
 _MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 # Route task-vs-chat turns semantically by default using the same embedding
-# model as memory/RAG. Set AIKO_ROUTE_MODE=llm to let the local LLM classify
-# instead, or AIKO_ROUTE_MODE=chat to disable autonomous routing.
-_ROUTE_ENABLED = os.getenv("AIKO_ROUTE_ENABLED", os.getenv("AIKO_ROUTE_LLM", "1")).lower() in {"1", "true", "yes", "on"}
-_ROUTE_MODE = os.getenv("AIKO_ROUTE_MODE", "semantic").strip().lower()
-_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("AIKO_ROUTE_SEMANTIC_THRESHOLD", "0.36"))
+# model as memory/RAG. Set ROUTE_MODE=llm to let the local LLM classify
+# instead, or ROUTE_MODE=chat to disable autonomous routing.
+_ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+_ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
+_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.36"))
+_SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.36"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -87,75 +88,7 @@ def _load_persona() -> str:
     today   = datetime.now().strftime("%B %d, %Y")
     return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + skills_block
 
-# ── intent signals ────────────────────────────────────────────────────────────
-#
-# Routing for "does this turn need live web data" is layered:
-#
-#   1. _SOCIAL_RE   — conversational / relational framing. Checked FIRST so a
-#                      message like "what do you think, wanna grab coffee
-#                      today?" doesn't get hijacked by stray factual-looking
-#                      words. If this matches, we short-circuit to chat.
-#
-#   2. _FACTUAL_RE  — narrow, genuinely data-specific nouns (prices, scores,
-#                      weather, news, rankings, etc). These rarely show up in
-#                      normal conversation or code talk, so a bare match is a
-#                      reliable signal on its own.
-#
-#   3. _PHRASE_PATTERNS — bare interrogatives (who/what/when/where/how much/
-#                      how many) are NOT reliable signals by themselves
-#                      (they're some of the most common words in English:
-#                      "what do you think", "where should I put this config",
-#                      "today I finished the migration"). They're only
-#                      re-admitted as a search signal when paired with a
-#                      data-specific anchor word in the same message, e.g.
-#                      "who won the game", "what's the weather", "when does
-#                      the new model release".
-#
-# Agentic routing itself does not use these keyword/regex signals. They are
-# only used later inside normal chat to decide whether the answer needs live
-# search context.
-
-_SOCIAL_SIGNALS = frozenset([
-    "wanna", "want to", "would you", "shall we",
-    "let's", "lets", "together", "with me", "join me",
-    "how are you", "what do you think", "do you like",
-])
-
-# Narrow: words that are specific enough to data lookups that a bare match is
-# trustworthy on its own. Generic interrogatives and overloaded common words
-# (what/who/when/where/today/current/game/won/win/lost/beat/final/match/
-# series) were removed from this list — they false-positive constantly on
-# ordinary statements and code/project talk. See _PHRASE_PATTERNS below for
-# how those are re-admitted only in genuinely data-seeking phrasing.
-_FACTUAL_SIGNALS = frozenset([
-    "score", "result", "results", "latest", "news",
-    "price", "weather", "forecast", "temperature",
-    "standing", "standings", "ranking", "rankings",
-    "bitcoin", "crypto", "stock", "stocks",
-])
-
-_FACTUAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _FACTUAL_SIGNALS) + r')\b', re.IGNORECASE)
-_SOCIAL_RE = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in _SOCIAL_SIGNALS) + r')\b', re.IGNORECASE)
-
-# Phrase-level patterns: an interrogative/time word only counts as a data
-# signal when it's anchored to something that's actually looked up, not just
-# discussed. Each pattern requires both halves in the same message, in either
-# order, within a short span.
-_PHRASE_PATTERNS = [
-    # who/when + sports or competition outcome
-    re.compile(r'\b(who|when)\b.{0,30}\b(won|win|wins|winning|lost|losing|beat|playing|plays)\b', re.IGNORECASE),
-    re.compile(r'\b(won|win|wins|winning|lost|losing|beat|playing|plays)\b.{0,30}\b(who|when)\b', re.IGNORECASE),
-    # what/how much + price, weather, score, odds
-    re.compile(r'\b(what|how much|how many)\b.{0,30}\b(price|cost|weather|temperature|score|odds|rate|exchange rate)\b', re.IGNORECASE),
-    re.compile(r'\b(price|cost|weather|temperature|score|odds|rate|exchange rate)\b.{0,30}\b(what|how much|how many)\b', re.IGNORECASE),
-    # when + release/happen/start/launch (events, not general planning)
-    re.compile(r'\b(when)\b.{0,30}\b(release|releases|released|launch|launches|launched|happen|happens|happened|start|starts|started|come out|coming out)\b', re.IGNORECASE),
-    # what's the current/today's + state-of-the-world nouns
-    re.compile(r"\b(what'?s|what is)\b.{0,15}\b(current|today'?s|latest)\b", re.IGNORECASE),
-    # game/match/series/final explicitly tied to a result/score word
-    re.compile(r'\b(game|match|series|final|finals)\b.{0,30}\b(score|result|won|win|lost|beat|standing|ranking)\b', re.IGNORECASE),
-    re.compile(r'\b(score|result|won|win|lost|beat|standing|ranking)\b.{0,30}\b(game|match|series|final|finals)\b', re.IGNORECASE),
-]
+# ── semantic intent examples ──────────────────────────────────────────────────
 
 import subprocess
 
@@ -170,10 +103,6 @@ def _play_beep() -> None:
         except Exception as e:
             log.warning("Beep playback failed: %s", e)
     threading.Thread(target=_run, daemon=True).start()
-
-def _matches_phrase_pattern(text: str) -> bool:
-    return any(p.search(text) for p in _PHRASE_PATTERNS)
-
 
 _SEMANTIC_ROUTE_EXAMPLES: dict[str, tuple[str, ...]] = {
     "chat": (
@@ -224,6 +153,24 @@ _SEMANTIC_ROUTE_EXAMPLES: dict[str, tuple[str, ...]] = {
     ),
 }
 
+_SEMANTIC_SEARCH_EXAMPLES: dict[str, tuple[str, ...]] = {
+    "chat": (
+        "talk with me normally",
+        "what do you think about this idea",
+        "help me reason through this from what you already know",
+        "explain this concept without looking anything up",
+        "where should I put this config in my project",
+    ),
+    "data": (
+        "what is the weather today",
+        "search for the latest news about this topic",
+        "what is the current price of bitcoin",
+        "who won the game last night",
+        "look up the newest release notes for this library",
+        "find current facts and cite the source",
+    ),
+}
+
 # ── think ─────────────────────────────────────────────────────────────────────
 
 class AikoThink:
@@ -238,6 +185,8 @@ class AikoThink:
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
         self._route_chat_classified: str | None = None
+        self._semantic_example_cache: dict[int, tuple[list[str], list[list[float]]]] = {}
+        self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
         self._reasoning = False
         self._mem_queue  = queue.Queue()
@@ -283,7 +232,7 @@ class AikoThink:
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
-        """Main entry point. Uses keyword + semantic intent routing."""
+        """Main entry point. Uses semantic intent routing."""
         self._last_chat_time = time.time()
         self._active_turn.set()
         try:
@@ -313,16 +262,9 @@ class AikoThink:
         return sum(x * y for x, y in zip(a, b)) / (denom_a * denom_b)
 
     def _semantic_agent_intent(self, user_input: str) -> str:
-        if not self._route_cache:
-            return self._classify_agent_intent(user_input)
+        """Classify agentic intent by embedding similarity to route examples."""
         try:
-            query_vec = self._memorize.embed_text(user_input)
-            best_label, best_score = "chat", 0.0
-            for label, vecs in self._route_cache.items():
-                score = max(self._cosine_similarity(query_vec, v) for v in vecs)
-                if score > best_score:
-                    best_label, best_score = label, score
-    
+            best_label, best_score = self._semantic_best_label(user_input, _SEMANTIC_ROUTE_EXAMPLES)
             log.debug("[route] Semantic route best=%s score=%.3f for: %r", best_label, best_score, user_input)
             if best_score >= _SEMANTIC_ROUTE_THRESHOLD:
                 return best_label
@@ -332,6 +274,45 @@ class AikoThink:
             if _ROUTE_MODE == "semantic_only":
                 return "chat"
             return self._classify_agent_intent(user_input)
+
+    def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float]:
+        """Return the closest semantic label and cosine score for a prompt."""
+        query_vector = self._memorize.embed_text(user_input)
+        labels, example_vectors = self._semantic_example_vectors(examples_by_label)
+        best_label = "chat"
+        best_score = 0.0
+        for label, vector in zip(labels, example_vectors):
+            score = self._cosine_similarity(query_vector, vector)
+            if score > best_score:
+                best_label = label
+                best_score = score
+        return best_label, best_score
+
+    def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], list[list[float]]]:
+        """Return cached embeddings for a static semantic example corpus."""
+        cache_key = id(examples_by_label)
+        cache = getattr(self, "_semantic_example_cache", None)
+        cache_lock = getattr(self, "_semantic_example_cache_lock", None)
+        if cache is None:
+            cache = self._semantic_example_cache = {}
+        if cache_lock is None:
+            cache_lock = self._semantic_example_cache_lock = threading.RLock()
+
+        with cache_lock:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            labels: list[str] = []
+            prompts: list[str] = []
+            for label, examples in examples_by_label.items():
+                labels.extend([label] * len(examples))
+                prompts.extend(examples)
+
+            vectors = [self._memorize.embed_text(text) for text in prompts]
+            cached = (labels, vectors)
+            cache[cache_key] = cached
+            return cached
 
     def _classify_agent_intent(self, user_input: str) -> str:
         """Ask the local model for a compact route label when keywords miss."""
@@ -635,21 +616,31 @@ class AikoThink:
         return f"[LLM error] {reason}"
 
     def _is_data_intent(self, user_input: str) -> bool:
-        # Social/conversational framing wins outright, same ordering as
-        # _route_intent above, so /web-search step-in inside chat() stays
-        # consistent with the routing decision that got us here.
-        if _SOCIAL_RE.search(user_input):
-            return False
-        if _FACTUAL_RE.search(user_input) or _matches_phrase_pattern(user_input):
-            return True
         if self._route_chat_classified == user_input:
             self._route_chat_classified = None
             return False
-        if not _ROUTE_ENABLED:
+        if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
             return False
+        if _ROUTE_MODE != "llm":
+            is_data, query = self._semantic_data_intent(user_input)
+            self._pending_search_query = query if is_data else None
+            return is_data
         is_data, resolved_query = self._classify_and_resolve(user_input)
         self._pending_search_query = resolved_query if is_data else None
         return is_data
+
+    def _semantic_data_intent(self, user_input: str) -> tuple[bool, str]:
+        """Classify normal-chat web-search need by embedding similarity."""
+        try:
+            best_label, best_score = self._semantic_best_label(user_input, _SEMANTIC_SEARCH_EXAMPLES)
+            log.debug("[search] Semantic route best=%s score=%.3f for: %r", best_label, best_score, user_input)
+            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD, user_input
+        except Exception as e:
+            log.warning("Semantic search intent routing failed: %s", e)
+            if _ROUTE_MODE == "semantic_only":
+                return False, user_input
+            is_data, resolved_query = self._classify_and_resolve(user_input)
+            return is_data, resolved_query
 
     def _classify_and_resolve(self, user_input: str) -> tuple[bool, str]:
         with self._history_lock:
