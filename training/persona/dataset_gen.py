@@ -2,7 +2,7 @@
 dataset_gen.py — Aiko Persona Finetune Dataset Generator
 OppaAI / AuRoRA Project
 
-Generates structured output training examples using a teacher LLM (Qwen3-30B-A3B).
+Generates structured output training examples using a teacher LLM (Qwen3-30B-A3B GGUF).
 Each example teaches Ministral-3B to output:
 
     <emoji>
@@ -24,38 +24,50 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import time
+import subprocess
+import urllib.request
 from pathlib import Path
 
 import modal
-import os
+
 # ---------------------------------------------------------------------------
 # Modal infra
 # ---------------------------------------------------------------------------
 
-APP_NAME = "aiko-persona-dataset-gen"
-VOLUME_NAME = "aiko-persona-data"
-OUTPUTS_DIR = "/outputs"
-TEACHER_MODEL = "Qwen/Qwen3-30B-A3B"  # teacher labeler — strong instruction follower
-TEACHER_QUANT = "fp8"                  # A10G fits 30B-A3B at fp8
+APP_NAME     = "aiko-persona-dataset-gen"
+VOLUME_NAME  = "aiko-persona-data"
+OUTPUTS_DIR  = "/outputs"
 
-app = modal.App(APP_NAME)
+# llama.cpp server config
+HF_REPO       = "unsloth/Qwen3-30B-A3B-GGUF"
+GGUF_FILENAME = "Qwen3-30B-A3B-Q4_K_M.gguf"
+MODEL_PATH    = f"{OUTPUTS_DIR}/models/{GGUF_FILENAME}"
+LLAMA_PORT    = 8080
+LLAMA_CTX     = 2048
+LLAMA_GPU_LAYERS = 999
+
+app    = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.4.0-devel-ubuntu22.04",
-        add_python="3.11"
+    modal.Image.from_registry("nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11")
+    .apt_install(
+        "build-essential", "cmake", "git", "wget", "curl",
+        "libcurl4-openssl-dev", "pkg-config"
     )
-    .pip_install(
-        "vllm>=0.4.3",
-        "transformers>=4.43.0",
-        "huggingface_hub>=0.23.0",
-        "datasets>=2.20.0",
-        "tqdm",
+    .run_commands(
+        "git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
+        "cd /opt/llama.cpp && cmake -B build "
+        "  -DGGML_CUDA=ON "
+        "  -DLLAMA_CURL=ON "
+        "  -DCMAKE_BUILD_TYPE=Release "
+        "  && cmake --build build --config Release -j$(nproc)",
     )
+    .pip_install("openai", "tqdm", "huggingface_hub")
 )
 
 # ---------------------------------------------------------------------------
@@ -191,7 +203,7 @@ GENERATION_PROMPT_TEMPLATE = """Generate a realistic Aiko response for this scen
 
 SCENARIO: {scenario}
 
-Respond ONLY with the 3-line structured output. No preamble, no explanation."""
+Respond ONLY with the 3-line structured output. No preamble, no explanation. /no_think"""
 
 # ---------------------------------------------------------------------------
 # Validation
@@ -202,12 +214,16 @@ _ASTERISK_IN_RESPONSE_RE = re.compile(r"\*[^*]+\*")
 
 def validate_example(raw: str) -> dict | None:
     """Parse and validate a generated example. Returns None if malformed."""
+    # strip thinking blocks if model outputs them anyway
+    if "<think>" in raw and "</think>" in raw:
+        raw = raw[raw.find("</think>") + 8:].strip()
+
     lines = raw.strip().splitlines()
     if len(lines) < 3:
         return None
 
     emotion = lines[0].strip()
-    action = lines[1].strip()
+    action  = lines[1].strip()
     response = "\n".join(lines[2:]).strip()
 
     # line 1 must contain at least one emoji-like character
@@ -239,12 +255,12 @@ def build_training_example(scenario: str, parsed: dict) -> dict:
     return {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": GENERATION_PROMPT_TEMPLATE.format(scenario=scenario)},
+            {"role": "user",   "content": GENERATION_PROMPT_TEMPLATE.format(scenario=scenario)},
             {"role": "assistant", "content": parsed["raw"]},
         ],
         "metadata": {
-            "emotion": parsed["emotion"],
-            "action": parsed["action"],
+            "emotion":  parsed["emotion"],
+            "action":   parsed["action"],
             "response": parsed["response"],
             "scenario": scenario,
         },
@@ -257,8 +273,8 @@ def build_training_example(scenario: str, parsed: dict) -> dict:
 
 @app.function(
     image=image,
-    gpu="A100-40GB",
-    timeout=60 * 60 * 4,   # 4 hours max
+    gpu="A10G",
+    timeout=60 * 60 * 4,
     volumes={OUTPUTS_DIR: volume},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     memory=32768,
@@ -270,31 +286,73 @@ def generate_topic_batch(
     temperature: float = 0.85,
 ) -> dict:
     """Generate n_per_scenario examples for each scenario in a topic."""
-    os.makedirs(OUTPUTS_DIR, exist_ok=True)
-    from vllm import LLM, SamplingParams
+    from huggingface_hub import hf_hub_download
+    from openai import OpenAI
     from tqdm import tqdm
 
-    print(f"[{topic}] Loading teacher model {TEACHER_MODEL}...")
-    llm = LLM(
-        model=TEACHER_MODEL,
-        quantization=TEACHER_QUANT,
-        max_model_len=2048,
-        gpu_memory_utilization=0.88,
-        trust_remote_code=True,
-        # disable thinking
-        model_impl="transformers",
+    os.makedirs(f"{OUTPUTS_DIR}/models", exist_ok=True)
+
+    # download model if not cached in volume
+    if not os.path.exists(MODEL_PATH):
+        print(f"[{topic}] Downloading {GGUF_FILENAME} ...")
+        hf_hub_download(
+            repo_id=HF_REPO,
+            filename=GGUF_FILENAME,
+            local_dir=f"{OUTPUTS_DIR}/models",
+        )
+        volume.commit()
+        print(f"[{topic}] Download complete.")
+    else:
+        print(f"[{topic}] Model found: {MODEL_PATH}")
+
+    # start llama-server
+    cmd = [
+        "/opt/llama.cpp/build/bin/llama-server",
+        "-m", MODEL_PATH,
+        "--host", "127.0.0.1",
+        "--port", str(LLAMA_PORT),
+        "--ctx-size", str(LLAMA_CTX),
+        "--n-gpu-layers", str(LLAMA_GPU_LAYERS),
+        "--parallel", "4",
+        "--cont-batching",
+        "--flash-attn",
+        "--log-disable",
+    ]
+    print(f"[{topic}] Starting llama-server ...")
+    server_proc = subprocess.Popen(cmd)
+
+    # wait for server ready
+    for i in range(60):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
+            print(f"[{topic}] llama-server ready ({i+1}s)")
+            break
+        except Exception:
+            time.sleep(1)
+    else:
+        server_proc.terminate()
+        raise RuntimeError("llama-server failed to start within 60s")
+
+    client = OpenAI(
+        api_key="none",
+        base_url=f"http://127.0.0.1:{LLAMA_PORT}/v1",
     )
-    sampling = SamplingParams(
-        temperature=temperature,
-        max_tokens=256,
-        stop=["\n\n\n"],
-    )
+
+    def chat(system: str, user: str) -> str:
+        return client.chat.completions.create(
+            model="local",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user},
+            ],
+            temperature=temperature,
+            max_tokens=256,
+        ).choices[0].message.content.strip()
 
     results = []
     skipped = 0
 
     for scenario in tqdm(scenarios, desc=f"[{topic}] scenarios"):
-        prompts = []
         for _ in range(n_per_scenario):
             # slight scenario variation to encourage diversity
             varied = scenario
@@ -303,23 +361,18 @@ def generate_topic_batch(
             elif random.random() < 0.2:
                 varied = scenario + " (late at night)"
 
-            messages = [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": GENERATION_PROMPT_TEMPLATE.format(scenario=varied)},
-            ]
-            # format for vllm chat template
-            prompts.append(messages)
-
-        outputs = llm.chat(prompts, sampling_params=sampling, use_tqdm=False)
-
-        for i, output in enumerate(outputs):
-            raw = output.outputs[0].text.strip()
-            parsed = validate_example(raw)
-            if parsed is None:
+            try:
+                raw    = chat(SYSTEM_PROMPT, GENERATION_PROMPT_TEMPLATE.format(scenario=varied))
+                parsed = validate_example(raw)
+                if parsed is None:
+                    skipped += 1
+                    continue
+                results.append(build_training_example(scenario, parsed))
+            except Exception as e:
+                print(f"  error: {e}")
                 skipped += 1
-                continue
-            results.append(build_training_example(scenarios[i % len(scenarios)], parsed))
 
+    server_proc.terminate()
     print(f"[{topic}] Generated {len(results)} valid examples, skipped {skipped}")
     return {"topic": topic, "examples": results, "skipped": skipped}
 
@@ -330,16 +383,15 @@ def generate_topic_batch(
 
 @app.local_entrypoint()
 def main(
-    n_per_topic: int = 200,    # examples per topic total
+    n_per_topic: int = 200,
     resume: bool = False,
     seed: int = 42,
 ):
     random.seed(seed)
-    out_dir = Path(OUTPUTS_DIR)
 
-    dataset_path = out_dir / "aiko_persona_dataset.jsonl"
-    stats_path = out_dir / "dataset_stats.json"
-    resume_path = out_dir / "completed_topics.json"
+    dataset_path = Path(OUTPUTS_DIR) / "aiko_persona_dataset.jsonl"
+    stats_path   = Path(OUTPUTS_DIR) / "dataset_stats.json"
+    resume_path  = Path(OUTPUTS_DIR) / "completed_topics.json"
 
     # load completed topics for resume
     completed: set[str] = set()
@@ -354,14 +406,18 @@ def main(
 
     all_examples: list[dict] = []
 
-    # load existing if resuming
-    if resume and dataset_path.exists():
-        with open(dataset_path) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    all_examples.append(json.loads(line))
-        print(f"[resume] Loaded {len(all_examples)} existing examples.")
+    # load existing examples if resuming
+    if resume:
+        try:
+            volume.reload()
+            with open(dataset_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        all_examples.append(json.loads(line))
+            print(f"[resume] Loaded {len(all_examples)} existing examples.")
+        except Exception:
+            pass
 
     topics_to_run = {k: v for k, v in TOPICS.items() if k not in completed}
     n_per_scenario = max(1, n_per_topic // max(1, len(list(topics_to_run.values())[0]))) if topics_to_run else 1
@@ -370,7 +426,7 @@ def main(
     print(f"  Topics to run : {len(topics_to_run)}")
     print(f"  N per topic   : {n_per_topic}")
     print(f"  N per scenario: {n_per_scenario}")
-    print(f"  Teacher model : {TEACHER_MODEL}\n")
+    print(f"  Teacher model : {GGUF_FILENAME}\n")
 
     total_skipped = 0
 
@@ -398,29 +454,29 @@ def main(
     random.shuffle(all_examples)
     n = len(all_examples)
     train_end = int(n * 0.85)
-    val_end = int(n * 0.92)
+    val_end   = int(n * 0.92)
 
     splits = {
         "train": all_examples[:train_end],
-        "val": all_examples[train_end:val_end],
-        "test": all_examples[val_end:],
+        "val":   all_examples[train_end:val_end],
+        "test":  all_examples[val_end:],
     }
 
     for split_name, split_data in splits.items():
-        split_path = out_dir / f"{split_name}_split.jsonl"
+        split_path = Path(OUTPUTS_DIR) / f"{split_name}_split.jsonl"
         with open(split_path, "w") as f:
             for ex in split_data:
                 f.write(json.dumps(ex, ensure_ascii=False) + "\n")
         print(f"  {split_name}: {len(split_data)} examples → {split_path}")
 
     stats = {
-        "total": n,
-        "train": len(splits["train"]),
-        "val": len(splits["val"]),
-        "test": len(splits["test"]),
+        "total":         n,
+        "train":         len(splits["train"]),
+        "val":           len(splits["val"]),
+        "test":          len(splits["test"]),
         "total_skipped": total_skipped,
-        "topics": list(TOPICS.keys()),
-        "teacher_model": TEACHER_MODEL,
+        "topics":        list(TOPICS.keys()),
+        "teacher_model": GGUF_FILENAME,
     }
     stats_path.write_text(json.dumps(stats, indent=2))
     volume.commit()
