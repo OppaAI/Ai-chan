@@ -59,7 +59,11 @@ _REASONING_SCALE = 3
 _IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
 _MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
 _MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
-_ROUTE_LLM = os.getenv("AIKO_ROUTE_LLM", "0").lower() in {"1", "true", "yes", "on"}
+# Let the local model decide ambiguous task-vs-chat turns by default, while
+# keeping hard deterministic guards for reminders and obvious chat-only turns.
+# Set AIKO_ROUTE_LLM=0 on very constrained hardware to fall back to keyword
+# routing.
+_ROUTE_LLM = os.getenv("AIKO_ROUTE_LLM", "1").lower() in {"1", "true", "yes", "on"}
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -239,11 +243,6 @@ class AikoThink:
     def _route_intent(self, user_input: str) -> str:
         """Classify whether a turn needs autonomous task mode or normal chat."""
         text = user_input.lower()
-        matched_skill = skill_route_match(user_input)
-        if matched_skill:
-            return f"skill:{matched_skill.skill_id}"
-        if any(trigger in text for trigger in SKILL_TRIGGERS):
-            return "keyword"
         if re.search(r"\b(wake me|remind me|alarm|timer|every morning|every day|daily)\b", text):
             return "reminder"
         # Social/conversational framing wins even if a factual-looking word
@@ -253,9 +252,15 @@ class AikoThink:
             return "chat"
         if _FACTUAL_RE.search(user_input) or _matches_phrase_pattern(user_input):
             return "chat"
-        if not _ROUTE_LLM:
-            return "chat"
-        return self._classify_agent_intent(user_input)
+        if _ROUTE_LLM:
+            return self._classify_agent_intent(user_input)
+
+        matched_skill = skill_route_match(user_input)
+        if matched_skill:
+            return f"skill:{matched_skill.skill_id}"
+        if any(trigger in text for trigger in SKILL_TRIGGERS):
+            return "keyword"
+        return "chat"
 
     def _classify_agent_intent(self, user_input: str) -> str:
         """Ask the local model for a compact route label when keywords miss."""
@@ -264,7 +269,9 @@ class AikoThink:
                 model=self._llm_model,
                 messages=[{"role": "user", "content": (
                     "Route message. Labels: chat, research, planning, writing, coding, "
-                    "decision, reminder, ongoing_task. Reply one label only.\n"
+                    "architecture, decision, reminder, ongoing_task. "
+                    "Use architecture for requests to inspect, read, debug, or improve "
+                    "Aiko's own codebase/repository. Reply one label only.\n"
                     f"Message: {user_input!r}"
                 )}],
                 stream=False, max_tokens=8, temperature=0.0,
@@ -273,7 +280,7 @@ class AikoThink:
             label = re.sub(r"[^a-z_].*$", "", label)
             if label in {
                 "research", "planning", "writing", "coding",
-                "decision", "reminder", "ongoing_task",
+                "architecture", "decision", "reminder", "ongoing_task",
             }:
                 return label
             self._route_chat_classified = user_input
@@ -716,4 +723,3 @@ def split_stream_sentences(buffer: str) -> tuple[list[str], str]:
             tail = remaining[split_pt + 1:]
             return ([sentence] if sentence else []), tail
     return sentences, remaining
-

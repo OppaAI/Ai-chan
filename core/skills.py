@@ -226,7 +226,7 @@ _ROUTE_ACTION_TERMS = frozenset({
     "create", "debug", "design", "draft", "explain", "fix",
     "help", "implement", "improve", "ingest", "inspect", "learn",
     "lesson", "load", "make", "monitor", "optimize", "plan",
-    "practice", "process", "refactor", "research", "review", "route",
+    "practice", "process", "read", "refactor", "research", "review", "route",
     "schedule", "search", "teach", "update", "use", "watch", "write",
 })
 
