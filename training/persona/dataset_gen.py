@@ -31,7 +31,6 @@ from pathlib import Path
 
 import modal
 import os
-os.makedirs(OUTPUTS_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Modal infra
 # ---------------------------------------------------------------------------
@@ -271,6 +270,7 @@ def generate_topic_batch(
     temperature: float = 0.85,
 ) -> dict:
     """Generate n_per_scenario examples for each scenario in a topic."""
+    os.makedirs(OUTPUTS_DIR, exist_ok=True)
     from vllm import LLM, SamplingParams
     from tqdm import tqdm
 
