@@ -6,13 +6,15 @@ Aiko-chan CLI — entry point and session orchestrator.
 Usage:
     python main.py               # full voice — ASR (SenseVoice + Silero VAD) + TTS (MioTTS)
     python main.py --text        # keyboard input + no TTS
+    python main.py               # browser WebUI (default)
+    python main.py --tui         # curses TUI
     python main.py --debug       # show memory debug info each turn
     python main.py --clear-mem   # wipe all stored memories and exit
 
 Responsibilities:
     - Parse CLI arguments
     - Delegate subsystem boot to core/wakeup.py
-    - Drive the TUI init phase and transition to active chat
+    - Drive the UI init phase and transition to active chat
     - Run the main input → inference → render loop
     - Handle commands (/quit, /reset, /memory, /clear, /remember, /think,
                        /voice, /listen, /web, /help)
@@ -39,6 +41,7 @@ import logging
 from core.silence import silent_stderr
 from core.log     import get_logger
 from core.wakeup  import AikoWakeup
+from core.toolkit.web import web_search
 
 log = get_logger(__name__)
 
@@ -46,6 +49,7 @@ with silent_stderr():
     from core.memorize import AikoMemorize
 
 from tui.tui import AikoTUI
+from webui.aiko_web import AikoWeb
 
 # ── env ───────────────────────────────────────────────────────────────────────
 
@@ -146,6 +150,10 @@ def parse_args():
                    help="keyboard input but keep TTS")
     p.add_argument("--debug",     action="store_true",
                    help="show memory hits each turn")
+    p.add_argument("--tui",       action="store_true",
+                   help="use the legacy curses TUI instead of the default browser WebUI")
+    p.add_argument("--webui",     action="store_true",
+                   help="use the browser WebUI (default; kept for explicit launch scripts)")
     p.add_argument("--clear-mem", action="store_true",
                    help="wipe all stored memories and exit")
     return p.parse_args()
@@ -155,7 +163,7 @@ def parse_args():
 # SESSION ORCHESTRATOR
 # ═════════════════════════════════════════════════════════════════════════════
         
-def _run(stdscr, args):
+def _run_tui(stdscr, args):
     """
     Orchestrate the full session lifecycle from boot to shutdown inside the
     curses wrapper.
@@ -169,7 +177,17 @@ def _run(stdscr, args):
            writes to complete.
     """
     tui = AikoTUI(stdscr, no_voice=args.text, debug=args.debug)
+    _run_session(tui, args)
 
+
+def _run_webui(args):
+    """Launch Aiko with the browser WebUI."""
+    tui = AikoWeb(no_voice=args.text, debug=args.debug)
+    _run_session(tui, args)
+
+
+def _run_session(tui, args):
+    """Run Aiko using any UI object that implements the AikoTUI-compatible API."""
     last_stream_draw = 0.0
 
     def token_cb(token):
@@ -455,7 +473,12 @@ def main():
         log.info("Clearing all memories...")
         AikoMemorize().clear()
         sys.exit(0)
-    curses.wrapper(lambda scr: _run(scr, args))
+    if args.tui and args.webui:
+        raise SystemExit("Choose only one UI: --tui or --webui")
+    if args.tui:
+        curses.wrapper(lambda scr: _run_tui(scr, args))
+    else:
+        _run_webui(args)
 
 
 if __name__ == '__main__':
