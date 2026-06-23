@@ -15,7 +15,6 @@ dependencies = [
     "packaging>=26.2",
     "protobuf>=6.33.6",
     "python-dotenv>=1.0.0",
-    "reazonspeech-k2-asr",
     "requests>=2.34.2",
     "scipy>=1.17.1",
     "sherpa-onnx>=1.13.3",
@@ -32,7 +31,6 @@ dependencies = [
 # no override-dependencies needed
 
 [tool.uv.sources]
-reazonspeech-k2-asr = { path = "../reazonspeech/pkg/k2-asr" }
 onnxruntime-gpu = { index = "ort-cuda-13-nightly" }
 
 [[tool.uv.index]]
