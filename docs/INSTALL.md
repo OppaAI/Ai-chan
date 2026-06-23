@@ -8,7 +8,7 @@ This guide walks through installing every component of the Aiko-chan stack from 
 ## Table of Contents
 
 1. [System Requirements](#1-system-requirements)
-2. [Python 3.10 via pyenv](#2-python-310-via-pyenv)
+2. [Python 3.12 via pyenv](#2-python-312-via-pyenv)
 3. [uv Package Manager](#3-uv-package-manager)
 4. [Docker & Docker Compose](#4-docker--docker-compose)
 5. [SearXNG (via Docker)](#5-searxng-via-docker)
@@ -28,7 +28,7 @@ This guide walks through installing every component of the Aiko-chan stack from 
 | Requirement | Minimum | Notes |
 |---|---|---|
 | OS | Ubuntu 22.04 / 24.04 | Also works on WSL2 |
-| Python | **3.10.x** | `pyproject.toml` is pinned `>=3.10,<3.11` |
+| Python | **3.12.x** | `pyproject.toml` is pinned `>=3.12,<3.13` |
 | RAM | 8 GB | 16 GB recommended for comfort |
 | GPU VRAM | 4 GB | 8 GB for smooth local LLM inference |
 | Storage | 20 GB free | Models are large |
@@ -38,9 +38,9 @@ This guide walks through installing every component of the Aiko-chan stack from 
 
 ---
 
-## 2. Python 3.10 via pyenv
+## 2. Python 3.12 via pyenv
 
-Aiko-chan requires exactly Python **3.10**. Using `pyenv` avoids polluting your system Python.
+Aiko-chan requires Python **3.12**. Using `pyenv` avoids polluting your system Python.
 
 ```bash
 # Install pyenv dependencies
@@ -59,12 +59,12 @@ echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.
 echo 'eval "$(pyenv init -)"' >> ~/.bashrc
 source ~/.bashrc
 
-# Install Python 3.10 and set it as the local default
-pyenv install 3.10.14
-pyenv global 3.10.14
+# Install Python 3.12 and set it as the local default
+pyenv install 3.12.13
+pyenv global 3.12.13
 
 # Confirm
-python --version   # should print Python 3.10.14
+python --version   # should print Python 3.12.x
 ```
 
 ---
@@ -228,6 +228,11 @@ SEARXNG_SECRET=<your_secret_from_searxng_settings.yml>
 
 # MioTTS (leave blank or point to a dummy URL to disable voice)
 MIOTTS_API_URL=http://localhost:8001
+
+# ASR — SenseVoice via sherpa-onnx + Silero VAD
+ASR_DEVICE=cpu
+ASR_LANGUAGE=auto
+ASR_MODEL=csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
 ```
 
 The `SEARXNG_SECRET` must match the `secret_key` value inside `searxng/settings.yml`.
@@ -237,7 +242,7 @@ The `SEARXNG_SECRET` must match the `secret_key` value inside `searxng/settings.
 ## 10. Install Python Dependencies
 
 ```bash
-# From the project root with Python 3.10 active
+# From the project root with Python 3.12 active
 uv sync
 ```
 
@@ -320,8 +325,12 @@ curl http://localhost:8001/health
 # Expected: {"status":"ok"} or similar
 
 # 4. Python environment
-uv run python -c "import sqlite_vec; print('deps OK')"
+uv run python -c "import sqlite_vec; import sherpa_onnx; import silero_vad; print('deps OK')"
 # Expected: deps OK
+
+# 5. ASR model cache (first voice launch downloads SenseVoice files if absent)
+uv run python -c "from core.listen import ASR_MODEL; print(ASR_MODEL)"
+# Expected: csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17 or your override
 ```
 
 ---
@@ -357,6 +366,7 @@ On first launch Aiko will:
 | `uv sync` fails — wheel not found | Jetson wheel path wrong | Update path in `pyproject.toml` → Section 12b |
 | SearXNG returns 403 | Wrong `SEARXNG_SECRET` | Match secret in `.env` and `searxng/settings.yml` |
 | Ollama model not found | Model not pulled | `ollama pull <model>` → Section 8 |
-| No TTS audio on Jetson | Wrong PulseAudio sink | `pactl set-default-sink` → Section 12e |
+| No TTS audio on Jetson | Wrong PulseAudio sink | `pactl set-default-sink` → Section 11e |
+| ASR import/model error | Missing sherpa-onnx/SenseVoice deps or model cache | Run `uv sync`, then launch once online or set `HF_HUB_OFFLINE=0` |
 | LLM ignores search results | Model too small (< 7B) | Pull a 7B+ model → Section 8 |
 | `curses` import error | Running inside a non-TTY | Run in a real terminal, not a pipe |

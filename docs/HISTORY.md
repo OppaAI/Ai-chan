@@ -68,7 +68,7 @@ Major additions:
 - token streaming
 - callback-based architecture
 - decoupled TTS pipeline
-- Kokoro TTS integration
+- Kokoro TTS integration, later replaced by MioTTS after Jetson OOM/latency/quality testing
 - persona framework
 - identity framework
 
@@ -90,9 +90,9 @@ Goal:
 
 Major additions:
 
-- faster-whisper
+- SenseVoice via sherpa-onnx for active ASR
 - Silero VAD
-- microphone capture
+- microphone capture via PulseAudio `parec`
 - hands-free interaction
 - barge-in interruption
 
@@ -104,12 +104,44 @@ Major architectural change:
 - fastembed adopted
 - custom retrieval pipeline implemented
 
+
+Voice backend trials:
+
+- Kokoro TTS was useful early, but removed from the active runtime after OOM/latency/quality tradeoffs on Jetson.
+- RealtimeTTS was tried and removed from the active runtime for the same constrained-hardware reasons.
+- MioTTS became the active TTS server because it fits Aiko's current voice pipeline best.
+- faster-whisper was used as an ASR prototype and archived.
+- ReazonSpeech K2 was tried and archived; the active ASR path is now SenseVoice through sherpa-onnx with Silero VAD.
+
 Lessons learned:
 
 - Simpler systems are often more reliable.
 - Removing dependencies can be more valuable than adding features.
 - Local-first design requires ruthless resource discipline.
 - Memory management is harder than memory storage.
+
+---
+
+# Phase 2.5 — Agent
+
+Goal:
+
+> Give Aiko a repeatable task layer between voice interaction and visible embodiment.
+
+Major additions:
+
+- `core/toolkit/` focused tool modules
+- `core/tools.py` compatibility facade
+- `skills/<id>/SKILL.md` workflow documents
+- skill discovery and retrieval in `core/skills.py`
+- agentic task-mode skill context injection
+- initial `wildlife_photo` and `aiko_architect` skills
+
+Lessons learned:
+
+- Tools are executable abilities; skills are repeatable workflows.
+- Markdown skill files are for humans and prompts; Python toolkit modules are for actions.
+- `core/tools.py` remains useful as a stable public facade even when implementations move into `core/toolkit/`.
 
 ---
 

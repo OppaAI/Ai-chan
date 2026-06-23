@@ -41,7 +41,7 @@ from core.health import _ram_used_str, _db_size_str, _fmt_uptime
 
 LLM_BASE_URL  = os.getenv("LLM_BASE_URL", "unknown")
 LLM_MODEL     = os.getenv("LLM_MODEL", "unknown")
-ASR_MODEL     = os.getenv("ASR_MODEL", os.getenv("ASR_MODE", "csukuangfj/reazonspeech-k2-v2-ja-en"))
+ASR_MODEL     = os.getenv("ASR_MODEL", os.getenv("ASR_MODE", "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"))
 MIOTTS_MODEL  = os.getenv("MIOTTS_MODEL", "MioTTS 0.4B")
 SEARXNG_URL   = os.getenv("SEARXNG_URL",   "localhost:8080")
 AI_NAME       = os.getenv("AI_NAME", "Aiko")
@@ -143,7 +143,7 @@ INIT_STEPS = {
     'speak_miotts':     ('TTS Engine',       f'Initializing MioTTS  ·  {os.getenv("MIOTTS_PRESET", "jp_female")}'),
     'speak_ready':      ('Voice Output',     'Audio pipeline ready  ·  24 kHz'),
     'speak_skip':       ('Voice Output',     'TTS disabled  (--text mode)'),
-    'listen_ready':     ('Speech Input',     f'ReazonSpeech ready  ·  {ASR_MODEL}'),
+    'listen_ready':     ('Speech Input',     f'SenseVoice ready  ·  {ASR_MODEL}'),
     'listen_skip':      ('Speech Input',     'ASR disabled  (--text mode)'),
 }
 
