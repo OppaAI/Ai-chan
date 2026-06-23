@@ -1304,6 +1304,10 @@ class AikoMemorize:
         """Retrieve the raw embedding vector for a single memory."""
         return _sqlite_get_vector(self._conn, mem_id)
 
+    def embed_text(self, text: str) -> list[float]:
+        """Embed one text string with the configured memory embedding model."""
+        return self._mem._embed(text)
+
     def _is_pinned(self, mem_id: str) -> bool:
         """Return True if memories.pinned == 1 for this id."""
         return _sqlite_is_pinned(self._conn, mem_id)
