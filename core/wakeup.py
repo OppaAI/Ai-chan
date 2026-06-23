@@ -50,6 +50,19 @@ class BootResult:
     listen:   object | None   # AikoListen — None in text mode
 
 
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _prewarm_semantic_cache(think) -> None:
+    """Embed route and search exemplars at boot so first-turn latency is cold-free."""
+    from core.think import _SEMANTIC_ROUTE_EXAMPLES, _SEMANTIC_SEARCH_EXAMPLES
+    try:
+        think._semantic_example_vectors(_SEMANTIC_ROUTE_EXAMPLES)
+        think._semantic_example_vectors(_SEMANTIC_SEARCH_EXAMPLES)
+        log.info("[wakeup] Semantic exemplar cache warmed")
+    except Exception as e:
+        log.warning("[wakeup] Semantic exemplar prewarm failed: %s", e)
+
+
 # ── wakeup ────────────────────────────────────────────────────────────────────
 
 class AikoWakeup:
@@ -118,8 +131,9 @@ class AikoWakeup:
             on_loading('think_warmup')
             think_ref[0].join_warmup()
             on_done('think_warmup')
-            mem_ready.wait()                       # hold until memorize is ready
-            think_ref[0]._memorize = memorize[0]   # inject memory backend
+            mem_ready.wait()                        # hold until memorize is ready
+            think_ref[0]._memorize = memorize[0]    # inject memory backend
+            _prewarm_semantic_cache(think_ref[0])   # embed exemplars while booting
 
         def init_memorize():
             try:
