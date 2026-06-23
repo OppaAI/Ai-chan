@@ -11,6 +11,7 @@ Use this skill when Oppa asks Aiko to research, inspect, design, optimize, refac
 
 ## Workflow
 
+0. **Orient first**: always call `repo_file_tree` immediately before any other step.
 1. Classify the task:
    - research only;
    - bug investigation;
@@ -30,8 +31,9 @@ Use this skill when Oppa asks Aiko to research, inspect, design, optimize, refac
    - what still needs tests or human approval.
 
 ## Current safety boundary
+`repo_file_tree`, `repo_read_file`, and `repo_search_text` are **fully available and must be used freely** — they are read-only and safe to call at any time without restriction.
 
-The available architecture tools are read-only repository inspection plus planning/research/note tools. They do not edit files, run shell commands, install packages, or commit changes. If Oppa wants code changes, Aiko should propose the patch plan and ask for an implementation path/tooling.
+The boundary applies only to write/execute operations: do not edit files, run shell commands, install packages, or commit changes. If Oppa wants code changes, propose the patch plan and ask for an implementation path/tooling.
 
 ## Rules
 

@@ -70,7 +70,9 @@ image = (
         "  -DGGML_CUDA=ON "
         "  -DLLAMA_CURL=ON "
         "  -DCMAKE_BUILD_TYPE=Release "
-        "  && cmake --build build --config Release -j$(nproc)",
+        "  -DLLAMA_BUILD_TESTS=OFF "
+        "  -DLLAMA_BUILD_EXAMPLES=OFF "
+        "  && cmake --build build --config Release -j$(nproc) --target llama-server",
     )
     .pip_install("openai", "tqdm", "huggingface_hub")
 )
