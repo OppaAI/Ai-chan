@@ -231,6 +231,7 @@ class AikoThink:
         self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
         self._llm_model = LLM_MODEL
         self._memorize  = memorize
+        self._route_cache = self._precompute_route_vectors()
         self._speak     = speak
         self._persona   = _load_persona()
         self._history:  list[dict] = []
@@ -252,7 +253,19 @@ class AikoThink:
 
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
         self._warmup_thread.start()
-
+      
+    def _precompute_route_vectors(self) -> dict:
+        try:
+            cache = {}
+            for label, examples in _SEMANTIC_ROUTE_EXAMPLES.items():
+                cache[label] = [self._memorize.embed_text(ex) for ex in examples]
+            log.info("[route] Precomputed %d intent exemplar vectors", 
+                     sum(len(v) for v in cache.values()))
+            return cache
+        except Exception as e:
+            log.warning("[route] Exemplar precompute failed, will embed at runtime: %s", e)
+            return {}  # _semantic_agent_intent checks for empty cache → falls back to LLM
+        
     def _warmup_llm(self) -> None:
         try:
             self._client.chat.completions.create(
@@ -300,24 +313,16 @@ class AikoThink:
         return sum(x * y for x, y in zip(a, b)) / (denom_a * denom_b)
 
     def _semantic_agent_intent(self, user_input: str) -> str:
-        """Classify agentic intent by embedding similarity to route examples."""
+        if not self._route_cache:
+            return self._classify_agent_intent(user_input)
         try:
-            prompts = [user_input]
-            labels: list[str] = []
-            for label, examples in _SEMANTIC_ROUTE_EXAMPLES.items():
-                labels.extend([label] * len(examples))
-                prompts.extend(examples)
-
-            vectors = [self._memorize.embed_text(text) for text in prompts]
-            query_vector = vectors[0]
-            best_label = "chat"
-            best_score = 0.0
-            for label, vector in zip(labels, vectors[1:]):
-                score = self._cosine_similarity(query_vector, vector)
+            query_vec = self._memorize.embed_text(user_input)
+            best_label, best_score = "chat", 0.0
+            for label, vecs in self._route_cache.items():
+                score = max(self._cosine_similarity(query_vec, v) for v in vecs)
                 if score > best_score:
-                    best_label = label
-                    best_score = score
-
+                    best_label, best_score = label, score
+    
             log.debug("[route] Semantic route best=%s score=%.3f for: %r", best_label, best_score, user_input)
             if best_score >= _SEMANTIC_ROUTE_THRESHOLD:
                 return best_label
