@@ -220,7 +220,7 @@ flowchart TD
     Queue --> Extract[Memory extraction / write]
     Extract --> Store[(sqlite-vec memory store)]
 
-    UserRemember[/remember command] --> Pin[core.memorize.pin]
+    UserRemember["/remember command"] --> Pin[core.memorize.pin]
     Pin --> Store
 
     Store --> Recall[Relevant recall before normal chat and task mode]
