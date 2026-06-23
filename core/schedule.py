@@ -122,7 +122,12 @@ def _normalize_relative_days(relative_days: int | str | None = None) -> int | No
         if text in RELATIVE_DAY_ALIASES:
             days = RELATIVE_DAY_ALIASES[text]
         else:
-            days = int(text)
+            try:
+                days = int(text)
+            except ValueError:
+                raise ValueError(
+                    f"relative_days must be a day count or known phrase, got: {relative_days!r}"
+                ) from None
     if not (0 <= days <= 366):
         raise ValueError("relative_days must be between 0 and 366")
     return days
@@ -187,6 +192,10 @@ def calculate_next_due(
     tz_name = timezone or DEFAULT_TIMEZONE
     now = after.astimezone(_timezone(tz_name)) if after else _now(tz_name)
     relative_offset = _normalize_relative_days(relative_days)
+    if relative_offset is not None and frequency in {"weekdays", "custom_weekdays", "weekly", "monthly"}:
+        raise ValueError(
+            "relative_days is only supported for once, hourly, daily, and biweekly schedules"
+        )
     candidate = _candidate_at(now, time_of_day, relative_offset)
 
     if frequency in {"once", "daily"}:
