@@ -519,10 +519,17 @@ animate();
 const loader = new GLTFLoader();
 loader.register(parser => new VRMLoaderPlugin(parser));
 
+const VRM_URL = './assets/Aiko.vrm';
+
+if (window.location.protocol === 'file:') {
+  loadMsg.textContent = 'error: open Aiko via `python main.py` or http://localhost:8787/ — browsers block VRM fetches from file://';
+  throw new Error('Aiko WebUI must be served over HTTP so assets/Aiko.vrm can be fetched.');
+}
+
 loadMsg.textContent = 'loading Aiko.vrm…';
 fill.style.width = '5%';
 
-loader.load('./assets/Aiko.vrm',
+loader.load(VRM_URL,
   (gltf) => {
     fill.style.width = '95%';
     loadMsg.textContent = 'building model…';
@@ -553,7 +560,8 @@ loader.load('./assets/Aiko.vrm',
     fill.style.width = (5 + p * 88) + '%';
   },
   (err) => {
-    loadMsg.textContent = 'error: ' + err.message;
+    const detail = err?.message || String(err);
+    loadMsg.textContent = `error loading ${VRM_URL}: ${detail}. Start with python main.py and open http://localhost:8787/ instead of file://.`;
     console.error('[aiko-vrm]', err);
   }
 );
