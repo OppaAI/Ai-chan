@@ -521,6 +521,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "Use <skill_context> when it matches the task. For repeatable workflows, "
         "prefer the predefined skill's workflow and tools over inventing a new process. "
         "If no matching skill exists, continue with generic tools."
+        "CRITICAL: When asked to save a file, call save_note BEFORE writing "
+        "any content in chat. Do not describe what you will save — just save it. "
+        "Never say 'I'll now open a file' or 'I'll generate' — call the tool immediately. "
     )
     messages = [
         {"role": "system", "content": agent_system},
