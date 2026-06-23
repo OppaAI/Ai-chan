@@ -31,7 +31,7 @@ from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import deep_search
 from core.agentic  import run_agentic_chat
-from core.skills   import load_skills, skill_route_match
+from core.skills   import load_skills
 from core.log      import get_logger
 from core.schedule import DueJob, ScheduleRunner
 from core.experience import append_chat_turn
@@ -59,11 +59,12 @@ _REASONING_SCALE = 3
 _IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
 _MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
 _MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
-# Let the local model decide ambiguous task-vs-chat turns by default, while
-# keeping hard deterministic guards for reminders and obvious chat-only turns.
-# Set AIKO_ROUTE_LLM=0 on very constrained hardware to fall back to keyword
-# routing.
-_ROUTE_LLM = os.getenv("AIKO_ROUTE_LLM", "1").lower() in {"1", "true", "yes", "on"}
+# Route task-vs-chat turns semantically by default using the same embedding
+# model as memory/RAG. Set AIKO_ROUTE_MODE=llm to let the local LLM classify
+# instead, or AIKO_ROUTE_MODE=chat to disable autonomous routing.
+_ROUTE_ENABLED = os.getenv("AIKO_ROUTE_ENABLED", os.getenv("AIKO_ROUTE_LLM", "1")).lower() in {"1", "true", "yes", "on"}
+_ROUTE_MODE = os.getenv("AIKO_ROUTE_MODE", "semantic").strip().lower()
+_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("AIKO_ROUTE_SEMANTIC_THRESHOLD", "0.36"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -110,8 +111,9 @@ def _load_persona() -> str:
 #                      "who won the game", "what's the weather", "when does
 #                      the new model release".
 #
-# If none of these match, intent falls through to the LLM classifier (when
-# AIKO_ROUTE_LLM is enabled) or defaults to plain chat.
+# Agentic routing itself does not use these keyword/regex signals. They are
+# only used later inside normal chat to decide whether the answer needs live
+# search context.
 
 _SOCIAL_SIGNALS = frozenset([
     "wanna", "want to", "would you", "shall we",
@@ -173,13 +175,54 @@ def _matches_phrase_pattern(text: str) -> bool:
     return any(p.search(text) for p in _PHRASE_PATTERNS)
 
 
-SKILL_TRIGGERS = [
-    "research", "deep dive", "compare", "vs", "which is better", "difference between",
-    "plan", "step by step", "help me", "organize", "checklist", "schedule",
-    "draft", "write", "make a", "create a", "build", "debug", "fix", "learn",
-    "apply", "prepare", "autonomous", "agent", "task",
-    "every monday", "weekly", "biweekly", "monthly", "weekdays",
-]
+_SEMANTIC_ROUTE_EXAMPLES: dict[str, tuple[str, ...]] = {
+    "chat": (
+        "talk with me normally",
+        "answer this casual question conversationally",
+        "what is the weather today",
+        "what happened in the news today",
+    ),
+    "reminder": (
+        "remind me to do this tomorrow",
+        "wake me up at six in the morning",
+        "set an alarm for this time",
+    ),
+    "research": (
+        "research this topic and summarize what you find",
+        "look into this question and give me sourced findings",
+        "compare these options and report the tradeoffs",
+    ),
+    "planning": (
+        "make a step by step plan for this project",
+        "turn this goal into an organized checklist",
+        "break this task down into next actions",
+    ),
+    "writing": (
+        "draft this message for me",
+        "write a note or document from these details",
+        "prepare a clean response I can send",
+    ),
+    "coding": (
+        "debug this code problem",
+        "explain how this code works and what to change",
+        "help implement this programming task",
+    ),
+    "architecture": (
+        "inspect Aiko's own codebase",
+        "read the repository and explain how this part works",
+        "debug or improve Aiko's architecture",
+    ),
+    "decision": (
+        "help me decide between these choices",
+        "evaluate the options and recommend one",
+        "score the tradeoffs for this decision",
+    ),
+    "ongoing_task": (
+        "track this task and update progress",
+        "continue the task we were working on",
+        "manage this ongoing project state",
+    ),
+}
 
 # ── think ─────────────────────────────────────────────────────────────────────
 
@@ -242,25 +285,48 @@ class AikoThink:
 
     def _route_intent(self, user_input: str) -> str:
         """Classify whether a turn needs autonomous task mode or normal chat."""
-        text = user_input.lower()
-        if re.search(r"\b(wake me|remind me|alarm|timer|every morning|every day|daily)\b", text):
-            return "reminder"
-        # Social/conversational framing wins even if a factual-looking word
-        # also appears in the same message (e.g. "what do you think, wanna
-        # grab coffee today?").
-        if _SOCIAL_RE.search(user_input):
+        if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
             return "chat"
-        if _FACTUAL_RE.search(user_input) or _matches_phrase_pattern(user_input):
-            return "chat"
-        if _ROUTE_LLM:
+        if _ROUTE_MODE == "llm":
             return self._classify_agent_intent(user_input)
+        return self._semantic_agent_intent(user_input)
 
-        matched_skill = skill_route_match(user_input)
-        if matched_skill:
-            return f"skill:{matched_skill.skill_id}"
-        if any(trigger in text for trigger in SKILL_TRIGGERS):
-            return "keyword"
-        return "chat"
+    @staticmethod
+    def _cosine_similarity(a: list[float], b: list[float]) -> float:
+        denom_a = sum(x * x for x in a) ** 0.5
+        denom_b = sum(x * x for x in b) ** 0.5
+        if not denom_a or not denom_b:
+            return 0.0
+        return sum(x * y for x, y in zip(a, b)) / (denom_a * denom_b)
+
+    def _semantic_agent_intent(self, user_input: str) -> str:
+        """Classify agentic intent by embedding similarity to route examples."""
+        try:
+            prompts = [user_input]
+            labels: list[str] = []
+            for label, examples in _SEMANTIC_ROUTE_EXAMPLES.items():
+                labels.extend([label] * len(examples))
+                prompts.extend(examples)
+
+            vectors = [self._memorize.embed_text(text) for text in prompts]
+            query_vector = vectors[0]
+            best_label = "chat"
+            best_score = 0.0
+            for label, vector in zip(labels, vectors[1:]):
+                score = self._cosine_similarity(query_vector, vector)
+                if score > best_score:
+                    best_label = label
+                    best_score = score
+
+            log.debug("[route] Semantic route best=%s score=%.3f for: %r", best_label, best_score, user_input)
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD:
+                return best_label
+            return "chat"
+        except Exception as e:
+            log.warning("Semantic intent routing failed: %s", e)
+            if _ROUTE_MODE == "semantic_only":
+                return "chat"
+            return self._classify_agent_intent(user_input)
 
     def _classify_agent_intent(self, user_input: str) -> str:
         """Ask the local model for a compact route label when keywords miss."""
@@ -574,7 +640,7 @@ class AikoThink:
         if self._route_chat_classified == user_input:
             self._route_chat_classified = None
             return False
-        if not _ROUTE_LLM:
+        if not _ROUTE_ENABLED:
             return False
         is_data, resolved_query = self._classify_and_resolve(user_input)
         self._pending_search_query = resolved_query if is_data else None
