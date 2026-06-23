@@ -62,8 +62,8 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Feature | Status |
 |---|---|
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
-| Microphone capture with SenseVoice via sherpa-onnx | 🔲 Planned |
-| Voice Activity Detection via Silero VAD | 🔲 Planned |
+| Microphone capture with SenseVoice via sherpa-onnx | ✅ Done |
+| Voice Activity Detection via Silero VAD | ✅ Done |
 | Interactive Talk mode (hands-free conversation) | 🔲 Planned |
 | Interrupt handling — speak over Aiko mid-response | 🔲 Planned |
 | Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Planned |
@@ -74,11 +74,11 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Area | Tried | Current decision | Reason |
 |---|---|---|---|
-| TTS | Kokoro, RealtimeTTS | Removed | OOM/latency/quality tradeoffs on Jetson; kept archived experiments only |
-| TTS | MioTTS | Active | Best current voice runtime for Aiko's local stack |
-| ASR | faster-whisper prototype | Removed from active runtime | Useful prototype, but heavier and less aligned with current Jetson constraints |
-| ASR | ReazonSpeech K2 | Removed from active runtime | Kept as trial/archive; current listener moved to SenseVoice via sherpa-onnx |
-| ASR | SenseVoice via sherpa-onnx + Silero VAD | Active | CPU-friendly int8 ONNX path with multilingual support and stable VAD gating |
+| TTS | Kokoro, RealtimeTTS | ❌Removed | Slightly robotic voice quality; Japanese voice speaking English non-understandable |
+| TTS | MioTTS | ✅Active | Best current voice runtime for Aiko's local stack; Able to speak Japanee and English in a same sentence |
+| ASR | faster-whisper prototype | ❌Removed | Useful prototype, but heavier and less aligned with current Jetson constraints |
+| ASR | ReazonSpeech K2 | ❌Removed | Good for Japanese only; Cannot understand English too well |
+| ASR | SenseVoice via sherpa-onnx + Silero VAD | ✅Active | CPU-friendly int8 ONNX path with multilingual support and stable VAD gating |
 
 ---
 
@@ -91,9 +91,9 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Feature | Status |
 |---|---|
 | ReAct-style task loop with tool dispatch | ✅ Done |
-| Persistent schedule jobs with `action=agentic` | ✅ Done |
-| `core/toolkit/` focused tool modules | ✅ Done |
-| `skills/<id>/SKILL.md` workflow registry | ✅ Done |
+| Persistent schedule jobs with reminder | ✅ Done |
+| Toolkit set Agentic-focused tool modules | ✅ Done |
+| Agentic skill workflow registry | ✅ Done |
 | Skill-context retrieval in agentic mode | ✅ Done |
 | Initial wildlife-photo and Aiko-architecture skills | ✅ Done |
 | Safer code-edit/review workflow for self-improvement | 🔲 Planned |
