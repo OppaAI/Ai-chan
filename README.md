@@ -55,7 +55,7 @@ flowchart TD
     THINK <-->|async| MEM[Memory\nsqlite-vec + fastembed]
     THINK <-->|on demand| SEARCH[Web search\nSearXNG]
     THINK --> SPEAK[Speak\nMioTTS]
-    LISTEN[Listen\nSenseVoice (sherpa-onnx) + Silero VAD] --> THINK
+    LISTEN["Listen\nSenseVoice (sherpa-onnx) + Silero VAD"] --> THINK
     THINK -.->|nightly| DREAM[Dream\nconsolidation]
     DREAM -.->|optional| REFLECT[Reflect\nHugo + GitHub]
 ```
