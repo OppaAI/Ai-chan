@@ -184,6 +184,8 @@ class AikoThink:
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
         self._route_chat_classified: str | None = None
+        self._semantic_example_cache: dict[int, tuple[list[str], list[list[float]]]] = {}
+        self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
         self._reasoning = False
         self._mem_queue  = queue.Queue()
@@ -262,22 +264,42 @@ class AikoThink:
 
     def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float]:
         """Return the closest semantic label and cosine score for a prompt."""
-        prompts = [user_input]
-        labels: list[str] = []
-        for label, examples in examples_by_label.items():
-            labels.extend([label] * len(examples))
-            prompts.extend(examples)
-
-        vectors = [self._memorize.embed_text(text) for text in prompts]
-        query_vector = vectors[0]
+        query_vector = self._memorize.embed_text(user_input)
+        labels, example_vectors = self._semantic_example_vectors(examples_by_label)
         best_label = "chat"
         best_score = 0.0
-        for label, vector in zip(labels, vectors[1:]):
+        for label, vector in zip(labels, example_vectors):
             score = self._cosine_similarity(query_vector, vector)
             if score > best_score:
                 best_label = label
                 best_score = score
         return best_label, best_score
+
+    def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], list[list[float]]]:
+        """Return cached embeddings for a static semantic example corpus."""
+        cache_key = id(examples_by_label)
+        cache = getattr(self, "_semantic_example_cache", None)
+        cache_lock = getattr(self, "_semantic_example_cache_lock", None)
+        if cache is None:
+            cache = self._semantic_example_cache = {}
+        if cache_lock is None:
+            cache_lock = self._semantic_example_cache_lock = threading.RLock()
+
+        with cache_lock:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                return cached
+
+            labels: list[str] = []
+            prompts: list[str] = []
+            for label, examples in examples_by_label.items():
+                labels.extend([label] * len(examples))
+                prompts.extend(examples)
+
+            vectors = [self._memorize.embed_text(text) for text in prompts]
+            cached = (labels, vectors)
+            cache[cache_key] = cached
+            return cached
 
     def _classify_agent_intent(self, user_input: str) -> str:
         """Ask the local model for a compact route label when keywords miss."""
@@ -587,26 +609,25 @@ class AikoThink:
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
             return False
         if _ROUTE_MODE != "llm":
-            is_data = self._semantic_data_intent(user_input)
-            self._pending_search_query = user_input if is_data else None
+            is_data, query = self._semantic_data_intent(user_input)
+            self._pending_search_query = query if is_data else None
             return is_data
         is_data, resolved_query = self._classify_and_resolve(user_input)
         self._pending_search_query = resolved_query if is_data else None
         return is_data
 
-    def _semantic_data_intent(self, user_input: str) -> bool:
+    def _semantic_data_intent(self, user_input: str) -> tuple[bool, str]:
         """Classify normal-chat web-search need by embedding similarity."""
         try:
             best_label, best_score = self._semantic_best_label(user_input, _SEMANTIC_SEARCH_EXAMPLES)
             log.debug("[search] Semantic route best=%s score=%.3f for: %r", best_label, best_score, user_input)
-            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD
+            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD, user_input
         except Exception as e:
             log.warning("Semantic search intent routing failed: %s", e)
             if _ROUTE_MODE == "semantic_only":
-                return False
+                return False, user_input
             is_data, resolved_query = self._classify_and_resolve(user_input)
-            self._pending_search_query = resolved_query if is_data else None
-            return is_data
+            return is_data, resolved_query
 
     def _classify_and_resolve(self, user_input: str) -> tuple[bool, str]:
         with self._history_lock:
