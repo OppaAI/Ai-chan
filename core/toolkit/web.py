@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
+import socket
 from urllib.parse import urlparse
 
 import importlib
@@ -44,11 +46,31 @@ def web_search(query: str, max_results: int = MAX_RESULTS) -> str:
     return "\n\n".join(lines)
 
 
+def _is_private_or_local_host(hostname: str) -> bool:
+    try:
+        for _family, _type, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
+            raw_ip = sockaddr[0]
+            ip = ipaddress.ip_address(raw_ip.split("%")[0])
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+            ):
+                return True
+        return False
+    except OSError:
+        return True
+
+
 def fetch_and_extract(url: str, max_chars: int = 4000) -> str:
     """Fetch a URL and extract its main article/body text with trafilatura."""
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"}:
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return f"[fetch failed: unsupported URL scheme: {parsed.scheme or 'none'}]"
+    if _is_private_or_local_host(parsed.hostname):
+        return "[fetch failed: URL host is not allowed]"
     if importlib.util.find_spec("trafilatura") is None:
         return "[fetch failed: trafilatura is not installed]"
     trafilatura = importlib.import_module("trafilatura")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timezone
+from itertools import islice
 from pathlib import Path
 
 from core.toolkit.common import WORKSPACE_ROOT, json_block, now_stamp, safe_path, slugify
@@ -13,17 +14,20 @@ DEFAULT_PHOTO_INBOX = "photos/inbox"
 DEFAULT_PHOTO_REPORTS = "photos/reports"
 
 
-def _image_files(root: Path) -> list[Path]:
+def _image_files(root: Path, limit: int | None = None) -> list[Path]:
     if not root.exists():
         return []
-    return sorted(p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    matches = (p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    if limit is not None:
+        matches = islice(matches, limit)
+    return list(matches)
 
 
 def scan_photo_workspace(inbox: str = DEFAULT_PHOTO_INBOX, limit: int = 100) -> str:
     """Scan a workspace photo inbox for image files Aiko can ingest."""
     try:
         root = safe_path(inbox)
-        files = _image_files(root)[: max(1, min(limit, 1000))]
+        files = _image_files(root, max(1, min(limit, 1000)))
         by_ext = Counter(p.suffix.lower() for p in files)
         return json_block("photo workspace scan", {
             "inbox": str(root),
@@ -41,9 +45,9 @@ def propose_photo_ingestion(inbox: str = DEFAULT_PHOTO_INBOX, library_root: str 
     """Create a safe dry-run ingestion plan for untracked photos."""
     try:
         root = safe_path(inbox)
-        files = _image_files(root)
+        files = _image_files(root, 100)
         planned = []
-        for path in files[:100]:
+        for path in files:
             rel = path.relative_to(WORKSPACE_ROOT)
             stem_slug = slugify(path.stem, fallback="photo")
             planned.append({

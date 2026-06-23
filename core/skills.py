@@ -32,10 +32,14 @@ class SkillDoc:
     tools: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
+        try:
+            display_path = str(self.path.resolve().relative_to(SKILL_ROOT.resolve()))
+        except ValueError:
+            display_path = self.path.name
         return {
             "skill_id": self.skill_id,
             "name": self.name,
-            "path": str(self.path),
+            "path": display_path,
             "summary": self.summary,
             "triggers": list(self.triggers),
             "tools": list(self.tools),
@@ -157,7 +161,10 @@ def discover_skill_docs(root: str | Path = SKILL_ROOT) -> list[SkillDoc]:
     docs: list[SkillDoc] = []
     for skill_file in sorted(base.glob("*/SKILL.md")):
         skill_id = skill_file.parent.name
-        raw = skill_file.read_text(encoding="utf-8")
+        try:
+            raw = skill_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
         meta, body = _front_matter(raw)
         docs.append(SkillDoc(
             skill_id=meta.get("id", skill_id),
@@ -208,7 +215,10 @@ def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:
     cleaned = skill_id.strip().replace("/", "").replace("\\", "")
     for doc in discover_skill_docs():
         if doc.skill_id == cleaned or doc.path.parent.name == cleaned:
-            text = doc.path.read_text(encoding="utf-8")[:max(1, min(max_chars, 50_000))]
+            try:
+                text = doc.path.read_text(encoding="utf-8", errors="replace")[:max(1, min(max_chars, 50_000))]
+            except OSError as e:
+                return f"[skill load failed: {e}]"
             return f"<skill id=\"{doc.skill_id}\" name=\"{doc.name}\">\n{text}\n</skill>"
     return f"[skill not found: {skill_id}]"
 

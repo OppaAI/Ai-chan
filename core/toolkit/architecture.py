@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import islice
 from pathlib import Path
 
 from core.toolkit.common import json_block
@@ -24,8 +25,13 @@ def _iter_repo_files(root: Path = REPO_ROOT):
     for path in root.rglob("*"):
         if any(part in _SKIP_DIRS for part in path.relative_to(REPO_ROOT).parts):
             continue
-        if path.is_file() and path.suffix.lower() in _ALLOWED_TEXT_SUFFIXES:
-            yield path
+        if not path.is_file():
+            continue
+        resolved = path.resolve()
+        if resolved != REPO_ROOT and REPO_ROOT not in resolved.parents:
+            continue
+        if resolved.suffix.lower() in _ALLOWED_TEXT_SUFFIXES:
+            yield resolved
 
 
 def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
@@ -33,9 +39,11 @@ def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
     try:
         base = _safe_repo_path(prefix) if prefix else REPO_ROOT
         if base.is_file():
+            if base.suffix.lower() not in _ALLOWED_TEXT_SUFFIXES:
+                return f"[repo tree failed: unsupported file type: {base.suffix}]"
             files = [base]
         else:
-            files = list(_iter_repo_files(base))[: max(1, min(limit, 1000))]
+            files = list(islice(_iter_repo_files(base), max(1, min(limit, 1000))))
         return json_block("repo file tree", {
             "root": str(REPO_ROOT),
             "prefix": prefix or ".",
@@ -66,7 +74,12 @@ def repo_search_text(query: str, prefix: str = "", limit: int = 50) -> str:
         if not needle:
             return "[repo search failed: empty query]"
         base = _safe_repo_path(prefix) if prefix else REPO_ROOT
-        files = [base] if base.is_file() else _iter_repo_files(base)
+        if base.is_file():
+            if base.suffix.lower() not in _ALLOWED_TEXT_SUFFIXES:
+                return f"[repo search failed: unsupported file type: {base.suffix}]"
+            files = [base]
+        else:
+            files = _iter_repo_files(base)
         matches = []
         for path in files:
             try:
