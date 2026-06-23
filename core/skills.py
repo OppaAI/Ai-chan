@@ -13,6 +13,7 @@ conversation state.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -208,6 +209,65 @@ def search_skillsets(query: str, limit: int = 3) -> list[SkillDoc]:
 def search_skillsets_json(query: str, limit: int = 3) -> str:
     """Return matching skill workflows as JSON text for agent tools."""
     return json.dumps({"query": query, "matches": [doc.as_dict() for doc in search_skillsets(query, limit)]}, ensure_ascii=False, indent=2)
+
+
+def _contains_route_phrase(text: str, phrase: str) -> bool:
+    """Return true when a route phrase appears as a phrase or whole word."""
+    needle = phrase.strip().casefold()
+    if not needle:
+        return False
+    if re.search(r"\s", needle):
+        return needle in text
+    return bool(re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", text))
+
+
+_ROUTE_ACTION_TERMS = frozenset({
+    "apply", "build", "categorize", "check", "compare", "correct",
+    "create", "debug", "design", "draft", "explain", "fix",
+    "help", "implement", "improve", "ingest", "inspect", "learn",
+    "lesson", "load", "make", "monitor", "optimize", "plan",
+    "practice", "process", "refactor", "research", "review", "route",
+    "schedule", "search", "teach", "update", "use", "watch", "write",
+})
+
+
+def _has_route_action(text: str) -> bool:
+    return any(_contains_route_phrase(text, term) for term in _ROUTE_ACTION_TERMS)
+
+
+def skill_route_match(query: str) -> SkillDoc | None:
+    """Return the strongest skill whose explicit routing metadata matches."""
+    text = query.casefold()
+    if not text.strip():
+        return None
+
+    has_action = _has_route_action(text)
+    matches: list[tuple[int, int, str, SkillDoc]] = []
+    for doc in discover_skill_docs():
+        identifiers = {
+            doc.skill_id,
+            doc.skill_id.replace("_", " "),
+            doc.skill_id.replace("_", "-"),
+            doc.name,
+        }
+        id_hits = [phrase for phrase in identifiers if _contains_route_phrase(text, phrase)]
+        trigger_hits = [trigger for trigger in doc.triggers if _contains_route_phrase(text, trigger)]
+        strong_trigger_hits = [trigger for trigger in trigger_hits if re.search(r"\s", trigger.strip())]
+        if not id_hits and not trigger_hits:
+            continue
+        if not id_hits and not strong_trigger_hits and len(trigger_hits) < 2 and not has_action:
+            continue
+
+        best_phrase_len = max((len(hit) for hit in id_hits + trigger_hits), default=0)
+        score = len(strong_trigger_hits) * 5 + len(trigger_hits) * 4 + len(id_hits) * 3
+        if has_action:
+            score += 1
+        matches.append((score, best_phrase_len, doc.skill_id, doc))
+
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return matches[0][3]
 
 
 def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:

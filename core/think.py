@@ -31,7 +31,7 @@ from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import deep_search
 from core.agentic  import run_agentic_chat
-from core.skills   import load_skills
+from core.skills   import load_skills, skill_route_match
 from core.log      import get_logger
 from core.schedule import DueJob, ScheduleRunner
 from core.experience import append_chat_turn
@@ -239,6 +239,9 @@ class AikoThink:
     def _route_intent(self, user_input: str) -> str:
         """Classify whether a turn needs autonomous task mode or normal chat."""
         text = user_input.lower()
+        matched_skill = skill_route_match(user_input)
+        if matched_skill:
+            return f"skill:{matched_skill.skill_id}"
         if any(trigger in text for trigger in SKILL_TRIGGERS):
             return "keyword"
         if re.search(r"\b(wake me|remind me|alarm|timer|every morning|every day|daily)\b", text):
