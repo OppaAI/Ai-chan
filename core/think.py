@@ -60,12 +60,12 @@ _IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
 _MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
 _MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 # Route task-vs-chat turns semantically by default using the same embedding
-# model as memory/RAG. Set AIKO_ROUTE_MODE=llm to let the local LLM classify
-# instead, or AIKO_ROUTE_MODE=chat to disable autonomous routing.
-_ROUTE_ENABLED = os.getenv("AIKO_ROUTE_ENABLED", os.getenv("AIKO_ROUTE_LLM", "1")).lower() in {"1", "true", "yes", "on"}
-_ROUTE_MODE = os.getenv("AIKO_ROUTE_MODE", "semantic").strip().lower()
-_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("AIKO_ROUTE_SEMANTIC_THRESHOLD", "0.36"))
-_SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("AIKO_SEARCH_SEMANTIC_THRESHOLD", "0.36"))
+# model as memory/RAG. Set ROUTE_MODE=llm to let the local LLM classify
+# instead, or ROUTE_MODE=chat to disable autonomous routing.
+_ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+_ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
+_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.36"))
+_SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.36"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
