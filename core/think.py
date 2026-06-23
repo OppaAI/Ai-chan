@@ -217,7 +217,7 @@ class AikoThink:
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
-        """Main entry point. Uses keyword + semantic intent routing."""
+        """Main entry point. Uses semantic intent routing."""
         self._last_chat_time = time.time()
         self._active_turn.set()
         try:
