@@ -123,6 +123,7 @@ Lessons learned:
 ---
 
 # Phase 2.5 — Agent
+![Phase 2.5](../assets/phase-2.5.png)
 
 Goal:
 
@@ -130,12 +131,12 @@ Goal:
 
 Major additions:
 
-- `core/toolkit/` focused tool modules
-- `core/tools.py` compatibility facade
-- `skills/<id>/SKILL.md` workflow documents
-- skill discovery and retrieval in `core/skills.py`
+- agentic toolkit focused tool modules
+- agentic tools compatibility facade
+- agentic skills workflow documents `skills.md`
+- agentic skill discovery and retrieval in `core/skills.py`
 - agentic task-mode skill context injection
-- initial `wildlife_photo` and `aiko_architect` skills
+- initial `wildlife_photo` and `aiko_architect` skills project
 
 Lessons learned:
 
