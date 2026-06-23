@@ -5,8 +5,9 @@ Persistent scheduled jobs, reminders, and wake-up alarms for Aiko.
 
 A scheduled job is a small local record with:
   - time_of_day: local wall-clock time in HH:MM format
-  - frequency: once, daily, weekdays, weekly, biweekly, monthly, or custom_weekdays
+  - frequency: once, hourly, daily, weekdays, weekly, biweekly, monthly, or custom_weekdays
   - days_of_week: optional weekday names for custom_weekdays/weekly jobs
+  - relative_days: optional integer day offset for phrases like tomorrow or the day after tomorrow
   - task: what Aiko should do or say when the job fires
   - action: announce or agentic
 
@@ -38,7 +39,18 @@ LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH", WORKSPACE_ROOT / "remin
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
 POLL_SECONDS = float(os.getenv("SCHEDULE_POLL_SECONDS", 15))
 
-FREQUENCIES = {"once", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
+FREQUENCIES = {"once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
+RELATIVE_DAY_ALIASES = {
+    "today": 0,
+    "tonight": 0,
+    "tomorrow": 1,
+    "tmr": 1,
+    "tmrw": 1,
+    "the day after tomorrow": 2,
+    "day after tomorrow": 2,
+    "overmorrow": 2,
+}
+
 _WEEKDAYS = {
     "monday": 0, "mon": 0,
     "tuesday": 1, "tue": 1, "tues": 1,
@@ -99,10 +111,34 @@ def _normalize_weekdays(days_of_week: list[str] | str | None) -> list[int]:
     return sorted(days)
 
 
-def _candidate_at(now: datetime, time_of_day: str) -> datetime:
-    """Return today's candidate datetime at a given wall-clock time."""
+def _normalize_relative_days(relative_days: int | str | None = None) -> int | None:
+    """Normalize a relative day offset or phrase into an integer day count."""
+    if relative_days is None or relative_days == "":
+        return None
+    if isinstance(relative_days, int):
+        days = relative_days
+    else:
+        text = str(relative_days).strip().lower().replace("-", " ")
+        if text in RELATIVE_DAY_ALIASES:
+            days = RELATIVE_DAY_ALIASES[text]
+        else:
+            try:
+                days = int(text)
+            except ValueError:
+                raise ValueError(
+                    f"relative_days must be a day count or known phrase, got: {relative_days!r}"
+                ) from None
+    if not (0 <= days <= 366):
+        raise ValueError("relative_days must be between 0 and 366")
+    return days
+
+
+def _candidate_at(now: datetime, time_of_day: str, relative_days: int | str | None = None) -> datetime:
+    """Return the candidate datetime at a wall-clock time, optionally offset by days."""
     hour, minute = _parse_time_of_day(time_of_day)
-    return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    days = _normalize_relative_days(relative_days) or 0
+    base = now + timedelta(days=days)
+    return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
 def _next_for_weekdays(time_of_day: str, weekdays: list[int], tz_name: str | None = None) -> datetime:
@@ -146,6 +182,7 @@ def calculate_next_due(
     days_of_week: list[str] | str | None = None,
     after: datetime | None = None,
     anchor_day: int | None = None,
+    relative_days: int | str | None = None,
 ) -> datetime:
     """Calculate the next due datetime for a scheduled job."""
     frequency = (frequency or "daily").lower().strip()
@@ -154,10 +191,21 @@ def calculate_next_due(
 
     tz_name = timezone or DEFAULT_TIMEZONE
     now = after.astimezone(_timezone(tz_name)) if after else _now(tz_name)
-    candidate = _candidate_at(now, time_of_day)
+    relative_offset = _normalize_relative_days(relative_days)
+    if relative_offset is not None and frequency in {"weekdays", "custom_weekdays", "weekly", "monthly"}:
+        raise ValueError(
+            "relative_days is only supported for once, hourly, daily, and biweekly schedules"
+        )
+    candidate = _candidate_at(now, time_of_day, relative_offset)
 
     if frequency in {"once", "daily"}:
         return candidate if candidate > now else candidate + timedelta(days=1)
+    if frequency == "hourly":
+        _, minute = _parse_time_of_day(time_of_day)
+        hourly_candidate = now.replace(minute=minute, second=0, microsecond=0)
+        if relative_offset:
+            hourly_candidate = candidate
+        return hourly_candidate if hourly_candidate > now else hourly_candidate + timedelta(hours=1)
     if frequency == "weekdays":
         return _next_for_weekdays(time_of_day, [0, 1, 2, 3, 4], tz_name)
     if frequency == "custom_weekdays":
@@ -235,6 +283,7 @@ def schedule_job_record(
     timezone: str | None = None,
     days_of_week: list[str] | str | None = None,
     action: str = "agentic",
+    relative_days: int | str | None = None,
 ) -> dict:
     """Create and persist a scheduled job record, returning the stored dict."""
     action = (action or "agentic").lower().strip()
@@ -242,7 +291,14 @@ def schedule_job_record(
         raise ValueError("action must be 'announce' or 'agentic'")
     tz_name = timezone or DEFAULT_TIMEZONE
     normalized_days = _normalize_weekdays(days_of_week)
-    due = calculate_next_due(time_of_day, frequency, tz_name, normalized_days)
+    normalized_relative_days = _normalize_relative_days(relative_days)
+    due = calculate_next_due(
+        time_of_day,
+        frequency,
+        tz_name,
+        normalized_days,
+        relative_days=normalized_relative_days,
+    )
     job = {
         "id": uuid.uuid4().hex[:12],
         "title": title.strip() or "Scheduled job",
@@ -250,6 +306,7 @@ def schedule_job_record(
         "time_of_day": time_of_day,
         "frequency": (frequency or "daily").lower().strip(),
         "days_of_week": normalized_days,
+        "relative_days": normalized_relative_days,
         "timezone": tz_name,
         "next_due": due.isoformat(),
         "created_at": _now(tz_name).isoformat(),

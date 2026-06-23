@@ -205,13 +205,14 @@ _TOOL_SCHEMAS = [
                 "next_action": {"type": "string"}, "risks": {"type": "string"}},
                 "required": ["goal"]}}},
         {"type": "function", "function": {
-            "name": "schedule_job", "description": "Schedule local job/alarm. HH:MM. Frequencies: once,daily,weekdays,weekly,biweekly,monthly,custom_weekdays.",
+            "name": "schedule_job", "description": "Schedule local job/alarm. HH:MM. Frequencies: once,hourly,daily,weekdays,weekly,biweekly,monthly,custom_weekdays. Supports relative_days for today/tomorrow/day-after-tomorrow offsets.",
             "parameters": {"type": "object", "properties": {
                 "title": {"type": "string"}, "task": {"type": "string"},
                 "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"},
-                "frequency": {"type": "string", "enum": ["once", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]},
+                "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]},
                 "timezone": {"type": "string"},
                 "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"},
+                "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"},
                 "action": {"type": "string", "enum": ["announce", "agentic"], "description": "announce only, or agentic to let Aiko perform a local autonomous task"}},
                 "required": ["title", "task", "time_of_day"]}}},
         {"type": "function", "function": {
@@ -306,7 +307,7 @@ def _register_tools() -> None:
         "save_note": lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
         "read_workspace_file": lambda args: read_workspace_file(args.get("relative_path", "")),
         "summarize_task_state": lambda args: summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", "")),
-        "schedule_job": lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic")),
+        "schedule_job": lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"), args.get("relative_days")),
         "list_schedule": lambda args: list_schedule(bool(args.get("include_disabled", False))),
         "cancel_schedule": lambda args: cancel_schedule(args.get("job_id", "")),
         "schedule_reminder": lambda args: schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone")),

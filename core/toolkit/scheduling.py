@@ -21,10 +21,20 @@ def schedule_job(
     timezone: str | None = None,
     days_of_week: list[str] | str | None = None,
     action: str = "agentic",
+    relative_days: int | str | None = None,
 ) -> str:
     """Schedule a local recurring job while Aiko is running."""
     try:
-        job = schedule_job_record(title, task, time_of_day, frequency, timezone, days_of_week, action)
+        job = schedule_job_record(
+            title,
+            task,
+            time_of_day,
+            frequency,
+            timezone,
+            days_of_week,
+            action,
+            relative_days,
+        )
         return json_block("scheduled job created", job)
     except Exception as e:
         return f"[schedule failed: {e}]"
