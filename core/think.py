@@ -178,7 +178,6 @@ class AikoThink:
         self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
         self._llm_model = LLM_MODEL
         self._memorize  = memorize
-        self._route_cache = self._precompute_route_vectors()
         self._speak     = speak
         self._persona   = _load_persona()
         self._history:  list[dict] = []
@@ -203,18 +202,6 @@ class AikoThink:
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
         self._warmup_thread.start()
       
-    def _precompute_route_vectors(self) -> dict:
-        try:
-            cache = {}
-            for label, examples in _SEMANTIC_ROUTE_EXAMPLES.items():
-                cache[label] = [self._memorize.embed_text(ex) for ex in examples]
-            log.info("[route] Precomputed %d intent exemplar vectors", 
-                     sum(len(v) for v in cache.values()))
-            return cache
-        except Exception as e:
-            log.warning("[route] Exemplar precompute failed, will embed at runtime: %s", e)
-            return {}  # _semantic_agent_intent checks for empty cache → falls back to LLM
-        
     def _warmup_llm(self) -> None:
         try:
             self._client.chat.completions.create(
