@@ -24,14 +24,14 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 import random
 import re
 import time
 from pathlib import Path
 
 import modal
-
+import os
+os.makedirs(OUTPUTS_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # Modal infra
 # ---------------------------------------------------------------------------
@@ -281,6 +281,8 @@ def generate_topic_batch(
         max_model_len=2048,
         gpu_memory_utilization=0.88,
         trust_remote_code=True,
+        # disable thinking
+        model_impl="transformers",
     )
     sampling = SamplingParams(
         temperature=temperature,
