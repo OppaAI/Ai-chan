@@ -252,7 +252,7 @@ def extract_json_object(raw: str) -> dict:
 
 @app.cls(
     image=image,
-    gpu=modal.gpu.A10G(),
+    gpu="A10G",
     volumes={VOLUME_MOUNT: volume},
     timeout=7200,
     cpu=4.0,
