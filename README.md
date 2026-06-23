@@ -171,8 +171,8 @@ Aiko-chan/
 | Phase | Name | Status |
 |---|---|---|
 | 1 | Soul — CLI, Ollama, mem0 + Qdrant, SearXNG | ✅ Done |
-| 1.5 | Stream — curses TUI, streaming pipeline, MioTTS, persona | ✅ Done |
-| 2 | Voice — SenseVoice ASR, Silero VAD, hands-free talk | 🔲 Next |
+| 1.5 | Stream — curses TUI, streaming pipeline, persona, test TTS models | ✅ Done |
+| 2 | Voice — SenseVoice ASR, Silero VAD, MioTTS, hands-free talk | 🔲 Next |
 | 2.5 | Agent — tool registry, skill workflows, scheduled local tasks | 🔲 Planned |
 | 3 | Face — VRM avatar, three-vrm, expressions, lip-sync | 🔲 Planned |
 | 4 | Presence — emotional state, mood, relationship progression | 🔲 Planned |
