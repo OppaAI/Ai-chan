@@ -53,19 +53,45 @@ LLAMA_GPU_LAYERS = 999
 app    = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
+# ---------------------------------------------------------------------------
+# Image: llama.cpp built with CUDA
+#
+# FIX: the CUDA "devel" base image ships nvcc + the toolkit, but NOT a real
+# libcuda.so (the actual driver lib only exists once a GPU is attached at
+# *runtime*; Modal's build step has no GPU). The linker therefore can't
+# resolve driver-API symbols like cuDeviceGet, cuMemCreate, cuMemMap, etc.
+#
+# The toolkit ships a *stub* libcuda.so under /usr/local/cuda/lib64/stubs/
+# specifically for this case. We add it to LIBRARY_PATH/LD_LIBRARY_PATH for
+# all build steps, AND pass explicit linker flags to cmake as a second
+# guarantee. We also scope the build to the --target llama-server only,
+# since building "all" pulls in test binaries (test-tokenizer-0, etc.)
+# that don't need to be built at all for this use case and were the ones
+# failing in this latest error.
+# ---------------------------------------------------------------------------
+
 image = (
     modal.Image.from_registry("nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11")
     .apt_install(
         "build-essential", "cmake", "git", "wget", "curl",
         "libcurl4-openssl-dev", "pkg-config"
     )
+    .env({
+        "LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LIBRARY_PATH}",
+        "LD_LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}",
+    })
     .run_commands(
+        "ls -la /usr/local/cuda/lib64/stubs/ || true",
         "git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
         "cd /opt/llama.cpp && cmake -B build "
         "  -DGGML_CUDA=ON "
         "  -DLLAMA_CURL=ON "
         "  -DCMAKE_BUILD_TYPE=Release "
-        "  && cmake --build build --config Release -j$(nproc)",
+        "  -DLLAMA_BUILD_TESTS=OFF "
+        "  -DLLAMA_BUILD_EXAMPLES=OFF "
+        "  -DCMAKE_EXE_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda' "
+        "  -DCMAKE_SHARED_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda' "
+        "  && cmake --build build --config Release -j$(nproc) --target llama-server",
     )
     .pip_install("openai", "tqdm", "huggingface_hub")
 )
