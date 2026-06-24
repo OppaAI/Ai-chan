@@ -151,9 +151,9 @@ def parse_args():
     p.add_argument("--debug",     action="store_true",
                    help="show memory hits each turn")
     p.add_argument("--tui",       action="store_true",
-                   help="use the legacy curses TUI instead of the default browser WebUI")
+                   help="use the curses TUI (default)")
     p.add_argument("--webui",     action="store_true",
-                   help="use the browser WebUI (default; kept for explicit launch scripts)")
+                   help="use the browser WebUI instead of the default curses TUI")
     p.add_argument("--clear-mem", action="store_true",
                    help="wipe all stored memories and exit")
     return p.parse_args()
@@ -480,10 +480,10 @@ def main():
         sys.exit(0)
     if args.tui and args.webui:
         raise SystemExit("Choose only one UI: --tui or --webui")
-    if args.tui:
-        curses.wrapper(lambda scr: _run_tui(scr, args))
-    else:
+    if args.webui:
         _run_webui(args)
+    else:
+        curses.wrapper(lambda scr: _run_tui(scr, args))
 
 
 if __name__ == '__main__':
