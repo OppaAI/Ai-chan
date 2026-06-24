@@ -16,10 +16,10 @@ renderer.setClearColor(0x0a0a0f);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(22, 1, 0.1, 100);
-camera.position.set(0.35, 1.18, 2.5);
+camera.position.set(0.40, 1.18, 2.5);
 
 const controls = new OrbitControls(camera, canvas);
-controls.target.set(0.35, 1.15, 0);
+controls.target.set(0.40, 1.15, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.enablePan = false;
