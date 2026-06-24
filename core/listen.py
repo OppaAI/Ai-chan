@@ -4,9 +4,12 @@ core/listen.py
 Aiko's speech-to-text input layer.
   - Captures microphone audio with Silero VAD (neural, energy-independent)
   - Transcribes via SenseVoice (sherpa-onnx, int8 ONNX) in a background thread
+  - Optionally verifies the speaker against one enrolled voice embedding
+    (sherpa-onnx SpeakerEmbeddingExtractor) on the same buffered audio, run
+    in parallel with transcription — see SPEAKER_VERIFY_ENABLED below
   - Exposes listen() (blocking) and listen_async() (callback) for UI
-  - Staged init: load_asr() → load_vad() → join_warmup() for granular
-    boot progress reporting via wakeup.py
+  - Staged init: load_asr() → load_vad() → load_speaker_id() → join_warmup()
+    for granular boot progress reporting via wakeup.py
   - Always-on barge-in VAD monitor: start_barge_in_monitor() runs a
     lightweight Silero-only daemon that sets _barge_in_event when speech is
     detected during TTS playback, enabling speak.wait_or_barge_in()
@@ -15,12 +18,21 @@ Dependencies:
     pip install sherpa-onnx numpy silero-vad scipy huggingface_hub
     Model: auto-downloaded to HF cache on first use (see ASR_MODEL in .env)
     parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
+
+Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
+    1. Download a speaker embedding model (.onnx) from
+       https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models
+       e.g. 3dspeaker_speech_eres2net_base_sv_en_voxceleb_16k.onnx (~28MB)
+    2. Set SPEAKER_MODEL_PATH in .env to point at it
+    3. Enroll your voice: python enroll_speaker.py
+    4. Set SPEAKER_VERIFY_ENABLED=1 in .env
 """
 import onnxruntime as _ort
 _ort.set_default_logger_severity(3)  # 0=verbose, 1=info, 2=warning, 3=error, 4=fatal
 
 from huggingface_hub import hf_hub_download
 from silero_vad import load_silero_vad
+import json
 import logging
 import numpy as np
 import os
@@ -40,6 +52,7 @@ logging.getLogger("sherpa_onnx").setLevel(logging.ERROR)
 BOOT_LABELS = {
     'listen_asr':     'Loading SenseVoice ASR model...',
     'listen_silero':  'Loading Silero VAD...',
+    'listen_speaker': 'Loading speaker verification...',
     'listen_warmup':  'Warming up ASR pipeline...',
     'listen_ready':   'Microphone ready',
     'listen_skip':    'ASR skipped (text mode)',
@@ -73,6 +86,18 @@ BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.65"))
 BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "2"))
 BARGE_IN_COOLDOWN_MS   = int(os.getenv("BARGE_IN_COOLDOWN_MS",     "800"))
 BARGE_IN_ALWAYS_ON      = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "true", "yes", "on"}
+
+# ── speaker verification config ──────────────────────────────────────────────
+# Single-enrollment 1:1 verification (not multi-speaker identification) —
+# Aiko has exactly one "owner" voice to check against.
+
+SPEAKER_VERIFY_ENABLED = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+SPEAKER_MODEL_PATH     = os.getenv("SPEAKER_MODEL_PATH", "")            # path to embedding .onnx
+SPEAKER_ENROLL_PATH    = os.getenv("SPEAKER_ENROLL_PATH", os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "speaker_enrollment.json"
+))
+SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
+SPEAKER_NUM_THREADS       = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 
 _CHUNK_SAMPLES_VAD = 512                                            # at 16 kHz, ~32 ms
 _MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / CHUNK_DURATION_MS)
@@ -118,15 +143,17 @@ def _load_sense_voice_recognizer() -> sherpa_onnx.OfflineRecognizer:
 
 class AikoListen:
     """
-    Microphone capture + SenseVoice ASR transcription.
+    Microphone capture + SenseVoice ASR transcription (+ optional speaker
+    verification against one enrolled voice).
     Uses parec (PulseAudio) for mic capture — no PortAudio/sounddevice.
     Silero VAD gates recording for robust, noise-resilient speech detection.
 
     Staged init:
-        listen = AikoListen()   # no heavy loading
-        listen.load_asr()       # loads the SenseVoice model
-        listen.load_vad()       # loads Silero VAD + kicks off warmup thread
-        listen.join_warmup()    # blocks until warmup completes
+        listen = AikoListen()    # no heavy loading
+        listen.load_asr()        # loads the SenseVoice model
+        listen.load_vad()        # loads Silero VAD + kicks off warmup thread
+        listen.load_speaker_id() # loads embedding model + enrolled vector (no-op if disabled)
+        listen.join_warmup()     # blocks until warmup completes
 
     Barge-in monitor (call after join_warmup):
         listen.start_barge_in_monitor()
@@ -148,6 +175,11 @@ class AikoListen:
         # set while _record() is running — pauses barge-in to avoid mic conflict
         self._recording = threading.Event()
 
+        # speaker verification — None if disabled or model missing
+        self._speaker_extractor: sherpa_onnx.SpeakerEmbeddingExtractor | None = None
+        self._enrolled_embedding: np.ndarray | None = None
+        self._speaker_lock = threading.Lock()
+
     # ── staged init ───────────────────────────────────────────────────────────
 
     def load_asr(self) -> None:
@@ -159,8 +191,70 @@ class AikoListen:
         self._warmup_thread = threading.Thread(target=self._warmup, daemon=True)
         self._warmup_thread.start()
 
+    def load_speaker_id(self) -> None:
+        """
+        Load the speaker embedding model + enrolled embedding, if speaker
+        verification is enabled. Silently no-ops (verification stays off)
+        if disabled, the model path is missing, or no enrollment exists yet
+        — listen() always falls back to speaker=None in that case, it never
+        raises, so a missing enrollment can't break normal listening.
+        """
+        if not SPEAKER_VERIFY_ENABLED:
+            return
+        if not SPEAKER_MODEL_PATH or not os.path.isfile(SPEAKER_MODEL_PATH):
+            logging.getLogger(__name__).warning(
+                f"[listen] SPEAKER_VERIFY_ENABLED=1 but SPEAKER_MODEL_PATH "
+                f"is missing or invalid ({SPEAKER_MODEL_PATH!r}); verification disabled."
+            )
+            return
+        if not os.path.isfile(SPEAKER_ENROLL_PATH):
+            logging.getLogger(__name__).warning(
+                f"[listen] SPEAKER_VERIFY_ENABLED=1 but no enrollment found at "
+                f"{SPEAKER_ENROLL_PATH!r}; run enroll_speaker.py first. Verification disabled."
+            )
+            return
+
+        config = sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+            model=SPEAKER_MODEL_PATH,
+            num_threads=SPEAKER_NUM_THREADS,
+            debug=False,
+            provider="cpu",
+        )
+        self._speaker_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
+
+        with open(SPEAKER_ENROLL_PATH) as f:
+            data = json.load(f)
+        self._enrolled_embedding = np.asarray(data["embedding"], dtype=np.float32)
+
     def join_warmup(self) -> None:
         self._warmup_done.wait()
+
+    # ── speaker verification ──────────────────────────────────────────────────
+
+    def speaker_verify_active(self) -> bool:
+        """True if speaker verification is loaded and ready to run."""
+        return self._speaker_extractor is not None and self._enrolled_embedding is not None
+
+    def _compute_embedding(self, audio: np.ndarray) -> np.ndarray:
+        """Compute a speaker embedding for a float32 16kHz audio buffer."""
+        stream = self._speaker_extractor.create_stream()
+        stream.accept_waveform(SAMPLE_RATE, audio)
+        stream.input_finished()
+        embedding = self._speaker_extractor.compute(stream)
+        return np.asarray(embedding, dtype=np.float32)
+
+    def _verify_speaker(self, audio: np.ndarray) -> tuple[bool, float]:
+        """
+        Compare audio against the enrolled embedding via cosine similarity.
+        Returns (is_match, score). Thread-safe — extractor sessions aren't
+        guaranteed reentrant, so this is serialized alongside _transcribe().
+        """
+        with self._speaker_lock:
+            embedding = self._compute_embedding(audio)
+        a, b = embedding, self._enrolled_embedding
+        denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1e-8
+        score = float(np.dot(a, b) / denom)
+        return score >= SPEAKER_VERIFY_THRESHOLD, score
 
     # ── barge-in monitor ──────────────────────────────────────────────────────
 
@@ -227,7 +321,16 @@ class AikoListen:
         status_callback=None,
         wait_fn=None,
         speak=None,
-    ) -> str:
+    ) -> tuple[str, dict]:
+        """
+        Returns (text, info). info always has a "verified" key:
+          - None  if speaker verification is disabled / not loaded
+          - True  if the buffered audio matched the enrolled voice
+          - False if it didn't match
+        info also carries "speaker_score" (float or None) for logging/tuning.
+        Verification never blocks or fails transcription — it's metadata
+        attached alongside the text, not a gate in front of it.
+        """
         if speak is not None and speak.is_playing():
             _cb(status_callback, "__WAITING__")
             self._barge_in_armed.set()
@@ -244,16 +347,34 @@ class AikoListen:
         audio = self._record(status_callback)
         if audio is None:
             _cb(status_callback, "__IDLE__")
-            return ""
+            return "", {"verified": None, "speaker_score": None}
+
         _cb(status_callback, "__TRANSCRIBING__")
-        text = self._transcribe(audio)
+
+        info = {"verified": None, "speaker_score": None}
+        if self.speaker_verify_active():
+            result_box: dict = {}
+
+            def _run_verify():
+                result_box["verified"], result_box["speaker_score"] = self._verify_speaker(audio)
+
+            verify_thread = threading.Thread(target=_run_verify, daemon=True)
+            verify_thread.start()
+            text = self._transcribe(audio)
+            verify_thread.join()
+            info["verified"]      = result_box.get("verified")
+            info["speaker_score"] = result_box.get("speaker_score")
+        else:
+            text = self._transcribe(audio)
+
         _cb(status_callback, "__IDLE__")
-        return text
+        return text, info
 
     def listen_async(self, on_result, status_callback=None) -> threading.Thread:
+        """on_result receives (text, info) — same shape as listen()'s return."""
         def _run():
-            text = self.listen(status_callback=status_callback)
-            on_result(text)
+            text, info = self.listen(status_callback=status_callback)
+            on_result(text, info)
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
