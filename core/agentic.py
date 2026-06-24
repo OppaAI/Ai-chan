@@ -503,6 +503,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
 
     agent_system = (
         f"{owner._persona}\n\n"
+        "[TASK MODE OVERRIDE] The speech style limits in the persona do NOT apply "
+        "in task mode. Do not summarize in 1-2 sentences. Call tools first, speak after. "
+        "Output length is irrelevant until final_answer is reached.\n\n"
         f"{memory_context}\n\n"
         f"{skill_context}\n\n"
         "[TASK MODE] You MUST use tools to complete tasks. Never describe or "
