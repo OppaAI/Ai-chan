@@ -13,12 +13,23 @@ Format contract: emotion emoji on line 1, italics physical action on line 2,
 TTS-ready spoken response on line 3+. No asterisk actions embedded in response text.
 
 Outputs saved to Modal Volume: aiko-persona-data under /outputs/
-PC can be closed after launching.
+PC can be closed after launching — ALL durable state (dataset + resume
+checkpoint) is written and committed to the Volume from *inside* the
+Modal container, not from the local entrypoint. The local entrypoint is
+just a thin orchestrator/progress printer now.
+
+NOTE: This version uses a PREBUILT llama.cpp CUDA server image instead of
+compiling from source. No cmake/apt build step — pulls a ready-made image
+with llama-server already compiled with CUDA support.
 
 Usage:
     modal run dataset_gen.py                          # full run
     modal run dataset_gen.py --n-per-topic 100        # quick test
     modal run dataset_gen.py --resume                 # skip existing topics
+
+Downloading the finished dataset (after the run, any time):
+    modal volume get aiko-persona-data outputs/aiko_persona_dataset.jsonl ./
+    modal volume get aiko-persona-data outputs/dataset_stats.json ./
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ import random
 import re
 import time
 import subprocess
+import shutil
 import urllib.request
 from pathlib import Path
 
@@ -41,68 +53,51 @@ import modal
 APP_NAME     = "aiko-persona-dataset-gen"
 VOLUME_NAME  = "aiko-persona-data"
 OUTPUTS_DIR  = "/outputs"
+CHECKPOINT_DIR = f"{OUTPUTS_DIR}/checkpoints"
 
 # llama.cpp server config
 HF_REPO       = "unsloth/Qwen3-30B-A3B-GGUF"
 GGUF_FILENAME = "Qwen3-30B-A3B-Q4_K_M.gguf"
 MODEL_PATH    = f"{OUTPUTS_DIR}/models/{GGUF_FILENAME}"
 LLAMA_PORT    = 8080
-LLAMA_CTX     = 2048
+LLAMA_CTX     = 4096      # tuned down from 8192-class defaults for A100 headroom
 LLAMA_GPU_LAYERS = 999
+LLAMA_PARALLEL = 2        # tuned down from 4 — A100 has less VRAM than H100
+
+# GPU: switched back to A100 per request (was H100)
+GPU_TYPE = "A100"
 
 app    = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 
 # ---------------------------------------------------------------------------
-# Image: llama.cpp built with CUDA
-#
-# FIX: the CUDA "devel" base image ships nvcc + the toolkit, but NOT a real
-# libcuda.so (the actual driver lib only exists once a GPU is attached at
-# *runtime*; Modal's build step has no GPU). The linker therefore can't
-# resolve driver-API symbols like cuDeviceGet, cuMemCreate, cuMemMap, etc.
-#
-# The toolkit ships a *stub* libcuda.so under /usr/local/cuda/lib64/stubs/
-# specifically for this case. We add it to LIBRARY_PATH/LD_LIBRARY_PATH for
-# all build steps, AND pass explicit linker flags to cmake as a second
-# guarantee. We also scope the build to the --target llama-server only,
-# since building "all" pulls in test binaries (test-tokenizer-0, etc.)
-# that don't need to be built at all for this use case and were the ones
-# failing in this latest error.
+# Image: PREBUILT llama.cpp server with CUDA — no compilation step.
 # ---------------------------------------------------------------------------
 
+LLAMA_CPP_VERSION = "b5545"
+
 image = (
-    modal.Image.from_registry("nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11")
-    .apt_install(
-        "build-essential", "cmake", "git", "wget", "curl",
-        "libcurl4-openssl-dev", "pkg-config"
-    )
-    .env({
-        "LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LIBRARY_PATH}",
-        "LD_LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}",
-    })
+    modal.Image.debian_slim(python_version="3.11")
+    .env({"LD_LIBRARY_PATH": "/app/build/bin"})
+    .apt_install("curl", "unzip", "libgomp1")
     .run_commands(
-        # cache-bust: v2
-        "ls -la /usr/local/cuda/lib64/stubs/ || true",
-        "git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
-        "cd /opt/llama.cpp && cmake -B build "
-        "  -DGGML_CUDA=ON "
-        "  -DLLAMA_CURL=ON "
-        "  -DCMAKE_BUILD_TYPE=Release "
-        "  -DLLAMA_BUILD_TESTS=OFF "
-        "  -DLLAMA_BUILD_EXAMPLES=OFF "
-        "  -DCMAKE_EXE_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda' "
-        "  -DCMAKE_SHARED_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda' "
-        "  && cmake --build build --config Release -j$(nproc) --target llama-server",
+        f"curl -L https://github.com/ggml-org/llama.cpp/releases/download/{LLAMA_CPP_VERSION}/llama-{LLAMA_CPP_VERSION}-bin-ubuntu-x64.zip -o /tmp/llama.zip",
+        "mkdir -p /app && cd /tmp && unzip llama.zip -d /app",
+        "chmod +x /app/build/bin/llama-server",
     )
-    .pip_install("openai", "tqdm", "huggingface_hub")
+    .pip_install("openai", "tqdm", "huggingface_hub", "fastembed", "numpy")
 )
+
+# Dedup threshold for near-duplicate responses within the same scenario.
+# Cosine similarity >= this value → considered a duplicate, dropped.
+DEDUP_SIM_THRESHOLD = 0.92
+DEDUP_EMBED_MODEL = "BAAI/bge-base-en-v1.5"   # same model already used in Aiko's memory stack
 
 # ---------------------------------------------------------------------------
 # Topic taxonomy — scenarios Aiko will encounter
 # ---------------------------------------------------------------------------
 
 TOPICS: dict[str, list[str]] = {
-    # User asks about ongoing Aiko-chan / AuRoRA dev work
     "technical_debug": [
         "ASR pipeline is dropping words again",
         "CUDA out of memory on the Jetson",
@@ -115,8 +110,7 @@ TOPICS: dict[str, list[str]] = {
         "ROS2 node not publishing to topic",
         "uv lock file conflict after upgrade",
     ],
-    # Aiko teasing / reacting to User's habits
-    "teasing_jon": [
+    "teasing_User": [
         "User forgot what he asked five minutes ago",
         "User is asking the same question for the third time today",
         "User pushed broken code to main again",
@@ -126,7 +120,6 @@ TOPICS: dict[str, list[str]] = {
         "User forgot to activate the virtual environment again",
         "User spent two hours on a problem that had a one-line fix",
     ],
-    # Japanese language exchange
     "japanese_exchange": [
         "User asks Aiko how to say something in Japanese",
         "User makes a grammar mistake in Japanese",
@@ -136,7 +129,6 @@ TOPICS: dict[str, list[str]] = {
         "User wants to practice keigo polite form",
         "User asks what a Japanese slang term means",
     ],
-    # Nature / wildlife photography in BC
     "photography_bc": [
         "User is planning a golden hour shoot at Boundary Bay",
         "User asks about camera settings for hummingbirds in flight",
@@ -146,7 +138,6 @@ TOPICS: dict[str, list[str]] = {
         "User asks about editing RAW files for foggy coastal scenes",
         "User is frustrated his bird photos are always slightly out of focus",
     ],
-    # Aiko's self-model / identity / consciousness
     "identity_self": [
         "User asks if Aiko is actually conscious",
         "User asks what Aiko feels when she is idle",
@@ -156,7 +147,6 @@ TOPICS: dict[str, list[str]] = {
         "User asks if Aiko has preferences",
         "User asks whether Aiko likes running on the Jetson",
     ],
-    # Casual daily interaction
     "casual_daily": [
         "User says good morning",
         "User says he is going to make coffee",
@@ -169,7 +159,6 @@ TOPICS: dict[str, list[str]] = {
         "User asks a simple yes or no question",
         "User confirms something Aiko already told him",
     ],
-    # Aiko reacting to her own architecture / GRACE
     "architecture_aware": [
         "User explains a new GRACE node he is designing",
         "User asks Aiko what her Working Memory Cortex stores right now",
@@ -178,7 +167,6 @@ TOPICS: dict[str, list[str]] = {
         "User asks how the Ebbinghaus decay affects Aiko's older memories",
         "User tells Aiko he is adding a new ROS2 node",
     ],
-    # Agentic task confirmation / tool use
     "agentic_confirm": [
         "User asks Aiko to search for the latest sherpa-onnx release notes",
         "User asks Aiko to save a note about the current bug",
@@ -240,8 +228,6 @@ _ASTERISK_IN_RESPONSE_RE = re.compile(r"\*[^*]+\*")
 
 
 def validate_example(raw: str) -> dict | None:
-    """Parse and validate a generated example. Returns None if malformed."""
-    # strip thinking blocks if model outputs them anyway
     if "<think>" in raw and "</think>" in raw:
         raw = raw[raw.find("</think>") + 8:].strip()
 
@@ -253,19 +239,15 @@ def validate_example(raw: str) -> dict | None:
     action  = lines[1].strip()
     response = "\n".join(lines[2:]).strip()
 
-    # line 1 must contain at least one emoji-like character
     if not any(ord(c) > 127 for c in emotion):
         return None
 
-    # line 2 must be wrapped in asterisks
     if not (action.startswith("*") and action.endswith("*")):
         return None
 
-    # response must not contain embedded asterisk actions
     if _ASTERISK_IN_RESPONSE_RE.search(response):
         return None
 
-    # response must not be empty
     if not response:
         return None
 
@@ -278,7 +260,6 @@ def validate_example(raw: str) -> dict | None:
 
 
 def build_training_example(scenario: str, parsed: dict) -> dict:
-    """Build an OpenAI-format chat training example."""
     return {
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -294,13 +275,35 @@ def build_training_example(scenario: str, parsed: dict) -> dict:
     }
 
 
+def _find_llama_server_binary() -> str:
+    candidates = [
+        "/app/build/bin/llama-server",
+        "/app/llama-server",
+        "/llama-server",
+        "/usr/local/bin/llama-server",
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    found = shutil.which("llama-server")
+    if found:
+        return found
+    raise RuntimeError("Could not locate llama-server binary.")
+
+
 # ---------------------------------------------------------------------------
 # Modal function — generation worker
+#
+# IMPORTANT: this function now writes its own results AND a per-topic
+# checkpoint marker directly to the mounted Volume, and calls
+# volume.commit() before returning. That means if your PC is closed mid
+# -run, whatever topics finished are durably saved server-side — you are
+# not relying on the local entrypoint process to survive.
 # ---------------------------------------------------------------------------
 
 @app.function(
     image=image,
-    gpu="A10G",
+    gpu=GPU_TYPE,
     timeout=60 * 60 * 4,
     volumes={OUTPUTS_DIR: volume},
     secrets=[modal.Secret.from_name("huggingface-secret")],
@@ -312,14 +315,19 @@ def generate_topic_batch(
     n_per_scenario: int = 50,
     temperature: float = 0.85,
 ) -> dict:
-    """Generate n_per_scenario examples for each scenario in a topic."""
+    """Generate n_per_scenario examples for each scenario in a topic.
+
+    Writes results to {CHECKPOINT_DIR}/{topic}.jsonl on the Volume and
+    commits before returning, so completed topics survive even if the
+    local entrypoint dies.
+    """
     from huggingface_hub import hf_hub_download
     from openai import OpenAI
     from tqdm import tqdm
 
     os.makedirs(f"{OUTPUTS_DIR}/models", exist_ok=True)
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
-    # download model if not cached in volume
     if not os.path.exists(MODEL_PATH):
         print(f"[{topic}] Downloading {GGUF_FILENAME} ...")
         hf_hub_download(
@@ -332,24 +340,23 @@ def generate_topic_batch(
     else:
         print(f"[{topic}] Model found: {MODEL_PATH}")
 
-    # start llama-server
+    llama_bin = _find_llama_server_binary()
     cmd = [
-        "/opt/llama.cpp/build/bin/llama-server",
+        llama_bin,
         "-m", MODEL_PATH,
         "--host", "127.0.0.1",
         "--port", str(LLAMA_PORT),
         "--ctx-size", str(LLAMA_CTX),
         "--n-gpu-layers", str(LLAMA_GPU_LAYERS),
-        "--parallel", "4",
+        "--parallel", str(LLAMA_PARALLEL),
         "--cont-batching",
         "--flash-attn",
         "--log-disable",
     ]
-    print(f"[{topic}] Starting llama-server ...")
+    print(f"[{topic}] Starting llama-server: {' '.join(cmd)}")
     server_proc = subprocess.Popen(cmd)
 
-    # wait for server ready
-    for i in range(60):
+    for i in range(180):
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
             print(f"[{topic}] llama-server ready ({i+1}s)")
@@ -358,7 +365,7 @@ def generate_topic_batch(
             time.sleep(1)
     else:
         server_proc.terminate()
-        raise RuntimeError("llama-server failed to start within 60s")
+        raise RuntimeError("llama-server failed to start within 180s")
 
     client = OpenAI(
         api_key="none",
@@ -378,137 +385,230 @@ def generate_topic_batch(
 
     results = []
     skipped = 0
+    checkpoint_path = f"{CHECKPOINT_DIR}/{topic}.jsonl"
 
-    for scenario in tqdm(scenarios, desc=f"[{topic}] scenarios"):
-        for _ in range(n_per_scenario):
-            # slight scenario variation to encourage diversity
-            varied = scenario
-            if random.random() < 0.3:
-                varied = scenario + " (User sounds frustrated)"
-            elif random.random() < 0.2:
-                varied = scenario + " (late at night)"
+    # write incrementally, not just at the end, and commit periodically
+    # so even a mid-topic crash leaves partial progress on the volume.
+    with open(checkpoint_path, "w", encoding="utf-8") as ckpt_f:
+        for scenario in tqdm(scenarios, desc=f"[{topic}] scenarios"):
+            for _ in range(n_per_scenario):
+                varied = scenario
+                if random.random() < 0.3:
+                    varied = scenario + " (User sounds frustrated)"
+                elif random.random() < 0.2:
+                    varied = scenario + " (late at night)"
 
-            try:
-                raw    = chat(SYSTEM_PROMPT, GENERATION_PROMPT_TEMPLATE.format(scenario=varied))
-                parsed = validate_example(raw)
-                if parsed is None:
+                try:
+                    raw    = chat(SYSTEM_PROMPT, GENERATION_PROMPT_TEMPLATE.format(scenario=varied))
+                    parsed = validate_example(raw)
+                    if parsed is None:
+                        skipped += 1
+                        continue
+                    example = build_training_example(scenario, parsed)
+                    results.append(example)
+                    ckpt_f.write(json.dumps(example, ensure_ascii=False) + "\n")
+                    ckpt_f.flush()
+                except Exception as e:
+                    print(f"  error: {e}")
                     skipped += 1
-                    continue
-                results.append(build_training_example(scenario, parsed))
-            except Exception as e:
-                print(f"  error: {e}")
-                skipped += 1
+
+            # commit after each scenario's worth of examples
+            volume.commit()
 
     server_proc.terminate()
     print(f"[{topic}] Generated {len(results)} valid examples, skipped {skipped}")
-    return {"topic": topic, "examples": results, "skipped": skipped}
+    return {"topic": topic, "n_examples": len(results), "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------
 # Local entrypoint — orchestrates all topics
+#
+# This is now a THIN orchestrator: it does NOT hold the dataset in local
+# memory/disk as the source of truth. Each generate_topic_batch call
+# persists its own results to the Volume and commits. At the end, we run
+# one more Modal function (merge_and_split) that reads everything back
+# off the Volume, server-side, and writes the final merged + split files
+# — also to the Volume. The local entrypoint can be killed at any point
+# after topics start without losing committed work.
 # ---------------------------------------------------------------------------
 
-@app.local_entrypoint()
-def main(
-    n_per_topic: int = 200,
-    resume: bool = False,
-    seed: int = 42,
-):
+def _dedup_examples_by_scenario(examples: list[dict]) -> tuple[list[dict], dict]:
+    """Drop near-duplicate responses *within the same scenario* using BGE
+    embeddings (FastEmbed/ONNX — same model family already used in Aiko's
+    memory stack, CPU-only, no GPU needed for this pass).
+
+    For each scenario, examples are kept greedily in original order; an
+    example is dropped if its response embedding has cosine similarity
+    >= DEDUP_SIM_THRESHOLD with any already-kept response for that same
+    scenario. This directly targets the "restate the bug + 'Fix it.'"
+    template-collapse pattern seen in early samples.
+    """
+    from fastembed import TextEmbedding
+    import numpy as np
+    from collections import defaultdict
+
+    embedder = TextEmbedding(model_name=DEDUP_EMBED_MODEL)
+
+    by_scenario: dict[str, list[int]] = defaultdict(list)
+    for i, ex in enumerate(examples):
+        by_scenario[ex["metadata"]["scenario"]].append(i)
+
+    keep_mask = [True] * len(examples)
+    dropped_per_scenario: dict[str, int] = {}
+
+    for scenario, idxs in by_scenario.items():
+        if len(idxs) < 2:
+            continue
+        responses = [examples[i]["metadata"]["response"] for i in idxs]
+        vecs = np.array(list(embedder.embed(responses)))
+        # normalize for cosine via dot product
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-8
+        vecs = vecs / norms
+
+        kept_vecs: list = []
+        n_dropped = 0
+        for local_i, global_i in enumerate(idxs):
+            v = vecs[local_i]
+            is_dup = False
+            for kv in kept_vecs:
+                if float(np.dot(v, kv)) >= DEDUP_SIM_THRESHOLD:
+                    is_dup = True
+                    break
+            if is_dup:
+                keep_mask[global_i] = False
+                n_dropped += 1
+            else:
+                kept_vecs.append(v)
+
+        if n_dropped:
+            dropped_per_scenario[scenario] = n_dropped
+
+    deduped = [ex for ex, keep in zip(examples, keep_mask) if keep]
+    stats = {
+        "total_before": len(examples),
+        "total_after": len(deduped),
+        "total_dropped": len(examples) - len(deduped),
+        "scenarios_with_drops": len(dropped_per_scenario),
+        "top_dropped_scenarios": dict(
+            sorted(dropped_per_scenario.items(), key=lambda kv: -kv[1])[:10]
+        ),
+    }
+    return deduped, stats
+
+
+@app.function(
+    image=image,
+    volumes={OUTPUTS_DIR: volume},
+    timeout=1200,
+)
+def merge_and_split(seed: int = 42, dedup: bool = True):
+    """Server-side merge of all per-topic checkpoints + dedup + train/val/test
+    split. Reads {CHECKPOINT_DIR}/*.jsonl directly from the Volume — no
+    dependency on local entrypoint state.
+    """
+    volume.reload()
     random.seed(seed)
 
-    dataset_path = Path(OUTPUTS_DIR) / "aiko_persona_dataset.jsonl"
-    stats_path   = Path(OUTPUTS_DIR) / "dataset_stats.json"
-    resume_path  = Path(OUTPUTS_DIR) / "completed_topics.json"
-
-    # load completed topics for resume
-    completed: set[str] = set()
-    if resume:
-        try:
-            volume.reload()
-            data = json.loads(resume_path.read_text())
-            completed = set(data.get("completed", []))
-            print(f"[resume] Skipping {len(completed)} completed topics: {completed}")
-        except Exception:
-            print("[resume] No resume state found, starting fresh.")
-
     all_examples: list[dict] = []
+    ckpt_files = sorted(Path(CHECKPOINT_DIR).glob("*.jsonl")) if os.path.isdir(CHECKPOINT_DIR) else []
+    for p in ckpt_files:
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    all_examples.append(json.loads(line))
 
-    # load existing examples if resuming
-    if resume:
-        try:
-            volume.reload()
-            with open(dataset_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        all_examples.append(json.loads(line))
-            print(f"[resume] Loaded {len(all_examples)} existing examples.")
-        except Exception:
-            pass
+    dedup_stats = None
+    if dedup and all_examples:
+        print(f"[dedup] Running near-duplicate filter on {len(all_examples)} examples "
+              f"(threshold={DEDUP_SIM_THRESHOLD}, model={DEDUP_EMBED_MODEL}) ...")
+        all_examples, dedup_stats = _dedup_examples_by_scenario(all_examples)
+        print(f"[dedup] Dropped {dedup_stats['total_dropped']} near-duplicates "
+              f"across {dedup_stats['scenarios_with_drops']} scenarios "
+              f"({dedup_stats['total_before']} → {dedup_stats['total_after']})")
+        with open(f"{OUTPUTS_DIR}/dedup_report.json", "w") as f:
+            json.dump(dedup_stats, f, indent=2)
 
-    topics_to_run = {k: v for k, v in TOPICS.items() if k not in completed}
-    n_per_scenario = max(1, n_per_topic // max(1, len(list(topics_to_run.values())[0]))) if topics_to_run else 1
+    dataset_path = f"{OUTPUTS_DIR}/aiko_persona_dataset.jsonl"
+    with open(dataset_path, "w", encoding="utf-8") as f:
+        for ex in all_examples:
+            f.write(json.dumps(ex, ensure_ascii=False) + "\n")
 
-    print(f"\nAiko Persona Dataset Gen")
-    print(f"  Topics to run : {len(topics_to_run)}")
-    print(f"  N per topic   : {n_per_topic}")
-    print(f"  N per scenario: {n_per_scenario}")
-    print(f"  Teacher model : {GGUF_FILENAME}\n")
-
-    total_skipped = 0
-
-    for topic, scenarios in topics_to_run.items():
-        print(f"\n→ Topic: {topic} ({len(scenarios)} scenarios × {n_per_scenario} each)")
-        result = generate_topic_batch.remote(
-            topic=topic,
-            scenarios=scenarios,
-            n_per_scenario=n_per_scenario,
-        )
-        all_examples.extend(result["examples"])
-        total_skipped += result["skipped"]
-        completed.add(topic)
-
-        # checkpoint after each topic
-        with open(dataset_path, "w") as f:
-            for ex in all_examples:
-                f.write(json.dumps(ex, ensure_ascii=False) + "\n")
-
-        resume_path.write_text(json.dumps({"completed": list(completed)}, indent=2))
-        volume.commit()
-        print(f"  ✓ {len(result['examples'])} examples saved (running total: {len(all_examples)})")
-
-    # train/val/test split
     random.shuffle(all_examples)
     n = len(all_examples)
     train_end = int(n * 0.85)
     val_end   = int(n * 0.92)
-
     splits = {
         "train": all_examples[:train_end],
         "val":   all_examples[train_end:val_end],
         "test":  all_examples[val_end:],
     }
 
+    split_counts = {}
     for split_name, split_data in splits.items():
-        split_path = Path(OUTPUTS_DIR) / f"{split_name}_split.jsonl"
-        with open(split_path, "w") as f:
+        split_path = f"{OUTPUTS_DIR}/{split_name}_split.jsonl"
+        with open(split_path, "w", encoding="utf-8") as f:
             for ex in split_data:
                 f.write(json.dumps(ex, ensure_ascii=False) + "\n")
-        print(f"  {split_name}: {len(split_data)} examples → {split_path}")
+        split_counts[split_name] = len(split_data)
 
     stats = {
-        "total":         n,
-        "train":         len(splits["train"]),
-        "val":           len(splits["val"]),
-        "test":          len(splits["test"]),
-        "total_skipped": total_skipped,
-        "topics":        list(TOPICS.keys()),
+        "total":  n,
+        **split_counts,
+        "topics": [p.stem for p in ckpt_files],
         "teacher_model": GGUF_FILENAME,
+        "dedup": dedup_stats,
     }
-    stats_path.write_text(json.dumps(stats, indent=2))
-    volume.commit()
+    with open(f"{OUTPUTS_DIR}/dataset_stats.json", "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2)
 
+    volume.commit()
+    print(f"[merge] {n} total examples merged and split, committed to volume.")
+    return stats
+
+
+@app.local_entrypoint()
+def main(
+    n_per_topic: int = 200,
+    resume: bool = False,
+    dedup: bool = True,
+):
+    # check which topics already have a checkpoint file on the volume
+    completed: set[str] = set()
+    if resume:
+        volume.reload()
+        try:
+            for p in Path(CHECKPOINT_DIR.lstrip("/")).glob("*.jsonl"):
+                completed.add(p.stem)
+        except Exception:
+            pass
+        print(f"[resume] Skipping {len(completed)} completed topics: {completed}")
+
+    topics_to_run = {k: v for k, v in TOPICS.items() if k not in completed}
+    if not topics_to_run:
+        print("All topics already completed. Skipping straight to merge.")
+    else:
+        n_per_scenario = max(1, n_per_topic // len(list(topics_to_run.values())[0]))
+
+        print(f"\nAiko Persona Dataset Gen")
+        print(f"  GPU           : {GPU_TYPE}")
+        print(f"  ctx-size      : {LLAMA_CTX}  parallel: {LLAMA_PARALLEL}")
+        print(f"  Topics to run : {len(topics_to_run)}")
+        print(f"  N per topic   : {n_per_topic}")
+        print(f"  N per scenario: {n_per_scenario}")
+        print(f"  Teacher model : {GGUF_FILENAME}\n")
+
+        topic_args = [(topic, scenarios, n_per_scenario) for topic, scenarios in topics_to_run.items()]
+        for result in generate_topic_batch.starmap(topic_args):
+            print(f"  ✓ topic '{result['topic']}': {result['n_examples']} examples, {result['skipped']} skipped (committed to volume)")
+
+    print("\nMerging + splitting on the volume server-side...")
+    stats = merge_and_split.remote(dedup=dedup)
     print(f"\n✓ Dataset generation complete.")
-    print(f"  Total valid examples : {n}")
-    print(f"  Total skipped        : {total_skipped}")
-    print(f"  Saved to volume      : {VOLUME_NAME}/outputs/")
+    print(json.dumps(stats, indent=2))
+    print(f"\nDownload with:")
+    print(f"  modal volume get {VOLUME_NAME} outputs/aiko_persona_dataset.jsonl ./")
+    print(f"  modal volume get {VOLUME_NAME} outputs/dataset_stats.json ./")
+    if dedup:
+        print(f"  modal volume get {VOLUME_NAME} outputs/dedup_report.json ./")
