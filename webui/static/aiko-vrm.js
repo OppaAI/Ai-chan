@@ -370,19 +370,154 @@ function applyGestures(dt) {
       if (spine) spine.rotation.y = blend(0, gestureTarget.look * 0.08, held);
       break;
 
-    case 'lookAtHand':
-      if (side < 0) {
-        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.55, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.55, 1); }
-        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.72, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.22, 1); }
-        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, intensity * 0.22, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.30, 1); }
+    case 'lookAtHand': {
+      const s = side < 0 ? -1 : 1;
+    
+      let handBone = null;
+    
+      // -----------------------------
+      // Pose arm
+      // -----------------------------
+      if (s < 0) {
+        handBone = lH;
+    
+        if (lUA) {
+          lUA.rotation.x = blend(
+            REST.leftUpperArm.x + io.lUA.x,
+            -0.45 * intensity,
+            1
+          );
+    
+          lUA.rotation.z = blend(
+            REST.leftUpperArm.z + io.lUA.z,
+            -0.70 * intensity,
+            1
+          );
+        }
+    
+        if (lLA) {
+          lLA.rotation.x = blend(
+            REST.leftLowerArm.x + io.lLA.x,
+            -0.95 * intensity,
+            1
+          );
+    
+          lLA.rotation.z = blend(
+            REST.leftLowerArm.z + io.lLA.z,
+            -0.15 * intensity,
+            1
+          );
+        }
+    
+        if (lH) {
+          lH.rotation.x = blend(
+            REST.leftHand.x + io.lH.x,
+            0.25 * intensity,
+            1
+          );
+    
+          lH.rotation.y = blend(
+            REST.leftHand.y + io.lH.y,
+            0.45 * intensity,
+            1
+          );
+        }
       } else {
-        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.55, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.55, 1); }
-        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.72, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.22, 1); }
-        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, intensity * 0.22, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.30, 1); }
+        handBone = rH;
+    
+        if (rUA) {
+          rUA.rotation.x = blend(
+            REST.rightUpperArm.x + io.rUA.x,
+            -0.45 * intensity,
+            1
+          );
+    
+          rUA.rotation.z = blend(
+            REST.rightUpperArm.z + io.rUA.z,
+            0.70 * intensity,
+            1
+          );
+        }
+    
+        if (rLA) {
+          rLA.rotation.x = blend(
+            REST.rightLowerArm.x + io.rLA.x,
+            -0.95 * intensity,
+            1
+          );
+    
+          rLA.rotation.z = blend(
+            REST.rightLowerArm.z + io.rLA.z,
+            0.15 * intensity,
+            1
+          );
+        }
+    
+        if (rH) {
+          rH.rotation.x = blend(
+            REST.rightHand.x + io.rH.x,
+            0.25 * intensity,
+            1
+          );
+    
+          rH.rotation.y = blend(
+            REST.rightHand.y + io.rH.y,
+            -0.45 * intensity,
+            1
+          );
+        }
       }
-      if (head) { head.rotation.y = blend(io.head.y, side * intensity * 0.28, 1); head.rotation.x = blend(io.head.x, intensity * 0.12, 1); }
-      if (neck) neck.rotation.y = blend(io.neck.y, side * intensity * 0.14, 1);
+    
+      // -----------------------------
+      // True head tracking
+      // -----------------------------
+      if (head && handBone) {
+        const handPos = new THREE.Vector3();
+        const headPos = new THREE.Vector3();
+    
+        handBone.getWorldPosition(handPos);
+        head.getWorldPosition(headPos);
+    
+        const dir = handPos.sub(headPos).normalize();
+    
+        const yaw = Math.atan2(dir.x, dir.z);
+    
+        const pitch = Math.atan2(
+          -dir.y,
+          Math.sqrt(dir.x * dir.x + dir.z * dir.z)
+        );
+    
+        // Neck follows partially
+        if (neck) {
+          neck.rotation.y = blend(
+            io.neck.y,
+            yaw * 0.35 * intensity,
+            1
+          );
+    
+          neck.rotation.x = blend(
+            io.neck.x,
+            pitch * 0.35 * intensity,
+            1
+          );
+        }
+    
+        // Head follows more strongly
+        head.rotation.y = blend(
+          io.head.y,
+          yaw * 0.75 * intensity,
+          1
+        );
+    
+        head.rotation.x = blend(
+          io.head.x,
+          pitch * 0.75 * intensity,
+          1
+        );
+      }
+    
       break;
+    }
 
     case 'hairBrush':
       if (side < 0) {
