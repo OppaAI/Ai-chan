@@ -201,10 +201,10 @@ def _build_hugo_post(
     Assemble Hugo front matter + body.
 
     Returns (slug, markdown_content).
-    Slug format: YYYY-MM-DD-daily-reflection
+    Slug format: YYYY-MM-DD-day-reflection
     """
     date_str  = date.strftime("%Y-%m-%d")
-    slug      = f"{date_str}-daily-reflection"
+    slug      = f"{date_str}-day-reflection"
     tags_list = [t.strip() for t in REFLECT_TAGS.split(",") if t.strip()]
     tags_yaml = "\n".join(f'  - "{t}"' for t in tags_list)
 
@@ -317,7 +317,8 @@ def generate_and_post(
     Returns dict: {success, slug, word_count, mem_count, duration_s, prose, ascii_art, pinned}
     """
     t_start    = time.perf_counter()
-    write_time = datetime.now(timezone.utc)
+    local_tz   = datetime.now().astimezone().tzinfo
+    write_time = datetime.now(local_tz)
     date       = date or write_time - timedelta(days=1)
 
 
