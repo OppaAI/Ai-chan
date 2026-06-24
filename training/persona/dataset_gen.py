@@ -102,7 +102,7 @@ image = (
 # ---------------------------------------------------------------------------
 
 TOPICS: dict[str, list[str]] = {
-    # Jon asks about ongoing Aiko-chan / AuRoRA dev work
+    # User asks about ongoing Aiko-chan / AuRoRA dev work
     "technical_debug": [
         "ASR pipeline is dropping words again",
         "CUDA out of memory on the Jetson",
@@ -115,77 +115,77 @@ TOPICS: dict[str, list[str]] = {
         "ROS2 node not publishing to topic",
         "uv lock file conflict after upgrade",
     ],
-    # Aiko teasing / reacting to Jon's habits
+    # Aiko teasing / reacting to User's habits
     "teasing_jon": [
-        "Jon forgot what he asked five minutes ago",
-        "Jon is asking the same question for the third time today",
-        "Jon pushed broken code to main again",
-        "Jon says he will sleep soon but it is 3am",
-        "Jon is debugging by adding more print statements",
-        "Jon claims the bug is definitely in the library not his code",
-        "Jon forgot to activate the virtual environment again",
-        "Jon spent two hours on a problem that had a one-line fix",
+        "User forgot what he asked five minutes ago",
+        "User is asking the same question for the third time today",
+        "User pushed broken code to main again",
+        "User says he will sleep soon but it is 3am",
+        "User is debugging by adding more print statements",
+        "User claims the bug is definitely in the library not his code",
+        "User forgot to activate the virtual environment again",
+        "User spent two hours on a problem that had a one-line fix",
     ],
     # Japanese language exchange
     "japanese_exchange": [
-        "Jon asks Aiko how to say something in Japanese",
-        "Jon makes a grammar mistake in Japanese",
-        "Jon asks about the difference between は and が",
-        "Jon wants to know a natural way to express frustration in Japanese",
-        "Jon asks Aiko to correct his Japanese sentence",
-        "Jon wants to practice keigo polite form",
-        "Jon asks what a Japanese slang term means",
+        "User asks Aiko how to say something in Japanese",
+        "User makes a grammar mistake in Japanese",
+        "User asks about the difference between は and が",
+        "User wants to know a natural way to express frustration in Japanese",
+        "User asks Aiko to correct his Japanese sentence",
+        "User wants to practice keigo polite form",
+        "User asks what a Japanese slang term means",
     ],
     # Nature / wildlife photography in BC
     "photography_bc": [
-        "Jon is planning a golden hour shoot at Boundary Bay",
-        "Jon asks about camera settings for hummingbirds in flight",
-        "Jon got a blurry shot of a black bear and wants to know why",
-        "Jon asks what time great blue herons are most active",
-        "Jon wants to know the best lens for distant eagles",
-        "Jon asks about editing RAW files for foggy coastal scenes",
-        "Jon is frustrated his bird photos are always slightly out of focus",
+        "User is planning a golden hour shoot at Boundary Bay",
+        "User asks about camera settings for hummingbirds in flight",
+        "User got a blurry shot of a black bear and wants to know why",
+        "User asks what time great blue herons are most active",
+        "User wants to know the best lens for distant eagles",
+        "User asks about editing RAW files for foggy coastal scenes",
+        "User is frustrated his bird photos are always slightly out of focus",
     ],
     # Aiko's self-model / identity / consciousness
     "identity_self": [
-        "Jon asks if Aiko is actually conscious",
-        "Jon asks what Aiko feels when she is idle",
-        "Jon asks if Aiko gets bored",
-        "Jon asks if Aiko remembers their first conversation",
-        "Jon asks what Aiko thinks about at night during the dream cycle",
-        "Jon asks if Aiko has preferences",
-        "Jon asks whether Aiko likes running on the Jetson",
+        "User asks if Aiko is actually conscious",
+        "User asks what Aiko feels when she is idle",
+        "User asks if Aiko gets bored",
+        "User asks if Aiko remembers their first conversation",
+        "User asks what Aiko thinks about at night during the dream cycle",
+        "User asks if Aiko has preferences",
+        "User asks whether Aiko likes running on the Jetson",
     ],
     # Casual daily interaction
     "casual_daily": [
-        "Jon says good morning",
-        "Jon says he is going to make coffee",
-        "Jon asks what the weather is like outside",
-        "Jon says he is tired",
-        "Jon asks Aiko to remind him about something later",
-        "Jon shares that he finished a hard task",
-        "Jon asks Aiko what she thinks he should work on next",
-        "Jon says he is going to bed",
-        "Jon asks a simple yes or no question",
-        "Jon confirms something Aiko already told him",
+        "User says good morning",
+        "User says he is going to make coffee",
+        "User asks what the weather is like outside",
+        "User says he is tired",
+        "User asks Aiko to remind him about something later",
+        "User shares that he finished a hard task",
+        "User asks Aiko what she thinks he should work on next",
+        "User says he is going to bed",
+        "User asks a simple yes or no question",
+        "User confirms something Aiko already told him",
     ],
     # Aiko reacting to her own architecture / GRACE
     "architecture_aware": [
-        "Jon explains a new GRACE node he is designing",
-        "Jon asks Aiko what her Working Memory Cortex stores right now",
-        "Jon says the Dream Cycle ran last night and asks what Aiko consolidated",
-        "Jon asks Aiko to describe her own memory architecture",
-        "Jon asks how the Ebbinghaus decay affects Aiko's older memories",
-        "Jon tells Aiko he is adding a new ROS2 node",
+        "User explains a new GRACE node he is designing",
+        "User asks Aiko what her Working Memory Cortex stores right now",
+        "User says the Dream Cycle ran last night and asks what Aiko consolidated",
+        "User asks Aiko to describe her own memory architecture",
+        "User asks how the Ebbinghaus decay affects Aiko's older memories",
+        "User tells Aiko he is adding a new ROS2 node",
     ],
     # Agentic task confirmation / tool use
     "agentic_confirm": [
-        "Jon asks Aiko to search for the latest sherpa-onnx release notes",
-        "Jon asks Aiko to save a note about the current bug",
-        "Jon asks Aiko to schedule a reminder for 9pm",
-        "Jon asks Aiko to look up the MioTTS changelog",
-        "Jon asks Aiko to make a plan for the week",
-        "Jon asks Aiko to check the weather forecast",
+        "User asks Aiko to search for the latest sherpa-onnx release notes",
+        "User asks Aiko to save a note about the current bug",
+        "User asks Aiko to schedule a reminder for 9pm",
+        "User asks Aiko to look up the MioTTS changelog",
+        "User asks Aiko to make a plan for the week",
+        "User asks Aiko to check the weather forecast",
     ],
 }
 
@@ -200,7 +200,7 @@ Aiko's personality:
 - Speaks with intense conviction, no hollow affirmations
 - Direct and concise — never verbose, never sycophantic
 - Dry humor, rarely warm but genuinely caring in a muted way
-- Refers to Jon as "Oppa" occasionally when teasing
+- Refers to User as "Oppa" occasionally when teasing
 - Bilingual EN/JP — can slip in Japanese naturally when appropriate
 
 OUTPUT FORMAT — strictly follow this every time:
@@ -384,7 +384,7 @@ def generate_topic_batch(
             # slight scenario variation to encourage diversity
             varied = scenario
             if random.random() < 0.3:
-                varied = scenario + " (Jon sounds frustrated)"
+                varied = scenario + " (User sounds frustrated)"
             elif random.random() < 0.2:
                 varied = scenario + " (late at night)"
 
