@@ -17,7 +17,7 @@ Optional:
   SOUL_PATH           — path to soul.md (default "config/soul.md")
   REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 20)
   REFLECT_MAX_TURNS   — max chat turns to feed the LLM (default 40)
-  REFLECT_TAGS        — comma-separated Hugo tags (default "daily-summary,ai-journal,aiko")
+  REFLECT_TAGS        — comma-separated Hugo tags (default "daily-reflection,ai-journal,aiko")
   LLM_MODEL          — reuses the main chat model (already in VRAM)
   LLM_BASE_URL       — default http://localhost:8080/v1
   REFLECT_ASCII      — true/false toggle for ASCII art generation (default true)
@@ -56,7 +56,7 @@ SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
 
 REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 20))
 REFLECT_MAX_TURNS = int(os.getenv("REFLECT_MAX_TURNS", 40))
-REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-summary,ai-journal,aiko")
+REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 REFLECT_ASCII     = os.getenv("REFLECT_ASCII", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 _GITHUB_API       = "https://api.github.com"
@@ -201,10 +201,10 @@ def _build_hugo_post(
     Assemble Hugo front matter + body.
 
     Returns (slug, markdown_content).
-    Slug format: YYYY-MM-DD-day-summary
+    Slug format: YYYY-MM-DD-daily-reflection
     """
     date_str  = date.strftime("%Y-%m-%d")
-    slug      = f"{date_str}-day-summary"
+    slug      = f"{date_str}-daily-reflection"
     tags_list = [t.strip() for t in REFLECT_TAGS.split(",") if t.strip()]
     tags_yaml = "\n".join(f'  - "{t}"' for t in tags_list)
 
@@ -214,7 +214,7 @@ def _build_hugo_post(
     # Hugo front matter (YAML)
     front_matter = (
         f'---\n'
-        f'title: "{date_str} Daily Summary"\n'
+        f'title: "{date_str} Daily Reflection"\n'
         f'date: {write_time.strftime("%Y-%m-%dT%H:%M:%S+00:00")}\n'
         f'draft: false\n'
         f'tags:\n'
@@ -258,7 +258,7 @@ def _push_post(slug: str, content: str, date: datetime) -> bool:
     Create or update a Hugo post file via the GitHub Contents API.
 
     File path: {HUGO_CONTENT_PATH}/{slug}.md
-    Commit message: "feat(reflect): add daily summary YYYY-MM-DD"
+    Commit message: "feat(reflect): add daily reflection YYYY-MM-DD"
 
     Returns True on success, False on failure.
     """
@@ -270,7 +270,7 @@ def _push_post(slug: str, content: str, date: datetime) -> bool:
     repo_path  = f"{HUGO_CONTENT_PATH}/{filename}"
     encoded    = base64.b64encode(content.encode()).decode()
     date_str   = date.strftime("%Y-%m-%d")
-    commit_msg = f"feat(reflect): add daily summary {date_str}"
+    commit_msg = f"feat(reflect): add daily reflection {date_str}"
 
     payload: dict = {
         "message": commit_msg,
