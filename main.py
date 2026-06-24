@@ -183,6 +183,9 @@ def _run_tui(stdscr, args):
 def _run_webui(args):
     """Launch Aiko with the browser WebUI."""
     tui = AikoWeb(no_voice=args.text, debug=args.debug)
+    import socket
+    host_ip = socket.gethostbyname(socket.gethostname())
+    print(f"\n  🌸 Aiko-chan is ready → http://{host_ip}:{8787}/\n")
     _run_session(tui, args)
 
 
@@ -245,13 +248,15 @@ def _run_session(tui, args):
     while True:
         try:
             if listen and asr_enabled:
-                user_input = tui.get_voice_input(
+                result = tui.get_voice_input(
                     listen,
                     speak   = speak if tts_enabled else None,
                     wait_fn = None,
                 )
+                user_input = result[0] if isinstance(result, tuple) else result
             else:
-                user_input = tui.get_input()
+                result = tui.get_input()
+                user_input = result[0] if isinstance(result, tuple) else result
         except KeyboardInterrupt:
             tui.add_message('sys', "Fine... I'll be here when you come back.")
             tui._draw()
@@ -424,16 +429,16 @@ def _run_session(tui, args):
                         tui.add_message('sys', f'Search failed: {e}')
                         tui._draw()
                         continue
-                        tui.turn_start()
-                        def _web_token_cb(token):
-                            tui.stream_token(token)
-                            tui._draw(buf=[])
-                        think.chat(
-                            f"Use these web search results to answer the question: {query}\n\n{results}",
-                            token_callback=_web_token_cb,
-                        )
-                        tui.stream_commit()
-                    tui._draw()
+                    tui.turn_start()
+                    def _web_token_cb(token):
+                        tui.stream_token(token)
+                        tui._draw(buf=[])
+                    think.chat(
+                        f"Use these web search results to answer the question: {query}\n\n{results}",
+                        token_callback=_web_token_cb,
+                    )
+                    tui.stream_commit()
+                tui._draw()
 
             else:
                 tui.add_message('sys', f'Unknown command: {user_input}')

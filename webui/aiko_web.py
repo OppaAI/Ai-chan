@@ -110,6 +110,8 @@ class AikoWeb:
     def _start_servers(self) -> None:
         """Spin up the HTTP file server and WebSocket server in daemon threads."""
         # HTTP — serves webui/static/
+        import socket
+        host_ip = socket.gethostbyname(socket.gethostname())
         http_t = threading.Thread(target=self._run_http, daemon=True, name="aiko-http")
         http_t.start()
 
@@ -122,13 +124,12 @@ class AikoWeb:
 
         if not NO_BROWSER:
             # slight delay so the HTTP server is accepting before the browser hits it
-            threading.Timer(0.6, lambda: webbrowser.open(f"http://localhost:{HTTP_PORT}/")).start()
+            threading.Timer(0.6, lambda: webbrowser.open(f"http://{host_ip}:{HTTP_PORT}/")).start()
 
     def _run_http(self) -> None:
         """Serve webui/static/ over plain HTTP."""
         handler = _make_static_handler(STATIC_DIR)
-        with http.server.HTTPServer(("localhost", HTTP_PORT), handler) as srv:
-            log.info("[aiko-web] HTTP  → http://localhost:%d/", HTTP_PORT)
+        with http.server.HTTPServer(("0.0.0.0", HTTP_PORT), handler) as srv:
             srv.serve_forever()
 
     def _run_ws_loop(self) -> None:
@@ -139,8 +140,7 @@ class AikoWeb:
 
     async def _ws_main(self) -> None:
         """Async entry point: start the WS server then signal ready."""
-        async with ws_serve(self._ws_handler, "localhost", WS_PORT):
-            log.info("[aiko-web] WS    → ws://localhost:%d/", WS_PORT)
+        async with ws_serve(self._ws_handler, "0.0.0.0", WS_PORT):
             self._loop_ready.set()
             await asyncio.Future()          # run forever
 
@@ -382,7 +382,10 @@ class AikoWeb:
             self._push_vitals()
 
         self._broadcast({"type": "voice", "status": "idle"})
-        return result_holder[0] or ""
+        raw = result_holder[0]
+        if isinstance(raw, tuple):
+            raw = raw[0]
+        return raw or ""
 
     # ------------------------------------------------------------------
     # spin loop  (called during init phase — just keeps vitals ticking)
