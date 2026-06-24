@@ -81,6 +81,7 @@ image = (
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}",
     })
     .run_commands(
+        # cache-bust: v2
         "ls -la /usr/local/cuda/lib64/stubs/ || true",
         "git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
         "cd /opt/llama.cpp && cmake -B build "
