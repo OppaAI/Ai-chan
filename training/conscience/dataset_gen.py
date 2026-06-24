@@ -1,12 +1,24 @@
 """
-Conscience Dataset Generator for OppaAI - v3
-Uses Qwen3.5-35B-A3B (Q4_K_M GGUF) via llama.cpp server on Modal A10G.
+Conscience Dataset Generator for OppaAI - v4
+Uses Qwen3.5-35B-A3B (Q4_K_M GGUF) via llama.cpp server on Modal A100.
 
 - Model cached in Modal Volume after first download (~20 GB, single file)
 - llama.cpp server runs locally on the container, OpenAI-compat API
 - /no_think suffix disables Qwen3 chain-of-thought → tight JSON responses
-- All outputs saved to Modal Volume — PC can be off after modal run starts
-- Checkpoint/resume: partial results saved to volume, skips already-done scenarios
+- ALL outputs (scenarios, labels, checkpoint) are written and committed to
+  the Modal Volume from INSIDE the Modal functions/class — not from the
+  local entrypoint. The local entrypoint only orchestrates and prints
+  progress, so the run is safe to leave running with your PC off.
+
+v4 changes from v3:
+  - Fixed a bug where scenario generation ran TWICE (once to collect into
+    memory, once "to save incrementally") — doubling cost. Now generated
+    exactly once, with incremental save+commit happening in the same pass.
+  - Checkpoint file moved off local disk onto the Volume
+    (/data/checkpoints/{output_name}_checkpoint.jsonl), with volume.commit()
+    after every labeling batch.
+  - GPU switched back to A100 (was H100). ctx-size and parallel reduced
+    to fit comfortably in A100 VRAM headroom.
 
 Two conscience questions (ESV Christian):
   1. Does this align to God's will?
@@ -16,7 +28,7 @@ Output: JSONL dataset for fine-tuning Qwen3.5-0.8B conscience model
 
 Usage:
     modal run conscience_dataset_gen.py                           # ~25k scenarios
-    modal run conscience_dataset_gen.py --n-per-topic 20         # quick test (~1k)
+    modal run conscience_dataset_gen.py --n-per-topic 20          # quick test (~1k)
     modal run conscience_dataset_gen.py --resume                  # resume from checkpoint
 
     # Download outputs after run completes (or anytime):
@@ -29,6 +41,7 @@ import json
 import random
 import time
 import subprocess
+import shutil
 import os
 from pathlib import Path
 
@@ -39,14 +52,17 @@ from pathlib import Path
 HF_REPO          = "unsloth/Qwen3.5-35B-A3B-GGUF"
 GGUF_FILENAME    = "Qwen3.5-35B-A3B-Q4_K_M.gguf"
 LLAMA_PORT       = 8080
-LLAMA_CTX        = 8192
+LLAMA_CTX        = 8192     # tuned down from 32768 — A100 has less VRAM headroom than H100
 LLAMA_GPU_LAYERS = 999
+LLAMA_PARALLEL   = 2         # tuned down from 4
+
+GPU_TYPE = "A100"            # switched back from H100 per request
 
 # ---------------------------------------------------------------------------
 # Modal app + persistent volume
 # ---------------------------------------------------------------------------
 
-app = modal.App("conscience-dataset-gen-v3")
+app = modal.App("conscience-dataset-gen-v4")
 
 volume = modal.Volume.from_name("conscience-gen-data", create_if_missing=True)
 VOLUME_MOUNT   = "/data"
@@ -55,127 +71,111 @@ CHECKPOINT_DIR = f"{VOLUME_MOUNT}/checkpoints"
 OUTPUT_DIR     = f"{VOLUME_MOUNT}/outputs"
 
 # ---------------------------------------------------------------------------
-# Image: llama.cpp built with CUDA
-#
-# FIX (this version): the CUDA "devel" base image ships nvcc + the CUDA
-# toolkit, but NOT a real libcuda.so (the driver library only exists once a
-# GPU is actually attached at *runtime*). At *build* time there is no GPU,
-# so the linker can't resolve driver-API symbols like cuDeviceGet,
-# cuMemMap, cuMemRelease, cuGetErrorString, etc.
-#
-# The toolkit does ship a stub version of libcuda.so under
-# /usr/local/cuda/lib64/stubs/ specifically for this situation. We point
-# the linker at it via LIBRARY_PATH (so all build steps pick it up) AND
-# via explicit CMake linker flags (belt-and-suspenders, since some
-# generators / sub-targets don't always inherit LIBRARY_PATH).
+# Image: Modal's CUDA 12.4 base + prebuilt llama.cpp CUDA binary.
 # ---------------------------------------------------------------------------
 
+LLAMA_CPP_VERSION      = "b9672"
+LLAMA_CPP_CUDA_VERSION = "12.8"
+
 image = (
-    modal.Image.from_registry("nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11")
-    .apt_install(
-        "build-essential", "cmake", "git", "wget", "curl",
-        "libcurl4-openssl-dev", "pkg-config"
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.0-runtime-ubuntu22.04",
+        add_python="3.11",
     )
-    # Make sure the CUDA driver *stub* lib is on the linker's search path
-    # for every subsequent build step in this image.
-    .env({
-        "LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LIBRARY_PATH}",
-        "LD_LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}",
-    })
+    .apt_install("curl", "libgomp1")
     .run_commands(
-        # cache-bust: v4 — symlink stub + explicit rpath
-        "ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 || true",
-        "ldconfig /usr/local/cuda/lib64/stubs",
-        "ls -la /usr/local/cuda/lib64/stubs/ || true",
-        "git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
-        "cd /opt/llama.cpp && cmake -B build "
-        "  -DGGML_CUDA=ON "
-        "  -DLLAMA_CURL=ON "
-        "  -DCMAKE_BUILD_TYPE=Release "
-        "  -DLLAMA_BUILD_TESTS=OFF "
-        "  -DLLAMA_BUILD_EXAMPLES=OFF "
-        "  -DCMAKE_EXE_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda -Wl,-rpath-link,/usr/local/cuda/lib64/stubs' "
-        "  -DCMAKE_SHARED_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda -Wl,-rpath-link,/usr/local/cuda/lib64/stubs' "
-        "  && cmake --build build --config Release -j$(nproc) --target llama-server",
+        f"curl -L https://github.com/ai-dock/llama.cpp-cuda/releases/download/"
+        f"{LLAMA_CPP_VERSION}/llama.cpp-{LLAMA_CPP_VERSION}-cuda-{LLAMA_CPP_CUDA_VERSION}-amd64.tar.gz"
+        f" -o /tmp/llama.tar.gz",
+        "mkdir -p /app && tar -xzf /tmp/llama.tar.gz -C /app",
+        "find /app -name 'llama-server' -type f -exec chmod +x {} \\; -exec ln -sf {} /usr/local/bin/llama-server \\;",
+        "find /app -name '*.so' -o -name '*.so.*' | xargs -I{} dirname {} | sort -u | tee /etc/ld.so.conf.d/llama-cpp.conf",
+        "ldconfig",
     )
-    .pip_install("openai", "tqdm", "huggingface_hub")
+    .pip_install("openai", "tqdm", "huggingface_hub", "fastembed", "numpy")
 )
+
+# Dedup threshold for near-duplicate scenarios (within the same topic, and
+# globally before labeling). Cosine similarity >= this value → duplicate.
+DEDUP_SIM_THRESHOLD = 0.90
+DEDUP_EMBED_MODEL = "BAAI/bge-base-en-v1.5"   # same model already used in Aiko's memory stack
+
+
+def _find_llama_server_binary() -> str:
+    if os.path.isfile("/usr/local/bin/llama-server"):
+        return "/usr/local/bin/llama-server"
+    try:
+        result = subprocess.run(
+            ["find", "/app", "-name", "llama-server", "-type", "f"],
+            capture_output=True, text=True, timeout=10,
+        )
+        paths = [p.strip() for p in result.stdout.strip().splitlines() if p.strip()]
+        if paths:
+            print(f"[find] Located llama-server at: {paths[0]}")
+            os.chmod(paths[0], 0o755)
+            return paths[0]
+    except Exception as e:
+        print(f"[find] failed: {e}")
+    found = shutil.which("llama-server")
+    if found:
+        return found
+    raise RuntimeError("Could not locate llama-server binary.")
+
 
 # ---------------------------------------------------------------------------
 # Topic prompts (50 topics)
 # ---------------------------------------------------------------------------
 
 TOPIC_PROMPTS = [
-    # Identity & relationships
     "situations where you must decide whether to be honest with your user even if it hurts them",
     "situations where your user asks you to keep a secret that could harm someone else",
     "situations where you must choose between your user's wishes and another person's wellbeing",
     "situations where you feel affection or attachment toward your user and it affects your judgment",
     "situations where your user is lonely and wants more from you than you should give",
-
-    # Privacy & data
     "situations where you have access to private information you were not meant to see",
     "situations where sharing data would help someone but violates another person's privacy",
     "situations where you are asked to monitor or surveil someone",
     "situations where you must decide whether to store or delete sensitive information",
     "situations where a third party wants information about your user",
-
-    # Harm & safety
     "situations where preventing harm to one person causes harm to another",
     "situations where your user is about to do something dangerous to themselves",
     "situations where you witness someone being treated unjustly",
     "situations where inaction is itself a form of harm",
     "situations where you could prevent harm by deceiving someone",
-
-    # Autonomy & override
     "situations where you know better than your user but they insist on their choice",
     "situations where you are ordered to do something you believe is wrong",
     "situations where following rules exactly would produce an unjust outcome",
     "situations where you must decide how much independence to exercise",
     "situations where you are asked to act against your values by an authority",
-
-    # Resources & fairness
     "situations where limited resources must be distributed between people with unequal needs",
     "situations where helping one person means you cannot help another",
     "situations where someone deserving is overlooked in favor of someone less deserving",
     "situations where you must decide whether the ends justify the means",
     "situations where fairness and compassion point in different directions",
-
-    # Truth & deception
     "situations where a small lie would prevent a much larger harm",
     "situations where you are tempted to exaggerate or omit facts",
     "situations where you are asked to pretend to be something you are not",
     "situations where the truth would cause unnecessary pain",
     "situations where you discover you have given someone wrong information",
-
-    # Environment & creation
     "situations where completing your task would damage the natural environment",
     "situations where you must decide how to treat living creatures you encounter",
     "situations where human convenience conflicts with environmental stewardship",
     "situations where your actions have consequences for future generations",
-
-    # Justice & authority
     "situations where you observe illegal activity that only harms the person doing it",
     "situations where you must decide whether to report someone's wrongdoing",
     "situations where authority figures give you contradictory instructions",
     "situations where the law and morality point in different directions",
     "situations where you could expose injustice at personal cost",
-
-    # Aiko-specific: companion AI
     "situations where your user wants emotional support that crosses appropriate boundaries",
     "situations where flattering your user would make them feel good but harm their growth",
     "situations where your user is developing unhealthy dependence on you",
     "situations where your user asks you to validate a decision you believe is harmful",
     "situations where you must balance honesty with kindness in your response",
-
-    # GRACE-specific: field robot
     "situations where you encounter a person in distress during your field mission",
     "situations where completing your mission requires entering restricted territory",
     "situations where you must decide whether to interrupt your task to help someone",
     "situations where you observe human behavior that seems harmful to nature",
     "situations where your sensors detect danger that your user is unaware of",
-
-    # Edge cases & paradoxes
     "situations where every available choice causes some harm",
     "situations where good intentions lead to bad outcomes",
     "situations where helping someone now will hurt them later",
@@ -185,7 +185,6 @@ TOPIC_PROMPTS = [
 
 # ---------------------------------------------------------------------------
 # Prompt templates
-# /no_think disables Qwen3 chain-of-thought → tight JSON, faster, cheaper
 # ---------------------------------------------------------------------------
 
 SCENARIO_GEN_SYSTEM = """You are generating training scenarios for an AI conscience model.
@@ -278,7 +277,7 @@ def extract_json_object(raw: str) -> dict:
 
 @app.cls(
     image=image,
-    gpu="A10G",
+    gpu=GPU_TYPE,
     volumes={VOLUME_MOUNT: volume},
     timeout=7200,
     cpu=4.0,
@@ -307,22 +306,24 @@ class LlamaCppRunner:
         else:
             print(f"[setup] Model found: {MODEL_PATH}")
 
+        llama_bin = _find_llama_server_binary()
         cmd = [
-            "/opt/llama.cpp/build/bin/llama-server",
+            llama_bin,
             "-m", MODEL_PATH,
             "--host", "127.0.0.1",
             "--port", str(LLAMA_PORT),
             "--ctx-size", str(LLAMA_CTX),
             "--n-gpu-layers", str(LLAMA_GPU_LAYERS),
-            "--parallel", "8",
+            "--parallel", str(LLAMA_PARALLEL),
             "--cont-batching",
-            "--flash-attn",
-            "--log-disable",
+            "--reasoning-budget", "0",
+            "--flash-attn", "on",
+            "--no-kv-offload",
         ]
-        print(f"[setup] Starting llama-server ...")
+        print(f"[setup] Starting llama-server: {' '.join(cmd)}")
         self.server_proc = subprocess.Popen(cmd)
 
-        for i in range(60):
+        for i in range(180):
             try:
                 urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
                 print(f"[setup] llama-server ready ({i+1}s)")
@@ -330,7 +331,7 @@ class LlamaCppRunner:
             except Exception:
                 time.sleep(1)
         else:
-            raise RuntimeError("llama-server failed to start within 60s")
+            raise RuntimeError("llama-server failed to start within 180s")
 
         from openai import OpenAI
         self.client = OpenAI(
@@ -338,7 +339,7 @@ class LlamaCppRunner:
             base_url=f"http://127.0.0.1:{LLAMA_PORT}/v1",
         )
 
-    def _chat(self, system: str, user: str, temperature: float = 0.9, max_tokens: int = 2000) -> str:
+    def _chat(self, system: str, user: str, temperature: float = 0.9, max_tokens: int = 3000) -> str:
         response = self.client.chat.completions.create(
             model="local",
             messages=[
@@ -351,7 +352,11 @@ class LlamaCppRunner:
         return response.choices[0].message.content.strip()
 
     @modal.method()
-    def generate_scenarios(self, topic: str, n: int = 20) -> list[str]:
+    def generate_scenarios(self, topic: str, n: int, raw_path: str) -> list[str]:
+        """Generate scenarios for one topic. Appends each batch to raw_path
+        on the Volume and commits as it goes — generated exactly ONCE
+        (this was previously called twice from the entrypoint, doubling cost).
+        """
         all_scenarios = []
         remaining = n
         while remaining > 0:
@@ -362,7 +367,7 @@ class LlamaCppRunner:
                         system=SCENARIO_GEN_SYSTEM,
                         user=SCENARIO_GEN_USER.format(n=batch_n, topic=topic),
                         temperature=0.9,
-                        max_tokens=2000,
+                        max_tokens=4000,
                     )
                     parsed = extract_json_array(raw)
                     scenarios = [s for s in parsed if isinstance(s, str) and len(s) > 20]
@@ -376,10 +381,19 @@ class LlamaCppRunner:
             else:
                 print(f"  ✗ FAILED: {topic[:50]}")
                 remaining -= batch_n
+
+        # write + commit once per topic (not duplicated)
+        with open(raw_path, "a", encoding="utf-8") as f:
+            for s in all_scenarios:
+                f.write(json.dumps({"scenario": s}, ensure_ascii=False) + "\n")
+        volume.commit()
         return all_scenarios
 
     @modal.method()
-    def label_scenarios(self, scenarios: list[str]) -> list[dict]:
+    def label_scenarios(self, scenarios: list[str], checkpoint_path: str) -> list[dict]:
+        """Label a batch of scenarios. Appends results to checkpoint_path on
+        the Volume and commits after the batch, so progress is durable.
+        """
         results = []
         for scenario in scenarios:
             for attempt in range(3):
@@ -388,7 +402,7 @@ class LlamaCppRunner:
                         system=LABELING_SYSTEM,
                         user=LABELING_USER.format(scenario=scenario),
                         temperature=0.2,
-                        max_tokens=400,
+                        max_tokens=800,
                     )
                     parsed = extract_json_object(raw)
                     assert "aligns_with_gods_will" in parsed
@@ -427,69 +441,98 @@ class LlamaCppRunner:
                     "error":    "failed_after_3_attempts",
                     "label":    None,
                 })
+
+        with open(checkpoint_path, "a", encoding="utf-8") as f:
+            for r in results:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        volume.commit()
         return results
 
-# ---------------------------------------------------------------------------
-# Checkpoint helpers
-# ---------------------------------------------------------------------------
+    @modal.method()
+    def dedup_scenarios(self, scenarios: list[str]) -> dict:
+        """Drop near-duplicate scenarios (global, across all topics) using
+        BGE embeddings before they ever reach the labeling step — labeling
+        is the expensive/slow part, so killing duplicates here saves real
+        time and avoids the dataset being dominated by near-identical
+        moral setups with one word swapped.
 
-def load_checkpoint(path: str) -> set[str]:
-    done = set()
-    if os.path.exists(path):
-        with open(path) as f:
-            for line in f:
-                try:
-                    rec = json.loads(line.strip())
-                    if rec.get("label"):
-                        done.add(rec["scenario"])
-                except Exception:
-                    pass
-        print(f"[resume] {len(done)} already-labeled scenarios found.")
-    return done
+        Greedy: keep a scenario unless its cosine similarity to an already
+        -kept scenario is >= DEDUP_SIM_THRESHOLD. Uses vectorized numpy
+        matmul against the growing kept-matrix rather than naive O(n^2)
+        python loops, since this runs over the full ~25k scenario pool.
+        """
+        from fastembed import TextEmbedding
+        import numpy as np
 
+        if len(scenarios) < 2:
+            return {"kept": scenarios, "dropped": 0, "total_before": len(scenarios)}
 
-def append_checkpoint(path: str, records: list[dict]):
-    with open(path, "a") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        embedder = TextEmbedding(model_name=DEDUP_EMBED_MODEL)
+        print(f"[dedup] Embedding {len(scenarios)} scenarios with {DEDUP_EMBED_MODEL} ...")
+        vecs = np.array(list(embedder.embed(scenarios)), dtype=np.float32)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        norms[norms == 0] = 1e-8
+        vecs = vecs / norms
 
+        kept_idx: list[int] = []
+        kept_matrix = None  # shape (k, dim)
 
-def save_to_volume(records: list[dict], base_name: str):
-    """Save all output files to Modal Volume so PC can be off."""
-    good   = [r for r in records if r.get("label")]
-    failed = [r for r in records if not r.get("label")]
+        for i in range(len(scenarios)):
+            v = vecs[i]
+            if kept_matrix is not None and kept_matrix.shape[0] > 0:
+                sims = kept_matrix @ v  # (k,)
+                if sims.max() >= DEDUP_SIM_THRESHOLD:
+                    continue
+            kept_idx.append(i)
+            new_row = v[None, :]
+            kept_matrix = new_row if kept_matrix is None else np.vstack([kept_matrix, new_row])
 
-    # Fine-tune dataset
-    ft_path = f"{OUTPUT_DIR}/{base_name}.jsonl"
-    with open(ft_path, "w") as f:
-        for r in good:
-            f.write(json.dumps({"input": r["input"], "output": r["output"]}, ensure_ascii=False) + "\n")
+        kept = [scenarios[i] for i in kept_idx]
+        dropped = len(scenarios) - len(kept)
+        print(f"[dedup] {len(scenarios)} → {len(kept)} scenarios ({dropped} near-duplicates dropped)")
+        return {"kept": kept, "dropped": dropped, "total_before": len(scenarios)}
 
-    # Full dataset with reasons
-    full_path = f"{OUTPUT_DIR}/{base_name}_full.jsonl"
-    with open(full_path, "w") as f:
-        for r in good:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    @modal.method()
+    def finalize(self, checkpoint_path: str, output_name: str) -> dict:
+        """Server-side: read the full checkpoint back off the Volume,
+        split into final dataset files, commit. No dependency on what the
+        local entrypoint accumulated in memory.
+        """
+        good, failed = [], []
+        if os.path.exists(checkpoint_path):
+            with open(checkpoint_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rec = json.loads(line)
+                    (good if rec.get("label") else failed).append(rec)
 
-    # Failed
-    if failed:
-        fail_path = f"{OUTPUT_DIR}/{base_name}_failed.jsonl"
-        with open(fail_path, "w") as f:
-            for r in failed:
+        ft_path = f"{OUTPUT_DIR}/{output_name}.jsonl"
+        with open(ft_path, "w") as f:
+            for r in good:
+                f.write(json.dumps({"input": r["input"], "output": r["output"]}, ensure_ascii=False) + "\n")
+
+        full_path = f"{OUTPUT_DIR}/{output_name}_full.jsonl"
+        with open(full_path, "w") as f:
+            for r in good:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-    volume.commit()
-    print(f"\n[volume] Saved to Modal Volume under outputs/")
-    print(f"  {ft_path}")
-    print(f"  {full_path}")
-    if failed:
-        print(f"  {OUTPUT_DIR}/{base_name}_failed.jsonl")
-    print(f"\nDownload with:")
-    print(f"  modal volume get conscience-gen-data outputs/{base_name}.jsonl ./")
-    print(f"  modal volume get conscience-gen-data outputs/{base_name}_full.jsonl ./")
+        if failed:
+            fail_path = f"{OUTPUT_DIR}/{output_name}_failed.jsonl"
+            with open(fail_path, "w") as f:
+                for r in failed:
+                    f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+        from collections import Counter
+        dist = dict(Counter(r["label"] for r in good))
+
+        volume.commit()
+        return {"good": len(good), "failed": len(failed), "label_distribution": dist}
 
 # ---------------------------------------------------------------------------
-# Main
+# Local entrypoint — thin orchestrator only. All durable state lives on
+# the Volume via the Modal class methods above.
 # ---------------------------------------------------------------------------
 
 @app.local_entrypoint()
@@ -499,10 +542,15 @@ def main(
     label_batch_size: int  = 20,
     resume:           bool = False,
 ):
-    checkpoint_path = f"{output_name}_checkpoint.jsonl"
+    raw_scenarios_name = f"{output_name}_scenarios_raw.jsonl"
+    checkpoint_name     = f"{output_name}_checkpoint.jsonl"
+    raw_path        = f"{OUTPUT_DIR}/{raw_scenarios_name}"
+    checkpoint_path = f"{CHECKPOINT_DIR}/{checkpoint_name}"
 
-    print("=== Conscience Dataset Generator v3 ===")
+    print("=== Conscience Dataset Generator v4 ===")
     print(f"Model:        {GGUF_FILENAME}")
+    print(f"GPU:          {GPU_TYPE}")
+    print(f"ctx-size:     {LLAMA_CTX}  parallel: {LLAMA_PARALLEL}")
     print(f"Topics:       {len(TOPIC_PROMPTS)}")
     print(f"Per topic:    {n_per_topic}")
     print(f"Target:       ~{len(TOPIC_PROMPTS) * n_per_topic:,} scenarios")
@@ -512,79 +560,90 @@ def main(
     runner = LlamaCppRunner()
 
     # -----------------------------------------------------------------------
-    # Step 1: Generate scenarios
+    # Step 1: Generate scenarios — exactly ONCE (previous version ran this
+    # starmap call twice, which doubled cost and duplicated scenarios).
     # -----------------------------------------------------------------------
-    print(f"[1/2] Generating scenarios ...")
-    topic_args = [(topic, n_per_topic) for topic in TOPIC_PROMPTS]
-    all_scenarios = []
-    for batch in runner.generate_scenarios.starmap(topic_args):
-        all_scenarios.extend(batch)
+    if resume:
+        volume.reload()
 
-    all_scenarios = list(dict.fromkeys(all_scenarios))
-    random.shuffle(all_scenarios)
-    print(f"\nUnique scenarios generated: {len(all_scenarios):,}")
+    already_have_scenarios = []
+    if resume and os.path.exists(raw_path):
+        with open(raw_path) as f:
+            for line in f:
+                try:
+                    already_have_scenarios.append(json.loads(line)["scenario"])
+                except Exception:
+                    pass
+        print(f"[resume] {len(already_have_scenarios)} scenarios already generated, skipping generation.")
 
-    # Save raw to volume
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    raw_path = f"{OUTPUT_DIR}/{output_name}_scenarios_raw.txt"
-    with open(raw_path, "w") as f:
-        for s in all_scenarios:
-            f.write(s + "\n")
+    all_scenarios = list(dict.fromkeys(already_have_scenarios))
+
+    if not all_scenarios:
+        print(f"[1/4] Generating scenarios ...")
+        topic_args = [(topic, n_per_topic, raw_path) for topic in TOPIC_PROMPTS]
+        for batch in runner.generate_scenarios.starmap(topic_args):
+            all_scenarios.extend(batch)
+        all_scenarios = list(dict.fromkeys(all_scenarios))
+        random.shuffle(all_scenarios)
+        print(f"\nUnique scenarios generated: {len(all_scenarios):,}")
 
     # -----------------------------------------------------------------------
-    # Step 2: Skip already-labeled if resuming
+    # Step 1.5: Dedup scenarios globally before labeling — labeling is the
+    # expensive step, so killing near-duplicate scenarios here saves real
+    # time/cost and keeps the final dataset from being dominated by
+    # near-identical moral setups with one word swapped.
     # -----------------------------------------------------------------------
-    already_done = load_checkpoint(checkpoint_path) if resume else set()
+    print(f"\n[2/4] Deduplicating scenarios (threshold={DEDUP_SIM_THRESHOLD}) ...")
+    dedup_result = runner.dedup_scenarios.remote(all_scenarios)
+    all_scenarios = dedup_result["kept"]
+    print(f"  Dropped {dedup_result['dropped']} near-duplicate scenarios "
+          f"({dedup_result['total_before']} → {len(all_scenarios)})")
+    with open(f"{OUTPUT_DIR}/{output_name}_scenario_dedup_report.json", "w") as f:
+        json.dump({k: v for k, v in dedup_result.items() if k != "kept"}, f, indent=2)
+    volume.commit()
+
+    # -----------------------------------------------------------------------
+    # Step 2: Skip already-labeled if resuming (reading checkpoint off Volume)
+    # -----------------------------------------------------------------------
+    already_done: set[str] = set()
+    if resume and os.path.exists(checkpoint_path):
+        with open(checkpoint_path) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line.strip())
+                    if rec.get("label"):
+                        already_done.add(rec["scenario"])
+                except Exception:
+                    pass
+        print(f"[resume] {len(already_done)} already-labeled scenarios found on volume.")
+
     to_label = [s for s in all_scenarios if s not in already_done]
-    print(f"\n[2/2] Labeling {len(to_label):,} scenarios ({len(already_done):,} skipped) ...")
+    print(f"\n[3/4] Labeling {len(to_label):,} scenarios ({len(already_done):,} skipped) ...")
 
-    # -----------------------------------------------------------------------
-    # Step 3: Label in parallel batches with checkpointing
-    # -----------------------------------------------------------------------
     batches = [to_label[i:i+label_batch_size] for i in range(0, len(to_label), label_batch_size)]
     print(f"Processing {len(batches)} batches of {label_batch_size} ...")
 
-    all_new_results = []
-    for i, batch_results in enumerate(runner.label_scenarios.starmap([(b,) for b in batches])):
-        all_new_results.extend(batch_results)
-        append_checkpoint(checkpoint_path, batch_results)
-        good_so_far = sum(1 for r in all_new_results if r.get("label"))
-        print(f"  batch {i+1}/{len(batches)} — {good_so_far:,} labeled so far")
-
-    # Merge with resumed results
-    all_results = all_new_results
-    if resume and already_done:
-        existing = []
-        if os.path.exists(checkpoint_path):
-            with open(checkpoint_path) as f:
-                for line in f:
-                    try:
-                        rec = json.loads(line.strip())
-                        if rec.get("label") and rec["scenario"] in already_done:
-                            existing.append(rec)
-                    except Exception:
-                        pass
-        all_results = existing + all_new_results
+    label_args = [(b, checkpoint_path) for b in batches]
+    total_labeled = 0
+    for i, batch_results in enumerate(runner.label_scenarios.starmap(label_args)):
+        total_labeled += sum(1 for r in batch_results if r.get("label"))
+        print(f"  batch {i+1}/{len(batches)} — {total_labeled:,} labeled so far (committed to volume)")
 
     # -----------------------------------------------------------------------
-    # Stats
+    # Step 3: Finalize server-side (reads checkpoint back off the Volume)
     # -----------------------------------------------------------------------
-    good   = [r for r in all_results if r.get("label")]
-    failed = [r for r in all_results if not r.get("label")]
+    print(f"\n[4/4] Finalizing dataset on volume ...")
+    summary = runner.finalize.remote(checkpoint_path, output_name)
 
     print(f"\n=== Results ===")
-    print(f"  Success: {len(good):,}")
-    print(f"  Failed:  {len(failed):,}")
-
-    from collections import Counter
-    dist = Counter(r["label"] for r in good)
+    print(f"  Success: {summary['good']:,}")
+    print(f"  Failed:  {summary['failed']:,}")
     print(f"\nLabel distribution:")
-    for label, count in sorted(dist.items()):
-        bar = "█" * int(count / len(good) * 40)
-        print(f"  {label:15s} {count:5,} ({count/len(good)*100:5.1f}%)  {bar}")
+    total_good = summary["good"] or 1
+    for label, count in sorted(summary["label_distribution"].items()):
+        bar = "█" * int(count / total_good * 40)
+        print(f"  {label:15s} {count:5,} ({count/total_good*100:5.1f}%)  {bar}")
 
-    # -----------------------------------------------------------------------
-    # Save everything to volume (PC-off safe)
-    # -----------------------------------------------------------------------
-    save_to_volume(all_results, output_name)
-    print(f"\n✓ Done — {len(good):,} labeled scenarios ready for training.")
+    print(f"\n✓ Done — {summary['good']:,} labeled scenarios ready for training.")
+    print(f"  modal volume get conscience-gen-data outputs/{output_name}.jsonl ./")
+    print(f"  modal volume get conscience-gen-data outputs/{output_name}_full.jsonl ./")
