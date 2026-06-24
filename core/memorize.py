@@ -175,15 +175,17 @@ Conversation:
 {conversation}"""
 
 
-def _sanitize_fts_query(query: str) -> str:
+def _sanitize_fts_query(query: str) -> Optional[str]:
     """
     Strip characters that break FTS5 query parsing.
     FTS5 treats , " ( ) * ^ : - ' as syntax tokens — remove them all.
+    Returns None when nothing usable remains (caller should skip the FTS5
+    lookup entirely — a bare '*' is not a valid FTS5 "match everything"
+    query and raises `sqlite3.OperationalError: unknown special query:`).
     """
-    cleaned = re.sub(r'[^\w\s]', ' ', query)
+    cleaned = re.sub(r'[^\w\s]', ' ', query or "")
     cleaned = ' '.join(cleaned.split())
-    return cleaned or "*"
-
+    return cleaned or None
 
 # ── schema ────────────────────────────────────────────────────────────────────
 
@@ -597,18 +599,22 @@ class _MemoryBackend:
         knn_rows = _sqlite_knn_search(self._conn, vector, user_id, KNN_LIMIT)
         rank_knn = {row["id"]: i + 1 for i, row in enumerate(knn_rows)}
 
-        fts_rows = self._conn.execute(
-            """
-            SELECT f.id
-            FROM memories_fts f
-            JOIN memories m ON m.id = f.id
-            WHERE memories_fts MATCH ?
-            AND m.user_id = ?
-            ORDER BY rank
-            LIMIT ?
-            """,
-            (_sanitize_fts_query(query), user_id, FTS_LIMIT),
-        ).fetchall()
+        fts_query = _sanitize_fts_query(query)
+        if fts_query is not None:
+            fts_rows = self._conn.execute(
+                """
+                SELECT f.id
+                FROM memories_fts f
+                JOIN memories m ON m.id = f.id
+                WHERE memories_fts MATCH ?
+                AND m.user_id = ?
+                ORDER BY rank
+                LIMIT ?
+                """,
+                (fts_query, user_id, FTS_LIMIT),
+            ).fetchall()
+        else:
+            fts_rows = []
 
         rank_fts = {row["id"]: i + 1 for i, row in enumerate(fts_rows)}
 
