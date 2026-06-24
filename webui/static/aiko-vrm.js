@@ -17,8 +17,6 @@ renderer.setClearColor(0x0a0a0f);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(22, 1, 0.1, 100);
 camera.position.set(0.00, 1.33, 5.0);
-//camera.fov = 12;
-//camera.updateProjectionMatrix();
 
 const controls = new OrbitControls(camera, canvas);
 controls.target.set(0.00, 1.30, 0);
@@ -71,12 +69,12 @@ blinkTimer = nextBlinkWait();
 
 let t = 0;
 const REST = {
-  leftUpperArm: { x: -0.02, y: 0.0, z: 1.28 },
-  rightUpperArm: { x: -0.02, y: 0.0, z: -1.28 },
-  leftLowerArm: { x: 0.12, y: 0.0, z: 0.08 },
-  rightLowerArm: { x: 0.12, y: 0.0, z: -0.08 },
-  leftHand: { x: 0.0, y: 0.08, z: 0.0 },
-  rightHand: { x: 0.0, y: -0.08, z: 0.0 },
+  leftUpperArm: { x: -0.02, y: 0.00, z: 1.28 },
+  rightUpperArm: { x: -0.02, y: 0.00, z: -1.28 },
+  leftLowerArm: { x: 0.12, y: 0.00, z: 0.08 },
+  rightLowerArm: { x: 0.12, y: 0.00, z: -0.08 },
+  leftHand: { x: 0.00, y: 0.08, z: 0.00 },
+  rightHand: { x: 0.00, y: -0.08, z: 0.00 },
 };
 
 const FINGER_BONES = [
@@ -106,12 +104,18 @@ const GESTURES = [
   'curiousTilt',
   'shiftWeight',
   'stretchNeck',
-  'raiseHand',    // new: hand rises up near face, thinking pose
-  'chinTouch',    // new: hand up to chin, curious
-  'shoulderRoll', // new: one shoulder rolls up and back
-  'sway',         // new: whole-body gentle sway side to side
-  'headNod',      // new: slow contemplative nod
-  'wristFlick',   // new: wrist flick outward as if brushing something off
+  'raiseHand',
+  'chinTouch',
+  'shoulderRoll',
+  'sway',
+  'headNod',
+  'wristFlick',
+  'adjustSleeve',    // new: tugs at sleeve/cuff
+  'handOnHip',       // new: hand rests on hip briefly
+  'crossArms',       // new: briefly crosses arms (subtle)
+  'touchCollar',     // new: touches collar/neck area
+  'brushShoulder',   // new: brushes something off shoulder
+  'stretchArm',      // new: stretches one arm out and back
 ];
 
 const GESTURE_DURATION = {
@@ -129,6 +133,12 @@ const GESTURE_DURATION = {
   sway: 4.5,
   headNod: 3.0,
   wristFlick: 2.2,
+  adjustSleeve: 2.5,
+  handOnHip: 3.2,
+  crossArms: 3.0,
+  touchCollar: 2.8,
+  brushShoulder: 2.4,
+  stretchArm: 3.5,
 };
 
 function easeInOutSine(v) {
@@ -169,6 +179,147 @@ function applyFingerCurl(side, intensity) {
   }
 }
 
+// ── Idle animation helpers ─────────────────────────────────────────────────
+// We store idle offsets separately so gestures can blend cleanly
+let idleOffset = {
+  head: { x: 0, y: 0, z: 0 },
+  neck: { x: 0, y: 0, z: 0 },
+  spine: { x: 0, y: 0, z: 0 },
+  chest: { x: 0, y: 0, z: 0 },
+  hips: { x: 0, y: 0, z: 0, px: 0 },
+  lUA: { x: 0, y: 0, z: 0 },
+  rUA: { x: 0, y: 0, z: 0 },
+  lLA: { x: 0, y: 0, z: 0 },
+  rLA: { x: 0, y: 0, z: 0 },
+  lH: { x: 0, y: 0, z: 0 },
+  rH: { x: 0, y: 0, z: 0 },
+};
+
+function computeIdleOffsets(dt) {
+  t += dt;
+  const io = idleOffset;
+
+  // Breathing - chest and spine
+  const breath = Math.sin(t * 0.83) * 0.013;
+  io.chest.x = breath;
+  io.spine.x = breath * 0.5;
+
+  // Hips - gentle sway and bob
+  io.hips.z = Math.sin(t * 0.41) * 0.012;
+  io.hips.x = Math.sin(t * 0.67) * 0.008;
+  io.hips.px = Math.sin(t * 0.41) * 0.003;
+
+  // Head - natural idle look around (more varied)
+  io.head.y = Math.sin(t * 0.31) * 0.055 + Math.sin(t * 1.13) * 0.012 + Math.sin(t * 0.17) * 0.025;
+  io.head.z = Math.sin(t * 0.27 + 1.1) * 0.018 + Math.sin(t * 0.71) * 0.006;
+  io.head.x = Math.sin(t * 0.53) * 0.012 + Math.sin(t * 0.19) * 0.008;
+
+  // Neck follows head with damping
+  io.neck.y = io.head.y * 0.3 + Math.sin(t * 0.43) * 0.015;
+  io.neck.z = io.head.z * 0.3;
+  io.neck.x = io.head.x * 0.4 + Math.sin(t * 0.61) * 0.010;
+
+  // ── Arms: much more natural idle movement ────────────────────────────────
+  // Upper arms: gentle swaying, as if relaxed at sides but alive
+  io.lUA.x = Math.sin(t * 0.47) * 0.025 + Math.sin(t * 0.23) * 0.015;
+  io.lUA.y = Math.sin(t * 0.33) * 0.012 + Math.sin(t * 0.71) * 0.008;
+  io.lUA.z = Math.sin(t * 0.41) * 0.022 + Math.sin(t * 0.19 + 0.5) * 0.018;
+
+  io.rUA.x = Math.sin(t * 0.53 + 0.9) * 0.025 + Math.sin(t * 0.29 + 1.1) * 0.015;
+  io.rUA.y = Math.sin(t * 0.35 + 0.4) * 0.012 + Math.sin(t * 0.67 + 0.3) * 0.008;
+  io.rUA.z = Math.sin(t * 0.37 + 0.7) * 0.022 + Math.sin(t * 0.21 + 0.8) * 0.018;
+
+  // Lower arms: subtle forearm rotation, like hands naturally shifting
+  io.lLA.x = Math.sin(t * 0.61) * 0.018 + Math.sin(t * 0.31) * 0.012;
+  io.lLA.z = Math.sin(t * 0.43) * 0.014 + Math.sin(t * 0.17 + 0.3) * 0.010;
+  io.lLA.y = Math.sin(t * 0.27) * 0.008;
+
+  io.rLA.x = Math.sin(t * 0.57 + 1.4) * 0.018 + Math.sin(t * 0.33 + 0.6) * 0.012;
+  io.rLA.z = Math.sin(t * 0.51 + 0.5) * 0.014 + Math.sin(t * 0.19 + 0.9) * 0.010;
+  io.rLA.y = Math.sin(t * 0.29 + 0.8) * 0.008;
+
+  // Hands: gentle wrist rolls and finger-like micro-movements
+  io.lH.x = Math.sin(t * 0.39) * 0.015;
+  io.lH.y = Math.sin(t * 0.33) * 0.020 + Math.sin(t * 0.71) * 0.010;
+  io.lH.z = Math.sin(t * 0.45) * 0.012;
+
+  io.rH.x = Math.sin(t * 0.37 + 0.5) * 0.015;
+  io.rH.y = Math.sin(t * 0.29 + 1.2) * 0.020 + Math.sin(t * 0.73 + 0.4) * 0.010;
+  io.rH.z = Math.sin(t * 0.43 + 0.7) * 0.012;
+
+  return io;
+}
+
+function applyIdle(dt) {
+  if (!vrm?.humanoid) return;
+  const h = vrm.humanoid;
+  const get = n => h.getRawBoneNode(n);
+  const io = computeIdleOffsets(dt);
+
+  const chest = get('chest');
+  const spine = get('spine');
+  if (chest) chest.rotation.x = io.chest.x;
+  if (spine) spine.rotation.x = io.spine.x;
+
+  const hips = get('hips');
+  if (hips) {
+    hips.rotation.z = io.hips.z;
+    hips.rotation.x = io.hips.x;
+    hips.position.x = io.hips.px;
+  }
+
+  const head = get('head');
+  if (head) {
+    head.rotation.y = io.head.y;
+    head.rotation.z = io.head.z;
+    head.rotation.x = io.head.x;
+  }
+  const neck = get('neck');
+  if (neck) {
+    neck.rotation.y = io.neck.y;
+    neck.rotation.z = io.neck.z;
+    neck.rotation.x = io.neck.x;
+  }
+
+  const lUA = get('leftUpperArm');
+  const rUA = get('rightUpperArm');
+  const lLA = get('leftLowerArm');
+  const rLA = get('rightLowerArm');
+  const lH = get('leftHand');
+  const rH = get('rightHand');
+
+  if (lUA) {
+    lUA.rotation.x = REST.leftUpperArm.x + io.lUA.x;
+    lUA.rotation.y = REST.leftUpperArm.y + io.lUA.y;
+    lUA.rotation.z = REST.leftUpperArm.z + io.lUA.z;
+  }
+  if (rUA) {
+    rUA.rotation.x = REST.rightUpperArm.x + io.rUA.x;
+    rUA.rotation.y = REST.rightUpperArm.y + io.rUA.y;
+    rUA.rotation.z = REST.rightUpperArm.z + io.rUA.z;
+  }
+  if (lLA) {
+    lLA.rotation.x = REST.leftLowerArm.x + io.lLA.x;
+    lLA.rotation.y = REST.leftLowerArm.y + io.lLA.y;
+    lLA.rotation.z = REST.leftLowerArm.z + io.lLA.z;
+  }
+  if (rLA) {
+    rLA.rotation.x = REST.rightLowerArm.x + io.rLA.x;
+    rLA.rotation.y = REST.rightLowerArm.y + io.rLA.y;
+    rLA.rotation.z = REST.rightLowerArm.z + io.rLA.z;
+  }
+  if (lH) {
+    lH.rotation.x = REST.leftHand.x + io.lH.x;
+    lH.rotation.y = REST.leftHand.y + io.lH.y;
+    lH.rotation.z = REST.leftHand.z + io.lH.z;
+  }
+  if (rH) {
+    rH.rotation.x = REST.rightHand.x + io.rH.x;
+    rH.rotation.y = REST.rightHand.y + io.rH.y;
+    rH.rotation.z = REST.rightHand.z + io.rH.z;
+  }
+}
+
 function applyGestures(dt) {
   if (!vrm?.humanoid) return;
 
@@ -201,202 +352,273 @@ function applyGestures(dt) {
   const lH = getBone('leftHand');
   const rH = getBone('rightHand');
 
+  // Helper to blend gesture with idle base
+  const blend = (base, gesture, amt) => base + gesture * amt;
+  const io = idleOffset;
+
   switch (gestureState) {
 
-    // ── existing gestures, now more exaggerated ──────────────────────────────
-
     case 'lookAround':
-      // Turns head noticeably to one side, slight chin dip
       if (head) {
-        head.rotation.y += gestureTarget.look * 1.2 * held;
-        head.rotation.x += Math.sin(eased * Math.PI) * 0.04;
+        head.rotation.y = blend(io.head.y, gestureTarget.look * 1.2, held);
+        head.rotation.x = blend(io.head.x, Math.sin(eased * Math.PI) * 0.04, held);
       }
       if (neck) {
-        neck.rotation.y += gestureTarget.look * 0.45 * held;
-        neck.rotation.z += gestureTarget.tilt * 0.3 * held;
+        neck.rotation.y = blend(io.neck.y, gestureTarget.look * 0.45, held);
+        neck.rotation.z = blend(io.neck.z, gestureTarget.tilt * 0.3, held);
       }
-      if (spine) spine.rotation.y += gestureTarget.look * 0.08 * held;
+      if (spine) spine.rotation.y = blend(0, gestureTarget.look * 0.08, held);
       break;
 
     case 'lookAtHand':
-      // Arm rises noticeably; she inspects her hand, head follows
       if (side < 0) {
-        if (lUA) { lUA.rotation.x = REST.leftUpperArm.x - intensity * 0.55; lUA.rotation.z = REST.leftUpperArm.z - intensity * 0.55; }
-        if (lLA) { lLA.rotation.x = REST.leftLowerArm.x - intensity * 0.72; lLA.rotation.z = REST.leftLowerArm.z - intensity * 0.22; }
-        if (lH) { lH.rotation.x = REST.leftHand.x + intensity * 0.22; lH.rotation.y = REST.leftHand.y + intensity * 0.30; }
+        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.55, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.55, 1); }
+        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.72, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.22, 1); }
+        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, intensity * 0.22, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.30, 1); }
       } else {
-        if (rUA) { rUA.rotation.x = REST.rightUpperArm.x - intensity * 0.55; rUA.rotation.z = REST.rightUpperArm.z + intensity * 0.55; }
-        if (rLA) { rLA.rotation.x = REST.rightLowerArm.x - intensity * 0.72; rLA.rotation.z = REST.rightLowerArm.z + intensity * 0.22; }
-        if (rH) { rH.rotation.x = REST.rightHand.x + intensity * 0.22; rH.rotation.y = REST.rightHand.y - intensity * 0.30; }
+        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.55, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.55, 1); }
+        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.72, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.22, 1); }
+        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, intensity * 0.22, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.30, 1); }
       }
-      if (head) { head.rotation.y += side * intensity * 0.28; head.rotation.x += intensity * 0.12; }
-      if (neck) neck.rotation.y += side * intensity * 0.14;
+      if (head) { head.rotation.y = blend(io.head.y, side * intensity * 0.28, 1); head.rotation.x = blend(io.head.x, intensity * 0.12, 1); }
+      if (neck) neck.rotation.y = blend(io.neck.y, side * intensity * 0.14, 1);
       break;
 
     case 'hairBrush':
-      // Arm sweeps up past shoulder, hand moves through hair area
       if (side < 0) {
-        if (lUA) { lUA.rotation.z = REST.leftUpperArm.z - intensity * 0.90; lUA.rotation.x = REST.leftUpperArm.x - intensity * 0.45; }
-        if (lLA) { lLA.rotation.x = REST.leftLowerArm.x - intensity * 0.80; lLA.rotation.z = REST.leftLowerArm.z - intensity * 0.32; }
-        if (lH) { lH.rotation.y = REST.leftHand.y + intensity * 0.38; lH.rotation.z = REST.leftHand.z - intensity * 0.22; }
+        if (lUA) { lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.90, 1); lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.45, 1); }
+        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.80, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.32, 1); }
+        if (lH) { lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.38, 1); lH.rotation.z = blend(REST.leftHand.z + io.lH.z, -intensity * 0.22, 1); }
       } else {
-        if (rUA) { rUA.rotation.z = REST.rightUpperArm.z + intensity * 0.90; rUA.rotation.x = REST.rightUpperArm.x - intensity * 0.45; }
-        if (rLA) { rLA.rotation.x = REST.rightLowerArm.x - intensity * 0.80; rLA.rotation.z = REST.rightLowerArm.z + intensity * 0.32; }
-        if (rH) { rH.rotation.y = REST.rightHand.y - intensity * 0.38; rH.rotation.z = REST.rightHand.z + intensity * 0.22; }
+        if (rUA) { rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.90, 1); rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.45, 1); }
+        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.80, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.32, 1); }
+        if (rH) { rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.38, 1); rH.rotation.z = blend(REST.rightHand.z + io.rH.z, intensity * 0.22, 1); }
       }
-      if (head) { head.rotation.z -= side * intensity * 0.07; head.rotation.y += side * intensity * 0.05; }
+      if (head) { head.rotation.z = blend(io.head.z, -side * intensity * 0.07, 1); head.rotation.y = blend(io.head.y, side * intensity * 0.05, 1); }
       break;
 
     case 'fingerPlay':
-      // Forearm lifts, fingers curl and uncurl rhythmically
-      if (head) { head.rotation.x += intensity * 0.08; head.rotation.y += side * intensity * 0.14; }
+      if (head) { head.rotation.x = blend(io.head.x, intensity * 0.08, 1); head.rotation.y = blend(io.head.y, side * intensity * 0.14, 1); }
       if (side < 0) {
-        if (lLA) { lLA.rotation.x = REST.leftLowerArm.x - intensity * 0.38; }
-        if (lH) { lH.rotation.y = REST.leftHand.y + intensity * 0.26; lH.rotation.z = REST.leftHand.z + Math.sin(gestureT * 5.0) * 0.10 * intensity; }
+        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.38, 1); }
+        if (lH) { lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.26, 1); lH.rotation.z = blend(REST.leftHand.z + io.lH.z, Math.sin(gestureT * 5.0) * 0.10 * intensity, 1); }
       } else {
-        if (rLA) { rLA.rotation.x = REST.rightLowerArm.x - intensity * 0.38; }
-        if (rH) { rH.rotation.y = REST.rightHand.y - intensity * 0.26; rH.rotation.z = REST.rightHand.z - Math.sin(gestureT * 5.0) * 0.10 * intensity; }
+        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.38, 1); }
+        if (rH) { rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.26, 1); rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -Math.sin(gestureT * 5.0) * 0.10 * intensity, 1); }
       }
       applyFingerCurl(side, intensity);
       break;
 
     case 'meetGaze':
-      // Head settles to neutral/forward, like making eye contact
       if (head) {
-        head.rotation.y *= (1 - held * 0.85);
-        head.rotation.z *= (1 - held * 0.80);
-        head.rotation.x = head.rotation.x * (1 - held * 0.5) + held * 0.025;
+        head.rotation.y = blend(io.head.y, 0, held * 0.85);
+        head.rotation.z = blend(io.head.z, 0, held * 0.80);
+        head.rotation.x = blend(io.head.x, 0.025, held * 0.5);
       }
       if (neck) {
-        neck.rotation.y *= (1 - held * 0.60);
-        neck.rotation.z *= (1 - held * 0.60);
+        neck.rotation.y = blend(io.neck.y, 0, held * 0.60);
+        neck.rotation.z = blend(io.neck.z, 0, held * 0.60);
       }
       break;
 
     case 'curiousTilt':
-      // Head tilts well to one side, ears toward shoulder, brows up implied
       if (head) {
-        head.rotation.z += gestureTarget.tilt * 1.3 * held;
-        head.rotation.x -= 0.025 * intensity;
-        head.rotation.y += side * 0.06 * held;
+        head.rotation.z = blend(io.head.z, gestureTarget.tilt * 1.3, held);
+        head.rotation.x = blend(io.head.x, -0.025 * intensity, 1);
+        head.rotation.y = blend(io.head.y, side * 0.06, held);
       }
       if (neck) {
-        neck.rotation.z += gestureTarget.tilt * 0.60 * held;
-        neck.rotation.y += side * 0.04 * held;
+        neck.rotation.z = blend(io.neck.z, gestureTarget.tilt * 0.60, held);
+        neck.rotation.y = blend(io.neck.y, side * 0.04, held);
       }
       break;
 
     case 'shiftWeight':
-      // Hips slide to one side, spine and head compensate
       if (hips) {
-        hips.position.x += side * Math.sin(eased * Math.PI) * 0.022;
-        hips.rotation.z += side * Math.sin(eased * Math.PI) * 0.025;
+        hips.position.x = blend(io.hips.px, side * Math.sin(eased * Math.PI) * 0.022, 1);
+        hips.rotation.z = blend(io.hips.z, side * Math.sin(eased * Math.PI) * 0.025, 1);
       }
-      if (spine) spine.rotation.z -= side * Math.sin(eased * Math.PI) * 0.020;
-      if (chest) chest.rotation.z -= side * Math.sin(eased * Math.PI) * 0.014;
-      if (head) head.rotation.z += side * Math.sin(eased * Math.PI) * 0.018;
+      if (spine) spine.rotation.z = blend(0, -side * Math.sin(eased * Math.PI) * 0.020, 1);
+      if (chest) chest.rotation.z = blend(0, -side * Math.sin(eased * Math.PI) * 0.014, 1);
+      if (head) head.rotation.z = blend(io.head.z, side * Math.sin(eased * Math.PI) * 0.018, 1);
       break;
 
     case 'stretchNeck':
-      // Head tilts back, chin up, neck extends — satisfying stretch
-      if (neck) { neck.rotation.x -= intensity * 0.10; neck.rotation.z += gestureTarget.tilt * 0.5 * held; }
-      if (head) { head.rotation.x -= intensity * 0.08; head.rotation.z += gestureTarget.tilt * 0.3 * held; }
-      if (chest) chest.rotation.x -= intensity * 0.04;
+      if (neck) { neck.rotation.x = blend(io.neck.x, -intensity * 0.10, 1); neck.rotation.z = blend(io.neck.z, gestureTarget.tilt * 0.5, held); }
+      if (head) { head.rotation.x = blend(io.head.x, -intensity * 0.08, 1); head.rotation.z = blend(io.head.z, gestureTarget.tilt * 0.3, held); }
+      if (chest) chest.rotation.x = blend(io.chest.x, -intensity * 0.04, 1);
       break;
 
-    // ── new gestures ─────────────────────────────────────────────────────────
-
     case 'raiseHand':
-      // One hand rises to about chin/cheek height — thoughtful or greeting pose
       if (side < 0) {
-        if (lUA) { lUA.rotation.x = REST.leftUpperArm.x - intensity * 0.70; lUA.rotation.z = REST.leftUpperArm.z - intensity * 0.40; }
-        if (lLA) { lLA.rotation.x = REST.leftLowerArm.x - intensity * 0.90; lLA.rotation.z = REST.leftLowerArm.z - intensity * 0.14; }
-        if (lH) { lH.rotation.x = REST.leftHand.x + intensity * 0.12; }
+        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.70, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.40, 1); }
+        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.90, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.14, 1); }
+        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, intensity * 0.12, 1); }
       } else {
-        if (rUA) { rUA.rotation.x = REST.rightUpperArm.x - intensity * 0.70; rUA.rotation.z = REST.rightUpperArm.z + intensity * 0.40; }
-        if (rLA) { rLA.rotation.x = REST.rightLowerArm.x - intensity * 0.90; rLA.rotation.z = REST.rightLowerArm.z + intensity * 0.14; }
-        if (rH) { rH.rotation.x = REST.rightHand.x + intensity * 0.12; }
+        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.70, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.40, 1); }
+        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.90, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.14, 1); }
+        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, intensity * 0.12, 1); }
       }
-      // Head turns slightly toward the raised hand
-      if (head) { head.rotation.y += side * intensity * 0.10; head.rotation.x -= intensity * 0.03; }
+      if (head) { head.rotation.y = blend(io.head.y, side * intensity * 0.10, 1); head.rotation.x = blend(io.head.x, -intensity * 0.03, 1); }
       break;
 
     case 'chinTouch':
-      // Hand comes up to rest near chin — thinking/considering pose
       if (side < 0) {
-        if (lUA) { lUA.rotation.x = REST.leftUpperArm.x - intensity * 0.60; lUA.rotation.z = REST.leftUpperArm.z - intensity * 0.60; }
-        if (lLA) { lLA.rotation.x = REST.leftLowerArm.x - intensity * 1.05; lLA.rotation.z = REST.leftLowerArm.z - intensity * 0.10; }
-        if (lH) { lH.rotation.x = REST.leftHand.x - intensity * 0.18; lH.rotation.y = REST.leftHand.y + intensity * 0.20; }
+        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.60, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.60, 1); }
+        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 1.05, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.10, 1); }
+        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, -intensity * 0.18, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.20, 1); }
       } else {
-        if (rUA) { rUA.rotation.x = REST.rightUpperArm.x - intensity * 0.60; rUA.rotation.z = REST.rightUpperArm.z + intensity * 0.60; }
-        if (rLA) { rLA.rotation.x = REST.rightLowerArm.x - intensity * 1.05; rLA.rotation.z = REST.rightLowerArm.z + intensity * 0.10; }
-        if (rH) { rH.rotation.x = REST.rightHand.x - intensity * 0.18; rH.rotation.y = REST.rightHand.y - intensity * 0.20; }
+        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.60, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.60, 1); }
+        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 1.05, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.10, 1); }
+        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, -intensity * 0.18, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.20, 1); }
       }
-      // Slight head tilt and dip, as if actually resting chin on hand
-      if (head) { head.rotation.x += intensity * 0.06; head.rotation.z += side * intensity * 0.05; }
-      if (neck) neck.rotation.x += intensity * 0.04;
+      if (head) { head.rotation.x = blend(io.head.x, intensity * 0.06, 1); head.rotation.z = blend(io.head.z, side * intensity * 0.05, 1); }
+      if (neck) neck.rotation.x = blend(io.neck.x, intensity * 0.04, 1);
       break;
 
     case 'shoulderRoll':
-      // One shoulder rolls up then drops — casual, relaxed movement
       if (side < 0) {
         if (lUA) {
-          // Up phase (first half): shoulder rises; Down phase: drops back
           const roll = Math.sin(progress * Math.PI * 1.5) * intensity;
-          lUA.rotation.x = REST.leftUpperArm.x - roll * 0.28;
-          lUA.rotation.z = REST.leftUpperArm.z + roll * 0.18;
-          lUA.rotation.y = REST.leftUpperArm.y + roll * 0.10;
+          lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -roll * 0.28, 1);
+          lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, roll * 0.18, 1);
+          lUA.rotation.y = blend(REST.leftUpperArm.y + io.lUA.y, roll * 0.10, 1);
         }
       } else {
         if (rUA) {
           const roll = Math.sin(progress * Math.PI * 1.5) * intensity;
-          rUA.rotation.x = REST.rightUpperArm.x - roll * 0.28;
-          rUA.rotation.z = REST.rightUpperArm.z - roll * 0.18;
-          rUA.rotation.y = REST.rightUpperArm.y - roll * 0.10;
+          rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -roll * 0.28, 1);
+          rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, -roll * 0.18, 1);
+          rUA.rotation.y = blend(REST.rightUpperArm.y + io.rUA.y, -roll * 0.10, 1);
         }
       }
-      // Head dips slightly to opposite side as shoulder rises
-      if (head) head.rotation.z -= side * Math.sin(progress * Math.PI * 1.5) * intensity * 0.06;
-      if (neck) neck.rotation.z -= side * Math.sin(progress * Math.PI * 1.5) * intensity * 0.04;
+      if (head) head.rotation.z = blend(io.head.z, -side * Math.sin(progress * Math.PI * 1.5) * intensity * 0.06, 1);
+      if (neck) neck.rotation.z = blend(io.neck.z, -side * Math.sin(progress * Math.PI * 1.5) * intensity * 0.04, 1);
       break;
 
     case 'sway':
-      // Whole body sways gently side to side — one full cycle
       {
         const swayVal = Math.sin(progress * Math.PI * 2) * intensity;
-        if (hips) { hips.position.x += swayVal * 0.020; hips.rotation.z += swayVal * 0.022; }
-        if (spine) spine.rotation.z += swayVal * -0.014;
-        if (chest) chest.rotation.z += swayVal * -0.010;
-        if (head) head.rotation.z += swayVal * -0.016;
-        if (neck) neck.rotation.z += swayVal * -0.010;
-        // Arms drift opposite to sway for counterbalance
-        if (lUA) lUA.rotation.z = REST.leftUpperArm.z - swayVal * 0.06;
-        if (rUA) rUA.rotation.z = REST.rightUpperArm.z - swayVal * 0.06;
+        if (hips) { hips.position.x = blend(io.hips.px, swayVal * 0.020, 1); hips.rotation.z = blend(io.hips.z, swayVal * 0.022, 1); }
+        if (spine) spine.rotation.z = blend(0, swayVal * -0.014, 1);
+        if (chest) chest.rotation.z = blend(0, swayVal * -0.010, 1);
+        if (head) head.rotation.z = blend(io.head.z, swayVal * -0.016, 1);
+        if (neck) neck.rotation.z = blend(io.neck.z, swayVal * -0.010, 1);
+        if (lUA) lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -swayVal * 0.06, 1);
+        if (rUA) rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, -swayVal * 0.06, 1);
       }
       break;
 
     case 'headNod':
-      // Slow double-nod — agreeable, contemplative
       {
         const nod = Math.sin(progress * Math.PI * 3.5) * intensity * 0.14;
-        if (head) { head.rotation.x += nod; }
-        if (neck) { neck.rotation.x += nod * 0.5; }
-        // Slight eye-contact lean on downstroke
-        if (head) head.rotation.y *= (1 - held * 0.4);
+        if (head) { head.rotation.x = blend(io.head.x, nod, 1); }
+        if (neck) { neck.rotation.x = blend(io.neck.x, nod * 0.5, 1); }
+        if (head) head.rotation.y = blend(io.head.y, 0, held * 0.4);
       }
       break;
 
     case 'wristFlick':
-      // Quick outward wrist rotation — dismissive or playful flick
       if (side < 0) {
-        if (lLA) { lLA.rotation.y = REST.leftLowerArm.y + intensity * 0.55; }
-        if (lH) { lH.rotation.z = REST.leftHand.z + intensity * 0.50; lH.rotation.y = REST.leftHand.y + intensity * 0.30; }
+        if (lLA) { lLA.rotation.y = blend(REST.leftLowerArm.y + io.lLA.y, intensity * 0.55, 1); }
+        if (lH) { lH.rotation.z = blend(REST.leftHand.z + io.lH.z, intensity * 0.50, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.30, 1); }
       } else {
-        if (rLA) { rLA.rotation.y = REST.rightLowerArm.y - intensity * 0.55; }
-        if (rH) { rH.rotation.z = REST.rightHand.z - intensity * 0.50; rH.rotation.y = REST.rightHand.y - intensity * 0.30; }
+        if (rLA) { rLA.rotation.y = blend(REST.rightLowerArm.y + io.rLA.y, -intensity * 0.55, 1); }
+        if (rH) { rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -intensity * 0.50, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.30, 1); }
       }
-      // Tiny head glance toward the flick
-      if (head) head.rotation.y += side * intensity * 0.08;
+      if (head) head.rotation.y = blend(io.head.y, side * intensity * 0.08, 1);
+      break;
+
+    // ── new natural idle gestures ──────────────────────────────────────────
+
+    case 'adjustSleeve':
+      // Hand reaches to opposite forearm, tugs at sleeve
+      if (side < 0) {
+        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.35, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.25, 1); }
+        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.55, 1); rLA.rotation.y = blend(REST.rightLowerArm.y + io.rLA.y, -intensity * 0.40, 1); }
+        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, -intensity * 0.20, 1); rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -intensity * 0.15, 1); }
+      } else {
+        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.35, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.25, 1); }
+        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.55, 1); lLA.rotation.y = blend(REST.leftLowerArm.y + io.lLA.y, intensity * 0.40, 1); }
+        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, -intensity * 0.20, 1); lH.rotation.z = blend(REST.leftHand.z + io.lH.z, intensity * 0.15, 1); }
+      }
+      if (head) head.rotation.x = blend(io.head.x, intensity * 0.05, 1);
+      break;
+
+    case 'handOnHip':
+      // One hand rests on hip, elbow out
+      if (side < 0) {
+        if (lUA) { lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.55, 1); lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.20, 1); }
+        if (lLA) { lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.35, 1); lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.15, 1); }
+        if (lH) { lH.rotation.z = blend(REST.leftHand.z + io.lH.z, -intensity * 0.25, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.10, 1); }
+      } else {
+        if (rUA) { rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.55, 1); rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.20, 1); }
+        if (rLA) { rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.35, 1); rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.15, 1); }
+        if (rH) { rH.rotation.z = blend(REST.rightHand.z + io.rH.z, intensity * 0.25, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.10, 1); }
+      }
+      if (head) head.rotation.y = blend(io.head.y, -side * intensity * 0.06, 1);
+      if (spine) spine.rotation.z = blend(0, side * intensity * 0.012, 1);
+      break;
+
+    case 'crossArms':
+      // Subtle arm-cross: both arms shift inward slightly
+      {
+        const cross = intensity * 0.35;
+        if (lUA) { lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -cross * 0.40, 1); lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -cross * 0.15, 1); }
+        if (rUA) { rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, cross * 0.40, 1); rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -cross * 0.15, 1); }
+        if (lLA) { lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -cross * 0.30, 1); lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -cross * 0.25, 1); }
+        if (rLA) { rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, cross * 0.30, 1); rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -cross * 0.25, 1); }
+        if (head) head.rotation.x = blend(io.head.x, intensity * 0.04, 1);
+      }
+      break;
+
+    case 'touchCollar':
+      // Hand comes up to collar/neck area
+      if (side < 0) {
+        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.50, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.45, 1); }
+        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.85, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.20, 1); }
+        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, intensity * 0.15, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.25, 1); }
+      } else {
+        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.50, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.45, 1); }
+        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.85, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.20, 1); }
+        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, intensity * 0.15, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.25, 1); }
+      }
+      if (head) { head.rotation.x = blend(io.head.x, -intensity * 0.04, 1); head.rotation.y = blend(io.head.y, side * intensity * 0.08, 1); }
+      break;
+
+    case 'brushShoulder':
+      // Quick brush of shoulder, like dusting off
+      {
+        const brush = Math.sin(progress * Math.PI * 2.5) * intensity;
+        if (side < 0) {
+          if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -brush * 0.30, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, brush * 0.20, 1); }
+          if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -brush * 0.45, 1); }
+          if (rH) { rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -brush * 0.30, 1); }
+        } else {
+          if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -brush * 0.30, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -brush * 0.20, 1); }
+          if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -brush * 0.45, 1); }
+          if (lH) { lH.rotation.z = blend(REST.leftHand.z + io.lH.z, brush * 0.30, 1); }
+        }
+        if (head) head.rotation.y = blend(io.head.y, -side * brush * 0.10, 1);
+      }
+      break;
+
+    case 'stretchArm':
+      // One arm stretches out and up, then back down
+      {
+        const stretch = Math.sin(progress * Math.PI) * intensity;
+        if (side < 0) {
+          if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -stretch * 0.80, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -stretch * 0.30, 1); }
+          if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -stretch * 0.40, 1); }
+          if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, stretch * 0.20, 1); }
+        } else {
+          if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -stretch * 0.80, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, stretch * 0.30, 1); }
+          if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -stretch * 0.40, 1); }
+          if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, stretch * 0.20, 1); }
+        }
+        if (head) head.rotation.y = blend(io.head.y, side * stretch * 0.12, 1);
+        if (chest) chest.rotation.x = blend(io.chest.x, stretch * 0.03, 1);
+      }
       break;
   }
 
@@ -423,51 +645,6 @@ function applyBlink(dt) {
       try { em.setValue('blink', 0); } catch (_) { }
     }
   }
-}
-
-function applyIdle(dt) {
-  if (!vrm?.humanoid) return;
-  t += dt;
-  const h = vrm.humanoid;
-  const get = n => h.getRawBoneNode(n);
-
-  const breath = Math.sin(t * 0.83) * 0.013;
-  const chest = get('chest');
-  const spine = get('spine');
-  if (chest) chest.rotation.x = breath;
-  if (spine) spine.rotation.x = breath * 0.5;
-
-  const hips = get('hips');
-  if (hips) {
-    hips.rotation.z = Math.sin(t * 0.41) * 0.012;
-    hips.rotation.x = Math.sin(t * 0.67) * 0.008;
-    hips.position.x = Math.sin(t * 0.41) * 0.003;
-  }
-
-  const head = get('head');
-  if (head) {
-    head.rotation.y = Math.sin(t * 0.31) * 0.055 + Math.sin(t * 1.13) * 0.012;
-    head.rotation.z = Math.sin(t * 0.27 + 1.1) * 0.018 + Math.sin(t * 0.71) * 0.006;
-    head.rotation.x = Math.sin(t * 0.53) * 0.012;
-  }
-  const neck = get('neck');
-  if (neck && head) {
-    neck.rotation.y = head.rotation.y * 0.3;
-    neck.rotation.z = head.rotation.z * 0.3;
-  }
-
-  const lUA = get('leftUpperArm');
-  const rUA = get('rightUpperArm');
-  const lLA = get('leftLowerArm');
-  const rLA = get('rightLowerArm');
-  const lH = get('leftHand');
-  const rH = get('rightHand');
-  if (lUA) { lUA.rotation.x = REST.leftUpperArm.x + Math.sin(t * .47) * .010; lUA.rotation.y = REST.leftUpperArm.y + Math.sin(t * .33) * .006; lUA.rotation.z = REST.leftUpperArm.z + Math.sin(t * .41) * .008; }
-  if (rUA) { rUA.rotation.x = REST.rightUpperArm.x + Math.sin(t * .53 + .9) * .010; rUA.rotation.y = REST.rightUpperArm.y + Math.sin(t * .35 + .4) * .006; rUA.rotation.z = REST.rightUpperArm.z + Math.sin(t * .37 + .7) * .008; }
-  if (lLA) { lLA.rotation.x = REST.leftLowerArm.x + Math.sin(t * .61) * .008; lLA.rotation.y = REST.leftLowerArm.y; lLA.rotation.z = REST.leftLowerArm.z + Math.sin(t * .43) * .004; }
-  if (rLA) { rLA.rotation.x = REST.rightLowerArm.x + Math.sin(t * .57 + 1.4) * .008; rLA.rotation.y = REST.rightLowerArm.y; rLA.rotation.z = REST.rightLowerArm.z + Math.sin(t * .51 + .5) * .004; }
-  if (lH) { lH.rotation.x = REST.leftHand.x; lH.rotation.y = REST.leftHand.y + Math.sin(t * .33) * .008; lH.rotation.z = REST.leftHand.z; }
-  if (rH) { rH.rotation.x = REST.rightHand.x; rH.rotation.y = REST.rightHand.y + Math.sin(t * .29 + 1.2) * .008; rH.rotation.z = REST.rightHand.z; }
 }
 
 function animate() {
