@@ -93,9 +93,8 @@ BARGE_IN_ALWAYS_ON      = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", 
 
 SPEAKER_VERIFY_ENABLED = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 SPEAKER_MODEL_PATH     = os.getenv("SPEAKER_MODEL_PATH", "")            # path to embedding .onnx
-SPEAKER_ENROLL_PATH    = os.getenv("SPEAKER_ENROLL_PATH", os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "speaker_enrollment.json"
-))
+USER_ID                = os.getenv("USER_ID", "owner")
+SPEAKER_ENROLL_PATH    = os.path.join("user", f"{USER_ID.lower()}.json")
 SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
 SPEAKER_NUM_THREADS       = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 
