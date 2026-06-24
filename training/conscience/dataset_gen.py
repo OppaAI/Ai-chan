@@ -83,8 +83,9 @@ image = (
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64/stubs:${LD_LIBRARY_PATH}",
     })
     .run_commands(
-        # Sanity check: confirm the stub actually exists in this base image.
-        # (Shows up in the Modal build logs — safe to leave in.)
+        # cache-bust: v4 — symlink stub + explicit rpath
+        "ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 || true",
+        "ldconfig /usr/local/cuda/lib64/stubs",
         "ls -la /usr/local/cuda/lib64/stubs/ || true",
         "git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp",
         "cd /opt/llama.cpp && cmake -B build "
@@ -93,8 +94,8 @@ image = (
         "  -DCMAKE_BUILD_TYPE=Release "
         "  -DLLAMA_BUILD_TESTS=OFF "
         "  -DLLAMA_BUILD_EXAMPLES=OFF "
-        "  -DCMAKE_EXE_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda' "
-        "  -DCMAKE_SHARED_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda' "
+        "  -DCMAKE_EXE_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda -Wl,-rpath-link,/usr/local/cuda/lib64/stubs' "
+        "  -DCMAKE_SHARED_LINKER_FLAGS='-L/usr/local/cuda/lib64/stubs -lcuda -Wl,-rpath-link,/usr/local/cuda/lib64/stubs' "
         "  && cmake --build build --config Release -j$(nproc) --target llama-server",
     )
     .pip_install("openai", "tqdm", "huggingface_hub")
