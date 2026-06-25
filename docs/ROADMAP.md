@@ -78,7 +78,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Remote/browser TTS audio sink for WebUI playback | 🟡 Implemented — remote polish ongoing |
 | Browser/WebUI microphone streaming into ASR/VAD pipeline | 🟡 Implemented — remote polish ongoing |
 | Staged TTS/ASR/VAD warmup during boot | ✅ Done |
-| Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Not met — current normal-chat latency documented as >5s |
+| Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Not met — >5s even for short normal chat|
 
 
 ### Voice backend trial ledger
