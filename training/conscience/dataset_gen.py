@@ -282,6 +282,7 @@ def extract_json_object(raw: str) -> dict:
     timeout=7200,
     cpu=4.0,
     memory=32768,
+    concurrency_limit=5,
 )
 class LlamaCppRunner:
 
