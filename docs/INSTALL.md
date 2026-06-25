@@ -1,7 +1,7 @@
 [← Back to README](../README.md)
 # Aiko-chan 愛子ちゃん — Installation Guide
 
-This guide walks through installing every component of the Aiko-chan stack from scratch. Follow the sections in order; each one is a prerequisite for the next.
+This guide installs the current Aiko-chan stack: Python 3.12 + `uv`, SearXNG in Docker, a local OpenAI-compatible LLM endpoint (usually llama.cpp `llama-server`), sqlite-vec memory, MioTTS, SenseVoice ASR, the curses TUI, and the optional browser WebUI/VRM frontend.
 
 ---
 
@@ -10,16 +10,15 @@ This guide walks through installing every component of the Aiko-chan stack from 
 1. [System Requirements](#1-system-requirements)
 2. [Python 3.12 via pyenv](#2-python-312-via-pyenv)
 3. [uv Package Manager](#3-uv-package-manager)
-4. [Docker & Docker Compose](#4-docker--docker-compose)
-5. [SearXNG (via Docker)](#5-searxng-via-docker)
-6. [Ollama](#6-ollama)
-7. [Pull a Chat Model](#7-pull-a-chat-model)
-8. [MioTTS Server](#8-miotts-server)
-9. [Clone the Repo & Configure Environment](#9-clone-the-repo--configure-environment)
-10. [Install Python Dependencies](#10-install-python-dependencies)
-11. [Jetson Orin Nano — Extra Steps](#11-jetson-orin-nano--extra-steps)
-12. [Verify the Full Stack](#12-verify-the-full-stack)
-13. [Run Aiko-chan](#13-run-aiko-chan)
+4. [Clone the Repo](#4-clone-the-repo)
+5. [Docker & SearXNG](#5-docker--searxng)
+6. [Local LLM Server](#6-local-llm-server)
+7. [MioTTS Server](#7-miotts-server)
+8. [Configure Environment](#8-configure-environment)
+9. [Install Python Dependencies](#9-install-python-dependencies)
+10. [Jetson Orin Nano Notes](#10-jetson-orin-nano-notes)
+11. [Verify the Full Stack](#11-verify-the-full-stack)
+12. [Run Aiko-chan](#12-run-aiko-chan)
 
 ---
 
@@ -27,346 +26,273 @@ This guide walks through installing every component of the Aiko-chan stack from 
 
 | Requirement | Minimum | Notes |
 |---|---|---|
-| OS | Ubuntu 22.04 / 24.04 | Also works on WSL2 |
-| Python | **3.12.x** | `pyproject.toml` is pinned `>=3.12,<3.13` |
-| RAM | 8 GB | 16 GB recommended for comfort |
-| GPU VRAM | 4 GB | 8 GB for smooth local LLM inference |
-| Storage | 20 GB free | Models are large |
+| OS | Ubuntu 22.04 / 24.04 | Also works on WSL2 for text-only/testing use |
+| Python | **3.12.x** | `pyproject.toml` requires `>=3.12,<3.13` |
+| RAM | 8 GB | 16 GB recommended |
+| GPU/accelerator | optional but recommended | Jetson Orin Nano is the target constrained device |
+| Storage | 20 GB free | LLM, ASR, TTS, and embedding models are large |
 | Docker | 24.x+ | Required for SearXNG |
-
-> **Jetson Orin Nano:** See [Section 11](#11-jetson-orin-nano--extra-steps) for board-specific wheel overrides before running `uv sync`.
+| Local LLM server | OpenAI-compatible `/v1` API | `LLM_BASE_URL` defaults to `http://localhost:8080/v1` |
 
 ---
 
 ## 2. Python 3.12 via pyenv
 
-Aiko-chan requires Python **3.12**. Using `pyenv` avoids polluting your system Python.
-
 ```bash
-# Install pyenv dependencies
 sudo apt update
 sudo apt install -y make build-essential libssl-dev zlib1g-dev \
   libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm \
   libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
   libffi-dev liblzma-dev git
 
-# Install pyenv
 curl https://pyenv.run | bash
 
-# Add pyenv to your shell (bash example — adjust for zsh/fish)
 echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
 echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
 echo 'eval "$(pyenv init -)"' >> ~/.bashrc
 source ~/.bashrc
 
-# Install Python 3.12 and set it as the local default
 pyenv install 3.12.13
 pyenv global 3.12.13
-
-# Confirm
-python --version   # should print Python 3.12.x
+python --version
 ```
 
 ---
 
 ## 3. uv Package Manager
 
-`uv` is the only supported package manager for this project.
-
 ```bash
-# Install uv (official installer)
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Reload your shell so the uv binary is on PATH
-source $HOME/.cargo/env   # or open a new terminal
-
-# Confirm
+source "$HOME/.cargo/env"
 uv --version
 ```
 
----
-
-## 4. Docker & Docker Compose
-
-SearXNG run as Docker containers.
-
-```bash
-# Remove any old Docker installs
-sudo apt remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
-
-# Install Docker Engine via the official convenience script
-curl -fsSL https://get.docker.com | sudo sh
-
-# Add your user to the docker group (avoids needing sudo for every docker command)
-sudo usermod -aG docker $USER
-newgrp docker   # apply group change without logging out
-
-# Confirm Docker
-docker --version
-
-# Docker Compose is included with Docker Engine as a plugin
-docker compose version
-```
+`uv` is the supported dependency manager for this repo.
 
 ---
 
-## 5. SearXNG (via Docker)
-
-SearXNG is also managed by the project's `docker-compose.yml`. The `searxng/` directory inside the repo holds its configuration, so **clone the repo first** (Section 10) before starting the stack.
-
-Once the repo is cloned, from the project root:
+## 4. Clone the Repo
 
 ```bash
-# Start SearXNG together
-docker compose up -d
-
-# Confirm both containers are running
-docker compose ps
-```
-
-Expected output:
-
-```
-NAME        STATUS
-searxng     running
-```
-
-SearXNG is available at the URL you set in `SEARXNG_URL` (default **http://localhost:8081**).
-
----
-
-## 6. Ollama
-
-Ollama serves the local LLM used by Aiko's `think.py` core.
-
-```bash
-# Install Ollama
-curl -fsSL https://ollama.com/install.sh | sh
-
-# The installer registers a systemd service; confirm it is running
-systemctl status ollama
-
-# If not running, start it manually
-ollama serve
-```
-
-> On a **Jetson**, Ollama detects CUDA automatically. Verify with `ollama run llama3.2 "hello"` and check that GPU utilisation rises in `jtop`.
-
----
-
-## 7. Pull a Chat Model
-
-Pull the model referenced in your `.env` as `OLLAMA_MODEL`. The default in `.env.example` is a Ministral 3B reasoning GGUF:
-
-```bash
-ollama pull hf.co/unsloth/Ministral-3-3B-Reasoning-2512-GGUF:UD-Q4_K_XL
-```
-
-For a more capable model (recommended for grounded search answers — 7B+):
-
-```bash
-ollama pull mistral:7b-instruct
-# or
-ollama pull qwen2.5:7b
-```
-
-Confirm the model loads:
-
-```bash
-ollama run mistral:7b-instruct "Say hello."
-```
-
----
-
-## 8. MioTTS Server
-
-MioTTS is an external HTTP TTS server. Aiko calls it at `MIOTTS_API_URL` (default **http://localhost:8001**).
-
-> If you do not need voice output, set `MIOTTS_API_URL` to an unreachable address and run Aiko in `--text` mode. The client fails gracefully.
-
-**Option A — Run MioTTS via Docker (recommended):**
-
-```bash
-docker run -d --name miotts \
-  -p 8001:8001 \
-  # replace with the actual MioTTS image when available
-  miotts/miotts-server
-```
-
-**Option B — Run MioTTS from source:**
-
-Follow the MioTTS project's own README. Once running, verify the health endpoint:
-
-```bash
-curl http://localhost:8001/health
-# Expected: {"status":"ok"} or similar
-```
-
----
-
-## 9. Clone the Repo & Configure Environment
-
-```bash
-# Clone
 git clone https://github.com/OppaAI/Aiko-chan.git
 cd Aiko-chan
-
-# Copy the example env file
 cp .env.example .env
 ```
 
-Open `.env` in your editor and set at minimum:
+The repo contains `docker-compose.yml`, `searxng/` config, Python source, `webui/static/`, skills, persona files, and docs.
+
+---
+
+## 5. Docker & SearXNG
+
+```bash
+sudo apt remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker "$USER"
+newgrp docker
+
+docker --version
+docker compose version
+```
+
+Start SearXNG from the project root:
+
+```bash
+docker compose up -d
+docker compose ps
+```
+
+Expected service/container: `aiko_searxng` running and listening at `http://localhost:8081`.
+
+---
+
+## 6. Local LLM Server
+
+Aiko's current chat runtime uses the OpenAI Python client against a local OpenAI-compatible endpoint. The default environment values are:
 
 ```dotenv
-# Ollama
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=hf.co/unsloth/Ministral-3-3B-Reasoning-2512-GGUF:UD-Q4_K_XL
+LLM_BASE_URL=http://localhost:8080/v1
+LLM_MODEL=ministral
+```
 
-# SearXNG
+A common setup is llama.cpp `llama-server` with a local GGUF model. Example:
+
+```bash
+# Example only: adjust paths, GPU layers, context, and alias for your hardware/model.
+llama-server \
+  -m /path/to/Ministral-3-3B-Reasoning-Q4_K_M.gguf \
+  --host 0.0.0.0 \
+  --port 8080 \
+  --alias ministral \
+  --jinja \
+  -c 4096
+```
+
+Verify the endpoint:
+
+```bash
+curl http://localhost:8080/v1/models
+curl http://localhost:8080/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"ministral","messages":[{"role":"user","content":"Say hello."}],"max_tokens":32}'
+```
+
+> Older Ollama-specific instructions are no longer the primary path for the current codebase. You can still use any backend that exposes an OpenAI-compatible `/v1` API and matches `LLM_BASE_URL`/`LLM_MODEL`.
+
+---
+
+## 7. MioTTS Server
+
+MioTTS is an external HTTP synthesis service. Aiko calls `MIOTTS_API_URL` and plays the returned audio through `sounddevice`.
+
+```dotenv
+MIOTTS_API_URL=http://localhost:8001
+MIOTTS_MODEL=MioTTS-0.4B-Q4_K_M
+MIOTTS_PRESET=aiko_flat
+```
+
+Typical MioTTS flow:
+
+1. Start the local OpenAI-compatible model server that serves the MioTTS model.
+2. Start MioTTS's `run_server.py` wrapper, pointed at that model server.
+3. Verify the API before launching Aiko.
+
+```bash
+curl http://localhost:8001/health
+uv run python core/speak.py --devices
+uv run python core/speak.py --wait "Hello, I'm Aiko."
+```
+
+If you do not need voice, run Aiko with `--text`; wakeup will skip TTS and ASR.
+
+---
+
+## 8. Configure Environment
+
+Edit `.env`. At minimum, check these values:
+
+```dotenv
+# Identity
+AI_NAME=Aiko
+USER_ID=OppaAI
+
+# Local OpenAI-compatible LLM
+LLM_BASE_URL=http://localhost:8080/v1
+LLM_MODEL=ministral
+LLM_TIMEOUT=120
+LLM_MAX_TOKENS=280
+
+# Memory
+SQLITE_MEMORY_PATH=/home/oppa-ai/.aiko/memory.db
+FASTEMBED_CACHE_PATH=/home/oppa-ai/.cache/fastembed
+EMBED_MODEL=BAAI/bge-base-en-v1.5
+MEMORY_RECALL_LIMIT=5
+
+# Web search
 SEARXNG_URL=http://localhost:8081
 SEARXNG_SECRET=<your_secret_from_searxng_settings.yml>
 
-# MioTTS (leave blank or point to a dummy URL to disable voice)
+# Voice output
 MIOTTS_API_URL=http://localhost:8001
+MIOTTS_PRESET=aiko_flat
 
-# ASR — SenseVoice via sherpa-onnx + Silero VAD
+# Voice input
 ASR_DEVICE=cpu
 ASR_LANGUAGE=auto
 ASR_MODEL=csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+
+# Routing and agentic mode (current names read by core/think.py)
+ROUTE_ENABLED=1
+ROUTE_MODE=semantic
+ROUTE_SEMANTIC_THRESHOLD=0.36
+SEARCH_SEMANTIC_THRESHOLD=0.36
+
+# Scheduling/workspace
+TIMEZONE=America/Vancouver
+WORKSPACE_ROOT=workspace
+SCHEDULE_PATH=workspace/schedule.json
+SCHEDULE_POLL_SECONDS=15
 ```
 
-The `SEARXNG_SECRET` must match the `secret_key` value inside `searxng/settings.yml`.
+If your `.env` still has only `AIKO_ROUTE_*` keys, add the `ROUTE_*` keys above; the current code reads `ROUTE_ENABLED`, `ROUTE_MODE`, and `ROUTE_SEMANTIC_THRESHOLD`.
 
 ---
 
-## 10. Install Python Dependencies
-
-```bash
-# From the project root with Python 3.12 active
-uv sync
-```
-
-`uv` reads `pyproject.toml` and `uv.lock`, creates a virtual environment in `.venv/`, and installs all dependencies.
-
-> **If `uv sync` fails on wheel not found:** Check the local wheel paths in `pyproject.toml` for `torch` and `ctranslate2`. On a standard x86 machine, comment out or replace those path overrides with regular PyPI versions. On a Jetson, see Section 12.
-
----
-
-## 11. Jetson Orin Nano — Extra Steps
-
-The Jetson requires board-specific wheels for PyTorch that are not on PyPI.
-
-### 11a. Download Jetson AI Lab wheels
-
-Visit [https://forums.developer.nvidia.com/t/pytorch-for-jetson](https://forums.developer.nvidia.com/t/pytorch-for-jetson) and download the `.whl` files for:
-
-- `torch` (JetPack 6.x compatible)
-- `torchaudio`
-- `torchvision`
-- `ctranslate2` (Jetson build)
-
-Place the wheels in a local directory, e.g. `~/wheels/`.
-
-### 11b. Update pyproject.toml wheel paths
-
-In `pyproject.toml`, confirm the path overrides for `torch` and `ctranslate2` point to your downloaded `.whl` files:
-
-```toml
-[tool.uv.sources]
-torch = { path = "/home/oppa-ai/wheels/torch-<version>-cp310-linux_aarch64.whl" }
-ctranslate2 = { path = "/home/oppa-ai/wheels/ctranslate2-<version>-cp310-linux_aarch64.whl" }
-```
-
-### 11c. Install JetPack dev libraries (if not already present)
-
-```bash
-sudo apt install -y libopenblas-dev libopenmpi-dev
-```
-
-### 11d. Run uv sync
+## 9. Install Python Dependencies
 
 ```bash
 uv sync
 ```
 
-### 11e. PulseAudio default sink (for TTS audio output)
+This installs dependencies from `pyproject.toml`/`uv.lock`, including `openai`, `sqlite-vec`, `fastembed`, `sherpa-onnx`, `silero-vad`, `sounddevice`, `soundfile`, `websockets`, `torch`, and `torchaudio`.
 
-If audio output is silent after install, fix the PulseAudio default sink:
+For browser frontend asset experiments, the repo also has a `package.json` with `three` and `@pixiv/three-vrm`; the checked-in `webui/static/` files are served directly by Python, so `npm install` is not required for normal runtime.
+
+---
+
+## 10. Jetson Orin Nano Notes
+
+- The current `pyproject.toml` uses PyPI dependencies plus an ONNX Runtime CUDA nightly index for `onnxruntime-gpu`.
+- `ASR_DEVICE=cpu` is the documented SenseVoice setting in `.env.example` because CUDA EP availability can vary by JetPack/JP version.
+- Keep `SQLITE_MEMORY_PATH` and `FASTEMBED_CACHE_PATH` on persistent storage, not `/tmp`.
+- If audio output is silent, inspect devices and set `MIOTTS_DEVICE` or the system default sink:
 
 ```bash
-# List available sinks
+uv run python core/speak.py --devices
 pactl list short sinks
-
-# Set the default (replace <sink_name> with your output device)
 pactl set-default-sink <sink_name>
-
-# To make it persist across reboots, add to /etc/pulse/default.pa:
-echo "set-default-sink <sink_name>" | sudo tee -a /etc/pulse/default.pa
 ```
+
+- Watch memory pressure with `jtop` when LLM, MioTTS, ASR, and embeddings are warm.
 
 ---
 
-## 12. Verify the Full Stack
-
-Run this checklist before launching Aiko for the first time:
+## 11. Verify the Full Stack
 
 ```bash
-# 1. SearXNG
+# SearXNG
 curl "http://localhost:8081/search?q=test&format=json" \
   -H "X-Forwarded-For: 127.0.0.1"
-# Expected: JSON search results
 
-# 2. Ollama
-curl http://localhost:11434/api/tags
-# Expected: JSON list of pulled models
+# Local OpenAI-compatible LLM
+curl http://localhost:8080/v1/models
 
-# 3. MioTTS (if using voice)
+# MioTTS (voice mode only)
 curl http://localhost:8001/health
-# Expected: {"status":"ok"} or similar
 
-# 4. Python environment
-uv run python -c "import sqlite_vec; import sherpa_onnx; import silero_vad; print('deps OK')"
-# Expected: deps OK
+# Python imports
+uv run python -c "import sqlite_vec, fastembed, sherpa_onnx, silero_vad, sounddevice, websockets; print('OK')"
 
-# 5. ASR model cache (first voice launch downloads SenseVoice files if absent)
-uv run python -c "from core.listen import ASR_MODEL; print(ASR_MODEL)"
-# Expected: csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17 or your override
+# Skill registry and agentic tool schemas
+uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"
+uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"
+
+# Memory backend
+uv run python -c "from core.memorize import AikoMemorize; m=AikoMemorize(silent=True); print(m.get_all()[:1])"
 ```
 
 ---
 
-## 13. Run Aiko-chan
+## 12. Run Aiko-chan
 
 ```bash
-# Full voice mode (ASR input + TTS output)
+# Default: curses TUI, full voice if services are available
 uv run python main.py
 
-# Text-only mode (keyboard input, no ASR/TTS)
+# Browser WebUI + VRM frontend
+uv run python main.py --webui
+
+# Keyboard-only, skips ASR and TTS
 uv run python main.py --text
 
-# Text mode with memory debug output
-uv run python main.py --text --debug
+# Keyboard input but keep TTS available
+uv run python main.py --no-asr
 
-# Wipe all stored memories and exit
+# Debug memory hits each turn
+uv run python main.py --debug
+
+# Wipe memories and exit
 uv run python main.py --clear-mem
 ```
 
-On first launch Aiko will:
-1. Connect to SQLite-vec and initialise the memory collection if it does not exist.
-2. Warm up the Ollama model in the background.
-3. Warm up MioTTS in the background (voice mode only).
-4. Open the curses TUI.
-
----
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `uv sync` fails — wheel not found | Jetson wheel path wrong | Update path in `pyproject.toml` → Section 12b |
-| SearXNG returns 403 | Wrong `SEARXNG_SECRET` | Match secret in `.env` and `searxng/settings.yml` |
-| Ollama model not found | Model not pulled | `ollama pull <model>` → Section 8 |
-| No TTS audio on Jetson | Wrong PulseAudio sink | `pactl set-default-sink` → Section 11e |
-| ASR import/model error | Missing sherpa-onnx/SenseVoice deps or model cache | Run `uv sync`, then launch once online or set `HF_HUB_OFFLINE=0` |
-| LLM ignores search results | Model too small (< 7B) | Pull a 7B+ model → Section 8 |
-| `curses` import error | Running inside a non-TTY | Run in a real terminal, not a pipe |
+In-app commands include `/quit`, `/reset`, `/memory`, `/clear`, `/remember`, `/think <question>`, `/web <query>`, `/voice`, `/listen`, and `/help`.
