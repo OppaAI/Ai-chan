@@ -74,11 +74,13 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Area | Tried | Current decision | Reason |
 |---|---|---|---|
-| TTS | Kokoro, RealtimeTTS | ❌Removed | Slightly robotic voice quality; Japanese voice speaking English non-understandable |
 | TTS | MioTTS | ✅Active | Best current voice runtime for Aiko's local stack; Able to speak Japanee and English in a same sentence |
+| TTS | XTTSv2 via CoquiTTS, RealtimeTTS | ❌Removed | A bit obsolete due to depreciation in dependencies; Much slower to inference |
+| TTS | Kokoro, RealtimeTTS | ❌Removed | Slightly robotic voice quality; Japanese voice speaking English non-understandable |
+| TTS | PocketTTS, RealtimeTTS | ❌Removed | A bit too heavy in RAM usage in Jetson Orin Nano |
+| ASR | SenseVoice via sherpa-onnx + Silero VAD | ✅Active | CPU-friendly int8 ONNX path with multilingual support and stable VAD gating |
 | ASR | faster-whisper prototype | ❌Removed | Useful prototype, but heavier and less aligned with current Jetson constraints |
 | ASR | ReazonSpeech K2 | ❌Removed | Good for Japanese only; Cannot understand English too well |
-| ASR | SenseVoice via sherpa-onnx + Silero VAD | ✅Active | CPU-friendly int8 ONNX path with multilingual support and stable VAD gating |
 
 ---
 
