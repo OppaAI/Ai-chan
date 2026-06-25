@@ -360,6 +360,20 @@
     </div>
   </div>
 
+  <div class="section">
+    <div class="section-label">Animation</div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">lerp speed</span>
+        <span class="param-value" id="valLerp">0.08</span>
+      </div>
+      <input type="range" id="slLerp" min="0.01" max="1" step="0.01" value="0.08" oninput="document.getElementById('valLerp').textContent=(+this.value).toFixed(2)">
+    </div>
+    <div class="toggle-row" style="margin-top:8px">
+      <button class="toggle-btn active" id="btnAnimate" onclick="toggleAnimate()">▶ animate</button>
+    </div>
+  </div>
+
   <button id="resetBtn" onclick="resetAll()">↺ reset to rest</button>
 </div>
 
@@ -382,7 +396,8 @@
 <!-- Three.js r128 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
-<script>
+<script type="module">
+import { lookAtHand } from './gesture.js';
 // ── Scene setup ──────────────────────────────────────────────
 const canvas = document.getElementById('c');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -568,6 +583,30 @@ applyRest();
 // ── State ─────────────────────────────────────────────────────
 let currentSide = 1; // 1 = right
 
+// ── Animation state ───────────────────────────────────────────
+let animating = true;
+let animTime = 0;        // drives the intensity oscillation
+let lerpT = 0.08;
+
+// Current actual rotations (lerped toward targets each frame)
+const cur = {
+  lUA: { x: REST.leftUpperArm.x,  z: REST.leftUpperArm.z },
+  lLA: { x: REST.leftLowerArm.x,  z: REST.leftLowerArm.z },
+  lH:  { x: REST.leftHand.x,      y: REST.leftHand.y },
+  rUA: { x: REST.rightUpperArm.x, z: REST.rightUpperArm.z },
+  rLA: { x: REST.rightLowerArm.x, z: REST.rightLowerArm.z },
+  rH:  { x: REST.rightHand.x,     y: REST.rightHand.y },
+  neckY: 0, neckX: 0,
+  headY: 0, headX: 0,
+};
+
+function toggleAnimate() {
+  animating = !animating;
+  const btn = document.getElementById('btnAnimate');
+  btn.textContent = animating ? '▶ animate' : '⏸ paused';
+  btn.classList.toggle('active', animating);
+}
+
 function setSide(s) {
   currentSide = s;
   document.getElementById('btnLeft').classList.toggle('active', s < 0);
@@ -584,13 +623,22 @@ function getIO() {
     rUA: { x: +document.getElementById('slUAx').value, z: +document.getElementById('slUAz').value },
     rLA: { x: +document.getElementById('slLAx').value, z: +document.getElementById('slLAz').value },
     rH:  { x: +document.getElementById('slHx').value,  y: +document.getElementById('slHy').value  },
+    neck: { x: 0, y: 0 },
+    head: { x: 0, y: 0 },
   };
 }
 
-// Mirrors your blend() with t=1 (instant)
+// Mirrors your blend()
 function blend(from, to, t) { return from + (to - from) * t; }
 
-function update() {
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// Compute targets from lookAtHand case and lerp cur toward them
+function tickAnimation(dt) {
+  if (animating) animTime += dt;
+
+  lerpT = +document.getElementById('slLerp').value;
+
   const intensity = +document.getElementById('slIntensity').value;
   const io = getIO();
   const s = currentSide;
@@ -605,67 +653,46 @@ function update() {
   document.getElementById('valHy').textContent  = (+document.getElementById('slHy').value).toFixed(2);
   document.getElementById('hudInt').textContent = intensity.toFixed(2);
 
-  // Reset both arms to rest first
-  applyRest();
+  lookAtHand({
+        side: currentSide,
+        intensity,
+        io,
+        REST,
+        THREE,
 
-  // Apply lookAtHand pose to active arm (mirrors your switch case exactly)
-  if (s < 0) {
-    const uaX = blend(REST.leftUpperArm.x + io.lUA.x, -0.45 * intensity, 1);
-    const uaZ = blend(REST.leftUpperArm.z + io.lUA.z, -0.70 * intensity, 1);
-    leftArm.uaPivot.rotation.x = uaX;
-    leftArm.uaPivot.rotation.z = uaZ;
+        head,
+        neck,
 
-    const laX = blend(REST.leftLowerArm.x + io.lLA.x, -0.95 * intensity, 1);
-    const laZ = blend(REST.leftLowerArm.z + io.lLA.z, -0.15 * intensity, 1);
-    leftArm.laPivot.rotation.x = laX;
-    leftArm.laPivot.rotation.z = laZ;
+        lUA: leftArm.uaPivot,
+        lLA: leftArm.laPivot,
+        lH: leftArm.hPivot,
 
-    const hX = blend(REST.leftHand.x + io.lH.x, 0.25 * intensity, 1);
-    const hY = blend(REST.leftHand.y + io.lH.y, 0.45 * intensity, 1);
-    leftArm.hPivot.rotation.x = hX;
-    leftArm.hPivot.rotation.y = hY;
+        rUA: rightArm.uaPivot,
+        rLA: rightArm.laPivot,
+        rH: rightArm.hPivot
+      });
 
-    document.getElementById('bUAx').textContent = uaX.toFixed(3);
-    document.getElementById('bUAz').textContent = uaZ.toFixed(3);
-    document.getElementById('bLAx').textContent = laX.toFixed(3);
-    document.getElementById('bLAz').textContent = laZ.toFixed(3);
-    document.getElementById('bHx').textContent  = hX.toFixed(3);
-    document.getElementById('bHy').textContent  = hY.toFixed(3);
-  } else {
-    const uaX = blend(REST.rightUpperArm.x + io.rUA.x,  -0.45 * intensity, 1);
-    const uaZ = blend(REST.rightUpperArm.z + io.rUA.z,   0.70 * intensity, 1);
-    rightArm.uaPivot.rotation.x = uaX;
-    rightArm.uaPivot.rotation.z = uaZ;
-
-    const laX = blend(REST.rightLowerArm.x + io.rLA.x, -0.95 * intensity, 1);
-    const laZ = blend(REST.rightLowerArm.z + io.rLA.z,  0.15 * intensity, 1);
-    rightArm.laPivot.rotation.x = laX;
-    rightArm.laPivot.rotation.z = laZ;
-
-    const hX = blend(REST.rightHand.x + io.rH.x,  0.25 * intensity, 1);
-    const hY = blend(REST.rightHand.y + io.rH.y, -0.45 * intensity, 1);
-    rightArm.hPivot.rotation.x = hX;
-    rightArm.hPivot.rotation.y = hY;
-
-    document.getElementById('bUAx').textContent = uaX.toFixed(3);
-    document.getElementById('bUAz').textContent = uaZ.toFixed(3);
-    document.getElementById('bLAx').textContent = laX.toFixed(3);
-    document.getElementById('bLAz').textContent = laZ.toFixed(3);
-    document.getElementById('bHx').textContent  = hX.toFixed(3);
-    document.getElementById('bHy').textContent  = hY.toFixed(3);
-  }
+  // ── Update bone readout ──
+  const activeUA = s < 0 ? cur.lUA : cur.rUA;
+  const activeLA = s < 0 ? cur.lLA : cur.rLA;
+  const activeH  = s < 0 ? cur.lH  : cur.rH;
+  document.getElementById('bUAx').textContent = activeUA.x.toFixed(3);
+  document.getElementById('bUAz').textContent = activeUA.z.toFixed(3);
+  document.getElementById('bLAx').textContent = activeLA.x.toFixed(3);
+  document.getElementById('bLAz').textContent = activeLA.z.toFixed(3);
+  document.getElementById('bHx').textContent  = activeH.x.toFixed(3);
+  document.getElementById('bHy').textContent  = activeH.y.toFixed(3);
 }
+
+// Stub so sidebar sliders still call something
+function update() { /* driven by render loop */ }
 
 function resetAll() {
   document.getElementById('slIntensity').value = 1;
   ['UAx','UAz','LAx','LAz','Hx','Hy'].forEach(id => {
     document.getElementById('sl' + id).value = 0;
   });
-  update();
 }
-
-// Initial pose
-update();
 
 // ── Resize ────────────────────────────────────────────────────
 function resize() {
@@ -679,12 +706,16 @@ window.addEventListener('resize', resize);
 resize();
 
 // ── Render loop ───────────────────────────────────────────────
-function animate() {
+let lastTime = performance.now();
+function animate(now) {
   requestAnimationFrame(animate);
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  tickAnimation(dt);
   applyOrbit();
   renderer.render(scene, camera);
 }
-animate();
+animate(performance.now());
 </script>
 </body>
 </html>
