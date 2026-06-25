@@ -51,7 +51,7 @@ LLAMA_CTX        = 8192
 LLAMA_GPU_LAYERS = 999
 LLAMA_PARALLEL   = 2
 
-GPU_TYPE = "A100"
+GPU_TYPE = "A100-80G"
 
 app    = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
@@ -268,7 +268,7 @@ def _find_llama_server_binary() -> str:
     volumes={OUTPUTS_DIR: volume},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     memory=32768,
-    max_containers=5,
+    max_containers=1,
 )
 def process_topic(
     topic: str,
@@ -312,18 +312,22 @@ def process_topic(
         "--log-disable",
     ]
     print(f"[{topic}] Starting llama-server ...")
-    server_proc = subprocess.Popen(cmd)
+        server_proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
 
-    for i in range(180):
-        try:
-            urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
-            print(f"[{topic}] llama-server ready ({i+1}s)")
-            break
-        except Exception:
-            time.sleep(1)
-    else:
-        server_proc.terminate()
-        raise RuntimeError("llama-server failed to start within 180s")
+        for i in range(300):
+            try:
+                urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
+                print(f"[{topic}] llama-server ready ({i+1}s)")
+                break
+            except Exception:
+                if server_proc.poll() is not None:
+                    err = server_proc.stderr.read().decode(errors="replace")[-2000:]
+                    raise RuntimeError(f"llama-server exited early:\n{err}")
+                time.sleep(1)
+        else:
+            err = server_proc.stderr.read().decode(errors="replace")[-2000:]
+            server_proc.terminate()
+            raise RuntimeError(f"llama-server failed to start:\n{err}")
 
     client = OpenAI(
         api_key="none",

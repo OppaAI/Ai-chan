@@ -265,7 +265,7 @@ def _build_hugo_post(
     read_mins  = _estimate_read_minutes(prose)
 
     # optional image front matter
-    image_fm = f'\nimage: "/images/{image_slug}.png"' if image_slug else ""
+    image_fm = f'\nimage: "/images/{image_slug}.png"\n' if image_slug else "\n"
 
     front_matter = (
         f'---\n'
@@ -280,12 +280,6 @@ def _build_hugo_post(
         f'{image_fm}'
         f'---'
     )
-
-    # body — embed image if available, else omit
-    if image_slug:
-        image_block = f'{{{{< figure src="/images/{image_slug}.png" alt="{date_str} reflection" >}}}}\n\n'
-    else:
-        image_block = ""
 
     body = f"{image_block}{prose}\n\n*Generated from {mem_count} memories on {date_str}.*"
     content = f"{front_matter}\n\n{body}\n"

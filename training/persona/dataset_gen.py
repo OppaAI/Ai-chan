@@ -325,7 +325,6 @@ def generate_topic_batch(
     from huggingface_hub import hf_hub_download
     from openai import OpenAI
     from tqdm import tqdm
-    volume.reload()
     os.makedirs(f"{OUTPUTS_DIR}/models", exist_ok=True)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
