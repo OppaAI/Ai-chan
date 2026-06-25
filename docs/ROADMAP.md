@@ -64,9 +64,9 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
 | Microphone capture with SenseVoice via sherpa-onnx | ✅ Done |
 | Voice Activity Detection via Silero VAD | ✅ Done |
-| Interactive Talk mode (hands-free conversation) | 🔲 Planned |
-| Interrupt handling — speak over Aiko mid-response | 🔲 Planned |
-| Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Planned |
+| Interactive Talk mode (hands-free conversation) | ✅ Done |
+| Interrupt handling — speak over Aiko mid-response | ⌛ In Progress |
+| Latency target: < 3 s end-to-end on Jetson Orin Nano | ⌛ In Progress |
 | TTS voice/runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
 
 
