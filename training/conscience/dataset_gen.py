@@ -563,9 +563,6 @@ def main(
     # Step 1: Generate scenarios — exactly ONCE (previous version ran this
     # starmap call twice, which doubled cost and duplicated scenarios).
     # -----------------------------------------------------------------------
-    if resume:
-        volume.reload()
-
     already_have_scenarios = []
     if resume and os.path.exists(raw_path):
         with open(raw_path) as f:
@@ -600,7 +597,6 @@ def main(
           f"({dedup_result['total_before']} → {len(all_scenarios)})")
     with open(f"{OUTPUT_DIR}/{output_name}_scenario_dedup_report.json", "w") as f:
         json.dump({k: v for k, v in dedup_result.items() if k != "kept"}, f, indent=2)
-    volume.commit()
 
     # -----------------------------------------------------------------------
     # Step 2: Skip already-labeled if resuming (reading checkpoint off Volume)

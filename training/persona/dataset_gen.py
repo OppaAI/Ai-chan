@@ -577,7 +577,6 @@ def main(
     # check which topics already have a checkpoint file on the volume
     completed: set[str] = set()
     if resume:
-        volume.reload()
         try:
             for p in Path(CHECKPOINT_DIR.lstrip("/")).glob("*.jsonl"):
                 completed.add(p.stem)
