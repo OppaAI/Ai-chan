@@ -575,13 +575,23 @@ const REST = {
   rightHand:     { x: 0,    y:  0 },
 };
 
+function setArmRest(side) {
+  if (side < 0) {
+    leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
+    leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
+    leftArm.hPivot.rotation.set(REST.leftHand.x, REST.leftHand.y, 0);
+  } else {
+    rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
+    rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
+    rightArm.hPivot.rotation.set(REST.rightHand.x, REST.rightHand.y, 0);
+  }
+}
+
 function applyRest() {
-  leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
-  leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
-  leftArm.hPivot.rotation.set(REST.leftHand.x, REST.leftHand.y, 0);
-  rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
-  rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
-  rightArm.hPivot.rotation.set(REST.rightHand.x, REST.rightHand.y, 0);
+  setArmRest(-1);
+  setArmRest(1);
+  neck.rotation.set(0, 0, 0);
+  head.rotation.set(0, 0, 0);
 }
 applyRest();
 
@@ -590,6 +600,7 @@ let currentSide = 1; // 1 = right
 
 // ── Animation state ───────────────────────────────────────────
 let animating = true;
+let forceRest = false;
 let animTime = 0;        // drives the intensity oscillation
 let lerpT = 0.08;
 
@@ -606,6 +617,7 @@ const cur = {
 };
 
 function toggleAnimate() {
+  forceRest = false;
   animating = !animating;
   const btn = document.getElementById('btnAnimate');
   btn.textContent = animating ? '▶ animate' : '⏸ paused';
@@ -613,6 +625,7 @@ function toggleAnimate() {
 }
 
 function setSide(s) {
+  forceRest = false;
   currentSide = s;
   document.getElementById('btnLeft').classList.toggle('active', s < 0);
   document.getElementById('btnRight').classList.toggle('active', s > 0);
@@ -688,6 +701,18 @@ function syncCurrentRotations() {
   cur.rH.y = rightArm.hPivot.rotation.y;
 }
 
+function updateBoneReadout(side) {
+  const activeUA = side < 0 ? cur.lUA : cur.rUA;
+  const activeLA = side < 0 ? cur.lLA : cur.rLA;
+  const activeH  = side < 0 ? cur.lH  : cur.rH;
+  document.getElementById('bUAx').textContent = activeUA.x.toFixed(3);
+  document.getElementById('bUAz').textContent = activeUA.z.toFixed(3);
+  document.getElementById('bLAx').textContent = activeLA.x.toFixed(3);
+  document.getElementById('bLAz').textContent = activeLA.z.toFixed(3);
+  document.getElementById('bHx').textContent  = activeH.x.toFixed(3);
+  document.getElementById('bHy').textContent  = activeH.y.toFixed(3);
+}
+
 // Compute targets from lookAtHand case and lerp cur toward them
 function tickAnimation(dt) {
   if (animating) animTime += dt;
@@ -712,6 +737,13 @@ function tickAnimation(dt) {
   document.getElementById('valHy').textContent  = (+document.getElementById('slHy').value).toFixed(2);
   document.getElementById('hudInt').textContent = intensity.toFixed(2);
 
+  if (forceRest) {
+    applyRest();
+    syncCurrentRotations();
+    updateBoneReadout(s);
+    return;
+  }
+
   const beforeGesture = snapshotRotations();
 
   lookAtHand({
@@ -733,31 +765,36 @@ function tickAnimation(dt) {
         rH: rightArm.hPivot
       });
 
+  setArmRest(-s);
   applyLerpedRotations(beforeGesture, lerpT);
   syncCurrentRotations();
 
   // ── Update bone readout ──
-  const activeUA = s < 0 ? cur.lUA : cur.rUA;
-  const activeLA = s < 0 ? cur.lLA : cur.rLA;
-  const activeH  = s < 0 ? cur.lH  : cur.rH;
-  document.getElementById('bUAx').textContent = activeUA.x.toFixed(3);
-  document.getElementById('bUAz').textContent = activeUA.z.toFixed(3);
-  document.getElementById('bLAx').textContent = activeLA.x.toFixed(3);
-  document.getElementById('bLAz').textContent = activeLA.z.toFixed(3);
-  document.getElementById('bHx').textContent  = activeH.x.toFixed(3);
-  document.getElementById('bHy').textContent  = activeH.y.toFixed(3);
+  updateBoneReadout(s);
 }
 
 // Stub so sidebar sliders still call something
-function update() { /* driven by render loop */ }
+function update() { forceRest = false; /* driven by render loop */ }
 
 Object.assign(window, { setSide, toggleAnimate, update, resetAll });
 
 function resetAll() {
+  animating = false;
+  forceRest = true;
+  animTime = 0;
+
+  const btn = document.getElementById('btnAnimate');
+  btn.textContent = '⏸ paused';
+  btn.classList.remove('active');
+
   document.getElementById('slIntensity').value = 1;
   ['UAx','UAz','LAx','LAz','Hx','Hy'].forEach(id => {
     document.getElementById('sl' + id).value = 0;
   });
+
+  applyRest();
+  syncCurrentRotations();
+  updateBoneReadout(currentSide);
 }
 
 // ── Resize ────────────────────────────────────────────────────
