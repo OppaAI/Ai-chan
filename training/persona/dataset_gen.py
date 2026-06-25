@@ -308,6 +308,7 @@ def _find_llama_server_binary() -> str:
     volumes={OUTPUTS_DIR: volume},
     secrets=[modal.Secret.from_name("huggingface-secret")],
     memory=32768,
+    max_containers=4,
 )
 def generate_topic_batch(
     topic: str,
@@ -324,7 +325,7 @@ def generate_topic_batch(
     from huggingface_hub import hf_hub_download
     from openai import OpenAI
     from tqdm import tqdm
-
+    volume.reload()
     os.makedirs(f"{OUTPUTS_DIR}/models", exist_ok=True)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
@@ -356,7 +357,7 @@ def generate_topic_batch(
     print(f"[{topic}] Starting llama-server: {' '.join(cmd)}")
     server_proc = subprocess.Popen(cmd)
 
-    for i in range(180):
+    for i in range(300):
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
             print(f"[{topic}] llama-server ready ({i+1}s)")
