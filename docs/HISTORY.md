@@ -45,6 +45,7 @@ Major accomplishments:
 - asynchronous memory writes
 - web-grounded responses
 - fully local deployment
+- initial Ollama-based chat runtime, later replaced by an OpenAI-compatible local endpoint
 
 Lessons learned:
 
@@ -131,18 +132,24 @@ Goal:
 
 Major additions:
 
+- browser WebUI/VRM bridge groundwork under `webui/` and `webui/static/`
+- OpenAI-compatible local LLM client path for llama.cpp-style servers
 - agentic toolkit focused tool modules
 - agentic tools compatibility facade
-- agentic skills workflow documents `skills.md`
+- agentic skill workflow documents under `skills/<skill_id>/SKILL.md`
 - agentic skill discovery and retrieval in `core/skills.py`
 - agentic task-mode skill context injection
-- initial `wildlife_photo` and `aiko_architect` skills project
+- initial `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch` skill projects
+- local scheduling/reminder infrastructure using `workspace/schedule.json`
+- final-answer verification/repair safeguards in the agentic loop
 
 Lessons learned:
 
 - Tools are executable abilities; skills are repeatable workflows.
 - Markdown skill files are for humans and prompts; Python toolkit modules are for actions.
 - `core/tools.py` remains useful as a stable public facade even when implementations move into `core/toolkit/`.
+- The browser WebUI can share the TUI contract, but remote voice-device UX still needs polishing.
+- Environment-variable migrations need docs: `LLM_*` and `ROUTE_*` are now the current names for chat runtime/routing.
 
 ---
 

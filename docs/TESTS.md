@@ -10,20 +10,21 @@ Manual smoke-test checklist for each phase. Run the relevant section after insta
 Run before any phase tests. All items must pass.
 
 - [ ] `curl "http://localhost:8081/search?q=test&format=json"` returns JSON results
-- [ ] `curl http://localhost:11434/api/tags` returns a JSON list containing your configured model
+- [ ] `curl http://localhost:8080/v1/models` returns a JSON list containing your configured `LLM_MODEL`
 - [ ] `curl http://localhost:8001/health` returns `{"status":"ok"}` (voice mode only)
-- [ ] `uv run python -c "import sqlite_vec; import fastembed; print('OK')"` prints `OK`
-- [ ] `docker compose ps` shows `searxng` as `running`
+- [ ] `uv run python -c "import sqlite_vec; import fastembed; import sherpa_onnx; import silero_vad; print('OK')"` prints `OK`
+- [ ] `docker compose ps` shows `aiko_searxng` / `searxng` as `running`
 - [ ] SQLite memory DB path exists and is on persistent storage (not `/tmp`): `ls -lh $SQLITE_MEMORY_PATH`
 
 ---
 
 ## Phase 1 — Soul
 
-*CLI chatbot, Ollama inference, mem0 + Qdrant memory, web search.*
+*CLI/TUI chatbot, OpenAI-compatible local LLM inference, sqlite-vec memory, web search.*
 
-### Ollama / LLM
+### Local LLM Endpoint
 
+- [ ] `curl http://localhost:8080/v1/models` lists the model alias configured as `LLM_MODEL`
 - [ ] Aiko launches without errors in `--text` mode
 - [ ] First message receives a streamed response (tokens appear progressively, not all at once)
 - [ ] Response is coherent and matches the persona defined in `persona/soul.md`
@@ -77,6 +78,14 @@ Run before any phase tests. All items must pass.
 - [ ] Background LLM warmup on startup eliminates cold-start delay on the first real message
 - [ ] Memory writes do not block the streaming response (non-blocking queue worker)
 
+### WebUI / VRM Bridge
+
+- [ ] `uv run python main.py --webui --text` prints the browser URL and serves `webui/static/index.html`
+- [ ] Browser connects to the WebSocket and text chat works end-to-end
+- [ ] Chat messages, streamed tokens, commit events, vitals, and voice state updates appear in the browser
+- [ ] VRM asset loads from `webui/static/assets/Aiko.vrm`
+- [ ] Browser refresh/reconnect does not crash the Python backend
+
 ### TTS — MioTTS
 
 - [ ] `/voice` toggle enables TTS; spoken audio plays for the next assistant response
@@ -123,14 +132,21 @@ Run before any phase tests. All items must pass.
 
 ## Phase 2.5 — Agent
 
-*Agentic task loop, toolkit tools, skillset registry, scheduled local work.*
+*Agentic task loop, toolkit tools, skillset registry, final-answer verification, scheduled local work.*
 
 ### Toolkit & Skill Registry
 
-- [ ] `uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo` and `aiko_architect`
-- [ ] `uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes skill, photo, and repo tools
+- [ ] `uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch`
+- [ ] `uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes web, planning, workspace, scheduling, skill, photo, and repo tools
 - [ ] Asking Aiko to process wildlife photos loads/uses the `wildlife_photo` skill context
 - [ ] Asking Aiko to inspect her architecture loads/uses the `aiko_architect` skill context
+
+### Scheduling / Reminder Workflow
+
+- [ ] Asking Aiko to schedule a reminder creates/updates `workspace/schedule.json`
+- [ ] `list_schedule` reports scheduled jobs with IDs, due times, frequency, and action
+- [ ] `cancel_schedule` removes the selected job and persists the change
+- [ ] Due announce jobs play a short notification/beep when available and inject a reminder turn into chat
 
 ### Photo Workflow
 
@@ -169,7 +185,7 @@ Run before any phase tests. All items must pass.
 
 ### WebSocket Bridge
 
-- [ ] Python backend connects to the browser WebSocket on startup without errors
+- [ ] Python backend starts the browser WebSocket on startup without errors
 - [ ] Expression commands sent from Python appear in the browser within ~100 ms
 - [ ] Reconnection works if the browser tab is refreshed while Python is running
 

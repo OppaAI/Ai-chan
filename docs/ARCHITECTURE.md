@@ -4,12 +4,12 @@
 
 Aiko's runtime is already partly separated:
 
-- `main.py` is the launch orchestrator. It selects WebUI by default, keeps the curses TUI behind `--tui`, boots the subsystems through `AikoWakeup`, and then runs the shared input → route → render loop.
-- `webui/aiko_web.py` is the browser UI adapter. It serves `webui/static/`, opens a WebSocket bridge, and implements the same draw/input methods as the curses TUI.
+- `main.py` is the launch orchestrator. It selects the curses TUI by default, keeps the browser WebUI behind `--webui`, boots the subsystems through `AikoWakeup`, and then runs the shared input → route → render loop.
+- `webui/aiko_web.py` is the browser UI adapter. It serves `webui/static/`, opens a WebSocket bridge, accepts browser mic-audio frames, broadcasts chat/vitals/voice/expression/viseme events, and implements the same draw/input methods as the curses TUI.
 - `tui/tui.py` is the legacy full-screen curses adapter. It implements the same UI contract used by the shared session loop.
 - `core/wakeup.py` owns parallel subsystem startup and returns a `BootResult` containing live references to thinking, memory, speech, and listening modules.
 - `core/tools.py` is the compatibility facade for pure callable tools and should stay as the stable import surface; focused implementations live under `core/toolkit/` (web, planning, scheduling, photo, architecture). These functions do not own the ReAct loop.
-- `core/think.py` owns the public chat facade: routing, normal chat, TTS/history glue, scheduled job callbacks, and background memory writes.
+- `core/think.py` owns the public chat facade: OpenAI-compatible LLM client setup, semantic/LLM routing, normal chat, TTS/history glue, scheduled job callbacks, idle learner handoff, and background memory writes.
 - `core/agentic.py` owns task-mode tool schemas, ReAct loop execution, and tool dispatch.
 - `core/skills.py` owns local skill document CRUD/search helpers and the `skills/<skill_id>/SKILL.md` registry used by task mode.
 - `core/memorize.py` owns persistent memory CRUD, recall, pinning, decay, cleanup, and nightly consolidation.
@@ -21,7 +21,7 @@ Aiko's runtime is already partly separated:
 The runtime split should stay close to this shape:
 
 ```text
-main.py            CLI flags, UI selection, shared session loop
+main.py            CLI flags, default curses UI selection, optional WebUI selection, shared session loop
 webui/aiko_web.py  browser adapter: HTTP static server, WebSocket bridge, UI API
 tui/tui.py         curses adapter implementing the same UI API
 core/wakeup.py     boot orchestration and BootResult assembly
@@ -30,7 +30,7 @@ core/toolkit/      focused tool implementations, no LLM loop, no conversational 
 core/agentic.py    ReAct loop, tool schemas, tool dispatch
 core/skills.py     skill CRUD and retrieval: load, append, prune, search, skill registry
 skills/<id>/       human-readable repeatable workflow documents
-core/think.py      public chat facade: normal chat, agentic handoff, TTS/history glue
+core/think.py      public chat facade: OpenAI-compatible LLM calls, normal chat, agentic handoff, TTS/history glue
 ```
 
 Keep memory separate from all three: `core/memorize.py` should remain the single owner of persistent memory, including `pin()`.
@@ -41,14 +41,14 @@ Keep memory separate from all three: `core/memorize.py` should remain the single
 flowchart TD
     User[User] --> Entry[main.py]
     Entry --> Choice{UI mode?}
-    Choice -->|default / --webui| WebUI[AikoWeb\nHTTP + WebSocket browser UI]
-    Choice -->|--tui| TUI[AikoTUI\ncurses terminal UI]
+    Choice -->|default / --tui| TUI[AikoTUI\ncurses terminal UI]
+    Choice -->|--webui| WebUI[AikoWeb\nHTTP + WebSocket browser UI]
 
     WebUI --> Session[Shared session loop\n_run_session]
     TUI --> Session
 
     Session --> Wakeup[AikoWakeup.boot]
-    Wakeup --> Think[AikoThink]
+    Wakeup --> Think[AikoThink\nOpenAI-compatible client]
     Wakeup --> Memory[AikoMemorize\nsqlite-vec + embeddings]
     Wakeup --> Speak[AikoSpeak\nMioTTS]
     Wakeup --> Listen[AikoListen\nSenseVoice + Silero VAD]
@@ -81,8 +81,8 @@ sequenceDiagram
     participant Speak as core.speak.AikoSpeak
     participant Listen as core.listen.AikoListen
 
-    User->>Main: python main.py [--webui|--tui|--text]
-    Main->>UI: construct selected UI adapter
+    User->>Main: python main.py [--tui|--webui|--text|--no-asr]
+    Main->>UI: construct selected UI adapter (curses by default, browser with --webui)
     Main->>UI: start init spin loop
     Main->>Wakeup: boot(on_loading, on_done, on_skip)
     par Parallel cognitive boot
@@ -196,6 +196,7 @@ flowchart TD
 flowchart LR
     Browser[Browser\nwebui/static/index.html] <-->|WebSocket JSON| AikoWeb[AikoWeb\nwebui/aiko_web.py]
     Browser -->|HTTP GET / and /assets/Aiko.vrm| Static[Static file server\nwebui/static]
+    Browser -->|binary mic frames| AikoWeb
     AikoWeb -->|get_input queue| Main[main.py shared loop]
     Main -->|add_message / stream_token / vitals / voice state| AikoWeb
     AikoWeb -->|broadcast JSON events| Browser
@@ -256,6 +257,15 @@ flowchart TD
     Decide -->|yes| Final[final_answer]
     Final --> Stream[Return natural answer to UI]
 ```
+
+## Current Runtime Configuration
+
+- `LLM_BASE_URL` and `LLM_MODEL` select the local OpenAI-compatible LLM endpoint. The current code no longer imports `ollama.Client` for chat.
+- `EMBED_MODEL`, `SQLITE_MEMORY_PATH`, and `FASTEMBED_CACHE_PATH` configure local sqlite-vec memory and fastembed embeddings.
+- `ROUTE_ENABLED`/`ROUTE_MODE`/`ROUTE_SEMANTIC_THRESHOLD` are the environment variables read by `core/think.py`; older `AIKO_ROUTE_*` names in stale env files should be migrated.
+- `MIOTTS_API_URL`, `MIOTTS_PRESET`, and `MIOTTS_DEVICE` configure voice output.
+- `ASR_*`, `LISTEN_*`, and `SPEAKER_*` configure SenseVoice, Silero VAD, optional speaker verification, and barge-in.
+- `WORKSPACE_ROOT`, `SCHEDULE_PATH`, and `SCHEDULE_POLL_SECONDS` configure local scheduled work/reminders.
 
 ## Memory Use Rules
 
