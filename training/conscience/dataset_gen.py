@@ -361,14 +361,14 @@ class LlamaCppRunner:
         all_scenarios = []
         remaining = n
         while remaining > 0:
-            batch_n = min(remaining, 20)
+            batch_n = min(remaining, 5)
             for attempt in range(3):
                 try:
                     raw = self._chat(
                         system=SCENARIO_GEN_SYSTEM,
                         user=SCENARIO_GEN_USER.format(n=batch_n, topic=topic),
                         temperature=0.9,
-                        max_tokens=4000,
+                        max_tokens=2000,
                     )
                     parsed = extract_json_array(raw)
                     scenarios = [s for s in parsed if isinstance(s, str) and len(s) > 20]
