@@ -1,7 +1,7 @@
 # Aiko-chan 愛子ちゃん
 
 > A local-first AI companion with a curses TUI, persistent memory, web search, microphone input, and MioTTS voice output.
-> Optimised for constrained hardware — runs on a Jetson Orin Nano with 8 GB VRAM.
+> Optimised for constrained hardware — runs on a Jetson Orin Nano with 8GB unified RAM.
 
 **Author:** [OppaAI](https://github.com/OppaAI) · Beautiful British Columbia, Canada
  
@@ -14,6 +14,21 @@
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04_LTS-orange?logo=ubuntu&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900?logo=nvidia)
+
+---
+
+## Status
+Phase 2 is almost complete
+ASR and TTS are basically running in the TUI interface while the voice recording and playing is through the mic and speaker connected to Jetson (or the hardware running the TUI) itself.
+Still trying to figure out how to stream the voice input and output through network over remote connection via the WebUI interface.
+And a few tweaks and optimizations here and there are still needed to let the voice input and output run smoothly.
+
+> Know Issues:
+> - TTS via MioTTS sometimes cannot inference proper voice output due to memory constraint (May switch MioTTS model and even BGE 1.5 embedding model to the smallest param ones to squeeze out a bit more RAM)
+> - Time latency between ASR voice input ends to beginning of TTS voice output are still over 5 sec for normal chats. Need to figure out how to do proper synchronized text and speech streaming to save a couple seconds.
+> - ASR may have transcribing errors that output wrong text or even wrong language, especially when accent is present in speaker's voice or when using low quality microphone.
+> - Barge-in haven't been fully tested and may cause some runtime issues that needed to conduct more testing and debugging.
+
 
 ---
 
@@ -129,6 +144,7 @@ Aiko-chan/
 │   ├── memorize.py      # sqlite-vec backend, pinned memories, decay
 │   ├── forget.py        # decay scoring and cleanup gates
 │   ├── dream.py         # midnight consolidation scheduler
+│   ├── experience.py    # consolidate daily experience from memory
 │   ├── reflect.py       # Hugo/GitHub reflection publisher
 │   ├── speak.py         # MioTTS HTTP client
 │   ├── listen.py        # SenseVoice (sherpa-onnx) + Silero VAD
@@ -136,18 +152,24 @@ Aiko-chan/
 │   ├── tools.py         # compatibility facade for toolkit tools
 │   ├── toolkit/         # focused tool modules: web, planning, scheduling, photo, architecture
 │   ├── skills.py        # skill registry and workflow retrieval
-│   ├── health.py        # TUI vitals
+│   ├── schedule.py      # schedule reminders (excute scheduled tasks in the future)
+│   ├── health.py        # system information
 │   ├── log.py           # rotating log setup
 │   └── silence.py       # stderr suppression
 ├── tui/
-│   ├── tui.py
-│   └── identity.py
+│   ├── tui.py           # curse TUI interface
+│   └── identity.py      # ASCII art of TUI interface
 ├── persona/
 │   ├── soul.md          # personality, rules, and voice
 │   ├── skills.md        # human-readable skill index
+│   ├── user.md          # user bio and profile
+│   ├── schedule.md      # schedule tasks format policy
 │   └── identity.md      # banner and ASCII art
 ├── skills/
 │   ├── aiko_architect/  # architecture/code workflow skill
+│   ├── aurora_forecase_watch/  # aurora forecase/reminder workflow skill
+│   ├── coding_tutor/    # coding tutorial workflow skill
+│   ├── japanese_tutor/  # Japanese tutorial workflow skill
 │   └── wildlife_photo/  # photo-ingestion workflow skill
 ├── searxng/
 │   ├── settings.yml
@@ -172,7 +194,7 @@ Aiko-chan/
 |---|---|---|
 | 1 | Soul — CLI, Ollama, mem0 + Qdrant, SearXNG | ✅ Done |
 | 1.5 | Stream — curses TUI, streaming pipeline, persona, test TTS models | ✅ Done |
-| 2 | Voice — SenseVoice ASR, Silero VAD, MioTTS, hands-free talk | 🔲 Next |
+| 2 | Voice — SenseVoice ASR, Silero VAD, MioTTS, hands-free talk | ✅ Done |
 | 2.5 | Agent — tool registry, skill workflows, scheduled local tasks | 🔲 Planned |
 | 3 | Face — VRM avatar, three-vrm, expressions, lip-sync | 🔲 Planned |
 | 4 | Presence — emotional state, mood, relationship progression | 🔲 Planned |
@@ -188,8 +210,8 @@ Full details → **[docs/ROADMAP.md](docs/ROADMAP.md)**
 
 - Memory uses a custom sqlite-vec backend — no Qdrant server or mem0 required. Qdrant + mem0 were dropped in Phase 2 due to OOM issues on the Jetson Orin Nano.
 - Entry point is `main.py`, not `cli.py` anymore.
-- TTS runtime is MioTTS server. Kokoro and RealtimeTTS were tried and removed due to Jetson OOM/latency/quality tradeoffs.
-- ASR runtime is SenseVoice via sherpa-onnx with Silero VAD. ReazonSpeech K2 and faster-whisper experiments are archived as trials rather than the active runtime.
+- TTS runtime is MioTTS server with 0.4B Q4KM model (Tried XTTS with CoquiTTS, Kokoro and RealtimeTTS, PocketTTS but removed due to Jetson OOM/latency/quality tradeoffs).
+- ASR runtime is SenseVoice via sherpa-onnx with Silero VAD. (Tried ReazonSpeech K2 and faster-whisper but removed due to English capability and RAM usage tradeoffs respectively)
 - Reflection publishing fails safely if `GITHUB_TOKEN` or `GITHUB_REPO` are missing.
 
 ---
