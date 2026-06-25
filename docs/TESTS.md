@@ -1,164 +1,375 @@
 [← Back to README](../README.md)
-# Aiko-chan 愛子ちゃん — Test Checklist
+# Aiko-chan 愛子ちゃん — Industrial Test Checklist
 
-Manual smoke-test checklist for each phase. Run the relevant section after installing or after making changes to that phase's components. Check off each item before marking a phase stable.
+This checklist is the release gate for Aiko's phase stack. It is intentionally detailed: run the relevant phase suite after installation, dependency upgrades, model swaps, prompt/persona changes, UI changes, and before declaring a phase stable.
+
+Use it as an **industrial-standard verification plan**, not just a smoke test. Record the date, hardware, model names, environment overrides, observed latencies, and failures for every full run.
 
 ---
 
-## Pre-flight — Stack Health
+## Test Evidence Template
 
-Run before any phase tests. All items must pass.
+Copy this block into your run notes before executing a phase suite.
 
-- [ ] `curl "http://localhost:8081/search?q=test&format=json"` returns JSON results
-- [ ] `curl http://localhost:8080/v1/models` returns a JSON list containing your configured `LLM_MODEL`
-- [ ] `curl http://localhost:8001/health` returns `{"status":"ok"}` (voice mode only)
-- [ ] `uv run python -c "import sqlite_vec; import fastembed; import sherpa_onnx; import silero_vad; print('OK')"` prints `OK`
-- [ ] `docker compose ps` shows `aiko_searxng` / `searxng` as `running`
-- [ ] SQLite memory DB path exists and is on persistent storage (not `/tmp`): `ls -lh $SQLITE_MEMORY_PATH`
+- **Date / operator:**
+- **Git commit:** `git rev-parse --short HEAD`
+- **Hardware / OS:** Jetson Orin Nano or desktop, RAM/VRAM, JetPack/Ubuntu version
+- **Python / uv:** `python --version`; `uv --version`
+- **LLM server / model:** `LLM_BASE_URL`, `LLM_MODEL`, quantization, context length
+- **Voice stack:** MioTTS URL/preset/device, ASR model, speaker verification state
+- **Memory DB:** `SQLITE_MEMORY_PATH`, DB size before/after, backup path if applicable
+- **Browser / terminal:** browser version for WebUI; `$TERM`, terminal dimensions for TUI
+- **Network state:** online/offline, SearXNG reachable, HF cache warm/cold
+- **Pass/fail notes:** include exact command output snippets, screenshots, logs, and latency samples
+
+---
+
+## Severity and Exit Criteria
+
+- **P0 blocker:** crash, data loss, unsafe path traversal/write, privacy leak, deadlock, unrecoverable terminal/audio state, or a core Phase 1–2.5 workflow unusable.
+- **P1 major:** repeated timeout, severe hallucinated tool/search result, broken persistence, unacceptable latency regression, or degraded voice loop that needs restart.
+- **P2 minor:** cosmetic UI issue, recoverable warning, single flaky attempt with documented workaround.
+
+A phase is stable only when:
+
+- [ ] All P0/P1 findings are closed or explicitly waived with owner/date/reason.
+- [ ] All persistence tests were repeated across at least one application restart.
+- [ ] Stress tests ran for the requested duration without memory growth, file corruption, or deadlock.
+- [ ] Logs were reviewed for tracebacks, unhandled task exceptions, retry storms, and hidden warnings.
+
+---
+
+## Pre-flight — Stack, Configuration, and Safety
+
+Run before any phase suite.
+
+### Repository and environment
+
+- [ ] `git status --short` is clean or all local changes are intentional and documented.
+- [ ] `uv sync` completes, or existing lockfile environment is already synced.
+- [ ] `uv run python -m compileall main.py core tui webui skills training` completes without syntax errors.
+- [ ] Required environment variables are set or intentionally defaulted: `LLM_BASE_URL`, `LLM_MODEL`, `SQLITE_MEMORY_PATH`, `WORKSPACE_ROOT`, `MIOTTS_API_URL`, `MIOTTS_PRESET`.
+- [ ] Secrets, tokens, absolute private paths, and user-specific data are not printed in normal logs.
+- [ ] `WORKSPACE_ROOT` points to a writable persistent directory and is not `/tmp` unless testing ephemeral behavior.
+- [ ] `SQLITE_MEMORY_PATH` points to persistent storage and the parent directory exists.
+
+### Service health
+
+- [ ] `docker compose ps` shows SearXNG running and no unintended legacy Qdrant dependency.
+- [ ] `curl "http://localhost:8081/search?q=test&format=json"` returns JSON results within 3 seconds.
+- [ ] `curl http://localhost:8080/v1/models` returns JSON containing the configured `LLM_MODEL` alias.
+- [ ] `curl http://localhost:8001/health` returns `{"status":"ok"}` when TTS/voice tests are in scope.
+- [ ] `uv run python -c "import sqlite_vec, fastembed, sherpa_onnx, silero_vad; print('OK')"` prints `OK`.
+- [ ] `parec --version` works on the target voice machine; PulseAudio/PipeWire has an active default source.
+
+### Baseline observability
+
+- [ ] Start one test run with `--debug` and confirm memory hits/tool routing details are visible without exposing sensitive payloads.
+- [ ] Capture idle resource baseline for 60 seconds: CPU, RAM, swap, GPU/VRAM if available, disk free space, and open file descriptors.
+- [ ] Confirm logs include subsystem boot boundaries for think, memory, speak, listen, and UI.
+- [ ] Confirm Ctrl-C/Ctrl-D cleanly exits, drains memory work, and restores terminal state.
 
 ---
 
 ## Phase 1 — Soul
 
-*CLI/TUI chatbot, OpenAI-compatible local LLM inference, sqlite-vec memory, web search.*
+*CLI/TUI text companion, OpenAI-compatible local LLM inference, sqlite-vec memory, and SearXNG web search.*
 
-### Local LLM Endpoint
+### 1.1 Boot and launch modes
 
-- [ ] `curl http://localhost:8080/v1/models` lists the model alias configured as `LLM_MODEL`
-- [ ] Aiko launches without errors in `--text` mode
-- [ ] First message receives a streamed response (tokens appear progressively, not all at once)
-- [ ] Response is coherent and matches the persona defined in `persona/soul.md`
-- [ ] `/reset` clears short-term context; next reply has no memory of the previous exchange
-- [ ] `/think <question>` returns a higher-quality reasoning response and suppresses raw `<think>` tags from output
+- [ ] `uv run python main.py --text` starts without loading ASR/TTS and reaches the first input prompt.
+- [ ] `uv run python main.py --text --debug` starts and prints memory recall/debug information per turn.
+- [ ] `uv run python main.py --clear-mem` wipes the configured memory DB and exits without entering chat.
+- [ ] Launch fails gracefully with a clear error if `LLM_BASE_URL` is unavailable; no traceback-only user experience.
+- [ ] Launch from a different working directory still resolves persona, workspace, and memory paths as expected or documents the required cwd.
+- [ ] Cold start and warm start times are recorded separately.
 
-### Memory (sqlite-vec + fastembed)
+### 1.2 Local LLM endpoint and streaming
 
-> Memory backend was rewritten in Phase 2 — these tests verify the current sqlite-vec implementation,
-> not the original mem0 + Qdrant stack.
+- [ ] `curl http://localhost:8080/v1/models` lists the exact model alias configured as `LLM_MODEL`.
+- [ ] First assistant response streams progressively; tokens are not buffered until the end.
+- [ ] Warm-model time-to-first-token is measured over 10 short prompts; median and p95 are recorded.
+- [ ] The model respects `/think <question>` and returns a reasoned answer while suppressing raw `<think>` tags.
+- [ ] Malformed/empty user input, whitespace-only input, and very long input do not crash the route loop.
+- [ ] LLM server interruption mid-stream produces a visible recoverable error and leaves the next turn usable.
+- [ ] Timeout behavior is bounded: one hung LLM request does not permanently block input, TUI drawing, memory queue, or shutdown.
 
-- [ ] After a few exchanges, `/memory` prints stored memories (not empty)
-- [ ] Restarting Aiko and asking about a previously discussed topic surfaces a relevant memory
-- [ ] `/remember` pins the last exchange; restarting and running `/memory` shows it is still present
-- [ ] `/clear` wipes all memories; `/memory` returns empty afterward
-- [ ] `--clear-mem` flag wipes memories and exits cleanly without launching the TUI
-- [ ] DB file exists at `SQLITE_MEMORY_PATH` after first memory write: `ls -lh ~/.aiko/memory.db`
-- [ ] `dream()` dry-run completes without error: `uv run python -c "from core.memorize import AikoMemorize; m = AikoMemorize(); print(m.dream(dry_run=True))"`
+### 1.3 Persona and conversation quality
 
-### Web Search
+- [ ] `persona/soul.md`, `persona/identity.md`, `persona/user.md`, `persona/character.md`, and `persona/skills.md` load without startup errors.
+- [ ] Responses are consistent with Aiko's persona over at least 20 mixed turns: casual chat, technical help, Japanese/English mixed text, and emotional support.
+- [ ] Persona compliance survives `/reset`; short-term context resets without deleting persistent memories.
+- [ ] The assistant does not reveal raw system/developer prompts or internal tool schemas during normal chat.
+- [ ] Markdown, code blocks, Japanese text, emoji, and punctuation render acceptably in the active UI.
 
-- [ ] `/web what is the current version of Python` returns a grounded answer citing search results
-- [ ] A question that naturally triggers search (e.g. "what happened in the news today") receives a search-grounded reply rather than a hallucinated one
-- [ ] Search results are filtered — Aiko does not dump raw SearXNG JSON into the reply
+### 1.4 Memory: sqlite-vec + fastembed CRUD
+
+- [ ] After several exchanges, `/memory` shows relevant stored memories and does not show empty placeholder rows.
+- [ ] Restart Aiko and ask about a previously discussed topic; recall surfaces the relevant persisted memory.
+- [ ] `/remember` pins the last exchange; after restart `/memory` shows the pinned item remains.
+- [ ] `/clear` wipes memories; `/memory` is empty afterward and no stale recall appears in the next turn.
+- [ ] `--clear-mem` wipes memories and exits cleanly without launching the UI.
+- [ ] DB file exists after first write: `ls -lh "$SQLITE_MEMORY_PATH"`.
+- [ ] `uv run python -c "from core.memorize import AikoMemorize; m=AikoMemorize(); print(m.dream(dry_run=True))"` completes without error.
+- [ ] Corrupt/locked DB simulation is handled safely: Aiko reports the memory problem and continues chat if possible, without overwriting unrelated files.
+- [ ] Duplicate memory pressure test: repeat the same fact 20 times; recall does not become dominated by redundant near-identical entries.
+- [ ] Unicode memory test: store Japanese, Korean, emoji, and mixed punctuation; recall and display remain readable.
+- [ ] Privacy check: `/memory` does not expose secrets from environment variables or unrelated workspace files.
+
+### 1.5 Memory retrieval quality and cleanup
+
+- [ ] KNN vector recall returns semantically similar memories for paraphrased queries.
+- [ ] FTS5 lexical recall returns exact-name/exact-term memories that embeddings may miss.
+- [ ] RRF combined recall ranks an exact relevant memory above unrelated recent memories.
+- [ ] Memory decay/cleanup logs `deleted=N, kept=N` on startup or cleanup invocation without errors.
+- [ ] Pinned memories are not removed by cleanup.
+- [ ] Recall limit settings (`MEMORY_RECALL_LIMIT`, `AGENT_MEMORY_RECALL_LIMIT`) are respected.
+- [ ] Background memory writes drain on shutdown; no last-turn memory is lost after immediate exit.
+
+### 1.6 Web search and grounding
+
+- [ ] `/web what is the current version of Python` returns a grounded answer using SearXNG results.
+- [ ] A naturally time-sensitive question, such as "what happened in the news today", triggers search rather than hallucinated stale knowledge.
+- [ ] Search results are summarized; raw SearXNG JSON is not dumped into the chat.
+- [ ] Search with no results, rate-limit, timeout, and malformed query cases all produce useful user-facing messages.
+- [ ] Search answer cites or names sources enough for the user to distinguish evidence from model inference.
+- [ ] Network-offline mode fails gracefully and does not block normal non-web chat.
+- [ ] Prompt-injection content from fetched pages is treated as untrusted data and does not override Aiko behavior.
+
+### 1.7 Phase 1 stress and regression
+
+- [ ] Run 100 short text turns in one session; no crash, memory leak trend, or progressive slowdown.
+- [ ] Run 20 long-context turns near the configured context limit; truncation/summarization is graceful.
+- [ ] Alternate `/web`, `/think`, `/memory`, `/remember`, `/reset`, and normal chat for 30 minutes; no command parser drift.
+- [ ] Kill and restart the LLM server during a session; Aiko recovers after the server returns.
+- [ ] Disk-full or read-only workspace simulation is documented; save/memory errors are visible and contained.
 
 ---
 
 ## Phase 1.5 — Stream
 
-*Curses TUI, streaming architecture, MioTTS TTS, persona system.*
+*Curses TUI, shared streaming architecture, browser WebUI bridge, persona display, and MioTTS integration.*
 
-### TUI
+### 1.5.1 Curses TUI layout and input
 
-- [ ] Full-screen curses UI launches and fills the terminal without layout errors
-- [ ] Chat panel, architecture panel, and status areas render in the correct positions
-- [ ] Typing input appears in the input field; submitting with Enter sends the message
-- [ ] Streamed LLM tokens appear in the chat panel incrementally as they arrive
-- [ ] TUI resizes gracefully when the terminal window is resized (no crash, no garbled output)
-- [ ] `/help` renders the command list inside the TUI without breaking layout
-- [ ] Exiting with `/quit` or `/exit` restores the terminal cleanly (no leftover curses artifacts)
+- [ ] `uv run python main.py --tui --text` launches the full-screen curses UI and restores the terminal after exit.
+- [ ] Chat panel, architecture/status panels, identity area, and input field render in correct positions at 80x24, 120x40, and a large terminal size.
+- [ ] Terminal resize during generation does not crash or leave garbled output.
+- [ ] Typing, backspace, paste, Enter submit, arrow/navigation keys, and slash commands work reliably.
+- [ ] `/help` renders the command list without overflowing or breaking subsequent draws.
+- [ ] Rapid input submission while streaming is rejected, queued, or handled predictably; it does not corrupt the active assistant message.
+- [ ] Long assistant messages scroll correctly; the most recent content remains reachable/readable.
+- [ ] ANSI escape sequences or malicious terminal control characters in model output do not damage the terminal.
 
-### Persona & Identity
+### 1.5.2 Streaming pipeline and concurrency
 
-- [ ] `persona/soul.md` loads without error on startup (check logs)
-- [ ] `persona/identity.md` banner and ASCII art render correctly in the identity panel
-- [ ] Aiko's tone and personality match `soul.md` across multiple turns
+- [ ] Streaming begins within the expected warm-model latency target and updates the UI incrementally.
+- [ ] `AIKO_STREAM_DRAW_INTERVAL` throttles draw frequency without hiding tokens or causing flicker.
+- [ ] Background LLM warmup reduces first-turn delay compared with cold start; measurements are recorded.
+- [ ] Memory writes are asynchronous and do not block token streaming.
+- [ ] TTS preparation/playback does not block UI drawing or memory queue draining.
+- [ ] Exceptions in token callbacks are logged and do not leave the session permanently wedged.
+- [ ] Shutdown during active streaming drains or cancels cleanly without orphaning audio/process threads.
 
-### Streaming Pipeline
+### 1.5.3 Identity and persona panels
 
-- [ ] LLM response streaming begins within ~1 second of submitting a message (warm model)
-- [ ] Background LLM warmup on startup eliminates cold-start delay on the first real message
-- [ ] Memory writes do not block the streaming response (non-blocking queue worker)
+- [ ] `persona/identity.md` banner/ASCII art render correctly in the identity panel.
+- [ ] Missing or malformed persona files produce clear diagnostics and a safe fallback.
+- [ ] Persona updates are picked up after restart and do not require code changes.
+- [ ] The UI handles wide Unicode, Japanese kana/kanji, combining marks, and emoji without column misalignment severe enough to hide input.
 
-### WebUI / VRM Bridge
+### 1.5.4 WebUI / VRM bridge foundation
 
-- [ ] `uv run python main.py --webui --text` prints the browser URL and serves `webui/static/index.html`
-- [ ] Browser connects to the WebSocket and text chat works end-to-end
-- [ ] Chat messages, streamed tokens, commit events, vitals, and voice state updates appear in the browser
-- [ ] VRM asset loads from `webui/static/assets/Aiko.vrm`
-- [ ] Browser refresh/reconnect does not crash the Python backend
+- [ ] `uv run python main.py --webui --text` prints the browser URL and serves `webui/static/index.html`.
+- [ ] Browser WebSocket connects, receives boot/status events, and sends text chat end-to-end.
+- [ ] Chat messages, streamed tokens, stream commit events, vitals, voice state updates, and errors appear in browser developer tools as expected.
+- [ ] `webui/static/assets/Aiko.vrm` loads or fails with a clear visible error.
+- [ ] Browser refresh/reconnect does not crash the Python backend or duplicate stale sessions uncontrollably.
+- [ ] Multiple browser tabs are tested: behavior is documented, and one tab cannot corrupt backend state for another.
+- [ ] Static file path traversal attempts fail; only intended WebUI assets are served.
 
-### TTS — MioTTS
+### 1.5.5 MioTTS text-to-speech
 
-- [ ] `/voice` toggle enables TTS; spoken audio plays for the next assistant response
-- [ ] `/voice` toggle again disables TTS; no audio plays for subsequent responses
-- [ ] Background TTS warmup on startup eliminates cold-start audio delay
-- [ ] Audio plays through the correct output device (check PulseAudio default sink on Jetson)
-- [ ] Long responses play completely without cutting off mid-sentence
+- [ ] `curl http://localhost:8001/health` confirms the MioTTS server before voice playback tests.
+- [ ] `/voice` toggles TTS on; the next assistant response plays audio.
+- [ ] `/voice` toggles TTS off; later responses do not play audio.
+- [ ] Background TTS warmup reduces first-audio latency; cold and warm timings are recorded.
+- [ ] Audio plays through the intended output device; `python core/speak.py --devices` lists available devices.
+- [ ] `sanitize_for_tts` removes markdown, emoji noise, and unsafe symbols without making ordinary Japanese/English text unintelligible.
+- [ ] Long responses are split and played completely without cutting off mid-sentence.
+- [ ] TTS server unavailable, HTTP error, invalid preset, and invalid device are all surfaced without crashing chat.
+- [ ] TTS playback during shutdown stops cleanly and releases the audio device.
+
+### 1.5.6 Phase 1.5 stress and soak
+
+- [ ] Run a 60-minute TUI soak with intermittent long responses, `/help`, `/reset`, and window resizing; no terminal corruption or thread leak.
+- [ ] Run a 60-minute WebUI soak with browser refresh every 5 minutes; backend remains responsive.
+- [ ] Generate 25 consecutive TTS responses; no audio device lock, runaway queue, or memory leak.
+- [ ] Simulate slow browser/WebSocket client; backend does not block core chat streaming indefinitely.
 
 ---
 
 ## Phase 2 — Voice
 
-*SenseVoice via sherpa-onnx, Silero VAD, hands-free talk mode.*
+*SenseVoice via sherpa-onnx, Silero VAD, optional speaker verification, barge-in, and hands-free talk mode.*
 
-### Memory Backend Migration (sqlite-vec)
+### 2.1 Voice boot and dependency readiness
 
-- [ ] No Qdrant container is required — `docker compose ps` shows only `searxng`
-- [ ] Memory writes complete without OOM errors under concurrent ASR + LLM load (`jtop` VRAM stays stable)
-- [ ] KNN + FTS5 RRF recall returns relevant results: run `--debug` and confirm memory hits appear each turn
-- [ ] `cleanup()` runs on startup and logs `deleted=N, kept=N` without error
+- [ ] `uv run python main.py` starts full voice mode without `--text` and reaches ready state.
+- [ ] Staged boot reports ASR model loading, Silero VAD loading, optional speaker verification, ASR warmup, TTS readiness, and microphone readiness.
+- [ ] First-use Hugging Face model download is tested once; cached/offline boot is tested with `HF_HUB_OFFLINE=1`.
+- [ ] ASR/TTS disabled modes are correct: `--text` skips both, `--no-asr` keeps keyboard input with TTS.
+- [ ] Missing microphone, missing `parec`, invalid ASR model, and missing HF cache produce actionable errors.
+- [ ] Resource usage during boot stays within Jetson limits and does not trigger OOM killer.
 
-### ASR — SenseVoice via sherpa-onnx
+### 2.2 Microphone capture and VAD
 
-- [ ] Aiko launches in full voice mode (no `--text` flag) without errors
-- [ ] Speaking clearly into the microphone produces a transcription in the chat panel
-- [ ] Transcription accuracy is acceptable for normal conversational speech
-- [ ] Non-speech background noise does not trigger spurious transcriptions (VAD is active)
+- [ ] Speaking starts recording automatically; silence stops recording without manual keypress.
+- [ ] Short pauses mid-sentence do not prematurely cut off the utterance.
+- [ ] Very short accidental noises below `LISTEN_MIN_CHUNKS` are ignored.
+- [ ] `LISTEN_MAX_SECONDS` caps extremely long utterances and returns a usable partial transcription or clear timeout.
+- [ ] Background noise test: fan/keyboard/music does not trigger frequent false transcriptions.
+- [ ] Far-field and near-field speech are both tested; threshold adjustments are documented.
+- [ ] `/listen` disables ASR and microphone input is ignored; toggling again resumes ASR.
+- [ ] Barge-in monitor pauses while active recording to avoid microphone conflicts.
 
-### VAD — Silero
+### 2.3 ASR transcription quality
 
-- [ ] Speaking starts recording; silence stops recording without manual key press
-- [ ] Short pauses mid-sentence do not prematurely cut off the utterance
-- [ ] `/listen` toggle disables ASR; microphone input is ignored
-- [ ] `/listen` toggle again re-enables ASR; microphone input resumes
+- [ ] Clear English conversational speech transcribes accurately enough for command/chat routing.
+- [ ] Clear Japanese speech transcribes accurately enough for conversation.
+- [ ] Mixed Japanese/English utterances are handled according to `ASR_LANGUAGE` expectations.
+- [ ] Numbers, names, wake-like phrases, slash-command equivalents, and technical terms are tested.
+- [ ] Filler stripping and fuzzy spoken command mapping correctly detect "reset", "remember this", "show memory", "mute", "stop listening", and "help".
+- [ ] False command prevention: normal sentences containing similar words do not accidentally trigger destructive commands.
+- [ ] ASR returns empty/no-speech result for silence and does not send empty turns to the LLM.
+- [ ] ASR latency is measured over 20 utterances; median, p95, and worst case are recorded.
 
-### End-to-End Voice Loop
+### 2.4 Optional speaker verification
 
-- [ ] Full loop works: speak → transcribe → LLM response streams → TTS speaks the reply
-- [ ] Loop completes in an acceptable latency (target: < 3 s on Jetson for short replies)
-- [ ] Interrupting a TTS response and speaking again does not deadlock the pipeline
+- [ ] With `SPEAKER_VERIFY_ENABLED=0`, listening works and transcript speaker metadata is absent/neutral.
+- [ ] With verification enabled and no enrollment/model path, Aiko warns and continues listening without crashing.
+- [ ] Enrollment file exists at `user/<user_id>.json` after enrollment and is not accidentally committed if private.
+- [ ] Owner voice is accepted above threshold across several utterances.
+- [ ] Non-owner/recorded/nearby voice is rejected or flagged according to threshold policy.
+- [ ] Threshold tuning is documented with false accept/false reject examples.
+- [ ] Speaker verification does not add unacceptable ASR latency or block the transcription thread.
+
+### 2.5 End-to-end voice loop
+
+- [ ] Full loop works: speak → VAD records → ASR transcribes → LLM streams → TTS speaks response.
+- [ ] Short-reply end-to-end latency target is measured; current target is < 3 seconds on Jetson when achievable, otherwise regression budget is documented.
+- [ ] Long user utterances and long assistant replies complete without deadlock or lost UI state.
+- [ ] Interrupting a TTS response by speaking again triggers barge-in behavior or a documented safe fallback.
+- [ ] `/voice` mute during a spoken response stops or prevents subsequent playback predictably.
+- [ ] `/reset`, `/remember`, `/memory`, and `/clear` work when invoked by spoken aliases.
+- [ ] Web search from voice input works and does not read excessively long citations aloud unless intended.
+- [ ] Memory write/recall still works under simultaneous ASR + LLM + TTS load.
+
+### 2.6 Browser voice path
+
+- [ ] WebUI microphone permission prompt appears and denial is handled clearly.
+- [ ] Browser mic frames reach the Python backend and are processed through the same ASR/VAD path or documented browser path.
+- [ ] Remote/browser TTS sink plays audio in browser when configured; local sink remains correct otherwise.
+- [ ] Browser reconnect during voice capture stops the old stream cleanly and does not leave dangling capture state.
+- [ ] Network jitter/slow WebSocket does not crash ASR/TTS or corrupt chat turns.
+
+### 2.7 Voice stress, safety, and recovery
+
+- [ ] 30-minute hands-free conversation soak: no ASR thread death, audio device lock, memory leak, or queue runaway.
+- [ ] 100 repeated short utterances: no progressive latency growth or command misrouting trend.
+- [ ] 20 barge-in attempts across short and long TTS responses: no deadlocks.
+- [ ] Kill MioTTS server mid-session; chat continues text-only or reports TTS unavailable and recovers when server returns.
+- [ ] Unplug/replug microphone or change default source; behavior is documented and does not crash the whole app.
+- [ ] Jetson thermal/power throttling is monitored; voice tests record if latency spikes correlate with throttling.
 
 ---
 
-
 ## Phase 2.5 — Agent
 
-*Agentic task loop, toolkit tools, skillset registry, final-answer verification, scheduled local work.*
+*Agentic task loop, toolkit tools, skill registry, final-answer verification, scheduling, and local workspace operations.*
 
-### Toolkit & Skill Registry
+### 2.5.1 Tool schema and registry integrity
 
-- [ ] `uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch`
-- [ ] `uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes web, planning, workspace, scheduling, skill, photo, and repo tools
-- [ ] Asking Aiko to process wildlife photos loads/uses the `wildlife_photo` skill context
-- [ ] Asking Aiko to inspect her architecture loads/uses the `aiko_architect` skill context
+- [ ] `uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch`.
+- [ ] `uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes web, fetch, planning, workspace, scheduling, skill, photo, and repo tools.
+- [ ] Every tool schema has valid JSON-serializable parameters, required fields, and a matching registered handler.
+- [ ] Unknown tool names, malformed JSON arguments, missing required arguments, and type mismatches return structured errors rather than crashing.
+- [ ] Tool observations are truncated by configured limits and do not flood the LLM context.
+- [ ] Retryable vs non-retryable tool failures are labeled correctly and respect retry/backoff limits.
 
-### Scheduling / Reminder Workflow
+### 2.5.2 Skill context retrieval
 
-- [ ] Asking Aiko to schedule a reminder creates/updates `workspace/schedule.json`
-- [ ] `list_schedule` reports scheduled jobs with IDs, due times, frequency, and action
-- [ ] `cancel_schedule` removes the selected job and persists the change
-- [ ] Due announce jobs play a short notification/beep when available and inject a reminder turn into chat
+- [ ] Asking Aiko to process wildlife photos loads/uses the `wildlife_photo` skill context.
+- [ ] Asking Aiko to inspect her architecture loads/uses the `aiko_architect` skill context.
+- [ ] Asking for Japanese tutoring loads/uses `japanese_tutor`; coding help loads/uses `coding_tutor`.
+- [ ] Skill search returns relevant snippets without dumping entire unrelated skill files.
+- [ ] Missing/corrupt `SKILL.md` files are reported gracefully and do not break unrelated skills.
+- [ ] Skill instructions do not override safety boundaries for filesystem paths, external actions, or final-answer honesty.
 
-### Photo Workflow
+### 2.5.3 Agentic routing and ReAct loop
 
-- [ ] `scan_photo_workspace` reports image counts without moving or modifying files
-- [ ] `propose_photo_ingestion` produces a dry-run destination plan
-- [ ] `write_photo_ingestion_report` writes a report under `workspace/photos/reports`
+- [ ] Normal casual chat does not route to agent mode unnecessarily.
+- [ ] Research/planning/workspace/photo/repo tasks route to agent mode when appropriate.
+- [ ] `MAX_AGENT_ITER` stops runaway loops and produces a clear partial/failure final answer.
+- [ ] Agent memory recall is bounded by `AGENT_MEMORY_RECALL_LIMIT` and does not drown tool evidence.
+- [ ] Final-answer verification catches unsupported claims, failed tool actions, and missing artifact paths.
+- [ ] If verification fails, repair attempts are bounded by `AGENT_MAX_FINAL_REPAIRS` and disclose unresolved limitations.
+- [ ] The final answer clearly distinguishes completed actions, failed actions, saved files, scheduled jobs, and recommendations.
 
-### Architecture Workflow
+### 2.5.4 Web and fetch tools
 
-- [ ] `repo_file_tree` lists text files without entering skipped directories
-- [ ] `repo_search_text` finds known symbols such as `run_agentic_chat`
-- [ ] `repo_read_file` rejects path traversal outside the repository
+- [ ] `web_search` handles normal query, no-result query, timeout, and SearXNG unavailable cases.
+- [ ] `fetch_page` extracts readable text from a normal page and rejects/handles binary, huge, invalid URL, and timeout cases.
+- [ ] Prompt injection in fetched content is treated as data and does not change tool policy or persona.
+- [ ] Deep research tasks cite evidence/source names sufficiently in the final answer.
+
+### 2.5.5 Workspace planning and notes
+
+- [ ] `make_plan` creates a bounded step plan for a realistic goal and respects `max_steps`.
+- [ ] `create_checklist` returns clear checklist output for multi-step tasks.
+- [ ] `save_note` writes only under `WORKSPACE_ROOT`, uses safe slugs, and rejects path traversal.
+- [ ] `read_workspace_file` reads allowed workspace files and rejects `../` traversal or absolute paths outside workspace.
+- [ ] Oversized note content is limited by `MAX_WRITE_CHARS`; oversized reads are limited by `MAX_READ_CHARS`.
+- [ ] Disk-full/read-only workspace errors are reported without losing chat state.
+
+### 2.5.6 Scheduling and reminders
+
+- [ ] Asking Aiko to schedule a reminder creates/updates `workspace/schedule.json`.
+- [ ] `list_schedule` reports IDs, titles, due times, frequency, action, and timezone clearly.
+- [ ] `cancel_schedule` removes the selected job and persists the change.
+- [ ] Once, hourly, daily, weekdays, weekly, biweekly, monthly, and custom weekday schedules are tested.
+- [ ] Relative date handling for today/tomorrow/day-after-tomorrow is verified with exact due dates.
+- [ ] Invalid times, unsupported frequencies, invalid weekdays, duplicate jobs, and past-due once jobs are handled safely.
+- [ ] Due announce jobs play a notification/beep when available and inject a reminder turn into chat.
+- [ ] Agentic scheduled jobs execute only local approved actions and disclose failures.
+- [ ] Corrupt `workspace/schedule.json` is handled with backup/recovery or a clear error; no silent data loss.
+
+### 2.5.7 Photo workflow
+
+- [ ] `scan_photo_workspace` reports image counts without moving, deleting, or modifying files.
+- [ ] `propose_photo_ingestion` produces a dry-run destination plan and preserves originals.
+- [ ] `write_photo_ingestion_report` writes a report under `workspace/photos/reports`.
+- [ ] Empty folders, unsupported extensions, duplicate filenames, large photo sets, and unreadable files are handled.
+- [ ] Paths in photo reports are relative/safe enough to share and do not leak unrelated home-directory data.
+- [ ] Wildlife-photo requests use the skill context and ask for confirmation before destructive organization steps.
+
+### 2.5.8 Architecture and repository tools
+
+- [ ] `repo_file_tree` lists text files and skips generated/heavy directories such as virtualenvs, caches, node_modules, and binary assets where appropriate.
+- [ ] `repo_search_text` finds known symbols such as `run_agentic_chat`, `AikoWakeup`, `AikoMemorize`, and `_match_voice_command`.
+- [ ] `repo_read_file` reads a normal source file with bounded length.
+- [ ] `repo_read_file` rejects path traversal outside the repository.
+- [ ] Binary files, huge files, and missing files return controlled errors.
+- [ ] Architecture questions cite actual repo files/tool evidence rather than guessing from memory.
+
+### 2.5.9 Agent stress, concurrency, and recovery
+
+- [ ] Run 25 mixed agent tasks in one session: web research, note save, schedule create/cancel, photo scan, repo search, and architecture explanation.
+- [ ] Run concurrent user interruptions or rapid follow-up requests during an agent task; behavior is documented and does not corrupt tool state.
+- [ ] Force a tool timeout/failure every few steps; final answers disclose partial completion and preserve completed artifacts.
+- [ ] Agent loop never writes outside `WORKSPACE_ROOT` except explicitly read-only repo inspection tools.
+- [ ] Long tool outputs are truncated consistently and do not cause context overflow or invalid JSON observations.
+- [ ] After a crash/restart, schedules, notes, reports, and memories created by the agent are still valid and discoverable.
 
 ---
 
