@@ -83,6 +83,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 ---
 
 ## Phase 2.5 — Agent 🔲
+![Phase 2.5](../assets/phase-2.5.png)
 
 *Give Aiko a real task layer. Skills describe repeatable workflows; toolkit modules provide safe executable actions.*
 
