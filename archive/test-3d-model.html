@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>lookAtHand · Gesture Tester</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0d0f;
+    --surface: #16161a;
+    --border: #2a2a30;
+    --accent: #7c6bff;
+    --accent2: #ff6b9d;
+    --text: #e8e8ee;
+    --muted: #6b6b7a;
+    --track: #22222a;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  #sidebar header {
+    padding: 20px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #sidebar header .tag {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  #sidebar header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  /* Side toggle */
+  .toggle-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .toggle-btn {
+    flex: 1;
+    padding: 8px;
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .toggle-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  /* Sliders */
+  .param-row {
+    margin-bottom: 14px;
+  }
+
+  .param-row:last-child { margin-bottom: 0; }
+
+  .param-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 5px;
+  }
+
+  .param-name {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .param-value {
+    font-size: 11px;
+    color: var(--accent);
+    min-width: 44px;
+    text-align: right;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 3px;
+    background: var(--track);
+    border-radius: 2px;
+    outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+
+  input[type="range"]:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px rgba(124,107,255,0.3);
+  }
+
+  /* Bone display */
+  .bone-grid {
+    display: grid;
+    gap: 6px;
+  }
+
+  .bone-card {
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+
+  .bone-name {
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .bone-vals {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+  }
+
+  .bone-val {
+    font-size: 10px;
+    color: var(--text);
+  }
+
+  .axis-x { color: #ff6b6b; }
+  .axis-y { color: #6bffb8; }
+  .axis-z { color: #6bb5ff; }
+
+  /* Reset button */
+  #resetBtn {
+    margin: 16px 20px;
+    padding: 9px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.05em;
+  }
+
+  #resetBtn:hover {
+    border-color: var(--accent2);
+    color: var(--accent2);
+  }
+
+  /* ── Viewport ── */
+  #viewport {
+    flex: 1;
+    position: relative;
+    background: var(--bg);
+  }
+
+  canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  /* HUD overlay */
+  #hud {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-size: 10px;
+    color: var(--muted);
+    text-align: right;
+    pointer-events: none;
+    line-height: 1.8;
+  }
+
+  #hud span { color: var(--text); }
+
+  /* Info bar bottom */
+  #infobar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 10px 20px;
+    background: rgba(13,13,15,0.85);
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    gap: 20px;
+    backdrop-filter: blur(6px);
+  }
+
+  .hint { display: flex; align-items: center; gap: 5px; }
+  .key {
+    display: inline-block;
+    padding: 1px 5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 9px;
+    color: var(--text);
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SIDEBAR ── -->
+<div id="sidebar">
+  <header>
+    <div class="tag">aiko-vrm · gesture debug</div>
+    <h1>lookAtHand</h1>
+  </header>
+
+  <div class="section">
+    <div class="section-label">Side</div>
+    <div class="toggle-row">
+      <button class="toggle-btn" id="btnLeft" onclick="setSide(-1)">Left</button>
+      <button class="toggle-btn active" id="btnRight" onclick="setSide(1)">Right</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Intensity</div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">intensity</span>
+        <span class="param-value" id="valIntensity">1.00</span>
+      </div>
+      <input type="range" id="slIntensity" min="0" max="1" step="0.01" value="1" oninput="update()">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">IO offsets</div>
+
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">UA.x</span>
+        <span class="param-value" id="valUAx">0.00</span>
+      </div>
+      <input type="range" id="slUAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">UA.z</span>
+        <span class="param-value" id="valUAz">0.00</span>
+      </div>
+      <input type="range" id="slUAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">LA.x</span>
+        <span class="param-value" id="valLAx">0.00</span>
+      </div>
+      <input type="range" id="slLAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">LA.z</span>
+        <span class="param-value" id="valLAz">0.00</span>
+      </div>
+      <input type="range" id="slLAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">H.x</span>
+        <span class="param-value" id="valHx">0.00</span>
+      </div>
+      <input type="range" id="slHx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">H.y</span>
+        <span class="param-value" id="valHy">0.00</span>
+      </div>
+      <input type="range" id="slHy" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Live bone rotations (rad)</div>
+    <div class="bone-grid">
+      <div class="bone-card">
+        <div class="bone-name">UpperArm</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bUAx">0.00</span></div>
+          <div class="bone-val">y —</div>
+          <div class="bone-val axis-z">z <span id="bUAz">0.00</span></div>
+        </div>
+      </div>
+      <div class="bone-card">
+        <div class="bone-name">LowerArm</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bLAx">0.00</span></div>
+          <div class="bone-val">y —</div>
+          <div class="bone-val axis-z">z <span id="bLAz">0.00</span></div>
+        </div>
+      </div>
+      <div class="bone-card">
+        <div class="bone-name">Hand</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bHx">0.00</span></div>
+          <div class="bone-val axis-y">y <span id="bHy">0.00</span></div>
+          <div class="bone-val">z —</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <button id="resetBtn" onclick="resetAll()">↺ reset to rest</button>
+</div>
+
+<!-- ── 3D VIEWPORT ── -->
+<div id="viewport">
+  <canvas id="c"></canvas>
+
+  <div id="hud">
+    side: <span id="hudSide">right</span><br>
+    intensity: <span id="hudInt">1.00</span>
+  </div>
+
+  <div id="infobar">
+    <div class="hint"><span class="key">drag</span> orbit</div>
+    <div class="hint"><span class="key">scroll</span> zoom</div>
+    <div class="hint"><span class="key">R</span> reset view</div>
+  </div>
+</div>
+
+<!-- Three.js r128 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script>
+// ── Scene setup ──────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0d0f);
+scene.fog = new THREE.Fog(0x0d0d0f, 8, 22);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(0, 1.4, 3.5);
+
+// Lights
+const ambient = new THREE.AmbientLight(0x8888cc, 0.6);
+scene.add(ambient);
+const key = new THREE.DirectionalLight(0xffffff, 0.9);
+key.position.set(2, 4, 3);
+key.castShadow = true;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x6655ff, 0.4);
+rim.position.set(-3, 2, -2);
+scene.add(rim);
+const fill = new THREE.PointLight(0xff6b9d, 0.3, 8);
+fill.position.set(-1, 1, 1);
+scene.add(fill);
+
+// Floor grid
+const grid = new THREE.GridHelper(10, 20, 0x2a2a30, 0x1a1a20);
+scene.add(grid);
+
+// ── Orbit control (minimal, no import needed) ─────────────────
+let orbitState = { dragging: false, lastX: 0, lastY: 0, theta: 0, phi: 0.15, radius: 3.5, target: new THREE.Vector3(0, 1.1, 0) };
+
+canvas.addEventListener('mousedown', e => { orbitState.dragging = true; orbitState.lastX = e.clientX; orbitState.lastY = e.clientY; });
+window.addEventListener('mouseup', () => { orbitState.dragging = false; });
+window.addEventListener('mousemove', e => {
+  if (!orbitState.dragging) return;
+  const dx = (e.clientX - orbitState.lastX) * 0.006;
+  const dy = (e.clientY - orbitState.lastY) * 0.006;
+  orbitState.theta -= dx;
+  orbitState.phi = Math.max(0.05, Math.min(Math.PI / 2, orbitState.phi + dy));
+  orbitState.lastX = e.clientX;
+  orbitState.lastY = e.clientY;
+});
+canvas.addEventListener('wheel', e => {
+  orbitState.radius = Math.max(1.5, Math.min(8, orbitState.radius + e.deltaY * 0.005));
+}, { passive: true });
+window.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') { orbitState.theta = 0; orbitState.phi = 0.15; orbitState.radius = 3.5; } });
+
+function applyOrbit() {
+  const x = orbitState.radius * Math.sin(orbitState.theta) * Math.cos(orbitState.phi);
+  const y = orbitState.radius * Math.sin(orbitState.phi) + orbitState.target.y;
+  const z = orbitState.radius * Math.cos(orbitState.theta) * Math.cos(orbitState.phi);
+  camera.position.set(x, y, z);
+  camera.lookAt(orbitState.target);
+}
+
+// ── Stick figure skeleton ─────────────────────────────────────
+const MAT_BODY = new THREE.MeshLambertMaterial({ color: 0x3a3a4a });
+const MAT_JOINT = new THREE.MeshLambertMaterial({ color: 0x5a5a7a });
+const MAT_ACCENT = new THREE.MeshLambertMaterial({ color: 0x7c6bff });
+const MAT_ACCENT2 = new THREE.MeshLambertMaterial({ color: 0xff6b9d });
+
+function capsule(height, radius, mat) {
+  const g = new THREE.CylinderGeometry(radius, radius, height, 8);
+  return new THREE.Mesh(g, mat);
+}
+function sphere(r, mat) {
+  const g = new THREE.SphereGeometry(r, 8, 8);
+  return new THREE.Mesh(g, mat);
+}
+
+// Root pivot at hips
+const root = new THREE.Object3D();
+root.position.set(0, 0, 0);
+scene.add(root);
+
+// Torso
+const torso = capsule(0.55, 0.09, MAT_BODY);
+torso.position.set(0, 0.9, 0);
+root.add(torso);
+
+// Head
+const head = sphere(0.1, MAT_JOINT);
+head.position.set(0, 1.28, 0);
+root.add(head);
+
+// Neck
+const neck = capsule(0.12, 0.04, MAT_BODY);
+neck.position.set(0, 1.19, 0);
+root.add(neck);
+
+// Hips
+const hips = capsule(0.18, 0.1, MAT_BODY);
+hips.position.set(0, 0.62, 0);
+root.add(hips);
+
+// Legs (static, just for context)
+[-0.09, 0.09].forEach(xOff => {
+  const upper = capsule(0.28, 0.065, MAT_BODY);
+  upper.position.set(xOff, 0.35, 0);
+  root.add(upper);
+  const lower = capsule(0.28, 0.055, MAT_BODY);
+  lower.position.set(xOff, 0.06, 0);
+  root.add(lower);
+  const foot = capsule(0.1, 0.04, MAT_BODY);
+  foot.rotation.x = Math.PI / 2;
+  foot.position.set(xOff, -0.08, 0.04);
+  root.add(foot);
+});
+
+// ── Arm skeleton with pivots ──────────────────────────────────
+// Shoulder joint positions
+const SHOULDER_L = new THREE.Vector3(-0.17, 1.14, 0);
+const SHOULDER_R = new THREE.Vector3( 0.17, 1.14, 0);
+
+function buildArm(side) {
+  // side: -1 = left, 1 = right
+  const sOff = side < 0 ? SHOULDER_L : SHOULDER_R;
+
+  // Upper arm pivot (at shoulder)
+  const uaPivot = new THREE.Object3D();
+  uaPivot.position.copy(sOff);
+  root.add(uaPivot);
+
+  const uaMesh = capsule(0.24, 0.055, side < 0 ? MAT_BODY : MAT_ACCENT);
+  uaMesh.position.set(0, -0.12, 0); // offset so pivot is at top
+  uaPivot.add(uaMesh);
+
+  const elbowSphere = sphere(0.04, MAT_JOINT);
+  elbowSphere.position.set(0, -0.24, 0);
+  uaPivot.add(elbowSphere);
+
+  // Lower arm pivot (at elbow, child of uaPivot)
+  const laPivot = new THREE.Object3D();
+  laPivot.position.set(0, -0.24, 0);
+  uaPivot.add(laPivot);
+
+  const laMesh = capsule(0.20, 0.045, side < 0 ? MAT_BODY : MAT_ACCENT);
+  laMesh.position.set(0, -0.10, 0);
+  laPivot.add(laMesh);
+
+  const wristSphere = sphere(0.035, MAT_JOINT);
+  wristSphere.position.set(0, -0.20, 0);
+  laPivot.add(wristSphere);
+
+  // Hand pivot (at wrist)
+  const hPivot = new THREE.Object3D();
+  hPivot.position.set(0, -0.20, 0);
+  laPivot.add(hPivot);
+
+  const hMesh = capsule(0.10, 0.038, side < 0 ? MAT_BODY : MAT_ACCENT2);
+  hMesh.position.set(0, -0.05, 0);
+  hPivot.add(hMesh);
+
+  return { uaPivot, laPivot, hPivot };
+}
+
+const leftArm  = buildArm(-1);
+const rightArm = buildArm(1);
+
+// ── REST poses ────────────────────────────────────────────────
+const REST = {
+  leftUpperArm:  { x: 0,    z:  0.25 },
+  leftLowerArm:  { x: 0.1,  z:  0.05 },
+  leftHand:      { x: 0,    y:  0 },
+  rightUpperArm: { x: 0,    z: -0.25 },
+  rightLowerArm: { x: 0.1,  z: -0.05 },
+  rightHand:     { x: 0,    y:  0 },
+};
+
+function applyRest() {
+  leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
+  leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
+  leftArm.hPivot.rotation.set(REST.leftHand.x, REST.leftHand.y, 0);
+  rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
+  rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
+  rightArm.hPivot.rotation.set(REST.rightHand.x, REST.rightHand.y, 0);
+}
+applyRest();
+
+// ── State ─────────────────────────────────────────────────────
+let currentSide = 1; // 1 = right
+
+function setSide(s) {
+  currentSide = s;
+  document.getElementById('btnLeft').classList.toggle('active', s < 0);
+  document.getElementById('btnRight').classList.toggle('active', s > 0);
+  document.getElementById('hudSide').textContent = s < 0 ? 'left' : 'right';
+  update();
+}
+
+function getIO() {
+  return {
+    lUA: { x: +document.getElementById('slUAx').value, z: +document.getElementById('slUAz').value },
+    lLA: { x: +document.getElementById('slLAx').value, z: +document.getElementById('slLAz').value },
+    lH:  { x: +document.getElementById('slHx').value,  y: +document.getElementById('slHy').value  },
+    rUA: { x: +document.getElementById('slUAx').value, z: +document.getElementById('slUAz').value },
+    rLA: { x: +document.getElementById('slLAx').value, z: +document.getElementById('slLAz').value },
+    rH:  { x: +document.getElementById('slHx').value,  y: +document.getElementById('slHy').value  },
+  };
+}
+
+// Mirrors your blend() with t=1 (instant)
+function blend(from, to, t) { return from + (to - from) * t; }
+
+function update() {
+  const intensity = +document.getElementById('slIntensity').value;
+  const io = getIO();
+  const s = currentSide;
+
+  // Update display
+  document.getElementById('valIntensity').textContent = intensity.toFixed(2);
+  document.getElementById('valUAx').textContent = (+document.getElementById('slUAx').value).toFixed(2);
+  document.getElementById('valUAz').textContent = (+document.getElementById('slUAz').value).toFixed(2);
+  document.getElementById('valLAx').textContent = (+document.getElementById('slLAx').value).toFixed(2);
+  document.getElementById('valLAz').textContent = (+document.getElementById('slLAz').value).toFixed(2);
+  document.getElementById('valHx').textContent  = (+document.getElementById('slHx').value).toFixed(2);
+  document.getElementById('valHy').textContent  = (+document.getElementById('slHy').value).toFixed(2);
+  document.getElementById('hudInt').textContent = intensity.toFixed(2);
+
+  // Reset both arms to rest first
+  applyRest();
+
+  // Apply lookAtHand pose to active arm (mirrors your switch case exactly)
+  if (s < 0) {
+    const uaX = blend(REST.leftUpperArm.x + io.lUA.x, -0.45 * intensity, 1);
+    const uaZ = blend(REST.leftUpperArm.z + io.lUA.z, -0.70 * intensity, 1);
+    leftArm.uaPivot.rotation.x = uaX;
+    leftArm.uaPivot.rotation.z = uaZ;
+
+    const laX = blend(REST.leftLowerArm.x + io.lLA.x, -0.95 * intensity, 1);
+    const laZ = blend(REST.leftLowerArm.z + io.lLA.z, -0.15 * intensity, 1);
+    leftArm.laPivot.rotation.x = laX;
+    leftArm.laPivot.rotation.z = laZ;
+
+    const hX = blend(REST.leftHand.x + io.lH.x, 0.25 * intensity, 1);
+    const hY = blend(REST.leftHand.y + io.lH.y, 0.45 * intensity, 1);
+    leftArm.hPivot.rotation.x = hX;
+    leftArm.hPivot.rotation.y = hY;
+
+    document.getElementById('bUAx').textContent = uaX.toFixed(3);
+    document.getElementById('bUAz').textContent = uaZ.toFixed(3);
+    document.getElementById('bLAx').textContent = laX.toFixed(3);
+    document.getElementById('bLAz').textContent = laZ.toFixed(3);
+    document.getElementById('bHx').textContent  = hX.toFixed(3);
+    document.getElementById('bHy').textContent  = hY.toFixed(3);
+  } else {
+    const uaX = blend(REST.rightUpperArm.x + io.rUA.x,  -0.45 * intensity, 1);
+    const uaZ = blend(REST.rightUpperArm.z + io.rUA.z,   0.70 * intensity, 1);
+    rightArm.uaPivot.rotation.x = uaX;
+    rightArm.uaPivot.rotation.z = uaZ;
+
+    const laX = blend(REST.rightLowerArm.x + io.rLA.x, -0.95 * intensity, 1);
+    const laZ = blend(REST.rightLowerArm.z + io.rLA.z,  0.15 * intensity, 1);
+    rightArm.laPivot.rotation.x = laX;
+    rightArm.laPivot.rotation.z = laZ;
+
+    const hX = blend(REST.rightHand.x + io.rH.x,  0.25 * intensity, 1);
+    const hY = blend(REST.rightHand.y + io.rH.y, -0.45 * intensity, 1);
+    rightArm.hPivot.rotation.x = hX;
+    rightArm.hPivot.rotation.y = hY;
+
+    document.getElementById('bUAx').textContent = uaX.toFixed(3);
+    document.getElementById('bUAz').textContent = uaZ.toFixed(3);
+    document.getElementById('bLAx').textContent = laX.toFixed(3);
+    document.getElementById('bLAz').textContent = laZ.toFixed(3);
+    document.getElementById('bHx').textContent  = hX.toFixed(3);
+    document.getElementById('bHy').textContent  = hY.toFixed(3);
+  }
+}
+
+function resetAll() {
+  document.getElementById('slIntensity').value = 1;
+  ['UAx','UAz','LAx','LAz','Hx','Hy'].forEach(id => {
+    document.getElementById('sl' + id).value = 0;
+  });
+  update();
+}
+
+// Initial pose
+update();
+
+// ── Resize ────────────────────────────────────────────────────
+function resize() {
+  const vp = document.getElementById('viewport');
+  const w = vp.clientWidth, h = vp.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Render loop ───────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  applyOrbit();
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
