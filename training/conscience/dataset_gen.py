@@ -312,22 +312,22 @@ def process_topic(
         "--log-disable",
     ]
     print(f"[{topic}] Starting llama-server ...")
-        server_proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
+    server_proc = subprocess.Popen(cmd, stderr=subprocess.PIPE)
 
-        for i in range(300):
-            try:
-                urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
-                print(f"[{topic}] llama-server ready ({i+1}s)")
-                break
-            except Exception:
-                if server_proc.poll() is not None:
-                    err = server_proc.stderr.read().decode(errors="replace")[-2000:]
-                    raise RuntimeError(f"llama-server exited early:\n{err}")
-                time.sleep(1)
-        else:
-            err = server_proc.stderr.read().decode(errors="replace")[-2000:]
-            server_proc.terminate()
-            raise RuntimeError(f"llama-server failed to start:\n{err}")
+    for i in range(300):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{LLAMA_PORT}/health")
+            print(f"[{topic}] llama-server ready ({i+1}s)")
+            break
+        except Exception:
+            if server_proc.poll() is not None:
+                err = server_proc.stderr.read().decode(errors="replace")[-2000:]
+                raise RuntimeError(f"llama-server exited early:\n{err}")
+            time.sleep(1)
+    else:
+        err = server_proc.stderr.read().decode(errors="replace")[-2000:]
+        server_proc.terminate()
+        raise RuntimeError(f"llama-server failed to start:\n{err}")
 
     client = OpenAI(
         api_key="none",
