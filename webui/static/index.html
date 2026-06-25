@@ -752,6 +752,40 @@
       voiceSt.className = status === 'idle' ? '' : status;
     }
 
+    // ── TTS playback (binary WAV frames from the server) ────────────────────────
+    // Plays sequentially so chunked TTS (sentence-by-sentence) doesn't overlap.
+    let ttsContext = null;
+    let ttsQueue = [];
+    let ttsPlaying = false;
+
+    function getTtsContext() {
+      if (!ttsContext) ttsContext = new AudioContext();
+      return ttsContext;
+    }
+
+    async function enqueueTtsAudio(arrayBuffer) {
+      ttsQueue.push(arrayBuffer);
+      if (!ttsPlaying) playNextTts();
+    }
+
+    async function playNextTts() {
+      const buf = ttsQueue.shift();
+      if (!buf) { ttsPlaying = false; return; }
+      ttsPlaying = true;
+      try {
+        const ctx = getTtsContext();
+        const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuffer;
+        src.connect(ctx.destination);
+        src.onended = playNextTts;
+        src.start();
+      } catch (err) {
+        console.error('[tts] decode/play failed:', err);
+        playNextTts();
+      }
+    }
+
     // ── mic capture (Tier 2: raw PCM over the existing WebSocket) ──────────────────
     // Started/stopped by 'mic' messages from the server (sent only while a
     // voice turn in aiko_web.py's get_voice_input() is actually waiting for
@@ -821,6 +855,7 @@
       // derive WS port from URL hash or default 8765
       const wsPort = parseInt(new URLSearchParams(location.search).get('ws') || '8765');
       ws = new WebSocket(`ws://${location.hostname}:${wsPort}/`);
+      ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
         wsDot.className = 'dot on';
@@ -828,6 +863,10 @@
       };
 
       ws.onmessage = (e) => {
+        if (e.data instanceof ArrayBuffer) {
+          enqueueTtsAudio(e.data);
+          return;
+        }
         let msg;
         try { msg = JSON.parse(e.data); } catch (_) { return; }
 

@@ -208,8 +208,31 @@ class AikoSpeak:
         self._stream_chunks: list[str] = []
         self._stream_thread = None
         self._streaming_active = False
+
+        # ── remote audio sink (WebUI) ────────────────────────────────────
+        # If set, _play_wav_bytes() also hands each synthesized WAV chunk to
+        # this callback (e.g. aiko_web.py's broadcast_audio_bytes) so a
+        # connected browser can play it — needed for remote/WAN use where
+        # nobody's in the room to hear the Jetson's own speaker.
+        self._audio_sink = None
+        # When True (default), local sounddevice playback still happens even
+        # if a remote sink is set — fine on LAN where you might be near the
+        # robot. Set False to silence the Jetson's own speaker entirely once
+        # you're working remotely full-time, so it doesn't talk to an empty room.
+        self.local_playback = True
+
         if not silent:
             log.info(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
+
+    def set_audio_sink(self, callback) -> None:
+        """
+        Register a callback(wav_bytes: bytes) -> None invoked for every
+        synthesized chunk, in addition to (or instead of, see
+        `local_playback`) local sounddevice playback. Pass None to remove.
+        Typical wiring in your boot script:
+            voice.set_audio_sink(web.broadcast_audio_bytes)
+        """
+        self._audio_sink = callback
 
     def warmup(self) -> bool:
         """Health-check the MioTTS server — called from wakeup.py during boot."""
@@ -280,13 +303,33 @@ class AikoSpeak:
 
     def _play_wav_bytes(self, wav_bytes: bytes) -> None:
         """
-        Play WAV bytes via sounddevice.
+        Play WAV bytes via sounddevice (if local_playback is enabled) and/or
+        hand them to the registered remote audio sink (browser playback).
         NOTE: this does not set/clear self._playing or self._stop_flag —
         the calling entry point (_speak_thread / _speak_thread_synced) owns
         those flags for the whole utterance. Touching them per-chunk here
         used to cause is_playing() to flicker false between chunks, and
         could wipe a stop() request that landed between chunks.
         """
+        if self._audio_sink is not None:
+            try:
+                self._audio_sink(wav_bytes)
+            except Exception as e:
+                log.error(f"[speak] audio sink error: {e}")
+
+        if not self.local_playback:
+            # Nothing is playing locally to block on, but callers (wait(),
+            # wait_or_barge_in(), the karaoke word-pacing in
+            # _speak_thread_synced) all assume this call blocks for roughly
+            # the real audio duration. Sleep it out instead, interruptibly.
+            duration = self._wav_duration(wav_bytes)
+            deadline = time.monotonic() + duration
+            while time.monotonic() < deadline:
+                if self._stop_flag.is_set():
+                    break
+                time.sleep(0.05)
+            return
+
         import scipy.io.wavfile as wav_io
         try:
             sd = self._load_sd()

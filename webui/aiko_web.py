@@ -198,8 +198,38 @@ class AikoWeb:
             return_exceptions=True,
         )
 
+    def broadcast_audio_bytes(self, wav_bytes: bytes) -> None:
+        """
+        Fire-and-forget: send raw WAV bytes as a binary WS frame to every
+        connected browser. This is the hook speak.py calls so TTS audio can
+        play out of a remote browser instead of (or alongside) the Jetson's
+        local speaker. No-op if no browser is connected.
+        """
+        if self._loop is None:
+            return
+        with self._clients_lock:
+            if not self._clients:
+                return  # skip the asyncio hop entirely if nobody's listening
+        asyncio.run_coroutine_threadsafe(self._async_broadcast_bytes(wav_bytes), self._loop)
+
+    async def _async_broadcast_bytes(self, raw: bytes) -> None:
+        with self._clients_lock:
+            targets = list(self._clients)
+        if not targets:
+            return
+        await asyncio.gather(
+            *(self._safe_send(ws, raw) for ws in targets),
+            return_exceptions=True,
+        )
+
+    def has_remote_listener(self) -> bool:
+        """True if at least one browser is connected — speak.py uses this to
+        decide whether local Jetson playback should still also happen."""
+        with self._clients_lock:
+            return bool(self._clients)
+
     @staticmethod
-    async def _safe_send(ws, raw: str) -> None:
+    async def _safe_send(ws, raw) -> None:
         try:
             await ws.send(raw)
         except Exception:
