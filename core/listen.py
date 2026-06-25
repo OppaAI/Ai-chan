@@ -320,6 +320,7 @@ class AikoListen:
         status_callback=None,
         wait_fn=None,
         speak=None,
+        chunk_source=None,
     ) -> tuple[str, dict]:
         """
         Returns (text, info). info always has a "verified" key:
@@ -329,6 +330,10 @@ class AikoListen:
         info also carries "speaker_score" (float or None) for logging/tuning.
         Verification never blocks or fails transcription — it's metadata
         attached alongside the text, not a gate in front of it.
+
+        chunk_source: optional callable(bytes_per_chunk) -> bytes | None,
+            forwarded to _record(). See _record() docstring. None (default)
+            preserves the existing local-mic (parec) behavior.
         """
         if speak is not None and speak.is_playing():
             _cb(status_callback, "__WAITING__")
@@ -343,7 +348,7 @@ class AikoListen:
             wait_fn()
 
         _cb(status_callback, "__LISTENING__")
-        audio = self._record(status_callback)
+        audio = self._record(status_callback, chunk_source=chunk_source)
         if audio is None:
             _cb(status_callback, "__IDLE__")
             return "", {"verified": None, "speaker_score": None}
@@ -393,8 +398,19 @@ class AikoListen:
             prob = self._vad_model(tensor, SAMPLE_RATE).item()
         return prob
 
-    def _record(self, status_callback=None) -> np.ndarray | None:
-        """Capture mic via parec until silence after speech detected."""
+    def _record(self, status_callback=None, chunk_source=None) -> np.ndarray | None:
+        """
+        Capture audio until silence after speech detected.
+
+        chunk_source: optional callable(bytes_per_chunk) -> bytes | None.
+            If None (default), audio is captured locally via parec — this is
+            the path used by the robot/TUI, unchanged.
+            If provided, that callable is polled instead of parec — used by
+            the WebUI to feed mic audio streamed in from the browser over the
+            WebSocket. Must return exactly `bytes_per_chunk` bytes of
+            float32LE PCM, or None to signal end-of-stream (e.g. client
+            disconnected).
+        """
         audio_chunks   = []
         silence_count  = 0
         speech_count   = 0
@@ -404,12 +420,22 @@ class AikoListen:
         _cb(status_callback, "__LISTENING__")
         self._recording.set()
 
+        proc = None
+        use_external = chunk_source is not None
+
         try:
-            proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
+            if not use_external:
+                proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
+
             for _ in range(_MAX_CHUNKS):
-                raw = proc.stdout.read(bytes_per_chunk)
-                if len(raw) < bytes_per_chunk:
+                if use_external:
+                    raw = chunk_source(bytes_per_chunk)
+                else:
+                    raw = proc.stdout.read(bytes_per_chunk)
+
+                if raw is None or len(raw) < bytes_per_chunk:
                     break
+
                 chunk = np.frombuffer(raw, dtype=np.float32).copy()
                 is_speech = self._score_chunk(chunk) >= VAD_THRESHOLD
 
@@ -429,10 +455,11 @@ class AikoListen:
             return None
         finally:
             self._recording.clear()
-            try:
-                proc.terminate()
-            except Exception:
-                pass
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
 
         if speech_count < MIN_SPEECH_CHUNKS:
             return None

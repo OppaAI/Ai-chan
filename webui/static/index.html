@@ -752,6 +752,53 @@
       voiceSt.className = status === 'idle' ? '' : status;
     }
 
+    // ── mic capture (Tier 2: raw PCM over the existing WebSocket) ──────────────────
+    // Started/stopped by 'mic' messages from the server (sent only while a
+    // voice turn in aiko_web.py's get_voice_input() is actually waiting for
+    // audio), so we never stream mic data the server isn't expecting.
+    let micStream = null;
+    let micContext = null;
+    let micSource = null;
+    let micWorklet = null;
+
+    async function startMic() {
+      if (micContext) return; // already capturing
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        // Request 16kHz to match listen.py's SAMPLE_RATE. Browsers that ignore
+        // this hint will capture at their native rate instead (commonly 48000) —
+        // if you see transcription quality issues, resample explicitly here.
+        micContext = new AudioContext({ sampleRate: 16000 });
+        await micContext.audioWorklet.addModule('./pcm-worklet.js');
+        micSource = micContext.createMediaStreamSource(micStream);
+        micWorklet = new AudioWorkletNode(micContext, 'pcm-capture-processor');
+
+        micWorklet.port.onmessage = (e) => {
+          if (wsReady()) ws.send(e.data); // binary frame, 512 samples * 4 bytes
+        };
+
+        micSource.connect(micWorklet);
+        voiceSt.title = 'mic live';
+      } catch (err) {
+        console.error('[mic] getUserMedia/AudioWorklet failed:', err);
+        addMessage('sys', 'Microphone access failed — check browser permissions.');
+      }
+    }
+
+    function stopMic() {
+      if (micWorklet) { micWorklet.port.onmessage = null; micWorklet.disconnect(); micWorklet = null; }
+      if (micSource) { micSource.disconnect(); micSource = null; }
+      if (micContext) { micContext.close(); micContext = null; }
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    }
+
     // ── text input ────────────────────────────────────────────────────────────────
     function submitInput() {
       const text = input.value.trim();
@@ -818,6 +865,11 @@
             applyVoice(msg.status);
             break;
 
+          case 'mic':
+            if (msg.action === 'start') startMic();
+            else if (msg.action === 'stop') stopMic();
+            break;
+
           case 'expression':
             if (window.aikoSetExpression) window.aikoSetExpression(msg.name, msg.intensity ?? 1.0);
             break;
@@ -831,6 +883,7 @@
       ws.onclose = () => {
         wsDot.className = 'dot';
         wsLabel.textContent = 'ws offline';
+        stopMic();
         setTimeout(connectWS, 3000);
       };
       ws.onerror = () => ws.close();

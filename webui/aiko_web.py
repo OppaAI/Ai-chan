@@ -79,6 +79,10 @@ class AikoWeb:
         # input queue — browser posts here, get_input() reads here
         self._input_q: queue.Queue[str] = queue.Queue()
 
+        # binary mic-audio frames from the browser, consumed by get_voice_input()
+        self._audio_q: queue.Queue[bytes] = queue.Queue()
+        self._mic_active = threading.Event()
+
         # connected browser websocket clients
         self._clients: set = set()
         self._clients_lock = threading.Lock()
@@ -151,6 +155,13 @@ class AikoWeb:
         log.info("[aiko-web] browser connected  (total=%d)", len(self._clients))
         try:
             async for raw in ws:
+                if isinstance(raw, bytes):
+                    # browser mic audio frame — only buffer it while a voice
+                    # turn is actually waiting on input, so stray/late frames
+                    # from a previous turn don't pollute the next recording.
+                    if self._mic_active.is_set():
+                        self._audio_q.put(raw)
+                    continue
                 try:
                     msg = json.loads(raw)
                 except json.JSONDecodeError:
@@ -349,14 +360,36 @@ class AikoWeb:
 
     def get_voice_input(self, listen, speak=None, wait_fn=None) -> str:
         """
-        Capture a voice utterance via the ASR pipeline and return the transcript.
-
-        Mirrors AikoTUI.get_voice_input: runs the listen pipeline in a thread,
-        forwards status tokens as voice-status WebSocket messages so the browser
-        can show the mic/transcribing indicator, and blocks until done.
+        Capture a voice utterance via the browser's microphone and return the
+        transcript. Tells the browser to start streaming raw PCM mic frames
+        over the WebSocket (binary frames), feeds them into the same VAD/ASR
+        pipeline used locally (via chunk_source), and stops the browser mic
+        once the utterance is captured or the turn times out.
         """
         result_holder = [None]
         done_event    = threading.Event()
+
+        # drain any stale frames left over from a previous turn
+        while True:
+            try:
+                self._audio_q.get_nowait()
+            except queue.Empty:
+                break
+
+        BYTES_PER_CHUNK = 512 * 4  # must match listen.py's _CHUNK_SAMPLES_VAD * 4
+        FRAME_TIMEOUT_S = 2.0      # if the browser goes quiet this long, end the turn
+
+        def _chunk_source(n: int):
+            """Pulled by listen.py's _record() loop instead of parec."""
+            try:
+                raw = self._audio_q.get(timeout=FRAME_TIMEOUT_S)
+            except queue.Empty:
+                return None  # browser stalled/disconnected — end the recording
+            if len(raw) != n:
+                # tolerate odd-sized frames by padding/truncating rather than
+                # dropping the whole utterance over a boundary mismatch
+                raw = (raw + b"\x00" * n)[:n]
+            return raw
 
         def _status_cb(token: str) -> None:
             mapping = {
@@ -373,13 +406,20 @@ class AikoWeb:
                 status_callback=_status_cb,
                 speak=speak,
                 wait_fn=wait_fn,
+                chunk_source=_chunk_source,
             )
             done_event.set()
 
+        self._mic_active.set()
+        self._broadcast({"type": "mic", "action": "start", "bytes_per_chunk": BYTES_PER_CHUNK})
         threading.Thread(target=_run, daemon=True).start()
 
-        while not done_event.wait(timeout=1.0):
-            self._push_vitals()
+        try:
+            while not done_event.wait(timeout=1.0):
+                self._push_vitals()
+        finally:
+            self._mic_active.clear()
+            self._broadcast({"type": "mic", "action": "stop"})
 
         self._broadcast({"type": "voice", "status": "idle"})
         raw = result_holder[0]
