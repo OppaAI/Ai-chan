@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>lookAtHand · Gesture Tester</title>
+<title>Gesture Tester · aiko-vrm</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -70,11 +70,40 @@
     margin-bottom: 12px;
   }
 
-  /* Side toggle */
-  .toggle-row {
-    display: flex;
-    gap: 8px;
+  /* Gesture selector */
+  #gestureSelect {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b6b7a'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
   }
+  #gestureSelect:focus { border-color: var(--accent); }
+
+  /* Error / info banner */
+  #banner {
+    display: none;
+    margin: 0 20px 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 10px;
+    line-height: 1.5;
+    border: 1px solid transparent;
+  }
+  #banner.error { background: #2a1020; border-color: var(--accent2); color: var(--accent2); display: block; }
+  #banner.info  { background: #16202a; border-color: var(--accent);  color: var(--accent);  display: block; }
+
+  /* Side toggle */
+  .toggle-row { display: flex; gap: 8px; }
 
   .toggle-btn {
     flex: 1;
@@ -88,18 +117,10 @@
     cursor: pointer;
     transition: all 0.15s;
   }
-
-  .toggle-btn.active {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-  }
+  .toggle-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   /* Sliders */
-  .param-row {
-    margin-bottom: 14px;
-  }
-
+  .param-row { margin-bottom: 14px; }
   .param-row:last-child { margin-bottom: 0; }
 
   .param-header {
@@ -109,17 +130,8 @@
     margin-bottom: 5px;
   }
 
-  .param-name {
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  .param-value {
-    font-size: 11px;
-    color: var(--accent);
-    min-width: 44px;
-    text-align: right;
-  }
+  .param-name  { font-size: 11px; color: var(--muted); }
+  .param-value { font-size: 11px; color: var(--accent); min-width: 44px; text-align: right; }
 
   input[type="range"] {
     -webkit-appearance: none;
@@ -129,26 +141,18 @@
     border-radius: 2px;
     outline: none;
   }
-
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 14px;
-    height: 14px;
+    width: 14px; height: 14px;
     border-radius: 50%;
     background: var(--accent);
     cursor: pointer;
     border: 2px solid var(--bg);
   }
-
-  input[type="range"]:focus::-webkit-slider-thumb {
-    box-shadow: 0 0 0 3px rgba(124,107,255,0.3);
-  }
+  input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(124,107,255,0.3); }
 
   /* Bone display */
-  .bone-grid {
-    display: grid;
-    gap: 6px;
-  }
+  .bone-grid { display: grid; gap: 6px; }
 
   .bone-card {
     background: var(--track);
@@ -165,24 +169,15 @@
     margin-bottom: 4px;
   }
 
-  .bone-vals {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 4px;
-  }
-
-  .bone-val {
-    font-size: 10px;
-    color: var(--text);
-  }
-
+  .bone-vals { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
+  .bone-val  { font-size: 10px; color: var(--text); }
   .axis-x { color: #ff6b6b; }
   .axis-y { color: #6bffb8; }
   .axis-z { color: #6bb5ff; }
 
-  /* Reset button */
-  #resetBtn {
-    margin: 16px 20px;
+  /* Reset / action buttons */
+  .action-btn {
+    margin: 0 20px 12px;
     padding: 9px;
     background: transparent;
     border: 1px solid var(--border);
@@ -193,46 +188,30 @@
     cursor: pointer;
     transition: all 0.15s;
     letter-spacing: 0.05em;
+    width: calc(100% - 40px);
+    text-align: center;
   }
-
-  #resetBtn:hover {
-    border-color: var(--accent2);
-    color: var(--accent2);
-  }
+  .action-btn:hover { border-color: var(--accent2); color: var(--accent2); }
 
   /* ── Viewport ── */
-  #viewport {
-    flex: 1;
-    position: relative;
-    background: var(--bg);
-  }
+  #viewport { flex: 1; position: relative; background: var(--bg); }
 
-  canvas {
-    display: block;
-    width: 100% !important;
-    height: 100% !important;
-  }
+  canvas { display: block; width: 100% !important; height: 100% !important; }
 
-  /* HUD overlay */
   #hud {
     position: absolute;
-    top: 16px;
-    right: 16px;
+    top: 16px; right: 16px;
     font-size: 10px;
     color: var(--muted);
     text-align: right;
     pointer-events: none;
     line-height: 1.8;
   }
-
   #hud span { color: var(--text); }
 
-  /* Info bar bottom */
   #infobar {
     position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
+    bottom: 0; left: 0; right: 0;
     padding: 10px 20px;
     background: rgba(13,13,15,0.85);
     border-top: 1px solid var(--border);
@@ -261,17 +240,29 @@
 <div id="sidebar">
   <header>
     <div class="tag">aiko-vrm · gesture debug</div>
-    <h1>lookAtHand</h1>
+    <h1 id="activeLabel">—</h1>
   </header>
 
+  <!-- Gesture picker -->
+  <div class="section">
+    <div class="section-label">Gesture</div>
+    <select id="gestureSelect" onchange="onGestureChange()">
+      <option value="">loading gesture.js…</option>
+    </select>
+  </div>
+
+  <div id="banner"></div>
+
+  <!-- Side -->
   <div class="section">
     <div class="section-label">Side</div>
     <div class="toggle-row">
-      <button class="toggle-btn" id="btnLeft" onclick="setSide(-1)">Left</button>
+      <button class="toggle-btn" id="btnLeft"  onclick="setSide(-1)">Left</button>
       <button class="toggle-btn active" id="btnRight" onclick="setSide(1)">Right</button>
     </div>
   </div>
 
+  <!-- Intensity -->
   <div class="section">
     <div class="section-label">Intensity</div>
     <div class="param-row">
@@ -283,53 +274,37 @@
     </div>
   </div>
 
+  <!-- IO offsets -->
   <div class="section">
     <div class="section-label">IO offsets</div>
 
     <div class="param-row">
-      <div class="param-header">
-        <span class="param-name">UA.x</span>
-        <span class="param-value" id="valUAx">0.00</span>
-      </div>
+      <div class="param-header"><span class="param-name">UA.x</span><span class="param-value" id="valUAx">0.00</span></div>
       <input type="range" id="slUAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
     </div>
     <div class="param-row">
-      <div class="param-header">
-        <span class="param-name">UA.z</span>
-        <span class="param-value" id="valUAz">0.00</span>
-      </div>
+      <div class="param-header"><span class="param-name">UA.z</span><span class="param-value" id="valUAz">0.00</span></div>
       <input type="range" id="slUAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
     </div>
     <div class="param-row">
-      <div class="param-header">
-        <span class="param-name">LA.x</span>
-        <span class="param-value" id="valLAx">0.00</span>
-      </div>
+      <div class="param-header"><span class="param-name">LA.x</span><span class="param-value" id="valLAx">0.00</span></div>
       <input type="range" id="slLAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
     </div>
     <div class="param-row">
-      <div class="param-header">
-        <span class="param-name">LA.z</span>
-        <span class="param-value" id="valLAz">0.00</span>
-      </div>
+      <div class="param-header"><span class="param-name">LA.z</span><span class="param-value" id="valLAz">0.00</span></div>
       <input type="range" id="slLAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
     </div>
     <div class="param-row">
-      <div class="param-header">
-        <span class="param-name">H.x</span>
-        <span class="param-value" id="valHx">0.00</span>
-      </div>
+      <div class="param-header"><span class="param-name">H.x</span><span class="param-value" id="valHx">0.00</span></div>
       <input type="range" id="slHx" min="-1" max="1" step="0.01" value="0" oninput="update()">
     </div>
     <div class="param-row">
-      <div class="param-header">
-        <span class="param-name">H.y</span>
-        <span class="param-value" id="valHy">0.00</span>
-      </div>
+      <div class="param-header"><span class="param-name">H.y</span><span class="param-value" id="valHy">0.00</span></div>
       <input type="range" id="slHy" min="-1" max="1" step="0.01" value="0" oninput="update()">
     </div>
   </div>
 
+  <!-- Live bone readout -->
   <div class="section">
     <div class="section-label">Live bone rotations (rad)</div>
     <div class="bone-grid">
@@ -357,9 +332,18 @@
           <div class="bone-val">z —</div>
         </div>
       </div>
+      <div class="bone-card">
+        <div class="bone-name">Head</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bHdX">0.00</span></div>
+          <div class="bone-val axis-y">y <span id="bHdY">0.00</span></div>
+          <div class="bone-val axis-z">z <span id="bHdZ">0.00</span></div>
+        </div>
+      </div>
     </div>
   </div>
 
+  <!-- Animation controls -->
   <div class="section">
     <div class="section-label">Animation</div>
     <div class="param-row">
@@ -367,14 +351,23 @@
         <span class="param-name">lerp speed</span>
         <span class="param-value" id="valLerp">0.08</span>
       </div>
-      <input type="range" id="slLerp" min="0.01" max="1" step="0.01" value="0.08" oninput="document.getElementById('valLerp').textContent=(+this.value).toFixed(2)">
+      <input type="range" id="slLerp" min="0.01" max="1" step="0.01" value="0.08"
+             oninput="document.getElementById('valLerp').textContent=(+this.value).toFixed(2)">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">stroke speed</span>
+        <span class="param-value" id="valSpeed">2.50</span>
+      </div>
+      <input type="range" id="slSpeed" min="0.2" max="6" step="0.05" value="2.5"
+             oninput="document.getElementById('valSpeed').textContent=(+this.value).toFixed(2)">
     </div>
     <div class="toggle-row" style="margin-top:8px">
       <button class="toggle-btn active" id="btnAnimate" onclick="toggleAnimate()">▶ animate</button>
     </div>
   </div>
 
-  <button id="resetBtn" onclick="resetAll()">↺ reset to rest</button>
+  <button class="action-btn" onclick="resetAll()">↺ reset to rest</button>
 </div>
 
 <!-- ── 3D VIEWPORT ── -->
@@ -382,8 +375,10 @@
   <canvas id="c"></canvas>
 
   <div id="hud">
+    gesture: <span id="hudGesture">—</span><br>
     side: <span id="hudSide">right</span><br>
-    intensity: <span id="hudInt">1.00</span>
+    intensity: <span id="hudInt">1.00</span><br>
+    t: <span id="hudT">0.00</span>
   </div>
 
   <div id="infobar">
@@ -393,19 +388,71 @@
   </div>
 </div>
 
-<!-- Three.js r128 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
 <script type="module">
-const { lookAtHand } = await import('./gesture.js').catch(error => {
-  const message = `Failed to load ./gesture.js: ${error.message}. Serve this file over HTTP instead of opening it with file://.`;
-  console.error(message, error);
-  document.getElementById('hud').insertAdjacentHTML('beforeend', `<br><span style="color:#ff6b9d">${message}</span>`);
-  return { lookAtHand: () => {} };
+// ── Load gesture.js and discover all exported functions ──────
+let gestures = {};
+let activeGestureFn = null;
+let activeGestureName = '';
+
+function showBanner(msg, type = 'error') {
+  const b = document.getElementById('banner');
+  b.className = type;
+  b.textContent = msg;
+}
+function hideBanner() {
+  document.getElementById('banner').className = '';
+  document.getElementById('banner').textContent = '';
+}
+
+const gestureModule = await import('./gesture.js').catch(err => {
+  showBanner(`Failed to load gesture.js: ${err.message}. Serve over HTTP, not file://.`);
+  return null;
 });
+
+if (gestureModule) {
+  // Filter to callable, non-utility exports
+  const SKIP = new Set(['blend', 'default']);
+  gestures = Object.fromEntries(
+    Object.entries(gestureModule).filter(([k, v]) => typeof v === 'function' && !SKIP.has(k))
+  );
+
+  const sel = document.getElementById('gestureSelect');
+  sel.innerHTML = '';
+
+  const names = Object.keys(gestures);
+  if (names.length === 0) {
+    showBanner('gesture.js has no exported gesture functions (besides blend).', 'info');
+  } else {
+    names.forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+    activateGesture(names[0]);
+    hideBanner();
+  }
+}
+
+function activateGesture(name) {
+  activeGestureName = name;
+  activeGestureFn = gestures[name] ?? null;
+  document.getElementById('activeLabel').textContent = name;
+  document.getElementById('hudGesture').textContent = name;
+  document.getElementById('gestureSelect').value = name;
+}
+
+window.onGestureChange = function() {
+  const name = document.getElementById('gestureSelect').value;
+  activateGesture(name);
+  resetAll();
+};
+
 // ── Scene setup ──────────────────────────────────────────────
 const canvas = document.getElementById('c');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.shadowMap.enabled = true;
 
@@ -417,408 +464,314 @@ const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
 camera.position.set(0, 1.4, 3.5);
 
 // Lights
-const ambient = new THREE.AmbientLight(0x8888cc, 0.6);
-scene.add(ambient);
+scene.add(new THREE.AmbientLight(0x8888cc, 0.6));
 const key = new THREE.DirectionalLight(0xffffff, 0.9);
-key.position.set(2, 4, 3);
-key.castShadow = true;
-scene.add(key);
+key.position.set(2, 4, 3); key.castShadow = true; scene.add(key);
 const rim = new THREE.DirectionalLight(0x6655ff, 0.4);
-rim.position.set(-3, 2, -2);
-scene.add(rim);
+rim.position.set(-3, 2, -2); scene.add(rim);
 const fill = new THREE.PointLight(0xff6b9d, 0.3, 8);
-fill.position.set(-1, 1, 1);
-scene.add(fill);
+fill.position.set(-1, 1, 1); scene.add(fill);
 
-// Floor grid
-const grid = new THREE.GridHelper(10, 20, 0x2a2a30, 0x1a1a20);
-scene.add(grid);
+scene.add(new THREE.GridHelper(10, 20, 0x2a2a30, 0x1a1a20));
 
-// ── Orbit control (minimal, no import needed) ─────────────────
-let orbitState = { dragging: false, lastX: 0, lastY: 0, theta: 0, phi: 0.15, radius: 3.5, target: new THREE.Vector3(0, 1.1, 0) };
-
-canvas.addEventListener('mousedown', e => { orbitState.dragging = true; orbitState.lastX = e.clientX; orbitState.lastY = e.clientY; });
-window.addEventListener('mouseup', () => { orbitState.dragging = false; });
+// ── Orbit ────────────────────────────────────────────────────
+const orbit = { dragging:false, lastX:0, lastY:0, theta:0, phi:0.15, radius:3.5, target: new THREE.Vector3(0,1.1,0) };
+canvas.addEventListener('mousedown', e => { orbit.dragging=true; orbit.lastX=e.clientX; orbit.lastY=e.clientY; });
+window.addEventListener('mouseup', () => { orbit.dragging=false; });
 window.addEventListener('mousemove', e => {
-  if (!orbitState.dragging) return;
-  const dx = (e.clientX - orbitState.lastX) * 0.006;
-  const dy = (e.clientY - orbitState.lastY) * 0.006;
-  orbitState.theta -= dx;
-  orbitState.phi = Math.max(0.05, Math.min(Math.PI / 2, orbitState.phi + dy));
-  orbitState.lastX = e.clientX;
-  orbitState.lastY = e.clientY;
+  if (!orbit.dragging) return;
+  orbit.theta -= (e.clientX - orbit.lastX) * 0.006;
+  orbit.phi = Math.max(0.05, Math.min(Math.PI/2, orbit.phi + (e.clientY - orbit.lastY) * 0.006));
+  orbit.lastX = e.clientX; orbit.lastY = e.clientY;
 });
 canvas.addEventListener('wheel', e => {
-  orbitState.radius = Math.max(1.5, Math.min(8, orbitState.radius + e.deltaY * 0.005));
+  orbit.radius = Math.max(1.5, Math.min(8, orbit.radius + e.deltaY * 0.005));
 }, { passive: true });
-window.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') { orbitState.theta = 0; orbitState.phi = 0.15; orbitState.radius = 3.5; } });
-
+window.addEventListener('keydown', e => {
+  if (e.key === 'r' || e.key === 'R') { orbit.theta=0; orbit.phi=0.15; orbit.radius=3.5; }
+});
 function applyOrbit() {
-  const x = orbitState.radius * Math.sin(orbitState.theta) * Math.cos(orbitState.phi);
-  const y = orbitState.radius * Math.sin(orbitState.phi) + orbitState.target.y;
-  const z = orbitState.radius * Math.cos(orbitState.theta) * Math.cos(orbitState.phi);
+  const x = orbit.radius * Math.sin(orbit.theta) * Math.cos(orbit.phi);
+  const y = orbit.radius * Math.sin(orbit.phi) + orbit.target.y;
+  const z = orbit.radius * Math.cos(orbit.theta) * Math.cos(orbit.phi);
   camera.position.set(x, y, z);
-  camera.lookAt(orbitState.target);
+  camera.lookAt(orbit.target);
 }
 
-// ── Stick figure skeleton ─────────────────────────────────────
-const MAT_BODY = new THREE.MeshLambertMaterial({ color: 0x3a3a4a });
-const MAT_JOINT = new THREE.MeshLambertMaterial({ color: 0x5a5a7a });
+// ── Skeleton ─────────────────────────────────────────────────
+const MAT_BODY   = new THREE.MeshLambertMaterial({ color: 0x3a3a4a });
+const MAT_JOINT  = new THREE.MeshLambertMaterial({ color: 0x5a5a7a });
 const MAT_ACCENT = new THREE.MeshLambertMaterial({ color: 0x7c6bff });
-const MAT_ACCENT2 = new THREE.MeshLambertMaterial({ color: 0xff6b9d });
+const MAT_ACCENT2= new THREE.MeshLambertMaterial({ color: 0xff6b9d });
 
-function capsule(height, radius, mat) {
-  const g = new THREE.CylinderGeometry(radius, radius, height, 8);
-  return new THREE.Mesh(g, mat);
-}
-function sphere(r, mat) {
-  const g = new THREE.SphereGeometry(r, 8, 8);
-  return new THREE.Mesh(g, mat);
-}
+const mkCapsule = (h, r, mat) => new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,8), mat);
+const mkSphere  = (r, mat)    => new THREE.Mesh(new THREE.SphereGeometry(r,8,8), mat);
 
-// Root pivot at hips
 const root = new THREE.Object3D();
-root.position.set(0, 0, 0);
 scene.add(root);
 
-// Torso
-const torso = capsule(0.55, 0.09, MAT_BODY);
-torso.position.set(0, 0.9, 0);
-root.add(torso);
+// Torso / head / neck / hips
+const torso = mkCapsule(0.55, 0.09, MAT_BODY); torso.position.set(0,0.9,0); root.add(torso);
+const head  = mkSphere(0.1, MAT_JOINT);         head.position.set(0,1.28,0); root.add(head);
+const neck  = mkCapsule(0.12, 0.04, MAT_BODY);  neck.position.set(0,1.19,0); root.add(neck);
+const hips  = mkCapsule(0.18, 0.1, MAT_BODY);   hips.position.set(0,0.62,0); root.add(hips);
 
-// Head
-const head = sphere(0.1, MAT_JOINT);
-head.position.set(0, 1.28, 0);
-root.add(head);
-
-// Neck
-const neck = capsule(0.12, 0.04, MAT_BODY);
-neck.position.set(0, 1.19, 0);
-root.add(neck);
-
-// Hips
-const hips = capsule(0.18, 0.1, MAT_BODY);
-hips.position.set(0, 0.62, 0);
-root.add(hips);
-
-// Legs (static, just for context)
-[-0.09, 0.09].forEach(xOff => {
-  const upper = capsule(0.28, 0.065, MAT_BODY);
-  upper.position.set(xOff, 0.35, 0);
-  root.add(upper);
-  const lower = capsule(0.28, 0.055, MAT_BODY);
-  lower.position.set(xOff, 0.06, 0);
-  root.add(lower);
-  const foot = capsule(0.1, 0.04, MAT_BODY);
-  foot.rotation.x = Math.PI / 2;
-  foot.position.set(xOff, -0.08, 0.04);
-  root.add(foot);
+// Static legs
+[-0.09, 0.09].forEach(x => {
+  const ul = mkCapsule(0.28,0.065,MAT_BODY); ul.position.set(x,0.35,0); root.add(ul);
+  const ll = mkCapsule(0.28,0.055,MAT_BODY); ll.position.set(x,0.06,0); root.add(ll);
+  const ft = mkCapsule(0.10,0.04,MAT_BODY);  ft.rotation.x=Math.PI/2; ft.position.set(x,-0.08,0.04); root.add(ft);
 });
 
-// ── Arm skeleton with pivots ──────────────────────────────────
-// Shoulder joint positions
+// Arms
 const SHOULDER_L = new THREE.Vector3(-0.17, 1.14, 0);
 const SHOULDER_R = new THREE.Vector3( 0.17, 1.14, 0);
 
 function buildArm(side) {
-  // side: -1 = left, 1 = right
   const sOff = side < 0 ? SHOULDER_L : SHOULDER_R;
+  const col   = side < 0 ? MAT_BODY : MAT_ACCENT;
+  const col2  = side < 0 ? MAT_BODY : MAT_ACCENT2;
 
-  // Upper arm pivot (at shoulder)
-  const uaPivot = new THREE.Object3D();
-  uaPivot.position.copy(sOff);
-  root.add(uaPivot);
+  const uaPivot = new THREE.Object3D(); uaPivot.position.copy(sOff); root.add(uaPivot);
+  const uaMesh  = mkCapsule(0.24,0.055,col); uaMesh.position.set(0,-0.12,0); uaPivot.add(uaMesh);
+  const elbSph  = mkSphere(0.04, MAT_JOINT); elbSph.position.set(0,-0.24,0); uaPivot.add(elbSph);
 
-  const uaMesh = capsule(0.24, 0.055, side < 0 ? MAT_BODY : MAT_ACCENT);
-  uaMesh.position.set(0, -0.12, 0); // offset so pivot is at top
-  uaPivot.add(uaMesh);
+  const laPivot = new THREE.Object3D(); laPivot.position.set(0,-0.24,0); uaPivot.add(laPivot);
+  const laMesh  = mkCapsule(0.20,0.045,col); laMesh.position.set(0,-0.10,0); laPivot.add(laMesh);
+  const wriSph  = mkSphere(0.035, MAT_JOINT); wriSph.position.set(0,-0.20,0); laPivot.add(wriSph);
 
-  const elbowSphere = sphere(0.04, MAT_JOINT);
-  elbowSphere.position.set(0, -0.24, 0);
-  uaPivot.add(elbowSphere);
-
-  // Lower arm pivot (at elbow, child of uaPivot)
-  const laPivot = new THREE.Object3D();
-  laPivot.position.set(0, -0.24, 0);
-  uaPivot.add(laPivot);
-
-  const laMesh = capsule(0.20, 0.045, side < 0 ? MAT_BODY : MAT_ACCENT);
-  laMesh.position.set(0, -0.10, 0);
-  laPivot.add(laMesh);
-
-  const wristSphere = sphere(0.035, MAT_JOINT);
-  wristSphere.position.set(0, -0.20, 0);
-  laPivot.add(wristSphere);
-
-  // Hand pivot (at wrist)
-  const hPivot = new THREE.Object3D();
-  hPivot.position.set(0, -0.20, 0);
-  laPivot.add(hPivot);
-
-  const hMesh = capsule(0.10, 0.038, side < 0 ? MAT_BODY : MAT_ACCENT2);
-  hMesh.position.set(0, -0.05, 0);
-  hPivot.add(hMesh);
+  const hPivot  = new THREE.Object3D(); hPivot.position.set(0,-0.20,0); laPivot.add(hPivot);
+  const hMesh   = mkCapsule(0.10,0.038,col2); hMesh.position.set(0,-0.05,0); hPivot.add(hMesh);
 
   return { uaPivot, laPivot, hPivot };
 }
 
 const leftArm  = buildArm(-1);
-const rightArm = buildArm(1);
+const rightArm = buildArm( 1);
 
 // ── REST poses ────────────────────────────────────────────────
 const REST = {
-  leftUpperArm:  { x: 0,    z:  0.25 },
-  leftLowerArm:  { x: 0.1,  z:  0.05 },
-  leftHand:      { x: 0,    y:  0 },
-  rightUpperArm: { x: 0,    z: -0.25 },
-  rightLowerArm: { x: 0.1,  z: -0.05 },
-  rightHand:     { x: 0,    y:  0 },
+  leftUpperArm:  { x:0,   y:0, z: 0.25 },
+  leftLowerArm:  { x:0.1, y:0, z: 0.05 },
+  leftHand:      { x:0,   y:0, z:0 },
+  rightUpperArm: { x:0,   y:0, z:-0.25 },
+  rightLowerArm: { x:0.1, y:0, z:-0.05 },
+  rightHand:     { x:0,   y:0, z:0 },
 };
 
-function setArmRest(side) {
-  if (side < 0) {
-    leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
-    leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
-    leftArm.hPivot.rotation.set(REST.leftHand.x, REST.leftHand.y, 0);
-  } else {
-    rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
-    rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
-    rightArm.hPivot.rotation.set(REST.rightHand.x, REST.rightHand.y, 0);
-  }
-}
-
 function applyRest() {
-  setArmRest(-1);
-  setArmRest(1);
-  neck.rotation.set(0, 0, 0);
-  head.rotation.set(0, 0, 0);
+  leftArm.uaPivot.rotation.set(REST.leftUpperArm.x,  0, REST.leftUpperArm.z);
+  leftArm.laPivot.rotation.set(REST.leftLowerArm.x,  0, REST.leftLowerArm.z);
+  leftArm.hPivot.rotation.set (REST.leftHand.x,      0, 0);
+  rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
+  rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
+  rightArm.hPivot.rotation.set (REST.rightHand.x,     0, 0);
+  neck.rotation.set(0,0,0);
+  head.rotation.set(0,0,0);
 }
 applyRest();
 
 // ── State ─────────────────────────────────────────────────────
-let currentSide = 1; // 1 = right
+let currentSide = 1;
+let animating   = true;
+let forceRest   = false;
+let animTime    = 0;
 
-// ── Animation state ───────────────────────────────────────────
-let animating = true;
-let forceRest = false;
-let animTime = 0;        // drives the intensity oscillation
-let lerpT = 0.08;
-
-// Current actual rotations (lerped toward targets each frame)
-const cur = {
-  lUA: { x: REST.leftUpperArm.x,  z: REST.leftUpperArm.z },
-  lLA: { x: REST.leftLowerArm.x,  z: REST.leftLowerArm.z },
-  lH:  { x: REST.leftHand.x,      y: REST.leftHand.y },
-  rUA: { x: REST.rightUpperArm.x, z: REST.rightUpperArm.z },
-  rLA: { x: REST.rightLowerArm.x, z: REST.rightLowerArm.z },
-  rH:  { x: REST.rightHand.x,     y: REST.rightHand.y },
-  neckY: 0, neckX: 0,
-  headY: 0, headX: 0,
-};
-
-function toggleAnimate() {
-  forceRest = false;
-  animating = !animating;
-  const btn = document.getElementById('btnAnimate');
-  btn.textContent = animating ? '▶ animate' : '⏸ paused';
-  btn.classList.toggle('active', animating);
-}
-
-function setSide(s) {
-  forceRest = false;
-  currentSide = s;
-  document.getElementById('btnLeft').classList.toggle('active', s < 0);
-  document.getElementById('btnRight').classList.toggle('active', s > 0);
-  document.getElementById('hudSide').textContent = s < 0 ? 'left' : 'right';
-  update();
-}
-
-function getIO() {
-  return {
-    lUA: { x: +document.getElementById('slUAx').value, z: +document.getElementById('slUAz').value },
-    lLA: { x: +document.getElementById('slLAx').value, z: +document.getElementById('slLAz').value },
-    lH:  { x: +document.getElementById('slHx').value,  y: +document.getElementById('slHy').value  },
-    rUA: { x: +document.getElementById('slUAx').value, z: +document.getElementById('slUAz').value },
-    rLA: { x: +document.getElementById('slLAx').value, z: +document.getElementById('slLAz').value },
-    rH:  { x: +document.getElementById('slHx').value,  y: +document.getElementById('slHy').value  },
-    neck: { x: 0, y: 0 },
-    head: { x: 0, y: 0 },
-  };
-}
-
-// Mirrors your blend()
-function blend(from, to, t) { return from + (to - from) * t; }
-
+// ── Helpers ───────────────────────────────────────────────────
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 function snapshotRotations() {
   return {
-    lUA: leftArm.uaPivot.rotation.clone(),
-    lLA: leftArm.laPivot.rotation.clone(),
-    lH: leftArm.hPivot.rotation.clone(),
-    rUA: rightArm.uaPivot.rotation.clone(),
-    rLA: rightArm.laPivot.rotation.clone(),
-    rH: rightArm.hPivot.rotation.clone(),
+    lUA:  leftArm.uaPivot.rotation.clone(),
+    lLA:  leftArm.laPivot.rotation.clone(),
+    lH:   leftArm.hPivot.rotation.clone(),
+    rUA:  rightArm.uaPivot.rotation.clone(),
+    rLA:  rightArm.laPivot.rotation.clone(),
+    rH:   rightArm.hPivot.rotation.clone(),
     neck: neck.rotation.clone(),
     head: head.rotation.clone(),
   };
 }
 
 function applyLerpedRotations(from, t) {
-  const pairs = [
-    [leftArm.uaPivot, from.lUA],
-    [leftArm.laPivot, from.lLA],
-    [leftArm.hPivot, from.lH],
+  [
+    [leftArm.uaPivot,  from.lUA],
+    [leftArm.laPivot,  from.lLA],
+    [leftArm.hPivot,   from.lH],
     [rightArm.uaPivot, from.rUA],
     [rightArm.laPivot, from.rLA],
-    [rightArm.hPivot, from.rH],
-    [neck, from.neck],
-    [head, from.head],
-  ];
-
-  pairs.forEach(([object, start]) => {
-    const target = object.rotation.clone();
-    object.rotation.set(
-      lerp(start.x, target.x, t),
-      lerp(start.y, target.y, t),
-      lerp(start.z, target.z, t)
+    [rightArm.hPivot,  from.rH],
+    [neck,             from.neck],
+    [head,             from.head],
+  ].forEach(([bone, start]) => {
+    const tgt = bone.rotation.clone();
+    bone.rotation.set(
+      lerp(start.x, tgt.x, t),
+      lerp(start.y, tgt.y, t),
+      lerp(start.z, tgt.z, t),
     );
   });
 }
 
-function syncCurrentRotations() {
-  cur.lUA.x = leftArm.uaPivot.rotation.x;
-  cur.lUA.z = leftArm.uaPivot.rotation.z;
-  cur.lLA.x = leftArm.laPivot.rotation.x;
-  cur.lLA.z = leftArm.laPivot.rotation.z;
-  cur.lH.x = leftArm.hPivot.rotation.x;
-  cur.lH.y = leftArm.hPivot.rotation.y;
-  cur.rUA.x = rightArm.uaPivot.rotation.x;
-  cur.rUA.z = rightArm.uaPivot.rotation.z;
-  cur.rLA.x = rightArm.laPivot.rotation.x;
-  cur.rLA.z = rightArm.laPivot.rotation.z;
-  cur.rH.x = rightArm.hPivot.rotation.x;
-  cur.rH.y = rightArm.hPivot.rotation.y;
+function getIO() {
+  return {
+    lUA:  { x: +slUAx.value, z: +slUAz.value },
+    lLA:  { x: +slLAx.value, z: +slLAz.value },
+    lH:   { x: +slHx.value,  y: +slHy.value, z: 0 },
+    rUA:  { x: +slUAx.value, z: +slUAz.value },
+    rLA:  { x: +slLAx.value, z: +slLAz.value },
+    rH:   { x: +slHx.value,  y: +slHy.value, z: 0 },
+    neck: { x:0, y:0 },
+    head: { x:0, y:0, z:0 },
+  };
 }
 
-function updateBoneReadout(side) {
-  const activeUA = side < 0 ? cur.lUA : cur.rUA;
-  const activeLA = side < 0 ? cur.lLA : cur.rLA;
-  const activeH  = side < 0 ? cur.lH  : cur.rH;
-  document.getElementById('bUAx').textContent = activeUA.x.toFixed(3);
-  document.getElementById('bUAz').textContent = activeUA.z.toFixed(3);
-  document.getElementById('bLAx').textContent = activeLA.x.toFixed(3);
-  document.getElementById('bLAz').textContent = activeLA.z.toFixed(3);
-  document.getElementById('bHx').textContent  = activeH.x.toFixed(3);
-  document.getElementById('bHy').textContent  = activeH.y.toFixed(3);
+function syncAndReadout() {
+  const s = currentSide;
+  const UA = s<0 ? leftArm.uaPivot : rightArm.uaPivot;
+  const LA = s<0 ? leftArm.laPivot : rightArm.laPivot;
+  const H  = s<0 ? leftArm.hPivot  : rightArm.hPivot;
+  document.getElementById('bUAx').textContent = UA.rotation.x.toFixed(3);
+  document.getElementById('bUAz').textContent = UA.rotation.z.toFixed(3);
+  document.getElementById('bLAx').textContent = LA.rotation.x.toFixed(3);
+  document.getElementById('bLAz').textContent = LA.rotation.z.toFixed(3);
+  document.getElementById('bHx').textContent  = H.rotation.x.toFixed(3);
+  document.getElementById('bHy').textContent  = H.rotation.y.toFixed(3);
+  document.getElementById('bHdX').textContent = head.rotation.x.toFixed(3);
+  document.getElementById('bHdY').textContent = head.rotation.y.toFixed(3);
+  document.getElementById('bHdZ').textContent = head.rotation.z.toFixed(3);
 }
 
-// Compute targets from lookAtHand case and lerp cur toward them
+// ── Tick ──────────────────────────────────────────────────────
 function tickAnimation(dt) {
   if (animating) animTime += dt;
 
-  lerpT = +document.getElementById('slLerp').value;
+  const intensity  = +document.getElementById('slIntensity').value;
+  const lerpT      = +document.getElementById('slLerp').value;
+  const strokeSpeed= +document.getElementById('slSpeed').value;
+  const io         = getIO();
 
-  const intensity = +document.getElementById('slIntensity').value;
-  const io = getIO();
-  const s = currentSide;
+  // update sidebar display values
+  document.getElementById('valIntensity').textContent = intensity.toFixed(2);
+  document.getElementById('valUAx').textContent = (+slUAx.value).toFixed(2);
+  document.getElementById('valUAz').textContent = (+slUAz.value).toFixed(2);
+  document.getElementById('valLAx').textContent = (+slLAx.value).toFixed(2);
+  document.getElementById('valLAz').textContent = (+slLAz.value).toFixed(2);
+  document.getElementById('valHx').textContent  = (+slHx.value).toFixed(2);
+  document.getElementById('valHy').textContent  = (+slHy.value).toFixed(2);
+  document.getElementById('hudInt').textContent = intensity.toFixed(2);
+  document.getElementById('hudT').textContent   = animTime.toFixed(2);
+
+  if (forceRest) { applyRest(); syncAndReadout(); return; }
 
   const animatedIntensity = animating
     ? intensity * (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(animTime * 2.4)))
     : intensity;
 
-  // Update display
-  document.getElementById('valIntensity').textContent = intensity.toFixed(2);
-  document.getElementById('valUAx').textContent = (+document.getElementById('slUAx').value).toFixed(2);
-  document.getElementById('valUAz').textContent = (+document.getElementById('slUAz').value).toFixed(2);
-  document.getElementById('valLAx').textContent = (+document.getElementById('slLAx').value).toFixed(2);
-  document.getElementById('valLAz').textContent = (+document.getElementById('slLAz').value).toFixed(2);
-  document.getElementById('valHx').textContent  = (+document.getElementById('slHx').value).toFixed(2);
-  document.getElementById('valHy').textContent  = (+document.getElementById('slHy').value).toFixed(2);
-  document.getElementById('hudInt').textContent = intensity.toFixed(2);
+  if (activeGestureFn) {
+    const before = snapshotRotations();
 
-  if (forceRest) {
-    applyRest();
-    syncCurrentRotations();
-    updateBoneReadout(s);
-    return;
-  }
+    // Set the non-active arm to rest first
+    const s = currentSide;
+    if (s < 0) {
+      rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
+      rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
+      rightArm.hPivot.rotation.set(REST.rightHand.x, 0, 0);
+    } else {
+      leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
+      leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
+      leftArm.hPivot.rotation.set(REST.leftHand.x, 0, 0);
+    }
 
-  const beforeGesture = snapshotRotations();
-
-  lookAtHand({
-        side: currentSide,
+    try {
+      activeGestureFn({
+        side:      currentSide,
         intensity: animatedIntensity,
+        t:         animTime,
+        strokeSpeed,
         io,
         REST,
         THREE,
-
         head,
         neck,
-
         lUA: leftArm.uaPivot,
         lLA: leftArm.laPivot,
-        lH: leftArm.hPivot,
-
+        lH:  leftArm.hPivot,
         rUA: rightArm.uaPivot,
         rLA: rightArm.laPivot,
-        rH: rightArm.hPivot
+        rH:  rightArm.hPivot,
       });
+    } catch(err) {
+      showBanner(`${activeGestureName}() threw: ${err.message}`);
+    }
 
-  setArmRest(-s);
-  applyLerpedRotations(beforeGesture, lerpT);
-  syncCurrentRotations();
+    applyLerpedRotations(before, lerpT);
+  }
 
-  // ── Update bone readout ──
-  updateBoneReadout(s);
+  syncAndReadout();
 }
 
-// Stub so sidebar sliders still call something
-function update() { forceRest = false; /* driven by render loop */ }
+// ── Controls ─────────────────────────────────────────────────
+const slUAx = document.getElementById('slUAx');
+const slUAz = document.getElementById('slUAz');
+const slLAx = document.getElementById('slLAx');
+const slLAz = document.getElementById('slLAz');
+const slHx  = document.getElementById('slHx');
+const slHy  = document.getElementById('slHy');
 
-Object.assign(window, { setSide, toggleAnimate, update, resetAll });
+window.setSide = function(s) {
+  forceRest = false;
+  currentSide = s;
+  document.getElementById('btnLeft').classList.toggle('active',  s < 0);
+  document.getElementById('btnRight').classList.toggle('active', s > 0);
+  document.getElementById('hudSide').textContent = s < 0 ? 'left' : 'right';
+};
 
-function resetAll() {
+window.toggleAnimate = function() {
+  forceRest = false;
+  animating = !animating;
+  const btn = document.getElementById('btnAnimate');
+  btn.textContent = animating ? '▶ animate' : '⏸ paused';
+  btn.classList.toggle('active', animating);
+};
+
+window.update = function() { forceRest = false; };
+
+window.resetAll = function() {
   animating = false;
   forceRest = true;
-  animTime = 0;
-
+  animTime  = 0;
   const btn = document.getElementById('btnAnimate');
   btn.textContent = '⏸ paused';
   btn.classList.remove('active');
-
   document.getElementById('slIntensity').value = 1;
   ['UAx','UAz','LAx','LAz','Hx','Hy'].forEach(id => {
-    document.getElementById('sl' + id).value = 0;
+    document.getElementById('sl'+id).value = 0;
   });
-
   applyRest();
-  syncCurrentRotations();
-  updateBoneReadout(currentSide);
-}
+  syncAndReadout();
+};
 
 // ── Resize ────────────────────────────────────────────────────
 function resize() {
   const vp = document.getElementById('viewport');
-  const w = vp.clientWidth, h = vp.clientHeight;
-  renderer.setSize(w, h, false);
-  camera.aspect = w / h;
+  renderer.setSize(vp.clientWidth, vp.clientHeight, false);
+  camera.aspect = vp.clientWidth / vp.clientHeight;
   camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
 resize();
 
 // ── Render loop ───────────────────────────────────────────────
-let lastTime = performance.now();
-function animate(now) {
-  requestAnimationFrame(animate);
-  const dt = Math.min((now - lastTime) / 1000, 0.05);
-  lastTime = now;
+let last = performance.now();
+(function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
   tickAnimation(dt);
   applyOrbit();
   renderer.render(scene, camera);
-}
-animate(performance.now());
+})(performance.now());
 </script>
 </body>
 </html>
