@@ -317,9 +317,8 @@ class LlamaCppRunner:
             "--n-gpu-layers", str(LLAMA_GPU_LAYERS),
             "--parallel", str(LLAMA_PARALLEL),
             "--cont-batching",
-            "--reasoning-budget", "0",
             "--flash-attn", "on",
-            "--no-kv-offload",
+            "--log-disable",
         ]
         print(f"[setup] Starting llama-server: {' '.join(cmd)}")
         self.server_proc = subprocess.Popen(cmd)

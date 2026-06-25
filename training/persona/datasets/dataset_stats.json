@@ -1,0 +1,35 @@
+{
+  "total": 464,
+  "train": 394,
+  "val": 32,
+  "test": 38,
+  "topics": [
+    "agentic_confirm",
+    "architecture_aware",
+    "casual_daily",
+    "identity_self",
+    "japanese_exchange",
+    "photography_bc",
+    "teasing_User",
+    "technical_debug"
+  ],
+  "teacher_model": "Qwen3-30B-A3B-Q4_K_M.gguf",
+  "dedup": {
+    "total_before": 603,
+    "total_after": 464,
+    "total_dropped": 139,
+    "scenarios_with_drops": 50,
+    "top_dropped_scenarios": {
+      "User asks Aiko to check the weather forecast": 9,
+      "User asks a simple yes or no question": 9,
+      "uv lock file conflict after upgrade": 8,
+      "User asks about the difference between \u306f and \u304c": 7,
+      "llama-server crashed at startup": 6,
+      "User asks Aiko to describe her own memory architecture": 5,
+      "sqlite-vec query returning wrong embeddings": 5,
+      "User asks Aiko to schedule a reminder for 9pm": 4,
+      "User asks Aiko what she thinks he should work on next": 4,
+      "User says he is going to bed": 4
+    }
+  }
+}
