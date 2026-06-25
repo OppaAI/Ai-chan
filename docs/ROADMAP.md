@@ -50,24 +50,35 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 ## Phase 2 — Voice ⌛
 ![Phase 2](../assets/phase-2.0.png)
 
-*Go fully hands-free. Aiko listens and speaks without any keyboard involvement.*
+*Make Aiko usable as a voice companion, not just a typed chatbot.*
 
-**Goal:** A complete voice loop — speak, transcribe, respond, synthesise — running in real time on the Jetson.
+**Goal:** A local-first voice loop — listen, detect speech, transcribe, respond, and speak back — that runs on the Jetson with stable memory under ASR + LLM + TTS load.
 
-> **Memory backend migration:** mem0 + Qdrant were replaced in this phase with a custom
-> sqlite-vec backend (Ollama extraction + fastembed embeddings + RRF dual-path retrieval).
-> Qdrant caused OOM crashes on the Jetson Orin Nano under concurrent ASR + LLM + memory load.
-> The new backend is fully serverless — no Docker containers required for memory.
+> **Memory backend migration:** Phase 2 replaced mem0 + Qdrant with a custom
+> sqlite-vec + fastembed backend using local SQLite storage, KNN vector search,
+> FTS5 lexical search, and Reciprocal Rank Fusion retrieval.
+> Qdrant caused OOM crashes on the Jetson Orin Nano when ASR, LLM inference,
+> TTS, and memory were active together.
+> The new backend is serverless and keeps memory local — no Qdrant container,
+> no mem0 runtime, and no Docker dependency for memory.
 
 | Feature | Status |
 |---|---|
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
-| Microphone capture with SenseVoice via sherpa-onnx | ✅ Done |
+| KNN + FTS5 + RRF memory retrieval | ✅ Done |
+| Microphone capture via PulseAudio `parec` | ✅ Done |
+| ASR via SenseVoice + sherpa-onnx | ✅ Done |
 | Voice Activity Detection via Silero VAD | ✅ Done |
-| Interactive Talk mode (hands-free conversation) | ✅ Done |
-| Interrupt handling — speak over Aiko mid-response | ⌛ In Progress |
-| Latency target: < 3 s end-to-end on Jetson Orin Nano | ⌛ In Progress |
-| TTS voice/runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
+| Interactive Talk mode — local/TUI hands-free conversation | ✅ Done |
+| Spoken command aliases in ASR mode | ✅ Done |
+| Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — stress testing |
+| Optional owner voice verification via sherpa-onnx speaker embeddings | 🟡 Implemented — threshold tuning |
+| TTS runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
+| MioTTS HTTP client + local sounddevice playback | ✅ Done |
+| Remote/browser TTS audio sink for WebUI playback | 🟡 Implemented — remote polish ongoing |
+| Browser/WebUI microphone streaming into ASR/VAD pipeline | 🟡 Implemented — remote polish ongoing |
+| Staged TTS/ASR/VAD warmup during boot | ✅ Done |
+| Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Not met — current normal-chat latency documented as >5s |
 
 
 ### Voice backend trial ledger
