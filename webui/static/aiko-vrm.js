@@ -1,888 +1,721 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>lookAtHand · Gesture Tester</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-// ── renderer ────────────────────────────────────────────────────────────────
-const canvas = document.getElementById('canvas');
-const vrmSide = document.getElementById('vrm-side');
-const fill = document.getElementById('progress-fill');
-const loadMsg = document.getElementById('load-msg');
+  :root {
+    --bg: #0d0d0f;
+    --surface: #16161a;
+    --border: #2a2a30;
+    --accent: #7c6bff;
+    --accent2: #ff6b9d;
+    --text: #e8e8ee;
+    --muted: #6b6b7a;
+    --track: #22222a;
+  }
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.setClearColor(0x0a0a0f);
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  #sidebar header {
+    padding: 20px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #sidebar header .tag {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  #sidebar header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  /* Side toggle */
+  .toggle-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  .toggle-btn {
+    flex: 1;
+    padding: 8px;
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .toggle-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  /* Sliders */
+  .param-row {
+    margin-bottom: 14px;
+  }
+
+  .param-row:last-child { margin-bottom: 0; }
+
+  .param-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 5px;
+  }
+
+  .param-name {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .param-value {
+    font-size: 11px;
+    color: var(--accent);
+    min-width: 44px;
+    text-align: right;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 3px;
+    background: var(--track);
+    border-radius: 2px;
+    outline: none;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+
+  input[type="range"]:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 3px rgba(124,107,255,0.3);
+  }
+
+  /* Bone display */
+  .bone-grid {
+    display: grid;
+    gap: 6px;
+  }
+
+  .bone-card {
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+
+  .bone-name {
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .bone-vals {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 4px;
+  }
+
+  .bone-val {
+    font-size: 10px;
+    color: var(--text);
+  }
+
+  .axis-x { color: #ff6b6b; }
+  .axis-y { color: #6bffb8; }
+  .axis-z { color: #6bb5ff; }
+
+  /* Reset button */
+  #resetBtn {
+    margin: 16px 20px;
+    padding: 9px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.05em;
+  }
+
+  #resetBtn:hover {
+    border-color: var(--accent2);
+    color: var(--accent2);
+  }
+
+  /* ── Viewport ── */
+  #viewport {
+    flex: 1;
+    position: relative;
+    background: var(--bg);
+  }
+
+  canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  /* HUD overlay */
+  #hud {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    font-size: 10px;
+    color: var(--muted);
+    text-align: right;
+    pointer-events: none;
+    line-height: 1.8;
+  }
+
+  #hud span { color: var(--text); }
+
+  /* Info bar bottom */
+  #infobar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 10px 20px;
+    background: rgba(13,13,15,0.85);
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    gap: 20px;
+    backdrop-filter: blur(6px);
+  }
+
+  .hint { display: flex; align-items: center; gap: 5px; }
+  .key {
+    display: inline-block;
+    padding: 1px 5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 9px;
+    color: var(--text);
+  }
+</style>
+</head>
+<body>
+
+<!-- ── SIDEBAR ── -->
+<div id="sidebar">
+  <header>
+    <div class="tag">aiko-vrm · gesture debug</div>
+    <h1>lookAtHand</h1>
+  </header>
+
+  <div class="section">
+    <div class="section-label">Side</div>
+    <div class="toggle-row">
+      <button class="toggle-btn" id="btnLeft" onclick="setSide(-1)">Left</button>
+      <button class="toggle-btn active" id="btnRight" onclick="setSide(1)">Right</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Intensity</div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">intensity</span>
+        <span class="param-value" id="valIntensity">1.00</span>
+      </div>
+      <input type="range" id="slIntensity" min="0" max="1" step="0.01" value="1" oninput="update()">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">IO offsets</div>
+
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">UA.x</span>
+        <span class="param-value" id="valUAx">0.00</span>
+      </div>
+      <input type="range" id="slUAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">UA.z</span>
+        <span class="param-value" id="valUAz">0.00</span>
+      </div>
+      <input type="range" id="slUAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">LA.x</span>
+        <span class="param-value" id="valLAx">0.00</span>
+      </div>
+      <input type="range" id="slLAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">LA.z</span>
+        <span class="param-value" id="valLAz">0.00</span>
+      </div>
+      <input type="range" id="slLAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">H.x</span>
+        <span class="param-value" id="valHx">0.00</span>
+      </div>
+      <input type="range" id="slHx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">H.y</span>
+        <span class="param-value" id="valHy">0.00</span>
+      </div>
+      <input type="range" id="slHy" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Live bone rotations (rad)</div>
+    <div class="bone-grid">
+      <div class="bone-card">
+        <div class="bone-name">UpperArm</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bUAx">0.00</span></div>
+          <div class="bone-val">y —</div>
+          <div class="bone-val axis-z">z <span id="bUAz">0.00</span></div>
+        </div>
+      </div>
+      <div class="bone-card">
+        <div class="bone-name">LowerArm</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bLAx">0.00</span></div>
+          <div class="bone-val">y —</div>
+          <div class="bone-val axis-z">z <span id="bLAz">0.00</span></div>
+        </div>
+      </div>
+      <div class="bone-card">
+        <div class="bone-name">Hand</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bHx">0.00</span></div>
+          <div class="bone-val axis-y">y <span id="bHy">0.00</span></div>
+          <div class="bone-val">z —</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Animation</div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">lerp speed</span>
+        <span class="param-value" id="valLerp">0.08</span>
+      </div>
+      <input type="range" id="slLerp" min="0.01" max="1" step="0.01" value="0.08" oninput="document.getElementById('valLerp').textContent=(+this.value).toFixed(2)">
+    </div>
+    <div class="toggle-row" style="margin-top:8px">
+      <button class="toggle-btn active" id="btnAnimate" onclick="toggleAnimate()">▶ animate</button>
+    </div>
+  </div>
+
+  <button id="resetBtn" onclick="resetAll()">↺ reset to rest</button>
+</div>
+
+<!-- ── 3D VIEWPORT ── -->
+<div id="viewport">
+  <canvas id="c"></canvas>
+
+  <div id="hud">
+    side: <span id="hudSide">right</span><br>
+    intensity: <span id="hudInt">1.00</span>
+  </div>
+
+  <div id="infobar">
+    <div class="hint"><span class="key">drag</span> orbit</div>
+    <div class="hint"><span class="key">scroll</span> zoom</div>
+    <div class="hint"><span class="key">R</span> reset view</div>
+  </div>
+</div>
+
+<!-- Three.js r128 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+<script type="module">
+import { lookAtHand } from './gesture.js';
+// ── Scene setup ──────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(22, 1, 0.1, 100);
-camera.position.set(0.00, 1.33, 5.0);
+scene.background = new THREE.Color(0x0d0d0f);
+scene.fog = new THREE.Fog(0x0d0d0f, 8, 22);
 
-const controls = new OrbitControls(camera, canvas);
-controls.target.set(0.00, 1.30, 0);
-controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.enablePan = false;
-controls.minDistance = 1.0;
-controls.maxDistance = 3.2;
-controls.update();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(0, 1.4, 3.5);
 
-scene.add(new THREE.AmbientLight(0xc8b0ff, 0.6));
-const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-dir.position.set(1, 3, 2);
-scene.add(dir);
-const rim = new THREE.DirectionalLight(0x7b4fd4, 0.4);
-rim.position.set(-2, 1, -1);
+// Lights
+const ambient = new THREE.AmbientLight(0x8888cc, 0.6);
+scene.add(ambient);
+const key = new THREE.DirectionalLight(0xffffff, 0.9);
+key.position.set(2, 4, 3);
+key.castShadow = true;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x6655ff, 0.4);
+rim.position.set(-3, 2, -2);
 scene.add(rim);
-const fillL = new THREE.DirectionalLight(0xd4b0ff, 0.3);
-fillL.position.set(0, -1, 2);
-scene.add(fillL);
-scene.add(new THREE.GridHelper(10, 20, 0x1a0a2a, 0x100820));
+const fill = new THREE.PointLight(0xff6b9d, 0.3, 8);
+fill.position.set(-1, 1, 1);
+scene.add(fill);
 
+// Floor grid
+const grid = new THREE.GridHelper(10, 20, 0x2a2a30, 0x1a1a20);
+scene.add(grid);
+
+// ── Orbit control (minimal, no import needed) ─────────────────
+let orbitState = { dragging: false, lastX: 0, lastY: 0, theta: 0, phi: 0.15, radius: 3.5, target: new THREE.Vector3(0, 1.1, 0) };
+
+canvas.addEventListener('mousedown', e => { orbitState.dragging = true; orbitState.lastX = e.clientX; orbitState.lastY = e.clientY; });
+window.addEventListener('mouseup', () => { orbitState.dragging = false; });
+window.addEventListener('mousemove', e => {
+  if (!orbitState.dragging) return;
+  const dx = (e.clientX - orbitState.lastX) * 0.006;
+  const dy = (e.clientY - orbitState.lastY) * 0.006;
+  orbitState.theta -= dx;
+  orbitState.phi = Math.max(0.05, Math.min(Math.PI / 2, orbitState.phi + dy));
+  orbitState.lastX = e.clientX;
+  orbitState.lastY = e.clientY;
+});
+canvas.addEventListener('wheel', e => {
+  orbitState.radius = Math.max(1.5, Math.min(8, orbitState.radius + e.deltaY * 0.005));
+}, { passive: true });
+window.addEventListener('keydown', e => { if (e.key === 'r' || e.key === 'R') { orbitState.theta = 0; orbitState.phi = 0.15; orbitState.radius = 3.5; } });
+
+function applyOrbit() {
+  const x = orbitState.radius * Math.sin(orbitState.theta) * Math.cos(orbitState.phi);
+  const y = orbitState.radius * Math.sin(orbitState.phi) + orbitState.target.y;
+  const z = orbitState.radius * Math.cos(orbitState.theta) * Math.cos(orbitState.phi);
+  camera.position.set(x, y, z);
+  camera.lookAt(orbitState.target);
+}
+
+// ── Stick figure skeleton ─────────────────────────────────────
+const MAT_BODY = new THREE.MeshLambertMaterial({ color: 0x3a3a4a });
+const MAT_JOINT = new THREE.MeshLambertMaterial({ color: 0x5a5a7a });
+const MAT_ACCENT = new THREE.MeshLambertMaterial({ color: 0x7c6bff });
+const MAT_ACCENT2 = new THREE.MeshLambertMaterial({ color: 0xff6b9d });
+
+function capsule(height, radius, mat) {
+  const g = new THREE.CylinderGeometry(radius, radius, height, 8);
+  return new THREE.Mesh(g, mat);
+}
+function sphere(r, mat) {
+  const g = new THREE.SphereGeometry(r, 8, 8);
+  return new THREE.Mesh(g, mat);
+}
+
+// Root pivot at hips
+const root = new THREE.Object3D();
+root.position.set(0, 0, 0);
+scene.add(root);
+
+// Torso
+const torso = capsule(0.55, 0.09, MAT_BODY);
+torso.position.set(0, 0.9, 0);
+root.add(torso);
+
+// Head
+const head = sphere(0.1, MAT_JOINT);
+head.position.set(0, 1.28, 0);
+root.add(head);
+
+// Neck
+const neck = capsule(0.12, 0.04, MAT_BODY);
+neck.position.set(0, 1.19, 0);
+root.add(neck);
+
+// Hips
+const hips = capsule(0.18, 0.1, MAT_BODY);
+hips.position.set(0, 0.62, 0);
+root.add(hips);
+
+// Legs (static, just for context)
+[-0.09, 0.09].forEach(xOff => {
+  const upper = capsule(0.28, 0.065, MAT_BODY);
+  upper.position.set(xOff, 0.35, 0);
+  root.add(upper);
+  const lower = capsule(0.28, 0.055, MAT_BODY);
+  lower.position.set(xOff, 0.06, 0);
+  root.add(lower);
+  const foot = capsule(0.1, 0.04, MAT_BODY);
+  foot.rotation.x = Math.PI / 2;
+  foot.position.set(xOff, -0.08, 0.04);
+  root.add(foot);
+});
+
+// ── Arm skeleton with pivots ──────────────────────────────────
+// Shoulder joint positions
+const SHOULDER_L = new THREE.Vector3(-0.17, 1.14, 0);
+const SHOULDER_R = new THREE.Vector3( 0.17, 1.14, 0);
+
+function buildArm(side) {
+  // side: -1 = left, 1 = right
+  const sOff = side < 0 ? SHOULDER_L : SHOULDER_R;
+
+  // Upper arm pivot (at shoulder)
+  const uaPivot = new THREE.Object3D();
+  uaPivot.position.copy(sOff);
+  root.add(uaPivot);
+
+  const uaMesh = capsule(0.24, 0.055, side < 0 ? MAT_BODY : MAT_ACCENT);
+  uaMesh.position.set(0, -0.12, 0); // offset so pivot is at top
+  uaPivot.add(uaMesh);
+
+  const elbowSphere = sphere(0.04, MAT_JOINT);
+  elbowSphere.position.set(0, -0.24, 0);
+  uaPivot.add(elbowSphere);
+
+  // Lower arm pivot (at elbow, child of uaPivot)
+  const laPivot = new THREE.Object3D();
+  laPivot.position.set(0, -0.24, 0);
+  uaPivot.add(laPivot);
+
+  const laMesh = capsule(0.20, 0.045, side < 0 ? MAT_BODY : MAT_ACCENT);
+  laMesh.position.set(0, -0.10, 0);
+  laPivot.add(laMesh);
+
+  const wristSphere = sphere(0.035, MAT_JOINT);
+  wristSphere.position.set(0, -0.20, 0);
+  laPivot.add(wristSphere);
+
+  // Hand pivot (at wrist)
+  const hPivot = new THREE.Object3D();
+  hPivot.position.set(0, -0.20, 0);
+  laPivot.add(hPivot);
+
+  const hMesh = capsule(0.10, 0.038, side < 0 ? MAT_BODY : MAT_ACCENT2);
+  hMesh.position.set(0, -0.05, 0);
+  hPivot.add(hMesh);
+
+  return { uaPivot, laPivot, hPivot };
+}
+
+const leftArm  = buildArm(-1);
+const rightArm = buildArm(1);
+
+// ── REST poses ────────────────────────────────────────────────
+const REST = {
+  leftUpperArm:  { x: 0,    z:  0.25 },
+  leftLowerArm:  { x: 0.1,  z:  0.05 },
+  leftHand:      { x: 0,    y:  0 },
+  rightUpperArm: { x: 0,    z: -0.25 },
+  rightLowerArm: { x: 0.1,  z: -0.05 },
+  rightHand:     { x: 0,    y:  0 },
+};
+
+function applyRest() {
+  leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
+  leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
+  leftArm.hPivot.rotation.set(REST.leftHand.x, REST.leftHand.y, 0);
+  rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
+  rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
+  rightArm.hPivot.rotation.set(REST.rightHand.x, REST.rightHand.y, 0);
+}
+applyRest();
+
+// ── State ─────────────────────────────────────────────────────
+let currentSide = 1; // 1 = right
+
+// ── Animation state ───────────────────────────────────────────
+let animating = true;
+let animTime = 0;        // drives the intensity oscillation
+let lerpT = 0.08;
+
+// Current actual rotations (lerped toward targets each frame)
+const cur = {
+  lUA: { x: REST.leftUpperArm.x,  z: REST.leftUpperArm.z },
+  lLA: { x: REST.leftLowerArm.x,  z: REST.leftLowerArm.z },
+  lH:  { x: REST.leftHand.x,      y: REST.leftHand.y },
+  rUA: { x: REST.rightUpperArm.x, z: REST.rightUpperArm.z },
+  rLA: { x: REST.rightLowerArm.x, z: REST.rightLowerArm.z },
+  rH:  { x: REST.rightHand.x,     y: REST.rightHand.y },
+  neckY: 0, neckX: 0,
+  headY: 0, headX: 0,
+};
+
+function toggleAnimate() {
+  animating = !animating;
+  const btn = document.getElementById('btnAnimate');
+  btn.textContent = animating ? '▶ animate' : '⏸ paused';
+  btn.classList.toggle('active', animating);
+}
+
+function setSide(s) {
+  currentSide = s;
+  document.getElementById('btnLeft').classList.toggle('active', s < 0);
+  document.getElementById('btnRight').classList.toggle('active', s > 0);
+  document.getElementById('hudSide').textContent = s < 0 ? 'left' : 'right';
+  update();
+}
+
+function getIO() {
+  return {
+    lUA: { x: +document.getElementById('slUAx').value, z: +document.getElementById('slUAz').value },
+    lLA: { x: +document.getElementById('slLAx').value, z: +document.getElementById('slLAz').value },
+    lH:  { x: +document.getElementById('slHx').value,  y: +document.getElementById('slHy').value  },
+    rUA: { x: +document.getElementById('slUAx').value, z: +document.getElementById('slUAz').value },
+    rLA: { x: +document.getElementById('slLAx').value, z: +document.getElementById('slLAz').value },
+    rH:  { x: +document.getElementById('slHx').value,  y: +document.getElementById('slHy').value  },
+    neck: { x: 0, y: 0 },
+    head: { x: 0, y: 0 },
+  };
+}
+
+// Mirrors your blend()
+function blend(from, to, t) { return from + (to - from) * t; }
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+// Compute targets from lookAtHand case and lerp cur toward them
+function tickAnimation(dt) {
+  if (animating) animTime += dt;
+
+  lerpT = +document.getElementById('slLerp').value;
+
+  const intensity = +document.getElementById('slIntensity').value;
+  const io = getIO();
+  const s = currentSide;
+
+  // Update display
+  document.getElementById('valIntensity').textContent = intensity.toFixed(2);
+  document.getElementById('valUAx').textContent = (+document.getElementById('slUAx').value).toFixed(2);
+  document.getElementById('valUAz').textContent = (+document.getElementById('slUAz').value).toFixed(2);
+  document.getElementById('valLAx').textContent = (+document.getElementById('slLAx').value).toFixed(2);
+  document.getElementById('valLAz').textContent = (+document.getElementById('slLAz').value).toFixed(2);
+  document.getElementById('valHx').textContent  = (+document.getElementById('slHx').value).toFixed(2);
+  document.getElementById('valHy').textContent  = (+document.getElementById('slHy').value).toFixed(2);
+  document.getElementById('hudInt').textContent = intensity.toFixed(2);
+
+  lookAtHand({
+        side: currentSide,
+        intensity,
+        io,
+        REST,
+        THREE,
+
+        head,
+        neck,
+
+        lUA: leftArm.uaPivot,
+        lLA: leftArm.laPivot,
+        lH: leftArm.hPivot,
+
+        rUA: rightArm.uaPivot,
+        rLA: rightArm.laPivot,
+        rH: rightArm.hPivot
+      });
+
+  // ── Update bone readout ──
+  const activeUA = s < 0 ? cur.lUA : cur.rUA;
+  const activeLA = s < 0 ? cur.lLA : cur.rLA;
+  const activeH  = s < 0 ? cur.lH  : cur.rH;
+  document.getElementById('bUAx').textContent = activeUA.x.toFixed(3);
+  document.getElementById('bUAz').textContent = activeUA.z.toFixed(3);
+  document.getElementById('bLAx').textContent = activeLA.x.toFixed(3);
+  document.getElementById('bLAz').textContent = activeLA.z.toFixed(3);
+  document.getElementById('bHx').textContent  = activeH.x.toFixed(3);
+  document.getElementById('bHy').textContent  = activeH.y.toFixed(3);
+}
+
+// Stub so sidebar sliders still call something
+function update() { /* driven by render loop */ }
+
+function resetAll() {
+  document.getElementById('slIntensity').value = 1;
+  ['UAx','UAz','LAx','LAz','Hx','Hy'].forEach(id => {
+    document.getElementById('sl' + id).value = 0;
+  });
+}
+
+// ── Resize ────────────────────────────────────────────────────
 function resize() {
-  const w = vrmSide.clientWidth;
-  const h = vrmSide.clientHeight;
+  const vp = document.getElementById('viewport');
+  const w = vp.clientWidth, h = vp.clientHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
-resize();
 window.addEventListener('resize', resize);
+resize();
 
-// ── VRM state ────────────────────────────────────────────────────────────────
-let vrm = null;
-const clock = new THREE.Clock();
-
-const exprTargets = {};
-const exprCurrent = {};
-const EXPR_LERP = 6;
-let exprResetTimer = null;
-const EXPR_RESET_DELAY = 4000;
-
-let blinkTimer = 0;
-let blinkPhase = 'wait';
-let blinkT = 0;
-const BLINK_CLOSE_DUR = 0.07;
-const BLINK_OPEN_DUR = 0.10;
-function nextBlinkWait() { return 3.0 + Math.random() * 4.0; }
-blinkTimer = nextBlinkWait();
-
-let t = 0;
-const REST = {
-  leftUpperArm: { x: -0.02, y: 0.00, z: 1.28 },
-  rightUpperArm: { x: -0.02, y: 0.00, z: -1.28 },
-  leftLowerArm: { x: 0.12, y: 0.00, z: 0.08 },
-  rightLowerArm: { x: 0.12, y: 0.00, z: -0.08 },
-  leftHand: { x: 0.00, y: 0.08, z: 0.00 },
-  rightHand: { x: 0.00, y: -0.08, z: 0.00 },
-};
-
-const FINGER_BONES = [
-  'leftThumbProximal', 'leftThumbDistal', 'leftIndexProximal', 'leftIndexIntermediate', 'leftIndexDistal',
-  'leftMiddleProximal', 'leftMiddleIntermediate', 'leftRingProximal', 'leftLittleProximal',
-  'rightThumbProximal', 'rightThumbDistal', 'rightIndexProximal', 'rightIndexIntermediate', 'rightIndexDistal',
-  'rightMiddleProximal', 'rightMiddleIntermediate', 'rightRingProximal', 'rightLittleProximal',
-];
-
-function getBone(name) {
-  return vrm?.humanoid?.getRawBoneNode(name) ?? null;
-}
-
-let gestureState = 'none';
-let gestureT = 0;
-let gestureDuration = 0;
-let gestureCooldown = 2.0 + Math.random() * 3.0;
-let gestureTarget = {};
-let lastVisemeAt = 0;
-
-const GESTURES = [
-  'lookAround',
-  'lookAtHand',
-  'hairBrush',
-  'fingerPlay',
-  'meetGaze',
-  'curiousTilt',
-  'shiftWeight',
-  'stretchNeck',
-  'raiseHand',
-  'chinTouch',
-  'shoulderRoll',
-  'sway',
-  'headNod',
-  'wristFlick',
-  'adjustSleeve',    // new: tugs at sleeve/cuff
-  'handOnHip',       // new: hand rests on hip briefly
-  'crossArms',       // new: briefly crosses arms (subtle)
-  'touchCollar',     // new: touches collar/neck area
-  'brushShoulder',   // new: brushes something off shoulder
-  'stretchArm',      // new: stretches one arm out and back
-];
-
-const GESTURE_DURATION = {
-  lookAround: 3.8,
-  lookAtHand: 3.4,
-  hairBrush: 3.2,
-  fingerPlay: 3.8,
-  meetGaze: 3.0,
-  curiousTilt: 2.8,
-  shiftWeight: 3.4,
-  stretchNeck: 3.0,
-  raiseHand: 3.6,
-  chinTouch: 4.0,
-  shoulderRoll: 2.8,
-  sway: 4.5,
-  headNod: 3.0,
-  wristFlick: 2.2,
-  adjustSleeve: 2.5,
-  handOnHip: 3.2,
-  crossArms: 3.0,
-  touchCollar: 2.8,
-  brushShoulder: 2.4,
-  stretchArm: 3.5,
-};
-
-function easeInOutSine(v) {
-  return -(Math.cos(Math.PI * v) - 1) / 2;
-}
-
-function holdCurve(progress, inPortion = 0.28, outPortion = 0.30) {
-  if (progress < inPortion) return easeInOutSine(progress / inPortion);
-  if (progress > 1 - outPortion) return easeInOutSine((1 - progress) / outPortion);
-  return 1;
-}
-
-function pickGesture() {
-  const gesture = GESTURES[Math.floor(Math.random() * GESTURES.length)];
-  const side = Math.random() < 0.5 ? -1 : 1;
-  gestureState = gesture;
-  gestureT = 0;
-  gestureDuration = GESTURE_DURATION[gesture] ?? 3.0;
-  gestureTarget = {
-    side,
-    look: side * (0.28 + Math.random() * 0.22),
-    tilt: side * (0.10 + Math.random() * 0.09),
-    sway: side * (0.018 + Math.random() * 0.012),
-  };
-}
-
-function speakingRecently() {
-  return performance.now() - lastVisemeAt < 650;
-}
-
-function applyFingerCurl(side, intensity) {
-  const prefix = side < 0 ? 'left' : 'right';
-  const pulse = 0.5 + Math.sin(t * 8.0) * 0.5;
-  for (const name of FINGER_BONES) {
-    if (!name.startsWith(prefix)) continue;
-    const bone = getBone(name);
-    if (bone) bone.rotation.z += intensity * (0.12 + pulse * 0.14);
-  }
-}
-
-// ── Idle animation helpers ─────────────────────────────────────────────────
-// We store idle offsets separately so gestures can blend cleanly
-let idleOffset = {
-  head: { x: 0, y: 0, z: 0 },
-  neck: { x: 0, y: 0, z: 0 },
-  spine: { x: 0, y: 0, z: 0 },
-  chest: { x: 0, y: 0, z: 0 },
-  hips: { x: 0, y: 0, z: 0, px: 0 },
-  lUA: { x: 0, y: 0, z: 0 },
-  rUA: { x: 0, y: 0, z: 0 },
-  lLA: { x: 0, y: 0, z: 0 },
-  rLA: { x: 0, y: 0, z: 0 },
-  lH: { x: 0, y: 0, z: 0 },
-  rH: { x: 0, y: 0, z: 0 },
-};
-
-function computeIdleOffsets(dt) {
-  t += dt;
-  const io = idleOffset;
-
-  // Breathing - chest and spine
-  const breath = Math.sin(t * 0.83) * 0.013;
-  io.chest.x = breath;
-  io.spine.x = breath * 0.5;
-
-  // Hips - gentle sway and bob
-  io.hips.z = Math.sin(t * 0.41) * 0.012;
-  io.hips.x = Math.sin(t * 0.67) * 0.008;
-  io.hips.px = Math.sin(t * 0.41) * 0.003;
-
-  // Head - natural idle look around (more varied)
-  io.head.y = Math.sin(t * 0.31) * 0.055 + Math.sin(t * 1.13) * 0.012 + Math.sin(t * 0.17) * 0.025;
-  io.head.z = Math.sin(t * 0.27 + 1.1) * 0.018 + Math.sin(t * 0.71) * 0.006;
-  io.head.x = Math.sin(t * 0.53) * 0.012 + Math.sin(t * 0.19) * 0.008;
-
-  // Neck follows head with damping
-  io.neck.y = io.head.y * 0.3 + Math.sin(t * 0.43) * 0.015;
-  io.neck.z = io.head.z * 0.3;
-  io.neck.x = io.head.x * 0.4 + Math.sin(t * 0.61) * 0.010;
-
-  // ── Arms: much more natural idle movement ────────────────────────────────
-  // Upper arms: gentle swaying, as if relaxed at sides but alive
-  io.lUA.x = Math.sin(t * 0.47) * 0.025 + Math.sin(t * 0.23) * 0.015;
-  io.lUA.y = Math.sin(t * 0.33) * 0.012 + Math.sin(t * 0.71) * 0.008;
-  io.lUA.z = Math.sin(t * 0.41) * 0.022 + Math.sin(t * 0.19 + 0.5) * 0.018;
-
-  io.rUA.x = Math.sin(t * 0.53 + 0.9) * 0.025 + Math.sin(t * 0.29 + 1.1) * 0.015;
-  io.rUA.y = Math.sin(t * 0.35 + 0.4) * 0.012 + Math.sin(t * 0.67 + 0.3) * 0.008;
-  io.rUA.z = Math.sin(t * 0.37 + 0.7) * 0.022 + Math.sin(t * 0.21 + 0.8) * 0.018;
-
-  // Lower arms: subtle forearm rotation, like hands naturally shifting
-  io.lLA.x = Math.sin(t * 0.61) * 0.018 + Math.sin(t * 0.31) * 0.012;
-  io.lLA.z = Math.sin(t * 0.43) * 0.014 + Math.sin(t * 0.17 + 0.3) * 0.010;
-  io.lLA.y = Math.sin(t * 0.27) * 0.008;
-
-  io.rLA.x = Math.sin(t * 0.57 + 1.4) * 0.018 + Math.sin(t * 0.33 + 0.6) * 0.012;
-  io.rLA.z = Math.sin(t * 0.51 + 0.5) * 0.014 + Math.sin(t * 0.19 + 0.9) * 0.010;
-  io.rLA.y = Math.sin(t * 0.29 + 0.8) * 0.008;
-
-  // Hands: gentle wrist rolls and finger-like micro-movements
-  io.lH.x = Math.sin(t * 0.39) * 0.015;
-  io.lH.y = Math.sin(t * 0.33) * 0.020 + Math.sin(t * 0.71) * 0.010;
-  io.lH.z = Math.sin(t * 0.45) * 0.012;
-
-  io.rH.x = Math.sin(t * 0.37 + 0.5) * 0.015;
-  io.rH.y = Math.sin(t * 0.29 + 1.2) * 0.020 + Math.sin(t * 0.73 + 0.4) * 0.010;
-  io.rH.z = Math.sin(t * 0.43 + 0.7) * 0.012;
-
-  return io;
-}
-
-function applyIdle(dt) {
-  if (!vrm?.humanoid) return;
-  const h = vrm.humanoid;
-  const get = n => h.getRawBoneNode(n);
-  const io = computeIdleOffsets(dt);
-
-  const chest = get('chest');
-  const spine = get('spine');
-  if (chest) chest.rotation.x = io.chest.x;
-  if (spine) spine.rotation.x = io.spine.x;
-
-  const hips = get('hips');
-  if (hips) {
-    hips.rotation.z = io.hips.z;
-    hips.rotation.x = io.hips.x;
-    hips.position.x = io.hips.px;
-  }
-
-  const head = get('head');
-  if (head) {
-    head.rotation.y = io.head.y;
-    head.rotation.z = io.head.z;
-    head.rotation.x = io.head.x;
-  }
-  const neck = get('neck');
-  if (neck) {
-    neck.rotation.y = io.neck.y;
-    neck.rotation.z = io.neck.z;
-    neck.rotation.x = io.neck.x;
-  }
-
-  const lUA = get('leftUpperArm');
-  const rUA = get('rightUpperArm');
-  const lLA = get('leftLowerArm');
-  const rLA = get('rightLowerArm');
-  const lH = get('leftHand');
-  const rH = get('rightHand');
-
-  if (lUA) {
-    lUA.rotation.x = REST.leftUpperArm.x + io.lUA.x;
-    lUA.rotation.y = REST.leftUpperArm.y + io.lUA.y;
-    lUA.rotation.z = REST.leftUpperArm.z + io.lUA.z;
-  }
-  if (rUA) {
-    rUA.rotation.x = REST.rightUpperArm.x + io.rUA.x;
-    rUA.rotation.y = REST.rightUpperArm.y + io.rUA.y;
-    rUA.rotation.z = REST.rightUpperArm.z + io.rUA.z;
-  }
-  if (lLA) {
-    lLA.rotation.x = REST.leftLowerArm.x + io.lLA.x;
-    lLA.rotation.y = REST.leftLowerArm.y + io.lLA.y;
-    lLA.rotation.z = REST.leftLowerArm.z + io.lLA.z;
-  }
-  if (rLA) {
-    rLA.rotation.x = REST.rightLowerArm.x + io.rLA.x;
-    rLA.rotation.y = REST.rightLowerArm.y + io.rLA.y;
-    rLA.rotation.z = REST.rightLowerArm.z + io.rLA.z;
-  }
-  if (lH) {
-    lH.rotation.x = REST.leftHand.x + io.lH.x;
-    lH.rotation.y = REST.leftHand.y + io.lH.y;
-    lH.rotation.z = REST.leftHand.z + io.lH.z;
-  }
-  if (rH) {
-    rH.rotation.x = REST.rightHand.x + io.rH.x;
-    rH.rotation.y = REST.rightHand.y + io.rH.y;
-    rH.rotation.z = REST.rightHand.z + io.rH.z;
-  }
-}
-
-function applyGestures(dt) {
-  if (!vrm?.humanoid) return;
-
-  if (gestureState === 'none') {
-    if (speakingRecently()) return;
-    gestureCooldown -= dt;
-    if (gestureCooldown <= 0) {
-      pickGesture();
-      gestureCooldown = 4.5 + Math.random() * 7.0;
-    }
-    return;
-  }
-
-  gestureT += dt;
-  const progress = Math.min(1, gestureT / gestureDuration);
-  const eased = easeInOutSine(progress);
-  const held = holdCurve(progress);
-  const intensity = Math.sin(progress * Math.PI);
-  const side = gestureTarget.side;
-
-  const head = getBone('head');
-  const neck = getBone('neck');
-  const spine = getBone('spine');
-  const chest = getBone('chest');
-  const hips = getBone('hips');
-  const lUA = getBone('leftUpperArm');
-  const rUA = getBone('rightUpperArm');
-  const lLA = getBone('leftLowerArm');
-  const rLA = getBone('rightLowerArm');
-  const lH = getBone('leftHand');
-  const rH = getBone('rightHand');
-
-  // Helper to blend gesture with idle base
-  const blend = (base, gesture, amt) => base + gesture * amt;
-  const io = idleOffset;
-
-  switch (gestureState) {
-
-    case 'lookAround':
-      if (head) {
-        head.rotation.y = blend(io.head.y, gestureTarget.look * 1.2, held);
-        head.rotation.x = blend(io.head.x, Math.sin(eased * Math.PI) * 0.04, held);
-      }
-      if (neck) {
-        neck.rotation.y = blend(io.neck.y, gestureTarget.look * 0.45, held);
-        neck.rotation.z = blend(io.neck.z, gestureTarget.tilt * 0.3, held);
-      }
-      if (spine) spine.rotation.y = blend(0, gestureTarget.look * 0.08, held);
-      break;
-
-    case 'lookAtHand': {
-      const s = side < 0 ? -1 : 1;
-    
-      let handBone = null;
-    
-      // -----------------------------
-      // Pose arm
-      // -----------------------------
-      if (s < 0) {
-        handBone = lH;
-    
-        if (lUA) {
-          lUA.rotation.x = blend(
-            REST.leftUpperArm.x + io.lUA.x,
-            -0.45 * intensity,
-            1
-          );
-    
-          lUA.rotation.z = blend(
-            REST.leftUpperArm.z + io.lUA.z,
-            -0.70 * intensity,
-            1
-          );
-        }
-    
-        if (lLA) {
-          lLA.rotation.x = blend(
-            REST.leftLowerArm.x + io.lLA.x,
-            -0.95 * intensity,
-            1
-          );
-    
-          lLA.rotation.z = blend(
-            REST.leftLowerArm.z + io.lLA.z,
-            -0.15 * intensity,
-            1
-          );
-        }
-    
-        if (lH) {
-          lH.rotation.x = blend(
-            REST.leftHand.x + io.lH.x,
-            0.25 * intensity,
-            1
-          );
-    
-          lH.rotation.y = blend(
-            REST.leftHand.y + io.lH.y,
-            0.45 * intensity,
-            1
-          );
-        }
-      } else {
-        handBone = rH;
-    
-        if (rUA) {
-          rUA.rotation.x = blend(
-            REST.rightUpperArm.x + io.rUA.x,
-            -0.45 * intensity,
-            1
-          );
-    
-          rUA.rotation.z = blend(
-            REST.rightUpperArm.z + io.rUA.z,
-            0.70 * intensity,
-            1
-          );
-        }
-    
-        if (rLA) {
-          rLA.rotation.x = blend(
-            REST.rightLowerArm.x + io.rLA.x,
-            -0.95 * intensity,
-            1
-          );
-    
-          rLA.rotation.z = blend(
-            REST.rightLowerArm.z + io.rLA.z,
-            0.15 * intensity,
-            1
-          );
-        }
-    
-        if (rH) {
-          rH.rotation.x = blend(
-            REST.rightHand.x + io.rH.x,
-            0.25 * intensity,
-            1
-          );
-    
-          rH.rotation.y = blend(
-            REST.rightHand.y + io.rH.y,
-            -0.45 * intensity,
-            1
-          );
-        }
-      }
-    
-      // -----------------------------
-      // True head tracking
-      // -----------------------------
-      if (head && handBone) {
-        const handPos = new THREE.Vector3();
-        const headPos = new THREE.Vector3();
-    
-        handBone.getWorldPosition(handPos);
-        head.getWorldPosition(headPos);
-    
-        const dir = handPos.sub(headPos).normalize();
-    
-        const yaw = Math.atan2(dir.x, dir.z);
-    
-        const pitch = Math.atan2(
-          -dir.y,
-          Math.sqrt(dir.x * dir.x + dir.z * dir.z)
-        );
-    
-        // Neck follows partially
-        if (neck) {
-          neck.rotation.y = blend(
-            io.neck.y,
-            yaw * 0.35 * intensity,
-            1
-          );
-    
-          neck.rotation.x = blend(
-            io.neck.x,
-            pitch * 0.35 * intensity,
-            1
-          );
-        }
-    
-        // Head follows more strongly
-        head.rotation.y = blend(
-          io.head.y,
-          yaw * 0.75 * intensity,
-          1
-        );
-    
-        head.rotation.x = blend(
-          io.head.x,
-          pitch * 0.75 * intensity,
-          1
-        );
-      }
-    
-      break;
-    }
-
-    case 'hairBrush':
-      if (side < 0) {
-        if (lUA) { lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.90, 1); lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.45, 1); }
-        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.80, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.32, 1); }
-        if (lH) { lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.38, 1); lH.rotation.z = blend(REST.leftHand.z + io.lH.z, -intensity * 0.22, 1); }
-      } else {
-        if (rUA) { rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.90, 1); rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.45, 1); }
-        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.80, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.32, 1); }
-        if (rH) { rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.38, 1); rH.rotation.z = blend(REST.rightHand.z + io.rH.z, intensity * 0.22, 1); }
-      }
-      if (head) { head.rotation.z = blend(io.head.z, -side * intensity * 0.07, 1); head.rotation.y = blend(io.head.y, side * intensity * 0.05, 1); }
-      break;
-
-    case 'fingerPlay':
-      if (head) { head.rotation.x = blend(io.head.x, intensity * 0.08, 1); head.rotation.y = blend(io.head.y, side * intensity * 0.14, 1); }
-      if (side < 0) {
-        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.38, 1); }
-        if (lH) { lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.26, 1); lH.rotation.z = blend(REST.leftHand.z + io.lH.z, Math.sin(gestureT * 5.0) * 0.10 * intensity, 1); }
-      } else {
-        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.38, 1); }
-        if (rH) { rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.26, 1); rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -Math.sin(gestureT * 5.0) * 0.10 * intensity, 1); }
-      }
-      applyFingerCurl(side, intensity);
-      break;
-
-    case 'meetGaze':
-      if (head) {
-        head.rotation.y = blend(io.head.y, 0, held * 0.85);
-        head.rotation.z = blend(io.head.z, 0, held * 0.80);
-        head.rotation.x = blend(io.head.x, 0.025, held * 0.5);
-      }
-      if (neck) {
-        neck.rotation.y = blend(io.neck.y, 0, held * 0.60);
-        neck.rotation.z = blend(io.neck.z, 0, held * 0.60);
-      }
-      break;
-
-    case 'curiousTilt':
-      if (head) {
-        head.rotation.z = blend(io.head.z, gestureTarget.tilt * 1.3, held);
-        head.rotation.x = blend(io.head.x, -0.025 * intensity, 1);
-        head.rotation.y = blend(io.head.y, side * 0.06, held);
-      }
-      if (neck) {
-        neck.rotation.z = blend(io.neck.z, gestureTarget.tilt * 0.60, held);
-        neck.rotation.y = blend(io.neck.y, side * 0.04, held);
-      }
-      break;
-
-    case 'shiftWeight':
-      if (hips) {
-        hips.position.x = blend(io.hips.px, side * Math.sin(eased * Math.PI) * 0.022, 1);
-        hips.rotation.z = blend(io.hips.z, side * Math.sin(eased * Math.PI) * 0.025, 1);
-      }
-      if (spine) spine.rotation.z = blend(0, -side * Math.sin(eased * Math.PI) * 0.020, 1);
-      if (chest) chest.rotation.z = blend(0, -side * Math.sin(eased * Math.PI) * 0.014, 1);
-      if (head) head.rotation.z = blend(io.head.z, side * Math.sin(eased * Math.PI) * 0.018, 1);
-      break;
-
-    case 'stretchNeck':
-      if (neck) { neck.rotation.x = blend(io.neck.x, -intensity * 0.10, 1); neck.rotation.z = blend(io.neck.z, gestureTarget.tilt * 0.5, held); }
-      if (head) { head.rotation.x = blend(io.head.x, -intensity * 0.08, 1); head.rotation.z = blend(io.head.z, gestureTarget.tilt * 0.3, held); }
-      if (chest) chest.rotation.x = blend(io.chest.x, -intensity * 0.04, 1);
-      break;
-
-    case 'raiseHand':
-      if (side < 0) {
-        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.70, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.40, 1); }
-        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.90, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.14, 1); }
-        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, intensity * 0.12, 1); }
-      } else {
-        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.70, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.40, 1); }
-        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.90, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.14, 1); }
-        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, intensity * 0.12, 1); }
-      }
-      if (head) { head.rotation.y = blend(io.head.y, side * intensity * 0.10, 1); head.rotation.x = blend(io.head.x, -intensity * 0.03, 1); }
-      break;
-
-    case 'chinTouch':
-      if (side < 0) {
-        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.60, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.60, 1); }
-        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 1.05, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.10, 1); }
-        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, -intensity * 0.18, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.20, 1); }
-      } else {
-        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.60, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.60, 1); }
-        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 1.05, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.10, 1); }
-        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, -intensity * 0.18, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.20, 1); }
-      }
-      if (head) { head.rotation.x = blend(io.head.x, intensity * 0.06, 1); head.rotation.z = blend(io.head.z, side * intensity * 0.05, 1); }
-      if (neck) neck.rotation.x = blend(io.neck.x, intensity * 0.04, 1);
-      break;
-
-    case 'shoulderRoll':
-      if (side < 0) {
-        if (lUA) {
-          const roll = Math.sin(progress * Math.PI * 1.5) * intensity;
-          lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -roll * 0.28, 1);
-          lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, roll * 0.18, 1);
-          lUA.rotation.y = blend(REST.leftUpperArm.y + io.lUA.y, roll * 0.10, 1);
-        }
-      } else {
-        if (rUA) {
-          const roll = Math.sin(progress * Math.PI * 1.5) * intensity;
-          rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -roll * 0.28, 1);
-          rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, -roll * 0.18, 1);
-          rUA.rotation.y = blend(REST.rightUpperArm.y + io.rUA.y, -roll * 0.10, 1);
-        }
-      }
-      if (head) head.rotation.z = blend(io.head.z, -side * Math.sin(progress * Math.PI * 1.5) * intensity * 0.06, 1);
-      if (neck) neck.rotation.z = blend(io.neck.z, -side * Math.sin(progress * Math.PI * 1.5) * intensity * 0.04, 1);
-      break;
-
-    case 'sway':
-      {
-        const swayVal = Math.sin(progress * Math.PI * 2) * intensity;
-        if (hips) { hips.position.x = blend(io.hips.px, swayVal * 0.020, 1); hips.rotation.z = blend(io.hips.z, swayVal * 0.022, 1); }
-        if (spine) spine.rotation.z = blend(0, swayVal * -0.014, 1);
-        if (chest) chest.rotation.z = blend(0, swayVal * -0.010, 1);
-        if (head) head.rotation.z = blend(io.head.z, swayVal * -0.016, 1);
-        if (neck) neck.rotation.z = blend(io.neck.z, swayVal * -0.010, 1);
-        if (lUA) lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -swayVal * 0.06, 1);
-        if (rUA) rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, -swayVal * 0.06, 1);
-      }
-      break;
-
-    case 'headNod':
-      {
-        const nod = Math.sin(progress * Math.PI * 3.5) * intensity * 0.14;
-        if (head) { head.rotation.x = blend(io.head.x, nod, 1); }
-        if (neck) { neck.rotation.x = blend(io.neck.x, nod * 0.5, 1); }
-        if (head) head.rotation.y = blend(io.head.y, 0, held * 0.4);
-      }
-      break;
-
-    case 'wristFlick':
-      if (side < 0) {
-        if (lLA) { lLA.rotation.y = blend(REST.leftLowerArm.y + io.lLA.y, intensity * 0.55, 1); }
-        if (lH) { lH.rotation.z = blend(REST.leftHand.z + io.lH.z, intensity * 0.50, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.30, 1); }
-      } else {
-        if (rLA) { rLA.rotation.y = blend(REST.rightLowerArm.y + io.rLA.y, -intensity * 0.55, 1); }
-        if (rH) { rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -intensity * 0.50, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.30, 1); }
-      }
-      if (head) head.rotation.y = blend(io.head.y, side * intensity * 0.08, 1);
-      break;
-
-    // ── new natural idle gestures ──────────────────────────────────────────
-
-    case 'adjustSleeve':
-      // Hand reaches to opposite forearm, tugs at sleeve
-      if (side < 0) {
-        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.35, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.25, 1); }
-        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.55, 1); rLA.rotation.y = blend(REST.rightLowerArm.y + io.rLA.y, -intensity * 0.40, 1); }
-        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, -intensity * 0.20, 1); rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -intensity * 0.15, 1); }
-      } else {
-        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.35, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.25, 1); }
-        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.55, 1); lLA.rotation.y = blend(REST.leftLowerArm.y + io.lLA.y, intensity * 0.40, 1); }
-        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, -intensity * 0.20, 1); lH.rotation.z = blend(REST.leftHand.z + io.lH.z, intensity * 0.15, 1); }
-      }
-      if (head) head.rotation.x = blend(io.head.x, intensity * 0.05, 1);
-      break;
-
-    case 'handOnHip':
-      // One hand rests on hip, elbow out
-      if (side < 0) {
-        if (lUA) { lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.55, 1); lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.20, 1); }
-        if (lLA) { lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.35, 1); lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.15, 1); }
-        if (lH) { lH.rotation.z = blend(REST.leftHand.z + io.lH.z, -intensity * 0.25, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.10, 1); }
-      } else {
-        if (rUA) { rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.55, 1); rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.20, 1); }
-        if (rLA) { rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.35, 1); rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.15, 1); }
-        if (rH) { rH.rotation.z = blend(REST.rightHand.z + io.rH.z, intensity * 0.25, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.10, 1); }
-      }
-      if (head) head.rotation.y = blend(io.head.y, -side * intensity * 0.06, 1);
-      if (spine) spine.rotation.z = blend(0, side * intensity * 0.012, 1);
-      break;
-
-    case 'crossArms':
-      // Subtle arm-cross: both arms shift inward slightly
-      {
-        const cross = intensity * 0.35;
-        if (lUA) { lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -cross * 0.40, 1); lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -cross * 0.15, 1); }
-        if (rUA) { rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, cross * 0.40, 1); rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -cross * 0.15, 1); }
-        if (lLA) { lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -cross * 0.30, 1); lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -cross * 0.25, 1); }
-        if (rLA) { rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, cross * 0.30, 1); rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -cross * 0.25, 1); }
-        if (head) head.rotation.x = blend(io.head.x, intensity * 0.04, 1);
-      }
-      break;
-
-    case 'touchCollar':
-      // Hand comes up to collar/neck area
-      if (side < 0) {
-        if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -intensity * 0.50, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -intensity * 0.45, 1); }
-        if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -intensity * 0.85, 1); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -intensity * 0.20, 1); }
-        if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, intensity * 0.15, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, intensity * 0.25, 1); }
-      } else {
-        if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -intensity * 0.50, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, intensity * 0.45, 1); }
-        if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -intensity * 0.85, 1); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, intensity * 0.20, 1); }
-        if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, intensity * 0.15, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -intensity * 0.25, 1); }
-      }
-      if (head) { head.rotation.x = blend(io.head.x, -intensity * 0.04, 1); head.rotation.y = blend(io.head.y, side * intensity * 0.08, 1); }
-      break;
-
-    case 'brushShoulder':
-      // Quick brush of shoulder, like dusting off
-      {
-        const brush = Math.sin(progress * Math.PI * 2.5) * intensity;
-        if (side < 0) {
-          if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -brush * 0.30, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, brush * 0.20, 1); }
-          if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -brush * 0.45, 1); }
-          if (rH) { rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -brush * 0.30, 1); }
-        } else {
-          if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -brush * 0.30, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -brush * 0.20, 1); }
-          if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -brush * 0.45, 1); }
-          if (lH) { lH.rotation.z = blend(REST.leftHand.z + io.lH.z, brush * 0.30, 1); }
-        }
-        if (head) head.rotation.y = blend(io.head.y, -side * brush * 0.10, 1);
-      }
-      break;
-
-    case 'stretchArm':
-      // One arm stretches out and up, then back down
-      {
-        const stretch = Math.sin(progress * Math.PI) * intensity;
-        if (side < 0) {
-          if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -stretch * 0.80, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -stretch * 0.30, 1); }
-          if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -stretch * 0.40, 1); }
-          if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, stretch * 0.20, 1); }
-        } else {
-          if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -stretch * 0.80, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, stretch * 0.30, 1); }
-          if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -stretch * 0.40, 1); }
-          if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, stretch * 0.20, 1); }
-        }
-        if (head) head.rotation.y = blend(io.head.y, side * stretch * 0.12, 1);
-        if (chest) chest.rotation.x = blend(io.chest.x, stretch * 0.03, 1);
-      }
-      break;
-  }
-
-  if (progress >= 1) gestureState = 'none';
-}
-
-function applyBlink(dt) {
-  if (!vrm?.expressionManager) return;
-  const em = vrm.expressionManager;
-  if (blinkPhase === 'wait') {
-    blinkTimer -= dt;
-    if (blinkTimer <= 0) { blinkPhase = 'closing'; blinkT = 0; }
-  } else if (blinkPhase === 'closing') {
-    blinkT += dt;
-    const w = Math.min(blinkT / BLINK_CLOSE_DUR, 1.0);
-    try { em.setValue('blink', w); } catch (_) { }
-    if (blinkT >= BLINK_CLOSE_DUR) { blinkPhase = 'opening'; blinkT = 0; }
-  } else if (blinkPhase === 'opening') {
-    blinkT += dt;
-    const w = 1.0 - Math.min(blinkT / BLINK_OPEN_DUR, 1.0);
-    try { em.setValue('blink', w); } catch (_) { }
-    if (blinkT >= BLINK_OPEN_DUR) {
-      blinkPhase = 'wait'; blinkTimer = nextBlinkWait();
-      try { em.setValue('blink', 0); } catch (_) { }
-    }
-  }
-}
-
-function animate() {
+// ── Render loop ───────────────────────────────────────────────
+let lastTime = performance.now();
+function animate(now) {
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05);
-  controls.update();
-  if (vrm) {
-    vrm.update(dt);
-    const em = vrm.expressionManager;
-    if (em) {
-      for (const [name, target] of Object.entries(exprTargets)) {
-        const cur = exprCurrent[name] ?? 0;
-        const next = cur + (target - cur) * Math.min(1, EXPR_LERP * dt);
-        exprCurrent[name] = next;
-        if (name !== 'blink') { try { em.setValue(name, next); } catch (_) { } }
-      }
-    }
-    applyIdle(dt);
-    applyGestures(dt);
-    applyBlink(dt);
-  }
+  const dt = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime = now;
+  tickAnimation(dt);
+  applyOrbit();
   renderer.render(scene, camera);
 }
-animate();
-
-// ── VRM load ─────────────────────────────────────────────────────────────────
-const loader = new GLTFLoader();
-loader.register(parser => new VRMLoaderPlugin(parser));
-
-const VRM_URL = './assets/Aiko.vrm';
-
-if (window.location.protocol === 'file:') {
-  loadMsg.textContent = 'error: open Aiko via `python main.py` or http://localhost:8787/ — browsers block VRM fetches from file://';
-  throw new Error('Aiko WebUI must be served over HTTP so assets/Aiko.vrm can be fetched.');
-}
-
-loadMsg.textContent = 'loading Aiko.vrm…';
-fill.style.width = '5%';
-
-loader.load(VRM_URL,
-  (gltf) => {
-    fill.style.width = '95%';
-    loadMsg.textContent = 'building model…';
-    vrm = gltf.userData.vrm;
-    window._vrm = vrm;
-    window._REST = REST;
-
-    VRMUtils.removeUnnecessaryVertices(vrm.scene);
-    vrm.scene.traverse(o => { if (o.frustumCulled) o.frustumCulled = false; });
-    scene.add(vrm.scene);
-    vrm.scene.rotation.y = Math.PI;
-
-    if (vrm.expressionManager) {
-      vrm.expressionManager.expressions.forEach(ex => {
-        exprTargets[ex.expressionName] = 0;
-        exprCurrent[ex.expressionName] = 0;
-      });
-    }
-
-    fill.style.width = '100%';
-    setTimeout(() => {
-      const ov = document.getElementById('load-overlay');
-      ov.classList.add('fade');
-      setTimeout(() => ov.style.display = 'none', 800);
-    }, 300);
-  },
-  (prog) => {
-    const p = prog.total ? prog.loaded / prog.total : 0;
-    fill.style.width = (5 + p * 88) + '%';
-  },
-  (err) => {
-    const detail = err?.message || String(err);
-    loadMsg.textContent = `error loading ${VRM_URL}: ${detail}. Start with python main.py and open http://localhost:8787/ instead of file://.`;
-    console.error('[aiko-vrm]', err);
-  }
-);
-
-// ── expression / viseme API (called by WS handler) ───────────────────────────
-const VISEME = { A: 'aa', I: 'ih', U: 'ou', E: 'ee', O: 'oh' };
-
-window.aikoSetExpression = (name, intensity = 1.0) => {
-  for (const k of Object.keys(exprTargets)) if (k !== 'blink') exprTargets[k] = 0;
-  if (name && name !== 'neutral') exprTargets[name] = intensity;
-
-  const el = document.getElementById('vrm-emotion');
-  el.textContent = name ? `${name} · ${Math.round(intensity * 100)}%` : '—';
-  el.className = (name && name !== 'neutral') ? 'active' : '';
-
-  clearTimeout(exprResetTimer);
-  if (name && name !== 'neutral') {
-    exprResetTimer = setTimeout(() => window.aikoSetExpression('neutral'), EXPR_RESET_DELAY);
-  }
-};
-
-window.aikoSetViseme = (viseme, weight = 1.0) => {
-  const v = VISEME[viseme] ?? viseme;
-  ['aa', 'ih', 'ou', 'ee', 'oh'].forEach(k => exprTargets[k] = 0);
-  exprTargets[v] = weight;
-  lastVisemeAt = performance.now();
-  const dot = document.getElementById('speak-dot');
-  const lbl = document.getElementById('speak-label');
-  dot.className = 'dot speak';
-  lbl.textContent = viseme;
-  clearTimeout(window._vt);
-  window._vt = setTimeout(() => { dot.className = 'dot'; lbl.textContent = 'idle'; }, 300);
-};
+animate(performance.now());
+</script>
+</body>
+</html>
