@@ -281,7 +281,7 @@ def _build_hugo_post(
         f'---'
     )
 
-    body = f"{image_block}{prose}\n\n*Generated from {mem_count} memories on {date_str}.*"
+    body = f"{prose}\n\n*Generated from {mem_count} memories on {date_str}.*"
     content = f"{front_matter}\n\n{body}\n"
     return slug, content
 
