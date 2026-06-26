@@ -87,7 +87,7 @@ BOOT_LABELS = {
 # ── constants ─────────────────────────────────────────────────────────────────
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
-EMBED_DIMS  = 768
+EMBED_DIMS  = os.getenv("EMBED_DIMS", 768)
 RRF_K       = 60          # standard RRF constant — dampens outlier ranks
 KNN_LIMIT   = 20          # candidates fetched before RRF re-rank
 FTS_LIMIT   = 20          # candidates fetched before RRF re-rank
@@ -388,8 +388,21 @@ class _MemoryBackend:
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
+      
+        from fastembed.common.model_description import ModelSource, PoolingType
+        
+        # Before constructing the embedder:
+        TextEmbedding.add_custom_model(
+            model="EMBED_MODEL",
+            pooling=PoolingType.MEAN,
+            normalization=True,
+            sources=ModelSource(hf=""),
+            dim=EMBED_DIMS,
+            model_file="model_quantized.onnx",
+            additional_files=["model_quantized.onnx_data"],
+        )
         self._embedder = TextEmbedding(
-            model_name=EMBED_MODEL,
+            model_name="EMBED_MODEL",
             cache_dir=fastembed_cache,
         )
         self._conn = self._connect()
