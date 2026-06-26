@@ -442,7 +442,7 @@
     }
 
     function rigPose(vrm, riggedPose, poseLm) {
-      if (!riggedPose) return;
+      if (!riggedPose || !poseLm) return;
       rigRotation(vrm, 'Hips', riggedPose.Hips.rotation, 0.7, 0.3);
       rigPosition(vrm, 'Hips', {
         x: clamp(-riggedPose.Hips.position.x, HIP_DRIFT_CLAMP),
@@ -645,7 +645,7 @@
             if (poseLm && poseWorldLm) {
               const riggedPose = Kalidokit.Pose.solve(poseWorldLm, poseLm, { runtime: 'mediapipe', video: cameraPreview });
               if (sideSign === -1) swapLR(riggedPose, ['UpperArm', 'LowerArm', 'Hand', 'UpperLeg', 'LowerLeg', 'Foot']);
-              rigPose(currentVRM, riggedPose);
+              rigPose(currentVRM, riggedPose, poseLm)
             }
             if (faceLm) {
               const riggedFace = Kalidokit.Face.solve(faceLm, { runtime: 'mediapipe', video: cameraPreview, imageSize: { width: cameraPreview.videoWidth, height: cameraPreview.videoHeight } });
