@@ -4,13 +4,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Video Mocap Gesture Exporter · aiko-vrm</title>
+  <title>Video → VRM Mocap Exporter · aiko-vrm</title>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
       --bg: #0d0d0f;
@@ -34,9 +30,8 @@
       overflow: hidden;
     }
 
-    /* ── Sidebar ── */
     #sidebar {
-      width: 280px;
+      width: 300px;
       flex-shrink: 0;
       background: var(--surface);
       border-right: 1px solid var(--border);
@@ -45,543 +40,174 @@
       overflow-y: auto;
     }
 
-    #sidebar header {
-      padding: 20px 20px 12px;
-      border-bottom: 1px solid var(--border);
-    }
+    #sidebar header { padding: 20px 20px 12px; border-bottom: 1px solid var(--border); }
+    #sidebar header .tag { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent); margin-bottom: 4px; }
+    #sidebar header h1 { font-size: 15px; font-weight: 600; color: var(--text); }
 
-    #sidebar header .tag {
-      font-size: 10px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 4px;
-    }
+    .section { padding: 16px 20px; border-bottom: 1px solid var(--border); }
+    .section-label { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
 
-    #sidebar header h1 {
-      font-size: 15px;
-      font-weight: 600;
-      color: var(--text);
-    }
+    #banner { display: none; margin: 0 20px 0; padding: 8px 10px; border-radius: 6px; font-size: 10px; line-height: 1.5; border: 1px solid transparent; white-space: pre-wrap; }
+    #banner.error { background: #2a1020; border-color: var(--accent2); color: var(--accent2); display: block; }
+    #banner.info { background: #16202a; border-color: var(--accent); color: var(--accent); display: block; }
+    #banner.ok { background: #102a20; border-color: var(--ok); color: var(--ok); display: block; }
 
-    .section {
-      padding: 16px 20px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .section-label {
-      font-size: 10px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--muted);
-      margin-bottom: 12px;
-    }
-
-    /* Gesture selector */
-    #gestureSelect {
-      width: 100%;
-      padding: 8px 10px;
-      background: var(--track);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      outline: none;
-      appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b6b7a'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 10px center;
-    }
-
-    #gestureSelect:focus {
-      border-color: var(--accent);
-    }
-
-    /* Error / info banner */
-    #banner {
-      display: none;
-      margin: 0 20px 0;
-      padding: 8px 10px;
-      border-radius: 6px;
-      font-size: 10px;
-      line-height: 1.5;
-      border: 1px solid transparent;
-    }
-
-    #banner.error {
-      background: #2a1020;
-      border-color: var(--accent2);
-      color: var(--accent2);
-      display: block;
-    }
-
-    #banner.info {
-      background: #16202a;
-      border-color: var(--accent);
-      color: var(--accent);
-      display: block;
-    }
-
-    /* Side toggle */
-    .toggle-row {
-      display: flex;
-      gap: 8px;
-    }
-
+    .toggle-row { display: flex; gap: 8px; }
     .toggle-btn {
-      flex: 1;
-      padding: 8px;
-      background: var(--track);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--muted);
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      transition: all 0.15s;
+      flex: 1; padding: 8px; background: var(--track); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--muted); font-family: inherit; font-size: 12px; cursor: pointer; transition: all 0.15s;
     }
+    .toggle-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .toggle-btn.recording { background: #4a1226; border-color: var(--accent2); color: #fff; }
+    .toggle-btn:disabled, .action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-    .toggle-btn.active {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: #fff;
-    }
-
-    .toggle-btn.recording {
-      background: #4a1226;
-      border-color: var(--accent2);
-      color: #fff;
-    }
-
-    .toggle-btn:disabled,
-    .action-btn:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-
-    /* Sliders */
-    .param-row {
-      margin-bottom: 14px;
-    }
-
-    .param-row:last-child {
-      margin-bottom: 0;
-    }
-
-    .param-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      margin-bottom: 5px;
-    }
-
-    .param-name {
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    .param-value {
-      font-size: 11px;
-      color: var(--accent);
-      min-width: 44px;
-      text-align: right;
-    }
+    .param-row { margin-bottom: 14px; }
+    .param-row:last-child { margin-bottom: 0; }
+    .param-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 5px; }
+    .param-name { font-size: 11px; color: var(--muted); }
+    .param-value { font-size: 11px; color: var(--accent); min-width: 44px; text-align: right; }
 
     input[type="range"] {
-      -webkit-appearance: none;
-      width: 100%;
-      height: 3px;
-      background: var(--track);
-      border-radius: 2px;
-      outline: none;
+      -webkit-appearance: none; width: 100%; height: 3px; background: var(--track); border-radius: 2px; outline: none;
     }
-
     input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 14px;
-      height: 14px;
-      border-radius: 50%;
-      background: var(--accent);
-      cursor: pointer;
-      border: 2px solid var(--bg);
+      -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); cursor: pointer; border: 2px solid var(--bg);
     }
 
-    input[type="range"]:focus::-webkit-slider-thumb {
-      box-shadow: 0 0 0 3px rgba(124, 107, 255, 0.3);
-    }
-
-    /* Bone display */
-    .bone-grid {
-      display: grid;
-      gap: 6px;
-    }
-
-    .bone-card {
-      background: var(--track);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
-    }
-
-    .bone-name {
-      font-size: 9px;
-      letter-spacing: 0.08em;
-      color: var(--muted);
-      text-transform: uppercase;
-      margin-bottom: 4px;
-    }
-
-    .bone-vals {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 4px;
-    }
-
-    .bone-val {
-      font-size: 10px;
-      color: var(--text);
-    }
-
-    .axis-x {
-      color: #ff6b6b;
-    }
-
-    .axis-y {
-      color: #6bffb8;
-    }
-
-    .axis-z {
-      color: #6bb5ff;
-    }
-
-    /* Reset / action buttons */
     .action-btn {
-      margin: 0 20px 12px;
-      padding: 9px;
-      background: transparent;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--muted);
-      font-family: inherit;
-      font-size: 11px;
-      cursor: pointer;
-      transition: all 0.15s;
-      letter-spacing: 0.05em;
-      width: calc(100% - 40px);
-      text-align: center;
+      margin: 0 20px 12px; padding: 9px; background: transparent; border: 1px solid var(--border); border-radius: 6px;
+      color: var(--muted); font-family: inherit; font-size: 11px; cursor: pointer; transition: all 0.15s;
+      letter-spacing: 0.05em; width: calc(100% - 40px); text-align: center;
     }
+    .action-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+    .action-btn.primary { border-color: var(--accent); color: var(--accent); }
+    .action-btn.primary:hover { background: var(--accent); color: #fff; }
 
-    .action-btn:hover {
-      border-color: var(--accent2);
-      color: var(--accent2);
-    }
-
-    /* ── Viewport ── */
-    #viewport {
-      flex: 1;
-      position: relative;
-      background: var(--bg);
-    }
-
-    canvas {
-      display: block;
-      width: 100% !important;
-      height: 100% !important;
-    }
+    #viewport { flex: 1; position: relative; background: var(--bg); }
+    canvas { display: block; width: 100% !important; height: 100% !important; }
 
     #hud {
-      position: absolute;
-      top: 16px;
-      right: 16px;
-      font-size: 10px;
-      color: var(--muted);
-      text-align: right;
-      pointer-events: none;
-      line-height: 1.8;
+      position: absolute; top: 16px; right: 16px; font-size: 10px; color: var(--muted);
+      text-align: right; pointer-events: none; line-height: 1.8;
     }
-
-    #hud span {
-      color: var(--text);
-    }
+    #hud span { color: var(--text); }
 
     #infobar {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      padding: 10px 20px;
-      background: rgba(13, 13, 15, 0.85);
-      border-top: 1px solid var(--border);
-      font-size: 10px;
-      color: var(--muted);
-      display: flex;
-      gap: 20px;
-      backdrop-filter: blur(6px);
+      position: absolute; bottom: 0; left: 0; right: 0; padding: 10px 20px;
+      background: rgba(13, 13, 15, 0.85); border-top: 1px solid var(--border); font-size: 10px;
+      color: var(--muted); display: flex; gap: 20px; backdrop-filter: blur(6px);
     }
+    .hint { display: flex; align-items: center; gap: 5px; }
+    .key { display: inline-block; padding: 1px 5px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; font-size: 9px; color: var(--text); }
 
-    .hint {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
+    .mini-note { font-size: 10px; color: var(--muted); line-height: 1.45; margin-top: 8px; }
 
-    .key {
-      display: inline-block;
-      padding: 1px 5px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 3px;
-      font-size: 9px;
-      color: var(--text);
-    }
-
-    .mini-note {
-      font-size: 10px;
-      color: var(--muted);
-      line-height: 1.45;
-      margin-top: 8px;
-    }
-
-    .status-pill {
-      display: inline-block;
-      padding: 2px 6px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      color: var(--muted);
-      font-size: 10px;
-    }
-
-    .status-pill.live {
-      color: var(--ok);
-      border-color: var(--ok);
-    }
-
-    .status-pill.rec {
-      color: var(--accent2);
-      border-color: var(--accent2);
-    }
+    .status-pill { display: inline-block; padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 10px; }
+    .status-pill.live { color: var(--ok); border-color: var(--ok); }
+    .status-pill.rec { color: var(--accent2); border-color: var(--accent2); }
 
     .field {
-      width: 100%;
-      padding: 8px 10px;
-      background: var(--track);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      color: var(--text);
-      font-family: inherit;
-      font-size: 12px;
-      outline: none;
+      width: 100%; padding: 8px 10px; background: var(--track); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); font-family: inherit; font-size: 12px; outline: none;
     }
-
-    .field:focus {
-      border-color: var(--accent);
-    }
+    .field:focus { border-color: var(--accent); }
 
     #cameraPreview {
-      position: absolute;
-      left: 16px;
-      bottom: 48px;
-      width: 220px;
-      max-width: 30vw;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      background: #000;
-      opacity: 0.9;
-      display: none;
+      position: absolute; left: 16px; bottom: 48px; width: 220px; max-width: 30vw;
+      border: 1px solid var(--border); border-radius: 8px; background: #000; opacity: 0.9; display: none;
     }
+
+    .bone-grid { display: grid; gap: 6px; }
+    .bone-card { background: var(--track); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+    .bone-name { font-size: 9px; letter-spacing: 0.08em; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; }
+    .bone-vals { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
+    .bone-val { font-size: 10px; color: var(--text); }
+    .axis-x { color: #ff6b6b; } .axis-y { color: #6bffb8; } .axis-z { color: #6bb5ff; }
   </style>
 </head>
 
 <body>
 
-  <!-- ── SIDEBAR ── -->
   <div id="sidebar">
     <header>
-      <div class="tag">aiko-vrm · video mocap</div>
-      <h1 id="activeLabel">—</h1>
+      <div class="tag">aiko-vrm · video → vrm mocap</div>
+      <h1 id="activeLabel">no avatar loaded</h1>
     </header>
-
-    <!-- Gesture picker -->
-    <div class="section">
-      <div class="section-label">Gesture</div>
-      <select id="gestureSelect" onchange="onGestureChange()">
-        <option value="">loading gesture.js…</option>
-      </select>
-    </div>
 
     <div id="banner"></div>
 
-    <!-- Side -->
+    <!-- VRM loader -->
     <div class="section">
-      <div class="section-label">Side</div>
-      <div class="toggle-row">
-        <button class="toggle-btn" id="btnLeft" onclick="setSide(-1)">Left</button>
-        <button class="toggle-btn active" id="btnRight" onclick="setSide(1)">Right</button>
-      </div>
+      <div class="section-label">Avatar (.vrm)</div>
+      <div style="margin-bottom:10px"><span id="vrmStatus" class="status-pill">no avatar loaded</span></div>
+      <input class="field" id="vrmFile" type="file" accept=".vrm" aria-label="VRM avatar file">
+      <div class="mini-note">Browsers can't read your local filesystem by path, so pick <code>~/Aiko-chan/assets/Aiko.vrm</code> here once per session. Nothing is uploaded anywhere — it loads straight into this page.</div>
     </div>
 
-    <!-- Intensity -->
+    <!-- Video mocap importer -->
     <div class="section">
-      <div class="section-label">Intensity</div>
-      <div class="param-row">
-        <div class="param-header">
-          <span class="param-name">intensity</span>
-          <span class="param-value" id="valIntensity">1.00</span>
-        </div>
-        <input type="range" id="slIntensity" min="0" max="1" step="0.01" value="1" oninput="update()">
-      </div>
-    </div>
-
-    <!-- IO offsets -->
-    <div class="section">
-      <div class="section-label">IO offsets</div>
-
-      <div class="param-row">
-        <div class="param-header"><span class="param-name">UA.x</span><span class="param-value" id="valUAx">0.00</span>
-        </div>
-        <input type="range" id="slUAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
-      </div>
-      <div class="param-row">
-        <div class="param-header"><span class="param-name">UA.z</span><span class="param-value" id="valUAz">0.00</span>
-        </div>
-        <input type="range" id="slUAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
-      </div>
-      <div class="param-row">
-        <div class="param-header"><span class="param-name">LA.x</span><span class="param-value" id="valLAx">0.00</span>
-        </div>
-        <input type="range" id="slLAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
-      </div>
-      <div class="param-row">
-        <div class="param-header"><span class="param-name">LA.z</span><span class="param-value" id="valLAz">0.00</span>
-        </div>
-        <input type="range" id="slLAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
-      </div>
-      <div class="param-row">
-        <div class="param-header"><span class="param-name">H.x</span><span class="param-value" id="valHx">0.00</span>
-        </div>
-        <input type="range" id="slHx" min="-1" max="1" step="0.01" value="0" oninput="update()">
-      </div>
-      <div class="param-row">
-        <div class="param-header"><span class="param-name">H.y</span><span class="param-value" id="valHy">0.00</span>
-        </div>
-        <input type="range" id="slHy" min="-1" max="1" step="0.01" value="0" oninput="update()">
-      </div>
-    </div>
-
-
-    <!-- Video motion capture -->
-    <div class="section">
-      <div class="section-label">Video mocap importer</div>
+      <div class="section-label">Source video</div>
       <div style="margin-bottom:10px"><span id="mocapStatus" class="status-pill">choose a video</span></div>
-      <input class="field" id="videoFile" type="file" accept="video/*" onchange="loadVideoFile(event)"
-        aria-label="source video">
+      <input class="field" id="videoFile" type="file" accept="video/*" aria-label="source video">
       <div class="toggle-row" style="margin-top:8px">
-        <button class="toggle-btn" id="btnProcessVideo" onclick="processVideoMocap()" disabled>generate take</button>
-        <button class="toggle-btn" id="btnCancelVideo" onclick="cancelVideoMocap()" disabled>cancel</button>
+        <button class="toggle-btn" id="btnProcessVideo" disabled>track video</button>
+        <button class="toggle-btn" id="btnCancelVideo" disabled>cancel</button>
       </div>
       <div class="toggle-row" style="margin-top:8px">
-        <button class="toggle-btn" id="btnPlayback" onclick="toggleMocapPlayback()" disabled>play take</button>
-        <button class="toggle-btn" id="btnUseTrim" onclick="useTrimAsGesture()" disabled>preview trim</button>
+        <button class="toggle-btn" id="btnPlayback" disabled>play take</button>
+        <button class="toggle-btn" id="btnMirror">mirror L/R</button>
       </div>
-      <div class="mini-note">Imports a video in-browser with MediaPipe Pose, converts visible body motion into the same
-        gesture.js-compatible frames, lets you crop the best range, then saves the same way as the camera recorder.
-      </div>
+      <div class="mini-note">Runs MediaPipe Tasks Vision (pose + face landmarker) frame-by-frame on the video, feeds the landmarks into Kalidokit, and drives Aiko's actual VRM skeleton and face blendshapes directly — no hand-authored motion, it just follows what's in the footage.</div>
     </div>
 
+    <!-- Trim / export -->
     <div class="section">
       <div class="section-label">Crop take</div>
       <div class="param-row">
-        <div class="param-header"><span class="param-name">start <span id="trimStartLabel">0.00s</span></span><span
-            class="param-value" id="takeDurationLabel">0 frames</span></div>
-        <input type="range" id="slTrimStart" min="0" max="0" step="0.01" value="0" oninput="updateTrim()">
+        <div class="param-header"><span class="param-name">start <span id="trimStartLabel">0.00s</span></span><span class="param-value" id="takeDurationLabel">0 frames</span></div>
+        <input type="range" id="slTrimStart" min="0" max="0" step="0.01" value="0">
       </div>
       <div class="param-row">
-        <div class="param-header"><span class="param-name">end <span id="trimEndLabel">0.00s</span></span><span
-            class="param-value" id="trimDurationLabel">0.00s</span></div>
-        <input type="range" id="slTrimEnd" min="0" max="0" step="0.01" value="0" oninput="updateTrim()">
+        <div class="param-header"><span class="param-name">end <span id="trimEndLabel">0.00s</span></span><span class="param-value" id="trimDurationLabel">0.00s</span></div>
+        <input type="range" id="slTrimEnd" min="0" max="0" step="0.01" value="0">
       </div>
-      <input class="field" id="gestureFileName" value="myVideoGesture.js" aria-label="gesture filename">
-      <button class="action-btn" style="margin:10px 0 0; width:100%" id="btnSaveGesture" onclick="saveRecordedGesture()"
-        disabled>save .js gesture</button>
+      <input class="field" id="gestureFileName" value="myVideoMocap" aria-label="export filename">
+      <button class="action-btn primary" style="margin:10px 0 0; width:100%" id="btnSaveGesture" disabled>save .js mocap clip</button>
     </div>
 
-    <!-- Live bone readout -->
+    <!-- Live debug readout -->
     <div class="section">
-      <div class="section-label">Live bone rotations (rad)</div>
+      <div class="section-label">Live tracking confidence</div>
       <div class="bone-grid">
         <div class="bone-card">
-          <div class="bone-name">UpperArm</div>
+          <div class="bone-name">Pose / Face</div>
           <div class="bone-vals">
-            <div class="bone-val axis-x">x <span id="bUAx">0.00</span></div>
-            <div class="bone-val">y —</div>
-            <div class="bone-val axis-z">z <span id="bUAz">0.00</span></div>
+            <div class="bone-val">pose <span id="dbgPose">—</span></div>
+            <div class="bone-val">face <span id="dbgFace">—</span></div>
+            <div class="bone-val">fps <span id="dbgFps">—</span></div>
           </div>
         </div>
         <div class="bone-card">
-          <div class="bone-name">LowerArm</div>
+          <div class="bone-name">Mouth viseme weights</div>
           <div class="bone-vals">
-            <div class="bone-val axis-x">x <span id="bLAx">0.00</span></div>
-            <div class="bone-val">y —</div>
-            <div class="bone-val axis-z">z <span id="bLAz">0.00</span></div>
-          </div>
-        </div>
-        <div class="bone-card">
-          <div class="bone-name">Hand</div>
-          <div class="bone-vals">
-            <div class="bone-val axis-x">x <span id="bHx">0.00</span></div>
-            <div class="bone-val axis-y">y <span id="bHy">0.00</span></div>
-            <div class="bone-val">z —</div>
-          </div>
-        </div>
-        <div class="bone-card">
-          <div class="bone-name">Head</div>
-          <div class="bone-vals">
-            <div class="bone-val axis-x">x <span id="bHdX">0.00</span></div>
-            <div class="bone-val axis-y">y <span id="bHdY">0.00</span></div>
-            <div class="bone-val axis-z">z <span id="bHdZ">0.00</span></div>
+            <div class="bone-val axis-x">A <span id="dbgA">0.00</span></div>
+            <div class="bone-val axis-y">I <span id="dbgI">0.00</span></div>
+            <div class="bone-val axis-z">U <span id="dbgU">0.00</span></div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Animation controls -->
-    <div class="section">
-      <div class="section-label">Animation</div>
-      <div class="param-row">
-        <div class="param-header">
-          <span class="param-name">lerp speed</span>
-          <span class="param-value" id="valLerp">0.08</span>
-        </div>
-        <input type="range" id="slLerp" min="0.01" max="1" step="0.01" value="0.08"
-          oninput="document.getElementById('valLerp').textContent=(+this.value).toFixed(2)">
-      </div>
-      <div class="param-row">
-        <div class="param-header">
-          <span class="param-name">stroke speed</span>
-          <span class="param-value" id="valSpeed">2.50</span>
-        </div>
-        <input type="range" id="slSpeed" min="0.2" max="6" step="0.05" value="2.5"
-          oninput="document.getElementById('valSpeed').textContent=(+this.value).toFixed(2)">
-      </div>
-      <div class="toggle-row" style="margin-top:8px">
-        <button class="toggle-btn active" id="btnAnimate" onclick="toggleAnimate()">▶ animate</button>
-      </div>
-    </div>
-
-    <button class="action-btn" onclick="resetAll()">↺ reset to rest</button>
+    <button class="action-btn" id="btnResetPose">↺ reset to T-pose</button>
   </div>
 
-  <!-- ── 3D VIEWPORT ── -->
   <div id="viewport">
     <canvas id="c"></canvas>
     <video id="cameraPreview" muted playsinline></video>
 
     <div id="hud">
-      gesture: <span id="hudGesture">—</span><br>
-      side: <span id="hudSide">right</span><br>
-      intensity: <span id="hudInt">1.00</span><br>
+      avatar: <span id="hudAvatar">—</span><br>
+      mode: <span id="hudMode">idle</span><br>
       t: <span id="hudT">0.00</span>
     </div>
 
@@ -592,95 +218,77 @@
     </div>
   </div>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5/holistic.js"></script>
+  <!-- Kalidokit ships as a UMD bundle; loading it as a classic script keeps `Kalidokit` on window for the module below -->
+  <script src="https://cdn.jsdelivr.net/npm/kalidokit@1.1.4/dist/kalidokit.umd.js"></script>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.1/lib/three-vrm.module.js"
+    }
+  }
+  </script>
 
   <script type="module">
-    // ── Load gesture.js and discover all exported functions ──────
-    let gestures = {};
-    let activeGestureFn = null;
-    let activeGestureName = '';
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+    import {
+      FilesetResolver,
+      PoseLandmarker,
+      FaceLandmarker,
+    } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
 
+    // ── Banner / status helpers ────────────────────────────────────
     function showBanner(msg, type = 'error') {
       const b = document.getElementById('banner');
       b.className = type;
       b.textContent = msg;
+      if (type === 'error') console.error(msg);
     }
     function hideBanner() {
-      document.getElementById('banner').className = '';
-      document.getElementById('banner').textContent = '';
+      const b = document.getElementById('banner');
+      b.className = '';
+      b.textContent = '';
+    }
+    function setMocapStatus(text, mode = '') {
+      const el = document.getElementById('mocapStatus');
+      el.textContent = text;
+      el.className = `status-pill ${mode}`.trim();
+    }
+    function setVrmStatus(text, mode = '') {
+      const el = document.getElementById('vrmStatus');
+      el.textContent = text;
+      el.className = `status-pill ${mode}`.trim();
     }
 
-    const gestureModule = await import('./gesture.js').catch(err => {
-      showBanner(`Failed to load gesture.js: ${err.message}. Serve over HTTP, not file://.`);
-      return null;
-    });
-
-    if (gestureModule) {
-      // Filter to callable, non-utility exports
-      const SKIP = new Set(['blend', 'default']);
-      gestures = Object.fromEntries(
-        Object.entries(gestureModule).filter(([k, v]) => typeof v === 'function' && !SKIP.has(k))
-      );
-
-      const sel = document.getElementById('gestureSelect');
-      sel.innerHTML = '';
-
-      const names = Object.keys(gestures);
-      if (names.length === 0) {
-        showBanner('gesture.js has no exported gesture functions (besides blend).', 'info');
-      } else {
-        names.forEach(name => {
-          const opt = document.createElement('option');
-          opt.value = name;
-          opt.textContent = name;
-          sel.appendChild(opt);
-        });
-        activateGesture(names[0]);
-        hideBanner();
-      }
-    }
-
-    function activateGesture(name) {
-      activeGestureName = name;
-      activeGestureFn = gestures[name] ?? null;
-      document.getElementById('activeLabel').textContent = name;
-      document.getElementById('hudGesture').textContent = name;
-      document.getElementById('gestureSelect').value = name;
-    }
-
-    window.onGestureChange = function () {
-      const name = document.getElementById('gestureSelect').value;
-      activateGesture(name);
-      resetAll();
-    };
-
-    // ── Scene setup ──────────────────────────────────────────────
+    // ── Three.js scene ──────────────────────────────────────────────
     const canvas = document.getElementById('c');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.shadowMap.enabled = true;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0d0d0f);
     scene.fog = new THREE.Fog(0x0d0d0f, 8, 22);
 
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
-    camera.position.set(0, 1.4, 3.5);
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+    camera.position.set(0, 1.3, 3.2);
 
-    // Lights
-    scene.add(new THREE.AmbientLight(0x8888cc, 0.6));
-    const key = new THREE.DirectionalLight(0xffffff, 0.9);
-    key.position.set(2, 4, 3); key.castShadow = true; scene.add(key);
-    const rim = new THREE.DirectionalLight(0x6655ff, 0.4);
-    rim.position.set(-3, 2, -2); scene.add(rim);
-    const fill = new THREE.PointLight(0xff6b9d, 0.3, 8);
-    fill.position.set(-1, 1, 1); scene.add(fill);
+    scene.add(new THREE.AmbientLight(0x8888cc, 0.7));
+    const key = new THREE.DirectionalLight(0xffffff, 1.0);
+    key.position.set(2, 4, 3);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0x6655ff, 0.35);
+    rim.position.set(-3, 2, -2);
+    scene.add(rim);
 
     scene.add(new THREE.GridHelper(10, 20, 0x2a2a30, 0x1a1a20));
 
-    // ── Orbit ────────────────────────────────────────────────────
-    const orbit = { dragging: false, lastX: 0, lastY: 0, theta: 0, phi: 0.15, radius: 3.5, target: new THREE.Vector3(0, 1.1, 0) };
+    // ── Orbit camera (unchanged from previous tool) ─────────────────
+    const orbit = { dragging: false, lastX: 0, lastY: 0, theta: 0, phi: 0.15, radius: 3.2, target: new THREE.Vector3(0, 1.0, 0) };
     canvas.addEventListener('mousedown', e => { orbit.dragging = true; orbit.lastX = e.clientX; orbit.lastY = e.clientY; });
     window.addEventListener('mouseup', () => { orbit.dragging = false; });
     window.addEventListener('mousemove', e => {
@@ -690,10 +298,10 @@
       orbit.lastX = e.clientX; orbit.lastY = e.clientY;
     });
     canvas.addEventListener('wheel', e => {
-      orbit.radius = Math.max(1.5, Math.min(8, orbit.radius + e.deltaY * 0.005));
+      orbit.radius = Math.max(0.8, Math.min(8, orbit.radius + e.deltaY * 0.005));
     }, { passive: true });
     window.addEventListener('keydown', e => {
-      if (e.key === 'r' || e.key === 'R') { orbit.theta = 0; orbit.phi = 0.15; orbit.radius = 3.5; }
+      if (e.key === 'r' || e.key === 'R') { orbit.theta = 0; orbit.phi = 0.15; orbit.radius = 3.2; }
     });
     function applyOrbit() {
       const x = orbit.radius * Math.sin(orbit.theta) * Math.cos(orbit.phi);
@@ -703,766 +311,6 @@
       camera.lookAt(orbit.target);
     }
 
-    // ── Skeleton ─────────────────────────────────────────────────
-    const MAT_BODY = new THREE.MeshLambertMaterial({ color: 0x3a3a4a });
-    const MAT_JOINT = new THREE.MeshLambertMaterial({ color: 0x5a5a7a });
-    const MAT_ACCENT = new THREE.MeshLambertMaterial({ color: 0x7c6bff });
-    const MAT_ACCENT2 = new THREE.MeshLambertMaterial({ color: 0xff6b9d });
-
-    const mkCapsule = (h, r, mat) => new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 8), mat);
-    const mkSphere = (r, mat) => new THREE.Mesh(new THREE.SphereGeometry(r, 8, 8), mat);
-
-    const root = new THREE.Object3D();
-    scene.add(root);
-
-    // Torso / head / neck / hips
-    const torsoPivot = new THREE.Object3D(); torsoPivot.position.set(0, 0.62, 0); root.add(torsoPivot);
-    const torso = mkCapsule(0.55, 0.09, MAT_BODY); torso.position.set(0, 0.28, 0); torsoPivot.add(torso);
-    const head = mkSphere(0.1, MAT_JOINT); head.position.set(0, 0.66, 0); torsoPivot.add(head);
-    const neck = mkCapsule(0.12, 0.04, MAT_BODY); neck.position.set(0, 0.57, 0); torsoPivot.add(neck);
-    const hips = mkCapsule(0.18, 0.1, MAT_BODY); hips.position.set(0, 0, 0); torsoPivot.add(hips);
-    // Head pivot for independent head rotation
-    const headPivot = new THREE.Object3D(); headPivot.position.set(0, 0.66, 0); torsoPivot.add(headPivot);
-
-    function buildLeg(side) {
-      const hipPivot = new THREE.Object3D(); hipPivot.position.set(side * 0.09, 0.62, 0); root.add(hipPivot);
-      const ul = mkCapsule(0.28, 0.065, MAT_BODY); ul.position.set(0, -0.14, 0); hipPivot.add(ul);
-      const knee = mkSphere(0.04, MAT_JOINT); knee.position.set(0, -0.28, 0); hipPivot.add(knee);
-
-      const kneePivot = new THREE.Object3D(); kneePivot.position.set(0, -0.28, 0); hipPivot.add(kneePivot);
-      const ll = mkCapsule(0.28, 0.055, MAT_BODY); ll.position.set(0, -0.14, 0); kneePivot.add(ll);
-      const ankle = mkSphere(0.035, MAT_JOINT); ankle.position.set(0, -0.28, 0); kneePivot.add(ankle);
-
-      const footPivot = new THREE.Object3D(); footPivot.position.set(0, -0.28, 0); kneePivot.add(footPivot);
-      const ft = mkCapsule(0.10, 0.04, MAT_BODY); ft.rotation.x = Math.PI / 2; ft.position.set(0, -0.03, 0.06); footPivot.add(ft);
-      return { hipPivot, kneePivot, footPivot };
-    }
-
-    const leftLeg = buildLeg(-1);
-    const rightLeg = buildLeg(1);
-
-    // Face expression meshes (on headPivot)
-    const MAT_FACE = new THREE.MeshLambertMaterial({ color: 0xffd6e0 });
-    const MAT_EYE = new THREE.MeshLambertMaterial({ color: 0x222230 });
-    const MAT_MOUTH = new THREE.MeshLambertMaterial({ color: 0xff4466 });
-    const faceEyeL = mkSphere(0.022, MAT_EYE); faceEyeL.position.set(-0.035, 0.015, 0.092); headPivot.add(faceEyeL);
-    const faceEyeR = mkSphere(0.022, MAT_EYE); faceEyeR.position.set(0.035, 0.015, 0.092); headPivot.add(faceEyeR);
-    const faceMouth = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.01, 0.01), MAT_MOUTH);
-    faceMouth.position.set(0, -0.03, 0.093); headPivot.add(faceMouth);
-
-    // Arms
-    const SHOULDER_L = new THREE.Vector3(-0.17, 0.52, 0);
-    const SHOULDER_R = new THREE.Vector3(0.17, 0.52, 0);
-
-    function buildArm(side) {
-      const sOff = side < 0 ? SHOULDER_L : SHOULDER_R;
-      const col = side < 0 ? MAT_BODY : MAT_ACCENT;
-      const col2 = side < 0 ? MAT_BODY : MAT_ACCENT2;
-
-      const uaPivot = new THREE.Object3D(); uaPivot.position.copy(sOff); torsoPivot.add(uaPivot);
-      const uaMesh = mkCapsule(0.24, 0.055, col); uaMesh.position.set(0, -0.12, 0); uaPivot.add(uaMesh);
-      const elbSph = mkSphere(0.04, MAT_JOINT); elbSph.position.set(0, -0.24, 0); uaPivot.add(elbSph);
-
-      const laPivot = new THREE.Object3D(); laPivot.position.set(0, -0.24, 0); uaPivot.add(laPivot);
-      const laMesh = mkCapsule(0.20, 0.045, col); laMesh.position.set(0, -0.10, 0); laPivot.add(laMesh);
-      const wriSph = mkSphere(0.035, MAT_JOINT); wriSph.position.set(0, -0.20, 0); laPivot.add(wriSph);
-
-      const hPivot = new THREE.Object3D(); hPivot.position.set(0, -0.20, 0); laPivot.add(hPivot);
-      const hMesh = mkCapsule(0.10, 0.038, col2); hMesh.position.set(0, -0.05, 0); hPivot.add(hMesh);
-
-      return { uaPivot, laPivot, hPivot };
-    }
-
-    const leftArm = buildArm(-1);
-    const rightArm = buildArm(1);
-
-    // ── REST poses ────────────────────────────────────────────────
-    const REST = {
-      leftUpperArm: { x: 0, y: 0, z: 0.25 },
-      leftLowerArm: { x: 0.1, y: 0, z: 0.05 },
-      leftHand: { x: 0, y: 0, z: 0 },
-      rightUpperArm: { x: 0, y: 0, z: -0.25 },
-      rightLowerArm: { x: 0.1, y: 0, z: -0.05 },
-      rightHand: { x: 0, y: 0, z: 0 },
-      leftUpperLeg: { x: 0, y: 0, z: 0.05 },
-      leftLowerLeg: { x: 0, y: 0, z: 0 },
-      leftFoot: { x: 0, y: 0, z: 0 },
-      rightUpperLeg: { x: 0, y: 0, z: -0.05 },
-      rightLowerLeg: { x: 0, y: 0, z: 0 },
-      rightFoot: { x: 0, y: 0, z: 0 },
-    };
-
-    function applyRest() {
-      leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
-      leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
-      leftArm.hPivot.rotation.set(REST.leftHand.x, 0, 0);
-      rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
-      rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
-      rightArm.hPivot.rotation.set(REST.rightHand.x, 0, 0);
-      leftLeg.hipPivot.rotation.set(REST.leftUpperLeg.x, 0, REST.leftUpperLeg.z);
-      leftLeg.kneePivot.rotation.set(REST.leftLowerLeg.x, 0, REST.leftLowerLeg.z);
-      leftLeg.footPivot.rotation.set(REST.leftFoot.x, 0, REST.leftFoot.z);
-      rightLeg.hipPivot.rotation.set(REST.rightUpperLeg.x, 0, REST.rightUpperLeg.z);
-      rightLeg.kneePivot.rotation.set(REST.rightLowerLeg.x, 0, REST.rightLowerLeg.z);
-      rightLeg.footPivot.rotation.set(REST.rightFoot.x, 0, REST.rightFoot.z);
-      torsoPivot.rotation.set(0, 0, 0);
-      headPivot.rotation.set(0, 0, 0);
-      neck.rotation.set(0, 0, 0);
-    }
-    applyRest();
-
-    // ── State ─────────────────────────────────────────────────────
-    let currentSide = 1;
-    let animating = true;
-    let forceRest = false;
-    let animTime = 0;
-
-    // ── Helpers ───────────────────────────────────────────────────
-    function lerp(a, b, t) { return a + (b - a) * t; }
-
-    function snapshotRotations() {
-      return {
-        lUA: leftArm.uaPivot.rotation.clone(),
-        lLA: leftArm.laPivot.rotation.clone(),
-        lH: leftArm.hPivot.rotation.clone(),
-        rUA: rightArm.uaPivot.rotation.clone(),
-        rLA: rightArm.laPivot.rotation.clone(),
-        rH: rightArm.hPivot.rotation.clone(),
-        lUL: leftLeg.hipPivot.rotation.clone(),
-        lLL: leftLeg.kneePivot.rotation.clone(),
-        lF: leftLeg.footPivot.rotation.clone(),
-        rUL: rightLeg.hipPivot.rotation.clone(),
-        rLL: rightLeg.kneePivot.rotation.clone(),
-        rF: rightLeg.footPivot.rotation.clone(),
-        neck: neck.rotation.clone(),
-        torso: torsoPivot.rotation.clone(),
-        headP: headPivot.rotation.clone(),
-      };
-    }
-
-    function applyLerpedRotations(from, t) {
-      [
-        [leftArm.uaPivot, from.lUA],
-        [leftArm.laPivot, from.lLA],
-        [leftArm.hPivot, from.lH],
-        [rightArm.uaPivot, from.rUA],
-        [rightArm.laPivot, from.rLA],
-        [rightArm.hPivot, from.rH],
-        [leftLeg.hipPivot, from.lUL],
-        [leftLeg.kneePivot, from.lLL],
-        [leftLeg.footPivot, from.lF],
-        [rightLeg.hipPivot, from.rUL],
-        [rightLeg.kneePivot, from.rLL],
-        [rightLeg.footPivot, from.rF],
-        [neck, from.neck],
-        [torsoPivot, from.torso],
-        [headPivot, from.headP],
-      ].forEach(([bone, start]) => {
-        const tgt = bone.rotation.clone();
-        bone.rotation.set(
-          lerp(start.x, tgt.x, t),
-          lerp(start.y, tgt.y, t),
-          lerp(start.z, tgt.z, t),
-        );
-      });
-    }
-
-    function getIO() {
-      return {
-        lUA: { x: +slUAx.value, z: +slUAz.value },
-        lLA: { x: +slLAx.value, z: +slLAz.value },
-        lH: { x: +slHx.value, y: +slHy.value, z: 0 },
-        rUA: { x: +slUAx.value, z: +slUAz.value },
-        rLA: { x: +slLAx.value, z: +slLAz.value },
-        rH: { x: +slHx.value, y: +slHy.value, z: 0 },
-        neck: { x: 0, y: 0 },
-        head: { x: 0, y: 0, z: 0 },
-      };
-    }
-
-    function syncAndReadout() {
-      const s = currentSide;
-      const UA = s < 0 ? leftArm.uaPivot : rightArm.uaPivot;
-      const LA = s < 0 ? leftArm.laPivot : rightArm.laPivot;
-      const H = s < 0 ? leftArm.hPivot : rightArm.hPivot;
-      document.getElementById('bUAx').textContent = UA.rotation.x.toFixed(3);
-      document.getElementById('bUAz').textContent = UA.rotation.z.toFixed(3);
-      document.getElementById('bLAx').textContent = LA.rotation.x.toFixed(3);
-      document.getElementById('bLAz').textContent = LA.rotation.z.toFixed(3);
-      document.getElementById('bHx').textContent = H.rotation.x.toFixed(3);
-      document.getElementById('bHy').textContent = H.rotation.y.toFixed(3);
-      document.getElementById('bHdX').textContent = headPivot.rotation.x.toFixed(3);
-      document.getElementById('bHdY').textContent = headPivot.rotation.y.toFixed(3);
-      document.getElementById('bHdZ').textContent = headPivot.rotation.z.toFixed(3);
-    }
-
-    // ── Video mocap importer ─────────────────────────────────────
-    const MOCAP_BONES = ['lUA', 'lLA', 'lH', 'rUA', 'rLA', 'rH', 'lUL', 'lLL', 'lF', 'rUL', 'rLL', 'rF', 'neck', 'torso', 'headP'];
-    const cameraPreview = document.getElementById('cameraPreview');
-    let holistic = null;
-    let selectedVideoUrl = null;
-    let processingVideo = false;
-    let recordedFrames = [];
-    let recordStartedAt = 0;
-    let mocapPlayback = false;
-    let mocapPreview = false;
-    let mocapPlaybackStartedAt = 0;
-    let activeMocapFrames = [];
-    let latestPoseLandmarks = null;
-    let latestFaceLandmarks = null;
-
-    function setMocapStatus(text, mode = '') {
-      const el = document.getElementById('mocapStatus');
-      el.textContent = text;
-      el.className = `status-pill ${mode}`.trim();
-    }
-
-    function rotationPlain(rot) {
-      return { x: +rot.x.toFixed(5), y: +rot.y.toFixed(5), z: +rot.z.toFixed(5) };
-    }
-
-    function captureFrame(time) {
-      return {
-        time: +time.toFixed(4),
-        bones: Object.fromEntries(MOCAP_BONES.map(name => [name, rotationPlain({
-          lUA: leftArm.uaPivot.rotation, lLA: leftArm.laPivot.rotation, lH: leftArm.hPivot.rotation,
-          rUA: rightArm.uaPivot.rotation, rLA: rightArm.laPivot.rotation, rH: rightArm.hPivot.rotation,
-          lUL: leftLeg.hipPivot.rotation, lLL: leftLeg.kneePivot.rotation, lF: leftLeg.footPivot.rotation,
-          rUL: rightLeg.hipPivot.rotation, rLL: rightLeg.kneePivot.rotation, rF: rightLeg.footPivot.rotation,
-          neck: neck.rotation, torso: torsoPivot.rotation, headP: headPivot.rotation,
-        }[name])])),
-        face: {
-          mouthX: +faceMouth.scale.x.toFixed(5), mouthY: +faceMouth.scale.y.toFixed(5),
-          eyeLY: +faceEyeL.scale.y.toFixed(5), eyeRY: +faceEyeR.scale.y.toFixed(5),
-        },
-      };
-    }
-
-    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
-    function mapRange(v, inMin, inMax, outMin, outMax) {
-      const t = clamp((v - inMin) / (inMax - inMin), 0, 1);
-      return outMin + (outMax - outMin) * t;
-    }
-    function confidence(...pts) { return pts.every(p => (p?.visibility ?? 1) > 0.35); }
-    function mpVec(p) { return new THREE.Vector3(p.x, -p.y, -(p.z ?? 0)); }
-    function localVector(a, b, basis) {
-      const v = mpVec(b).sub(mpVec(a));
-      return new THREE.Vector3(v.dot(basis.right), v.dot(basis.up), v.dot(basis.forward)).normalize();
-    }
-    function makeBodyBasis(lm) {
-      const lSh = lm[11], rSh = lm[12], lHip = lm[23], rHip = lm[24];
-      if (!confidence(lSh, rSh, lHip, rHip)) return null;
-      const shoulderMid = mpVec(lSh).add(mpVec(rSh)).multiplyScalar(0.5);
-      const hipMid = mpVec(lHip).add(mpVec(rHip)).multiplyScalar(0.5);
-      const right = mpVec(rSh).sub(mpVec(lSh)).normalize();
-      const up = shoulderMid.sub(hipMid).normalize();
-      const forward = new THREE.Vector3().crossVectors(right, up).normalize();
-      up.crossVectors(forward, right).normalize();
-      return { right, up, forward };
-    }
-    function smoothRotation(obj, x, y, z, amount = 0.55) {
-      obj.rotation.x = lerp(obj.rotation.x, x, amount);
-      obj.rotation.y = lerp(obj.rotation.y, y, amount);
-      obj.rotation.z = lerp(obj.rotation.z, z, amount);
-    }
-
-    // ── Core pose → model mapping ────────────────────────────────
-    // MediaPipe landmark coordinate space:
-    //   x: 0=left-edge 1=right-edge of image (mirror of person's real left/right)
-    //   y: 0=top 1=bottom (y increases downward)
-    //   z: depth, negative = closer to camera
-    // landmark indices: 11=LShoulder, 12=RShoulder, 13=LElbow, 14=RElbow, 15=LWrist, 16=RWrist
-    // NOTE: In image space, the person's LEFT body part appears on the RIGHT side (x~0.6+)
-    //       and person's RIGHT appears on LEFT side (x~0.3-). This is the mirror effect.
-
-    function driveArmFromPose(side, lm, basis) {
-      const idx = side < 0 ? { sh: 11, el: 13, wr: 15 } : { sh: 12, el: 14, wr: 16 };
-      const sh = lm[idx.sh], el = lm[idx.el], wr = lm[idx.wr];
-      if (!basis || !confidence(sh, el, wr)) return;
-
-      const upper = localVector(sh, el, basis);
-      const lower = localVector(el, wr, basis);
-      const restUA = side < 0 ? REST.leftUpperArm : REST.rightUpperArm;
-      const restLA = side < 0 ? REST.leftLowerArm : REST.rightLowerArm;
-      const arm = side < 0 ? leftArm : rightArm;
-
-      const liftX = clamp(-upper.y * 1.45 + upper.z * 0.85, -1.45, 0.8);
-      const spreadZ = clamp(upper.x * side * 1.25, -1.05, 1.05);
-      const forwardY = clamp(upper.z * -0.55, -0.55, 0.55);
-
-      const bend = Math.acos(clamp(upper.dot(lower), -1, 1));
-      const bendX = clamp(-bend * 0.85 + 0.25, -1.65, 0.15);
-      const twistZ = clamp(lower.x * side * 0.65, -0.65, 0.65);
-      const wristX = clamp(-lower.y * 0.45 + lower.z * 0.35, -0.55, 0.55);
-      const wristY = clamp(lower.x * side * 0.45, -0.45, 0.45);
-
-      smoothRotation(arm.uaPivot, liftX, forwardY, restUA.z + spreadZ);
-      smoothRotation(arm.laPivot, bendX, 0, restLA.z + twistZ);
-      smoothRotation(arm.hPivot, wristX, wristY, 0);
-    }
-
-    function driveLegFromPose(side, lm, basis) {
-      const idx = side < 0 ? { hip: 23, knee: 25, ankle: 27, foot: 31 } : { hip: 24, knee: 26, ankle: 28, foot: 32 };
-      const hip = lm[idx.hip], knee = lm[idx.knee], ankle = lm[idx.ankle], foot = lm[idx.foot];
-      if (!basis || !confidence(hip, knee, ankle)) return;
-
-      const upper = localVector(hip, knee, basis);
-      const lower = localVector(knee, ankle, basis);
-      const footVec = confidence(ankle, foot) ? localVector(ankle, foot, basis) : lower.clone();
-      const leg = side < 0 ? leftLeg : rightLeg;
-      const restUL = side < 0 ? REST.leftUpperLeg : REST.rightUpperLeg;
-
-      const liftX = clamp(-upper.z * 1.1 - Math.max(0, upper.y) * 0.25, -0.9, 0.75);
-      const spreadZ = clamp(upper.x * side * 0.55, -0.55, 0.55);
-      const swingY = clamp(upper.x * -side * 0.25, -0.25, 0.25);
-      const bend = Math.acos(clamp(upper.dot(lower), -1, 1));
-      const kneeX = clamp(bend * 0.95, 0, 1.7);
-      const footX = clamp(-footVec.z * 0.65, -0.55, 0.55);
-      const footZ = clamp(footVec.x * side * 0.35, -0.35, 0.35);
-
-      smoothRotation(leg.hipPivot, liftX, swingY, restUL.z + spreadZ);
-      smoothRotation(leg.kneePivot, kneeX, 0, 0);
-      smoothRotation(leg.footPivot, footX, 0, footZ);
-    }
-
-    function applyPoseLandmarks(lm) {
-      const basis = makeBodyBasis(lm);
-      driveArmFromPose(-1, lm, basis);
-      driveArmFromPose(1, lm, basis);
-      driveLegFromPose(-1, lm, basis);
-      driveLegFromPose(1, lm, basis);
-
-      const lSh = lm[11], rSh = lm[12], lHip = lm[23], rHip = lm[24];
-      const nose = lm[0], lEar = lm[7], rEar = lm[8];
-      if (!confidence(lSh, rSh, lHip, rHip)) return;
-
-      const shWidth = Math.max(0.05, Math.abs(lSh.x - rSh.x));
-      const shMidX = (lSh.x + rSh.x) / 2;
-      const shMidY = (lSh.y + rSh.y) / 2;
-      const hipMidX = (lHip.x + rHip.x) / 2;
-      const hipMidY = (lHip.y + rHip.y) / 2;
-
-      const torsoRoll = clamp((lSh.y - rSh.y) * -2.2, -0.35, 0.35);
-      const torsoYaw = clamp((shMidX - hipMidX) / shWidth * -0.28, -0.28, 0.28);
-      const torsoPitch = clamp((shMidY - hipMidY + 0.42) * 0.55, -0.25, 0.25);
-      smoothRotation(torsoPivot, torsoPitch, torsoYaw, torsoRoll, 0.45);
-
-      if (confidence(nose, lSh, rSh)) {
-        const panNorm = (nose.x - shMidX) / shWidth;
-        const tiltNorm = (nose.y - shMidY) / shWidth;
-        let roll = torsoRoll * 0.35;
-        if (confidence(lEar, rEar)) roll += clamp((lEar.y - rEar.y) * -1.8, -0.25, 0.25);
-        const headY = clamp(-panNorm * 0.65, -0.65, 0.65);
-        const headX = clamp((tiltNorm - 0.55) * 0.65, -0.45, 0.35);
-        const headZ = clamp(roll, -0.35, 0.35);
-        smoothRotation(headPivot, headX, headY, headZ, 0.55);
-        smoothRotation(neck, headX * 0.4, headY * 0.4, headZ * 0.4, 0.55);
-      }
-    }
-
-    // ── Face blendshapes from Holistic face landmarks ────────────
-    function applyFaceLandmarks(faceLm) {
-      if (!faceLm || faceLm.length < 468) return;
-
-      // Mouth open: distance between upper lip (13) and lower lip (14)
-      const upperLip = faceLm[13], lowerLip = faceLm[14];
-      const leftCorner = faceLm[61], rightCorner = faceLm[291];
-      const mouthWidth = Math.max(0.01, Math.abs(rightCorner.x - leftCorner.x));
-      const mouthOpen = Math.max(0, (lowerLip.y - upperLip.y) / mouthWidth);
-      // Scale mouth mesh Y to show open/close
-      faceMouth.scale.y = 1 + mapRange(mouthOpen, 0, 0.4, 0, 3);
-      faceMouth.scale.x = 1 + mapRange(mouthOpen, 0, 0.4, 0, 0.5);
-
-      // Eye blink: left eye top (159) to bottom (145), right eye top (386) to bottom (374)
-      // normalized by eye width
-      const lEyeTop = faceLm[159], lEyeBot = faceLm[145];
-      const lEyeL = faceLm[33], lEyeR = faceLm[133];
-      const lEyeW = Math.max(0.005, Math.abs(lEyeR.x - lEyeL.x));
-      const lEyeOpen = (lEyeBot.y - lEyeTop.y) / lEyeW;
-      faceEyeL.scale.y = Math.max(0.05, mapRange(lEyeOpen, 0.1, 0.45, 0.05, 1.0));
-
-      const rEyeTop = faceLm[386], rEyeBot = faceLm[374];
-      const rEyeL = faceLm[362], rEyeR = faceLm[263];
-      const rEyeW = Math.max(0.005, Math.abs(rEyeR.x - rEyeL.x));
-      const rEyeOpen = (rEyeBot.y - rEyeTop.y) / rEyeW;
-      faceEyeR.scale.y = Math.max(0.05, mapRange(rEyeOpen, 0.1, 0.45, 0.05, 1.0));
-    }
-    function updateTakeUi() {
-      const duration = recordedFrames.at(-1)?.time ?? 0;
-      for (const id of ['slTrimStart', 'slTrimEnd']) {
-        const el = document.getElementById(id); el.max = duration.toFixed(2); el.disabled = recordedFrames.length < 2;
-      }
-      document.getElementById('slTrimEnd').value = duration.toFixed(2);
-      document.getElementById('takeDurationLabel').textContent = `${recordedFrames.length} frames`;
-      updateTrim();
-      const hasTake = recordedFrames.length > 1;
-      for (const id of ['btnPlayback', 'btnUseTrim', 'btnSaveGesture']) document.getElementById(id).disabled = !hasTake;
-    }
-    window.updateTrim = function () {
-      const a = document.getElementById('slTrimStart');
-      const b = document.getElementById('slTrimEnd');
-      if (+a.value > +b.value) a.value = b.value;
-      document.getElementById('trimStartLabel').textContent = `${(+a.value).toFixed(2)}s`;
-      document.getElementById('trimEndLabel').textContent = `${(+b.value).toFixed(2)}s`;
-      document.getElementById('trimDurationLabel').textContent = `${Math.max(0, +b.value - +a.value).toFixed(2)}s`;
-    };
-    function trimmedFrames() {
-      const start = +document.getElementById('slTrimStart').value;
-      const end = +document.getElementById('slTrimEnd').value;
-      return recordedFrames.filter(f => f.time >= start && f.time <= end).map(f => ({ time: +(f.time - start).toFixed(4), bones: f.bones, face: f.face }));
-    }
-    async function ensureHolistic() {
-      if (holistic) return;
-      holistic = new Holistic({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5/${file}` });
-      holistic.setOptions({
-        modelComplexity: 1,
-        smoothLandmarks: true,
-        enableSegmentation: false,
-        refineFaceLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-      });
-      holistic.onResults(results => {
-        latestPoseLandmarks = results.poseLandmarks;
-        latestFaceLandmarks = results.faceLandmarks;
-      });
-    }
-    window.loadVideoFile = function (event) {
-      const file = event.target.files?.[0];
-      if (!file) return;
-      if (selectedVideoUrl) URL.revokeObjectURL(selectedVideoUrl);
-      selectedVideoUrl = URL.createObjectURL(file);
-      recordedFrames = [];
-      activeMocapFrames = [];
-      latestPoseLandmarks = null;
-      mocapPreview = false;
-      mocapPlayback = false;
-      cameraPreview.src = selectedVideoUrl;
-      cameraPreview.loop = false;
-      cameraPreview.muted = true;
-      cameraPreview.playsInline = true;
-      cameraPreview.style.display = 'block';
-      document.getElementById('btnProcessVideo').disabled = false;
-      document.getElementById('btnPlayback').classList.remove('active');
-      updateTakeUi();
-      setMocapStatus(`loaded ${file.name}`, 'live');
-    };
-
-    window.cancelVideoMocap = function () {
-      processingVideo = false;
-      cameraPreview.pause();
-      document.getElementById('btnProcessVideo').classList.remove('recording');
-      document.getElementById('btnProcessVideo').textContent = 'generate take';
-      document.getElementById('btnCancelVideo').disabled = true;
-      document.getElementById('btnProcessVideo').disabled = !selectedVideoUrl;
-      setMocapStatus(recordedFrames.length > 1 ? `generated ${recordedFrames.length} frames` : 'video processing canceled', recordedFrames.length > 1 ? 'live' : '');
-    };
-
-    window.processVideoMocap = async function () {
-      if (!selectedVideoUrl || processingVideo) return;
-      try {
-        await ensureHolistic();
-        processingVideo = true;
-        recordedFrames = [];
-        activeMocapFrames = [];
-        latestPoseLandmarks = null;
-        latestFaceLandmarks = null;
-        mocapPreview = false;  // not preview during processing
-        mocapPlayback = false;
-        animating = false;
-        forceRest = false;
-        const processBtn = document.getElementById('btnProcessVideo');
-        processBtn.disabled = true;
-        processBtn.classList.add('recording');
-        processBtn.textContent = 'processing…';
-        document.getElementById('btnCancelVideo').disabled = false;
-        document.getElementById('btnPlayback').classList.remove('active');
-        cameraPreview.currentTime = 0;
-        cameraPreview.playbackRate = 1;
-        await cameraPreview.play();
-        setMocapStatus('processing video', 'rec');
-        const step = async () => {
-          if (!processingVideo) return;
-          if (cameraPreview.ended || cameraPreview.paused) {
-            processingVideo = false;
-            processBtn.classList.remove('recording');
-            processBtn.textContent = 'generate take';
-            processBtn.disabled = false;
-            document.getElementById('btnCancelVideo').disabled = true;
-            setMocapStatus(`generated ${recordedFrames.length} frames`, 'live');
-            updateTakeUi();
-            return;
-          }
-          await holistic.send({ image: cameraPreview });
-          if (latestPoseLandmarks) {
-            applyRest();
-            applyPoseLandmarks(latestPoseLandmarks);
-            applyFaceLandmarks(latestFaceLandmarks);
-            recordedFrames.push(captureFrame(cameraPreview.currentTime));
-          }
-          setMocapStatus(`processing ${cameraPreview.currentTime.toFixed(1)}s / ${(cameraPreview.duration || 0).toFixed(1)}s`, 'rec');
-          requestAnimationFrame(step);
-        };
-        requestAnimationFrame(step);
-      } catch (err) {
-        processingVideo = false;
-        document.getElementById('btnProcessVideo').disabled = !selectedVideoUrl;
-        document.getElementById('btnCancelVideo').disabled = true;
-        document.getElementById('btnProcessVideo').classList.remove('recording');
-        document.getElementById('btnProcessVideo').textContent = 'generate take';
-        showBanner(`Video processing failed: ${err.message}`);
-      }
-    };
-    window.toggleMocapPlayback = function () {
-      const frames = trimmedFrames(); if (frames.length < 2) return;
-      mocapPlayback = !mocapPlayback;
-      if (mocapPlayback) { activeMocapFrames = frames; mocapPlaybackStartedAt = performance.now(); mocapPreview = false; }
-      document.getElementById('btnPlayback').classList.toggle('active', mocapPlayback);
-    };
-    window.useTrimAsGesture = function () {
-      const frames = trimmedFrames();
-      if (frames.length < 2) return;
-      activeMocapFrames = frames;
-      mocapPreview = true;
-      mocapPlayback = false;
-      mocapPlaybackStartedAt = performance.now();
-      document.getElementById('btnPlayback').classList.remove('active');
-    };
-    function sampleFrames(frames, t) {
-      if (!frames.length) return null;
-      const duration = frames.at(-1).time || 0.001;
-      const time = ((t % duration) + duration) % duration;
-      let i = 0; while (i < frames.length - 2 && frames[i + 1].time < time) i++;
-      const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
-      const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
-      const bones = Object.fromEntries(MOCAP_BONES.map(name => [name, { x: lerp(a.bones[name].x, b.bones[name].x, f), y: lerp(a.bones[name].y, b.bones[name].y, f), z: lerp(a.bones[name].z, b.bones[name].z, f) }]));
-      const face = a.face && b.face ? {
-        mouthX: lerp(a.face.mouthX, b.face.mouthX, f), mouthY: lerp(a.face.mouthY, b.face.mouthY, f),
-        eyeLY: lerp(a.face.eyeLY, b.face.eyeLY, f), eyeRY: lerp(a.face.eyeRY, b.face.eyeRY, f),
-      } : null;
-      return { bones, face };
-    }
-    function applyMocapSample(sample) {
-      if (!sample) return;
-      const map = {
-        lUA: leftArm.uaPivot, lLA: leftArm.laPivot, lH: leftArm.hPivot,
-        rUA: rightArm.uaPivot, rLA: rightArm.laPivot, rH: rightArm.hPivot,
-        lUL: leftLeg.hipPivot, lLL: leftLeg.kneePivot, lF: leftLeg.footPivot,
-        rUL: rightLeg.hipPivot, rLL: rightLeg.kneePivot, rF: rightLeg.footPivot,
-        neck, torso: torsoPivot, headP: headPivot,
-      };
-      for (const [k, r] of Object.entries(sample.bones ?? sample)) map[k]?.rotation.set(r.x, r.y, r.z);
-      if (sample.face) {
-        faceMouth.scale.x = sample.face.mouthX; faceMouth.scale.y = sample.face.mouthY;
-        faceEyeL.scale.y = sample.face.eyeLY; faceEyeR.scale.y = sample.face.eyeRY;
-      }
-    }
-    function buildGestureModule(frames, exportName) {
-      return `// ${exportName}.js
-// Video-imported gesture exported from archive/video-3d-model-animation.html.
-// Drop this beside gesture.js, or copy the exported function into gesture.js.
-
-export function blend(from, to, t) { return from + (to - from) * t; }
-
-const FRAMES = ${JSON.stringify(frames)};
-const BONES = ['lUA','lLA','lH','rUA','rLA','rH','lUL','lLL','lF','rUL','rLL','rF','neck','torso','headP'];
-function sample(frames, t) {
-  if (!frames.length) return null;
-  const duration = frames[frames.length - 1].time || 0.001;
-  const time = ((t % duration) + duration) % duration;
-  let i = 0;
-  while (i < frames.length - 2 && frames[i + 1].time < time) i++;
-  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
-  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
-  const bones = Object.fromEntries(BONES.map(name => [name, {
-    x: blend(a.bones[name].x, b.bones[name].x, f),
-    y: blend(a.bones[name].y, b.bones[name].y, f),
-    z: blend(a.bones[name].z, b.bones[name].z, f),
-  }]));
-  const face = a.face && b.face ? {
-    mouthX: blend(a.face.mouthX, b.face.mouthX, f),
-    mouthY: blend(a.face.mouthY, b.face.mouthY, f),
-    eyeLY: blend(a.face.eyeLY, b.face.eyeLY, f),
-    eyeRY: blend(a.face.eyeRY, b.face.eyeRY, f),
-  } : null;
-  return { bones, face };
-}
-export function ${exportName}(ctx) {
-  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));
-  if (!pose) return;
-  const amount = ctx.intensity ?? 1;
-  for (const [name, rot] of Object.entries(pose.bones)) {
-    const bone = ctx[name];
-    if (!bone) continue;
-    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);
-    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);
-    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);
-  }
-  if (pose.face) {
-    if (ctx.faceMouth) {
-      ctx.faceMouth.scale.x = blend(ctx.faceMouth.scale.x, pose.face.mouthX, amount);
-      ctx.faceMouth.scale.y = blend(ctx.faceMouth.scale.y, pose.face.mouthY, amount);
-    }
-    if (ctx.faceEyeL) ctx.faceEyeL.scale.y = blend(ctx.faceEyeL.scale.y, pose.face.eyeLY, amount);
-    if (ctx.faceEyeR) ctx.faceEyeR.scale.y = blend(ctx.faceEyeR.scale.y, pose.face.eyeRY, amount);
-  }
-}
-`;
-    }
-    window.saveRecordedGesture = async function () {
-      const frames = trimmedFrames(); if (frames.length < 2) return showBanner('Generate and crop at least two frames first.', 'info');
-      const rawName = document.getElementById('gestureFileName').value.replace(/\.js$/i, '') || 'myVideoGesture';
-      const exportName = rawName.replace(/[^a-zA-Z0-9_$]/g, '_').replace(/^[^a-zA-Z_$]/, '_$&');
-      const source = buildGestureModule(frames, exportName);
-      if ('showSaveFilePicker' in window) {
-        const handle = await showSaveFilePicker({ suggestedName: `${rawName}.js`, types: [{ description: 'JavaScript module', accept: { 'text/javascript': ['.js'] } }] });
-        const writable = await handle.createWritable(); await writable.write(source); await writable.close(); setMocapStatus(`saved ${rawName}.js`, 'live');
-      } else {
-        const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([source], { type: 'text/javascript' })); a.download = `${rawName}.js`; a.click(); URL.revokeObjectURL(a.href); setMocapStatus(`downloaded ${rawName}.js`, 'live');
-      }
-    };
-
-    // ── Tick ──────────────────────────────────────────────────────
-    function tickAnimation(dt) {
-      if (animating) animTime += dt;
-
-      const intensity = +document.getElementById('slIntensity').value;
-      const lerpT = +document.getElementById('slLerp').value;
-      const strokeSpeed = +document.getElementById('slSpeed').value;
-      const io = getIO();
-
-      // update sidebar display values
-      document.getElementById('valIntensity').textContent = intensity.toFixed(2);
-      document.getElementById('valUAx').textContent = (+slUAx.value).toFixed(2);
-      document.getElementById('valUAz').textContent = (+slUAz.value).toFixed(2);
-      document.getElementById('valLAx').textContent = (+slLAx.value).toFixed(2);
-      document.getElementById('valLAz').textContent = (+slLAz.value).toFixed(2);
-      document.getElementById('valHx').textContent = (+slHx.value).toFixed(2);
-      document.getElementById('valHy').textContent = (+slHy.value).toFixed(2);
-      document.getElementById('hudInt').textContent = intensity.toFixed(2);
-      document.getElementById('hudT').textContent = animTime.toFixed(2);
-
-      if (forceRest) { applyRest(); syncAndReadout(); return; }
-
-      if (mocapPreview && activeMocapFrames.length > 1) {
-        applyMocapSample(sampleFrames(activeMocapFrames, (performance.now() - mocapPlaybackStartedAt) / 1000));
-        syncAndReadout();
-        return;
-      }
-
-      if (processingVideo && latestPoseLandmarks) {
-        applyRest();
-        applyPoseLandmarks(latestPoseLandmarks);
-        applyFaceLandmarks(latestFaceLandmarks);
-        syncAndReadout();
-        return;
-      }
-
-      if (mocapPlayback && activeMocapFrames.length > 1) {
-        applyMocapSample(sampleFrames(activeMocapFrames, (performance.now() - mocapPlaybackStartedAt) / 1000));
-        syncAndReadout();
-        return;
-      }
-
-      const animatedIntensity = animating
-        ? intensity * (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(animTime * 2.4)))
-        : intensity;
-
-      if (activeGestureFn) {
-        const before = snapshotRotations();
-
-        // Set the non-active arm to rest first
-        const s = currentSide;
-        if (s < 0) {
-          rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
-          rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
-          rightArm.hPivot.rotation.set(REST.rightHand.x, 0, 0);
-        } else {
-          leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
-          leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
-          leftArm.hPivot.rotation.set(REST.leftHand.x, 0, 0);
-        }
-
-        try {
-          activeGestureFn({
-            side: currentSide,
-            intensity: animatedIntensity,
-            t: animTime,
-            strokeSpeed,
-            io,
-            REST,
-            THREE,
-            headP: headPivot,
-            neck,
-            torso: torsoPivot,
-            lUA: leftArm.uaPivot,
-            lLA: leftArm.laPivot,
-            lH: leftArm.hPivot,
-            rUA: rightArm.uaPivot,
-            rLA: rightArm.laPivot,
-            rH: rightArm.hPivot,
-            lUL: leftLeg.hipPivot,
-            lLL: leftLeg.kneePivot,
-            lF: leftLeg.footPivot,
-            rUL: rightLeg.hipPivot,
-            rLL: rightLeg.kneePivot,
-            rF: rightLeg.footPivot,
-            faceMouth,
-            faceEyeL,
-            faceEyeR,
-          });
-        } catch (err) {
-          showBanner(`${activeGestureName}() threw: ${err.message}`);
-        }
-
-        applyLerpedRotations(before, lerpT);
-      }
-
-      syncAndReadout();
-    }
-
-    // ── Controls ─────────────────────────────────────────────────
-    const slUAx = document.getElementById('slUAx');
-    const slUAz = document.getElementById('slUAz');
-    const slLAx = document.getElementById('slLAx');
-    const slLAz = document.getElementById('slLAz');
-    const slHx = document.getElementById('slHx');
-    const slHy = document.getElementById('slHy');
-
-    window.setSide = function (s) {
-      forceRest = false;
-      currentSide = s;
-      document.getElementById('btnLeft').classList.toggle('active', s < 0);
-      document.getElementById('btnRight').classList.toggle('active', s > 0);
-      document.getElementById('hudSide').textContent = s < 0 ? 'left' : 'right';
-    };
-
-    window.toggleAnimate = function () {
-      forceRest = false;
-      animating = !animating;
-      const btn = document.getElementById('btnAnimate');
-      btn.textContent = animating ? '▶ animate' : '⏸ paused';
-      btn.classList.toggle('active', animating);
-    };
-
-    window.update = function () { forceRest = false; };
-
-    window.resetAll = function () {
-      animating = false;
-      forceRest = true;
-      animTime = 0;
-      const btn = document.getElementById('btnAnimate');
-      btn.textContent = '⏸ paused';
-      btn.classList.remove('active');
-      document.getElementById('slIntensity').value = 1;
-      ['UAx', 'UAz', 'LAx', 'LAz', 'Hx', 'Hy'].forEach(id => {
-        document.getElementById('sl' + id).value = 0;
-      });
-      applyRest();
-      syncAndReadout();
-    };
-
-    // ── Resize ────────────────────────────────────────────────────
     function resize() {
       const vp = document.getElementById('viewport');
       renderer.setSize(vp.clientWidth, vp.clientHeight, false);
@@ -1472,13 +320,546 @@ export function ${exportName}(ctx) {
     window.addEventListener('resize', resize);
     resize();
 
+    // ── VRM loading ──────────────────────────────────────────────────
+    const gltfLoader = new GLTFLoader();
+    gltfLoader.register(parser => new VRMLoaderPlugin(parser));
+
+    let currentVRM = null;
+
+    document.getElementById('vrmFile').addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      setVrmStatus(`loading ${file.name}…`, 'rec');
+      try {
+        const url = URL.createObjectURL(file);
+        const gltf = await gltfLoader.loadAsync(url);
+        URL.revokeObjectURL(url);
+        const vrm = gltf.userData.vrm;
+        if (!vrm) throw new Error('No VRM extension found in this glTF — is this really a .vrm file?');
+
+        VRMUtils.removeUnnecessaryVertices(gltf.scene);
+        VRMUtils.removeUnnecessaryJoints(gltf.scene);
+        // VRM0.x models face -Z by spec; three-vrm needs them turned to face +Z like VRM1.
+        if (vrm.meta?.metaVersion === '0') VRMUtils.rotateVRM0(vrm);
+
+        if (currentVRM) scene.remove(currentVRM.scene);
+        currentVRM = vrm;
+        scene.add(vrm.scene);
+        vrm.scene.traverse(o => { o.frustumCulled = false; });
+
+        // Frame the camera roughly at chest height of whatever scale this model is.
+        const head = vrm.humanoid?.getNormalizedBoneNode('head');
+        const headY = head ? head.getWorldPosition(new THREE.Vector3()).y : 1.4;
+        orbit.target.set(0, headY * 0.62, 0);
+
+        document.getElementById('activeLabel').textContent = file.name;
+        document.getElementById('hudAvatar').textContent = file.name;
+        setVrmStatus(`${file.name} loaded`, 'live');
+        hideBanner();
+      } catch (err) {
+        setVrmStatus('load failed', '');
+        showBanner(`VRM load failed: ${err.message}`);
+      }
+    });
+
+    // ── MediaPipe Tasks Vision setup ─────────────────────────────────
+    let poseLandmarker = null;
+    let faceLandmarker = null;
+    let visionReady = false;
+
+    async function ensureVision() {
+      if (visionReady) return;
+      const fileset = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
+      );
+      poseLandmarker = await PoseLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
+        },
+        runningMode: 'VIDEO',
+        numPoses: 1,
+      });
+      faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+        },
+        runningMode: 'VIDEO',
+        numFaces: 1,
+        outputFaceBlendshapes: false, // Kalidokit solves blendshapes itself from raw landmarks
+      });
+      visionReady = true;
+    }
+
+    // ── Kalidokit → VRM rigging ────────────────────────────────────
+    // Kalidokit returns PascalCase bone names; VRMHumanBoneName values are lowerCamelCase.
+    // Thumb segment names don't line up 1:1 with the VRM spec, so they get an explicit override.
+    const THUMB_OVERRIDE = {
+      LeftThumbProximal: 'leftThumbMetacarpal',
+      LeftThumbIntermediate: 'leftThumbProximal',
+      LeftThumbDistal: 'leftThumbDistal',
+      RightThumbProximal: 'rightThumbMetacarpal',
+      RightThumbIntermediate: 'rightThumbProximal',
+      RightThumbDistal: 'rightThumbDistal',
+    };
+    function vrmBoneName(kName) {
+      if (THUMB_OVERRIDE[kName]) return THUMB_OVERRIDE[kName];
+      return kName.charAt(0).toLowerCase() + kName.slice(1);
+    }
+
+    const tmpEuler = new THREE.Euler();
+    const tmpQuat = new THREE.Quaternion();
+    const tmpVec = new THREE.Vector3();
+
+    function rigRotation(vrm, kName, rotation, dampener = 1, lerpAmount = 0.3) {
+      if (!rotation) return;
+      const bone = vrm.humanoid?.getNormalizedBoneNode(vrmBoneName(kName));
+      if (!bone) return;
+      tmpEuler.set((rotation.x || 0) * dampener, (rotation.y || 0) * dampener, (rotation.z || 0) * dampener);
+      tmpQuat.setFromEuler(tmpEuler);
+      bone.quaternion.slerp(tmpQuat, lerpAmount);
+    }
+
+    function rigPosition(vrm, kName, position, dampener = 1, lerpAmount = 0.3) {
+      if (!position) return;
+      const bone = vrm.humanoid?.getNormalizedBoneNode(vrmBoneName(kName));
+      if (!bone) return;
+      tmpVec.set((position.x || 0) * dampener, (position.y || 0) * dampener, (position.z || 0) * dampener);
+      bone.position.lerp(tmpVec, lerpAmount);
+    }
+
+    function rigPose(vrm, riggedPose) {
+      if (!riggedPose) return;
+      rigRotation(vrm, 'Hips', riggedPose.Hips.rotation, 0.7, 0.3);
+      rigPosition(vrm, 'Hips', {
+        x: -riggedPose.Hips.position.x,
+        y: riggedPose.Hips.position.y + 1,
+        z: -riggedPose.Hips.position.z,
+      }, 1, 0.07);
+
+      rigRotation(vrm, 'Chest', riggedPose.Spine, 0.25, 0.3);
+      rigRotation(vrm, 'Spine', riggedPose.Spine, 0.45, 0.3);
+
+      rigRotation(vrm, 'RightUpperArm', riggedPose.RightUpperArm, 1, 0.3);
+      rigRotation(vrm, 'RightLowerArm', riggedPose.RightLowerArm, 1, 0.3);
+      rigRotation(vrm, 'LeftUpperArm', riggedPose.LeftUpperArm, 1, 0.3);
+      rigRotation(vrm, 'LeftLowerArm', riggedPose.LeftLowerArm, 1, 0.3);
+
+      rigRotation(vrm, 'LeftUpperLeg', riggedPose.LeftUpperLeg, 1, 0.3);
+      rigRotation(vrm, 'LeftLowerLeg', riggedPose.LeftLowerLeg, 1, 0.3);
+      rigRotation(vrm, 'RightUpperLeg', riggedPose.RightUpperLeg, 1, 0.3);
+      rigRotation(vrm, 'RightLowerLeg', riggedPose.RightLowerLeg, 1, 0.3);
+    }
+
+    function rigFace(vrm, riggedFace) {
+      if (!riggedFace || !vrm.expressionManager) return;
+      const em = vrm.expressionManager;
+
+      // Head/neck follow the face solve's head pose (this is what actually reads as
+      // "looking at the camera" / nodding / tilting in sync with the source footage).
+      rigRotation(vrm, 'Neck', riggedFace.head, 0.55, 0.3);
+      rigRotation(vrm, 'Head', riggedFace.head, 0.7, 0.3);
+
+      const blend = (name, value) => {
+        const prev = em.getValue(name) ?? 0;
+        em.setValue(name, prev + (value - prev) * 0.5);
+      };
+
+      blend('blinkLeft', 1 - riggedFace.eye.l);
+      blend('blinkRight', 1 - riggedFace.eye.r);
+
+      const mouth = riggedFace.mouth.shape;
+      blend('aa', mouth.A);
+      blend('ih', mouth.I);
+      blend('ou', mouth.U);
+      blend('ee', mouth.E);
+      blend('oh', mouth.O);
+
+      document.getElementById('dbgA').textContent = mouth.A.toFixed(2);
+      document.getElementById('dbgI').textContent = mouth.I.toFixed(2);
+      document.getElementById('dbgU').textContent = mouth.U.toFixed(2);
+    }
+
+    function captureFrame(vrm, time) {
+      const bones = {};
+      if (vrm.humanoid) {
+        for (const name of Object.values(THREE_VRM_HUMAN_BONE_NAMES)) {
+          const bone = vrm.humanoid.getNormalizedBoneNode(name);
+          if (!bone) continue;
+          bones[name] = [
+            +bone.quaternion.x.toFixed(5), +bone.quaternion.y.toFixed(5),
+            +bone.quaternion.z.toFixed(5), +bone.quaternion.w.toFixed(5),
+          ];
+        }
+      }
+      const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+      const expressions = {};
+      if (vrm.expressionManager) {
+        for (const name of ['blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh']) {
+          expressions[name] = +(vrm.expressionManager.getValue(name) ?? 0).toFixed(4);
+        }
+      }
+      return {
+        time: +time.toFixed(4),
+        hipsPos: hips ? [+hips.position.x.toFixed(5), +hips.position.y.toFixed(5), +hips.position.z.toFixed(5)] : [0, 0, 0],
+        bones,
+        expressions,
+      };
+    }
+
+    // Minimal humanoid bone list we actually rig/record (body + a few face-relevant ones).
+    // Hands/fingers are intentionally left out of this pass — Kalidokit + a HandLandmarker
+    // pass can be added later if you want fingers too.
+    const THREE_VRM_HUMAN_BONE_NAMES = [
+      'hips', 'spine', 'chest', 'neck', 'head',
+      'leftUpperArm', 'leftLowerArm', 'leftHand',
+      'rightUpperArm', 'rightLowerArm', 'rightHand',
+      'leftUpperLeg', 'leftLowerLeg', 'leftFoot',
+      'rightUpperLeg', 'rightLowerLeg', 'rightFoot',
+    ];
+
+    // ── Video element / state ────────────────────────────────────────
+    const cameraPreview = document.getElementById('cameraPreview');
+    let selectedVideoUrl = null;
+    let processingVideo = false;
+    let recordedFrames = [];
+    let mirrorLR = false;
+
+    document.getElementById('videoFile').addEventListener('change', (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      if (selectedVideoUrl) URL.revokeObjectURL(selectedVideoUrl);
+      selectedVideoUrl = URL.createObjectURL(file);
+      recordedFrames = [];
+      cameraPreview.src = selectedVideoUrl;
+      cameraPreview.loop = false;
+      cameraPreview.muted = true;
+      cameraPreview.playsInline = true;
+      cameraPreview.style.display = 'block';
+      document.getElementById('btnProcessVideo').disabled = !currentVRM;
+      updateTakeUi();
+      setMocapStatus(`loaded ${file.name}${currentVRM ? '' : ' — load a VRM avatar first'}`, currentVRM ? 'live' : '');
+    });
+
+    document.getElementById('btnMirror').addEventListener('click', (e) => {
+      mirrorLR = !mirrorLR;
+      e.target.classList.toggle('active', mirrorLR);
+    });
+
+    document.getElementById('btnCancelVideo').addEventListener('click', () => {
+      processingVideo = false;
+      cameraPreview.pause();
+      const btn = document.getElementById('btnProcessVideo');
+      btn.classList.remove('recording');
+      btn.textContent = 'track video';
+      document.getElementById('btnCancelVideo').disabled = true;
+      btn.disabled = !selectedVideoUrl || !currentVRM;
+      setMocapStatus(recordedFrames.length > 1 ? `tracked ${recordedFrames.length} frames` : 'tracking canceled', recordedFrames.length > 1 ? 'live' : '');
+    });
+
+    document.getElementById('btnProcessVideo').addEventListener('click', async () => {
+      if (!selectedVideoUrl || !currentVRM || processingVideo) return;
+      try {
+        await ensureVision();
+        processingVideo = true;
+        recordedFrames = [];
+
+        const processBtn = document.getElementById('btnProcessVideo');
+        processBtn.disabled = true;
+        processBtn.classList.add('recording');
+        processBtn.textContent = 'tracking…';
+        document.getElementById('btnCancelVideo').disabled = false;
+        document.getElementById('hudMode').textContent = 'tracking video';
+
+        cameraPreview.currentTime = 0;
+        cameraPreview.playbackRate = 1;
+        await cameraPreview.play();
+        setMocapStatus('tracking 0.0s', 'rec');
+        hideBanner();
+
+        let frameCount = 0;
+        let lastFpsCheck = performance.now();
+
+        const step = async () => {
+          if (!processingVideo) return;
+          if (cameraPreview.ended || cameraPreview.paused) {
+            processingVideo = false;
+            processBtn.classList.remove('recording');
+            processBtn.textContent = 'track video';
+            processBtn.disabled = false;
+            document.getElementById('btnCancelVideo').disabled = true;
+            document.getElementById('hudMode').textContent = 'idle';
+            setMocapStatus(`tracked ${recordedFrames.length} frames`, 'live');
+            updateTakeUi();
+            return;
+          }
+          try {
+            const t = cameraPreview.currentTime * 1000;
+            const poseResult = poseLandmarker.detectForVideo(cameraPreview, t);
+            const faceResult = faceLandmarker.detectForVideo(cameraPreview, t);
+
+            const poseLm = poseResult.landmarks?.[0];
+            const poseWorldLm = poseResult.worldLandmarks?.[0];
+            const faceLm = faceResult.faceLandmarks?.[0];
+
+            document.getElementById('dbgPose').textContent = poseLm ? 'tracked' : 'lost';
+            document.getElementById('dbgFace').textContent = faceLm ? 'tracked' : 'lost';
+
+            const sideSign = mirrorLR ? -1 : 1;
+
+            if (poseLm && poseWorldLm) {
+              const riggedPose = Kalidokit.Pose.solve(poseWorldLm, poseLm, { runtime: 'mediapipe', video: cameraPreview });
+              if (sideSign === -1) swapLR(riggedPose, ['UpperArm', 'LowerArm', 'Hand', 'UpperLeg', 'LowerLeg', 'Foot']);
+              rigPose(currentVRM, riggedPose);
+            }
+            if (faceLm) {
+              const riggedFace = Kalidokit.Face.solve(faceLm, { runtime: 'mediapipe', video: cameraPreview, imageSize: { width: cameraPreview.videoWidth, height: cameraPreview.videoHeight } });
+              if (sideSign === -1) [riggedFace.eye.l, riggedFace.eye.r] = [riggedFace.eye.r, riggedFace.eye.l];
+              rigFace(currentVRM, riggedFace);
+            }
+
+            currentVRM.update(1 / 60);
+            recordedFrames.push(captureFrame(currentVRM, cameraPreview.currentTime));
+
+            frameCount++;
+            const now = performance.now();
+            if (now - lastFpsCheck > 500) {
+              document.getElementById('dbgFps').textContent = (frameCount / ((now - lastFpsCheck) / 1000)).toFixed(0);
+              frameCount = 0;
+              lastFpsCheck = now;
+            }
+
+            setMocapStatus(`tracking ${cameraPreview.currentTime.toFixed(1)}s / ${(cameraPreview.duration || 0).toFixed(1)}s`, 'rec');
+            requestAnimationFrame(step);
+          } catch (err) {
+            processingVideo = false;
+            processBtn.classList.remove('recording');
+            processBtn.textContent = 'track video';
+            processBtn.disabled = !selectedVideoUrl || !currentVRM;
+            document.getElementById('btnCancelVideo').disabled = true;
+            document.getElementById('hudMode').textContent = 'idle';
+            showBanner(`Tracking step failed: ${err.message}\n${err.stack ?? ''}`);
+          }
+        };
+        requestAnimationFrame(step);
+      } catch (err) {
+        processingVideo = false;
+        document.getElementById('btnProcessVideo').disabled = !selectedVideoUrl || !currentVRM;
+        document.getElementById('btnCancelVideo').disabled = true;
+        showBanner(`Couldn't start tracking: ${err.message}`);
+      }
+    });
+
+    function swapLR(riggedPose, parts) {
+      for (const part of parts) {
+        const l = riggedPose['Left' + part];
+        const r = riggedPose['Right' + part];
+        riggedPose['Left' + part] = r;
+        riggedPose['Right' + part] = l;
+      }
+    }
+
+    // ── Trim ──────────────────────────────────────────────────────
+    function updateTakeUi() {
+      const duration = recordedFrames.at(-1)?.time ?? 0;
+      for (const id of ['slTrimStart', 'slTrimEnd']) {
+        const el = document.getElementById(id);
+        el.max = duration.toFixed(2);
+        el.disabled = recordedFrames.length < 2;
+      }
+      document.getElementById('slTrimStart').value = 0;
+      document.getElementById('slTrimEnd').value = duration.toFixed(2);
+      document.getElementById('takeDurationLabel').textContent = `${recordedFrames.length} frames`;
+      updateTrim();
+      const hasTake = recordedFrames.length > 1;
+      document.getElementById('btnPlayback').disabled = !hasTake;
+      document.getElementById('btnSaveGesture').disabled = !hasTake;
+    }
+    function updateTrim() {
+      const a = document.getElementById('slTrimStart');
+      const b = document.getElementById('slTrimEnd');
+      if (+a.value > +b.value) a.value = b.value;
+      document.getElementById('trimStartLabel').textContent = `${(+a.value).toFixed(2)}s`;
+      document.getElementById('trimEndLabel').textContent = `${(+b.value).toFixed(2)}s`;
+      document.getElementById('trimDurationLabel').textContent = `${Math.max(0, +b.value - +a.value).toFixed(2)}s`;
+    }
+    document.getElementById('slTrimStart').addEventListener('input', updateTrim);
+    document.getElementById('slTrimEnd').addEventListener('input', updateTrim);
+
+    function trimmedFrames() {
+      const start = +document.getElementById('slTrimStart').value;
+      const end = +document.getElementById('slTrimEnd').value;
+      return recordedFrames.filter(f => f.time >= start && f.time <= end)
+        .map(f => ({ time: +(f.time - start).toFixed(4), hipsPos: f.hipsPos, bones: f.bones, expressions: f.expressions }));
+    }
+
+    // ── Playback preview ────────────────────────────────────────────
+    let mocapPlayback = false;
+    let mocapPlaybackStartedAt = 0;
+    let activeMocapFrames = [];
+
+    document.getElementById('btnPlayback').addEventListener('click', (e) => {
+      const frames = trimmedFrames();
+      if (frames.length < 2) return;
+      mocapPlayback = !mocapPlayback;
+      if (mocapPlayback) { activeMocapFrames = frames; mocapPlaybackStartedAt = performance.now(); }
+      e.target.classList.toggle('active', mocapPlayback);
+      document.getElementById('hudMode').textContent = mocapPlayback ? 'previewing take' : 'idle';
+    });
+
+    function lerp(a, b, t) { return a + (b - a) * t; }
+    const playbackQuat = new THREE.Quaternion();
+
+    function sampleAndApply(frames, t) {
+      if (!currentVRM || frames.length < 2) return;
+      const duration = frames.at(-1).time || 0.001;
+      const time = ((t % duration) + duration) % duration;
+      let i = 0;
+      while (i < frames.length - 2 && frames[i + 1].time < time) i++;
+      const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
+      const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
+
+      for (const name of THREE_VRM_HUMAN_BONE_NAMES) {
+        const bone = currentVRM.humanoid?.getNormalizedBoneNode(name);
+        const qa = a.bones[name], qb = b.bones[name];
+        if (!bone || !qa || !qb) continue;
+        playbackQuat.set(
+          lerp(qa[0], qb[0], f), lerp(qa[1], qb[1], f),
+          lerp(qa[2], qb[2], f), lerp(qa[3], qb[3], f),
+        ).normalize();
+        bone.quaternion.copy(playbackQuat);
+      }
+      const hips = currentVRM.humanoid?.getNormalizedBoneNode('hips');
+      if (hips) {
+        hips.position.set(
+          lerp(a.hipsPos[0], b.hipsPos[0], f),
+          lerp(a.hipsPos[1], b.hipsPos[1], f),
+          lerp(a.hipsPos[2], b.hipsPos[2], f),
+        );
+      }
+      if (currentVRM.expressionManager && a.expressions) {
+        for (const name of Object.keys(a.expressions)) {
+          currentVRM.expressionManager.setValue(name, lerp(a.expressions[name], b.expressions[name] ?? 0, f));
+        }
+      }
+      currentVRM.update(1 / 60);
+    }
+
+    // ── Export ────────────────────────────────────────────────────
+    function buildExportModule(frames, exportName) {
+      return `// ${exportName}.js
+// Mocap clip exported from video-vrm-mocap.html.
+// Tracked with MediaPipe Tasks Vision + Kalidokit, retargeted onto Aiko's VRM humanoid skeleton.
+// Replay on any loaded @pixiv/three-vrm VRM instance with the same bone naming.
+
+const BONES = ${JSON.stringify(THREE_VRM_HUMAN_BONE_NAMES)};
+const FRAMES = ${JSON.stringify(frames)};
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function sample(frames, t) {
+  if (!frames.length) return null;
+  const duration = frames[frames.length - 1].time || 0.001;
+  const time = ((t % duration) + duration) % duration;
+  let i = 0;
+  while (i < frames.length - 2 && frames[i + 1].time < time) i++;
+  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
+  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
+  return { a, b, f };
+}
+
+// vrm: a loaded @pixiv/three-vrm VRM instance. t: seconds, looping.
+export function ${exportName}(vrm, t) {
+  const s = sample(FRAMES, t);
+  if (!s || !vrm.humanoid) return;
+  const { a, b, f } = s;
+  for (const name of BONES) {
+    const bone = vrm.humanoid.getNormalizedBoneNode(name);
+    const qa = a.bones[name], qb = b.bones[name];
+    if (!bone || !qa || !qb) continue;
+    bone.quaternion.set(
+      lerp(qa[0], qb[0], f), lerp(qa[1], qb[1], f),
+      lerp(qa[2], qb[2], f), lerp(qa[3], qb[3], f),
+    ).normalize();
+  }
+  const hips = vrm.humanoid.getNormalizedBoneNode('hips');
+  if (hips) {
+    hips.position.set(
+      lerp(a.hipsPos[0], b.hipsPos[0], f),
+      lerp(a.hipsPos[1], b.hipsPos[1], f),
+      lerp(a.hipsPos[2], b.hipsPos[2], f),
+    );
+  }
+  if (vrm.expressionManager && a.expressions) {
+    for (const name of Object.keys(a.expressions)) {
+      vrm.expressionManager.setValue(name, lerp(a.expressions[name], b.expressions[name] ?? 0, f));
+    }
+  }
+}
+`;
+    }
+
+    document.getElementById('btnSaveGesture').addEventListener('click', async () => {
+      const frames = trimmedFrames();
+      if (frames.length < 2) return showBanner('Track a video and crop at least two frames first.', 'info');
+      const rawName = document.getElementById('gestureFileName').value.replace(/\.js$/i, '') || 'myVideoMocap';
+      const exportName = rawName.replace(/[^a-zA-Z0-9_$]/g, '_').replace(/^[^a-zA-Z_$]/, '_$&');
+      const source = buildExportModule(frames, exportName);
+      try {
+        if ('showSaveFilePicker' in window) {
+          const handle = await showSaveFilePicker({ suggestedName: `${rawName}.js`, types: [{ description: 'JavaScript module', accept: { 'text/javascript': ['.js'] } }] });
+          const writable = await handle.createWritable();
+          await writable.write(source);
+          await writable.close();
+          setMocapStatus(`saved ${rawName}.js`, 'live');
+        } else {
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+          a.download = `${rawName}.js`;
+          a.click();
+          URL.revokeObjectURL(a.href);
+          setMocapStatus(`downloaded ${rawName}.js`, 'live');
+        }
+      } catch (err) {
+        if (err.name !== 'AbortError') showBanner(`Save failed: ${err.message}`);
+      }
+    });
+
+    // ── Reset ────────────────────────────────────────────────────
+    document.getElementById('btnResetPose').addEventListener('click', () => {
+      mocapPlayback = false;
+      document.getElementById('btnPlayback').classList.remove('active');
+      if (currentVRM?.humanoid) {
+        for (const name of THREE_VRM_HUMAN_BONE_NAMES) {
+          const bone = currentVRM.humanoid.getNormalizedBoneNode(name);
+          if (bone) bone.quaternion.identity();
+        }
+        const hips = currentVRM.humanoid.getNormalizedBoneNode('hips');
+        if (hips) hips.position.set(0, 0, 0);
+        if (currentVRM.expressionManager) {
+          for (const name of ['blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh']) {
+            currentVRM.expressionManager.setValue(name, 0);
+          }
+        }
+      }
+      document.getElementById('hudMode').textContent = 'idle';
+    });
+
     // ── Render loop ───────────────────────────────────────────────
     let last = performance.now();
+    let animTime = 0;
     (function loop(now) {
       requestAnimationFrame(loop);
       const dt = Math.min((now - last) / 1000, 0.05);
       last = now;
-      tickAnimation(dt);
+      animTime += dt;
+      document.getElementById('hudT').textContent = animTime.toFixed(2);
+
+      if (mocapPlayback && activeMocapFrames.length > 1) {
+        sampleAndApply(activeMocapFrames, (now - mocapPlaybackStartedAt) / 1000);
+      } else if (currentVRM) {
+        currentVRM.update(dt);
+      }
+
       applyOrbit();
       renderer.render(scene, camera);
     })(performance.now());
