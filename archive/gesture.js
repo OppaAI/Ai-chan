@@ -42,12 +42,12 @@ function sideBones(ctx, side = ctx.side) {
   };
 }
 
-function poseArm(ctx, side, upper = {}, lower = {}, hand = {}, amount = 1) {
+function poseArm(ctx, side, upper = {}, lower = {}, hand = {}) {
   const b = sideBones(ctx, side);
   const set = (bone, rest, io, vals) => {
     if (!bone) return;
     for (const axis of ['x', 'y', 'z']) {
-      if (vals[axis] !== undefined) bone.rotation[axis] = blend((rest[axis] ?? 0) + (io[axis] ?? 0), vals[axis], amount);
+      if (vals[axis] !== undefined) bone.rotation[axis] = blend((rest[axis] ?? 0) + (io[axis] ?? 0), vals[axis], 1);
     }
   };
   set(b.UA, b.restUA, b.ioUA, upper);
@@ -109,62 +109,110 @@ export function headNod(ctx) {
 
 export function hairBrush(ctx) {
   const { t, intensity = 1, strokeSpeed = 0.9, side } = ctx;
-  const brush = strokeCycle(t, strokeSpeed, 0.76);
+  const b = strokeCycle(t, strokeSpeed, 0.76);
   const a = holdCycle(t, 0.23, 0.5) * intensity;
   poseArm(ctx, side,
-    { x: -0.55 + brush * 0.04, z: side * (0.92 + brush * 0.08) },
-    { x: -1.35 + brush * 0.55, z: side * 0.16 },
-    { x: -0.30 - brush * 0.14, y: -side * (0.55 - brush * 0.18), z: side * (0.20 + brush * 0.08) },
-    a
+    { x: -0.48 * a, z: side * (0.82 + b * 0.08) * a },
+    { x: -(1.18 - b * 0.45) * a, z: side * 0.18 * a },
+    { x: -(0.20 + b * 0.18) * a, y: -side * (0.50 - b * 0.16) * a, z: side * (0.16 + b * 0.10) * a }
   );
-  look(ctx, { x: -0.03 * a, y: side * (0.04 + brush * 0.02) * a, z: -side * 0.08 * a }, 1);
+  look(ctx, { x: -0.025 * a, y: side * (0.035 + b * 0.025) * a, z: -side * 0.075 * a }, 1);
 }
 
 export function lookAtHand(ctx) {
-  const { side, intensity, io, REST, head, neck, lUA, lLA, lH, rUA, rLA, rH } = ctx;
-  const s = side < 0 ? -1 : 1;
-  const a = holdCycle(ctx.t, 0.25, 0.46) * intensity;
+  const a = holdCycle(ctx.t, 0.25, 0.46) * ctx.intensity;
+  poseArm(ctx, ctx.side, { x: -0.42 * a, z: ctx.side * 0.68 * a }, { x: -0.92 * a, z: ctx.side * 0.14 * a }, { x: 0.18 * a, y: -ctx.side * 0.38 * a, z: ctx.side * 0.08 * wave(ctx.t, 3) * a });
+  look(ctx, { x: -0.08 * a, y: ctx.side * 0.18 * a, z: -ctx.side * 0.025 * a }, 1);
+}
 
-  // Restored to the stronger older pose: this brings the hand clearly up into view.
-  if (s < 0) {
-    if (lUA) {
-      lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -0.45, a);
-      lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -0.70, a);
-    }
-    if (lLA) {
-      lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -0.95, a);
-      lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -0.15, a);
-    }
-    if (lH) {
-      lH.rotation.x = blend(REST.leftHand.x + io.lH.x, 0.25, a);
-      lH.rotation.y = blend(REST.leftHand.y + io.lH.y, 0.45, a);
-      lH.rotation.z = blend(REST.leftHand.z + io.lH.z, 0.08 * wave(ctx.t, 3), a);
-    }
-  } else {
-    if (rUA) {
-      rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -0.45, a);
-      rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, 0.70, a);
-    }
-    if (rLA) {
-      rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -0.95, a);
-      rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, 0.15, a);
-    }
-    if (rH) {
-      rH.rotation.x = blend(REST.rightHand.x + io.rH.x, 0.25, a);
-      rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -0.45, a);
-      rH.rotation.z = blend(REST.rightHand.z + io.rH.z, -0.08 * wave(ctx.t, 3), a);
-    }
-  }
+export function fingerPlay(ctx) {
+  const a = holdCycle(ctx.t, 0.3, 0.5) * ctx.intensity;
+  poseArm(ctx, ctx.side, { x: -0.16 * a, z: ctx.side * 0.18 * a }, { x: -0.42 * a, z: ctx.side * 0.06 * a }, { x: 0.04 * wave(ctx.t, 5.2) * a, y: -ctx.side * 0.28 * a, z: ctx.side * 0.16 * wave(ctx.t, 7.1) * a });
+  look(ctx, { x: 0.055 * a, y: ctx.side * 0.11 * a, z: ctx.side * 0.02 * a }, 1);
+}
 
-  if (head) {
-    head.rotation.y = blend(io.head.y, s * 0.18, a);
-    head.rotation.x = blend(io.head.x, -0.10, a);
-    head.rotation.z = blend(io.head.z, -s * 0.025, a);
-  }
-  if (neck) {
-    neck.rotation.y = blend(io.neck?.y ?? 0, s * 0.10, a);
-    neck.rotation.x = blend(io.neck?.x ?? 0, -0.06, a);
-  }
+export function raiseHand(ctx) {
+  const a = holdCycle(ctx.t, 0.23, 0.44) * ctx.intensity;
+  const flutter = wave(ctx.t, 8.5) * 0.10 * a;
+  poseArm(ctx, ctx.side, { x: -0.72 * a, z: ctx.side * 0.44 * a }, { x: -0.86 * a, z: ctx.side * 0.10 * a }, { x: 0.10 * a, y: -ctx.side * 0.22 * a, z: ctx.side * flutter });
+  look(ctx, { x: -0.025 * a, y: ctx.side * 0.10 * a, z: -ctx.side * 0.018 * a }, 1);
+}
+
+export function chinTouch(ctx) {
+  const a = holdCycle(ctx.t, 0.22, 0.55) * ctx.intensity;
+  poseArm(ctx, ctx.side, { x: -0.55 * a, z: ctx.side * 0.58 * a }, { x: -1.02 * a, z: ctx.side * 0.10 * a }, { x: -0.18 * a, y: -ctx.side * 0.20 * a, z: ctx.side * 0.06 * a });
+  look(ctx, { x: 0.055 * a, y: -ctx.side * 0.035 * a, z: ctx.side * 0.045 * a }, 1);
+}
+
+export function touchCollar(ctx) {
+  const a = holdCycle(ctx.t, 0.28, 0.42) * ctx.intensity;
+  poseArm(ctx, ctx.side, { x: -0.46 * a, z: ctx.side * 0.44 * a }, { x: -0.82 * a, z: ctx.side * 0.18 * a }, { x: 0.12 * a, y: -ctx.side * 0.24 * a, z: ctx.side * 0.05 * wave(ctx.t, 4) * a });
+  look(ctx, { x: -0.035 * a, y: ctx.side * 0.08 * a, z: -ctx.side * 0.03 * a }, 1);
+}
+
+export function wristFlick(ctx) {
+  const a = holdCycle(ctx.t, 0.55, 0.15) * ctx.intensity;
+  poseArm(ctx, ctx.side, { z: ctx.side * 0.16 * a }, { y: -ctx.side * 0.34 * a }, { y: -ctx.side * 0.25 * a, z: ctx.side * 0.48 * wave(ctx.t, 11) * a });
+  look(ctx, { y: ctx.side * 0.06 * a, z: -ctx.side * 0.015 * a }, 1);
+}
+
+export function shoulderRoll(ctx) {
+  const r = Math.sin((ctx.t * 0.55) % 1 * TAU) * ctx.intensity;
+  poseArm(ctx, ctx.side, { x: -0.20 * r, y: ctx.side * 0.10 * r, z: ctx.side * 0.14 * r }, {}, {});
+  look(ctx, { x: -0.02 * Math.abs(r), z: -ctx.side * 0.045 * r }, 1);
+}
+
+export function handOnHip(ctx) {
+  const a = holdCycle(ctx.t, 0.21, 0.58) * ctx.intensity;
+  poseArm(ctx, ctx.side, { x: -0.18 * a, z: ctx.side * 0.58 * a }, { x: -0.18 * a, z: ctx.side * 0.34 * a }, { y: -ctx.side * 0.12 * a, z: ctx.side * 0.22 * a });
+  look(ctx, { y: -ctx.side * 0.05 * a, z: ctx.side * 0.025 * a }, 1);
+}
+
+export function adjustSleeve(ctx) {
+  const a = holdCycle(ctx.t, 0.32, 0.34) * ctx.intensity;
+  const workingSide = -ctx.side;
+  poseArm(ctx, workingSide, { x: -0.30 * a, z: workingSide * 0.36 * a }, { x: -0.54 * a, y: -workingSide * 0.35 * a }, { x: -0.16 * a, z: workingSide * (0.12 + 0.08 * wave(ctx.t, 9)) * a });
+  look(ctx, { x: 0.04 * a, y: workingSide * 0.08 * a }, 1);
+}
+
+export function brushShoulder(ctx) {
+  const a = holdCycle(ctx.t, 0.35, 0.25) * ctx.intensity;
+  const workingSide = -ctx.side;
+  const brush = wave(ctx.t, 9.5) * a;
+  poseArm(ctx, workingSide, { x: -0.28 * a, z: workingSide * 0.24 * a }, { x: -0.45 * a }, { z: workingSide * 0.26 * brush, y: -workingSide * 0.12 * a });
+  look(ctx, { y: -workingSide * 0.08 * a, z: workingSide * 0.025 * a }, 1);
+}
+
+export function stretchArm(ctx) {
+  const a = holdCycle(ctx.t, 0.18, 0.42) * ctx.intensity;
+  poseArm(ctx, ctx.side, { x: -0.82 * a, z: ctx.side * 0.30 * a }, { x: -0.32 * a, z: ctx.side * 0.04 * a }, { x: 0.18 * a, y: -ctx.side * 0.10 * a });
+  look(ctx, { x: -0.04 * a, y: ctx.side * 0.12 * a, z: -ctx.side * 0.025 * a }, 1);
+}
+
+export function stretchNeck(ctx) {
+  const a = holdCycle(ctx.t, 0.2, 0.5) * ctx.intensity;
+  look(ctx, { x: -0.10 * a, y: -ctx.side * 0.04 * a, z: ctx.side * 0.08 * a }, 1);
+}
+
+export function shiftWeight(ctx) {
+  const a = Math.sin((ctx.t * 0.22) % 1 * Math.PI) * ctx.intensity;
+  look(ctx, { x: 0.005, y: -ctx.side * 0.025 * a, z: ctx.side * 0.04 * a }, 1);
+  poseArm(ctx, -1, { z: ctx.REST.leftUpperArm.z - ctx.side * 0.035 * a }, {}, {});
+  poseArm(ctx, 1, { z: ctx.REST.rightUpperArm.z - ctx.side * 0.035 * a }, {}, {});
+}
+
+export function sway(ctx) {
+  const s = wave(ctx.t, 0.8) * ctx.intensity;
+  look(ctx, { x: 0.01 * wave(ctx.t, 1.1), y: 0.035 * s, z: -0.045 * s }, 1);
+  poseArm(ctx, -1, { z: ctx.REST.leftUpperArm.z - 0.045 * s }, { x: ctx.REST.leftLowerArm.x + 0.018 * s }, {});
+  poseArm(ctx, 1, { z: ctx.REST.rightUpperArm.z - 0.045 * s }, { x: ctx.REST.rightLowerArm.x - 0.018 * s }, {});
+}
+
+export function crossArms(ctx) {
+  const a = holdCycle(ctx.t, 0.17, 0.5) * ctx.intensity;
+  poseArm(ctx, -1, { x: -0.16 * a, z: -0.34 * a }, { x: -0.36 * a, z: -0.25 * a }, { z: -0.10 * a });
+  poseArm(ctx, 1, { x: -0.16 * a, z: 0.34 * a }, { x: -0.36 * a, z: 0.25 * a }, { z: 0.10 * a });
+  look(ctx, { x: 0.035 * a, y: ctx.side * 0.025 * a }, 1);
 }
 
 export function fingerPlay(ctx) {
