@@ -257,9 +257,24 @@ class AikoThink:
     def _semantic_agent_intent(self, user_input: str) -> str:
         """Classify agentic intent by embedding similarity to route examples."""
         try:
-            best_label, best_score = self._semantic_best_label(user_input, _SEMANTIC_ROUTE_EXAMPLES)
-            log.debug("[route] Semantic route best=%s score=%.3f for: %r", best_label, best_score, user_input)
-            if best_score >= _SEMANTIC_ROUTE_THRESHOLD:
+            query_vector = self._memorize.embed_text(user_input)
+            labels, example_vectors = self._semantic_example_vectors(_SEMANTIC_ROUTE_EXAMPLES)
+            
+            scores: dict[str, float] = {}
+            for label, vector in zip(labels, example_vectors):
+                s = self._cosine_similarity(query_vector, vector)
+                if s > scores.get(label, 0.0):
+                    scores[label] = s
+            
+            best_label = max(scores, key=scores.get)
+            best_score = scores[best_label]
+            sorted_scores = sorted(scores.values(), reverse=True)
+            second_score = sorted_scores[1] if len(sorted_scores) > 1 else 0.0
+            
+            MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.03"))
+            log.debug("[route] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, best_score - second_score, user_input)
+            
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and (best_score - second_score) >= MIN_GAP:
                 return best_label
             return "chat"
         except Exception as e:
