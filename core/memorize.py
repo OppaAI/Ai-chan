@@ -71,7 +71,7 @@ import sqlite_vec
 from openai import OpenAI
 from fastembed import TextEmbedding
 
-from core.forget import compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
+from core.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
 from core.log import get_logger
 
 log = get_logger(__name__)
@@ -1389,7 +1389,10 @@ class AikoMemorize:
         """Persist one already-curated memory string without LLM extraction."""
         # metadata is accepted for call-site clarity; the current schema stores
         # only the curated text plus pinned flag.
-        return self._mem.add_raw(memory, user_id=user_id, pinned=pinned)
+        mem_id = self._mem.add_raw(memory, user_id=user_id, pinned=pinned)
+        if mem_id:
+            self._clear_search_cache()
+        return mem_id
 
     def get_since(self, since: datetime, user_id: str = USER_ID) -> list[dict]:
         """Return memories created on or after `since`, newest first."""

@@ -388,11 +388,12 @@ class AikoWeb:
             except queue.Empty:
                 self._push_vitals()
 
-    def get_voice_input(self, listen, speak=None, wait_fn=None) -> str:
+    def get_voice_input(self, listen, speak=None, wait_fn=None):
         """
         Capture a voice utterance via the browser's microphone and return the
-        transcript. Tells the browser to start streaming raw PCM mic frames
-        over the WebSocket (binary frames), feeds them into the same VAD/ASR
+        same (text, info) shape as AikoTUI.get_voice_input(). Tells the browser
+        to start streaming raw PCM mic frames over the WebSocket (binary frames),
+        feeds them into the same VAD/ASR
         pipeline used locally (via chunk_source), and stops the browser mic
         once the utterance is captured or the turn times out.
         """
@@ -454,8 +455,8 @@ class AikoWeb:
         self._broadcast({"type": "voice", "status": "idle"})
         raw = result_holder[0]
         if isinstance(raw, tuple):
-            raw = raw[0]
-        return raw or ""
+            return raw
+        return (raw or "", {})
 
     # ------------------------------------------------------------------
     # spin loop  (called during init phase — just keeps vitals ticking)

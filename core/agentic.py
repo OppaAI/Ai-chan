@@ -9,6 +9,7 @@ history, and memory queue ownership stay in core/think.py.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -511,8 +512,18 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
         data = json.loads(match.group(0) if match else raw)
         ok = _coerce_verifier_bool(data.get("pass"))
-        score = float(data.get("score", 1.0 if ok else 0.0))
+        raw_score = data.get("score", 1.0 if ok else 0.0)
         feedback = str(data.get("feedback") or ("Verifier passed." if ok else "Verifier failed."))
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            score = 0.0
+            ok = False
+            feedback = "Verifier returned an invalid score."
+        if not math.isfinite(score) or score < 0.0 or score > 1.0:
+            ok = False
+            feedback = f"Verifier returned an out-of-range score: {raw_score!r}."
+            score = 0.0
         if score < AGENT_VERIFY_MIN_SCORE:
             ok = False
             if feedback == "Verifier passed.":

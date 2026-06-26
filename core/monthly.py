@@ -33,6 +33,7 @@ MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_
 MONTHLY_CONSOLIDATION_STATE_PATH = Path(os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH", str(Path.home() / ".aiko" / "monthly_consolidation_state.json")))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
+MONTHLY_CONSOLIDATION_LLM_TIMEOUT = float(os.getenv("MONTHLY_CONSOLIDATION_LLM_TIMEOUT", os.getenv("LLM_TIMEOUT", "120")))
 
 
 def _add_months(dt: datetime, months: int) -> datetime:
@@ -64,7 +65,7 @@ def _save_state(state: dict) -> None:
 
 
 def _chat(prompt: str, max_tokens: int = 700) -> str:
-    client = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+    client = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=MONTHLY_CONSOLIDATION_LLM_TIMEOUT)
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],

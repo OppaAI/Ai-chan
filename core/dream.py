@@ -10,9 +10,10 @@ The scheduler runs in a background daemon thread and fires once per local date a
 It does NOT block startup or conversation flow.
 
  VRAM safety:
-     dream() does zero LLM calls — only sqlite-vec ops and memory deletes.
-     No LLM-server contention. Safe to fire even if a conversation is mid-flight,
-     though a _dream_lock flag is checked to avoid overlapping passes.
+     memorize.dream() itself does zero LLM calls — only sqlite-vec ops and memory deletes.
+     This scheduler also runs reflection/monthly consolidation, which may call the LLM;
+     avoid configuring the window during expected active conversation time.
+     A _dream_lock flag is checked to avoid overlapping passes.
 """
 
 from datetime import datetime, timedelta, timezone

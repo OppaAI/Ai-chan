@@ -69,7 +69,7 @@ _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes",
 _ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
 _SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.36"))
 _SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.36"))
-_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.03"))
+_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -277,7 +277,7 @@ class AikoThink:
             raw_scores = example_vectors @ query_vector
 
             scores: dict[str, float] = {}
-            for label, score in zip(labels, raw_scores):
+            for label, score in zip(labels, raw_scores, strict=True):
                 scores[label] = max(scores.get(label, 0.0), float(score))
 
             best_label = max(scores, key=scores.get)
@@ -289,6 +289,8 @@ class AikoThink:
 
             if best_score >= _SEMANTIC_ROUTE_THRESHOLD and (best_score - second_score) >= _SEMANTIC_ROUTE_MIN_GAP:
                 return best_label
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and _ROUTE_MODE != "semantic_only":
+                return self._classify_agent_intent(user_input)
             return "chat"
         except Exception as e:
             log.warning("Semantic intent routing failed: %s", e)
@@ -344,7 +346,7 @@ class AikoThink:
                     "Aiko's own codebase/repository. Reply one label only.\n"
                     f"Message: {user_input!r}"
                 )}],
-                stream=False, max_tokens=8, temperature=0.0,
+                stream=False, max_tokens=8, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -675,7 +677,7 @@ class AikoThink:
                     f'If data, resolve pronouns into a search query.\n'
                     f'Reply EXACTLY:\ndata|<search query>\nor:\nsocial|none'
                 )}],
-                stream=False, max_tokens=32, temperature=0.0,
+                stream=False, max_tokens=32, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")
