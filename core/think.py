@@ -50,6 +50,7 @@ BOOT_LABELS = {
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL    = os.getenv("LLM_MODEL",    "ministral")
+ROUTER_MODEL = os.getenv("ROUTER_MODEL", LLM_MODEL)
 LLM_TIMEOUT  = float(os.getenv("LLM_TIMEOUT", 120))
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
@@ -182,7 +183,7 @@ _SEMANTIC_SEARCH_EXAMPLES: dict[str, tuple[str, ...]] = {
 class AikoThink:
     def __init__(self, memorize: AikoMemorize, speak: AikoSpeak | None = None) -> None:
         self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
-        self._llm_model = LLM_MODEL
+        self._llm_model = ROUTER_MODEL
         self._memorize  = memorize
         self._speak     = speak
         self._persona   = _load_persona()
