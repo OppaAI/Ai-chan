@@ -65,7 +65,7 @@ LLAMA_GPU_LAYERS = 999
 LLAMA_PARALLEL = 2        # tuned down from 4 — A100 has less VRAM than H100
 
 # GPU: switched back to A100 per request (was H100)
-GPU_TYPE = "A100"
+GPU_TYPE = "A10G"
 
 app    = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
