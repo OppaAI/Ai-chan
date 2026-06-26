@@ -137,9 +137,10 @@ _SEMANTIC_ROUTE_EXAMPLES: dict[str, tuple[str, ...]] = {
         "help implement this programming task",
     ),
     "architecture": (
-        "inspect Aiko's own codebase",
-        "read the repository and explain how this part works",
-        "debug or improve Aiko's architecture",
+        "open the codebase and show me this file",
+        "read your own source code and explain this part",
+        "search your repository for this function",
+        "look at your codebase and find where this is defined",
     ),
     "decision": (
         "help me decide between these choices",
