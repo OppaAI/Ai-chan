@@ -8,6 +8,13 @@ Run this once when changing EMBED_MODEL or EMBED_DIMS.
 The memories and memories_fts tables are untouched — only the
 vec0 table is dropped and rebuilt with fresh vectors.
 
+NOTE on instruction prefixes: stored memories are DOCUMENTS, not queries.
+For decoder-only instruct-style embedding models (e.g. harrier-oss-v1),
+the model card specifies query-side text needs an "Instruct: ...\\nQuery: "
+prefix while document-side text gets NO prefix. This script intentionally
+embeds raw `memory` text with no prefix — correct for documents. Only the
+live search query embedded at runtime in memorize.py needs the prefix.
+
 Usage:
     python3 migrate_embeddings.py [--db PATH] [--model MODEL_ID] [--dims N] [--dry-run]
 
@@ -48,7 +55,14 @@ DEFAULT_DB    = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "mem
 DEFAULT_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
 DEFAULT_DIMS  = int(os.getenv("EMBED_DIMS", "768"))
 FASTEMBED_CACHE = os.getenv("FASTEMBED_CACHE_PATH")
-BATCH_SIZE    = 64   # memories per embedding batch — tune down if OOM on Jetson
+BATCH_SIZE    = int(os.getenv("EMBED_BATCH_SIZE", "64"))   # memories per embedding batch — tune down if OOM on Jetson
+
+# Custom fastembed model registration — only needed for community ONNX
+# conversions that fastembed doesn't ship natively (e.g. ferrisS/harrier-oss-v1-270m-fastembed).
+# If you switch to a model fastembed supports out of the box, this becomes a no-op
+# you can skip via --no-register.
+_MODEL_FILE             = os.getenv("EMBED_MODEL_FILE", "model_quantized.onnx")
+_MODEL_ADDITIONAL_FILES = [os.getenv("EMBED_MODEL_DATA_FILE", "model_quantized.onnx_data")]
 
 
 def parse_args():
@@ -58,7 +72,41 @@ def parse_args():
     p.add_argument("--dims",    default=DEFAULT_DIMS,  type=int, help=f"Embedding dimensions (default: {DEFAULT_DIMS})")
     p.add_argument("--dry-run", action="store_true",   help="Load model and count memories, but don't write anything")
     p.add_argument("--batch",   default=BATCH_SIZE,    type=int, help=f"Embedding batch size (default: {BATCH_SIZE})")
+    p.add_argument("--no-register", action="store_true",
+                   help="Skip add_custom_model() registration — use if --model is natively supported by fastembed")
     return p.parse_args()
+
+
+def register_custom_model(model_id: str, dims: int) -> None:
+    """
+    Register a community/custom ONNX embedding model with fastembed so
+    TextEmbedding(model_name=model_id) can find it. Safe to call even if
+    already registered in this process (fastembed raises on duplicate
+    registration, which we swallow).
+    """
+    from fastembed import TextEmbedding
+    from fastembed.common.model_description import ModelSource, PoolingType
+
+    try:
+        TextEmbedding.add_custom_model(
+            model=model_id,
+            # NOTE: verify against the model card / config_sentence_transformers.json
+            # for the actual repo — harrier-oss-v1 uses LAST-TOKEN pooling, not mean.
+            # If fastembed's PoolingType has no last-token option and the ONNX
+            # export doesn't bake pooling into the graph itself, embeddings will
+            # be silently degraded. Confirm before trusting migrated vectors.
+            pooling=PoolingType.MEAN,
+            normalization=True,
+            sources=ModelSource(hf=model_id),
+            dim=dims,
+            model_file=_MODEL_FILE,
+            additional_files=_MODEL_ADDITIONAL_FILES,
+        )
+        print(f"  ✓ Registered custom model {model_id!r} (dim={dims})")
+    except Exception as e:
+        # Already registered (e.g. re-run in same process, or fastembed now
+        # ships it natively) — not fatal, just log and continue.
+        print(f"  · Custom model registration skipped/failed (continuing): {e}")
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -107,7 +155,8 @@ def insert_vectors(
     batch_size: int,
 ) -> tuple[int, int]:
     """
-    Embed and insert in batches.
+    Embed and insert in batches. Memory text is embedded RAW — no instruction
+    prefix — since stored memories are documents, not queries.
     Returns (inserted, failed).
     """
     import sqlite_vec
@@ -118,7 +167,7 @@ def insert_vectors(
 
     for start in tqdm(range(0, total, batch_size), total=(total + batch_size - 1) // batch_size, desc="  Embedding"):
         batch = memories[start : start + batch_size]
-        texts = [m["memory"] for m in batch]
+        texts = [m["memory"] for m in batch]  # document-side: no prefix
 
         try:
             vectors = [v.tolist() for v in embedder.embed(texts)]
@@ -174,7 +223,11 @@ def main():
     except ImportError:
         sys.exit("✗ sqlite_vec not installed — pip install sqlite-vec")
 
-    # ── load model ────────────────────────────────────────────────────────────
+    # ── register + load model ─────────────────────────────────────────────────
+    if not args.no_register:
+        print("Registering custom embedding model with fastembed...")
+        register_custom_model(model, dims)
+
     print("Loading embedding model (may download on first run)...")
     t0 = time.perf_counter()
     try:
