@@ -1258,9 +1258,56 @@
       }
     }
     function buildGestureModule(frames, exportName) {
-      return `// ${exportName}.js\n// Video-imported gesture exported from archive/video-3d-model-animation.html.\n// Drop this beside gesture.js, or copy the exported function into gesture.js.\n\nexport function blend(from, to, t) { return from + (to - from) * t; }\n\nconst FRAMES = ${JSON.stringify(frames)};\nconst BONES = ['lUA','lLA','lH','rUA','rLA','rH','lUL','lLL','lF','rUL','rLL','rF','neck','torso','headP'];\nfunction sample(frames, t) {\n  if (!frames.length) return null;\n  const duration = frames[frames.length - 1].time || 0.001;\n  const time = ((t % duration) + duration) % duration;\n  let i = 0;\n  while (i < frames.length - 2 && frames[i + 1].time < time) i++;\n  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];\n  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));\n  const bones = Object.fromEntries(BONES.map(name => [name, { x: blend(a.bones[name].x, b.bones[name].x, f), y: blend(a.bones[name].y, b.bones[name].y, f), z: blend(a.bones[name].z, b.bones[name].z, f) }]));
-  const face = a.face && b.face ? { mouthX: blend(a.face.mouthX, b.face.mouthX, f), mouthY: blend(a.face.mouthY, b.face.mouthY, f), eyeLY: blend(a.face.eyeLY, b.face.eyeLY, f), eyeRY: blend(a.face.eyeRY, b.face.eyeRY, f) } : null;
-  return { bones, face };\n}\nexport function ${exportName}(ctx) {\n  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));\n  if (!pose) return;\n  const amount = ctx.intensity ?? 1;\n  for (const [name, rot] of Object.entries(pose)) {\n    const bone = ctx[name];\n    if (!bone) continue;\n    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);\n    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);\n    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);\n  }\n}\n`;
+      return `// ${exportName}.js
+// Video-imported gesture exported from archive/video-3d-model-animation.html.
+// Drop this beside gesture.js, or copy the exported function into gesture.js.
+
+export function blend(from, to, t) { return from + (to - from) * t; }
+
+const FRAMES = ${JSON.stringify(frames)};
+const BONES = ['lUA','lLA','lH','rUA','rLA','rH','lUL','lLL','lF','rUL','rLL','rF','neck','torso','headP'];
+function sample(frames, t) {
+  if (!frames.length) return null;
+  const duration = frames[frames.length - 1].time || 0.001;
+  const time = ((t % duration) + duration) % duration;
+  let i = 0;
+  while (i < frames.length - 2 && frames[i + 1].time < time) i++;
+  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
+  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
+  const bones = Object.fromEntries(BONES.map(name => [name, {
+    x: blend(a.bones[name].x, b.bones[name].x, f),
+    y: blend(a.bones[name].y, b.bones[name].y, f),
+    z: blend(a.bones[name].z, b.bones[name].z, f),
+  }]));
+  const face = a.face && b.face ? {
+    mouthX: blend(a.face.mouthX, b.face.mouthX, f),
+    mouthY: blend(a.face.mouthY, b.face.mouthY, f),
+    eyeLY: blend(a.face.eyeLY, b.face.eyeLY, f),
+    eyeRY: blend(a.face.eyeRY, b.face.eyeRY, f),
+  } : null;
+  return { bones, face };
+}
+export function ${exportName}(ctx) {
+  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));
+  if (!pose) return;
+  const amount = ctx.intensity ?? 1;
+  for (const [name, rot] of Object.entries(pose.bones)) {
+    const bone = ctx[name];
+    if (!bone) continue;
+    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);
+    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);
+    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);
+  }
+  if (pose.face) {
+    if (ctx.faceMouth) {
+      ctx.faceMouth.scale.x = blend(ctx.faceMouth.scale.x, pose.face.mouthX, amount);
+      ctx.faceMouth.scale.y = blend(ctx.faceMouth.scale.y, pose.face.mouthY, amount);
+    }
+    if (ctx.faceEyeL) ctx.faceEyeL.scale.y = blend(ctx.faceEyeL.scale.y, pose.face.eyeLY, amount);
+    if (ctx.faceEyeR) ctx.faceEyeR.scale.y = blend(ctx.faceEyeR.scale.y, pose.face.eyeRY, amount);
+  }
+}
+`;
     }
     window.saveRecordedGesture = async function () {
       const frames = trimmedFrames(); if (frames.length < 2) return showBanner('Generate and crop at least two frames first.', 'info');
