@@ -724,12 +724,22 @@
     // Head pivot for independent head rotation
     const headPivot = new THREE.Object3D(); headPivot.position.set(0, 0.66, 0); torsoPivot.add(headPivot);
 
-    // Static legs
-    [-0.09, 0.09].forEach(x => {
-      const ul = mkCapsule(0.28, 0.065, MAT_BODY); ul.position.set(x, 0.35, 0); root.add(ul);
-      const ll = mkCapsule(0.28, 0.055, MAT_BODY); ll.position.set(x, 0.06, 0); root.add(ll);
-      const ft = mkCapsule(0.10, 0.04, MAT_BODY); ft.rotation.x = Math.PI / 2; ft.position.set(x, -0.08, 0.04); root.add(ft);
-    });
+    function buildLeg(side) {
+      const hipPivot = new THREE.Object3D(); hipPivot.position.set(side * 0.09, 0.62, 0); root.add(hipPivot);
+      const ul = mkCapsule(0.28, 0.065, MAT_BODY); ul.position.set(0, -0.14, 0); hipPivot.add(ul);
+      const knee = mkSphere(0.04, MAT_JOINT); knee.position.set(0, -0.28, 0); hipPivot.add(knee);
+
+      const kneePivot = new THREE.Object3D(); kneePivot.position.set(0, -0.28, 0); hipPivot.add(kneePivot);
+      const ll = mkCapsule(0.28, 0.055, MAT_BODY); ll.position.set(0, -0.14, 0); kneePivot.add(ll);
+      const ankle = mkSphere(0.035, MAT_JOINT); ankle.position.set(0, -0.28, 0); kneePivot.add(ankle);
+
+      const footPivot = new THREE.Object3D(); footPivot.position.set(0, -0.28, 0); kneePivot.add(footPivot);
+      const ft = mkCapsule(0.10, 0.04, MAT_BODY); ft.rotation.x = Math.PI / 2; ft.position.set(0, -0.03, 0.06); footPivot.add(ft);
+      return { hipPivot, kneePivot, footPivot };
+    }
+
+    const leftLeg = buildLeg(-1);
+    const rightLeg = buildLeg(1);
 
     // Face expression meshes (on headPivot)
     const MAT_FACE = new THREE.MeshLambertMaterial({ color: 0xffd6e0 });
@@ -774,6 +784,12 @@
       rightUpperArm: { x: 0, y: 0, z: -0.25 },
       rightLowerArm: { x: 0.1, y: 0, z: -0.05 },
       rightHand: { x: 0, y: 0, z: 0 },
+      leftUpperLeg: { x: 0, y: 0, z: 0.05 },
+      leftLowerLeg: { x: 0, y: 0, z: 0 },
+      leftFoot: { x: 0, y: 0, z: 0 },
+      rightUpperLeg: { x: 0, y: 0, z: -0.05 },
+      rightLowerLeg: { x: 0, y: 0, z: 0 },
+      rightFoot: { x: 0, y: 0, z: 0 },
     };
 
     function applyRest() {
@@ -783,6 +799,12 @@
       rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
       rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
       rightArm.hPivot.rotation.set(REST.rightHand.x, 0, 0);
+      leftLeg.hipPivot.rotation.set(REST.leftUpperLeg.x, 0, REST.leftUpperLeg.z);
+      leftLeg.kneePivot.rotation.set(REST.leftLowerLeg.x, 0, REST.leftLowerLeg.z);
+      leftLeg.footPivot.rotation.set(REST.leftFoot.x, 0, REST.leftFoot.z);
+      rightLeg.hipPivot.rotation.set(REST.rightUpperLeg.x, 0, REST.rightUpperLeg.z);
+      rightLeg.kneePivot.rotation.set(REST.rightLowerLeg.x, 0, REST.rightLowerLeg.z);
+      rightLeg.footPivot.rotation.set(REST.rightFoot.x, 0, REST.rightFoot.z);
       torsoPivot.rotation.set(0, 0, 0);
       headPivot.rotation.set(0, 0, 0);
       neck.rotation.set(0, 0, 0);
@@ -806,6 +828,12 @@
         rUA: rightArm.uaPivot.rotation.clone(),
         rLA: rightArm.laPivot.rotation.clone(),
         rH: rightArm.hPivot.rotation.clone(),
+        lUL: leftLeg.hipPivot.rotation.clone(),
+        lLL: leftLeg.kneePivot.rotation.clone(),
+        lF: leftLeg.footPivot.rotation.clone(),
+        rUL: rightLeg.hipPivot.rotation.clone(),
+        rLL: rightLeg.kneePivot.rotation.clone(),
+        rF: rightLeg.footPivot.rotation.clone(),
         neck: neck.rotation.clone(),
         torso: torsoPivot.rotation.clone(),
         headP: headPivot.rotation.clone(),
@@ -820,6 +848,12 @@
         [rightArm.uaPivot, from.rUA],
         [rightArm.laPivot, from.rLA],
         [rightArm.hPivot, from.rH],
+        [leftLeg.hipPivot, from.lUL],
+        [leftLeg.kneePivot, from.lLL],
+        [leftLeg.footPivot, from.lF],
+        [rightLeg.hipPivot, from.rUL],
+        [rightLeg.kneePivot, from.rLL],
+        [rightLeg.footPivot, from.rF],
         [neck, from.neck],
         [torsoPivot, from.torso],
         [headPivot, from.headP],
@@ -863,7 +897,7 @@
     }
 
     // ── Video mocap importer ─────────────────────────────────────
-    const MOCAP_BONES = ['lUA', 'lLA', 'lH', 'rUA', 'rLA', 'rH', 'neck', 'torso', 'headP'];
+    const MOCAP_BONES = ['lUA', 'lLA', 'lH', 'rUA', 'rLA', 'rH', 'lUL', 'lLL', 'lF', 'rUL', 'rLL', 'rF', 'neck', 'torso', 'headP'];
     const cameraPreview = document.getElementById('cameraPreview');
     let holistic = null;
     let selectedVideoUrl = null;
@@ -889,20 +923,48 @@
 
     function captureFrame(time) {
       return {
-        time: +time.toFixed(4), bones: Object.fromEntries(MOCAP_BONES.map(name => [name, rotationPlain({
+        time: +time.toFixed(4),
+        bones: Object.fromEntries(MOCAP_BONES.map(name => [name, rotationPlain({
           lUA: leftArm.uaPivot.rotation, lLA: leftArm.laPivot.rotation, lH: leftArm.hPivot.rotation,
           rUA: rightArm.uaPivot.rotation, rLA: rightArm.laPivot.rotation, rH: rightArm.hPivot.rotation,
+          lUL: leftLeg.hipPivot.rotation, lLL: leftLeg.kneePivot.rotation, lF: leftLeg.footPivot.rotation,
+          rUL: rightLeg.hipPivot.rotation, rLL: rightLeg.kneePivot.rotation, rF: rightLeg.footPivot.rotation,
           neck: neck.rotation, torso: torsoPivot.rotation, headP: headPivot.rotation,
-        }[name])]))
+        }[name])])),
+        face: {
+          mouthX: +faceMouth.scale.x.toFixed(5), mouthY: +faceMouth.scale.y.toFixed(5),
+          eyeLY: +faceEyeL.scale.y.toFixed(5), eyeRY: +faceEyeR.scale.y.toFixed(5),
+        },
       };
     }
 
-    function vec(a, b) { return { x: b.x - a.x, y: b.y - a.y, z: (b.z ?? 0) - (a.z ?? 0) }; }
+    function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
     function mapRange(v, inMin, inMax, outMin, outMax) {
-      const t = Math.max(0, Math.min(1, (v - inMin) / (inMax - inMin)));
+      const t = clamp((v - inMin) / (inMax - inMin), 0, 1);
       return outMin + (outMax - outMin) * t;
     }
-    function confidence(...pts) { return pts.every(p => (p?.visibility ?? 1) > 0.4); }
+    function confidence(...pts) { return pts.every(p => (p?.visibility ?? 1) > 0.35); }
+    function mpVec(p) { return new THREE.Vector3(p.x, -p.y, -(p.z ?? 0)); }
+    function localVector(a, b, basis) {
+      const v = mpVec(b).sub(mpVec(a));
+      return new THREE.Vector3(v.dot(basis.right), v.dot(basis.up), v.dot(basis.forward)).normalize();
+    }
+    function makeBodyBasis(lm) {
+      const lSh = lm[11], rSh = lm[12], lHip = lm[23], rHip = lm[24];
+      if (!confidence(lSh, rSh, lHip, rHip)) return null;
+      const shoulderMid = mpVec(lSh).add(mpVec(rSh)).multiplyScalar(0.5);
+      const hipMid = mpVec(lHip).add(mpVec(rHip)).multiplyScalar(0.5);
+      const right = mpVec(rSh).sub(mpVec(lSh)).normalize();
+      const up = shoulderMid.sub(hipMid).normalize();
+      const forward = new THREE.Vector3().crossVectors(right, up).normalize();
+      up.crossVectors(forward, right).normalize();
+      return { right, up, forward };
+    }
+    function smoothRotation(obj, x, y, z, amount = 0.55) {
+      obj.rotation.x = lerp(obj.rotation.x, x, amount);
+      obj.rotation.y = lerp(obj.rotation.y, y, amount);
+      obj.rotation.z = lerp(obj.rotation.z, z, amount);
+    }
 
     // ── Core pose → model mapping ────────────────────────────────
     // MediaPipe landmark coordinate space:
@@ -913,105 +975,88 @@
     // NOTE: In image space, the person's LEFT body part appears on the RIGHT side (x~0.6+)
     //       and person's RIGHT appears on LEFT side (x~0.3-). This is the mirror effect.
 
-    function driveArmFromPose(side, lm) {
-      // side < 0 = model left arm = person's LEFT arm = image RIGHT side = landmark indices 11,13,15
-      // side > 0 = model right arm = person's RIGHT arm = image LEFT side = landmark indices 12,14,16
-      // In image space, person's LEFT shoulder has HIGHER x (right of image)
+    function driveArmFromPose(side, lm, basis) {
       const idx = side < 0 ? { sh: 11, el: 13, wr: 15 } : { sh: 12, el: 14, wr: 16 };
       const sh = lm[idx.sh], el = lm[idx.el], wr = lm[idx.wr];
-      if (!confidence(sh, el, wr)) return;
+      if (!basis || !confidence(sh, el, wr)) return;
 
-      // Normalize by shoulder width so camera distance doesn't affect scale
-      const lSh = lm[11], rSh = lm[12];
-      const shWidth = Math.max(0.05, Math.abs(lSh.x - rSh.x));
-      const shMidX = (lSh.x + rSh.x) / 2;
-      const shMidY = (lSh.y + rSh.y) / 2;
-
-      // Elbow relative to shoulder, normalized
-      const dElX = (el.x - sh.x) / shWidth;  // lateral offset in shoulder-widths
-      const dElY = (el.y - sh.y) / shWidth;  // vertical offset (positive = elbow below shoulder)
-
-      // Wrist relative to elbow, normalized
-      const dWrX = (wr.x - el.x) / shWidth;
-      const dWrY = (wr.y - el.y) / shWidth;
-
-      // ── Upper arm ──
-      // Lift: elbow going UP means el.y < sh.y → dElY negative → arm raised
-      // rotation.x: negative = arm swings forward/up in Three.js
-      const liftX = mapRange(dElY, 0.6, -0.6, 0.3, -1.3);  // +0.3 rest to -1.3 fully raised
-
-      // Spread: in IMAGE space, person's LEFT arm goes further RIGHT (larger x) when arm out
-      //         person's RIGHT arm goes further LEFT (smaller x) when arm out
-      // For left arm (side=-1): sh is at right of image (high x), elbow further right = arm out
-      //   → dElX positive = elbow right of shoulder = arm spread out for left arm
-      // For right arm (side=+1): sh is at left of image (low x), elbow further left = arm out
-      //   → dElX negative = elbow left of shoulder = arm spread out for right arm
-      // Model: positive z-rotation = left arm out, negative z-rotation = right arm out
-      // Multiply by -side to invert the image-space direction to model-space
-      const spreadZ = mapRange(dElX * (-side), -0.8, 0.8, -0.9, 0.9);
+      const upper = localVector(sh, el, basis);
+      const lower = localVector(el, wr, basis);
       const restUA = side < 0 ? REST.leftUpperArm : REST.rightUpperArm;
-
-      // ── Lower arm (elbow bend) ──
-      // Reach = distance wrist→shoulder; closer = more bent
-      const reach = Math.hypot((wr.x - sh.x) / shWidth, (wr.y - sh.y) / shWidth);
-      const bendX = mapRange(reach, 0.15, 1.1, -1.4, -0.05);  // negative = elbow bent forward
       const restLA = side < 0 ? REST.leftLowerArm : REST.rightLowerArm;
+      const arm = side < 0 ? leftArm : rightArm;
 
-      // Forearm twist based on wrist-relative-to-elbow lateral direction
-      const twistZ = mapRange(dWrX * (-side), -0.8, 0.8, -0.5, 0.5);
+      const liftX = clamp(-upper.y * 1.45 + upper.z * 0.85, -1.45, 0.8);
+      const spreadZ = clamp(upper.x * side * 1.25, -1.05, 1.05);
+      const forwardY = clamp(upper.z * -0.55, -0.55, 0.55);
 
-      // ── Hand wrist flex ──
-      const wristX = mapRange(dWrY, -0.5, 0.5, -0.45, 0.45);  // wrist up/down relative to elbow
-      const wristY = mapRange(dWrX * (-side), -0.4, 0.4, -0.4, 0.4);
+      const bend = Math.acos(clamp(upper.dot(lower), -1, 1));
+      const bendX = clamp(-bend * 0.85 + 0.25, -1.65, 0.15);
+      const twistZ = clamp(lower.x * side * 0.65, -0.65, 0.65);
+      const wristX = clamp(-lower.y * 0.45 + lower.z * 0.35, -0.55, 0.55);
+      const wristY = clamp(lower.x * side * 0.45, -0.45, 0.45);
 
-      const b = side < 0 ? leftArm : rightArm;
-      b.uaPivot.rotation.x = liftX;
-      b.uaPivot.rotation.z = restUA.z + spreadZ;
-      b.laPivot.rotation.x = bendX;
-      b.laPivot.rotation.z = restLA.z + twistZ;
-      b.hPivot.rotation.x = wristX;
-      b.hPivot.rotation.y = wristY;
+      smoothRotation(arm.uaPivot, liftX, forwardY, restUA.z + spreadZ);
+      smoothRotation(arm.laPivot, bendX, 0, restLA.z + twistZ);
+      smoothRotation(arm.hPivot, wristX, wristY, 0);
+    }
+
+    function driveLegFromPose(side, lm, basis) {
+      const idx = side < 0 ? { hip: 23, knee: 25, ankle: 27, foot: 31 } : { hip: 24, knee: 26, ankle: 28, foot: 32 };
+      const hip = lm[idx.hip], knee = lm[idx.knee], ankle = lm[idx.ankle], foot = lm[idx.foot];
+      if (!basis || !confidence(hip, knee, ankle)) return;
+
+      const upper = localVector(hip, knee, basis);
+      const lower = localVector(knee, ankle, basis);
+      const footVec = confidence(ankle, foot) ? localVector(ankle, foot, basis) : lower.clone();
+      const leg = side < 0 ? leftLeg : rightLeg;
+      const restUL = side < 0 ? REST.leftUpperLeg : REST.rightUpperLeg;
+
+      const liftX = clamp(-upper.z * 1.1 - Math.max(0, upper.y) * 0.25, -0.9, 0.75);
+      const spreadZ = clamp(upper.x * side * 0.55, -0.55, 0.55);
+      const swingY = clamp(upper.x * -side * 0.25, -0.25, 0.25);
+      const bend = Math.acos(clamp(upper.dot(lower), -1, 1));
+      const kneeX = clamp(bend * 0.95, 0, 1.7);
+      const footX = clamp(-footVec.z * 0.65, -0.55, 0.55);
+      const footZ = clamp(footVec.x * side * 0.35, -0.35, 0.35);
+
+      smoothRotation(leg.hipPivot, liftX, swingY, restUL.z + spreadZ);
+      smoothRotation(leg.kneePivot, kneeX, 0, 0);
+      smoothRotation(leg.footPivot, footX, 0, footZ);
     }
 
     function applyPoseLandmarks(lm) {
-      driveArmFromPose(-1, lm);
-      driveArmFromPose(1, lm);
+      const basis = makeBodyBasis(lm);
+      driveArmFromPose(-1, lm, basis);
+      driveArmFromPose(1, lm, basis);
+      driveLegFromPose(-1, lm, basis);
+      driveLegFromPose(1, lm, basis);
 
-      const lSh = lm[11], rSh = lm[12];
-      const nose = lm[0];
+      const lSh = lm[11], rSh = lm[12], lHip = lm[23], rHip = lm[24];
+      const nose = lm[0], lEar = lm[7], rEar = lm[8];
+      if (!confidence(lSh, rSh, lHip, rHip)) return;
+
       const shWidth = Math.max(0.05, Math.abs(lSh.x - rSh.x));
       const shMidX = (lSh.x + rSh.x) / 2;
       const shMidY = (lSh.y + rSh.y) / 2;
+      const hipMidX = (lHip.x + rHip.x) / 2;
+      const hipMidY = (lHip.y + rHip.y) / 2;
 
-      // ── Body/torso lean ──
-      if (confidence(lSh, rSh)) {
-        // Shoulder tilt → torso roll (z-axis)
-        // In image, if person leans right, left shoulder goes UP (lSh.y < rSh.y)
-        // → torsoPivot.rotation.z negative = lean right in Three.js
-        torsoPivot.rotation.z = mapRange(lSh.y - rSh.y, -0.15, 0.15, 0.25, -0.25);
+      const torsoRoll = clamp((lSh.y - rSh.y) * -2.2, -0.35, 0.35);
+      const torsoYaw = clamp((shMidX - hipMidX) / shWidth * -0.28, -0.28, 0.28);
+      const torsoPitch = clamp((shMidY - hipMidY + 0.42) * 0.55, -0.25, 0.25);
+      smoothRotation(torsoPivot, torsoPitch, torsoYaw, torsoRoll, 0.45);
 
-        // Forward lean: if both shoulders are lower than usual and face shows forward lean
-        torsoPivot.rotation.x = mapRange(shMidY, 0.2, 0.6, -0.15, 0.15);
-      }
-
-      // ── Head rotation ──
       if (confidence(nose, lSh, rSh)) {
-        // Pan (Y-axis): nose moves LEFT of center (low x) → head turns LEFT
-        // In image: nose.x < shMidX means nose is to the left in image = person turned right (from viewer)
-        // Model: headPivot.rotation.y positive = head turns left (from model's perspective)
-        // Mirror: person turning RIGHT → nose goes to image-left → we want model to turn RIGHT → negative Y
-        const panNorm = (nose.x - shMidX) / shWidth;  // normalized: 0 = center
-        headPivot.rotation.y = mapRange(panNorm, -0.8, 0.8, 0.5, -0.5);  // mirrored for correct direction
-
-        // Tilt (X-axis): nose lower than shoulders midpoint → chin up (head tilted back)
+        const panNorm = (nose.x - shMidX) / shWidth;
         const tiltNorm = (nose.y - shMidY) / shWidth;
-        headPivot.rotation.x = mapRange(tiltNorm, -0.4, 0.8, -0.35, 0.25);
-
-        // Roll (Z-axis): shoulder tilt drives head roll
-        headPivot.rotation.z = torsoPivot.rotation.z * 0.5 + mapRange(lSh.y - rSh.y, -0.15, 0.15, 0.12, -0.12);
-
-        // Neck follows head at reduced amount
-        neck.rotation.set(headPivot.rotation.x * 0.4, headPivot.rotation.y * 0.4, headPivot.rotation.z * 0.4);
+        let roll = torsoRoll * 0.35;
+        if (confidence(lEar, rEar)) roll += clamp((lEar.y - rEar.y) * -1.8, -0.25, 0.25);
+        const headY = clamp(-panNorm * 0.65, -0.65, 0.65);
+        const headX = clamp((tiltNorm - 0.55) * 0.65, -0.45, 0.35);
+        const headZ = clamp(roll, -0.35, 0.35);
+        smoothRotation(headPivot, headX, headY, headZ, 0.55);
+        smoothRotation(neck, headX * 0.4, headY * 0.4, headZ * 0.4, 0.55);
       }
     }
 
@@ -1064,7 +1109,7 @@
     function trimmedFrames() {
       const start = +document.getElementById('slTrimStart').value;
       const end = +document.getElementById('slTrimEnd').value;
-      return recordedFrames.filter(f => f.time >= start && f.time <= end).map(f => ({ time: +(f.time - start).toFixed(4), bones: f.bones }));
+      return recordedFrames.filter(f => f.time >= start && f.time <= end).map(f => ({ time: +(f.time - start).toFixed(4), bones: f.bones, face: f.face }));
     }
     async function ensureHolistic() {
       if (holistic) return;
@@ -1190,11 +1235,32 @@
       let i = 0; while (i < frames.length - 2 && frames[i + 1].time < time) i++;
       const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
       const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
-      return Object.fromEntries(MOCAP_BONES.map(name => [name, { x: lerp(a.bones[name].x, b.bones[name].x, f), y: lerp(a.bones[name].y, b.bones[name].y, f), z: lerp(a.bones[name].z, b.bones[name].z, f) }]));
+      const bones = Object.fromEntries(MOCAP_BONES.map(name => [name, { x: lerp(a.bones[name].x, b.bones[name].x, f), y: lerp(a.bones[name].y, b.bones[name].y, f), z: lerp(a.bones[name].z, b.bones[name].z, f) }]));
+      const face = a.face && b.face ? {
+        mouthX: lerp(a.face.mouthX, b.face.mouthX, f), mouthY: lerp(a.face.mouthY, b.face.mouthY, f),
+        eyeLY: lerp(a.face.eyeLY, b.face.eyeLY, f), eyeRY: lerp(a.face.eyeRY, b.face.eyeRY, f),
+      } : null;
+      return { bones, face };
     }
-    function applyMocapSample(sample) { if (!sample) return; const map = { lUA: leftArm.uaPivot, lLA: leftArm.laPivot, lH: leftArm.hPivot, rUA: rightArm.uaPivot, rLA: rightArm.laPivot, rH: rightArm.hPivot, neck, torso: torsoPivot, headP: headPivot }; for (const [k, r] of Object.entries(sample)) map[k]?.rotation.set(r.x, r.y, r.z); }
+    function applyMocapSample(sample) {
+      if (!sample) return;
+      const map = {
+        lUA: leftArm.uaPivot, lLA: leftArm.laPivot, lH: leftArm.hPivot,
+        rUA: rightArm.uaPivot, rLA: rightArm.laPivot, rH: rightArm.hPivot,
+        lUL: leftLeg.hipPivot, lLL: leftLeg.kneePivot, lF: leftLeg.footPivot,
+        rUL: rightLeg.hipPivot, rLL: rightLeg.kneePivot, rF: rightLeg.footPivot,
+        neck, torso: torsoPivot, headP: headPivot,
+      };
+      for (const [k, r] of Object.entries(sample.bones ?? sample)) map[k]?.rotation.set(r.x, r.y, r.z);
+      if (sample.face) {
+        faceMouth.scale.x = sample.face.mouthX; faceMouth.scale.y = sample.face.mouthY;
+        faceEyeL.scale.y = sample.face.eyeLY; faceEyeR.scale.y = sample.face.eyeRY;
+      }
+    }
     function buildGestureModule(frames, exportName) {
-      return `// ${exportName}.js\n// Video-imported gesture exported from archive/video-3d-model-animation.html.\n// Drop this beside gesture.js, or copy the exported function into gesture.js.\n\nexport function blend(from, to, t) { return from + (to - from) * t; }\n\nconst FRAMES = ${JSON.stringify(frames)};\nconst BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','torso','headP'];\nfunction sample(frames, t) {\n  if (!frames.length) return null;\n  const duration = frames[frames.length - 1].time || 0.001;\n  const time = ((t % duration) + duration) % duration;\n  let i = 0;\n  while (i < frames.length - 2 && frames[i + 1].time < time) i++;\n  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];\n  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));\n  return Object.fromEntries(BONES.map(name => [name, { x: blend(a.bones[name].x, b.bones[name].x, f), y: blend(a.bones[name].y, b.bones[name].y, f), z: blend(a.bones[name].z, b.bones[name].z, f) }]));\n}\nexport function ${exportName}(ctx) {\n  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));\n  if (!pose) return;\n  const amount = ctx.intensity ?? 1;\n  for (const [name, rot] of Object.entries(pose)) {\n    const bone = ctx[name];\n    if (!bone) continue;\n    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);\n    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);\n    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);\n  }\n}\n`;
+      return `// ${exportName}.js\n// Video-imported gesture exported from archive/video-3d-model-animation.html.\n// Drop this beside gesture.js, or copy the exported function into gesture.js.\n\nexport function blend(from, to, t) { return from + (to - from) * t; }\n\nconst FRAMES = ${JSON.stringify(frames)};\nconst BONES = ['lUA','lLA','lH','rUA','rLA','rH','lUL','lLL','lF','rUL','rLL','rF','neck','torso','headP'];\nfunction sample(frames, t) {\n  if (!frames.length) return null;\n  const duration = frames[frames.length - 1].time || 0.001;\n  const time = ((t % duration) + duration) % duration;\n  let i = 0;\n  while (i < frames.length - 2 && frames[i + 1].time < time) i++;\n  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];\n  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));\n  const bones = Object.fromEntries(BONES.map(name => [name, { x: blend(a.bones[name].x, b.bones[name].x, f), y: blend(a.bones[name].y, b.bones[name].y, f), z: blend(a.bones[name].z, b.bones[name].z, f) }]));
+  const face = a.face && b.face ? { mouthX: blend(a.face.mouthX, b.face.mouthX, f), mouthY: blend(a.face.mouthY, b.face.mouthY, f), eyeLY: blend(a.face.eyeLY, b.face.eyeLY, f), eyeRY: blend(a.face.eyeRY, b.face.eyeRY, f) } : null;
+  return { bones, face };\n}\nexport function ${exportName}(ctx) {\n  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));\n  if (!pose) return;\n  const amount = ctx.intensity ?? 1;\n  for (const [name, rot] of Object.entries(pose)) {\n    const bone = ctx[name];\n    if (!bone) continue;\n    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);\n    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);\n    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);\n  }\n}\n`;
     }
     window.saveRecordedGesture = async function () {
       const frames = trimmedFrames(); if (frames.length < 2) return showBanner('Generate and crop at least two frames first.', 'info');
@@ -1288,6 +1354,15 @@
             rUA: rightArm.uaPivot,
             rLA: rightArm.laPivot,
             rH: rightArm.hPivot,
+            lUL: leftLeg.hipPivot,
+            lLL: leftLeg.kneePivot,
+            lF: leftLeg.footPivot,
+            rUL: rightLeg.hipPivot,
+            rLL: rightLeg.kneePivot,
+            rF: rightLeg.footPivot,
+            faceMouth,
+            faceEyeL,
+            faceEyeR,
           });
         } catch (err) {
           showBanner(`${activeGestureName}() threw: ${err.message}`);
