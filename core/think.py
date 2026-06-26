@@ -168,6 +168,12 @@ _SEMANTIC_SEARCH_EXAMPLES: dict[str, tuple[str, ...]] = {
         "who won the game last night",
         "look up the newest release notes for this library",
         "find current facts and cite the source",
+        "what is this tool and what does it do",
+        "what is this software",
+        "tell me about this technology",
+        "what is this and where can I find out more",
+        "look up what this software does",
+        "find information about this tool online",
     ),
 }
 

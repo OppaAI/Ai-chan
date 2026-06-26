@@ -358,6 +358,21 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content=f"Missing required argument(s): {', '.join(missing)}. Reissue the tool call with complete arguments.",
             error_type="missing_args", retryable=True,
         )
+
+    # Guard against blank strings for search/fetch
+    if name == "web_search" and not (args.get("query") or "").strip():
+        return ToolResult(
+            ok=False, tool=name, args=args,
+            content="Missing required argument: query must be a non-empty string. Reissue with a specific search query.",
+            error_type="missing_args", retryable=True,
+        )
+    if name == "fetch_page" and not (args.get("url") or "").strip():
+        return ToolResult(
+            ok=False, tool=name, args=args,
+            content="Missing required argument: url must be a non-empty string.",
+            error_type="missing_args", retryable=True,
+        )
+
     return None
 
 

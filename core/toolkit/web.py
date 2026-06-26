@@ -86,6 +86,8 @@ def fetch_and_extract(url: str, max_chars: int = 4000) -> str:
 
 def deep_search(query: str, max_results: int = 3, fetch_top: int = 2) -> str:
     """Search, fetch the top pages, and return one compact research bundle."""
+    if not query or not query.strip():
+        return "[search failed: empty query]"
     raw_results = web_search(query, max_results)
     if raw_results.startswith("[search failed") or raw_results.startswith("[no results"):
         return raw_results
@@ -106,6 +108,8 @@ def deep_search(query: str, max_results: int = 3, fetch_top: int = 2) -> str:
 
 def web_search_context(query: str, max_results: int = MAX_RESULTS) -> str | None:
     """Run web_search and wrap successful results as context for chat mode."""
+    if not query or not query.strip():
+        return "[search failed: empty query]"
     results = web_search(query, max_results)
     if results.startswith("[search failed") or results.startswith("[no results"):
         return None
