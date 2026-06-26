@@ -163,7 +163,7 @@ uv run python core/speak.py --devices
 uv run python core/speak.py --wait "Hello, I'm Aiko."
 ```
 
-If you do not need voice, run Aiko with `--text`; wakeup will skip TTS and ASR.
+If you do not need voice initially, run Aiko with `--text`; TTS and ASR still load so `/voice` and `/listen` can toggle them on later without restarting.
 
 ---
 
@@ -185,7 +185,8 @@ LLM_MAX_TOKENS=280
 # Memory
 SQLITE_MEMORY_PATH=/home/oppa-ai/.aiko/memory.db
 FASTEMBED_CACHE_PATH=/home/oppa-ai/.cache/fastembed
-EMBED_MODEL=BAAI/bge-base-en-v1.5
+EMBED_MODEL=ferrisS/harrier-oss-v1-270m-fastembed
+EMBED_DIMS=640
 MEMORY_RECALL_LIMIT=5
 
 # Web search
@@ -282,10 +283,10 @@ uv run python main.py
 # Browser WebUI + VRM frontend
 uv run python main.py --webui
 
-# Keyboard-only, skips ASR and TTS
+# Keyboard-first, ASR/TTS loaded but initially toggled off
 uv run python main.py --text
 
-# Keyboard input but keep TTS available
+# Keyboard input, TTS on and ASR loaded but toggled off
 uv run python main.py --no-asr
 
 # Debug memory hits each turn

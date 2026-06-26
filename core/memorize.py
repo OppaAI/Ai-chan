@@ -79,18 +79,26 @@ log = get_logger(__name__)
 # ── boot labels ───────────────────────────────────────────────────────────────
 
 BOOT_LABELS = {
-    'mem_sqlite':  'Opening sqlite-vec memory store...',
+    'mem_sqlite_vec':  'Opening sqlite-vec memory store...',
     'mem_cleanup': 'Running memory cleanup...',
     'mem_ready':   'Memory backend ready',
 }
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-EMBED_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
-EMBED_DIMS  = os.getenv("EMBED_DIMS", 768)
+EMBED_MODEL = os.getenv("EMBED_MODEL", "ferrisS/harrier-oss-v1-270m-fastembed")
+EMBED_DIMS  = int(os.getenv("EMBED_DIMS", "640"))
+EMBED_QUERY_INSTRUCT = os.getenv("EMBED_QUERY_INSTRUCT", "Retrieve relevant memories that answer the query").strip()
+EMBED_MODEL_FILE = os.getenv("EMBED_MODEL_FILE", "model_quantized.onnx")
+EMBED_MODEL_DATA_FILE = os.getenv("EMBED_MODEL_DATA_FILE", "model_quantized.onnx_data").strip()
+EMBED_REGISTER_CUSTOM_MODEL = os.getenv("EMBED_REGISTER_CUSTOM_MODEL", "auto").strip().lower()
 RRF_K       = 60          # standard RRF constant — dampens outlier ranks
 KNN_LIMIT   = 20          # candidates fetched before RRF re-rank
 FTS_LIMIT   = 20          # candidates fetched before RRF re-rank
+MEMORY_RANK_RECENCY_WEIGHT = float(os.getenv("MEMORY_RANK_RECENCY_WEIGHT", "0.004"))
+MEMORY_RANK_RECENCY_HALF_LIFE_DAYS = float(os.getenv("MEMORY_RANK_RECENCY_HALF_LIFE_DAYS", "30"))
+MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"))
+MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.002"))
 SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -390,17 +398,26 @@ class _MemoryBackend:
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
       
         from fastembed.common.model_description import ModelSource, PoolingType
-        
-        # Before constructing the embedder:
-        TextEmbedding.add_custom_model(
-            model=EMBED_MODEL,
-            pooling=PoolingType.MEAN,
-            normalization=True,
-            sources=ModelSource(hf=EMBED_MODEL),
-            dim=EMBED_DIMS,
-            model_file="model_quantized.onnx",
-            additional_files=["model_quantized.onnx_data"],
-        )
+
+        # Register community ONNX packages that fastembed does not ship
+        # natively. Harrier's fastembed conversion documents MEAN pooling in
+        # its custom-model example, despite the base SentenceTransformers model
+        # card using last-token pooling internally.
+        if EMBED_REGISTER_CUSTOM_MODEL not in {"0", "false", "no", "off"}:
+            try:
+                TextEmbedding.add_custom_model(
+                    model=EMBED_MODEL,
+                    pooling=PoolingType.MEAN,
+                    normalization=True,
+                    sources=ModelSource(hf=EMBED_MODEL),
+                    dim=EMBED_DIMS,
+                    model_file=EMBED_MODEL_FILE,
+                    additional_files=[EMBED_MODEL_DATA_FILE] if EMBED_MODEL_DATA_FILE else [],
+                )
+            except Exception as e:
+                if EMBED_REGISTER_CUSTOM_MODEL in {"1", "true", "yes", "on"}:
+                    raise
+                log.debug("Custom embedding model registration skipped: %s", e)
         self._embedder = TextEmbedding(
             model_name=EMBED_MODEL,
             cache_dir=fastembed_cache,
@@ -424,13 +441,21 @@ class _MemoryBackend:
 
     # ── embedding ─────────────────────────────────────────────────────────────
 
-    def _embed(self, text: str) -> list[float]:
-        """Embed a single string with fastembed. Returns a plain float list."""
-        return list(self._embedder.embed([text]))[0].tolist()
+    def _format_query_text(self, text: str) -> str:
+        """Apply query-side instruction prefix for instruct embedding models."""
+        if not EMBED_QUERY_INSTRUCT:
+            return text
+        return f"Instruct: {EMBED_QUERY_INSTRUCT}\nQuery: {text}"
 
-    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+    def _embed(self, text: str, *, query: bool = False) -> list[float]:
+        """Embed a single string with fastembed. Returns a plain float list."""
+        embed_text = self._format_query_text(text) if query else text
+        return list(self._embedder.embed([embed_text]))[0].tolist()
+
+    def _embed_batch(self, texts: list[str], *, query: bool = False) -> list[list[float]]:
         """Embed multiple strings in a single batched fastembed call."""
-        return [v.tolist() for v in self._embedder.embed(texts)]
+        embed_texts = [self._format_query_text(t) for t in texts] if query else texts
+        return [v.tolist() for v in self._embedder.embed(embed_texts)]
 
     # ── extraction ────────────────────────────────────────────────────────────
 
@@ -596,6 +621,34 @@ class _MemoryBackend:
 
         return ids
 
+    def add_raw(self, memory: str, user_id: str, *, pinned: bool = False) -> str | None:
+        """Persist one already-curated memory string without LLM extraction."""
+        text = (memory or "").strip()
+        if not text:
+            return None
+        mem_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            vector = self._embed(text)
+            self._conn.execute(
+                """
+                INSERT INTO memories
+                    (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
+                VALUES (?, ?, ?, ?, 0, 'never', ?)
+                """,
+                (mem_id, user_id, text, now, 1 if pinned else 0),
+            )
+            self._conn.execute(
+                "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
+                (mem_id, sqlite_vec.serialize_float32(vector)),
+            )
+            self._conn.commit()
+            return mem_id
+        except Exception as e:
+            log.warning("Failed to insert raw memory %r: %s", mem_id, e)
+            self._conn.rollback()
+            return None
+
     # ── read ──────────────────────────────────────────────────────────────────
 
     def search(self, query: str, user_id: str, limit: int = 5) -> list[dict]:
@@ -607,7 +660,7 @@ class _MemoryBackend:
         3. RRF: score = 1/(k+rank_knn) + 1/(k+rank_fts)
         4. Return top `limit` by RRF score as payload dicts
         """
-        vector = self._embed(query)
+        vector = self._embed(query, query=True)
 
         knn_rows = _sqlite_knn_search(self._conn, vector, user_id, KNN_LIMIT)
         rank_knn = {row["id"]: i + 1 for i, row in enumerate(knn_rows)}
@@ -635,7 +688,24 @@ class _MemoryBackend:
         if not all_ids:
             return []
 
-        def rrf(mem_id: str) -> float:
+        placeholders = ",".join("?" * len(all_ids))
+        rows = self._conn.execute(
+            f"SELECT * FROM memories WHERE id IN ({placeholders})",
+            list(all_ids),
+        ).fetchall()
+        row_by_id = {row["id"]: row for row in rows}
+
+        def _recency_score(created_at: str) -> float:
+            try:
+                created = datetime.fromisoformat((created_at or "").replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                age_days = max(0.0, (datetime.now(timezone.utc) - created).total_seconds() / 86400)
+                return 0.5 ** (age_days / max(MEMORY_RANK_RECENCY_HALF_LIFE_DAYS, 1e-6))
+            except Exception:
+                return 0.0
+
+        def final_score(mem_id: str) -> float:
             knn = rank_knn.get(mem_id, 0)
             fts = rank_fts.get(mem_id, 0)
             score = 0.0
@@ -643,18 +713,18 @@ class _MemoryBackend:
                 score += 1.0 / (RRF_K + knn)
             if fts:
                 score += 1.0 / (RRF_K + fts)
+
+            row = row_by_id.get(mem_id)
+            if row is not None:
+                score += MEMORY_RANK_RECENCY_WEIGHT * _recency_score(row["created_at"])
+                score += MEMORY_RANK_ACCESS_WEIGHT * min(int(row["access_count"] or 0), ACCESS_COUNT_CAP) / max(ACCESS_COUNT_CAP, 1)
+                if int(row["pinned"] or 0):
+                    score += MEMORY_RANK_PINNED_WEIGHT
             return score
 
-        ranked = sorted(all_ids, key=rrf, reverse=True)[:limit]
-
-        placeholders = ",".join("?" * len(ranked))
-        rows = self._conn.execute(
-            f"SELECT * FROM memories WHERE id IN ({placeholders})",
-            ranked,
-        ).fetchall()
-
-        order       = {mid: i for i, mid in enumerate(ranked)}
-        rows_sorted = sorted(rows, key=lambda r: order.get(r["id"], 999))
+        ranked = sorted(all_ids, key=final_score, reverse=True)[:limit]
+        order = {mid: i for i, mid in enumerate(ranked)}
+        rows_sorted = sorted((row_by_id[mid] for mid in ranked if mid in row_by_id), key=lambda r: order.get(r["id"], 999))
 
         return [dict(r) for r in rows_sorted]
 
@@ -700,6 +770,18 @@ class _MemoryBackend:
             ORDER BY created_at DESC
             """,
             (user_id, since.isoformat()),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_between(self, start: datetime, end: datetime, user_id: str = USER_ID) -> list[dict]:
+        """Return memories created in [start, end), oldest first."""
+        rows = self._conn.execute(
+            """
+            SELECT * FROM memories
+            WHERE user_id = ? AND created_at >= ? AND created_at < ?
+            ORDER BY created_at ASC
+            """,
+            (user_id, start.isoformat(), end.isoformat()),
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1303,9 +1385,24 @@ class AikoMemorize:
         """Return all stored memories for a user."""
         return self._mem.get_all(user_id=user_id)
 
+    def add_raw(self, memory: str, user_id: str = USER_ID, *, pinned: bool = False, metadata: Optional[dict] = None) -> str | None:
+        """Persist one already-curated memory string without LLM extraction."""
+        # metadata is accepted for call-site clarity; the current schema stores
+        # only the curated text plus pinned flag.
+        return self._mem.add_raw(memory, user_id=user_id, pinned=pinned)
+
     def get_since(self, since: datetime, user_id: str = USER_ID) -> list[dict]:
         """Return memories created on or after `since`, newest first."""
         return self._mem.get_since(since, user_id=user_id)
+
+    def get_between(self, start: datetime, end: datetime, user_id: str = USER_ID) -> list[dict]:
+        """Return memories created in [start, end), oldest first."""
+        return self._mem.get_between(start, end, user_id=user_id)
+
+    def delete(self, memory_id: str) -> None:
+        """Delete one memory from the store and clear search cache."""
+        self._mem.delete(memory_id)
+        self._clear_search_cache()
 
     def clear(self, user_id: str = USER_ID) -> None:
         """Wipe all memories for a user. Use carefully."""
@@ -1323,9 +1420,13 @@ class AikoMemorize:
         """Retrieve the raw embedding vector for a single memory."""
         return _sqlite_get_vector(self._conn, mem_id)
 
-    def embed_text(self, text: str) -> list[float]:
+    def embed_text(self, text: str, *, query: bool = False) -> list[float]:
         """Embed one text string with the configured memory embedding model."""
-        return self._mem._embed(text)
+        return self._mem._embed(text, query=query)
+
+    def embed_texts(self, texts: list[str], *, query: bool = False) -> list[list[float]]:
+        """Embed multiple strings with the configured memory embedding model."""
+        return self._mem._embed_batch(texts, query=query)
 
     def _is_pinned(self, mem_id: str) -> bool:
         """Return True if memories.pinned == 1 for this id."""

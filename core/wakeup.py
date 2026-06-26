@@ -24,8 +24,8 @@ Usage:
     )
     think    = result.think
     memorize = result.memorize
-    speak    = result.speak    # None in text mode
-    listen   = result.listen   # None in text mode
+    speak    = result.speak
+    listen   = result.listen
 """
 
 import threading
@@ -46,8 +46,8 @@ class BootResult:
     """Holds all live subsystem references produced during boot."""
     think:    object          # AikoThink
     memorize: object          # AikoMemorize
-    speak:    object | None   # AikoSpeak  — None in text mode
-    listen:   object | None   # AikoListen — None in text mode
+    speak:    object          # AikoSpeak
+    listen:   object          # AikoListen
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ class AikoWakeup:
     so the TUI can register display text before boot begins.
 
     Args:
-        text_mode: When True, TTS and ASR subsystems are skipped entirely.
+        text_mode: Legacy flag. The CLI now keeps voice subsystems loadable so /voice and /listen can toggle them at runtime.
     """
 
     ALL_BOOT_LABELS: dict[str, str] = {
@@ -98,7 +98,7 @@ class AikoWakeup:
         Execute full boot sequence and return live subsystem references.
 
         Parallel phase: AikoThink + AikoMemorize boot concurrently.
-        Sequential phase: TTS warmup → ASR staged init (or skip both).
+        Sequential phase: TTS warmup → ASR staged init.
         Barge-in monitor started as the final ASR step so Silero is already
         warm and the VAD thread costs nothing before the first turn.
 
@@ -117,7 +117,7 @@ class AikoWakeup:
             from core.speak import AikoSpeak
             from core.think import AikoThink
 
-        speak     = AikoSpeak(silent=True) if not self._text_mode else None
+        speak     = AikoSpeak(silent=True)
         memorize  = [None]
         think_ref = [None]
         mem_ready = threading.Event()
@@ -163,38 +163,32 @@ class AikoWakeup:
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
-        listen = None
+        # TTS
+        on_loading('speak_miotts')
+        speak.warmup()
+        on_done('speak_miotts')
+        on_loading('speak_ready')
+        on_done('speak_ready')
 
-        if not self._text_mode:
-            # TTS
-            on_loading('speak_miotts')
-            speak.warmup()
-            on_done('speak_miotts')
-            on_loading('speak_ready')
-            on_done('speak_ready')
+        # ASR — staged so each step reports independently
+        from core.listen import AikoListen
+        listen = AikoListen()
 
-            # ASR — staged so each step reports independently
-            from core.listen import AikoListen
-            listen = AikoListen()
+        on_loading('listen_asr')
+        listen.load_asr()
+        on_done('listen_asr')
 
-            on_loading('listen_asr')
-            listen.load_asr()
-            on_done('listen_asr')
+        on_loading('listen_silero')
+        listen.load_vad()              # also kicks off warmup thread
+        on_done('listen_silero')
 
-            on_loading('listen_silero')
-            listen.load_vad()              # also kicks off warmup thread
-            on_done('listen_silero')
+        on_loading('listen_warmup')
+        listen.join_warmup()
+        on_done('listen_warmup')
 
-            on_loading('listen_warmup')
-            listen.join_warmup()
-            on_done('listen_warmup')
-
-            on_loading('listen_ready')
-            listen.start_barge_in_monitor()   # VAD daemon — costs ~0 CPU at idle
-            on_done('listen_ready')
-        else:
-            on_skip('speak_skip')
-            on_skip('listen_skip')
+        on_loading('listen_ready')
+        listen.start_barge_in_monitor()   # VAD daemon — costs ~0 CPU at idle
+        on_done('listen_ready')
 
         return BootResult(
             think    = think_ref[0],

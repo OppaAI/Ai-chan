@@ -23,7 +23,7 @@ Phase 2 voice is implemented, and Phase 2.5 agentic workflows are now active. Th
 ASR and TTS run through the local machine by default. WebUI microphone streaming exists in the frontend/backend bridge, but full remote voice-device polish is still experimental.
 
 > Known Issues:
-> - TTS via MioTTS sometimes cannot inference proper voice output due to memory constraint (May switch MioTTS model and even BGE 1.5 embedding model to the smallest param ones to squeeze out a bit more RAM)
+> - TTS via MioTTS sometimes cannot inference proper voice output due to memory constraint (MioTTS and embedding models are still tuned for Jetson memory pressure; Harrier replaced BGE for better semantic separation at 640d)
 > - Time latency between ASR voice input ends to beginning of TTS voice output are still over 5 sec for normal chats. Need to figure out how to do proper synchronized text and speech streaming to save a couple seconds.
 > - ASR may have transcribing errors that output wrong text or even wrong language, especially when accent is present in speaker's voice or when using low quality microphone.
 > - Barge-in haven't been fully tested and may cause some runtime issues that needed to conduct more testing and debugging.
@@ -84,7 +84,7 @@ flowchart TD
 | Interface | full-screen curses TUI in `tui/`; optional browser WebUI in `webui/` |
 | Chat model | llama.cpp or any OpenAI-compatible local server via `openai.OpenAI` |
 | Long-term memory | custom sqlite-vec backend (no server required) |
-| Embeddings | fastembed `BAAI/bge-base-en-v1.5` |
+| Embeddings | fastembed `ferrisS/harrier-oss-v1-270m-fastembed` |
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
 | Web search | local SearXNG instance through `core/toolkit/web.py` |
 | TTS | external MioTTS HTTP server |
@@ -113,7 +113,7 @@ uv run python main.py            # curses TUI, full voice if services are availa
 
 ```bash
 uv run python main.py --webui    # browser WebUI + VRM frontend
-uv run python main.py --text      # keyboard input, no ASR/TTS
+uv run python main.py --text      # keyboard input, ASR/TTS toggled off but loaded
 uv run python main.py --debug     # show memory hits each turn
 uv run python main.py --clear-mem # wipe all memories and exit
 ```

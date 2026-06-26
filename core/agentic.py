@@ -42,13 +42,14 @@ log = get_logger(__name__)
 
 MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 512)))
-AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25))
+AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("AGENT_MEMORY_DRAIN_TIMEOUT", os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25)))
 AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", 1500))
 AGENT_TOOL_RESULT_MAX_CHARS = int(os.getenv("AGENT_TOOL_RESULT_MAX_CHARS", 3000))
 AGENT_VERIFY_FINAL = os.getenv("AGENT_VERIFY_FINAL", "1").lower() in {"1", "true", "yes", "on"}
 AGENT_VERIFY_LLM = os.getenv("AGENT_VERIFY_LLM", "1").lower() in {"1", "true", "yes", "on"}
 AGENT_MAX_FINAL_REPAIRS = int(os.getenv("AGENT_MAX_FINAL_REPAIRS", 2))
+AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
 
 _ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^\]:]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)
@@ -450,8 +451,17 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolRes
     return last
 
 
+def _coerce_verifier_bool(value) -> bool:
+    """Parse verifier booleans without treating non-empty strings as True."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "yes", "1", "pass", "passed"}
+    return bool(value)
+
+
 def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) -> VerificationResult:
-    """Check answer completeness and faithfulness before Aiko speaks it."""
+    """Check answer completeness and evidence support before Aiko speaks it."""
     issues: list[str] = []
     stripped = (answer or "").strip()
     lowered = stripped.lower()
@@ -478,11 +488,15 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
         return VerificationResult(ok=not issues, feedback="\n".join(issues) or "Verified by deterministic checks.", score=0.0 if issues else 1.0)
 
     prompt = (
-        "You are Aiko's verifier. Check whether the candidate answer is accurate, complete, "
-        "and supported by the task ledger. Return ONLY compact JSON with keys: "
-        "pass (boolean), score (0-1), feedback (string). Do not add markdown.\n\n"
+        "You are Aiko's final-answer verifier. This is NOT just a JSON schema check. "
+        "Judge whether the candidate answer is accurate, complete, and supported by "
+        "the task ledger/tool evidence. Do not use outside knowledge to bless facts that "
+        "are missing from the ledger. Fail answers that invent unsupported details, hide "
+        "tool failures, imply external actions that were not performed, omit required paths "
+        "or confirmations, or do not answer the user's request. Return ONLY compact JSON "
+        "with keys: pass (boolean), score (0-1), feedback (string). Do not add markdown.\n\n"
         f"User request:\n{user_input}\n\n"
-        f"Task ledger:\n{state.summary()}\n\n"
+        f"Task ledger/tool evidence:\n{state.summary()}\n\n"
         f"Candidate answer:\n{stripped}"
     )
     try:
@@ -496,9 +510,13 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
         raw = (resp.choices[0].message.content or "").strip()
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
         data = json.loads(match.group(0) if match else raw)
-        ok = bool(data.get("pass"))
+        ok = _coerce_verifier_bool(data.get("pass"))
         score = float(data.get("score", 1.0 if ok else 0.0))
         feedback = str(data.get("feedback") or ("Verifier passed." if ok else "Verifier failed."))
+        if score < AGENT_VERIFY_MIN_SCORE:
+            ok = False
+            if feedback == "Verifier passed.":
+                feedback = f"Verifier score {score:.2f} below threshold {AGENT_VERIFY_MIN_SCORE:.2f}."
         return VerificationResult(ok=ok, feedback=feedback, score=score)
     except Exception as e:
         log.warning("Agent verifier failed; falling back to deterministic pass: %s", e)

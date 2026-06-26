@@ -93,15 +93,12 @@ sequenceDiagram
         Memory-->>Wakeup: ready
     end
     Wakeup->>Think: inject Memory reference
-    alt voice mode
-        Wakeup->>Speak: warm TTS client
-        Speak-->>Wakeup: ready
-        Wakeup->>Listen: initialize ASR + VAD + barge-in monitor
-        Listen-->>Wakeup: ready
-    else --text mode
-        Wakeup-->>Main: skip Speak and Listen
-    end
-    Wakeup-->>Main: BootResult(think, memorize, speak?, listen?)
+    Wakeup->>Speak: warm TTS client
+    Speak-->>Wakeup: ready
+    Wakeup->>Listen: initialize ASR + VAD + barge-in monitor
+    Listen-->>Wakeup: ready
+    Wakeup-->>Main: BootResult(think, memorize, speak, listen)
+    Note over Main: --text/--no-asr only change initial toggles; /voice and /listen can enable loaded subsystems.
     Main->>UI: status_finish + first draw
     Main->>Main: enter shared input loop
 ```

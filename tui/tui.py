@@ -41,6 +41,8 @@ from core.health import _ram_used_str, _db_size_str, _fmt_uptime
 
 LLM_BASE_URL  = os.getenv("LLM_BASE_URL", "unknown")
 LLM_MODEL     = os.getenv("LLM_MODEL", "unknown")
+EMBED_MODEL   = os.getenv("EMBED_MODEL", "unknown")
+EMBED_DIMS    = os.getenv("EMBED_DIMS", "?")
 ASR_MODEL     = os.getenv("ASR_MODEL", os.getenv("ASR_MODE", "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"))
 MIOTTS_MODEL  = os.getenv("MIOTTS_MODEL", "MioTTS 0.4B")
 SEARXNG_URL   = os.getenv("SEARXNG_URL",   "localhost:8080")
@@ -115,11 +117,11 @@ def _art_attr(palette_idx: int) -> int:
 ARCH_SECTIONS = [
     ("MEMORY SYSTEMS", [
         ("Long-term store", "SQLite-vec DB"),
-        ("Embedding model", "BGE-base-en-v1.5  (768d)"),
+        ("Embedding model", f"{EMBED_MODEL}  ({EMBED_DIMS}d)"),
         ("Short-term ctx",  f"Rolling {os.getenv('CONTEXT_WINDOW_TURNS', '20')}-turn window"),
     ]),
     ("COGNITION", [
-        ("Inference engine", "Ollama  (local, offline)"),
+        ("Inference engine", "llama.cpp  (OpenAI-compatible)"),
         ("Active model",     LLM_MODEL),
         ("Web search",       SEARXNG_URL),
     ]),
@@ -134,10 +136,10 @@ ARCH_ROWS = sum(1 + len(items) for _, items in ARCH_SECTIONS) + 2
 db_path = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
 
 INIT_STEPS = {
-    'think_start':      ('Inference Engine', f'Spawning Ollama worker  ·  {LLM_MODEL}'),
+    'think_start':      ('Inference Engine', f'Spawning llama.cpp client  ·  {LLM_MODEL}'),
     'think_warmup':     ('Model Warm-up',    'Loading weights, running prefill pass …'),
     'mem_sqlite_vec':   ('Vector Database',  f'Connecting to SQLite-vec  ·  {db_path}'),
-    'mem_embed':        ('Embedding Model',  'Loading BGE-base-en-v1.5  ·  768-dim vectors'),
+    'mem_embed':        ('Embedding Model',  f'Loading {EMBED_MODEL}  ·  {EMBED_DIMS}-dim vectors'),
     'mem_cleanup':      ('Memory Lifecycle', 'Pruning decayed memories …'),
     'mem_ready':        ('Memory Cortex',    'OppaAI custom-build  ·  long-term recall online'),
     'speak_miotts':     ('TTS Engine',       f'Initializing MioTTS  ·  {os.getenv("MIOTTS_PRESET", "jp_female")}'),

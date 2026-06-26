@@ -348,14 +348,26 @@ class AikoListen:
             wait_fn()
 
         _cb(status_callback, "__LISTENING__")
+        listen_started_at = time.monotonic()
         audio = self._record(status_callback, chunk_source=chunk_source)
+        recording_stopped_at = time.monotonic()
         if audio is None:
             _cb(status_callback, "__IDLE__")
-            return "", {"verified": None, "speaker_score": None}
+            return "", {
+                "verified": None,
+                "speaker_score": None,
+                "listen_started_at": listen_started_at,
+                "recording_stopped_at": recording_stopped_at,
+            }
 
         _cb(status_callback, "__TRANSCRIBING__")
 
-        info = {"verified": None, "speaker_score": None}
+        info = {
+            "verified": None,
+            "speaker_score": None,
+            "listen_started_at": listen_started_at,
+            "recording_stopped_at": recording_stopped_at,
+        }
         if self.speaker_verify_active():
             result_box: dict = {}
 

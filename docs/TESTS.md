@@ -77,7 +77,7 @@ Run before any phase suite.
 
 ### 1.1 Boot and launch modes
 
-- [ ] `uv run python main.py --text` starts without loading ASR/TTS and reaches the first input prompt.
+- [ ] `uv run python main.py --text` starts with ASR/TTS loaded but initially toggled off, and reaches the first input prompt.
 - [ ] `uv run python main.py --text --debug` starts and prints memory recall/debug information per turn.
 - [ ] `uv run python main.py --clear-mem` wipes the configured memory DB and exits without entering chat.
 - [ ] Launch fails gracefully with a clear error if `LLM_BASE_URL` is unavailable; no traceback-only user experience.
@@ -218,7 +218,7 @@ Run before any phase suite.
 - [ ] `uv run python main.py` starts full voice mode without `--text` and reaches ready state.
 - [ ] Staged boot reports ASR model loading, Silero VAD loading, optional speaker verification, ASR warmup, TTS readiness, and microphone readiness.
 - [ ] First-use Hugging Face model download is tested once; cached/offline boot is tested with `HF_HUB_OFFLINE=1`.
-- [ ] ASR/TTS disabled modes are correct: `--text` skips both, `--no-asr` keeps keyboard input with TTS.
+- [ ] ASR/TTS initial-toggle modes are correct: `--text` starts with both off but loadable via `/voice` and `/listen`; `--no-asr` starts with keyboard input and TTS on.
 - [ ] Missing microphone, missing `parec`, invalid ASR model, and missing HF cache produce actionable errors.
 - [ ] Resource usage during boot stays within Jetson limits and does not trigger OOM killer.
 

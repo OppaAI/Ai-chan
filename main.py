@@ -5,7 +5,8 @@ Aiko-chan CLI — entry point and session orchestrator.
 
 Usage:
     python main.py               # full voice — ASR (SenseVoice + Silero VAD) + TTS (MioTTS)
-    python main.py --text        # keyboard input + no TTS
+    python main.py --text        # keyboard input + TTS/ASR loaded but toggled off
+    python main.py --no-asr      # keyboard input + TTS on, ASR loaded but toggled off
     python main.py               # browser WebUI (default)
     python main.py --tui         # curses TUI
     python main.py --debug       # show memory debug info each turn
@@ -56,6 +57,7 @@ from webui.aiko_web import AikoWeb
 AI_NAME = os.getenv("AI_NAME", "Aiko")
 USER_ID = os.getenv("USER_ID", "")
 STREAM_DRAW_INTERVAL = float(os.getenv("AIKO_STREAM_DRAW_INTERVAL", "0.05"))
+LATENCY_LOG_ENABLED = os.getenv("AIKO_LATENCY_LOG", "1").lower() in {"1", "true", "yes", "on"}
 
 
 # ── voice command map ─────────────────────────────────────────────────────────
@@ -145,9 +147,9 @@ def parse_args():
     """Parse and return the CLI argument namespace for Aiko-chan's launch options."""
     p = argparse.ArgumentParser(description="Aiko-chan CLI")
     p.add_argument("--text",      action="store_true",
-                   help="keyboard input + no TTS  (default: ASR + TTS)")
+                   help="keyboard input + TTS/ASR initially off; both subsystems still load for /voice and /listen toggles")
     p.add_argument("--no-asr",    action="store_true",
-                   help="keyboard input but keep TTS")
+                   help="keyboard input but keep TTS on; ASR still loads for /listen")
     p.add_argument("--debug",     action="store_true",
                    help="show memory hits each turn")
     p.add_argument("--tui",       action="store_true",
@@ -195,6 +197,13 @@ def _run_session(tui, args):
 
     def token_cb(token):
         nonlocal last_stream_draw
+        if token:
+            _latency_mark("first_token_at")
+            if not token.startswith("__"):
+                _latency_mark("first_assistant_token_at")
+        if token.startswith("__THINKING__") or token.startswith("__TOOL__:"):
+            if current_latency is not None:
+                current_latency["mode"] = "agentic"
         if token.startswith("__SEARCHING__:"):
             query = token.split(":", 1)[1]
             tui.add_message('sys', f'Searching: {query}...')
@@ -214,7 +223,9 @@ def _run_session(tui, args):
 
     # ── boot all subsystems via wakeup ────────────────────────────────────────
 
-    result = AikoWakeup(text_mode=args.text).boot(
+    # Load voice subsystems even when initially toggled off so /voice and
+    # /listen can turn them on without a second boot-time model load.
+    result = AikoWakeup(text_mode=False).boot(
         on_loading = tui.step_loading,
         on_done    = tui.step_done,
         on_skip    = tui.step_skip,
@@ -234,6 +245,53 @@ def _run_session(tui, args):
 
     tts_enabled = not args.text
     asr_enabled = not args.text and not args.no_asr
+    if hasattr(tui, "_stats"):
+        tui._stats['tts_on'] = tts_enabled
+        tui._stats['asr_on'] = asr_enabled
+
+    current_latency: dict | None = None
+
+    def _latency_mark(name: str) -> None:
+        if current_latency is not None and name not in current_latency:
+            current_latency[name] = time.monotonic()
+
+    if speak is not None and hasattr(speak, "set_first_audio_callback"):
+        speak.set_first_audio_callback(lambda: _latency_mark("first_audio_at"))
+
+    def _latency_seconds(timing: dict, start: str, end: str) -> float | None:
+        if timing.get(start) is None or timing.get(end) is None:
+            return None
+        return max(0.0, timing[end] - timing[start])
+
+    def _fmt_latency(value: float | None) -> str:
+        return "n/a" if value is None else f"{value:.3f}s"
+
+    def _log_latency(timing: dict) -> None:
+        if not LATENCY_LOG_ENABLED:
+            return
+        mode = timing.get("mode", "text")
+        parts = {
+            "voice_end_to_submit": _latency_seconds(timing, "voice_recording_stopped_at", "submitted_at"),
+            "submit_to_first_token": _latency_seconds(timing, "submitted_at", "first_assistant_token_at"),
+            "submit_to_assistant_done": _latency_seconds(timing, "submitted_at", "assistant_done_at"),
+            "assistant_done_to_first_audio": _latency_seconds(timing, "assistant_done_at", "first_audio_at"),
+            "voice_end_to_first_audio": _latency_seconds(timing, "voice_recording_stopped_at", "first_audio_at"),
+            "submit_to_first_audio": _latency_seconds(timing, "submitted_at", "first_audio_at"),
+            "submit_to_turn_done": _latency_seconds(timing, "submitted_at", "turn_done_at"),
+        }
+        log.info(
+            "[latency] mode=%s voice_end→submit=%s submit→first_token=%s "
+            "submit→assistant_done=%s assistant_done→first_audio=%s "
+            "voice_end→first_audio=%s submit→first_audio=%s submit→turn_done=%s",
+            mode,
+            _fmt_latency(parts["voice_end_to_submit"]),
+            _fmt_latency(parts["submit_to_first_token"]),
+            _fmt_latency(parts["submit_to_assistant_done"]),
+            _fmt_latency(parts["assistant_done_to_first_audio"]),
+            _fmt_latency(parts["voice_end_to_first_audio"]),
+            _fmt_latency(parts["submit_to_first_audio"]),
+            _fmt_latency(parts["submit_to_turn_done"]),
+        )
 
     # ── shutdown helper ───────────────────────────────────────────────────────
 
@@ -247,6 +305,7 @@ def _run_session(tui, args):
 
     while True:
         try:
+            voice_info = None
             if listen and asr_enabled:
                 result = tui.get_voice_input(
                     listen,
@@ -254,6 +313,7 @@ def _run_session(tui, args):
                     wait_fn = None,
                 )
                 user_input = result[0] if isinstance(result, tuple) else result
+                voice_info = result[1] if isinstance(result, tuple) and len(result) > 1 and isinstance(result[1], dict) else None
             else:
                 result = tui.get_input()
                 user_input = result[0] if isinstance(result, tuple) else result
@@ -375,7 +435,7 @@ def _run_session(tui, args):
 
             elif cmd == '/voice':
                 if speak is None:
-                    tui.add_message('sys', 'TTS unavailable — started in --text mode.')
+                    tui.add_message('sys', 'TTS unavailable — voice subsystem did not load.')
                 else:
                     tts_enabled = not tts_enabled
                     think.set_speak(speak if tts_enabled else None)
@@ -385,7 +445,7 @@ def _run_session(tui, args):
 
             elif cmd == '/listen':
                 if listen is None:
-                    tui.add_message('sys', 'ASR unavailable — started in --text mode.')
+                    tui.add_message('sys', 'ASR unavailable — voice subsystem did not load.')
                 else:
                     asr_enabled = not asr_enabled
                     tui._stats['asr_on'] = asr_enabled
@@ -456,15 +516,27 @@ def _run_session(tui, args):
                     tui.add_message('sys',
                         f'  → {m.get("memory") or m.get("text") or m}')
 
+        current_latency = {
+            "mode": "voice" if (listen and asr_enabled and voice_info) else "text",
+            "submitted_at": time.monotonic(),
+        }
+        if voice_info:
+            current_latency["listen_started_at"] = voice_info.get("listen_started_at")
+            current_latency["voice_recording_stopped_at"] = voice_info.get("recording_stopped_at")
+
         tui.add_message('you', user_input)
         tui.turn_start()
         tui._draw()
 
         think.route(user_input, token_callback=token_cb)
+        current_latency["assistant_done_at"] = time.monotonic()
         tui.stream_commit()
         tui._draw()
         if speak and tts_enabled:
             speak.wait()
+        current_latency["turn_done_at"] = time.monotonic()
+        _log_latency(current_latency)
+        current_latency = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
