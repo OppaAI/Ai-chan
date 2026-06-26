@@ -25,6 +25,7 @@ dependencies = [
     "sympy>=1.14.0",
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
+    "trafilatura>=2.1.0",
     "websockets>=16.0",
 ]
 
