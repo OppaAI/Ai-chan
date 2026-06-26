@@ -16,6 +16,8 @@
     --text: #e8e8ee;
     --muted: #6b6b7a;
     --track: #22222a;
+    --ok: #6bffb8;
+    --warn: #ffd166;
   }
 
   body {
@@ -118,6 +120,8 @@
     transition: all 0.15s;
   }
   .toggle-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .toggle-btn.recording { background: #4a1226; border-color: var(--accent2); color: #fff; }
+  .toggle-btn:disabled, .action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
   /* Sliders */
   .param-row { margin-bottom: 14px; }
@@ -232,6 +236,14 @@
     font-size: 9px;
     color: var(--text);
   }
+
+  .mini-note { font-size: 10px; color: var(--muted); line-height: 1.45; margin-top: 8px; }
+  .status-pill { display:inline-block; padding:2px 6px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:10px; }
+  .status-pill.live { color: var(--ok); border-color: var(--ok); }
+  .status-pill.rec { color: var(--accent2); border-color: var(--accent2); }
+  .field { width:100%; padding:8px 10px; background:var(--track); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:inherit; font-size:12px; outline:none; }
+  .field:focus { border-color: var(--accent); }
+  #cameraPreview { position:absolute; left:16px; bottom:48px; width:220px; max-width:30vw; border:1px solid var(--border); border-radius:8px; background:#000; transform: scaleX(-1); opacity:0.9; display:none; }
 </style>
 </head>
 <body>
@@ -304,6 +316,36 @@
     </div>
   </div>
 
+
+  <!-- Camera motion capture -->
+  <div class="section">
+    <div class="section-label">Camera mocap recorder</div>
+    <div style="margin-bottom:10px"><span id="mocapStatus" class="status-pill">camera off</span></div>
+    <div class="toggle-row">
+      <button class="toggle-btn" id="btnCamera" onclick="toggleCamera()">camera</button>
+      <button class="toggle-btn" id="btnRecord" onclick="toggleRecording()" disabled>● record</button>
+    </div>
+    <div class="toggle-row" style="margin-top:8px">
+      <button class="toggle-btn" id="btnPlayback" onclick="toggleMocapPlayback()" disabled>play take</button>
+      <button class="toggle-btn" id="btnUseTrim" onclick="useTrimAsGesture()" disabled>preview trim</button>
+    </div>
+    <div class="mini-note">Uses your webcam in-browser with MediaPipe Pose. Move slowly, stop recording, crop the best time range, then save a gesture.js-compatible module.</div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Crop take</div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">start <span id="trimStartLabel">0.00s</span></span><span class="param-value" id="takeDurationLabel">0 frames</span></div>
+      <input type="range" id="slTrimStart" min="0" max="0" step="0.01" value="0" oninput="updateTrim()">
+    </div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">end <span id="trimEndLabel">0.00s</span></span><span class="param-value" id="trimDurationLabel">0.00s</span></div>
+      <input type="range" id="slTrimEnd" min="0" max="0" step="0.01" value="0" oninput="updateTrim()">
+    </div>
+    <input class="field" id="gestureFileName" value="myCameraGesture.js" aria-label="gesture filename">
+    <button class="action-btn" style="margin:10px 0 0; width:100%" id="btnSaveGesture" onclick="saveRecordedGesture()" disabled>save .js gesture</button>
+  </div>
+
   <!-- Live bone readout -->
   <div class="section">
     <div class="section-label">Live bone rotations (rad)</div>
@@ -373,6 +415,7 @@
 <!-- ── 3D VIEWPORT ── -->
 <div id="viewport">
   <canvas id="c"></canvas>
+  <video id="cameraPreview" muted playsinline></video>
 
   <div id="hud">
     gesture: <span id="hudGesture">—</span><br>
@@ -389,6 +432,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3/camera_utils.js"></script>
 
 <script type="module">
 // ── Load gesture.js and discover all exported functions ──────
@@ -642,6 +687,160 @@ function syncAndReadout() {
   document.getElementById('bHdZ').textContent = head.rotation.z.toFixed(3);
 }
 
+// ── Camera mocap recorder ─────────────────────────────────────
+const MOCAP_BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','head'];
+const cameraPreview = document.getElementById('cameraPreview');
+let pose = null;
+let cameraFeed = null;
+let cameraReady = false;
+let recording = false;
+let recordedFrames = [];
+let recordStartedAt = 0;
+let mocapPlayback = false;
+let mocapPreview = false;
+let mocapPlaybackStartedAt = 0;
+let activeMocapFrames = [];
+let latestPoseLandmarks = null;
+
+function setMocapStatus(text, mode = '') {
+  const el = document.getElementById('mocapStatus');
+  el.textContent = text;
+  el.className = `status-pill ${mode}`.trim();
+}
+
+function rotationPlain(rot) {
+  return { x: +rot.x.toFixed(5), y: +rot.y.toFixed(5), z: +rot.z.toFixed(5) };
+}
+
+function captureFrame(time) {
+  return { time: +time.toFixed(4), bones: Object.fromEntries(MOCAP_BONES.map(name => [name, rotationPlain({
+    lUA: leftArm.uaPivot.rotation, lLA: leftArm.laPivot.rotation, lH: leftArm.hPivot.rotation,
+    rUA: rightArm.uaPivot.rotation, rLA: rightArm.laPivot.rotation, rH: rightArm.hPivot.rotation,
+    neck: neck.rotation, head: head.rotation,
+  }[name])])) };
+}
+
+function vec(a, b) { return { x: b.x - a.x, y: b.y - a.y, z: (b.z ?? 0) - (a.z ?? 0) }; }
+function mapRange(v, inMin, inMax, outMin, outMax) {
+  const t = Math.max(0, Math.min(1, (v - inMin) / (inMax - inMin)));
+  return outMin + (outMax - outMin) * t;
+}
+function confidence(...pts) { return pts.every(p => (p?.visibility ?? 1) > 0.45); }
+function driveArmFromPose(side, lm) {
+  const idx = side < 0 ? { sh:11, el:13, wr:15 } : { sh:12, el:14, wr:16 };
+  const sh = lm[idx.sh], el = lm[idx.el], wr = lm[idx.wr];
+  if (!confidence(sh, el, wr)) return;
+  const lower = vec(el, wr);
+  const reach = Math.hypot(wr.x - sh.x, wr.y - sh.y);
+  const lift = mapRange(el.y, sh.y + 0.28, sh.y - 0.28, 0.25, -1.15);
+  const spread = mapRange(el.x - sh.x, -0.35, 0.35, -0.95, 0.95);
+  const bend = mapRange(reach, 0.08, 0.42, -1.35, -0.10);
+  const twist = mapRange(lower.x, -0.35, 0.35, -0.45, 0.45);
+  const b = side < 0 ? leftArm : rightArm;
+  const restUA = side < 0 ? REST.leftUpperArm : REST.rightUpperArm;
+  const restLA = side < 0 ? REST.leftLowerArm : REST.rightLowerArm;
+  b.uaPivot.rotation.x = lift;
+  b.uaPivot.rotation.z = restUA.z + spread * side;
+  b.laPivot.rotation.x = bend;
+  b.laPivot.rotation.z = restLA.z + twist * side;
+  b.hPivot.rotation.x = mapRange(wr.y - el.y, -0.24, 0.24, -0.45, 0.45);
+  b.hPivot.rotation.y = mapRange(lower.x, -0.25, 0.25, 0.45, -0.45);
+}
+function applyPoseLandmarks(lm) {
+  driveArmFromPose(-1, lm);
+  driveArmFromPose(1, lm);
+  const nose = lm[0], lSh = lm[11], rSh = lm[12];
+  if (confidence(nose, lSh, rSh)) {
+    const cx = (lSh.x + rSh.x) / 2;
+    head.rotation.y = mapRange(nose.x - cx, -0.18, 0.18, 0.35, -0.35);
+    head.rotation.x = mapRange(nose.y - ((lSh.y + rSh.y) / 2), -0.28, -0.04, -0.20, 0.18);
+    head.rotation.z = mapRange(lSh.y - rSh.y, -0.12, 0.12, -0.18, 0.18);
+    neck.rotation.set(head.rotation.x * 0.35, head.rotation.y * 0.35, head.rotation.z * 0.35);
+  }
+}
+function updateTakeUi() {
+  const duration = recordedFrames.at(-1)?.time ?? 0;
+  for (const id of ['slTrimStart','slTrimEnd']) {
+    const el = document.getElementById(id); el.max = duration.toFixed(2); el.disabled = recordedFrames.length < 2;
+  }
+  document.getElementById('slTrimEnd').value = duration.toFixed(2);
+  document.getElementById('takeDurationLabel').textContent = `${recordedFrames.length} frames`;
+  updateTrim();
+  const hasTake = recordedFrames.length > 1;
+  for (const id of ['btnPlayback','btnUseTrim','btnSaveGesture']) document.getElementById(id).disabled = !hasTake;
+}
+window.updateTrim = function() {
+  const a = document.getElementById('slTrimStart');
+  const b = document.getElementById('slTrimEnd');
+  if (+a.value > +b.value) a.value = b.value;
+  document.getElementById('trimStartLabel').textContent = `${(+a.value).toFixed(2)}s`;
+  document.getElementById('trimEndLabel').textContent = `${(+b.value).toFixed(2)}s`;
+  document.getElementById('trimDurationLabel').textContent = `${Math.max(0, +b.value - +a.value).toFixed(2)}s`;
+};
+function trimmedFrames() {
+  const start = +document.getElementById('slTrimStart').value;
+  const end = +document.getElementById('slTrimEnd').value;
+  return recordedFrames.filter(f => f.time >= start && f.time <= end).map(f => ({ time: +(f.time - start).toFixed(4), bones: f.bones }));
+}
+async function ensurePose() {
+  if (pose) return;
+  pose = new Pose({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}` });
+  pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.55, minTrackingConfidence: 0.55 });
+  pose.onResults(results => { latestPoseLandmarks = results.poseLandmarks; });
+}
+window.toggleCamera = async function() {
+  if (cameraReady) {
+    cameraFeed?.stop(); cameraPreview.srcObject?.getTracks().forEach(t => t.stop());
+    cameraReady = false; cameraPreview.style.display = 'none'; document.getElementById('btnCamera').classList.remove('active'); document.getElementById('btnRecord').disabled = true; setMocapStatus('camera off'); return;
+  }
+  try {
+    await ensurePose();
+    cameraPreview.style.display = 'block';
+    cameraFeed = new Camera(cameraPreview, { onFrame: async () => pose.send({ image: cameraPreview }), width: 640, height: 480 });
+    await cameraFeed.start(); cameraReady = true;
+    document.getElementById('btnCamera').classList.add('active'); document.getElementById('btnRecord').disabled = false; setMocapStatus('camera live', 'live');
+  } catch (err) { showBanner(`Camera failed: ${err.message}. Use HTTPS or localhost and allow camera access.`); }
+};
+window.toggleRecording = function() {
+  if (!cameraReady) return;
+  recording = !recording;
+  const btn = document.getElementById('btnRecord');
+  btn.classList.toggle('recording', recording); btn.textContent = recording ? '■ stop' : '● record';
+  if (recording) { recordedFrames = []; recordStartedAt = performance.now(); mocapPreview = true; animating = false; setMocapStatus('recording', 'rec'); }
+  else { mocapPreview = false; setMocapStatus(`recorded ${recordedFrames.length} frames`, 'live'); updateTakeUi(); }
+};
+window.toggleMocapPlayback = function() {
+  activeMocapFrames = trimmedFrames(); if (activeMocapFrames.length < 2) return;
+  mocapPlayback = !mocapPlayback; mocapPlaybackStartedAt = performance.now();
+  document.getElementById('btnPlayback').classList.toggle('active', mocapPlayback);
+};
+window.useTrimAsGesture = function() { activeMocapFrames = trimmedFrames(); mocapPreview = activeMocapFrames.length > 1; mocapPlaybackStartedAt = performance.now(); };
+function sampleFrames(frames, t) {
+  if (!frames.length) return null;
+  const duration = frames.at(-1).time || 0.001;
+  const time = ((t % duration) + duration) % duration;
+  let i = 0; while (i < frames.length - 2 && frames[i + 1].time < time) i++;
+  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
+  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
+  return Object.fromEntries(MOCAP_BONES.map(name => [name, { x: lerp(a.bones[name].x, b.bones[name].x, f), y: lerp(a.bones[name].y, b.bones[name].y, f), z: lerp(a.bones[name].z, b.bones[name].z, f) }]));
+}
+function applyMocapSample(sample) { if (!sample) return; const map = { lUA:leftArm.uaPivot, lLA:leftArm.laPivot, lH:leftArm.hPivot, rUA:rightArm.uaPivot, rLA:rightArm.laPivot, rH:rightArm.hPivot, neck, head }; for (const [k, r] of Object.entries(sample)) map[k]?.rotation.set(r.x, r.y, r.z); }
+function buildGestureModule(frames, exportName) {
+  return `// ${exportName}.js\n// Camera-recorded gesture exported from archive/test-3d-model.html.\n// Drop this beside gesture.js, or copy the exported function into gesture.js.\n\nexport function blend(from, to, t) { return from + (to - from) * t; }\n\nconst FRAMES = ${JSON.stringify(frames)};\nconst BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','head'];\nfunction sample(frames, t) {\n  if (!frames.length) return null;\n  const duration = frames[frames.length - 1].time || 0.001;\n  const time = ((t % duration) + duration) % duration;\n  let i = 0;\n  while (i < frames.length - 2 && frames[i + 1].time < time) i++;\n  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];\n  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));\n  return Object.fromEntries(BONES.map(name => [name, { x: blend(a.bones[name].x, b.bones[name].x, f), y: blend(a.bones[name].y, b.bones[name].y, f), z: blend(a.bones[name].z, b.bones[name].z, f) }]));\n}\nexport function ${exportName}(ctx) {\n  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));\n  if (!pose) return;\n  const amount = ctx.intensity ?? 1;\n  for (const [name, rot] of Object.entries(pose)) {\n    const bone = ctx[name];\n    if (!bone) continue;\n    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);\n    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);\n    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);\n  }\n}\n`;
+}
+window.saveRecordedGesture = async function() {
+  const frames = trimmedFrames(); if (frames.length < 2) return showBanner('Record and crop at least two frames first.', 'info');
+  const rawName = document.getElementById('gestureFileName').value.replace(/\.js$/i, '') || 'myCameraGesture';
+  const exportName = rawName.replace(/[^a-zA-Z0-9_$]/g, '_').replace(/^[^a-zA-Z_$]/, '_$&');
+  const source = buildGestureModule(frames, exportName);
+  if ('showSaveFilePicker' in window) {
+    const handle = await showSaveFilePicker({ suggestedName: `${rawName}.js`, types: [{ description: 'JavaScript module', accept: { 'text/javascript': ['.js'] } }] });
+    const writable = await handle.createWritable(); await writable.write(source); await writable.close(); setMocapStatus(`saved ${rawName}.js`, 'live');
+  } else {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([source], { type:'text/javascript' })); a.download = `${rawName}.js`; a.click(); URL.revokeObjectURL(a.href); setMocapStatus(`downloaded ${rawName}.js`, 'live');
+  }
+};
+
 // ── Tick ──────────────────────────────────────────────────────
 function tickAnimation(dt) {
   if (animating) animTime += dt;
@@ -663,6 +862,20 @@ function tickAnimation(dt) {
   document.getElementById('hudT').textContent   = animTime.toFixed(2);
 
   if (forceRest) { applyRest(); syncAndReadout(); return; }
+
+  if ((recording || mocapPreview) && latestPoseLandmarks) {
+    applyRest();
+    applyPoseLandmarks(latestPoseLandmarks);
+    if (recording) recordedFrames.push(captureFrame((performance.now() - recordStartedAt) / 1000));
+    syncAndReadout();
+    return;
+  }
+
+  if (mocapPlayback && activeMocapFrames.length > 1) {
+    applyMocapSample(sampleFrames(activeMocapFrames, (performance.now() - mocapPlaybackStartedAt) / 1000));
+    syncAndReadout();
+    return;
+  }
 
   const animatedIntensity = animating
     ? intensity * (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(animTime * 2.4)))
