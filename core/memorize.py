@@ -393,16 +393,16 @@ class _MemoryBackend:
         
         # Before constructing the embedder:
         TextEmbedding.add_custom_model(
-            model="EMBED_MODEL",
+            model=EMBED_MODEL,
             pooling=PoolingType.MEAN,
             normalization=True,
-            sources=ModelSource(hf=""),
+            sources=ModelSource(hf=EMBED_MODEL),
             dim=EMBED_DIMS,
             model_file="model_quantized.onnx",
             additional_files=["model_quantized.onnx_data"],
         )
         self._embedder = TextEmbedding(
-            model_name="EMBED_MODEL",
+            model_name=EMBED_MODEL,
             cache_dir=fastembed_cache,
         )
         self._conn = self._connect()
