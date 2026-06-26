@@ -433,7 +433,7 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5/holistic.js"></script>
 
 <script type="module">
 // ── Load gesture.js and discover all exported functions ──────
@@ -556,10 +556,13 @@ const root = new THREE.Object3D();
 scene.add(root);
 
 // Torso / head / neck / hips
-const torso = mkCapsule(0.55, 0.09, MAT_BODY); torso.position.set(0,0.9,0); root.add(torso);
-const head  = mkSphere(0.1, MAT_JOINT);         head.position.set(0,1.28,0); root.add(head);
-const neck  = mkCapsule(0.12, 0.04, MAT_BODY);  neck.position.set(0,1.19,0); root.add(neck);
-const hips  = mkCapsule(0.18, 0.1, MAT_BODY);   hips.position.set(0,0.62,0); root.add(hips);
+const torsoPivot = new THREE.Object3D(); torsoPivot.position.set(0,0.62,0); root.add(torsoPivot);
+const torso = mkCapsule(0.55, 0.09, MAT_BODY); torso.position.set(0,0.28,0); torsoPivot.add(torso);
+const head  = mkSphere(0.1, MAT_JOINT);         head.position.set(0,0.66,0); torsoPivot.add(head);
+const neck  = mkCapsule(0.12, 0.04, MAT_BODY);  neck.position.set(0,0.57,0); torsoPivot.add(neck);
+const hips  = mkCapsule(0.18, 0.1, MAT_BODY);   hips.position.set(0,0,0);    torsoPivot.add(hips);
+// Head pivot for independent head rotation
+const headPivot = new THREE.Object3D(); headPivot.position.set(0,0.66,0); torsoPivot.add(headPivot);
 
 // Static legs
 [-0.09, 0.09].forEach(x => {
@@ -568,16 +571,25 @@ const hips  = mkCapsule(0.18, 0.1, MAT_BODY);   hips.position.set(0,0.62,0); roo
   const ft = mkCapsule(0.10,0.04,MAT_BODY);  ft.rotation.x=Math.PI/2; ft.position.set(x,-0.08,0.04); root.add(ft);
 });
 
+// Face expression meshes (on headPivot)
+const MAT_FACE  = new THREE.MeshLambertMaterial({ color: 0xffd6e0 });
+const MAT_EYE   = new THREE.MeshLambertMaterial({ color: 0x222230 });
+const MAT_MOUTH = new THREE.MeshLambertMaterial({ color: 0xff4466 });
+const faceEyeL  = mkSphere(0.022, MAT_EYE);   faceEyeL.position.set(-0.035, 0.015, 0.092);  headPivot.add(faceEyeL);
+const faceEyeR  = mkSphere(0.022, MAT_EYE);   faceEyeR.position.set( 0.035, 0.015, 0.092);  headPivot.add(faceEyeR);
+const faceMouth = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.01, 0.01), MAT_MOUTH);
+faceMouth.position.set(0, -0.03, 0.093); headPivot.add(faceMouth);
+
 // Arms
-const SHOULDER_L = new THREE.Vector3(-0.17, 1.14, 0);
-const SHOULDER_R = new THREE.Vector3( 0.17, 1.14, 0);
+const SHOULDER_L = new THREE.Vector3(-0.17, 0.52, 0);
+const SHOULDER_R = new THREE.Vector3( 0.17, 0.52, 0);
 
 function buildArm(side) {
   const sOff = side < 0 ? SHOULDER_L : SHOULDER_R;
   const col   = side < 0 ? MAT_BODY : MAT_ACCENT;
   const col2  = side < 0 ? MAT_BODY : MAT_ACCENT2;
 
-  const uaPivot = new THREE.Object3D(); uaPivot.position.copy(sOff); root.add(uaPivot);
+  const uaPivot = new THREE.Object3D(); uaPivot.position.copy(sOff); torsoPivot.add(uaPivot);
   const uaMesh  = mkCapsule(0.24,0.055,col); uaMesh.position.set(0,-0.12,0); uaPivot.add(uaMesh);
   const elbSph  = mkSphere(0.04, MAT_JOINT); elbSph.position.set(0,-0.24,0); uaPivot.add(elbSph);
 
@@ -611,8 +623,9 @@ function applyRest() {
   rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
   rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
   rightArm.hPivot.rotation.set (REST.rightHand.x,     0, 0);
+  torsoPivot.rotation.set(0,0,0);
+  headPivot.rotation.set(0,0,0);
   neck.rotation.set(0,0,0);
-  head.rotation.set(0,0,0);
 }
 applyRest();
 
@@ -627,14 +640,15 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 
 function snapshotRotations() {
   return {
-    lUA:  leftArm.uaPivot.rotation.clone(),
-    lLA:  leftArm.laPivot.rotation.clone(),
-    lH:   leftArm.hPivot.rotation.clone(),
-    rUA:  rightArm.uaPivot.rotation.clone(),
-    rLA:  rightArm.laPivot.rotation.clone(),
-    rH:   rightArm.hPivot.rotation.clone(),
-    neck: neck.rotation.clone(),
-    head: head.rotation.clone(),
+    lUA:   leftArm.uaPivot.rotation.clone(),
+    lLA:   leftArm.laPivot.rotation.clone(),
+    lH:    leftArm.hPivot.rotation.clone(),
+    rUA:   rightArm.uaPivot.rotation.clone(),
+    rLA:   rightArm.laPivot.rotation.clone(),
+    rH:    rightArm.hPivot.rotation.clone(),
+    neck:  neck.rotation.clone(),
+    torso: torsoPivot.rotation.clone(),
+    headP: headPivot.rotation.clone(),
   };
 }
 
@@ -647,7 +661,8 @@ function applyLerpedRotations(from, t) {
     [rightArm.laPivot, from.rLA],
     [rightArm.hPivot,  from.rH],
     [neck,             from.neck],
-    [head,             from.head],
+    [torsoPivot,       from.torso],
+    [headPivot,        from.headP],
   ].forEach(([bone, start]) => {
     const tgt = bone.rotation.clone();
     bone.rotation.set(
@@ -682,15 +697,15 @@ function syncAndReadout() {
   document.getElementById('bLAz').textContent = LA.rotation.z.toFixed(3);
   document.getElementById('bHx').textContent  = H.rotation.x.toFixed(3);
   document.getElementById('bHy').textContent  = H.rotation.y.toFixed(3);
-  document.getElementById('bHdX').textContent = head.rotation.x.toFixed(3);
-  document.getElementById('bHdY').textContent = head.rotation.y.toFixed(3);
-  document.getElementById('bHdZ').textContent = head.rotation.z.toFixed(3);
+  document.getElementById('bHdX').textContent = headPivot.rotation.x.toFixed(3);
+  document.getElementById('bHdY').textContent = headPivot.rotation.y.toFixed(3);
+  document.getElementById('bHdZ').textContent = headPivot.rotation.z.toFixed(3);
 }
 
 // ── Video mocap importer ─────────────────────────────────────
-const MOCAP_BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','head'];
+const MOCAP_BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','torso','headP'];
 const cameraPreview = document.getElementById('cameraPreview');
-let pose = null;
+let holistic = null;
 let selectedVideoUrl = null;
 let processingVideo = false;
 let recordedFrames = [];
@@ -700,6 +715,7 @@ let mocapPreview = false;
 let mocapPlaybackStartedAt = 0;
 let activeMocapFrames = [];
 let latestPoseLandmarks = null;
+let latestFaceLandmarks = null;
 
 function setMocapStatus(text, mode = '') {
   const el = document.getElementById('mocapStatus');
@@ -715,7 +731,7 @@ function captureFrame(time) {
   return { time: +time.toFixed(4), bones: Object.fromEntries(MOCAP_BONES.map(name => [name, rotationPlain({
     lUA: leftArm.uaPivot.rotation, lLA: leftArm.laPivot.rotation, lH: leftArm.hPivot.rotation,
     rUA: rightArm.uaPivot.rotation, rLA: rightArm.laPivot.rotation, rH: rightArm.hPivot.rotation,
-    neck: neck.rotation, head: head.rotation,
+    neck: neck.rotation, torso: torsoPivot.rotation, headP: headPivot.rotation,
   }[name])])) };
 }
 
@@ -724,38 +740,145 @@ function mapRange(v, inMin, inMax, outMin, outMax) {
   const t = Math.max(0, Math.min(1, (v - inMin) / (inMax - inMin)));
   return outMin + (outMax - outMin) * t;
 }
-function confidence(...pts) { return pts.every(p => (p?.visibility ?? 1) > 0.45); }
+function confidence(...pts) { return pts.every(p => (p?.visibility ?? 1) > 0.4); }
+
+// ── Core pose → model mapping ────────────────────────────────
+// MediaPipe landmark coordinate space:
+//   x: 0=left-edge 1=right-edge of image (mirror of person's real left/right)
+//   y: 0=top 1=bottom (y increases downward)
+//   z: depth, negative = closer to camera
+// landmark indices: 11=LShoulder, 12=RShoulder, 13=LElbow, 14=RElbow, 15=LWrist, 16=RWrist
+// NOTE: In image space, the person's LEFT body part appears on the RIGHT side (x~0.6+)
+//       and person's RIGHT appears on LEFT side (x~0.3-). This is the mirror effect.
+
 function driveArmFromPose(side, lm) {
+  // side < 0 = model left arm = person's LEFT arm = image RIGHT side = landmark indices 11,13,15
+  // side > 0 = model right arm = person's RIGHT arm = image LEFT side = landmark indices 12,14,16
+  // In image space, person's LEFT shoulder has HIGHER x (right of image)
   const idx = side < 0 ? { sh:11, el:13, wr:15 } : { sh:12, el:14, wr:16 };
   const sh = lm[idx.sh], el = lm[idx.el], wr = lm[idx.wr];
   if (!confidence(sh, el, wr)) return;
-  const lower = vec(el, wr);
-  const reach = Math.hypot(wr.x - sh.x, wr.y - sh.y);
-  const lift = mapRange(el.y, sh.y + 0.28, sh.y - 0.28, 0.25, -1.15);
-  const spread = mapRange(el.x - sh.x, -0.35, 0.35, -0.95, 0.95);
-  const bend = mapRange(reach, 0.08, 0.42, -1.35, -0.10);
-  const twist = mapRange(lower.x, -0.35, 0.35, -0.45, 0.45);
-  const b = side < 0 ? leftArm : rightArm;
+
+  // Normalize by shoulder width so camera distance doesn't affect scale
+  const lSh = lm[11], rSh = lm[12];
+  const shWidth = Math.max(0.05, Math.abs(lSh.x - rSh.x));
+  const shMidX  = (lSh.x + rSh.x) / 2;
+  const shMidY  = (lSh.y + rSh.y) / 2;
+
+  // Elbow relative to shoulder, normalized
+  const dElX = (el.x - sh.x) / shWidth;  // lateral offset in shoulder-widths
+  const dElY = (el.y - sh.y) / shWidth;  // vertical offset (positive = elbow below shoulder)
+
+  // Wrist relative to elbow, normalized
+  const dWrX = (wr.x - el.x) / shWidth;
+  const dWrY = (wr.y - el.y) / shWidth;
+
+  // ── Upper arm ──
+  // Lift: elbow going UP means el.y < sh.y → dElY negative → arm raised
+  // rotation.x: negative = arm swings forward/up in Three.js
+  const liftX = mapRange(dElY, 0.6, -0.6, 0.3, -1.3);  // +0.3 rest to -1.3 fully raised
+
+  // Spread: in IMAGE space, person's LEFT arm goes further RIGHT (larger x) when arm out
+  //         person's RIGHT arm goes further LEFT (smaller x) when arm out
+  // For left arm (side=-1): sh is at right of image (high x), elbow further right = arm out
+  //   → dElX positive = elbow right of shoulder = arm spread out for left arm
+  // For right arm (side=+1): sh is at left of image (low x), elbow further left = arm out
+  //   → dElX negative = elbow left of shoulder = arm spread out for right arm
+  // Model: positive z-rotation = left arm out, negative z-rotation = right arm out
+  // Multiply by -side to invert the image-space direction to model-space
+  const spreadZ = mapRange(dElX * (-side), -0.8, 0.8, -0.9, 0.9);
   const restUA = side < 0 ? REST.leftUpperArm : REST.rightUpperArm;
+
+  // ── Lower arm (elbow bend) ──
+  // Reach = distance wrist→shoulder; closer = more bent
+  const reach = Math.hypot((wr.x - sh.x) / shWidth, (wr.y - sh.y) / shWidth);
+  const bendX = mapRange(reach, 0.15, 1.1, -1.4, -0.05);  // negative = elbow bent forward
   const restLA = side < 0 ? REST.leftLowerArm : REST.rightLowerArm;
-  b.uaPivot.rotation.x = lift;
-  b.uaPivot.rotation.z = restUA.z + spread * side;
-  b.laPivot.rotation.x = bend;
-  b.laPivot.rotation.z = restLA.z + twist * side;
-  b.hPivot.rotation.x = mapRange(wr.y - el.y, -0.24, 0.24, -0.45, 0.45);
-  b.hPivot.rotation.y = mapRange(lower.x, -0.25, 0.25, 0.45, -0.45);
+
+  // Forearm twist based on wrist-relative-to-elbow lateral direction
+  const twistZ = mapRange(dWrX * (-side), -0.8, 0.8, -0.5, 0.5);
+
+  // ── Hand wrist flex ──
+  const wristX = mapRange(dWrY, -0.5, 0.5, -0.45, 0.45);  // wrist up/down relative to elbow
+  const wristY = mapRange(dWrX * (-side), -0.4, 0.4, -0.4, 0.4);
+
+  const b = side < 0 ? leftArm : rightArm;
+  b.uaPivot.rotation.x = liftX;
+  b.uaPivot.rotation.z = restUA.z + spreadZ;
+  b.laPivot.rotation.x = bendX;
+  b.laPivot.rotation.z = restLA.z + twistZ;
+  b.hPivot.rotation.x  = wristX;
+  b.hPivot.rotation.y  = wristY;
 }
+
 function applyPoseLandmarks(lm) {
   driveArmFromPose(-1, lm);
   driveArmFromPose(1, lm);
-  const nose = lm[0], lSh = lm[11], rSh = lm[12];
-  if (confidence(nose, lSh, rSh)) {
-    const cx = (lSh.x + rSh.x) / 2;
-    head.rotation.y = mapRange(nose.x - cx, -0.18, 0.18, 0.35, -0.35);
-    head.rotation.x = mapRange(nose.y - ((lSh.y + rSh.y) / 2), -0.28, -0.04, -0.20, 0.18);
-    head.rotation.z = mapRange(lSh.y - rSh.y, -0.12, 0.12, -0.18, 0.18);
-    neck.rotation.set(head.rotation.x * 0.35, head.rotation.y * 0.35, head.rotation.z * 0.35);
+
+  const lSh = lm[11], rSh = lm[12];
+  const nose = lm[0];
+  const shWidth = Math.max(0.05, Math.abs(lSh.x - rSh.x));
+  const shMidX  = (lSh.x + rSh.x) / 2;
+  const shMidY  = (lSh.y + rSh.y) / 2;
+
+  // ── Body/torso lean ──
+  if (confidence(lSh, rSh)) {
+    // Shoulder tilt → torso roll (z-axis)
+    // In image, if person leans right, left shoulder goes UP (lSh.y < rSh.y)
+    // → torsoPivot.rotation.z negative = lean right in Three.js
+    torsoPivot.rotation.z = mapRange(lSh.y - rSh.y, -0.15, 0.15, 0.25, -0.25);
+
+    // Forward lean: if both shoulders are lower than usual and face shows forward lean
+    torsoPivot.rotation.x = mapRange(shMidY, 0.2, 0.6, -0.15, 0.15);
   }
+
+  // ── Head rotation ──
+  if (confidence(nose, lSh, rSh)) {
+    // Pan (Y-axis): nose moves LEFT of center (low x) → head turns LEFT
+    // In image: nose.x < shMidX means nose is to the left in image = person turned right (from viewer)
+    // Model: headPivot.rotation.y positive = head turns left (from model's perspective)
+    // Mirror: person turning RIGHT → nose goes to image-left → we want model to turn RIGHT → negative Y
+    const panNorm = (nose.x - shMidX) / shWidth;  // normalized: 0 = center
+    headPivot.rotation.y = mapRange(panNorm, -0.8, 0.8, 0.5, -0.5);  // mirrored for correct direction
+
+    // Tilt (X-axis): nose lower than shoulders midpoint → chin up (head tilted back)
+    const tiltNorm = (nose.y - shMidY) / shWidth;
+    headPivot.rotation.x = mapRange(tiltNorm, -0.4, 0.8, -0.35, 0.25);
+
+    // Roll (Z-axis): shoulder tilt drives head roll
+    headPivot.rotation.z = torsoPivot.rotation.z * 0.5 + mapRange(lSh.y - rSh.y, -0.15, 0.15, 0.12, -0.12);
+
+    // Neck follows head at reduced amount
+    neck.rotation.set(headPivot.rotation.x * 0.4, headPivot.rotation.y * 0.4, headPivot.rotation.z * 0.4);
+  }
+}
+
+// ── Face blendshapes from Holistic face landmarks ────────────
+function applyFaceLandmarks(faceLm) {
+  if (!faceLm || faceLm.length < 468) return;
+
+  // Mouth open: distance between upper lip (13) and lower lip (14)
+  const upperLip = faceLm[13], lowerLip = faceLm[14];
+  const leftCorner = faceLm[61], rightCorner = faceLm[291];
+  const mouthWidth = Math.max(0.01, Math.abs(rightCorner.x - leftCorner.x));
+  const mouthOpen = Math.max(0, (lowerLip.y - upperLip.y) / mouthWidth);
+  // Scale mouth mesh Y to show open/close
+  faceMouth.scale.y = 1 + mapRange(mouthOpen, 0, 0.4, 0, 3);
+  faceMouth.scale.x = 1 + mapRange(mouthOpen, 0, 0.4, 0, 0.5);
+
+  // Eye blink: left eye top (159) to bottom (145), right eye top (386) to bottom (374)
+  // normalized by eye width
+  const lEyeTop = faceLm[159], lEyeBot = faceLm[145];
+  const lEyeL = faceLm[33], lEyeR = faceLm[133];
+  const lEyeW = Math.max(0.005, Math.abs(lEyeR.x - lEyeL.x));
+  const lEyeOpen = (lEyeBot.y - lEyeTop.y) / lEyeW;
+  faceEyeL.scale.y = Math.max(0.05, mapRange(lEyeOpen, 0.1, 0.45, 0.05, 1.0));
+
+  const rEyeTop = faceLm[386], rEyeBot = faceLm[374];
+  const rEyeL = faceLm[362], rEyeR = faceLm[263];
+  const rEyeW = Math.max(0.005, Math.abs(rEyeR.x - rEyeL.x));
+  const rEyeOpen = (rEyeBot.y - rEyeTop.y) / rEyeW;
+  faceEyeR.scale.y = Math.max(0.05, mapRange(rEyeOpen, 0.1, 0.45, 0.05, 1.0));
 }
 function updateTakeUi() {
   const duration = recordedFrames.at(-1)?.time ?? 0;
@@ -781,11 +904,21 @@ function trimmedFrames() {
   const end = +document.getElementById('slTrimEnd').value;
   return recordedFrames.filter(f => f.time >= start && f.time <= end).map(f => ({ time: +(f.time - start).toFixed(4), bones: f.bones }));
 }
-async function ensurePose() {
-  if (pose) return;
-  pose = new Pose({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}` });
-  pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.55, minTrackingConfidence: 0.55 });
-  pose.onResults(results => { latestPoseLandmarks = results.poseLandmarks; });
+async function ensureHolistic() {
+  if (holistic) return;
+  holistic = new Holistic({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic@0.5/${file}` });
+  holistic.setOptions({
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    refineFaceLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+  });
+  holistic.onResults(results => {
+    latestPoseLandmarks = results.poseLandmarks;
+    latestFaceLandmarks = results.faceLandmarks;
+  });
 }
 window.loadVideoFile = function(event) {
   const file = event.target.files?.[0];
@@ -821,12 +954,13 @@ window.cancelVideoMocap = function() {
 window.processVideoMocap = async function() {
   if (!selectedVideoUrl || processingVideo) return;
   try {
-    await ensurePose();
+    await ensureHolistic();
     processingVideo = true;
     recordedFrames = [];
     activeMocapFrames = [];
     latestPoseLandmarks = null;
-    mocapPreview = true;
+    latestFaceLandmarks = null;
+    mocapPreview = false;  // not preview during processing
     mocapPlayback = false;
     animating = false;
     forceRest = false;
@@ -844,7 +978,6 @@ window.processVideoMocap = async function() {
       if (!processingVideo) return;
       if (cameraPreview.ended || cameraPreview.paused) {
         processingVideo = false;
-        mocapPreview = false;
         processBtn.classList.remove('recording');
         processBtn.textContent = 'generate take';
         processBtn.disabled = false;
@@ -853,10 +986,11 @@ window.processVideoMocap = async function() {
         updateTakeUi();
         return;
       }
-      await pose.send({ image: cameraPreview });
+      await holistic.send({ image: cameraPreview });
       if (latestPoseLandmarks) {
         applyRest();
         applyPoseLandmarks(latestPoseLandmarks);
+        applyFaceLandmarks(latestFaceLandmarks);
         recordedFrames.push(captureFrame(cameraPreview.currentTime));
       }
       setMocapStatus(`processing ${cameraPreview.currentTime.toFixed(1)}s / ${(cameraPreview.duration || 0).toFixed(1)}s`, 'rec');
@@ -865,7 +999,6 @@ window.processVideoMocap = async function() {
     requestAnimationFrame(step);
   } catch (err) {
     processingVideo = false;
-    mocapPreview = false;
     document.getElementById('btnProcessVideo').disabled = !selectedVideoUrl;
     document.getElementById('btnCancelVideo').disabled = true;
     document.getElementById('btnProcessVideo').classList.remove('recording');
@@ -874,11 +1007,20 @@ window.processVideoMocap = async function() {
   }
 };
 window.toggleMocapPlayback = function() {
-  activeMocapFrames = trimmedFrames(); if (activeMocapFrames.length < 2) return;
-  mocapPlayback = !mocapPlayback; mocapPlaybackStartedAt = performance.now();
+  const frames = trimmedFrames(); if (frames.length < 2) return;
+  mocapPlayback = !mocapPlayback;
+  if (mocapPlayback) { activeMocapFrames = frames; mocapPlaybackStartedAt = performance.now(); mocapPreview = false; }
   document.getElementById('btnPlayback').classList.toggle('active', mocapPlayback);
 };
-window.useTrimAsGesture = function() { activeMocapFrames = trimmedFrames(); mocapPreview = activeMocapFrames.length > 1; mocapPlaybackStartedAt = performance.now(); };
+window.useTrimAsGesture = function() {
+  const frames = trimmedFrames();
+  if (frames.length < 2) return;
+  activeMocapFrames = frames;
+  mocapPreview = true;
+  mocapPlayback = false;
+  mocapPlaybackStartedAt = performance.now();
+  document.getElementById('btnPlayback').classList.remove('active');
+};
 function sampleFrames(frames, t) {
   if (!frames.length) return null;
   const duration = frames.at(-1).time || 0.001;
@@ -888,9 +1030,9 @@ function sampleFrames(frames, t) {
   const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
   return Object.fromEntries(MOCAP_BONES.map(name => [name, { x: lerp(a.bones[name].x, b.bones[name].x, f), y: lerp(a.bones[name].y, b.bones[name].y, f), z: lerp(a.bones[name].z, b.bones[name].z, f) }]));
 }
-function applyMocapSample(sample) { if (!sample) return; const map = { lUA:leftArm.uaPivot, lLA:leftArm.laPivot, lH:leftArm.hPivot, rUA:rightArm.uaPivot, rLA:rightArm.laPivot, rH:rightArm.hPivot, neck, head }; for (const [k, r] of Object.entries(sample)) map[k]?.rotation.set(r.x, r.y, r.z); }
+function applyMocapSample(sample) { if (!sample) return; const map = { lUA:leftArm.uaPivot, lLA:leftArm.laPivot, lH:leftArm.hPivot, rUA:rightArm.uaPivot, rLA:rightArm.laPivot, rH:rightArm.hPivot, neck, torso:torsoPivot, headP:headPivot }; for (const [k, r] of Object.entries(sample)) map[k]?.rotation.set(r.x, r.y, r.z); }
 function buildGestureModule(frames, exportName) {
-  return `// ${exportName}.js\n// Video-imported gesture exported from archive/video-3d-model-animation.html.\n// Drop this beside gesture.js, or copy the exported function into gesture.js.\n\nexport function blend(from, to, t) { return from + (to - from) * t; }\n\nconst FRAMES = ${JSON.stringify(frames)};\nconst BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','head'];\nfunction sample(frames, t) {\n  if (!frames.length) return null;\n  const duration = frames[frames.length - 1].time || 0.001;\n  const time = ((t % duration) + duration) % duration;\n  let i = 0;\n  while (i < frames.length - 2 && frames[i + 1].time < time) i++;\n  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];\n  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));\n  return Object.fromEntries(BONES.map(name => [name, { x: blend(a.bones[name].x, b.bones[name].x, f), y: blend(a.bones[name].y, b.bones[name].y, f), z: blend(a.bones[name].z, b.bones[name].z, f) }]));\n}\nexport function ${exportName}(ctx) {\n  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));\n  if (!pose) return;\n  const amount = ctx.intensity ?? 1;\n  for (const [name, rot] of Object.entries(pose)) {\n    const bone = ctx[name];\n    if (!bone) continue;\n    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);\n    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);\n    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);\n  }\n}\n`;
+  return `// ${exportName}.js\n// Video-imported gesture exported from archive/video-3d-model-animation.html.\n// Drop this beside gesture.js, or copy the exported function into gesture.js.\n\nexport function blend(from, to, t) { return from + (to - from) * t; }\n\nconst FRAMES = ${JSON.stringify(frames)};\nconst BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','torso','headP'];\nfunction sample(frames, t) {\n  if (!frames.length) return null;\n  const duration = frames[frames.length - 1].time || 0.001;\n  const time = ((t % duration) + duration) % duration;\n  let i = 0;\n  while (i < frames.length - 2 && frames[i + 1].time < time) i++;\n  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];\n  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));\n  return Object.fromEntries(BONES.map(name => [name, { x: blend(a.bones[name].x, b.bones[name].x, f), y: blend(a.bones[name].y, b.bones[name].y, f), z: blend(a.bones[name].z, b.bones[name].z, f) }]));\n}\nexport function ${exportName}(ctx) {\n  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));\n  if (!pose) return;\n  const amount = ctx.intensity ?? 1;\n  for (const [name, rot] of Object.entries(pose)) {\n    const bone = ctx[name];\n    if (!bone) continue;\n    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);\n    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);\n    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);\n  }\n}\n`;
 }
 window.saveRecordedGesture = async function() {
   const frames = trimmedFrames(); if (frames.length < 2) return showBanner('Generate and crop at least two frames first.', 'info');
@@ -936,6 +1078,7 @@ function tickAnimation(dt) {
   if (processingVideo && latestPoseLandmarks) {
     applyRest();
     applyPoseLandmarks(latestPoseLandmarks);
+    applyFaceLandmarks(latestFaceLandmarks);
     syncAndReadout();
     return;
   }
@@ -974,8 +1117,9 @@ function tickAnimation(dt) {
         io,
         REST,
         THREE,
-        head,
+        headP: headPivot,
         neck,
+        torso: torsoPivot,
         lUA: leftArm.uaPivot,
         lLA: leftArm.laPivot,
         lH:  leftArm.hPivot,
