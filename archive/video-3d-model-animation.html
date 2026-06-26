@@ -427,27 +427,63 @@
       bone.position.lerp(tmpVec, lerpAmount);
     }
 
-    function rigPose(vrm, riggedPose) {
+    // Monocular depth (Z) is the noisiest axis we get, even for a stationary subject — small
+    // per-frame jitter there accumulates through the position lerp into visible drift. Clamp the
+    // hip offset to a small box around the rest position instead of letting it free-run.
+    const HIP_DRIFT_CLAMP = 0.12; // meters
+    function clamp(v, lim) { return Math.max(-lim, Math.min(lim, v)); }
+
+    // Legs (and arms, to a lesser extent) get noisy when their landmarks are partially occluded
+    // or just less confidently tracked than the torso/face. Below this visibility we hold the
+    // last pose instead of applying the noisy sample.
+    const VISIBILITY_GATE = 0.6;
+    function landmarksVisible(poseLm, indices) {
+      return indices.every(i => (poseLm[i]?.visibility ?? 0) >= VISIBILITY_GATE);
+    }
+
+    function rigPose(vrm, riggedPose, poseLm) {
       if (!riggedPose) return;
       rigRotation(vrm, 'Hips', riggedPose.Hips.rotation, 0.7, 0.3);
       rigPosition(vrm, 'Hips', {
-        x: -riggedPose.Hips.position.x,
-        y: riggedPose.Hips.position.y + 1,
-        z: -riggedPose.Hips.position.z,
-      }, 1, 0.07);
+        x: clamp(-riggedPose.Hips.position.x, HIP_DRIFT_CLAMP),
+        y: 1 + clamp(riggedPose.Hips.position.y, HIP_DRIFT_CLAMP),
+        z: clamp(-riggedPose.Hips.position.z * 0.4, HIP_DRIFT_CLAMP), // depth is the least reliable axis, so trust it least
+      }, 1, 0.05);
 
       rigRotation(vrm, 'Chest', riggedPose.Spine, 0.25, 0.3);
       rigRotation(vrm, 'Spine', riggedPose.Spine, 0.45, 0.3);
 
-      rigRotation(vrm, 'RightUpperArm', riggedPose.RightUpperArm, 1, 0.3);
-      rigRotation(vrm, 'RightLowerArm', riggedPose.RightLowerArm, 1, 0.3);
-      rigRotation(vrm, 'LeftUpperArm', riggedPose.LeftUpperArm, 1, 0.3);
-      rigRotation(vrm, 'LeftLowerArm', riggedPose.LeftLowerArm, 1, 0.3);
+      // MediaPipe pose landmark indices: 11/12 shoulders, 13/14 elbows, 15/16 wrists,
+      // 23/24 hips, 25/26 knees, 27/28 ankles.
+      if (landmarksVisible(poseLm, [11, 13, 15])) {
+        rigRotation(vrm, 'LeftUpperArm', riggedPose.LeftUpperArm, 1, 0.3);
+        rigRotation(vrm, 'LeftLowerArm', riggedPose.LeftLowerArm, 1, 0.3);
+      }
+      if (landmarksVisible(poseLm, [12, 14, 16])) {
+        rigRotation(vrm, 'RightUpperArm', riggedPose.RightUpperArm, 1, 0.3);
+        rigRotation(vrm, 'RightLowerArm', riggedPose.RightLowerArm, 1, 0.3);
+      }
+      if (landmarksVisible(poseLm, [23, 25, 27])) {
+        rigRotation(vrm, 'LeftUpperLeg', riggedPose.LeftUpperLeg, 1, 0.2);
+        rigRotation(vrm, 'LeftLowerLeg', riggedPose.LeftLowerLeg, 1, 0.2);
+      }
+      if (landmarksVisible(poseLm, [24, 26, 28])) {
+        rigRotation(vrm, 'RightUpperLeg', riggedPose.RightUpperLeg, 1, 0.2);
+        rigRotation(vrm, 'RightLowerLeg', riggedPose.RightLowerLeg, 1, 0.2);
+      }
+    }
 
-      rigRotation(vrm, 'LeftUpperLeg', riggedPose.LeftUpperLeg, 1, 0.3);
-      rigRotation(vrm, 'LeftLowerLeg', riggedPose.LeftLowerLeg, 1, 0.3);
-      rigRotation(vrm, 'RightUpperLeg', riggedPose.RightUpperLeg, 1, 0.3);
-      rigRotation(vrm, 'RightLowerLeg', riggedPose.RightLowerLeg, 1, 0.3);
+    // True mirroring has to happen on the raw landmarks *before* Kalidokit solves them — negating
+    // the x-axis of every point gives a geometrically correct mirror image (same as a person looking
+    // at themselves in a mirror), and Kalidokit's left/right labeling stays self-consistent because
+    // it's still reading the same indices, just reflected. Swapping output fields after solving
+    // (the previous approach) doesn't flip the underlying rotation math, which is why that only
+    // produced a different wrong pose instead of the correct one.
+    function mirrorNormalized(landmarks) {
+      return landmarks.map(p => ({ ...p, x: 1 - p.x }));
+    }
+    function mirrorWorld(landmarks) {
+      return landmarks.map(p => ({ ...p, x: -p.x }));
     }
 
     function rigFace(vrm, riggedFace) {
