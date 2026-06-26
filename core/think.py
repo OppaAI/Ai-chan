@@ -27,6 +27,8 @@ import threading
 import time
 import unicodedata
 
+import numpy as np
+
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import deep_search
@@ -67,6 +69,7 @@ _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes",
 _ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
 _SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.36"))
 _SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.36"))
+_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -183,7 +186,8 @@ _SEMANTIC_SEARCH_EXAMPLES: dict[str, tuple[str, ...]] = {
 class AikoThink:
     def __init__(self, memorize: AikoMemorize, speak: AikoSpeak | None = None) -> None:
         self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
-        self._llm_model = ROUTER_MODEL
+        self._llm_model = LLM_MODEL
+        self._router_model = ROUTER_MODEL
         self._memorize  = memorize
         self._speak     = speak
         self._persona   = _load_persona()
@@ -191,7 +195,7 @@ class AikoThink:
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
         self._route_chat_classified: str | None = None
-        self._semantic_example_cache: dict[int, tuple[list[str], list[list[float]]]] = {}
+        self._semantic_example_cache: dict[int, tuple[list[str], np.ndarray]] = {}
         self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
         self._reasoning = False
@@ -248,35 +252,45 @@ class AikoThink:
         return self._semantic_agent_intent(user_input)
 
     @staticmethod
-    def _cosine_similarity(a: list[float], b: list[float]) -> float:
-        denom_a = sum(x * x for x in a) ** 0.5
-        denom_b = sum(x * x for x in b) ** 0.5
-        if not denom_a or not denom_b:
-            return 0.0
-        return sum(x * y for x, y in zip(a, b)) / (denom_a * denom_b)
+    def _normalized_vector(vector: list[float]) -> np.ndarray:
+        """Return one L2-normalized float32 embedding vector for cosine scoring."""
+        arr = np.asarray(vector, dtype=np.float32)
+        norm = float(np.linalg.norm(arr))
+        if norm <= 1e-12:
+            return arr
+        return arr / norm
+
+    @staticmethod
+    def _normalized_matrix(vectors: list[list[float]]) -> np.ndarray:
+        """Return row-wise L2-normalized float32 embeddings for vectorized cosine."""
+        matrix = np.asarray(vectors, dtype=np.float32)
+        if matrix.size == 0:
+            return matrix.reshape(0, 0)
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        return matrix / np.clip(norms, 1e-12, None)
 
     def _semantic_agent_intent(self, user_input: str) -> str:
         """Classify agentic intent by embedding similarity to route examples."""
         try:
-            query_vector = self._memorize.embed_text(user_input)
+            query_vector = self._normalized_vector(self._memorize.embed_text(user_input, query=True))
             labels, example_vectors = self._semantic_example_vectors(_SEMANTIC_ROUTE_EXAMPLES)
-            
+            raw_scores = example_vectors @ query_vector
+
             scores: dict[str, float] = {}
-            for label, vector in zip(labels, example_vectors):
-                s = self._cosine_similarity(query_vector, vector)
-                if s > scores.get(label, 0.0):
-                    scores[label] = s
-            
+            for label, score in zip(labels, raw_scores, strict=True):
+                scores[label] = max(scores.get(label, 0.0), float(score))
+
             best_label = max(scores, key=scores.get)
             best_score = scores[best_label]
             sorted_scores = sorted(scores.values(), reverse=True)
             second_score = sorted_scores[1] if len(sorted_scores) > 1 else 0.0
-            
-            MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.03"))
+
             log.debug("[route] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, best_score - second_score, user_input)
-            
-            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and (best_score - second_score) >= MIN_GAP:
+
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and (best_score - second_score) >= _SEMANTIC_ROUTE_MIN_GAP:
                 return best_label
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and _ROUTE_MODE != "semantic_only":
+                return self._classify_agent_intent(user_input)
             return "chat"
         except Exception as e:
             log.warning("Semantic intent routing failed: %s", e)
@@ -286,18 +300,15 @@ class AikoThink:
 
     def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float]:
         """Return the closest semantic label and cosine score for a prompt."""
-        query_vector = self._memorize.embed_text(user_input)
+        query_vector = self._normalized_vector(self._memorize.embed_text(user_input, query=True))
         labels, example_vectors = self._semantic_example_vectors(examples_by_label)
-        best_label = "chat"
-        best_score = 0.0
-        for label, vector in zip(labels, example_vectors):
-            score = self._cosine_similarity(query_vector, vector)
-            if score > best_score:
-                best_label = label
-                best_score = score
-        return best_label, best_score
+        if example_vectors.size == 0:
+            return "chat", 0.0
+        raw_scores = example_vectors @ query_vector
+        best_idx = int(np.argmax(raw_scores))
+        return labels[best_idx], float(raw_scores[best_idx])
 
-    def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], list[list[float]]]:
+    def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], np.ndarray]:
         """Return cached embeddings for a static semantic example corpus."""
         cache_key = id(examples_by_label)
         cache = getattr(self, "_semantic_example_cache", None)
@@ -318,7 +329,7 @@ class AikoThink:
                 labels.extend([label] * len(examples))
                 prompts.extend(examples)
 
-            vectors = [self._memorize.embed_text(text) for text in prompts]
+            vectors = self._normalized_matrix(self._memorize.embed_texts(prompts))
             cached = (labels, vectors)
             cache[cache_key] = cached
             return cached
@@ -327,7 +338,7 @@ class AikoThink:
         """Ask the local model for a compact route label when keywords miss."""
         try:
             resp = self._client.chat.completions.create(
-                model=self._llm_model,
+                model=self._router_model,
                 messages=[{"role": "user", "content": (
                     "Route message. Labels: chat, research, planning, writing, coding, "
                     "architecture, decision, reminder, ongoing_task. "
@@ -335,7 +346,7 @@ class AikoThink:
                     "Aiko's own codebase/repository. Reply one label only.\n"
                     f"Message: {user_input!r}"
                 )}],
-                stream=False, max_tokens=8, temperature=0.0,
+                stream=False, max_tokens=8, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -659,14 +670,14 @@ class AikoThink:
 
         try:
             resp = self._client.chat.completions.create(
-                model=self._llm_model,
+                model=self._router_model,
                 messages=[{"role": "user", "content": (
                     f'{context_block}Message: "{user_input}"\n\n'
                     f'Is this asking for factual external data, or conversational?\n'
                     f'If data, resolve pronouns into a search query.\n'
                     f'Reply EXACTLY:\ndata|<search query>\nor:\nsocial|none'
                 )}],
-                stream=False, max_tokens=32, temperature=0.0,
+                stream=False, max_tokens=32, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")

@@ -432,14 +432,14 @@ def generate_and_post(
             "pinned":          False,
         }
 
-    # Step 4: pin daily summary to persistent memory
+    # Step 4: pin daily summary to persistent memory. Store a raw curated
+    # summary with a stable prefix so monthly consolidation can replace older
+    # daily summaries without relying on another extraction pass.
     pinned = False
     if memorize is not None:
         try:
-            pinned = bool(memorize.pin([
-                {"role": "user", "content": f"Pin Aiko's daily experience summary for {date.strftime('%Y-%m-%d')}."},
-                {"role": "assistant", "content": f"Daily experience summary for {date.strftime('%Y-%m-%d')}: {prose}"},
-            ]))
+            daily_text = f"Daily experience summary for {date.strftime('%Y-%m-%d')}: {prose}"
+            pinned = bool(memorize.add_raw(daily_text, pinned=True))
         except Exception as e:
             log.error(f"Daily summary pin failed: {e}")
 

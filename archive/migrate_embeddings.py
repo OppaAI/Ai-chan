@@ -20,8 +20,8 @@ Usage:
 
 Defaults pulled from environment (.env if python-dotenv is installed):
     DB:    $SQLITE_MEMORY_PATH  (~/.aiko/memory.db)
-    MODEL: $EMBED_MODEL         (BAAI/bge-base-en-v1.5)
-    DIMS:  $EMBED_DIMS          (768)
+    MODEL: $EMBED_MODEL         (ferrisS/harrier-oss-v1-270m-fastembed in .env.example)
+    DIMS:  $EMBED_DIMS          (640 for harrier-oss-v1-270m)
 """
 
 import argparse
@@ -52,8 +52,8 @@ except ImportError:
 
 # ── defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_DB    = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
-DEFAULT_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
-DEFAULT_DIMS  = int(os.getenv("EMBED_DIMS", "768"))
+DEFAULT_MODEL = os.getenv("EMBED_MODEL", "ferrisS/harrier-oss-v1-270m-fastembed")
+DEFAULT_DIMS  = int(os.getenv("EMBED_DIMS", "640"))
 FASTEMBED_CACHE = os.getenv("FASTEMBED_CACHE_PATH")
 BATCH_SIZE    = int(os.getenv("EMBED_BATCH_SIZE", "64"))   # memories per embedding batch — tune down if OOM on Jetson
 
@@ -90,11 +90,10 @@ def register_custom_model(model_id: str, dims: int) -> None:
     try:
         TextEmbedding.add_custom_model(
             model=model_id,
-            # NOTE: verify against the model card / config_sentence_transformers.json
-            # for the actual repo — harrier-oss-v1 uses LAST-TOKEN pooling, not mean.
-            # If fastembed's PoolingType has no last-token option and the ONNX
-            # export doesn't bake pooling into the graph itself, embeddings will
-            # be silently degraded. Confirm before trusting migrated vectors.
+            # The ferrisS fastembed package documents MEAN pooling for its
+            # custom TextEmbedding registration. The upstream sentence-
+            # transformers model card uses last-token pooling, but that is not
+            # the fastembed package's documented loading contract.
             pooling=PoolingType.MEAN,
             normalization=True,
             sources=ModelSource(hf=model_id),

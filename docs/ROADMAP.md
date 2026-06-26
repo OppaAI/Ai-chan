@@ -65,7 +65,9 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Feature | Status |
 |---|---|
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
+| Embedding model migration — BGE v1.5 → Harrier OSS v1 270M fastembed for newer 640d vectors and better expected semantic separation | ✅ Done |
 | KNN + FTS5 + RRF memory retrieval | ✅ Done |
+| Monthly memory consolidation — older full months summarized into pinned durable memories | ✅ Done |
 | Microphone capture via PulseAudio `parec` | ✅ Done |
 | ASR via SenseVoice + sherpa-onnx | ✅ Done |
 | Voice Activity Detection via Silero VAD | ✅ Done |
@@ -109,6 +111,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Toolkit set Agentic-focused tool modules | ✅ Done |
 | Agentic skill workflow registry | ✅ Done |
 | Skill-context retrieval in agentic mode | ✅ Done |
+| Dual-path agentic routing — semantic exemplar route by default, optional LLM router/fallback instead of keyword-only dispatch | ✅ Done |
 | Initial wildlife-photo and Aiko-architecture skills | ✅ Done |
 | Safer code-edit/review workflow for self-improvement | 🔲 Planned |
 | Optional MCP wrappers for stable long-running tools | 🔲 Planned |

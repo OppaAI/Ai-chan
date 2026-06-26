@@ -208,6 +208,8 @@ class AikoSpeak:
         self._stream_chunks: list[str] = []
         self._stream_thread = None
         self._streaming_active = False
+        self._first_audio_callback = None
+        self._first_audio_fired = threading.Event()
 
         # ── remote audio sink (WebUI) ────────────────────────────────────
         # If set, _play_wav_bytes() also hands each synthesized WAV chunk to
@@ -223,6 +225,22 @@ class AikoSpeak:
 
         if not silent:
             log.info(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
+
+    def set_first_audio_callback(self, callback) -> None:
+        """Register a callback invoked when the next utterance starts playback."""
+        self._first_audio_callback = callback
+        self._first_audio_fired.clear()
+
+    def _notify_first_audio_start(self) -> None:
+        if self._first_audio_fired.is_set():
+            return
+        self._first_audio_fired.set()
+        callback = self._first_audio_callback
+        if callback is not None:
+            try:
+                callback()
+            except Exception as e:
+                log.warning("[speak] first-audio callback failed: %s", e)
 
     def set_audio_sink(self, callback) -> None:
         """
@@ -311,6 +329,8 @@ class AikoSpeak:
         used to cause is_playing() to flicker false between chunks, and
         could wipe a stop() request that landed between chunks.
         """
+        self._notify_first_audio_start()
+
         if self._audio_sink is not None:
             try:
                 self._audio_sink(wav_bytes)
@@ -487,6 +507,7 @@ class AikoSpeak:
         if not clean:
             return False
         self.stop()
+        self._first_audio_fired.clear()
         self._playing.set()
         t = threading.Thread(target=self._speak_thread, args=(clean,), daemon=True)
         t.start()
@@ -505,6 +526,7 @@ class AikoSpeak:
         if not clean:
             return False
         self.stop()
+        self._first_audio_fired.clear()
         self._playing.set()
         t = threading.Thread(
             target=self._speak_thread_synced, args=(clean, on_word), daemon=True
@@ -524,6 +546,7 @@ class AikoSpeak:
         if not text:
             return
         self.stop()
+        self._first_audio_fired.clear()
         self._playing.set()
         t = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
         t.start()
@@ -537,6 +560,7 @@ class AikoSpeak:
         if not text:
             return
         self.stop()
+        self._first_audio_fired.clear()
         self._playing.set()
         t = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
         t.start()
@@ -544,6 +568,7 @@ class AikoSpeak:
     def start_speech_stream(self) -> None:
         """Start collecting streamed text for one complete TTS playback."""
         self.stop()
+        self._first_audio_fired.clear()
         with self._lock:
             self._stream_chunks = []
             self._streaming_active = True
@@ -569,6 +594,7 @@ class AikoSpeak:
         clean = sanitize_for_tts(text)
         if not clean or self._stop_flag.is_set():
             return
+        self._first_audio_fired.clear()
         self._playing.set()
         self._stop_flag.clear()
         self._stream_thread = threading.Thread(
