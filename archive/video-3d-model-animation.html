@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Mocap Gesture Exporter · aiko-vrm</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0d0f;
+    --surface: #16161a;
+    --border: #2a2a30;
+    --accent: #7c6bff;
+    --accent2: #ff6b9d;
+    --text: #e8e8ee;
+    --muted: #6b6b7a;
+    --track: #22222a;
+    --ok: #6bffb8;
+    --warn: #ffd166;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', monospace;
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  #sidebar header {
+    padding: 20px 20px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  #sidebar header .tag {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  #sidebar header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .section {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  /* Gesture selector */
+  #gestureSelect {
+    width: 100%;
+    padding: 8px 10px;
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b6b7a'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
+  #gestureSelect:focus { border-color: var(--accent); }
+
+  /* Error / info banner */
+  #banner {
+    display: none;
+    margin: 0 20px 0;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 10px;
+    line-height: 1.5;
+    border: 1px solid transparent;
+  }
+  #banner.error { background: #2a1020; border-color: var(--accent2); color: var(--accent2); display: block; }
+  #banner.info  { background: #16202a; border-color: var(--accent);  color: var(--accent);  display: block; }
+
+  /* Side toggle */
+  .toggle-row { display: flex; gap: 8px; }
+
+  .toggle-btn {
+    flex: 1;
+    padding: 8px;
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .toggle-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .toggle-btn.recording { background: #4a1226; border-color: var(--accent2); color: #fff; }
+  .toggle-btn:disabled, .action-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  /* Sliders */
+  .param-row { margin-bottom: 14px; }
+  .param-row:last-child { margin-bottom: 0; }
+
+  .param-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 5px;
+  }
+
+  .param-name  { font-size: 11px; color: var(--muted); }
+  .param-value { font-size: 11px; color: var(--accent); min-width: 44px; text-align: right; }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 3px;
+    background: var(--track);
+    border-radius: 2px;
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    border: 2px solid var(--bg);
+  }
+  input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(124,107,255,0.3); }
+
+  /* Bone display */
+  .bone-grid { display: grid; gap: 6px; }
+
+  .bone-card {
+    background: var(--track);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+  }
+
+  .bone-name {
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+
+  .bone-vals { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; }
+  .bone-val  { font-size: 10px; color: var(--text); }
+  .axis-x { color: #ff6b6b; }
+  .axis-y { color: #6bffb8; }
+  .axis-z { color: #6bb5ff; }
+
+  /* Reset / action buttons */
+  .action-btn {
+    margin: 0 20px 12px;
+    padding: 9px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.05em;
+    width: calc(100% - 40px);
+    text-align: center;
+  }
+  .action-btn:hover { border-color: var(--accent2); color: var(--accent2); }
+
+  /* ── Viewport ── */
+  #viewport { flex: 1; position: relative; background: var(--bg); }
+
+  canvas { display: block; width: 100% !important; height: 100% !important; }
+
+  #hud {
+    position: absolute;
+    top: 16px; right: 16px;
+    font-size: 10px;
+    color: var(--muted);
+    text-align: right;
+    pointer-events: none;
+    line-height: 1.8;
+  }
+  #hud span { color: var(--text); }
+
+  #infobar {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    padding: 10px 20px;
+    background: rgba(13,13,15,0.85);
+    border-top: 1px solid var(--border);
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    gap: 20px;
+    backdrop-filter: blur(6px);
+  }
+
+  .hint { display: flex; align-items: center; gap: 5px; }
+  .key {
+    display: inline-block;
+    padding: 1px 5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 9px;
+    color: var(--text);
+  }
+
+  .mini-note { font-size: 10px; color: var(--muted); line-height: 1.45; margin-top: 8px; }
+  .status-pill { display:inline-block; padding:2px 6px; border:1px solid var(--border); border-radius:999px; color:var(--muted); font-size:10px; }
+  .status-pill.live { color: var(--ok); border-color: var(--ok); }
+  .status-pill.rec { color: var(--accent2); border-color: var(--accent2); }
+  .field { width:100%; padding:8px 10px; background:var(--track); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:inherit; font-size:12px; outline:none; }
+  .field:focus { border-color: var(--accent); }
+  #cameraPreview { position:absolute; left:16px; bottom:48px; width:220px; max-width:30vw; border:1px solid var(--border); border-radius:8px; background:#000; opacity:0.9; display:none; }
+</style>
+</head>
+<body>
+
+<!-- ── SIDEBAR ── -->
+<div id="sidebar">
+  <header>
+    <div class="tag">aiko-vrm · video mocap</div>
+    <h1 id="activeLabel">—</h1>
+  </header>
+
+  <!-- Gesture picker -->
+  <div class="section">
+    <div class="section-label">Gesture</div>
+    <select id="gestureSelect" onchange="onGestureChange()">
+      <option value="">loading gesture.js…</option>
+    </select>
+  </div>
+
+  <div id="banner"></div>
+
+  <!-- Side -->
+  <div class="section">
+    <div class="section-label">Side</div>
+    <div class="toggle-row">
+      <button class="toggle-btn" id="btnLeft"  onclick="setSide(-1)">Left</button>
+      <button class="toggle-btn active" id="btnRight" onclick="setSide(1)">Right</button>
+    </div>
+  </div>
+
+  <!-- Intensity -->
+  <div class="section">
+    <div class="section-label">Intensity</div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">intensity</span>
+        <span class="param-value" id="valIntensity">1.00</span>
+      </div>
+      <input type="range" id="slIntensity" min="0" max="1" step="0.01" value="1" oninput="update()">
+    </div>
+  </div>
+
+  <!-- IO offsets -->
+  <div class="section">
+    <div class="section-label">IO offsets</div>
+
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">UA.x</span><span class="param-value" id="valUAx">0.00</span></div>
+      <input type="range" id="slUAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">UA.z</span><span class="param-value" id="valUAz">0.00</span></div>
+      <input type="range" id="slUAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">LA.x</span><span class="param-value" id="valLAx">0.00</span></div>
+      <input type="range" id="slLAx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">LA.z</span><span class="param-value" id="valLAz">0.00</span></div>
+      <input type="range" id="slLAz" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">H.x</span><span class="param-value" id="valHx">0.00</span></div>
+      <input type="range" id="slHx" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">H.y</span><span class="param-value" id="valHy">0.00</span></div>
+      <input type="range" id="slHy" min="-1" max="1" step="0.01" value="0" oninput="update()">
+    </div>
+  </div>
+
+
+  <!-- Video motion capture -->
+  <div class="section">
+    <div class="section-label">Video mocap importer</div>
+    <div style="margin-bottom:10px"><span id="mocapStatus" class="status-pill">choose a video</span></div>
+    <input class="field" id="videoFile" type="file" accept="video/*" onchange="loadVideoFile(event)" aria-label="source video">
+    <div class="toggle-row" style="margin-top:8px">
+      <button class="toggle-btn" id="btnProcessVideo" onclick="processVideoMocap()" disabled>generate take</button>
+      <button class="toggle-btn" id="btnCancelVideo" onclick="cancelVideoMocap()" disabled>cancel</button>
+    </div>
+    <div class="toggle-row" style="margin-top:8px">
+      <button class="toggle-btn" id="btnPlayback" onclick="toggleMocapPlayback()" disabled>play take</button>
+      <button class="toggle-btn" id="btnUseTrim" onclick="useTrimAsGesture()" disabled>preview trim</button>
+    </div>
+    <div class="mini-note">Imports a video in-browser with MediaPipe Pose, converts visible body motion into the same gesture.js-compatible frames, lets you crop the best range, then saves the same way as the camera recorder.</div>
+  </div>
+
+  <div class="section">
+    <div class="section-label">Crop take</div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">start <span id="trimStartLabel">0.00s</span></span><span class="param-value" id="takeDurationLabel">0 frames</span></div>
+      <input type="range" id="slTrimStart" min="0" max="0" step="0.01" value="0" oninput="updateTrim()">
+    </div>
+    <div class="param-row">
+      <div class="param-header"><span class="param-name">end <span id="trimEndLabel">0.00s</span></span><span class="param-value" id="trimDurationLabel">0.00s</span></div>
+      <input type="range" id="slTrimEnd" min="0" max="0" step="0.01" value="0" oninput="updateTrim()">
+    </div>
+    <input class="field" id="gestureFileName" value="myVideoGesture.js" aria-label="gesture filename">
+    <button class="action-btn" style="margin:10px 0 0; width:100%" id="btnSaveGesture" onclick="saveRecordedGesture()" disabled>save .js gesture</button>
+  </div>
+
+  <!-- Live bone readout -->
+  <div class="section">
+    <div class="section-label">Live bone rotations (rad)</div>
+    <div class="bone-grid">
+      <div class="bone-card">
+        <div class="bone-name">UpperArm</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bUAx">0.00</span></div>
+          <div class="bone-val">y —</div>
+          <div class="bone-val axis-z">z <span id="bUAz">0.00</span></div>
+        </div>
+      </div>
+      <div class="bone-card">
+        <div class="bone-name">LowerArm</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bLAx">0.00</span></div>
+          <div class="bone-val">y —</div>
+          <div class="bone-val axis-z">z <span id="bLAz">0.00</span></div>
+        </div>
+      </div>
+      <div class="bone-card">
+        <div class="bone-name">Hand</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bHx">0.00</span></div>
+          <div class="bone-val axis-y">y <span id="bHy">0.00</span></div>
+          <div class="bone-val">z —</div>
+        </div>
+      </div>
+      <div class="bone-card">
+        <div class="bone-name">Head</div>
+        <div class="bone-vals">
+          <div class="bone-val axis-x">x <span id="bHdX">0.00</span></div>
+          <div class="bone-val axis-y">y <span id="bHdY">0.00</span></div>
+          <div class="bone-val axis-z">z <span id="bHdZ">0.00</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Animation controls -->
+  <div class="section">
+    <div class="section-label">Animation</div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">lerp speed</span>
+        <span class="param-value" id="valLerp">0.08</span>
+      </div>
+      <input type="range" id="slLerp" min="0.01" max="1" step="0.01" value="0.08"
+             oninput="document.getElementById('valLerp').textContent=(+this.value).toFixed(2)">
+    </div>
+    <div class="param-row">
+      <div class="param-header">
+        <span class="param-name">stroke speed</span>
+        <span class="param-value" id="valSpeed">2.50</span>
+      </div>
+      <input type="range" id="slSpeed" min="0.2" max="6" step="0.05" value="2.5"
+             oninput="document.getElementById('valSpeed').textContent=(+this.value).toFixed(2)">
+    </div>
+    <div class="toggle-row" style="margin-top:8px">
+      <button class="toggle-btn active" id="btnAnimate" onclick="toggleAnimate()">▶ animate</button>
+    </div>
+  </div>
+
+  <button class="action-btn" onclick="resetAll()">↺ reset to rest</button>
+</div>
+
+<!-- ── 3D VIEWPORT ── -->
+<div id="viewport">
+  <canvas id="c"></canvas>
+  <video id="cameraPreview" muted playsinline></video>
+
+  <div id="hud">
+    gesture: <span id="hudGesture">—</span><br>
+    side: <span id="hudSide">right</span><br>
+    intensity: <span id="hudInt">1.00</span><br>
+    t: <span id="hudT">0.00</span>
+  </div>
+
+  <div id="infobar">
+    <div class="hint"><span class="key">drag</span> orbit</div>
+    <div class="hint"><span class="key">scroll</span> zoom</div>
+    <div class="hint"><span class="key">R</span> reset view</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/pose.js"></script>
+
+<script type="module">
+// ── Load gesture.js and discover all exported functions ──────
+let gestures = {};
+let activeGestureFn = null;
+let activeGestureName = '';
+
+function showBanner(msg, type = 'error') {
+  const b = document.getElementById('banner');
+  b.className = type;
+  b.textContent = msg;
+}
+function hideBanner() {
+  document.getElementById('banner').className = '';
+  document.getElementById('banner').textContent = '';
+}
+
+const gestureModule = await import('./gesture.js').catch(err => {
+  showBanner(`Failed to load gesture.js: ${err.message}. Serve over HTTP, not file://.`);
+  return null;
+});
+
+if (gestureModule) {
+  // Filter to callable, non-utility exports
+  const SKIP = new Set(['blend', 'default']);
+  gestures = Object.fromEntries(
+    Object.entries(gestureModule).filter(([k, v]) => typeof v === 'function' && !SKIP.has(k))
+  );
+
+  const sel = document.getElementById('gestureSelect');
+  sel.innerHTML = '';
+
+  const names = Object.keys(gestures);
+  if (names.length === 0) {
+    showBanner('gesture.js has no exported gesture functions (besides blend).', 'info');
+  } else {
+    names.forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      sel.appendChild(opt);
+    });
+    activateGesture(names[0]);
+    hideBanner();
+  }
+}
+
+function activateGesture(name) {
+  activeGestureName = name;
+  activeGestureFn = gestures[name] ?? null;
+  document.getElementById('activeLabel').textContent = name;
+  document.getElementById('hudGesture').textContent = name;
+  document.getElementById('gestureSelect').value = name;
+}
+
+window.onGestureChange = function() {
+  const name = document.getElementById('gestureSelect').value;
+  activateGesture(name);
+  resetAll();
+};
+
+// ── Scene setup ──────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0d0f);
+scene.fog = new THREE.Fog(0x0d0d0f, 8, 22);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(0, 1.4, 3.5);
+
+// Lights
+scene.add(new THREE.AmbientLight(0x8888cc, 0.6));
+const key = new THREE.DirectionalLight(0xffffff, 0.9);
+key.position.set(2, 4, 3); key.castShadow = true; scene.add(key);
+const rim = new THREE.DirectionalLight(0x6655ff, 0.4);
+rim.position.set(-3, 2, -2); scene.add(rim);
+const fill = new THREE.PointLight(0xff6b9d, 0.3, 8);
+fill.position.set(-1, 1, 1); scene.add(fill);
+
+scene.add(new THREE.GridHelper(10, 20, 0x2a2a30, 0x1a1a20));
+
+// ── Orbit ────────────────────────────────────────────────────
+const orbit = { dragging:false, lastX:0, lastY:0, theta:0, phi:0.15, radius:3.5, target: new THREE.Vector3(0,1.1,0) };
+canvas.addEventListener('mousedown', e => { orbit.dragging=true; orbit.lastX=e.clientX; orbit.lastY=e.clientY; });
+window.addEventListener('mouseup', () => { orbit.dragging=false; });
+window.addEventListener('mousemove', e => {
+  if (!orbit.dragging) return;
+  orbit.theta -= (e.clientX - orbit.lastX) * 0.006;
+  orbit.phi = Math.max(0.05, Math.min(Math.PI/2, orbit.phi + (e.clientY - orbit.lastY) * 0.006));
+  orbit.lastX = e.clientX; orbit.lastY = e.clientY;
+});
+canvas.addEventListener('wheel', e => {
+  orbit.radius = Math.max(1.5, Math.min(8, orbit.radius + e.deltaY * 0.005));
+}, { passive: true });
+window.addEventListener('keydown', e => {
+  if (e.key === 'r' || e.key === 'R') { orbit.theta=0; orbit.phi=0.15; orbit.radius=3.5; }
+});
+function applyOrbit() {
+  const x = orbit.radius * Math.sin(orbit.theta) * Math.cos(orbit.phi);
+  const y = orbit.radius * Math.sin(orbit.phi) + orbit.target.y;
+  const z = orbit.radius * Math.cos(orbit.theta) * Math.cos(orbit.phi);
+  camera.position.set(x, y, z);
+  camera.lookAt(orbit.target);
+}
+
+// ── Skeleton ─────────────────────────────────────────────────
+const MAT_BODY   = new THREE.MeshLambertMaterial({ color: 0x3a3a4a });
+const MAT_JOINT  = new THREE.MeshLambertMaterial({ color: 0x5a5a7a });
+const MAT_ACCENT = new THREE.MeshLambertMaterial({ color: 0x7c6bff });
+const MAT_ACCENT2= new THREE.MeshLambertMaterial({ color: 0xff6b9d });
+
+const mkCapsule = (h, r, mat) => new THREE.Mesh(new THREE.CylinderGeometry(r,r,h,8), mat);
+const mkSphere  = (r, mat)    => new THREE.Mesh(new THREE.SphereGeometry(r,8,8), mat);
+
+const root = new THREE.Object3D();
+scene.add(root);
+
+// Torso / head / neck / hips
+const torso = mkCapsule(0.55, 0.09, MAT_BODY); torso.position.set(0,0.9,0); root.add(torso);
+const head  = mkSphere(0.1, MAT_JOINT);         head.position.set(0,1.28,0); root.add(head);
+const neck  = mkCapsule(0.12, 0.04, MAT_BODY);  neck.position.set(0,1.19,0); root.add(neck);
+const hips  = mkCapsule(0.18, 0.1, MAT_BODY);   hips.position.set(0,0.62,0); root.add(hips);
+
+// Static legs
+[-0.09, 0.09].forEach(x => {
+  const ul = mkCapsule(0.28,0.065,MAT_BODY); ul.position.set(x,0.35,0); root.add(ul);
+  const ll = mkCapsule(0.28,0.055,MAT_BODY); ll.position.set(x,0.06,0); root.add(ll);
+  const ft = mkCapsule(0.10,0.04,MAT_BODY);  ft.rotation.x=Math.PI/2; ft.position.set(x,-0.08,0.04); root.add(ft);
+});
+
+// Arms
+const SHOULDER_L = new THREE.Vector3(-0.17, 1.14, 0);
+const SHOULDER_R = new THREE.Vector3( 0.17, 1.14, 0);
+
+function buildArm(side) {
+  const sOff = side < 0 ? SHOULDER_L : SHOULDER_R;
+  const col   = side < 0 ? MAT_BODY : MAT_ACCENT;
+  const col2  = side < 0 ? MAT_BODY : MAT_ACCENT2;
+
+  const uaPivot = new THREE.Object3D(); uaPivot.position.copy(sOff); root.add(uaPivot);
+  const uaMesh  = mkCapsule(0.24,0.055,col); uaMesh.position.set(0,-0.12,0); uaPivot.add(uaMesh);
+  const elbSph  = mkSphere(0.04, MAT_JOINT); elbSph.position.set(0,-0.24,0); uaPivot.add(elbSph);
+
+  const laPivot = new THREE.Object3D(); laPivot.position.set(0,-0.24,0); uaPivot.add(laPivot);
+  const laMesh  = mkCapsule(0.20,0.045,col); laMesh.position.set(0,-0.10,0); laPivot.add(laMesh);
+  const wriSph  = mkSphere(0.035, MAT_JOINT); wriSph.position.set(0,-0.20,0); laPivot.add(wriSph);
+
+  const hPivot  = new THREE.Object3D(); hPivot.position.set(0,-0.20,0); laPivot.add(hPivot);
+  const hMesh   = mkCapsule(0.10,0.038,col2); hMesh.position.set(0,-0.05,0); hPivot.add(hMesh);
+
+  return { uaPivot, laPivot, hPivot };
+}
+
+const leftArm  = buildArm(-1);
+const rightArm = buildArm( 1);
+
+// ── REST poses ────────────────────────────────────────────────
+const REST = {
+  leftUpperArm:  { x:0,   y:0, z: 0.25 },
+  leftLowerArm:  { x:0.1, y:0, z: 0.05 },
+  leftHand:      { x:0,   y:0, z:0 },
+  rightUpperArm: { x:0,   y:0, z:-0.25 },
+  rightLowerArm: { x:0.1, y:0, z:-0.05 },
+  rightHand:     { x:0,   y:0, z:0 },
+};
+
+function applyRest() {
+  leftArm.uaPivot.rotation.set(REST.leftUpperArm.x,  0, REST.leftUpperArm.z);
+  leftArm.laPivot.rotation.set(REST.leftLowerArm.x,  0, REST.leftLowerArm.z);
+  leftArm.hPivot.rotation.set (REST.leftHand.x,      0, 0);
+  rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
+  rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
+  rightArm.hPivot.rotation.set (REST.rightHand.x,     0, 0);
+  neck.rotation.set(0,0,0);
+  head.rotation.set(0,0,0);
+}
+applyRest();
+
+// ── State ─────────────────────────────────────────────────────
+let currentSide = 1;
+let animating   = true;
+let forceRest   = false;
+let animTime    = 0;
+
+// ── Helpers ───────────────────────────────────────────────────
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function snapshotRotations() {
+  return {
+    lUA:  leftArm.uaPivot.rotation.clone(),
+    lLA:  leftArm.laPivot.rotation.clone(),
+    lH:   leftArm.hPivot.rotation.clone(),
+    rUA:  rightArm.uaPivot.rotation.clone(),
+    rLA:  rightArm.laPivot.rotation.clone(),
+    rH:   rightArm.hPivot.rotation.clone(),
+    neck: neck.rotation.clone(),
+    head: head.rotation.clone(),
+  };
+}
+
+function applyLerpedRotations(from, t) {
+  [
+    [leftArm.uaPivot,  from.lUA],
+    [leftArm.laPivot,  from.lLA],
+    [leftArm.hPivot,   from.lH],
+    [rightArm.uaPivot, from.rUA],
+    [rightArm.laPivot, from.rLA],
+    [rightArm.hPivot,  from.rH],
+    [neck,             from.neck],
+    [head,             from.head],
+  ].forEach(([bone, start]) => {
+    const tgt = bone.rotation.clone();
+    bone.rotation.set(
+      lerp(start.x, tgt.x, t),
+      lerp(start.y, tgt.y, t),
+      lerp(start.z, tgt.z, t),
+    );
+  });
+}
+
+function getIO() {
+  return {
+    lUA:  { x: +slUAx.value, z: +slUAz.value },
+    lLA:  { x: +slLAx.value, z: +slLAz.value },
+    lH:   { x: +slHx.value,  y: +slHy.value, z: 0 },
+    rUA:  { x: +slUAx.value, z: +slUAz.value },
+    rLA:  { x: +slLAx.value, z: +slLAz.value },
+    rH:   { x: +slHx.value,  y: +slHy.value, z: 0 },
+    neck: { x:0, y:0 },
+    head: { x:0, y:0, z:0 },
+  };
+}
+
+function syncAndReadout() {
+  const s = currentSide;
+  const UA = s<0 ? leftArm.uaPivot : rightArm.uaPivot;
+  const LA = s<0 ? leftArm.laPivot : rightArm.laPivot;
+  const H  = s<0 ? leftArm.hPivot  : rightArm.hPivot;
+  document.getElementById('bUAx').textContent = UA.rotation.x.toFixed(3);
+  document.getElementById('bUAz').textContent = UA.rotation.z.toFixed(3);
+  document.getElementById('bLAx').textContent = LA.rotation.x.toFixed(3);
+  document.getElementById('bLAz').textContent = LA.rotation.z.toFixed(3);
+  document.getElementById('bHx').textContent  = H.rotation.x.toFixed(3);
+  document.getElementById('bHy').textContent  = H.rotation.y.toFixed(3);
+  document.getElementById('bHdX').textContent = head.rotation.x.toFixed(3);
+  document.getElementById('bHdY').textContent = head.rotation.y.toFixed(3);
+  document.getElementById('bHdZ').textContent = head.rotation.z.toFixed(3);
+}
+
+// ── Video mocap importer ─────────────────────────────────────
+const MOCAP_BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','head'];
+const cameraPreview = document.getElementById('cameraPreview');
+let pose = null;
+let selectedVideoUrl = null;
+let processingVideo = false;
+let recordedFrames = [];
+let recordStartedAt = 0;
+let mocapPlayback = false;
+let mocapPreview = false;
+let mocapPlaybackStartedAt = 0;
+let activeMocapFrames = [];
+let latestPoseLandmarks = null;
+
+function setMocapStatus(text, mode = '') {
+  const el = document.getElementById('mocapStatus');
+  el.textContent = text;
+  el.className = `status-pill ${mode}`.trim();
+}
+
+function rotationPlain(rot) {
+  return { x: +rot.x.toFixed(5), y: +rot.y.toFixed(5), z: +rot.z.toFixed(5) };
+}
+
+function captureFrame(time) {
+  return { time: +time.toFixed(4), bones: Object.fromEntries(MOCAP_BONES.map(name => [name, rotationPlain({
+    lUA: leftArm.uaPivot.rotation, lLA: leftArm.laPivot.rotation, lH: leftArm.hPivot.rotation,
+    rUA: rightArm.uaPivot.rotation, rLA: rightArm.laPivot.rotation, rH: rightArm.hPivot.rotation,
+    neck: neck.rotation, head: head.rotation,
+  }[name])])) };
+}
+
+function vec(a, b) { return { x: b.x - a.x, y: b.y - a.y, z: (b.z ?? 0) - (a.z ?? 0) }; }
+function mapRange(v, inMin, inMax, outMin, outMax) {
+  const t = Math.max(0, Math.min(1, (v - inMin) / (inMax - inMin)));
+  return outMin + (outMax - outMin) * t;
+}
+function confidence(...pts) { return pts.every(p => (p?.visibility ?? 1) > 0.45); }
+function driveArmFromPose(side, lm) {
+  const idx = side < 0 ? { sh:11, el:13, wr:15 } : { sh:12, el:14, wr:16 };
+  const sh = lm[idx.sh], el = lm[idx.el], wr = lm[idx.wr];
+  if (!confidence(sh, el, wr)) return;
+  const lower = vec(el, wr);
+  const reach = Math.hypot(wr.x - sh.x, wr.y - sh.y);
+  const lift = mapRange(el.y, sh.y + 0.28, sh.y - 0.28, 0.25, -1.15);
+  const spread = mapRange(el.x - sh.x, -0.35, 0.35, -0.95, 0.95);
+  const bend = mapRange(reach, 0.08, 0.42, -1.35, -0.10);
+  const twist = mapRange(lower.x, -0.35, 0.35, -0.45, 0.45);
+  const b = side < 0 ? leftArm : rightArm;
+  const restUA = side < 0 ? REST.leftUpperArm : REST.rightUpperArm;
+  const restLA = side < 0 ? REST.leftLowerArm : REST.rightLowerArm;
+  b.uaPivot.rotation.x = lift;
+  b.uaPivot.rotation.z = restUA.z + spread * side;
+  b.laPivot.rotation.x = bend;
+  b.laPivot.rotation.z = restLA.z + twist * side;
+  b.hPivot.rotation.x = mapRange(wr.y - el.y, -0.24, 0.24, -0.45, 0.45);
+  b.hPivot.rotation.y = mapRange(lower.x, -0.25, 0.25, 0.45, -0.45);
+}
+function applyPoseLandmarks(lm) {
+  driveArmFromPose(-1, lm);
+  driveArmFromPose(1, lm);
+  const nose = lm[0], lSh = lm[11], rSh = lm[12];
+  if (confidence(nose, lSh, rSh)) {
+    const cx = (lSh.x + rSh.x) / 2;
+    head.rotation.y = mapRange(nose.x - cx, -0.18, 0.18, 0.35, -0.35);
+    head.rotation.x = mapRange(nose.y - ((lSh.y + rSh.y) / 2), -0.28, -0.04, -0.20, 0.18);
+    head.rotation.z = mapRange(lSh.y - rSh.y, -0.12, 0.12, -0.18, 0.18);
+    neck.rotation.set(head.rotation.x * 0.35, head.rotation.y * 0.35, head.rotation.z * 0.35);
+  }
+}
+function updateTakeUi() {
+  const duration = recordedFrames.at(-1)?.time ?? 0;
+  for (const id of ['slTrimStart','slTrimEnd']) {
+    const el = document.getElementById(id); el.max = duration.toFixed(2); el.disabled = recordedFrames.length < 2;
+  }
+  document.getElementById('slTrimEnd').value = duration.toFixed(2);
+  document.getElementById('takeDurationLabel').textContent = `${recordedFrames.length} frames`;
+  updateTrim();
+  const hasTake = recordedFrames.length > 1;
+  for (const id of ['btnPlayback','btnUseTrim','btnSaveGesture']) document.getElementById(id).disabled = !hasTake;
+}
+window.updateTrim = function() {
+  const a = document.getElementById('slTrimStart');
+  const b = document.getElementById('slTrimEnd');
+  if (+a.value > +b.value) a.value = b.value;
+  document.getElementById('trimStartLabel').textContent = `${(+a.value).toFixed(2)}s`;
+  document.getElementById('trimEndLabel').textContent = `${(+b.value).toFixed(2)}s`;
+  document.getElementById('trimDurationLabel').textContent = `${Math.max(0, +b.value - +a.value).toFixed(2)}s`;
+};
+function trimmedFrames() {
+  const start = +document.getElementById('slTrimStart').value;
+  const end = +document.getElementById('slTrimEnd').value;
+  return recordedFrames.filter(f => f.time >= start && f.time <= end).map(f => ({ time: +(f.time - start).toFixed(4), bones: f.bones }));
+}
+async function ensurePose() {
+  if (pose) return;
+  pose = new Pose({ locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5/${file}` });
+  pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.55, minTrackingConfidence: 0.55 });
+  pose.onResults(results => { latestPoseLandmarks = results.poseLandmarks; });
+}
+window.loadVideoFile = function(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (selectedVideoUrl) URL.revokeObjectURL(selectedVideoUrl);
+  selectedVideoUrl = URL.createObjectURL(file);
+  recordedFrames = [];
+  activeMocapFrames = [];
+  latestPoseLandmarks = null;
+  mocapPreview = false;
+  mocapPlayback = false;
+  cameraPreview.src = selectedVideoUrl;
+  cameraPreview.loop = false;
+  cameraPreview.muted = true;
+  cameraPreview.playsInline = true;
+  cameraPreview.style.display = 'block';
+  document.getElementById('btnProcessVideo').disabled = false;
+  document.getElementById('btnPlayback').classList.remove('active');
+  updateTakeUi();
+  setMocapStatus(`loaded ${file.name}`, 'live');
+};
+
+window.cancelVideoMocap = function() {
+  processingVideo = false;
+  cameraPreview.pause();
+  document.getElementById('btnProcessVideo').classList.remove('recording');
+  document.getElementById('btnProcessVideo').textContent = 'generate take';
+  document.getElementById('btnCancelVideo').disabled = true;
+  document.getElementById('btnProcessVideo').disabled = !selectedVideoUrl;
+  setMocapStatus(recordedFrames.length > 1 ? `generated ${recordedFrames.length} frames` : 'video processing canceled', recordedFrames.length > 1 ? 'live' : '');
+};
+
+window.processVideoMocap = async function() {
+  if (!selectedVideoUrl || processingVideo) return;
+  try {
+    await ensurePose();
+    processingVideo = true;
+    recordedFrames = [];
+    activeMocapFrames = [];
+    latestPoseLandmarks = null;
+    mocapPreview = true;
+    mocapPlayback = false;
+    animating = false;
+    forceRest = false;
+    const processBtn = document.getElementById('btnProcessVideo');
+    processBtn.disabled = true;
+    processBtn.classList.add('recording');
+    processBtn.textContent = 'processing…';
+    document.getElementById('btnCancelVideo').disabled = false;
+    document.getElementById('btnPlayback').classList.remove('active');
+    cameraPreview.currentTime = 0;
+    cameraPreview.playbackRate = 1;
+    await cameraPreview.play();
+    setMocapStatus('processing video', 'rec');
+    const step = async () => {
+      if (!processingVideo) return;
+      if (cameraPreview.ended || cameraPreview.paused) {
+        processingVideo = false;
+        mocapPreview = false;
+        processBtn.classList.remove('recording');
+        processBtn.textContent = 'generate take';
+        processBtn.disabled = false;
+        document.getElementById('btnCancelVideo').disabled = true;
+        setMocapStatus(`generated ${recordedFrames.length} frames`, 'live');
+        updateTakeUi();
+        return;
+      }
+      await pose.send({ image: cameraPreview });
+      if (latestPoseLandmarks) {
+        applyRest();
+        applyPoseLandmarks(latestPoseLandmarks);
+        recordedFrames.push(captureFrame(cameraPreview.currentTime));
+      }
+      setMocapStatus(`processing ${cameraPreview.currentTime.toFixed(1)}s / ${(cameraPreview.duration || 0).toFixed(1)}s`, 'rec');
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  } catch (err) {
+    processingVideo = false;
+    mocapPreview = false;
+    document.getElementById('btnProcessVideo').disabled = !selectedVideoUrl;
+    document.getElementById('btnCancelVideo').disabled = true;
+    document.getElementById('btnProcessVideo').classList.remove('recording');
+    document.getElementById('btnProcessVideo').textContent = 'generate take';
+    showBanner(`Video processing failed: ${err.message}`);
+  }
+};
+window.toggleMocapPlayback = function() {
+  activeMocapFrames = trimmedFrames(); if (activeMocapFrames.length < 2) return;
+  mocapPlayback = !mocapPlayback; mocapPlaybackStartedAt = performance.now();
+  document.getElementById('btnPlayback').classList.toggle('active', mocapPlayback);
+};
+window.useTrimAsGesture = function() { activeMocapFrames = trimmedFrames(); mocapPreview = activeMocapFrames.length > 1; mocapPlaybackStartedAt = performance.now(); };
+function sampleFrames(frames, t) {
+  if (!frames.length) return null;
+  const duration = frames.at(-1).time || 0.001;
+  const time = ((t % duration) + duration) % duration;
+  let i = 0; while (i < frames.length - 2 && frames[i + 1].time < time) i++;
+  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];
+  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));
+  return Object.fromEntries(MOCAP_BONES.map(name => [name, { x: lerp(a.bones[name].x, b.bones[name].x, f), y: lerp(a.bones[name].y, b.bones[name].y, f), z: lerp(a.bones[name].z, b.bones[name].z, f) }]));
+}
+function applyMocapSample(sample) { if (!sample) return; const map = { lUA:leftArm.uaPivot, lLA:leftArm.laPivot, lH:leftArm.hPivot, rUA:rightArm.uaPivot, rLA:rightArm.laPivot, rH:rightArm.hPivot, neck, head }; for (const [k, r] of Object.entries(sample)) map[k]?.rotation.set(r.x, r.y, r.z); }
+function buildGestureModule(frames, exportName) {
+  return `// ${exportName}.js\n// Video-imported gesture exported from archive/video-3d-model-animation.html.\n// Drop this beside gesture.js, or copy the exported function into gesture.js.\n\nexport function blend(from, to, t) { return from + (to - from) * t; }\n\nconst FRAMES = ${JSON.stringify(frames)};\nconst BONES = ['lUA','lLA','lH','rUA','rLA','rH','neck','head'];\nfunction sample(frames, t) {\n  if (!frames.length) return null;\n  const duration = frames[frames.length - 1].time || 0.001;\n  const time = ((t % duration) + duration) % duration;\n  let i = 0;\n  while (i < frames.length - 2 && frames[i + 1].time < time) i++;\n  const a = frames[i], b = frames[Math.min(i + 1, frames.length - 1)];\n  const f = Math.max(0, Math.min(1, (time - a.time) / Math.max(0.001, b.time - a.time)));\n  return Object.fromEntries(BONES.map(name => [name, { x: blend(a.bones[name].x, b.bones[name].x, f), y: blend(a.bones[name].y, b.bones[name].y, f), z: blend(a.bones[name].z, b.bones[name].z, f) }]));\n}\nexport function ${exportName}(ctx) {\n  const pose = sample(FRAMES, ctx.t * (ctx.strokeSpeed ?? 1));\n  if (!pose) return;\n  const amount = ctx.intensity ?? 1;\n  for (const [name, rot] of Object.entries(pose)) {\n    const bone = ctx[name];\n    if (!bone) continue;\n    bone.rotation.x = blend(bone.rotation.x, rot.x, amount);\n    bone.rotation.y = blend(bone.rotation.y, rot.y, amount);\n    bone.rotation.z = blend(bone.rotation.z, rot.z, amount);\n  }\n}\n`;
+}
+window.saveRecordedGesture = async function() {
+  const frames = trimmedFrames(); if (frames.length < 2) return showBanner('Generate and crop at least two frames first.', 'info');
+  const rawName = document.getElementById('gestureFileName').value.replace(/\.js$/i, '') || 'myVideoGesture';
+  const exportName = rawName.replace(/[^a-zA-Z0-9_$]/g, '_').replace(/^[^a-zA-Z_$]/, '_$&');
+  const source = buildGestureModule(frames, exportName);
+  if ('showSaveFilePicker' in window) {
+    const handle = await showSaveFilePicker({ suggestedName: `${rawName}.js`, types: [{ description: 'JavaScript module', accept: { 'text/javascript': ['.js'] } }] });
+    const writable = await handle.createWritable(); await writable.write(source); await writable.close(); setMocapStatus(`saved ${rawName}.js`, 'live');
+  } else {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([source], { type:'text/javascript' })); a.download = `${rawName}.js`; a.click(); URL.revokeObjectURL(a.href); setMocapStatus(`downloaded ${rawName}.js`, 'live');
+  }
+};
+
+// ── Tick ──────────────────────────────────────────────────────
+function tickAnimation(dt) {
+  if (animating) animTime += dt;
+
+  const intensity  = +document.getElementById('slIntensity').value;
+  const lerpT      = +document.getElementById('slLerp').value;
+  const strokeSpeed= +document.getElementById('slSpeed').value;
+  const io         = getIO();
+
+  // update sidebar display values
+  document.getElementById('valIntensity').textContent = intensity.toFixed(2);
+  document.getElementById('valUAx').textContent = (+slUAx.value).toFixed(2);
+  document.getElementById('valUAz').textContent = (+slUAz.value).toFixed(2);
+  document.getElementById('valLAx').textContent = (+slLAx.value).toFixed(2);
+  document.getElementById('valLAz').textContent = (+slLAz.value).toFixed(2);
+  document.getElementById('valHx').textContent  = (+slHx.value).toFixed(2);
+  document.getElementById('valHy').textContent  = (+slHy.value).toFixed(2);
+  document.getElementById('hudInt').textContent = intensity.toFixed(2);
+  document.getElementById('hudT').textContent   = animTime.toFixed(2);
+
+  if (forceRest) { applyRest(); syncAndReadout(); return; }
+
+  if (mocapPreview && activeMocapFrames.length > 1) {
+    applyMocapSample(sampleFrames(activeMocapFrames, (performance.now() - mocapPlaybackStartedAt) / 1000));
+    syncAndReadout();
+    return;
+  }
+
+  if (processingVideo && latestPoseLandmarks) {
+    applyRest();
+    applyPoseLandmarks(latestPoseLandmarks);
+    syncAndReadout();
+    return;
+  }
+
+  if (mocapPlayback && activeMocapFrames.length > 1) {
+    applyMocapSample(sampleFrames(activeMocapFrames, (performance.now() - mocapPlaybackStartedAt) / 1000));
+    syncAndReadout();
+    return;
+  }
+
+  const animatedIntensity = animating
+    ? intensity * (0.55 + 0.45 * (0.5 + 0.5 * Math.sin(animTime * 2.4)))
+    : intensity;
+
+  if (activeGestureFn) {
+    const before = snapshotRotations();
+
+    // Set the non-active arm to rest first
+    const s = currentSide;
+    if (s < 0) {
+      rightArm.uaPivot.rotation.set(REST.rightUpperArm.x, 0, REST.rightUpperArm.z);
+      rightArm.laPivot.rotation.set(REST.rightLowerArm.x, 0, REST.rightLowerArm.z);
+      rightArm.hPivot.rotation.set(REST.rightHand.x, 0, 0);
+    } else {
+      leftArm.uaPivot.rotation.set(REST.leftUpperArm.x, 0, REST.leftUpperArm.z);
+      leftArm.laPivot.rotation.set(REST.leftLowerArm.x, 0, REST.leftLowerArm.z);
+      leftArm.hPivot.rotation.set(REST.leftHand.x, 0, 0);
+    }
+
+    try {
+      activeGestureFn({
+        side:      currentSide,
+        intensity: animatedIntensity,
+        t:         animTime,
+        strokeSpeed,
+        io,
+        REST,
+        THREE,
+        head,
+        neck,
+        lUA: leftArm.uaPivot,
+        lLA: leftArm.laPivot,
+        lH:  leftArm.hPivot,
+        rUA: rightArm.uaPivot,
+        rLA: rightArm.laPivot,
+        rH:  rightArm.hPivot,
+      });
+    } catch(err) {
+      showBanner(`${activeGestureName}() threw: ${err.message}`);
+    }
+
+    applyLerpedRotations(before, lerpT);
+  }
+
+  syncAndReadout();
+}
+
+// ── Controls ─────────────────────────────────────────────────
+const slUAx = document.getElementById('slUAx');
+const slUAz = document.getElementById('slUAz');
+const slLAx = document.getElementById('slLAx');
+const slLAz = document.getElementById('slLAz');
+const slHx  = document.getElementById('slHx');
+const slHy  = document.getElementById('slHy');
+
+window.setSide = function(s) {
+  forceRest = false;
+  currentSide = s;
+  document.getElementById('btnLeft').classList.toggle('active',  s < 0);
+  document.getElementById('btnRight').classList.toggle('active', s > 0);
+  document.getElementById('hudSide').textContent = s < 0 ? 'left' : 'right';
+};
+
+window.toggleAnimate = function() {
+  forceRest = false;
+  animating = !animating;
+  const btn = document.getElementById('btnAnimate');
+  btn.textContent = animating ? '▶ animate' : '⏸ paused';
+  btn.classList.toggle('active', animating);
+};
+
+window.update = function() { forceRest = false; };
+
+window.resetAll = function() {
+  animating = false;
+  forceRest = true;
+  animTime  = 0;
+  const btn = document.getElementById('btnAnimate');
+  btn.textContent = '⏸ paused';
+  btn.classList.remove('active');
+  document.getElementById('slIntensity').value = 1;
+  ['UAx','UAz','LAx','LAz','Hx','Hy'].forEach(id => {
+    document.getElementById('sl'+id).value = 0;
+  });
+  applyRest();
+  syncAndReadout();
+};
+
+// ── Resize ────────────────────────────────────────────────────
+function resize() {
+  const vp = document.getElementById('viewport');
+  renderer.setSize(vp.clientWidth, vp.clientHeight, false);
+  camera.aspect = vp.clientWidth / vp.clientHeight;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── Render loop ───────────────────────────────────────────────
+let last = performance.now();
+(function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - last) / 1000, 0.05);
+  last = now;
+  tickAnimation(dt);
+  applyOrbit();
+  renderer.render(scene, camera);
+})(performance.now());
+</script>
+</body>
+</html>
