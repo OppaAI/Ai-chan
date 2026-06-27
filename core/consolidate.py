@@ -1,619 +1,238 @@
 """
-core/schedule.py
+core/consolidate.py
 
-Persistent scheduled jobs, reminders, and wake-up alarms for Aiko.
+Monthly memory consolidation.
 
-A scheduled job is a small local record with:
-  - time_of_day: local wall-clock time in HH:MM format
-  - frequency: once, hourly, daily, weekdays, weekly, biweekly, monthly, or custom_weekdays
-  - days_of_week: optional weekday names for custom_weekdays/weekly jobs
-  - relative_days: optional integer day offset for phrases like tomorrow or the day after tomorrow
-  - task: what Aiko should do or say when the job fires
-  - action: announce or agentic
+Runs on/after the first day of a month and consolidates the month before the
+most recent full month. Example: on July 1, keep June intact and summarize May.
+The summary is inserted as a pinned raw memory, then unpinned detailed memories
+from the consolidated month are deleted to reduce vector DB size.
 
-The scheduler is deliberately local-first: jobs are stored in JSON under
-WORKSPACE_ROOT and a single daemon thread sleeps until the next due event.
-It can announce or initiate jobs only while Aiko is running on an awake machine.
-It does not install OS-level cron jobs, wake a sleeping computer, or run after
-Aiko exits.
-
-Two hardcoded system jobs run outside schedule.json and cannot be modified
-by the user:
-  - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
-  - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
+Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import threading
-import uuid
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from openai import OpenAI
+
+from core.experience import load_chat_turns
 from core.log import get_logger
 
 log = get_logger(__name__)
 
-WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
-SCHEDULE_PATH = Path(os.getenv("SCHEDULE_PATH", WORKSPACE_ROOT / "schedule.json")).resolve()
-LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH", WORKSPACE_ROOT / "reminders.json")).resolve()
-DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
+CONSOLIDATION_ENABLED         = os.getenv("MONTHLY_CONSOLIDATION_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+CONSOLIDATION_KEEP_MONTHS     = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_KEEP_MONTHS", "1")))
+CONSOLIDATION_SOURCE          = os.getenv("MONTHLY_CONSOLIDATION_SOURCE", "experience").strip().lower()
+CONSOLIDATION_CHUNK_MEMS      = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_MEMS", "25")))
+CONSOLIDATION_CHUNK_TURNS     = max(10, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_TURNS", "40")))
+CONSOLIDATION_MAX_INPUT_CHARS = max(1000, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS", "6000")))
+CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MEMS", "5")))
+CONSOLIDATION_DELETE_ORIGINALS       = os.getenv("MONTHLY_CONSOLIDATION_DELETE_ORIGINALS", "1").lower() in {"1", "true", "yes", "on"}
+CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES", "1").lower() in {"1", "true", "yes", "on"}
+CONSOLIDATION_STATE_PATH      = Path(os.getenv(
+    "MONTHLY_CONSOLIDATION_STATE_PATH",
+    str(Path.home() / ".aiko" / "consolidation_state.json"),
+))
 
-# System job timing — env overridable, not user-modifiable via schedule.json
-DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
-DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
-MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
-MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
-
-FREQUENCIES = {"once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
-RELATIVE_DAY_ALIASES = {
-    "today": 0,
-    "tonight": 0,
-    "tomorrow": 1,
-    "tmr": 1,
-    "tmrw": 1,
-    "the day after tomorrow": 2,
-    "day after tomorrow": 2,
-    "overmorrow": 2,
-}
-
-_WEEKDAYS = {
-    "monday": 0, "mon": 0,
-    "tuesday": 1, "tue": 1, "tues": 1,
-    "wednesday": 2, "wed": 2,
-    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
-    "friday": 4, "fri": 4,
-    "saturday": 5, "sat": 5,
-    "sunday": 6, "sun": 6,
-}
+LLM_BASE_URL          = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
+LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
+CONSOLIDATION_LLM_TIMEOUT = float(os.getenv("MONTHLY_CONSOLIDATION_LLM_TIMEOUT", os.getenv("LLM_TIMEOUT", "120")))
 
 
-def _timezone(name: str | None = None) -> ZoneInfo:
-    """Return a ZoneInfo object, falling back to UTC when the name is invalid."""
+def _add_months(dt: datetime, months: int) -> datetime:
+    month_index = dt.month - 1 + months
+    year  = dt.year + month_index // 12
+    month = month_index % 12 + 1
+    return dt.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
+    """Return (start, end, key) for the month ready to consolidate."""
+    local_first  = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    target_end   = _add_months(local_first, -CONSOLIDATION_KEEP_MONTHS)
+    target_start = _add_months(target_end, -1)
+    key          = target_start.strftime("%Y-%m")
+    return target_start, target_end, key
+
+
+def _load_state() -> dict:
     try:
-        return ZoneInfo(name or DEFAULT_TIMEZONE)
-    except ZoneInfoNotFoundError:
-        log.warning("Unknown timezone %s; falling back to UTC", name or DEFAULT_TIMEZONE)
-        return ZoneInfo("UTC")
+        return json.loads(CONSOLIDATION_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
 
 
-def _now(tz_name: str | None = None) -> datetime:
-    """Return the current timezone-aware datetime for schedule calculations."""
-    return datetime.now(_timezone(tz_name))
+def _save_state(state: dict) -> None:
+    CONSOLIDATION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONSOLIDATION_STATE_PATH.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
 
-def _parse_time_of_day(time_of_day: str) -> tuple[int, int]:
-    """Parse HH:MM or H:MM into hour/minute integers."""
-    hour_text, sep, minute_text = time_of_day.strip().partition(":")
-    if not sep:
-        raise ValueError("time_of_day must be HH:MM")
-    hour = int(hour_text)
-    minute = int(minute_text)
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-        raise ValueError("time_of_day must be a valid 24-hour time")
-    return hour, minute
-
-
-def _normalize_weekdays(days_of_week: list[str] | str | None) -> list[int]:
-    """Normalize weekday names/integers into sorted Python weekday numbers."""
-    if days_of_week is None:
-        return []
-    if isinstance(days_of_week, str):
-        parts = [p.strip().lower() for p in days_of_week.replace(",", " ").split()]
-    else:
-        parts = [str(p).strip().lower() for p in days_of_week]
-    days: set[int] = set()
-    for part in parts:
-        if not part:
-            continue
-        if part.isdigit():
-            value = int(part)
-            if 0 <= value <= 6:
-                days.add(value)
-                continue
-        if part not in _WEEKDAYS:
-            raise ValueError(f"unknown weekday: {part}")
-        days.add(_WEEKDAYS[part])
-    return sorted(days)
-
-
-def _normalize_relative_days(relative_days: int | str | None = None) -> int | None:
-    """Normalize a relative day offset or phrase into an integer day count."""
-    if relative_days is None or relative_days == "":
-        return None
-    if isinstance(relative_days, int):
-        days = relative_days
-    else:
-        text = str(relative_days).strip().lower().replace("-", " ")
-        if text in RELATIVE_DAY_ALIASES:
-            days = RELATIVE_DAY_ALIASES[text]
-        else:
-            days = int(text)
-    if not (0 <= days <= 366):
-        raise ValueError("relative_days must be between 0 and 366")
-    return days
-
-
-def _candidate_at(now: datetime, time_of_day: str, relative_days: int | str | None = None) -> datetime:
-    """Return the candidate datetime at a wall-clock time, optionally offset by days."""
-    hour, minute = _parse_time_of_day(time_of_day)
-    days = _normalize_relative_days(relative_days) or 0
-    base = now + timedelta(days=days)
-    return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
-
-
-def _next_for_weekdays(time_of_day: str, weekdays: list[int], tz_name: str | None = None) -> datetime:
-    """Return the next datetime matching one of the requested weekdays."""
-    if not weekdays:
-        raise ValueError("days_of_week is required for this frequency")
-    now = _now(tz_name)
-    base = _candidate_at(now, time_of_day)
-    for offset in range(0, 14):
-        candidate = base + timedelta(days=offset)
-        if candidate.weekday() in weekdays and candidate > now:
-            return candidate
-    raise ValueError("could not calculate next weekday occurrence")
-
-
-def _next_monthly(time_of_day: str, tz_name: str | None = None, anchor_day: int | None = None) -> datetime:
-    """Return the next monthly occurrence on the anchor day, clamped to month length."""
-    import calendar
-
-    now = _now(tz_name)
-    anchor = anchor_day or now.day
-    hour, minute = _parse_time_of_day(time_of_day)
-    year, month = now.year, now.month
-    for _ in range(14):
-        last_day = calendar.monthrange(year, month)[1]
-        day = min(anchor, last_day)
-        candidate = now.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
-        if candidate > now:
-            return candidate
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
-    raise ValueError("could not calculate next monthly occurrence")
-
-
-def calculate_next_due(
-    time_of_day: str,
-    frequency: str = "daily",
-    timezone: str | None = None,
-    days_of_week: list[str] | str | None = None,
-    after: datetime | None = None,
-    anchor_day: int | None = None,
-    relative_days: int | str | None = None,
-) -> datetime:
-    """Calculate the next due datetime for a scheduled job."""
-    frequency = (frequency or "daily").lower().strip()
-    if frequency not in FREQUENCIES:
-        raise ValueError(f"frequency must be one of: {', '.join(sorted(FREQUENCIES))}")
-
-    tz_name = timezone or DEFAULT_TIMEZONE
-    now = after.astimezone(_timezone(tz_name)) if after else _now(tz_name)
-    relative_offset = _normalize_relative_days(relative_days)
-    candidate = _candidate_at(now, time_of_day, relative_offset)
-
-    if frequency in {"once", "daily"}:
-        return candidate if candidate > now else candidate + timedelta(days=1)
-    if frequency == "hourly":
-        _, minute = _parse_time_of_day(time_of_day)
-        hourly_candidate = now.replace(minute=minute, second=0, microsecond=0)
-        if relative_offset:
-            hourly_candidate = candidate
-        return hourly_candidate if hourly_candidate > now else hourly_candidate + timedelta(hours=1)
-    if frequency == "weekdays":
-        return _next_for_weekdays(time_of_day, [0, 1, 2, 3, 4], tz_name)
-    if frequency == "custom_weekdays":
-        return _next_for_weekdays(time_of_day, _normalize_weekdays(days_of_week), tz_name)
-    if frequency == "weekly":
-        weekdays = _normalize_weekdays(days_of_week) or [now.weekday()]
-        return _next_for_weekdays(time_of_day, weekdays, tz_name)
-    if frequency == "biweekly":
-        base = candidate if candidate > now else candidate + timedelta(days=14)
-        return base
-    if frequency == "monthly":
-        return _next_monthly(time_of_day, tz_name, anchor_day=anchor_day)
-    raise ValueError(f"unsupported frequency: {frequency}")
-
-
-def _read_raw(path: Path) -> list[dict]:
-    """Read schedule JSON from a path, returning [] when absent/invalid."""
-    if not path.exists():
-        return []
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        log.error("Failed reading schedule file %s: %s", path, e)
-        return []
-
-
-def _migrate_legacy_reminders(records: list[dict]) -> list[dict]:
-    """Convert older reminder records into the scheduled-job shape."""
-    migrated = []
-    for record in records:
-        migrated.append({
-            "id": record.get("id", uuid.uuid4().hex[:12]),
-            "title": record.get("title", "Reminder"),
-            "task": record.get("message", record.get("title", "Reminder")),
-            "time_of_day": record.get("time_of_day", "06:00"),
-            "frequency": "daily" if record.get("repeat") == "daily" else "once",
-            "days_of_week": [],
-            "timezone": record.get("timezone", DEFAULT_TIMEZONE),
-            "next_due": record.get("next_due"),
-            "created_at": record.get("created_at", _now(record.get("timezone")).isoformat()),
-            "last_ran_at": None,
-            "enabled": record.get("enabled", True),
-            "kind": "reminder",
-            "action": "announce",
-        })
-    return migrated
-
-
-def _read_all() -> list[dict]:
-    """Read scheduled jobs, including one-time migration from reminders.json."""
-    records = _read_raw(SCHEDULE_PATH)
-    if records:
-        return records
-    legacy = _read_raw(LEGACY_REMINDERS_PATH)
-    if legacy:
-        records = _migrate_legacy_reminders(legacy)
-        _write_all(records)
-    return records
-
-
-def _write_all(jobs: list[dict]) -> None:
-    """Persist scheduled jobs atomically enough for a single local process."""
-    SCHEDULE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = SCHEDULE_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(SCHEDULE_PATH)
-
-
-def schedule_job_record(
-    title: str,
-    task: str,
-    time_of_day: str,
-    frequency: str = "daily",
-    timezone: str | None = None,
-    days_of_week: list[str] | str | None = None,
-    action: str = "agentic",
-    relative_days: int | str | None = None,
-) -> dict:
-    """Create and persist a scheduled job record, returning the stored dict."""
-    action = (action or "agentic").lower().strip()
-    if action not in {"announce", "agentic"}:
-        raise ValueError("action must be 'announce' or 'agentic'")
-    tz_name = timezone or DEFAULT_TIMEZONE
-    normalized_days = _normalize_weekdays(days_of_week)
-    normalized_relative_days = _normalize_relative_days(relative_days)
-    due = calculate_next_due(
-        time_of_day,
-        frequency,
-        tz_name,
-        normalized_days,
-        relative_days=normalized_relative_days,
+def _chat(prompt: str, max_tokens: int = 700) -> str:
+    client = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=CONSOLIDATION_LLM_TIMEOUT)
+    resp = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        stream=False,
+        max_tokens=max_tokens,
+        temperature=0.1,
     )
-    job = {
-        "id": uuid.uuid4().hex[:12],
-        "title": title.strip() or "Scheduled job",
-        "task": task.strip() or title.strip() or "Scheduled job",
-        "time_of_day": time_of_day,
-        "frequency": (frequency or "daily").lower().strip(),
-        "days_of_week": normalized_days,
-        "relative_days": normalized_relative_days,
-        "timezone": tz_name,
-        "next_due": due.isoformat(),
-        "created_at": _now(tz_name).isoformat(),
-        "last_ran_at": None,
-        "enabled": True,
-        "kind": "scheduled_job",
-        "action": action,
+    return (resp.choices[0].message.content or "").strip()
+
+
+def _bounded_lines(items: list[str]) -> str:
+    lines: list[str] = []
+    total = 0
+    for line in items:
+        if total + len(line) > CONSOLIDATION_MAX_INPUT_CHARS:
+            break
+        lines.append(line)
+        total += len(line) + 1
+    return "\n".join(lines)
+
+
+def _memory_lines(memories: list[dict]) -> str:
+    return _bounded_lines([
+        f"- {m.get('created_at', '')}: {(m.get('memory') or m.get('text') or '').strip()}"
+        for m in memories
+        if (m.get("memory") or m.get("text") or "").strip()
+    ])
+
+
+def _turn_lines(turns: list[dict]) -> str:
+    return _bounded_lines([
+        f"- {t.get('created_at', '')}\n  User: {(t.get('user') or '').strip()}\n  Aiko: {(t.get('assistant') or '').strip()}"
+        for t in turns
+        if (t.get("user") or t.get("assistant"))
+    ])
+
+
+def _summarize_memory_chunk(month_key: str, memories: list[dict], idx: int, total: int) -> str:
+    prompt = (
+        "Summarize these long-term memory facts for Aiko's monthly memory consolidation. "
+        "Keep stable preferences, identity facts, projects, deadlines, relationships, and recurring patterns. "
+        "Drop trivial chatter, duplicates, and implementation details about the memory system. "
+        "Use compact bullet points only. Do not invent facts.\n\n"
+        f"Month: {month_key}\nChunk: {idx}/{total}\n\n"
+        f"Memories:\n{_memory_lines(memories)}"
+    )
+    return _chat(prompt, max_tokens=500)
+
+
+def _summarize_turn_chunk(month_key: str, turns: list[dict], idx: int, total: int) -> str:
+    prompt = (
+        "Summarize these raw Aiko/Oppa daily experience turns for monthly consolidation. "
+        "Keep stable facts, preferences, projects, emotional beats, deadlines, repeated themes, and important events. "
+        "Drop filler, greetings, transient wording, and duplicate details. Do not invent facts. "
+        "Use compact bullet points only.\n\n"
+        f"Month: {month_key}\nChunk: {idx}/{total}\n\n"
+        f"Experience turns:\n{_turn_lines(turns)}"
+    )
+    return _chat(prompt, max_tokens=550)
+
+
+def _final_summary(month_key: str, chunk_summaries: list[str]) -> str:
+    prompt = (
+        "Merge these chunk summaries into ONE durable pinned memory for Aiko. "
+        "Write concise bullet points grouped by theme. Preserve only facts worth keeping long-term. "
+        "Do not mention vectors, databases, consolidation, chunks, or internal processes. "
+        "Do not invent facts.\n\n"
+        f"Month: {month_key}\n\n"
+        + "\n\n".join(f"Chunk summary {i+1}:\n{s}" for i, s in enumerate(chunk_summaries))
+    )
+    return _chat(prompt, max_tokens=900)
+
+
+def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
+    """
+    Run monthly consolidation if enabled, due, and not already done this month.
+
+    Called by ScheduleRunner._run_monthly_consolidate() on the 1st of each month.
+    The state file guards against double-runs on reboot.
+
+    Returns a result dict with keys: ran, reason (on skip), month, source,
+    count, deleted, daily_deleted, summary_id.
+    """
+    if not CONSOLIDATION_ENABLED:
+        return {"ran": False, "reason": "disabled"}
+
+    now = now or datetime.now()
+    if now.day != 1:
+        return {"ran": False, "reason": "not_first_day"}
+
+    start, end, month_key = target_month_for(now)
+    state = _load_state()
+    if state.get("last_consolidated_month") == month_key:
+        return {"ran": False, "reason": "already_done", "month": month_key}
+
+    start_utc = start.replace(tzinfo=timezone.utc)
+    end_utc   = end.replace(tzinfo=timezone.utc)
+    memories  = memorize.get_between(start_utc, end_utc)
+    turns     = load_chat_turns(start_utc, end_utc) if CONSOLIDATION_SOURCE == "experience" else []
+
+    if turns:
+        chunks = [turns[i:i + CONSOLIDATION_CHUNK_TURNS] for i in range(0, len(turns), CONSOLIDATION_CHUNK_TURNS)]
+        chunk_summaries = [
+            _summarize_turn_chunk(month_key, chunk, i + 1, len(chunks))
+            for i, chunk in enumerate(chunks)
+        ]
+        source_count = len(turns)
+        source = "experience"
+    else:
+        if len(memories) < CONSOLIDATION_MIN_MEMS:
+            state["last_consolidated_month"] = month_key
+            _save_state(state)
+            return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(memories)}
+        chunks = [memories[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(memories), CONSOLIDATION_CHUNK_MEMS)]
+        chunk_summaries = [
+            _summarize_memory_chunk(month_key, chunk, i + 1, len(chunks))
+            for i, chunk in enumerate(chunks)
+        ]
+        source_count = len(memories)
+        source = "memory"
+
+    summary = _final_summary(month_key, chunk_summaries)
+    if not summary:
+        return {"ran": False, "reason": "empty_summary", "month": month_key, "count": source_count, "source": source}
+
+    summary_text = f"Monthly memory summary for {month_key}:\n{summary}"
+    summary_id   = memorize.add_raw(summary_text, pinned=True)
+    if not summary_id:
+        return {"ran": False, "reason": "summary_insert_failed", "month": month_key, "count": len(memories)}
+
+    deleted = 0
+    daily_deleted = 0
+    if CONSOLIDATION_DELETE_ORIGINALS:
+        for memory in memories:
+            mem_id = memory.get("id")
+            text   = (memory.get("memory") or "")
+            is_daily_summary = text.startswith("Daily experience summary for ")
+            if mem_id and not memorize._is_pinned(mem_id):
+                memorize.delete(mem_id)
+                deleted += 1
+            elif mem_id and is_daily_summary and CONSOLIDATION_DELETE_DAILY_SUMMARIES:
+                memorize.delete(mem_id)
+                daily_deleted += 1
+
+    state["last_consolidated_month"] = month_key
+    state["last_summary_id"]         = summary_id
+    _save_state(state)
+
+    log.info(
+        "monthly_consolidate complete: month=%s source=%s count=%s "
+        "deleted=%s daily_deleted=%s summary_id=%s",
+        month_key, source, source_count, deleted, daily_deleted, summary_id,
+    )
+    return {
+        "ran":           True,
+        "month":         month_key,
+        "source":        source,
+        "count":         source_count,
+        "deleted":       deleted,
+        "daily_deleted": daily_deleted,
+        "summary_id":    summary_id,
     }
-    jobs = _read_all()
-    jobs.append(job)
-    _write_all(jobs)
-    return job
-
-
-def list_schedule_records(include_disabled: bool = False) -> list[dict]:
-    """Return persisted scheduled jobs, optionally including disabled records."""
-    jobs = _read_all()
-    if include_disabled:
-        return jobs
-    return [job for job in jobs if job.get("enabled", True)]
-
-
-def cancel_schedule_record(job_id: str) -> bool:
-    """Disable a scheduled job by id; returns True when a matching record changed."""
-    changed = False
-    jobs = _read_all()
-    for job in jobs:
-        if job.get("id") == job_id:
-            job["enabled"] = False
-            changed = True
-    if changed:
-        _write_all(jobs)
-    return changed
-
-
-# Backwards-compatible reminder names used by older tools/tests.
-def schedule_reminder_record(title: str, message: str, time_of_day: str, repeat: str = "daily", timezone: str | None = None) -> dict:
-    """Compatibility wrapper: schedule a reminder as a scheduled job."""
-    frequency = "daily" if repeat == "daily" else "once"
-    return schedule_job_record(title, message, time_of_day, frequency, timezone, action="announce")
-
-
-def list_reminder_records(include_disabled: bool = False) -> list[dict]:
-    """Compatibility wrapper: list scheduled jobs."""
-    return list_schedule_records(include_disabled)
-
-
-def cancel_reminder_record(reminder_id: str) -> bool:
-    """Compatibility wrapper: cancel a scheduled job by id."""
-    return cancel_schedule_record(reminder_id)
-
-
-@dataclass
-class DueJob:
-    """A scheduled job event ready to announce or execute."""
-    id: str
-    title: str
-    task: str
-    action: str = "agentic"
-
-
-DueReminder = DueJob
-
-# ── system job timing ─────────────────────────────────────────────────────────
-
-def _next_daily_reflect_and_dream() -> datetime:
-    """Next wall-clock occurrence of the daily reflect+dream window."""
-    tz  = _timezone()
-    now = datetime.now(tz)
-    candidate = now.replace(
-        hour=DAILY_JOB_HOUR,
-        minute=DAILY_JOB_MINUTE,
-        second=0,
-        microsecond=0,
-    )
-    if candidate <= now:
-        candidate += timedelta(days=1)
-    return candidate
-
-
-def _next_monthly_consolidate() -> datetime:
-    """Next 1st-of-month occurrence of the monthly consolidation window."""
-    tz  = _timezone()
-    now = datetime.now(tz)
-    # advance to next month's 1st
-    if now.month == 12:
-        first = now.replace(year=now.year + 1, month=1, day=1,
-                            hour=MONTHLY_JOB_HOUR, minute=MONTHLY_JOB_MINUTE,
-                            second=0, microsecond=0)
-    else:
-        first = now.replace(month=now.month + 1, day=1,
-                            hour=MONTHLY_JOB_HOUR, minute=MONTHLY_JOB_MINUTE,
-                            second=0, microsecond=0)
-    return first
-
-
-# ── scheduler ─────────────────────────────────────────────────────────────────
-
-class ScheduleRunner:
-    """
-    Single daemon thread that sleeps until the next due event.
-
-    Two hardcoded system jobs are managed internally and never written to
-    schedule.json:
-      - daily_reflect_and_dream   every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE
-      - monthly_consolidate       every 1st of month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE
-
-    User reminders and scheduled jobs are read from schedule.json.
-
-    The thread sleeps until the soonest of all targets, waking early only
-    when notify_new_job() is called (e.g. after a new job is registered at
-    runtime).
-    """
-
-    def __init__(
-        self,
-        on_due: Callable[[DueJob], None] | None = None,
-        memorize=None,
-        generate_and_post_fn: Callable | None = None,
-        consolidate_fn: Callable | None = None,
-    ) -> None:
-        self._on_due               = on_due
-        self._memorize             = memorize
-        self._generate_and_post_fn = generate_and_post_fn
-        self._consolidate_fn       = consolidate_fn
-        self._wakeup               = threading.Event()
-        self._stop                 = threading.Event()
-        self._thread: threading.Thread | None = None
-
-        # calculated once at startup, updated after each fire
-        self._next_daily   = _next_daily_reflect_and_dream()
-        self._next_monthly = _next_monthly_consolidate()
-
-    def notify_new_job(self) -> None:
-        """Interrupt the sleep early so a newly added job is picked up immediately."""
-        self._wakeup.set()
-
-    def start(self) -> None:
-        """Start the daemon scheduler thread if it is not already running."""
-        if self._thread and self._thread.is_alive():
-            return
-        self._thread = threading.Thread(target=self._run, name="aiko-schedule", daemon=True)
-        self._thread.start()
-        log.info(
-            "Scheduler started — daily_reflect_and_dream at %02d:%02d, "
-            "monthly_consolidate on 1st at %02d:%02d.",
-            DAILY_JOB_HOUR, DAILY_JOB_MINUTE,
-            MONTHLY_JOB_HOUR, MONTHLY_JOB_MINUTE,
-        )
-
-    def stop(self) -> None:
-        """Request scheduler shutdown."""
-        self._stop.set()
-        self._wakeup.set()
-
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            now = datetime.now(_timezone())
-
-            # ── fire overdue system jobs first (handles missed runs on reboot) ──
-            # sorted by scheduled time so daily always fires before monthly
-            # on the rare overlap (1st of month at midnight)
-            system_due = sorted(
-                [t for t in [self._next_daily, self._next_monthly] if t <= now],
-                key=lambda t: t,
-            )
-            for target in system_due:
-                if target == self._next_daily or (
-                    target.hour == DAILY_JOB_HOUR and target.minute == DAILY_JOB_MINUTE
-                ):
-                    self._run_daily_reflect_and_dream()
-                    self._next_daily = _next_daily_reflect_and_dream()
-                else:
-                    self._run_monthly_consolidate()
-                    self._next_monthly = _next_monthly_consolidate()
-
-            # ── fire overdue user jobs ─────────────────────────────────────────
-            self._fire_due_user_jobs()
-
-            # ── sleep until soonest next target ───────────────────────────────
-            user_jobs = [
-                datetime.fromisoformat(j["next_due"])
-                for j in _read_all()
-                if j.get("enabled", True)
-            ]
-            candidates = [self._next_daily, self._next_monthly] + user_jobs
-            next_target = min(candidates)
-
-            delta = (next_target - datetime.now(_timezone())).total_seconds()
-            if delta > 0:
-                log.debug("Scheduler sleeping %.0fs until %s", delta, next_target.isoformat())
-                self._wakeup.wait(timeout=delta)
-                self._wakeup.clear()
-
-    # ── system job runners ────────────────────────────────────────────────────
-
-    def _run_daily_reflect_and_dream(self) -> None:
-        """
-        Hardcoded nightly job. Not in schedule.json. Not user-modifiable.
-
-        Order:
-          1. reflect  — LLM summary + image + GitHub push (reads memories before dream prunes)
-          2. dream    — sqlite-vec consolidation, boost, merge, prune (no LLM)
-        """
-        if not self._memorize or not self._generate_and_post_fn:
-            log.warning("daily_reflect_and_dream: memorize or generate_and_post_fn not set — skipping.")
-            return
-
-        try:
-            log.info("daily_reflect_and_dream: starting.")
-            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0,
-            )
-
-            # fetch once — both reflect and dream share the same day's memories
-            from core.reflect import REFLECT_MAX_MEMS
-            memories = self._memorize.get_since(yesterday)
-            log.info("daily_reflect_and_dream: %d memories fetched.", len(memories))
-
-            # reflect gets ctx-safe slice
-            log.info("daily_reflect_and_dream: running reflect...")
-            self._generate_and_post_fn(
-                memories[:REFLECT_MAX_MEMS],
-                date=yesterday,
-                memorize=self._memorize,
-            )
-            log.info("daily_reflect_and_dream: reflect done.")
-
-            # dream gets full set — pure sqlite-vec ops, no ctx concern
-            log.info("daily_reflect_and_dream: running dream...")
-            result = self._memorize.dream()
-            log.info("daily_reflect_and_dream: dream done — %s", result)
-
-        except Exception as e:
-            log.error("daily_reflect_and_dream failed: %s", e)
-
-    def _run_monthly_consolidate(self) -> None:
-        """
-        Hardcoded monthly job. Not in schedule.json. Not user-modifiable.
-        Delegates entirely to consolidate.maybe_run_consolidation().
-        """
-        if not self._memorize or not self._consolidate_fn:
-            log.warning("monthly_consolidate: memorize or consolidate_fn not set — skipping.")
-            return
-
-        try:
-            log.info("monthly_consolidate: starting.")
-            result = self._consolidate_fn(self._memorize, now=datetime.now())
-            log.info("monthly_consolidate: done — %s", result)
-        except Exception as e:
-            log.error("monthly_consolidate failed: %s", e)
-
-    # ── user job runner ───────────────────────────────────────────────────────
-
-    def _fire_due_user_jobs(self) -> None:
-        """Find due user jobs, reschedule recurring ones, disable one-shots."""
-        jobs = _read_all()
-        changed = False
-        due_events: list[DueJob] = []
-
-        for job in jobs:
-            if not job.get("enabled", True):
-                continue
-            tz_name = job.get("timezone") or DEFAULT_TIMEZONE
-            try:
-                due = datetime.fromisoformat(job["next_due"])
-                if due.tzinfo is None:
-                    due = due.replace(tzinfo=_timezone(tz_name))
-            except Exception:
-                due = calculate_next_due(
-                    job.get("time_of_day", "06:00"),
-                    job.get("frequency", "daily"),
-                    tz_name,
-                    job.get("days_of_week"),
-                )
-                job["next_due"] = due.isoformat()
-                changed = True
-
-            if due <= _now(tz_name):
-                due_events.append(DueJob(
-                    id=job.get("id", ""),
-                    title=job.get("title", "Scheduled job"),
-                    task=job.get("task", "Scheduled job"),
-                    action=job.get("action", "agentic"),
-                ))
-                job["last_ran_at"] = _now(tz_name).isoformat()
-                if job.get("frequency") == "once":
-                    job["enabled"] = False
-                else:
-                    job["next_due"] = calculate_next_due(
-                        job.get("time_of_day", "06:00"),
-                        job.get("frequency", "daily"),
-                        tz_name,
-                        job.get("days_of_week"),
-                        after=_now(tz_name),
-                    ).isoformat()
-                changed = True
-
-        if changed:
-            _write_all(jobs)
-
-        # fire sequentially — preserves order and avoids concurrent job side effects
-        for event in due_events:
-            if self._on_due:
-                self._on_due(event)
-
-
-ReminderScheduler = ScheduleRunner
