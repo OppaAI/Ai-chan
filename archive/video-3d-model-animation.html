@@ -438,7 +438,8 @@
     // last pose instead of applying the noisy sample.
     const VISIBILITY_GATE = 0.6;
     function landmarksVisible(poseLm, indices) {
-      return indices.every(i => (poseLm[i]?.visibility ?? 0) >= VISIBILITY_GATE);
+      if (!poseLm) return false;
+      return indices.every(i => i < poseLm.length && (poseLm[i]?.visibility ?? 0) >= VISIBILITY_GATE);
     }
 
     function rigPose(vrm, riggedPose, poseLm) {
