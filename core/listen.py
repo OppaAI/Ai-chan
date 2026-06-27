@@ -28,8 +28,10 @@ Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     4. Set SPEAKER_VERIFY_ENABLED=1 in .env
 """
 import onnxruntime as _ort
-_ort.set_default_logger_severity(3)  # 0=verbose, 1=info, 2=warning, 3=error, 4=fatal
-
+# listen.py line 31
+if hasattr(_ort, "set_default_logger_severity"):
+    _ort.set_default_logger_severity(3)
+    
 from huggingface_hub import hf_hub_download
 from silero_vad import load_silero_vad
 import json
