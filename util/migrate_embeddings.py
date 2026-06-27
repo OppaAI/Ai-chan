@@ -222,23 +222,16 @@ def main():
     except ImportError:
         sys.exit("✗ sqlite_vec not installed — pip install sqlite-vec")
 
-    # ── register + load model ─────────────────────────────────────────────────
-    if not args.no_register:
-        print("Registering custom embedding model with fastembed...")
-        register_custom_model(model, dims)
-
+    # ── load model ────────────────────────────────────────────────────────────
     print("Loading embedding model (may download on first run)...")
     t0 = time.perf_counter()
     try:
-        from fastembed import TextEmbedding
-        embedder = TextEmbedding(
-            model_name=model,
-            cache_dir=FASTEMBED_CACHE,
-        )
-        # warm up to trigger any download now, not mid-migration
+        from harrier_embedder import HarrierEmbedder
+        embedder = HarrierEmbedder(batch_size=args.batch)
+        # warm up — triggers ONNX session load now, not mid-migration
         list(embedder.embed(["warmup"]))
     except Exception as e:
-        sys.exit(f"✗ Failed to load model {model!r}: {e}")
+        sys.exit(f"✗ Failed to load model: {e}")
     print(f"  ✓ Model loaded in {time.perf_counter()-t0:.1f}s\n")
 
     # ── connect ───────────────────────────────────────────────────────────────
