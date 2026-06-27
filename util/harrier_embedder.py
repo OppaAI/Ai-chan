@@ -51,22 +51,26 @@ _QUERY_INSTRUCT   = os.getenv(
 
 def _find_snapshot(cache_dir: str, model_id: str) -> Path:
     """
-    Resolve the fastembed HF-layout cache to the actual snapshot directory.
-    Layout: <cache_dir>/models--<org>--<name>/snapshots/<hash>/
+    Resolve model snapshot — checks HF hub cache first, then fastembed cache.
+    HF hub layout: ~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<hash>/
+    fastembed layout: ~/.cache/fastembed/models--<org>--<name>/snapshots/<hash>/
     """
-    # normalise model_id to cache folder name (fastembed convention)
     folder = "models--" + model_id.replace("/", "--")
-    snapshots = Path(cache_dir) / folder / "snapshots"
-    if not snapshots.exists():
-        raise FileNotFoundError(
-            f"Harrier snapshot not found at {snapshots}. "
-            f"Run migrate_embeddings.py once to trigger the download."
-        )
-    # pick the first (usually only) snapshot hash
-    hashes = sorted(snapshots.iterdir())
-    if not hashes:
-        raise FileNotFoundError(f"No snapshots found under {snapshots}")
-    return hashes[0]
+
+    # prefer HF hub cache (where hf download put it)
+    hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
+    for base in [hf_cache, Path(cache_dir)]:
+        snapshots = base / folder / "snapshots"
+        if snapshots.exists():
+            hashes = sorted(snapshots.iterdir())
+            if hashes:
+                return hashes[0]
+
+    raise FileNotFoundError(
+        f"Harrier snapshot not found in HF hub cache ({hf_cache / folder}) "
+        f"or fastembed cache ({Path(cache_dir) / folder}). "
+        f"Run: hf download {model_id} model_quantized.onnx model_quantized.onnx_data tokenizer.json tokenizer_config.json special_tokens_map.json config.json"
+    )
 
 
 # ── main embedder ─────────────────────────────────────────────────────────────
