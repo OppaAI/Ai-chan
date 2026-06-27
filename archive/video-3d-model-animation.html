@@ -430,7 +430,7 @@
     // Monocular depth (Z) is the noisiest axis we get, even for a stationary subject — small
     // per-frame jitter there accumulates through the position lerp into visible drift. Clamp the
     // hip offset to a small box around the rest position instead of letting it free-run.
-    const HIP_DRIFT_CLAMP = 0.12; // meters
+    const HIP_DRIFT_CLAMP = 0.06; // meters
     function clamp(v, lim) { return Math.max(-lim, Math.min(lim, v)); }
 
     // Legs (and arms, to a lesser extent) get noisy when their landmarks are partially occluded
@@ -449,7 +449,7 @@
         x: clamp(-riggedPose.Hips.position.x, HIP_DRIFT_CLAMP),
         y: 1 + clamp(riggedPose.Hips.position.y, HIP_DRIFT_CLAMP),
         z: clamp(-riggedPose.Hips.position.z * 0.4, HIP_DRIFT_CLAMP), // depth is the least reliable axis, so trust it least
-      }, 1, 0.05);
+      }, 1, 0.12);
 
       rigRotation(vrm, 'Chest', riggedPose.Spine, 0.25, 0.3);
       rigRotation(vrm, 'Spine', riggedPose.Spine, 0.45, 0.3);
@@ -457,8 +457,8 @@
       // MediaPipe pose landmark indices: 11/12 shoulders, 13/14 elbows, 15/16 wrists,
       // 23/24 hips, 25/26 knees, 27/28 ankles.
       if (landmarksVisible(poseLm, [11, 13, 15])) {
-        rigRotation(vrm, 'LeftUpperArm', riggedPose.LeftUpperArm, 1, 0.3);
-        rigRotation(vrm, 'LeftLowerArm', riggedPose.LeftLowerArm, 1, 0.3);
+        rigRotation(vrm, 'LeftUpperArm', riggedPose.LeftUpperArm, 0.65, 0.3);
+        rigRotation(vrm, 'LeftLowerArm', riggedPose.LeftLowerArm, 0.65, 0.3);
       }
       if (landmarksVisible(poseLm, [12, 14, 16])) {
         rigRotation(vrm, 'RightUpperArm', riggedPose.RightUpperArm, 1, 0.3);
@@ -641,7 +641,7 @@
             document.getElementById('dbgPose').textContent = poseLm ? 'tracked' : 'lost';
             document.getElementById('dbgFace').textContent = faceLm ? 'tracked' : 'lost';
 
-            const sideSign = mirrorLR ? -1 : 1;
+            const sideSign = mirrorLR ? 1 : -1;
 
             if (poseLm && poseWorldLm) {
               const riggedPose = Kalidokit.Pose.solve(poseWorldLm, poseLm, { runtime: 'mediapipe', video: cameraPreview });
