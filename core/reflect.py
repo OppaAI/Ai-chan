@@ -378,8 +378,6 @@ def generate_and_post(
         if text and text not in seen:
             seen.add(text)
             snippets.append(text)
-        if len(snippets) >= REFLECT_MAX_MEMS:
-            break
 
     day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
     day_end   = day_start + timedelta(days=1)

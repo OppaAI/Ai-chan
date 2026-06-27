@@ -468,27 +468,26 @@ class ScheduleRunner:
         while not self._stop.is_set():
             now = datetime.now(_timezone())
 
-            # ── fire overdue system jobs first (handles missed runs on reboot) ──
-            # sorted by scheduled time so daily always fires before monthly
-            # on the rare overlap (1st of month at midnight)
+            # ── fire overdue system jobs ──────────────────────────────────────
             system_due = sorted(
-                [t for t in [self._next_daily, self._next_monthly] if t <= now],
-                key=lambda t: t,
+                [(t, name) for t, name in [
+                    (self._next_daily, "daily"),
+                    (self._next_monthly, "monthly"),
+                ] if t <= now],
+                key=lambda x: x[0],
             )
-            for target in system_due:
-                if target == self._next_daily or (
-                    target.hour == DAILY_JOB_HOUR and target.minute == DAILY_JOB_MINUTE
-                ):
+            for target, name in system_due:
+                if name == "daily":
                     self._run_daily_reflect_and_dream()
                     self._next_daily = _next_daily_reflect_and_dream()
                 else:
                     self._run_monthly_consolidate()
                     self._next_monthly = _next_monthly_consolidate()
 
-            # ── fire overdue user jobs ─────────────────────────────────────────
+            # ── fire overdue user jobs ────────────────────────────────────────
             self._fire_due_user_jobs()
 
-            # ── sleep until soonest next target ───────────────────────────────
+            # ── sleep until soonest next target ──────────────────────────────
             user_jobs = [
                 datetime.fromisoformat(j["next_due"])
                 for j in _read_all()
