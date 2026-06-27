@@ -426,7 +426,7 @@ def generate_and_post(
         dry_run:    Generate content but skip GitHub push/pin. Logs output instead.
         memorize:   Optional AikoMemorize instance used to pin the daily summary.
 
-    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, image_generated, pinned}
+    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, image_generated, pinned, record_pinned}
     """
     t_start    = time.perf_counter()
     local_tz   = datetime.now().astimezone().tzinfo
@@ -486,6 +486,7 @@ def generate_and_post(
             "prose":           prose,
             "image_generated": image_generated,
             "pinned":          False,
+            "record_pinned":   False,
         }
 
 # Step 4: pin daily summary to persistent memory. Store a raw curated
