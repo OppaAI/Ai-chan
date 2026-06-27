@@ -8,8 +8,9 @@ dependencies = [
     "click>=8.4.1",
     "coloredlogs>=15.0.1",
     "flatbuffers>=25.12.19",
+    "huggingface-hub>=1.21.0",
     "numpy>=2.4.6",
-    "onnxruntime-gpu>=1.27.0.dev0",
+    "onnxruntime==1.24.4",
     "openai>=2.43.0",
     "packaging>=26.2",
     "protobuf>=6.33.6",
@@ -22,6 +23,7 @@ dependencies = [
     "soundfile>=0.14.0",
     "sqlite-vec>=0.1.9",
     "sympy>=1.14.0",
+    "tokenizers>=0.23.1",
     "torch>=2.11.0",
     "torchaudio>=2.11.0",
     "trafilatura>=2.1.0",
@@ -29,10 +31,6 @@ dependencies = [
 ]
 
 [tool.uv]
-# no override-dependencies needed
-
-[tool.uv.sources]
-onnxruntime-gpu = { index = "ort-cuda-13-nightly" }
 
 [[tool.uv.index]]
 name = "pypi"
