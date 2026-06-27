@@ -524,7 +524,8 @@ class ScheduleRunner:
 
             # fetch once — both reflect and dream share the same day's memories
             from core.reflect import REFLECT_MAX_MEMS
-            memories = self._memorize.get_since(yesterday)
+            yesterday_end = yesterday + timedelta(days=1)
+            memories = self._memorize.get_between(yesterday, yesterday_end)
             log.info("daily_reflect_and_dream: %d memories fetched.", len(memories))
 
             # reflect gets ctx-safe slice

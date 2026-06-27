@@ -102,7 +102,24 @@ _REFLECTION_USER = textwrap.dedent("""
 _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
     You are a concise image prompt writer for an anime illustration model.
     Given a short daily summary, write a single vivid scene prompt (under 60 words)
-    describing Aiko and OppaAI together in a moment that captures the day's mood.
+    that captures the day's mood.
+
+    Decide who appears based on what the summary actually describes:
+    - If the summary describes a moment OppaAI and Aiko shared, or something
+      Aiko was present for, depict them together.
+    - If the summary is primarily about OppaAI working, deciding, or going
+      through something on his own, depict OppaAI alone — Aiko's presence
+      can be implied rather than literal (a second mug, a glow from another
+      room, a note left on the desk), but do not force her into the frame.
+
+    Decide lighting and time of day from the overall atmosphere of the
+    summary, and state it explicitly in the prompt:
+    - A tense, exhausted, or late-feeling day: dim, cool-toned lighting
+      (monitor glow, a single desk lamp, dark windows) — not warm light.
+    - A bright, productive, or ordinary working day: natural daylight.
+    - A calm, settled, wind-down mood: warm lamp light is appropriate.
+    Do not default to warm lighting if the mood doesn't support it.
+
     Focus on setting, lighting, and activity — not emotions explicitly.
     Return ONLY the prompt text. No explanation, no quotes, no preamble.
 """).strip()
@@ -190,8 +207,8 @@ def _generate_image(prose: str) -> Optional[str]:
         payload = {
             "prompt": (
                 f"{scene_prompt}, "
-                "anime illustration, manga style, soft warm lighting, "
-                "clean lineart, flat color, no text, no speech bubbles"
+                "anime illustration, manga style, clean lineart, flat color, "
+                "no text, no speech bubbles"
             ),
             "width": 1024,
             "height": 1024,
@@ -289,46 +306,91 @@ def _get_file_sha(repo: str, path: str, branch: str) -> Optional[str]:
     return None
 
 
-def _push_file(repo_path: str, content_b64: str, commit_msg: str) -> bool:
-    """Create or update any file in the GitHub repo via Contents API."""
+def _push_post_and_image(
+    slug: str,
+    content: str,
+    image_b64: Optional[str],
+    date: datetime,
+) -> bool:
     if not GITHUB_TOKEN or not GITHUB_REPO:
         log.error("GITHUB_TOKEN or GITHUB_REPO not set — skipping push.")
         return False
 
-    payload: dict = {
-        "message": commit_msg,
-        "content": content_b64,
-        "branch":  GITHUB_BRANCH,
-    }
-    existing_sha = _get_file_sha(GITHUB_REPO, repo_path, GITHUB_BRANCH)
-    if existing_sha:
-        payload["sha"] = existing_sha
+    headers = _github_headers()
+    base = f"{_GITHUB_API}/repos/{GITHUB_REPO}"
 
-    url  = f"{_GITHUB_API}/repos/{GITHUB_REPO}/contents/{repo_path}"
-    resp = requests.put(url, headers=_github_headers(), json=payload, timeout=30)
+    # 1. Get current HEAD SHA
+    ref_resp = requests.get(f"{base}/git/ref/heads/{GITHUB_BRANCH}", headers=headers, timeout=15)
+    ref_resp.raise_for_status()
+    head_sha = ref_resp.json()["object"]["sha"]
 
-    if resp.status_code in (200, 201):
-        action = "Updated" if existing_sha else "Created"
-        log.info(f"{action}: {repo_path}")
+    # 2. Get base tree SHA
+    commit_resp = requests.get(f"{base}/git/commits/{head_sha}", headers=headers, timeout=15)
+    commit_resp.raise_for_status()
+    base_tree_sha = commit_resp.json()["tree"]["sha"]
+
+    # 3. Build tree entries
+    tree = []
+
+    # Markdown post (text blob)
+    tree.append({
+        "path": f"{HUGO_CONTENT_PATH}/{slug}.md",
+        "mode": "100644",
+        "type": "blob",
+        "content": content,  # raw string, GitHub encodes it
+    })
+
+    # Image (binary blob — must pre-create blob)
+    if image_b64:
+        blob_resp = requests.post(
+            f"{base}/git/blobs",
+            headers=headers,
+            json={"content": image_b64, "encoding": "base64"},
+            timeout=30,
+        )
+        blob_resp.raise_for_status()
+        image_blob_sha = blob_resp.json()["sha"]
+        tree.append({
+            "path": f"{HUGO_IMAGES_PATH}/{slug}.png",
+            "mode": "100644",
+            "type": "blob",
+            "sha": image_blob_sha,
+        })
+
+    # 4. Create tree
+    tree_resp = requests.post(
+        f"{base}/git/trees",
+        headers=headers,
+        json={"base_tree": base_tree_sha, "tree": tree},
+        timeout=30,
+    )
+    tree_resp.raise_for_status()
+    new_tree_sha = tree_resp.json()["sha"]
+
+    # 5. Create commit
+    commit_msg = f"feat(reflect): daily reflection {date.strftime('%Y-%m-%d')}"
+    new_commit_resp = requests.post(
+        f"{base}/git/commits",
+        headers=headers,
+        json={"message": commit_msg, "tree": new_tree_sha, "parents": [head_sha]},
+        timeout=30,
+    )
+    new_commit_resp.raise_for_status()
+    new_commit_sha = new_commit_resp.json()["sha"]
+
+    # 6. Update branch ref
+    update_resp = requests.patch(
+        f"{base}/git/refs/heads/{GITHUB_BRANCH}",
+        headers=headers,
+        json={"sha": new_commit_sha},
+        timeout=15,
+    )
+    if update_resp.status_code in (200, 201):
+        log.info(f"Pushed single commit: {slug} + image → {GITHUB_BRANCH}")
         return True
     else:
-        log.error(f"GitHub push failed {resp.status_code}: {resp.text[:300]}")
+        log.error(f"Ref update failed {update_resp.status_code}: {update_resp.text[:300]}")
         return False
-
-
-def _push_image(slug: str, image_b64: str, date: datetime) -> bool:
-    """Push the generated PNG to static/images/ in the GitHub repo."""
-    repo_path  = f"{HUGO_IMAGES_PATH}/{slug}.png"
-    commit_msg = f"feat(reflect): add reflection image {date.strftime('%Y-%m-%d')}"
-    return _push_file(repo_path, image_b64, commit_msg)
-
-
-def _push_post(slug: str, content: str, date: datetime) -> bool:
-    """Push the Hugo markdown post to content/posts/ in the GitHub repo."""
-    repo_path  = f"{HUGO_CONTENT_PATH}/{slug}.md"
-    encoded    = base64.b64encode(content.encode()).decode()
-    commit_msg = f"feat(reflect): add daily reflection {date.strftime('%Y-%m-%d')}"
-    return _push_file(repo_path, encoded, commit_msg)
 
 # ── public API ────────────────────────────────────────────────────────────────
 
@@ -422,22 +484,8 @@ def generate_and_post(
         except Exception as e:
             log.error(f"Daily summary pin failed: {e}")
 
-    # Step 5: push image first (post references it)
-    if image_generated:
-        img_ok = _push_image(slug, image_b64, date)
-        if not img_ok:
-            log.warning("Image push failed — post will render without image.")
-            # rebuild post without image reference
-            _, content = _build_hugo_post(
-                prose=prose,
-                image_slug=None,
-                date=date,
-                write_time=write_time,
-                mem_count=len(snippets),
-            )
-
-    # Step 6: push Hugo post
-    success = _push_post(slug, content, date)
+    # Step 5: push image and Hugo post together
+    success = _push_post_and_image(slug, content, image_b64 if image_generated else None, date)
 
     log.info(
         f"{'Done' if success else 'Failed'} — "
