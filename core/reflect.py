@@ -148,7 +148,7 @@ def _build_reflection_system() -> str:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def _llm_chat(system: str, user: str, max_tokens: int = 400) -> str:
+def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float = 0.75) -> str:
     resp = _LLM_CLIENT.chat.completions.create(
         model=LLM_MODEL,
         messages=[
@@ -157,7 +157,7 @@ def _llm_chat(system: str, user: str, max_tokens: int = 400) -> str:
         ],
         stream=False,
         max_tokens=max_tokens,
-        temperature=0.75,
+        temperature=temperature,
         timeout=120,
     )
     return (resp.choices[0].message.content or "").strip()
@@ -169,7 +169,7 @@ def _generate_reflection(snippets: list[str], date: datetime) -> str:
         date_str=date.strftime("%Y-%m-%d"),
         snippets=bullet_list,
     )
-    return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500)
+    return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500, temperature=0.85)
 
 # ── image generation ──────────────────────────────────────────────────────────
 
@@ -392,6 +392,21 @@ def _push_post_and_image(
         log.error(f"Ref update failed {update_resp.status_code}: {update_resp.text[:300]}")
         return False
 
+# ── faithful daily record (non-LLM, permanent) ────────────────────────────────
+
+def build_daily_record(snippets: list[str], date: datetime) -> str:
+    """
+    Build a faithful, non-LLM record of one day's deduplicated memory facts.
+    No paraphrasing, no invention — verbatim facts in chronological order.
+    Meant to be pinned forever as ground truth, separate from the stylized
+    prose reflection.
+    """
+    date_str = date.strftime("%Y-%m-%d")
+    if not snippets:
+        return f"Day record for {date_str}: no memories recorded."
+    header = f"Day record for {date_str}:"
+    return header + "\n" + "\n".join(f"- {s}" for s in snippets)
+
 # ── public API ────────────────────────────────────────────────────────────────
 
 def generate_and_post(
@@ -473,7 +488,7 @@ def generate_and_post(
             "pinned":          False,
         }
 
-    # Step 4: pin daily summary to persistent memory. Store a raw curated
+# Step 4: pin daily summary to persistent memory. Store a raw curated
     # summary with a stable prefix so monthly consolidation can replace older
     # daily summaries without relying on another extraction pass.
     pinned = False
@@ -484,13 +499,23 @@ def generate_and_post(
         except Exception as e:
             log.error(f"Daily summary pin failed: {e}")
 
+    # Step 4b: pin the faithful fact-list day record — ground truth, separate
+    # from the stylized prose above. Never paraphrased, never invented.
+    record_pinned = False
+    if memorize is not None:
+        try:
+            day_record = build_daily_record(snippets, date)
+            record_pinned = bool(memorize.add_raw(day_record, pinned=True))
+        except Exception as e:
+            log.error(f"Daily record pin failed: {e}")
+
     # Step 5: push image and Hugo post together
     success = _push_post_and_image(slug, content, image_b64 if image_generated else None, date)
 
     log.info(
         f"{'Done' if success else 'Failed'} — "
         f"slug={slug}, words={_count_words(prose)}, mems={len(snippets)}, "
-        f"image={image_generated}, pinned={pinned}, duration={duration}s"
+        f"image={image_generated}, pinned={pinned}, record_pinned={record_pinned}, duration={duration}s"
     )
 
     return {
@@ -502,4 +527,5 @@ def generate_and_post(
         "prose":           prose,
         "image_generated": image_generated,
         "pinned":          pinned,
+        "record_pinned":   record_pinned,
     }
