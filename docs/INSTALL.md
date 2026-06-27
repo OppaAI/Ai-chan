@@ -184,7 +184,7 @@ LLM_MAX_TOKENS=280
 
 # Memory
 SQLITE_MEMORY_PATH=/home/oppa-ai/.aiko/memory.db
-FASTEMBED_CACHE_PATH=/home/oppa-ai/.cache/fastembed
+EMBED_CACHE_PATH=/home/oppa-ai/.cache/huggingface/hub
 EMBED_MODEL=ferrisS/harrier-oss-v1-270m-fastembed
 EMBED_DIMS=640
 MEMORY_RECALL_LIMIT=5
@@ -225,7 +225,7 @@ If your `.env` still has only `AIKO_ROUTE_*` keys, add the `ROUTE_*` keys above;
 uv sync
 ```
 
-This installs dependencies from `pyproject.toml`/`uv.lock`, including `openai`, `sqlite-vec`, `fastembed`, `sherpa-onnx`, `silero-vad`, `sounddevice`, `soundfile`, `websockets`, `torch`, and `torchaudio`.
+This installs dependencies from `pyproject.toml`/`uv.lock`, including `openai`, `sqlite-vec`, `onnxruntime-gpu`, `tokenizers`, `sherpa-onnx`, `silero-vad`, `sounddevice`, `soundfile`, `websockets`, `torch`, and `torchaudio`.
 
 For browser frontend asset experiments, the repo also has a `package.json` with `three` and `@pixiv/three-vrm`; the checked-in `webui/static/` files are served directly by Python, so `npm install` is not required for normal runtime.
 
@@ -235,7 +235,7 @@ For browser frontend asset experiments, the repo also has a `package.json` with 
 
 - The current `pyproject.toml` uses PyPI dependencies plus an ONNX Runtime CUDA nightly index for `onnxruntime-gpu`.
 - `ASR_DEVICE=cpu` is the documented SenseVoice setting in `.env.example` because CUDA EP availability can vary by JetPack/JP version.
-- Keep `SQLITE_MEMORY_PATH` and `FASTEMBED_CACHE_PATH` on persistent storage, not `/tmp`.
+- Keep `SQLITE_MEMORY_PATH` and `EMBED_CACHE_PATH` on persistent storage, not `/tmp`.
 - If audio output is silent, inspect devices and set `MIOTTS_DEVICE` or the system default sink:
 
 ```bash
@@ -262,7 +262,7 @@ curl http://localhost:8080/v1/models
 curl http://localhost:8001/health
 
 # Python imports
-uv run python -c "import sqlite_vec, fastembed, sherpa_onnx, silero_vad, sounddevice, websockets; print('OK')"
+uv run python -c "import sqlite_vec, tokenizers, onnxruntime, sherpa_onnx, silero_vad, sounddevice, websockets; print('OK')"
 
 # Skill registry and agentic tool schemas
 uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"

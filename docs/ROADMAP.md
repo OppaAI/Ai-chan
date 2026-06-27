@@ -61,11 +61,17 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 > TTS, and memory were active together.
 > The new backend is serverless and keeps memory local — no Qdrant container,
 > no mem0 runtime, and no Docker dependency for memory.
+>
+> Current embedding note: Aiko now uses a custom `core/embed.py` ONNX
+> Harrier embedder instead of fastembed. Harrier OSS v1 270M is decoder-only
+> and needs last-token pooling, while fastembed custom registration only
+> exposed `PoolingType.MEAN`/CLS-style pooling for this path.
 
 | Feature | Status |
 |---|---|
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
 | Embedding model migration — BGE v1.5 → Harrier OSS v1 270M fastembed for newer 640d vectors and better expected semantic separation | ✅ Done |
+| fastembed removal — custom Harrier ONNX embedder with last-token pooling | ✅ Done |
 | KNN + FTS5 + RRF memory retrieval | ✅ Done |
 | Monthly memory consolidation — older full months summarized into pinned durable memories | ✅ Done |
 | Microphone capture via PulseAudio `parec` | ✅ Done |

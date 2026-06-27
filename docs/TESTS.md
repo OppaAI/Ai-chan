@@ -59,7 +59,7 @@ Run before any phase suite.
 - [ ] `curl "http://localhost:8081/search?q=test&format=json"` returns JSON results within 3 seconds.
 - [ ] `curl http://localhost:8080/v1/models` returns JSON containing the configured `LLM_MODEL` alias.
 - [ ] `curl http://localhost:8001/health` returns `{"status":"ok"}` when TTS/voice tests are in scope.
-- [ ] `uv run python -c "import sqlite_vec, fastembed, sherpa_onnx, silero_vad; print('OK')"` prints `OK`.
+- [ ] `uv run python -c "import sqlite_vec, tokenizers, onnxruntime, sherpa_onnx, silero_vad; print('OK')"` prints `OK`.
 - [ ] `parec --version` works on the target voice machine; PulseAudio/PipeWire has an active default source.
 
 ### Baseline observability
@@ -102,7 +102,7 @@ Run before any phase suite.
 - [ ] The assistant does not reveal raw system/developer prompts or internal tool schemas during normal chat.
 - [ ] Markdown, code blocks, Japanese text, emoji, and punctuation render acceptably in the active UI.
 
-### 1.4 Memory: sqlite-vec + fastembed CRUD
+### 1.4 Memory: sqlite-vec + custom Harrier embedder CRUD
 
 - [ ] After several exchanges, `/memory` shows relevant stored memories and does not show empty placeholder rows.
 - [ ] Restart Aiko and ask about a previously discussed topic; recall surfaces the relevant persisted memory.

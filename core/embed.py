@@ -1,15 +1,15 @@
 """
-harrier_embedder.py
-───────────────────
+embed.py
+───────────
 Drop-in ONNX embedder for ferrisS/harrier-oss-v1-270m-fastembed.
 
 Replaces fastembed.TextEmbedding for harrier because fastembed's custom
-model API only supports MEAN/CLS pooling — harrier is a decoder-only
+model API only supports MEAN/CLS pooling. Harrier is a decoder-only
 Gemma3 model that requires last-token pooling.  This wrapper uses
-onnxruntime + tokenizers directly (the same stack fastembed uses
-internally) and applies correct last-token pooling + L2 normalisation.
+onnxruntime + tokenizers directly and applies correct last-token pooling
++ L2 normalisation.
 
-Drop-in interface — same as fastembed.TextEmbedding.embed():
+Small iterable interface:
     embedder = HarrierEmbedder()
     vectors = list(embedder.embed(["text one", "text two"]))
     # or
@@ -19,14 +19,7 @@ Query-side instruction prefix (set EMBED_QUERY_INSTRUCT in .env):
     Use embedder.embed_query("your query") for search queries.
     Use embedder.embed() / embed_batch() for document/memory storage (no prefix).
 
-Usage in migrate_embeddings.py — replace:
-    from fastembed import TextEmbedding
-    embedder = TextEmbedding(model_name=model, cache_dir=FASTEMBED_CACHE)
-With:
-    from harrier_embedder import HarrierEmbedder
-    embedder = HarrierEmbedder()
-
-Usage in memorize.py — replace query embedding call similarly.
+Used by core.memorize and util.migrate_embeddings.
 """
 
 import os
@@ -37,7 +30,7 @@ from typing import Generator, Iterable
 import numpy as np
 
 # ── config from env ───────────────────────────────────────────────────────────
-_FASTEMBED_CACHE  = os.getenv("FASTEMBED_CACHE_PATH", str(Path.home() / ".cache" / "fastembed"))
+_EMBED_CACHE      = os.getenv("EMBED_CACHE_PATH") or os.getenv("FASTEMBED_CACHE_PATH") or str(Path.home() / ".cache" / "huggingface" / "hub")
 _MODEL_ID         = os.getenv("EMBED_MODEL", "ferrisS/harrier-oss-v1-270m-fastembed")
 _MODEL_FILE       = os.getenv("EMBED_MODEL_FILE", "model_quantized.onnx")
 _EMBED_DIMS       = int(os.getenv("EMBED_DIMS", "640"))
@@ -51,9 +44,9 @@ _QUERY_INSTRUCT   = os.getenv(
 
 def _find_snapshot(cache_dir: str, model_id: str) -> Path:
     """
-    Resolve model snapshot — checks HF hub cache first, then fastembed cache.
+    Resolve model snapshot — checks HF hub cache first, then the configured cache.
     HF hub layout: ~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<hash>/
-    fastembed layout: ~/.cache/fastembed/models--<org>--<name>/snapshots/<hash>/
+    legacy cache layout: ~/.cache/fastembed/models--<org>--<name>/snapshots/<hash>/
     """
     folder = "models--" + model_id.replace("/", "--")
 
@@ -68,7 +61,7 @@ def _find_snapshot(cache_dir: str, model_id: str) -> Path:
 
     raise FileNotFoundError(
         f"Harrier snapshot not found in HF hub cache ({hf_cache / folder}) "
-        f"or fastembed cache ({Path(cache_dir) / folder}). "
+        f"or configured embedding cache ({Path(cache_dir) / folder}). "
         f"Run: hf download {model_id} model_quantized.onnx model_quantized.onnx_data tokenizer.json tokenizer_config.json special_tokens_map.json config.json"
     )
 
@@ -85,7 +78,7 @@ class HarrierEmbedder:
 
     def __init__(
         self,
-        cache_dir: str  = _FASTEMBED_CACHE,
+        cache_dir: str  = _EMBED_CACHE,
         model_id: str   = _MODEL_ID,
         model_file: str = _MODEL_FILE,
         dims: int       = _EMBED_DIMS,
@@ -128,7 +121,7 @@ class HarrierEmbedder:
         self._session   = ort.InferenceSession(str(onnx_path), sess_opts, providers=providers)
         self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
-        # enable padding + truncation to match fastembed behaviour
+        # enable padding + truncation for stable batched ONNX inputs
         from tokenizers import processors
         self._tokenizer.enable_padding(pad_id=0, pad_token="<pad>")
         self._tokenizer.enable_truncation(max_length=32768)
@@ -179,12 +172,12 @@ class HarrierEmbedder:
         # sentence_embedding is already pooled + L2-normalised: (batch, 640)
         return outputs[0]
 
-    # ── public API (fastembed-compatible) ─────────────────────────────────────
+    # ── public API ────────────────────────────────────────────────────────────
 
     def embed(self, texts: Iterable[str]) -> Generator[np.ndarray, None, None]:
         """
         Embed documents (no instruction prefix).
-        Yields one np.ndarray(dim,) per text — matches fastembed.TextEmbedding.embed().
+        Yields one np.ndarray(dim,) per text.
         """
         texts = list(texts)
         for start in range(0, len(texts), self.batch_size):

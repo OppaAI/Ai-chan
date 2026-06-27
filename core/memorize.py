@@ -1,6 +1,6 @@
 """
 core/memorize.py
-Aiko's persistent memory — custom backend via sqlite-vec + fastembed + llama.cpp.
+Aiko's persistent memory — custom backend via sqlite-vec + HarrierEmbedder (ONNX) + llama.cpp.
 Abstracts all memory calls so think.py stays clean.
 
 Memory lifecycle:
@@ -41,7 +41,7 @@ Recall strategy — Reciprocal Rank Fusion (RRF):
   RRF fuses both without weighting either arbitrarily.
 
 Custom backend (replaces Qdrant + mem0):
-  - _MemoryBackend handles LLM-based fact extraction, fastembed embeddings,
+  - _MemoryBackend handles LLM-based fact extraction, ONNX embeddings (HarrierEmbedder),
     and direct sqlite-vec upsert/search/delete/scroll.
   - Extraction prompt is tuned for small models: asks for a JSON array of
     atomic facts, strips <think> blocks for CoT models, skips trivial turns.
@@ -49,7 +49,7 @@ Custom backend (replaces Qdrant + mem0):
     last_accessed_at, pinned) are owned by this module — no hidden schema.
 
 Dependencies:
-  pip install sqlite-vec fastembed
+  pip install sqlite-vec onnxruntime tokenizers
 """
 from dotenv import load_dotenv
 load_dotenv()
@@ -69,10 +69,10 @@ from typing import Optional
 
 import sqlite_vec
 from openai import OpenAI
-from fastembed import TextEmbedding
 
 from core.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
 from core.log import get_logger
+from core.embed import HarrierEmbedder
 
 log = get_logger(__name__)
 
@@ -91,7 +91,6 @@ EMBED_DIMS  = int(os.getenv("EMBED_DIMS", "640"))
 EMBED_QUERY_INSTRUCT = os.getenv("EMBED_QUERY_INSTRUCT", "Retrieve relevant memories that answer the query").strip()
 EMBED_MODEL_FILE = os.getenv("EMBED_MODEL_FILE", "model_quantized.onnx")
 EMBED_MODEL_DATA_FILE = os.getenv("EMBED_MODEL_DATA_FILE", "model_quantized.onnx_data").strip()
-EMBED_REGISTER_CUSTOM_MODEL = os.getenv("EMBED_REGISTER_CUSTOM_MODEL", "auto").strip().lower()
 RRF_K       = 60          # standard RRF constant — dampens outlier ranks
 KNN_LIMIT   = 20          # candidates fetched before RRF re-rank
 FTS_LIMIT   = 20          # candidates fetched before RRF re-rank
@@ -389,39 +388,14 @@ class _MemoryBackend:
         db_path:         str,
         llm_base_url:    str,
         model:           str,
-        fastembed_cache: Optional[str] = None,
+        embed_cache:     Optional[str] = None,
     ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path  = db_path
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
-      
-        from fastembed.common.model_description import ModelSource, PoolingType
-
-        # Register community ONNX packages that fastembed does not ship
-        # natively. Harrier's fastembed conversion documents MEAN pooling in
-        # its custom-model example, despite the base SentenceTransformers model
-        # card using last-token pooling internally.
-        if EMBED_REGISTER_CUSTOM_MODEL not in {"0", "false", "no", "off"}:
-            try:
-                TextEmbedding.add_custom_model(
-                    model=EMBED_MODEL,
-                    pooling=PoolingType.MEAN,
-                    normalization=True,
-                    sources=ModelSource(hf=EMBED_MODEL),
-                    dim=EMBED_DIMS,
-                    model_file=EMBED_MODEL_FILE,
-                    additional_files=[EMBED_MODEL_DATA_FILE] if EMBED_MODEL_DATA_FILE else [],
-                )
-            except Exception as e:
-                if EMBED_REGISTER_CUSTOM_MODEL in {"1", "true", "yes", "on"}:
-                    raise
-                log.debug("Custom embedding model registration skipped: %s", e)
-        self._embedder = TextEmbedding(
-            model_name=EMBED_MODEL,
-            cache_dir=fastembed_cache,
-        )
+        self._embedder = HarrierEmbedder(cache_dir=embed_cache) if embed_cache else HarrierEmbedder()
         self._conn = self._connect()
         self._apply_schema()
 
@@ -448,14 +422,14 @@ class _MemoryBackend:
         return f"Instruct: {EMBED_QUERY_INSTRUCT}\nQuery: {text}"
 
     def _embed(self, text: str, *, query: bool = False) -> list[float]:
-        """Embed a single string with fastembed. Returns a plain float list."""
-        embed_text = self._format_query_text(text) if query else text
-        return list(self._embedder.embed([embed_text]))[0].tolist()
+        """Embed a single string with HarrierEmbedder. Returns a plain float list."""
+        if query:
+            return self._embedder.embed_query(text).tolist()
+        return list(self._embedder.embed([text]))[0].tolist()
 
-    def _embed_batch(self, texts: list[str], *, query: bool = False) -> list[list[float]]:
-        """Embed multiple strings in a single batched fastembed call."""
-        embed_texts = [self._format_query_text(t) for t in texts] if query else texts
-        return [v.tolist() for v in self._embedder.embed(embed_texts)]
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        """Embed multiple strings in a single batched ONNX call."""
+        return self._embedder.embed_batch(texts).tolist()
 
     # ── extraction ────────────────────────────────────────────────────────────
 
@@ -849,7 +823,7 @@ class AikoMemorize:
             db_path=db_path,
             llm_base_url=os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"),
             model=os.getenv("EXTRACT_MODEL") or os.getenv("LLM_MODEL", "ministral"),
-            fastembed_cache=os.getenv("FASTEMBED_CACHE_PATH"),
+            embed_cache=os.getenv("EMBED_CACHE_PATH") or os.getenv("FASTEMBED_CACHE_PATH"),
         )
         self._conn = self._mem._conn
         self._search_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
@@ -1429,7 +1403,9 @@ class AikoMemorize:
 
     def embed_texts(self, texts: list[str], *, query: bool = False) -> list[list[float]]:
         """Embed multiple strings with the configured memory embedding model."""
-        return self._mem._embed_batch(texts, query=query)
+        if query:
+            return self._mem._embedder.embed_queries(texts).tolist()   # applies instruct prefix
+        return self._mem._embed_batch(texts)                           # document side — no prefix
 
     def _is_pinned(self, mem_id: str) -> bool:
         """Return True if memories.pinned == 1 for this id."""

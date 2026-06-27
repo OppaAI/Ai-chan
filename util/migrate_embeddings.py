@@ -32,6 +32,10 @@ import sys
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 # ── optional dotenv ───────────────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
@@ -54,58 +58,17 @@ except ImportError:
 DEFAULT_DB    = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
 DEFAULT_MODEL = os.getenv("EMBED_MODEL", "ferrisS/harrier-oss-v1-270m-fastembed")
 DEFAULT_DIMS  = int(os.getenv("EMBED_DIMS", "640"))
-FASTEMBED_CACHE = os.getenv("FASTEMBED_CACHE_PATH")
 BATCH_SIZE    = int(os.getenv("EMBED_BATCH_SIZE", "64"))   # memories per embedding batch — tune down if OOM on Jetson
-
-# Custom fastembed model registration — only needed for community ONNX
-# conversions that fastembed doesn't ship natively (e.g. ferrisS/harrier-oss-v1-270m-fastembed).
-# If you switch to a model fastembed supports out of the box, this becomes a no-op
-# you can skip via --no-register.
-_MODEL_FILE             = os.getenv("EMBED_MODEL_FILE", "model_quantized.onnx")
-_MODEL_ADDITIONAL_FILES = [os.getenv("EMBED_MODEL_DATA_FILE", "model_quantized.onnx_data")]
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="Rebuild Aiko memories_vec with a new embedding model.")
     p.add_argument("--db",      default=DEFAULT_DB,    help=f"Path to memory.db (default: {DEFAULT_DB})")
-    p.add_argument("--model",   default=DEFAULT_MODEL, help=f"fastembed model ID (default: {DEFAULT_MODEL})")
+    p.add_argument("--model",   default=DEFAULT_MODEL, help=f"Harrier ONNX model ID (default: {DEFAULT_MODEL})")
     p.add_argument("--dims",    default=DEFAULT_DIMS,  type=int, help=f"Embedding dimensions (default: {DEFAULT_DIMS})")
     p.add_argument("--dry-run", action="store_true",   help="Load model and count memories, but don't write anything")
     p.add_argument("--batch",   default=BATCH_SIZE,    type=int, help=f"Embedding batch size (default: {BATCH_SIZE})")
-    p.add_argument("--no-register", action="store_true",
-                   help="Skip add_custom_model() registration — use if --model is natively supported by fastembed")
     return p.parse_args()
-
-
-def register_custom_model(model_id: str, dims: int) -> None:
-    """
-    Register a community/custom ONNX embedding model with fastembed so
-    TextEmbedding(model_name=model_id) can find it. Safe to call even if
-    already registered in this process (fastembed raises on duplicate
-    registration, which we swallow).
-    """
-    from fastembed import TextEmbedding
-    from fastembed.common.model_description import ModelSource, PoolingType
-
-    try:
-        TextEmbedding.add_custom_model(
-            model=model_id,
-            # The ferrisS fastembed package documents MEAN pooling for its
-            # custom TextEmbedding registration. The upstream sentence-
-            # transformers model card uses last-token pooling, but that is not
-            # the fastembed package's documented loading contract.
-            pooling=PoolingType.MEAN,
-            normalization=True,
-            sources=ModelSource(hf=model_id),
-            dim=dims,
-            model_file=_MODEL_FILE,
-            additional_files=_MODEL_ADDITIONAL_FILES,
-        )
-        print(f"  ✓ Registered custom model {model_id!r} (dim={dims})")
-    except Exception as e:
-        # Already registered (e.g. re-run in same process, or fastembed now
-        # ships it natively) — not fatal, just log and continue.
-        print(f"  · Custom model registration skipped/failed (continuing): {e}")
 
 
 def connect(db_path: str) -> sqlite3.Connection:
@@ -226,8 +189,8 @@ def main():
     print("Loading embedding model (may download on first run)...")
     t0 = time.perf_counter()
     try:
-        from harrier_embedder import HarrierEmbedder
-        embedder = HarrierEmbedder(batch_size=args.batch)
+        from core.embed import HarrierEmbedder
+        embedder = HarrierEmbedder(model_id=model, dims=dims, batch_size=args.batch)
         # warm up — triggers ONNX session load now, not mid-migration
         list(embedder.embed(["warmup"]))
     except Exception as e:

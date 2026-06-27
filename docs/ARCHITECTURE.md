@@ -258,7 +258,7 @@ flowchart TD
 ## Current Runtime Configuration
 
 - `LLM_BASE_URL` and `LLM_MODEL` select the local OpenAI-compatible LLM endpoint. The current code no longer imports `ollama.Client` for chat.
-- `EMBED_MODEL`, `SQLITE_MEMORY_PATH`, and `FASTEMBED_CACHE_PATH` configure local sqlite-vec memory and fastembed embeddings.
+- `EMBED_MODEL`, `EMBED_DIMS`, `EMBED_CACHE_PATH`, and `SQLITE_MEMORY_PATH` configure local sqlite-vec memory and the custom Harrier ONNX embedder. `FASTEMBED_CACHE_PATH` is only a backward-compatible cache fallback for older env files.
 - `ROUTE_ENABLED`/`ROUTE_MODE`/`ROUTE_SEMANTIC_THRESHOLD` are the environment variables read by `core/think.py`; older `AIKO_ROUTE_*` names in stale env files should be migrated.
 - `MIOTTS_API_URL`, `MIOTTS_PRESET`, and `MIOTTS_DEVICE` configure voice output.
 - `ASR_*`, `LISTEN_*`, and `SPEAKER_*` configure SenseVoice, Silero VAD, optional speaker verification, and barge-in.
