@@ -20,16 +20,13 @@ from pathlib import Path
 
 from openai import OpenAI
 
-from core.experience import load_chat_turns
 from core.log import get_logger
 
 log = get_logger(__name__)
 
 CONSOLIDATION_ENABLED         = os.getenv("MONTHLY_CONSOLIDATION_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 CONSOLIDATION_KEEP_MONTHS     = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_KEEP_MONTHS", "1")))
-CONSOLIDATION_SOURCE          = os.getenv("MONTHLY_CONSOLIDATION_SOURCE", "experience").strip().lower()
 CONSOLIDATION_CHUNK_MEMS      = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_MEMS", "25")))
-CONSOLIDATION_CHUNK_TURNS     = max(10, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_TURNS", "40")))
 CONSOLIDATION_MAX_INPUT_CHARS = max(1000, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS", "6000")))
 CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MEMS", "5")))
 CONSOLIDATION_DELETE_ORIGINALS       = os.getenv("MONTHLY_CONSOLIDATION_DELETE_ORIGINALS", "1").lower() in {"1", "true", "yes", "on"}
@@ -103,14 +100,6 @@ def _memory_lines(memories: list[dict]) -> str:
     ])
 
 
-def _turn_lines(turns: list[dict]) -> str:
-    return _bounded_lines([
-        f"- {t.get('created_at', '')}\n  User: {(t.get('user') or '').strip()}\n  Aiko: {(t.get('assistant') or '').strip()}"
-        for t in turns
-        if (t.get("user") or t.get("assistant"))
-    ])
-
-
 def _summarize_memory_chunk(month_key: str, memories: list[dict], idx: int, total: int) -> str:
     prompt = (
         "Summarize these long-term memory facts for Aiko's monthly memory consolidation. "
@@ -121,18 +110,6 @@ def _summarize_memory_chunk(month_key: str, memories: list[dict], idx: int, tota
         f"Memories:\n{_memory_lines(memories)}"
     )
     return _chat(prompt, max_tokens=500)
-
-
-def _summarize_turn_chunk(month_key: str, turns: list[dict], idx: int, total: int) -> str:
-    prompt = (
-        "Summarize these raw Aiko/Oppa daily experience turns for monthly consolidation. "
-        "Keep stable facts, preferences, projects, emotional beats, deadlines, repeated themes, and important events. "
-        "Drop filler, greetings, transient wording, and duplicate details. Do not invent facts. "
-        "Use compact bullet points only.\n\n"
-        f"Month: {month_key}\nChunk: {idx}/{total}\n\n"
-        f"Experience turns:\n{_turn_lines(turns)}"
-    )
-    return _chat(prompt, max_tokens=550)
 
 
 def _final_summary(month_key: str, chunk_summaries: list[str]) -> str:
@@ -172,28 +149,18 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
     start_utc = start.replace(tzinfo=timezone.utc)
     end_utc   = end.replace(tzinfo=timezone.utc)
     memories  = memorize.get_between(start_utc, end_utc)
-    turns     = load_chat_turns(start_utc, end_utc) if CONSOLIDATION_SOURCE == "experience" else []
 
-    if turns:
-        chunks = [turns[i:i + CONSOLIDATION_CHUNK_TURNS] for i in range(0, len(turns), CONSOLIDATION_CHUNK_TURNS)]
-        chunk_summaries = [
-            _summarize_turn_chunk(month_key, chunk, i + 1, len(chunks))
-            for i, chunk in enumerate(chunks)
-        ]
-        source_count = len(turns)
-        source = "experience"
-    else:
-        if len(memories) < CONSOLIDATION_MIN_MEMS:
-            state["last_consolidated_month"] = month_key
-            _save_state(state)
-            return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(memories)}
-        chunks = [memories[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(memories), CONSOLIDATION_CHUNK_MEMS)]
-        chunk_summaries = [
-            _summarize_memory_chunk(month_key, chunk, i + 1, len(chunks))
-            for i, chunk in enumerate(chunks)
-        ]
-        source_count = len(memories)
-        source = "memory"
+    if len(memories) < CONSOLIDATION_MIN_MEMS:
+        state["last_consolidated_month"] = month_key
+        _save_state(state)
+        return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(memories)}
+    chunks = [memories[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(memories), CONSOLIDATION_CHUNK_MEMS)]
+    chunk_summaries = [
+        _summarize_memory_chunk(month_key, chunk, i + 1, len(chunks))
+        for i, chunk in enumerate(chunks)
+    ]
+    source_count = len(memories)
+    source = "memory"
 
     summary = _final_summary(month_key, chunk_summaries)
     if not summary:

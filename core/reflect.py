@@ -16,7 +16,6 @@ Environment variables required:
 Optional:
   SOUL_PATH           — path to soul.md (default "config/soul.md")
   REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 20)
-  REFLECT_MAX_TURNS   — max chat turns to feed the LLM (default 40)
   REFLECT_TAGS        — comma-separated Hugo tags (default "daily-reflection,ai-journal,aiko")
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
@@ -41,7 +40,6 @@ import requests
 from openai import OpenAI
 
 from core.log import get_logger
-from core.experience import load_chat_turns
 
 log = get_logger(__name__)
 
@@ -59,8 +57,7 @@ _LLM_CLIENT  = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
 
-REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 20))
-REFLECT_MAX_TURNS = int(os.getenv("REFLECT_MAX_TURNS", 40))
+REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 50))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run")
@@ -94,9 +91,6 @@ _DAILY_SUMMARY_UNLOCK = textwrap.dedent("""
 
 _REFLECTION_USER = textwrap.dedent("""
     Date being summarized: {date_str}
-
-    Chat turns from that day:
-    {turns}
 
     Persistent memory snippets from that day and recent context:
     {snippets}
@@ -152,18 +146,10 @@ def _llm_chat(system: str, user: str, max_tokens: int = 400) -> str:
     return (resp.choices[0].message.content or "").strip()
 
 
-def _generate_reflection(snippets: list[str], turns: list[dict], date: datetime) -> str:
+def _generate_reflection(snippets: list[str], date: datetime) -> str:
     bullet_list = "\n".join(f"- {s}" for s in snippets) or "- No memory snippets available."
-    turn_lines = []
-    for turn in turns[:REFLECT_MAX_TURNS]:
-        user = str(turn.get("user", "")).strip().replace("\n", " ")
-        assistant = str(turn.get("assistant", "")).strip().replace("\n", " ")
-        if user or assistant:
-            turn_lines.append(f"- User: {user[:600]}\n  Aiko: {assistant[:600]}")
-    turns_text = "\n".join(turn_lines) or "- No chat turns logged for this day."
     user_prompt = _REFLECTION_USER.format(
         date_str=date.strftime("%Y-%m-%d"),
-        turns=turns_text,
         snippets=bullet_list,
     )
     return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500)
@@ -379,18 +365,13 @@ def generate_and_post(
             seen.add(text)
             snippets.append(text)
 
-    day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end   = day_start + timedelta(days=1)
-    turns     = load_chat_turns(day_start, day_end, user_id=os.getenv("USER_ID", "OppaAI"))
-
     log.info(
-        f"Generating daily summary from {len(turns)} chat turns and "
-        f"{len(snippets)} memory snippets..."
+        f"Generating daily summary from {len(snippets)} memory snippets..."
     )
 
     # Step 1: factual prose summary
     try:
-        prose = _generate_reflection(snippets, turns, date)
+        prose = _generate_reflection(snippets, date)
     except Exception as e:
         log.error(f"Reflection generation failed: {e}")
         return {"success": False, "error": str(e)}

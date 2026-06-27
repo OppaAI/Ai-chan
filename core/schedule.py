@@ -541,6 +541,12 @@ class ScheduleRunner:
             result = self._memorize.dream()
             log.info("daily_reflect_and_dream: dream done — %s", result)
 
+            # clean up experience log
+            log.info("daily_reflect_and_dream: trimming experience log...")
+            from core.experience import trim_experience_log
+            trim_experience_log(keep_days=7)
+            log.info("daily_reflect_and_dream: experience log trimmed.")
+
         except Exception as e:
             log.error("daily_reflect_and_dream failed: %s", e)
 
