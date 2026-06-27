@@ -176,10 +176,8 @@ class HarrierEmbedder:
             inputs["token_type_ids"] = np.zeros_like(input_ids)
 
         outputs = self._session.run(None, inputs)
-        # outputs[0] is last_hidden_state: (batch, seq_len, dim)
-        hidden_states = outputs[0]
-
-        return self._last_token_pool(hidden_states, attention_mask)
+        # sentence_embedding is already pooled + L2-normalised: (batch, 640)
+        return outputs[0]
 
     # ── public API (fastembed-compatible) ─────────────────────────────────────
 
