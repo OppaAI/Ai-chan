@@ -26,6 +26,8 @@ from core.think import (
     _SEMANTIC_ROUTE_THRESHOLD,
     _SEMANTIC_SEARCH_THRESHOLD,
     _SEMANTIC_ROUTE_MIN_GAP,
+    _SEMANTIC_TOOL_MIN_GAP,
+    _SEMANTIC_SEARCH_MIN_GAP,
     _SEMANTIC_LABEL_TOP_K,
 )
 
@@ -60,7 +62,7 @@ def score_bar(score: float, width: int = 20) -> str:
     color = GREEN if score >= 0.5 else YELLOW if score >= 0.35 else RED
     return f"{color}{'█' * filled}{'░' * (width - filled)}{RESET} {score:.3f}"
 
-def trace_stage(label: str, examples_by_label: dict, user_input: str, threshold: float) -> tuple[str, float]:
+def trace_stage(label: str, examples_by_label: dict, user_input: str, threshold: float, min_gap: float) -> tuple[str, float]:
     scores = think._semantic_all_scores(user_input, examples_by_label)
     if not scores:
         return "chat", 0.0
@@ -78,9 +80,9 @@ def trace_stage(label: str, examples_by_label: dict, user_input: str, threshold:
         print(f"  {lbl:<16} {score_bar(sc)}{marker}")
 
     pass_thresh = best_score >= threshold
-    pass_gap    = gap >= _SEMANTIC_ROUTE_MIN_GAP
+    pass_gap    = gap >= min_gap
     verdict = GREEN + "PASS" + RESET if (pass_thresh and pass_gap) else RED + "FAIL" + RESET
-    print(f"\n  threshold={threshold}  gap_min={_SEMANTIC_ROUTE_MIN_GAP}  top_k={_SEMANTIC_LABEL_TOP_K}")
+    print(f"\n  threshold={threshold}  gap_min={min_gap}  top_k={_SEMANTIC_LABEL_TOP_K}")
     print(f"  best={best_label}  score={best_score:.3f}  gap={gap:.3f}  [{verdict}]")
 
     return best_label, best_score
@@ -92,7 +94,7 @@ def trace(prompt: str) -> None:
 
     # ── Stage 1 ───────────────────────────────────────────────────────────────
     print(f"\n{BOLD}▶ Stage 1  chat vs agentic{RESET}")
-    best1, score1 = trace_stage("binary classifier", _ROUTE_BINARY_EXAMPLES, prompt, _SEMANTIC_ROUTE_THRESHOLD)
+    best1, score1 = trace_stage("binary classifier", _ROUTE_BINARY_EXAMPLES, prompt, _SEMANTIC_ROUTE_THRESHOLD, _SEMANTIC_ROUTE_MIN_GAP)
     scores1 = think._semantic_all_scores(prompt, _ROUTE_BINARY_EXAMPLES)
     sorted1 = sorted(scores1.values(), reverse=True)
     gap1 = sorted1[0] - sorted1[1] if len(sorted1) > 1 else 1.0
@@ -105,11 +107,11 @@ def trace(prompt: str) -> None:
 
         # ── Stage 2a ──────────────────────────────────────────────────────────
         print(f"\n{BOLD}▶ Stage 2a  which tool{RESET}")
-        best2, score2 = trace_stage("tool classifier", _ROUTE_TOOL_EXAMPLES, prompt, _SEMANTIC_ROUTE_THRESHOLD)
+        best2, score2 = trace_stage("tool classifier", _ROUTE_TOOL_EXAMPLES, prompt, _SEMANTIC_ROUTE_THRESHOLD, _SEMANTIC_TOOL_MIN_GAP)
         scores2 = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES)
         sorted2 = sorted(scores2.values(), reverse=True)
         gap2 = sorted2[0] - sorted2[1] if len(sorted2) > 1 else 1.0
-        if score2 >= _SEMANTIC_ROUTE_THRESHOLD and gap2 >= _SEMANTIC_ROUTE_MIN_GAP:
+        if score2 >= _SEMANTIC_ROUTE_THRESHOLD and gap2 >= _SEMANTIC_TOOL_MIN_GAP:
             print(f"\n  {GREEN}→ ROUTE: agentic_chat  tool={best2}{RESET}")
         else:
             print(f"\n  {YELLOW}→ ROUTE: agentic_chat  tool=llm_fallback (score too low){RESET}")
@@ -118,14 +120,16 @@ def trace(prompt: str) -> None:
 
         # ── Stage 2b ──────────────────────────────────────────────────────────
         print(f"\n{BOLD}▶ Stage 2b  websearch needed?{RESET}")
-        best3, score3 = trace_stage("search classifier", _ROUTE_SEARCH_EXAMPLES, prompt, _SEMANTIC_SEARCH_THRESHOLD)
+        best3, score3 = trace_stage("search classifier", _ROUTE_SEARCH_EXAMPLES, prompt, _SEMANTIC_SEARCH_THRESHOLD, _SEMANTIC_SEARCH_MIN_GAP)
         scores3 = think._semantic_all_scores(prompt, _ROUTE_SEARCH_EXAMPLES)
         sorted3 = sorted(scores3.values(), reverse=True)
         gap3 = sorted3[0] - sorted3[1] if len(sorted3) > 1 else 1.0
-        needs_search = best3 == "data" and score3 >= _SEMANTIC_SEARCH_THRESHOLD and gap3 >= _SEMANTIC_ROUTE_MIN_GAP
+        needs_search = best3 == "data" and score3 >= _SEMANTIC_SEARCH_THRESHOLD and gap3 >= _SEMANTIC_SEARCH_MIN_GAP
 
         if needs_search:
             print(f"\n  {GREEN}→ ROUTE: chat()  websearch=True  query={prompt!r}{RESET}")
+        elif score1 >= _SEMANTIC_ROUTE_THRESHOLD and gap1 < _SEMANTIC_ROUTE_MIN_GAP:
+            print(f"\n  {YELLOW}→ ROUTE: llm_fallback (binary scores too close){RESET}")
         else:
             print(f"\n  {CYAN}→ ROUTE: chat()  websearch=False{RESET}")
 

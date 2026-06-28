@@ -71,6 +71,8 @@ _ROUTE_INSTRUCT = "Does this message ask someone to perform a task or action, or
 _SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
+_SEMANTIC_TOOL_MIN_GAP = float(os.getenv("ROUTE_TOOL_MIN_GAP", "0.015"))
+_SEMANTIC_SEARCH_MIN_GAP = float(os.getenv("ROUTE_SEARCH_MIN_GAP", "0.010"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
@@ -199,6 +201,11 @@ class AikoThink:
 
         # Stage 2b
         self._pending_search_query = user_input if self._needs_websearch(user_input) else None
+        if self._pending_search_query is not None:
+            return "chat"
+
+        if _ROUTE_MODE != "semantic_only" and self._semantic_binary_is_ambiguous(user_input):
+            return self._classify_agent_intent(user_input)
         return "chat"
 
     @staticmethod
@@ -229,12 +236,21 @@ class AikoThink:
             log.warning("Binary intent routing failed: %s", e)
             return False
 
+    def _semantic_binary_is_ambiguous(self, user_input: str) -> bool:
+        """Return True when chat and agentic are too close for semantic-only routing."""
+        try:
+            _best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES)
+            return best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap < _SEMANTIC_ROUTE_MIN_GAP
+        except Exception as e:
+            log.warning("Binary ambiguity check failed: %s", e)
+            return False
+
     def _classify_agentic_tool(self, user_input: str) -> str:
         """Stage 2a: which agentic tool, called only when agentic is confirmed."""
         try:
             best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_TOOL_EXAMPLES)
             log.debug("[route/tool] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
-            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP:
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_TOOL_MIN_GAP:
                 return best_label
             # fallback to LLM classifier if score is weak
             return self._classify_agent_intent(user_input)
@@ -247,7 +263,7 @@ class AikoThink:
         try:
             best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_SEARCH_EXAMPLES)
             log.debug("[route/search] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
-            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP
+            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD and gap >= _SEMANTIC_SEARCH_MIN_GAP
         except Exception as e:
             log.warning("Search intent routing failed: %s", e)
             return False
