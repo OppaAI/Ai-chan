@@ -207,7 +207,7 @@ class AikoThink:
         self._idle_learner_thread = threading.Thread(target=self._idle_learner_loop, daemon=True)
         self._idle_learner_thread.start()
 
-        self._reminders = ScheduleRunner(on_due=self._on_scheduled_job_due)
+        self._reminders = ScheduleRunner(on_due=self.handle_scheduled_job)
         self._reminders.start()
 
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
@@ -468,7 +468,7 @@ class AikoThink:
                 self._mem_queue.all_tasks_done.wait(remaining)
         return True
 
-    def _on_scheduled_job_due(self, job: DueJob) -> None:
+    def handle_scheduled_job(self, job: DueJob) -> None:
         """Announce or execute a due scheduled job without blocking the scheduler."""
         text = f"{job.title}. {job.task}"
         log.info("[schedule] due %s action=%s: %s", job.id, job.action, text)
