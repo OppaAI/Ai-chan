@@ -18,7 +18,8 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "ninja" },
     { name = "numpy" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'aarch64' or platform_machine == 'x86_64'" },
+    { name = "onnxruntime-gpu", version = "1.24.4", source = { registry = "https://pypi.org/simple/" }, marker = "platform_machine == 'x86_64'" },
+    { name = "onnxruntime-gpu", version = "1.24.4", source = { path = "../onnxruntime/build/Linux/Release/dist/onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl" }, marker = "platform_machine == 'aarch64'" },
     { name = "openai" },
     { name = "packaging" },
     { name = "protobuf" },
@@ -49,7 +50,7 @@ requires-dist = [
     { name = "ninja", specifier = ">=1.13.0" },
     { name = "numpy", specifier = "<2" },
     { name = "onnxruntime-gpu", marker = "platform_machine == 'aarch64'", path = "../onnxruntime/build/Linux/Release/dist/onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64'", path = "../onnxruntime/build/Linux/Release/dist/onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64'", specifier = "==1.24.4" },
     { name = "openai", specifier = ">=2.43.0" },
     { name = "packaging", specifier = ">=26.2" },
     { name = "protobuf", specifier = ">=6.33.6" },
@@ -784,7 +785,29 @@ wheels = [
 [[package]]
 name = "onnxruntime-gpu"
 version = "1.24.4"
+source = { registry = "https://pypi.org/simple/" }
+resolution-markers = [
+    "platform_machine == 'x86_64'",
+]
+dependencies = [
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "packaging" },
+    { name = "protobuf" },
+    { name = "sympy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d0/2c/5b3fd4748cf7ed291eae541a37e426efc20ea04cb6e6a05768304ab0aa41/onnxruntime_gpu-1.24.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:eb0e38f0c1ef3b76ae0081c8e51eed20dd8925aa916f0fc6f9b8b17d05610e99", size = 252765531, upload-time = "2026-03-17T22:03:57.528Z" },
+    { url = "https://files.pythonhosted.org/packages/f2/86/70cecfdab1e963cc7f8c11e72040dfcd5cff85b1de2de74deba9611e0059/onnxruntime_gpu-1.24.4-cp312-cp312-win_amd64.whl", hash = "sha256:da5c1e327d8e119a831be2790e69f93cf6daab9145ed0aca7577f412a620f709", size = 207197978, upload-time = "2026-03-17T21:58:38.43Z" },
+]
+
+[[package]]
+name = "onnxruntime-gpu"
+version = "1.24.4"
 source = { path = "../onnxruntime/build/Linux/Release/dist/onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl" }
+resolution-markers = [
+    "platform_machine == 'aarch64'",
+]
 dependencies = [
     { name = "flatbuffers" },
     { name = "numpy" },

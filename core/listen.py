@@ -188,7 +188,7 @@ class AikoListen:
 
     def load_vad(self) -> None:
         self._vad_model = load_silero_vad(onnx=True)
-        self._vad_model.eval()
+        # self._vad_model.eval()  # PyTorch-only, not needed for OnnxWrapper
         self._warmup_thread = threading.Thread(target=self._warmup, daemon=True)
         self._warmup_thread.start()
 
