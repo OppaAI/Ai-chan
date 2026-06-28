@@ -291,7 +291,9 @@ def trace(prompt: str) -> None:
     # ── LLM-only mode ────────────────────────────────────────────────────────
     if not _RUN_SEMANTIC:
         print(f"\n{BOLD}▶ Skipping semantic stages (ROUTE_MODE={_ROUTE_MODE}){RESET}")
+        think._history = []
         trace_llm_router(prompt)
+        think._history = []
         trace_llm_search_classify(prompt)
 
     print()
