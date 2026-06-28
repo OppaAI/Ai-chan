@@ -16,7 +16,12 @@
             "is this bug caused by the threshold or the prompt examples",
             "what's your take on this",
             "I'm not sure how I feel about this",
-            "just wanted to talk through something with you"
+            "just wanted to talk through something with you",
+            "what's the difference between X and Y",
+            "tell me something interesting about X",
+            "how would you approach building X",
+            "what are the tradeoffs of X vs Y",
+            "explain X to me"
         ],
         "agentic": [
             "search for information about this online",
@@ -41,7 +46,12 @@
             "create this file for me",
             "look up this changelog and tell me what changed",
             "check the release notes and summarize what's new",
-            "find the latest changelog entry for this project"
+            "find the latest changelog entry for this project",
+            "debug this: why would X hang forever",
+            "compare X vs Y for local inference",
+            "open X file and show me Y",
+            "search for the latest version of X",
+            "is there a new release of X"
         ]
     },
     "tools": {
