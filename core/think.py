@@ -340,10 +340,16 @@ class AikoThink:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
-                    "Route message. Labels: chat, research, planning, writing, coding, "
-                    "architecture, decision, reminder, ongoing_task. "
-                    "Use architecture for requests to inspect, read, debug, or improve "
-                    "Aiko's own codebase/repository. Reply one label only.\n"
+                    "Classify this message into exactly one label. Reply with the label only, no punctuation.\n"
+                    "chat: greetings, opinions, jokes, feelings, explanations from existing knowledge\n"
+                    "research: requests to search, look up, find, or investigate any topic online\n"
+                    "reminder: set a reminder, alarm, or schedule something at a specific time\n"
+                    "planning: make a plan, break a goal into steps, or create a checklist\n"
+                    "coding: fix, implement, debug, or write code or scripts\n"
+                    "writing: draft a message, email, note, story, or document\n"
+                    "decision: compare options or help choose between alternatives\n"
+                    "architecture: ONLY for inspecting or modifying Aiko's own source code files\n"
+                    "ongoing_task: continue or update a previously started task\n"
                     f"Message: {user_input!r}"
                 )}],
                 stream=False, max_tokens=8, temperature=0.0, timeout=LLM_TIMEOUT,
@@ -355,7 +361,6 @@ class AikoThink:
                 "architecture", "decision", "reminder", "ongoing_task",
             }:
                 return label
-            self._route_chat_classified = user_input
             return "chat"
         except Exception as e:
             log.warning("Intent routing failed: %s", e)
@@ -673,14 +678,19 @@ class AikoThink:
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
                     f'{context_block}Message: "{user_input}"\n\n'
-                    f'Is this asking for factual external data, or conversational?\n'
-                    f'If data, resolve pronouns into a search query.\n'
+                    f'Does this require external/live data (scores, prices, weather, news) or is it conversational?\n'
+                    f'If data, resolve pronouns into a concise 3-8 word search query.\n'
                     f'Reply EXACTLY:\ndata|<search query>\nor:\nsocial|none'
                 )}],
                 stream=False, max_tokens=32, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")
+            
+            resolved = rest.strip().split('\n')[0].strip('*_`()').strip()[:100]
+            if not resolved or resolved.lower() in ("none", "<search query>"):
+                resolved = user_input
+
             is_data = "data" in label.strip().lower()
             resolved = rest.strip() if (is_data and rest and rest.lower() != "none") else user_input
             return is_data, resolved

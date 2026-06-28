@@ -200,6 +200,7 @@ class AikoTUI:
             'tok_s':      0.0,
             'asr_on':     not no_voice,
             'tts_on':     not no_voice,
+            'latency':    {},
         }
 
         init_colours()
@@ -423,12 +424,33 @@ class AikoTUI:
         up_str   = f"↑ {_fmt_uptime(time.time() - self._ts)}"
 
         segments = [mode_str, ram_str, db_str, tok_str, toks_str, up_str]
+        latency = s.get('latency') or {}
+        voice_to_audio = latency.get("voice_end_to_first_audio")
+        if voice_to_audio and voice_to_audio != "n/a":
+            segments.append(f"V->A {voice_to_audio}")
+
         sep      = "  │  "
-        built    = ""
-        for seg in segments:
-            candidate = (built + sep + seg) if built else ("  " + seg)
+        if voice_to_audio and voice_to_audio != "n/a":
+            latency_seg = segments.pop()
+            candidate_sets = [
+                segments + [latency_seg],
+                [mode_str, ram_str, tok_str, toks_str, latency_seg],
+                [mode_str, tok_str, toks_str, latency_seg],
+                [mode_str, toks_str, latency_seg],
+                [mode_str, latency_seg],
+                [latency_seg],
+            ]
+        else:
+            candidate_sets = [segments]
+
+        built = ""
+        for candidate_segments in candidate_sets:
+            candidate = "  " + sep.join(candidate_segments)
             if len(candidate) + 2 <= rw:
                 built = candidate
+                break
+        if not built:
+            built = "  " + sep.join(segments)
 
         bar = built.ljust(rw - 1)
         try:    self._scr.addstr(row, rx, bar[:rw - 1], attr)
@@ -702,6 +724,11 @@ class AikoTUI:
         with self._lock:
             self._stats['turn_start'] = time.time()
             self._stats['turn_tok']   = 0
+
+    def set_latency_stats(self, stats: dict):
+        """Update the last-turn latency counters shown in the vitals bar."""
+        with self._lock:
+            self._stats['latency'] = dict(stats or {})
 
     # ── text input ────────────────────────────────────────────────────────────
 
