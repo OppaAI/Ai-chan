@@ -333,19 +333,30 @@ class AikoThink:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
-                    "Classify this message into exactly one label. Reply with the label only, no punctuation.\n"
-                    "chat: greetings, opinions, jokes, feelings, explanations from existing knowledge\n"
-                    "research: requests to search, look up, find, or investigate any topic online\n"
-                    "reminder: set a reminder, alarm, or schedule something at a specific time\n"
-                    "planning: make a plan, break a goal into steps, or create a checklist\n"
-                    "coding: fix, implement, debug, or write code or scripts\n"
-                    "writing: draft a message, email, note, story, or document\n"
-                    "decision: compare options or help choose between alternatives\n"
-                    "architecture: ONLY for inspecting or modifying Aiko's own source code files\n"
-                    "ongoing_task: continue or update a previously started task\n"
-                    f"Message: {user_input!r}"
+                    "Output only the label. No explanation.\n"
+                    "Labels: [chat, research, reminder, planning, coding, writing, decision, architecture, ongoing_task]\n\n"
+                    "Message: 'set a reminder for 9pm'\n"
+                    "Label: reminder\n\n"
+                    "Message: 'write an email to my landlord'\n"
+                    "Label: writing\n\n"
+                    "Message: 'debug why asyncio.run() hangs'\n"
+                    "Label: coding\n\n"
+                    "Message: 'make a plan to learn Japanese'\n"
+                    "Label: planning\n\n"
+                    "Message: 'search for latest llama.cpp release'\n"
+                    "Label: research\n\n"
+                    "Message: 'compare ollama vs llama.cpp'\n"
+                    "Label: decision\n\n"
+                    "Message: 'open soul.md and show the persona block'\n"
+                    "Label: architecture\n\n"
+                    "Message: 'continue working on the reflection script'\n"
+                    "Label: ongoing_task\n\n"
+                    "Message: 'what do you think about minimalism'\n"
+                    "Label: chat\n\n"
+                    f"Message: {user_input!r}\n"
+                    "Label:"
                 )}],
-                stream=False, max_tokens=8, temperature=0.0, timeout=LLM_TIMEOUT,
+                stream=False, max_tokens=6, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -647,12 +658,25 @@ class AikoThink:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
-                    f'{context_block}Message: "{user_input}"\n\n'
-                    f'Does this require external/live data (scores, prices, weather, news) or is it conversational?\n'
-                    f'If data, resolve pronouns into a concise 3-8 word search query.\n'
-                    f'Reply EXACTLY:\ndata|<search query>\nor:\nsocial|none'
+                    "Output only one of these two formats, nothing else:\n"
+                    "data|<3-5 word search query>\n"
+                    "social|none\n\n"
+                    "Message: 'what's the weather in Vancouver'\n"
+                    "Output: data|current weather Vancouver\n\n"
+                    "Message: 'who won the NHL game last night'\n"
+                    "Output: data|NHL game results last night\n\n"
+                    "Message: 'what's the latest llama.cpp version'\n"
+                    "Output: data|llama.cpp latest stable version\n\n"
+                    "Message: 'write an email to my landlord'\n"
+                    "Output: social|none\n\n"
+                    "Message: 'explain how attention works'\n"
+                    "Output: social|none\n\n"
+                    "Message: 'what do you think about crows'\n"
+                    "Output: social|none\n\n"
+                    f"Message: {user_input!r}\n"
+                    "Output:"
                 )}],
-                stream=False, max_tokens=32, temperature=0.0, timeout=LLM_TIMEOUT,
+                stream=False, max_tokens=16, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")

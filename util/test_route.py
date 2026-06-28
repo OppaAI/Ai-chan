@@ -137,110 +137,56 @@ def trace_stage(
 
     return best_label, best_score
 
-# ── LLM tracer ────────────────────────────────────────────────────────────────
+# ── LLM tracer — delegates to think's real methods, no prompt duplication ─────
 
-def trace_llm_router(user_input: str) -> str | None:
-    """
-    Fire the real _classify_agent_intent prompt against llama-server and show
-    the raw reply + parsed label.
-    """
+def _ensure_llm_client() -> bool:
+    """Patch a real OpenAI client onto think. Returns False if unavailable."""
+    if getattr(think, "_client", None) is not None and not isinstance(think._client, MagicMock):
+        return True
     client = _get_llm_client()
     if client is None:
+        return False
+    think._client       = client
+    think._router_model = ROUTER_MODEL
+    think._llm_model    = LLM_MODEL
+    return True
+
+def trace_llm_router(user_input: str) -> str | None:
+    """Call think._classify_agent_intent — the exact production code path."""
+    if not _ensure_llm_client():
         return None
 
     print(f"\n{BOLD}▶ LLM classifier  (ROUTER_MODEL={ROUTER_MODEL}){RESET}")
-
-    system_prompt = (
-        "Classify this message into exactly one label. Reply with the label only, no punctuation.\n"
-        "chat: greetings, opinions, jokes, feelings, explanations from existing knowledge\n"
-        "research: requests to search, look up, find, or investigate any topic online\n"
-        "reminder: set a reminder, alarm, or schedule something at a specific time\n"
-        "planning: make a plan, break a goal into steps, or create a checklist\n"
-        "coding: fix, implement, debug, or write code or scripts\n"
-        "writing: draft a message, email, note, story, or document\n"
-        "decision: compare options or help choose between alternatives\n"
-        "architecture: ONLY for inspecting or modifying Aiko's own source code files\n"
-        "ongoing_task: continue or update a previously started task\n"
-        f"Message: {user_input!r}"
-    )
-
-    import re, time
+    import time
     t0 = time.monotonic()
     try:
-        resp = client.chat.completions.create(
-            model=ROUTER_MODEL,
-            messages=[{"role": "user", "content": system_prompt}],
-            stream=False,
-            max_tokens=8,
-            temperature=0.0,
-            timeout=LLM_TIMEOUT,
-        )
+        result  = think._classify_agent_intent(user_input)
         elapsed = time.monotonic() - t0
-        raw = (resp.choices[0].message.content or "").strip()
-        label = re.sub(r"[^a-z_].*$", "", raw.lower())
-
-        valid_labels = {
-            "research", "planning", "writing", "coding",
-            "architecture", "decision", "reminder", "ongoing_task", "chat",
-        }
-        resolved = label if label in valid_labels else "chat"
-        color    = GREEN if resolved != "chat" else CYAN
-
-        print(f"\n  raw reply  : {BOLD}{raw!r}{RESET}")
-        print(f"  parsed     : {color}{resolved}{RESET}")
+        color   = GREEN if result != "chat" else CYAN
+        print(f"\n  parsed     : {color}{result}{RESET}")
         print(f"  latency    : {elapsed*1000:.0f} ms")
-        return resolved
-
+        return result
     except Exception as e:
         print(f"\n  {RED}LLM call failed: {e}{RESET}")
         return None
 
-
 def trace_llm_search_classify(user_input: str) -> tuple[bool, str] | None:
-    """
-    Fire the real _classify_and_resolve prompt and show data/social decision
-    plus the resolved search query.
-    """
-    client = _get_llm_client()
-    if client is None:
+    """Call think._classify_and_resolve — the exact production code path."""
+    if not _ensure_llm_client():
         return None
 
     print(f"\n{BOLD}▶ LLM search classifier  (_classify_and_resolve){RESET}")
-
-    prompt = (
-        f'Message: "{user_input}"\n\n'
-        f'Does this require external/live data (scores, prices, weather, news) or is it conversational?\n'
-        f'If data, resolve pronouns into a concise 3-8 word search query.\n'
-        f'Reply EXACTLY:\ndata|<search query>\nor:\nsocial|none'
-    )
-
     import time
     t0 = time.monotonic()
     try:
-        resp = client.chat.completions.create(
-            model=ROUTER_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            stream=False,
-            max_tokens=32,
-            temperature=0.0,
-            timeout=LLM_TIMEOUT,
-        )
+        is_data, query = think._classify_and_resolve(user_input)
         elapsed = time.monotonic() - t0
-        answer  = resp.choices[0].message.content.strip()
-        label, _, rest = answer.partition("|")
-        is_data  = "data" in label.strip().lower()
-        resolved = rest.strip().split('\n')[0].strip('*_`()').strip()[:100]
-        if not resolved or resolved.lower() in ("none", "<search query>"):
-            resolved = user_input
-
-        color = GREEN if is_data else CYAN
-        print(f"\n  raw reply  : {BOLD}{answer!r}{RESET}")
-        print(f"  decision   : {color}{'data' if is_data else 'social'}{RESET}")
+        color   = GREEN if is_data else CYAN
+        print(f"\n  decision   : {color}{'data' if is_data else 'social'}{RESET}")
         if is_data:
-            print(f"  query      : {CYAN}{resolved!r}{RESET}")
+            print(f"  query      : {CYAN}{query!r}{RESET}")
         print(f"  latency    : {elapsed*1000:.0f} ms")
-        return is_data, resolved
-
+        return is_data, query
     except Exception as e:
         print(f"\n  {RED}LLM call failed: {e}{RESET}")
         return None
