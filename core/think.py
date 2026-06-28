@@ -333,6 +333,7 @@ class AikoThink:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
+                    f"Message: {user_input!r}\n\n"
                     "Output only the label. No explanation.\n"
                     "Labels: [chat, research, reminder, planning, coding, writing, decision, architecture, ongoing_task]\n\n"
                     "Message: 'set a reminder for 9pm'\n"
@@ -353,11 +354,9 @@ class AikoThink:
                     "Label: ongoing_task\n\n"
                     "Message: 'what do you think about minimalism'\n"
                     "Label: chat\n\n"
-                    f"Message: {user_input!r}\n"
                     "Label:"
                 )}],
                 stream=False, max_tokens=6, temperature=0.0, timeout=LLM_TIMEOUT,
-                extra_body={"cache_prompt": False},
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -659,6 +658,7 @@ class AikoThink:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
+                    f"Message: {user_input!r}\n\n"
                     "Output only one of these two formats, nothing else:\n"
                     "data|<3-5 word search query>\n"
                     "social|none\n\n"
@@ -674,11 +674,9 @@ class AikoThink:
                     "Output: social|none\n\n"
                     "Message: 'what do you think about crows'\n"
                     "Output: social|none\n\n"
-                    f"Message: {user_input!r}\n"
                     "Output:"
                 )}],
                 stream=False, max_tokens=16, temperature=0.0, timeout=LLM_TIMEOUT,
-                extra_body={"cache_prompt": False},
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")
