@@ -193,6 +193,8 @@ class AikoThink:
             self._active_turn.clear()
 
     def _route_intent(self, user_input: str) -> str:
+        self._pending_search_query = None  # ← reset first, always
+
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
             return "chat"
 
@@ -200,7 +202,6 @@ class AikoThink:
             label = self._classify_agent_intent(user_input)
             if label != "chat":
                 return label
-            # still need to check websearch even in llm mode
             self._pending_search_query = user_input if self._needs_websearch(user_input) else None
             return "chat"
 
