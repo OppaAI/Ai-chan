@@ -266,11 +266,8 @@ def _run_session(tui, args):
     def _fmt_latency(value: float | None) -> str:
         return "n/a" if value is None else f"{value:.3f}s"
 
-    def _log_latency(timing: dict) -> None:
-        if not LATENCY_LOG_ENABLED:
-            return
-        mode = timing.get("mode", "text")
-        parts = {
+    def _latency_parts(timing: dict) -> dict:
+        return {
             "voice_end_to_submit": _latency_seconds(timing, "voice_recording_stopped_at", "submitted_at"),
             "submit_to_first_token": _latency_seconds(timing, "submitted_at", "first_assistant_token_at"),
             "submit_to_assistant_done": _latency_seconds(timing, "submitted_at", "assistant_done_at"),
@@ -279,6 +276,24 @@ def _run_session(tui, args):
             "submit_to_first_audio": _latency_seconds(timing, "submitted_at", "first_audio_at"),
             "submit_to_turn_done": _latency_seconds(timing, "submitted_at", "turn_done_at"),
         }
+
+    def _update_latency_stats(timing: dict) -> None:
+        if not hasattr(tui, "set_latency_stats"):
+            return
+        parts = _latency_parts(timing)
+        tui.set_latency_stats({
+            "voice_end_to_submit": _fmt_latency(parts["voice_end_to_submit"]),
+            "submit_to_first_token": _fmt_latency(parts["submit_to_first_token"]),
+            "submit_to_assistant_done": _fmt_latency(parts["submit_to_assistant_done"]),
+            "assistant_done_to_first_audio": _fmt_latency(parts["assistant_done_to_first_audio"]),
+            "submit_to_first_audio": _fmt_latency(parts["submit_to_first_audio"]),
+        })
+
+    def _log_latency(timing: dict) -> None:
+        if not LATENCY_LOG_ENABLED:
+            return
+        mode = timing.get("mode", "text")
+        parts = _latency_parts(timing)
         log.info(
             "[latency] mode=%s voice_end→submit=%s submit→first_token=%s "
             "submit→assistant_done=%s assistant_done→first_audio=%s "
@@ -535,7 +550,9 @@ def _run_session(tui, args):
         if speak and tts_enabled:
             speak.wait()
         current_latency["turn_done_at"] = time.monotonic()
+        _update_latency_stats(current_latency)
         _log_latency(current_latency)
+        tui._draw()
         current_latency = None
 
 

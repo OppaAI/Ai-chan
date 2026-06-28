@@ -200,6 +200,7 @@ class AikoTUI:
             'tok_s':      0.0,
             'asr_on':     not no_voice,
             'tts_on':     not no_voice,
+            'latency':    {},
         }
 
         init_colours()
@@ -423,6 +424,20 @@ class AikoTUI:
         up_str   = f"↑ {_fmt_uptime(time.time() - self._ts)}"
 
         segments = [mode_str, ram_str, db_str, tok_str, toks_str, up_str]
+        latency = s.get('latency') or {}
+        latency_segments = [
+            ("V→S", latency.get("voice_end_to_submit")),
+            ("S→T", latency.get("submit_to_first_token")),
+            ("S→D", latency.get("submit_to_assistant_done")),
+            ("D→A", latency.get("assistant_done_to_first_audio")),
+            ("S→A", latency.get("submit_to_first_audio")),
+        ]
+        latency_str = "  ".join(
+            f"{label} {value}" for label, value in latency_segments if value
+        )
+        if latency_str:
+            segments.append(latency_str)
+
         sep      = "  │  "
         built    = ""
         for seg in segments:
@@ -702,6 +717,11 @@ class AikoTUI:
         with self._lock:
             self._stats['turn_start'] = time.time()
             self._stats['turn_tok']   = 0
+
+    def set_latency_stats(self, stats: dict):
+        """Update the last-turn latency counters shown in the vitals bar."""
+        with self._lock:
+            self._stats['latency'] = dict(stats or {})
 
     # ── text input ────────────────────────────────────────────────────────────
 
