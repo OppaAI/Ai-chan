@@ -21,7 +21,11 @@
             "tell me something interesting about X",
             "how would you approach building X",
             "what are the tradeoffs of X vs Y",
-            "explain X to me"
+            "explain X to me",
+            "why does X exist",
+            "why does Python have the GIL",
+            "how does X work internally",
+            "what is the purpose of X"
         ],
         "agentic": [
             "search for information about this online",
@@ -51,7 +55,11 @@
             "compare X vs Y for local inference",
             "open X file and show me Y",
             "search for the latest version of X",
-            "is there a new release of X"
+            "is there a new release of X",
+            "write a short email to my landlord about X",
+            "draft a message to X about Y",
+            "can you look something up for me",
+            "open soul.md and show me the persona block"
         ]
     },
     "tools": {
@@ -59,7 +67,11 @@
             "search for information about this and summarize it",
             "look up the latest documentation and summarize it",
             "find out what this is and report back",
-            "look this up online and give me the findings"
+            "look this up online and give me the findings",
+            "what is the latest stable version of X",
+            "is there a new JetPack release for Orin",
+            "check the latest release of this project",
+            "find out what version of X is current"
         ],
         "planning": [
             "make a plan for this project",
@@ -75,7 +87,9 @@
             "prepare a document from this",
             "draft a readme for this project",
             "write documentation for this module",
-            "prepare release notes for this version"
+            "prepare release notes for this version",
+            "write a short email to my landlord about the broken heater",
+            "draft a message to my manager about X"
         ],
         "coding": [
             "fix this bug in my code",
@@ -83,25 +97,33 @@
             "help me write this function",
             "write a script that does this",
             "code this up for me",
-            "implement this in python"
+            "implement this in python",
+            "debug why asyncio.run hangs forever",
+            "why would this function hang"
         ],
         "architecture": [
             "open your codebase and show me this file",
             "inspect Aiko source files and explain the route flow",
             "search your repository for this function",
-            "read your source code and explain this part"
+            "read your source code and explain this part",
+            "open soul.md and show me the persona block",
+            "open think.py and show me the routing logic"
         ],
         "decision": [
             "evaluate these options and recommend one",
             "help me decide between these choices",
             "compare these two tools for my use case",
             "which should I use for my project",
-            "evaluate X vs Y and give me a recommendation"
+            "evaluate X vs Y and give me a recommendation",
+            "compare ollama vs llama.cpp for local inference",
+            "compare fastembed vs sentence-transformers"
         ],
         "reminder": [
             "remind me to do this tomorrow",
             "set an alarm for this time",
-            "wake me up at six"
+            "wake me up at six",
+            "remind me to take my meds at 9pm",
+            "set a timer for 30 minutes"
         ],
         "ongoing_task": [
             "continue the task we were working on",
@@ -117,7 +139,13 @@
             "I want to talk about something personal",
             "can you help me understand this",
             "why are my embedding scores so close",
-            "explain why semantic routing can be ambiguous"
+            "explain why semantic routing can be ambiguous",
+            "tell me something interesting about crows",
+            "what do you think about minimalism",
+            "why does Python have the GIL",
+            "how does attention work in transformers",
+            "explain CUDA unified memory to me",
+            "what's the difference between TCP and UDP"
         ],
         "data": [
             "what is the weather today",
@@ -129,7 +157,10 @@
             "find current facts and cite the source",
             "what is this tool and what does it do",
             "tell me about this technology",
-            "what is this software"
+            "what is this software",
+            "what is the current price of RTX 5090",
+            "is there a new JetPack release for Orin",
+            "what's the latest stable version of llama.cpp"
         ]
     }
 }
