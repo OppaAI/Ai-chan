@@ -145,7 +145,12 @@
             "why does Python have the GIL",
             "how does attention work in transformers",
             "explain CUDA unified memory to me",
-            "what's the difference between TCP and UDP"
+            "what's the difference between TCP and UDP",
+            "debug why asyncio.run hangs forever",
+            "help me think through this",
+            "what should I do next",
+            "how would you approach building X",
+            "what are the tradeoffs of X vs Y"
         ],
         "data": [
             "what is the weather today",
