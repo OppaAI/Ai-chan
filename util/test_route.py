@@ -178,24 +178,64 @@ def trace_llm_search_classify(user_input: str) -> tuple[bool, str] | None:
     if not _ensure_llm_client():
         return None
 
-    # _classify_and_resolve reads _history for context — clear it so previous
-    # traced prompts don't bleed into the current classification
     think._history = []
 
     print(f"\n{BOLD}▶ LLM search classifier  (_classify_and_resolve){RESET}")
+    print(f"  {DIM}client={type(think._client).__name__}  model={think._router_model!r}{RESET}")
     import time
     t0 = time.monotonic()
     try:
-        is_data, query = think._classify_and_resolve(user_input)
+        # call the LLM directly here instead of delegating to _classify_and_resolve
+        # so we can see exactly what's happening without the silent except swallowing it
+        resp = think._client.chat.completions.create(
+            model=think._router_model,
+            messages=[{"role": "user", "content": (
+                f"Message: {user_input!r}\n\n"
+                "Output only one of these two formats, nothing else:\n"
+                "data|<3-5 word search query>\n"
+                "social|none\n\n"
+                "Message: 'what's the weather in Vancouver'\n"
+                "Output: data|current weather Vancouver\n\n"
+                "Message: 'who won the NHL game last night'\n"
+                "Output: data|NHL game results last night\n\n"
+                "Message: 'debug why asyncio.run() hangs'\n"
+                "Output: social|none\n\n"
+                "Message: 'explain how attention works'\n"
+                "Output: social|none\n\n"
+                "Message: 'do you think embeddings are good for memory'\n"
+                "Output: social|none\n\n"
+                "Output:"
+            )}],
+            stream=False, max_tokens=20, temperature=0.0,
+            top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
+        )
         elapsed = time.monotonic() - t0
-        color   = GREEN if is_data else CYAN
+        raw = resp.choices[0].message.content if resp.choices else None
+        print(f"  {DIM}raw response: {raw!r}{RESET}")
+
+        if not raw:
+            print(f"  {RED}empty response from model{RESET}")
+            print(f"  latency    : {elapsed*1000:.0f} ms")
+            return None
+
+        label, _, rest = raw.strip().partition("|")
+        is_data = "data" in label.strip().lower()
+        resolved = rest.strip().split('\n')[0].strip('*_`()').strip()[:100]
+        import re
+        resolved = re.sub(r'\{[^}]*\}', '', resolved).strip()
+        if not resolved or resolved.lower() in ("none", "<search query>", "<3-5 word search query>"):
+            resolved = user_input
+
+        color = GREEN if is_data else CYAN
         print(f"\n  decision   : {color}{'data' if is_data else 'social'}{RESET}")
         if is_data:
-            print(f"  query      : {CYAN}{query!r}{RESET}")
+            print(f"  query      : {CYAN}{resolved!r}{RESET}")
         print(f"  latency    : {elapsed*1000:.0f} ms")
-        return is_data, query
+        return is_data, resolved
+
     except Exception as e:
-        print(f"\n  {RED}LLM call failed: {e}{RESET}")
+        elapsed = time.monotonic() - t0
+        print(f"\n  {RED}LLM call failed ({elapsed*1000:.0f} ms): {e!r}{RESET}")
         return None
 
 # ── full trace ────────────────────────────────────────────────────────────────
