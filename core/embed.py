@@ -100,6 +100,14 @@ class HarrierEmbedder:
             return
 
         import onnxruntime as ort
+
+        from core.silence import silent_stderr
+        with silent_stderr():
+            sess_opts = ort.SessionOptions()
+            sess_opts.log_severity_level = 3  # suppress ort warnings too
+            available = ort.get_available_providers()
+            providers = ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
+            self._session = ort.InferenceSession(str(onnx_path), sess_opts, providers=providers)
         from tokenizers import Tokenizer
 
         snapshot = _find_snapshot(self._cache_dir, self._model_id)
