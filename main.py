@@ -282,11 +282,7 @@ def _run_session(tui, args):
             return
         parts = _latency_parts(timing)
         tui.set_latency_stats({
-            "voice_end_to_submit": _fmt_latency(parts["voice_end_to_submit"]),
-            "submit_to_first_token": _fmt_latency(parts["submit_to_first_token"]),
-            "submit_to_assistant_done": _fmt_latency(parts["submit_to_assistant_done"]),
-            "assistant_done_to_first_audio": _fmt_latency(parts["assistant_done_to_first_audio"]),
-            "submit_to_first_audio": _fmt_latency(parts["submit_to_first_audio"]),
+            "voice_end_to_first_audio": _fmt_latency(parts["voice_end_to_first_audio"]),
         })
 
     def _log_latency(timing: dict) -> None:

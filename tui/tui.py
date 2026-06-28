@@ -425,25 +425,32 @@ class AikoTUI:
 
         segments = [mode_str, ram_str, db_str, tok_str, toks_str, up_str]
         latency = s.get('latency') or {}
-        latency_segments = [
-            ("V→S", latency.get("voice_end_to_submit")),
-            ("S→T", latency.get("submit_to_first_token")),
-            ("S→D", latency.get("submit_to_assistant_done")),
-            ("D→A", latency.get("assistant_done_to_first_audio")),
-            ("S→A", latency.get("submit_to_first_audio")),
-        ]
-        latency_str = "  ".join(
-            f"{label} {value}" for label, value in latency_segments if value
-        )
-        if latency_str:
-            segments.append(latency_str)
+        voice_to_audio = latency.get("voice_end_to_first_audio")
+        if voice_to_audio and voice_to_audio != "n/a":
+            segments.append(f"V->A {voice_to_audio}")
 
         sep      = "  │  "
-        built    = ""
-        for seg in segments:
-            candidate = (built + sep + seg) if built else ("  " + seg)
+        if voice_to_audio and voice_to_audio != "n/a":
+            latency_seg = segments.pop()
+            candidate_sets = [
+                segments + [latency_seg],
+                [mode_str, ram_str, tok_str, toks_str, latency_seg],
+                [mode_str, tok_str, toks_str, latency_seg],
+                [mode_str, toks_str, latency_seg],
+                [mode_str, latency_seg],
+                [latency_seg],
+            ]
+        else:
+            candidate_sets = [segments]
+
+        built = ""
+        for candidate_segments in candidate_sets:
+            candidate = "  " + sep.join(candidate_segments)
             if len(candidate) + 2 <= rw:
                 built = candidate
+                break
+        if not built:
+            built = "  " + sep.join(segments)
 
         bar = built.ljust(rw - 1)
         try:    self._scr.addstr(row, rx, bar[:rw - 1], attr)
