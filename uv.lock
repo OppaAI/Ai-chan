@@ -18,7 +18,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "ninja" },
     { name = "numpy" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64'" },
+    { name = "onnxruntime-gpu" },
     { name = "openai" },
     { name = "packaging" },
     { name = "protobuf" },
@@ -48,7 +48,8 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.21.0" },
     { name = "ninja", specifier = ">=1.13.0" },
     { name = "numpy", specifier = "<2" },
-    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64'", specifier = "==1.24.4" },
+    { name = "onnxruntime-gpu", path = "onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64'", path = "onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl" },
     { name = "openai", specifier = ">=2.43.0" },
     { name = "packaging", specifier = ">=26.2" },
     { name = "protobuf", specifier = ">=6.33.6" },
@@ -783,7 +784,7 @@ wheels = [
 [[package]]
 name = "onnxruntime-gpu"
 version = "1.24.4"
-source = { registry = "https://pypi.org/simple/" }
+source = { path = "onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl" }
 dependencies = [
     { name = "flatbuffers" },
     { name = "numpy" },
@@ -792,9 +793,23 @@ dependencies = [
     { name = "sympy" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d0/2c/5b3fd4748cf7ed291eae541a37e426efc20ea04cb6e6a05768304ab0aa41/onnxruntime_gpu-1.24.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:eb0e38f0c1ef3b76ae0081c8e51eed20dd8925aa916f0fc6f9b8b17d05610e99", size = 252765531, upload-time = "2026-03-17T22:03:57.528Z" },
-    { url = "https://files.pythonhosted.org/packages/f2/86/70cecfdab1e963cc7f8c11e72040dfcd5cff85b1de2de74deba9611e0059/onnxruntime_gpu-1.24.4-cp312-cp312-win_amd64.whl", hash = "sha256:da5c1e327d8e119a831be2790e69f93cf6daab9145ed0aca7577f412a620f709", size = 207197978, upload-time = "2026-03-17T21:58:38.43Z" },
+    { filename = "onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl", hash = "sha256:c26f2fec8a296ff6b13f3c7ebe3caf6e5357f98061b1e082a040835b6a6382f5" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "flatbuffers" },
+    { name = "numpy", specifier = ">=1.21.6" },
+    { name = "nvidia-cuda-nvrtc-cu13", marker = "extra == 'cuda'", specifier = "~=13.0" },
+    { name = "nvidia-cuda-runtime-cu13", marker = "extra == 'cuda'", specifier = "~=13.0" },
+    { name = "nvidia-cudnn-cu13", marker = "extra == 'cudnn'", specifier = "~=9.0" },
+    { name = "nvidia-cufft-cu13", marker = "extra == 'cuda'", specifier = "~=12.0" },
+    { name = "nvidia-curand-cu13", marker = "extra == 'cuda'", specifier = "~=10.0" },
+    { name = "packaging" },
+    { name = "protobuf" },
+    { name = "sympy" },
+]
+provides-extras = ["cuda", "cudnn"]
 
 [[package]]
 name = "openai"

@@ -31,6 +31,7 @@ dependencies = [
     "trafilatura>=2.1.0",
     "websockets>=16.0",
     "psutil>=7.2.2",
+    "onnxruntime-gpu",
 ]
 
 [tool.uv]
@@ -44,6 +45,4 @@ name = "pypi"
 url = "https://pypi.org/simple/"
 
 [tool.uv.sources]
-onnxruntime-gpu = [
-    { path = "./onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" }
-]
+onnxruntime-gpu = { path = "onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'"}
