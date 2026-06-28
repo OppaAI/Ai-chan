@@ -362,9 +362,21 @@ class AikoThink:
                     "Label: ongoing_task\n\n"
                     "Message: 'which is better for X, option A or option B'\n"
                     "Label: decision\n\n"
+                    "Message: 'give me a roadmap for integrating MioTTS into AIVA'\n"
+                    "Label: planning\n\n"
+                    "Message: 'give me a roadmap for setting up ROS2 on the Jetson'\n"
+                    "Label: planning\n\n"
+                    "Message: 'pick up where we left off on the memory consolidation refactor'\n"
+                    "Label: ongoing_task\n\n"
+                    "Message: 'pick up where we left off on the sshfs uid mapping fix'\n"
+                    "Label: ongoing_task\n\n"
+                    "Message: 'is it weird that I find debugging more satisfying than writing features'\n"
+                    "Label: chat\n\n"
+                    "Message: 'which quantization level is better for bilingual TTS quality'\n"
+                    "Label: decision\n\n"
                     "Label:"
                 )}],
-                stream=False, max_tokens=6, temperature=0.0, timeout=LLM_TIMEOUT,
+                stream=False, max_tokens=6, temperature=0.0, top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -696,6 +708,10 @@ class AikoThink:
                     "Output: social|none\n\n"
                     "Message: 'write an email to my landlord'\n"
                     "Output: social|none\n\n"
+                    "Message: 'should I use X or Y for Z'\n"
+                    "Output: social|none\n\n"
+                    "Message: 'which option is better for my use case'\n"
+                    "Output: social|none\n\n"
                     "Message: 'what's the weather in Vancouver'\n"
                     "Output: data|current weather Vancouver\n\n"
                     "Message: 'who won the NHL game last night'\n"
@@ -707,7 +723,7 @@ class AikoThink:
                     f"{context_block}"
                     "Output:"
                 )}],
-                stream=False, max_tokens=12, temperature=0.0, timeout=LLM_TIMEOUT,
+                stream=False, max_tokens=20, temperature=0.0, top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")
