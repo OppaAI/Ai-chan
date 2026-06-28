@@ -9,9 +9,10 @@ dependencies = [
     "coloredlogs>=15.0.1",
     "flatbuffers>=25.12.19",
     "huggingface-hub>=1.21.0",
+    "ninja>=1.13.0",
     "numpy>=2.4.6",
-    "onnxruntime==1.24.4",
-    "onnxruntime-gpu>=1.27.0.dev0",
+    "onnxruntime-gpu==1.24.4; platform_machine == 'x86_64'",
+    "onnxruntime>=1.24.4; platform_machine == 'aarch64'",
     "openai>=2.43.0",
     "packaging>=26.2",
     "protobuf>=6.33.6",
@@ -25,23 +26,18 @@ dependencies = [
     "sqlite-vec>=0.1.9",
     "sympy>=1.14.0",
     "tokenizers>=0.23.1",
-    "torch>=2.11.0",
-    "torchaudio>=2.11.0",
+    "torch>=2.12.1; platform_machine == 'x86_64'",
+    "torchaudio>=2.11.0; platform_machine == 'x86_64'",
+    "torchvision>=0.27.1; platform_machine == 'x86_64'",
     "trafilatura>=2.1.0",
     "websockets>=16.0",
 ]
 
 [tool.uv]
-# no override-dependencies needed
-
-[tool.uv.sources]
-onnxruntime-gpu = { index = "ort-cuda-13-nightly" }
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu132"
+default = true
 
 [[tool.uv.index]]
 name = "pypi"
 url = "https://pypi.org/simple/"
-
-[[tool.uv.index]]
-name = "ort-cuda-13-nightly"
-url = "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/"
-explicit = true
