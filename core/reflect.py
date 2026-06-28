@@ -16,7 +16,6 @@ Environment variables required:
 Optional:
   SOUL_PATH           — path to soul.md (default "config/soul.md")
   REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 20)
-  REFLECT_MAX_TURNS   — max chat turns to feed the LLM (default 40)
   REFLECT_TAGS        — comma-separated Hugo tags (default "daily-reflection,ai-journal,aiko")
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
@@ -41,7 +40,6 @@ import requests
 from openai import OpenAI
 
 from core.log import get_logger
-from core.experience import load_chat_turns
 
 log = get_logger(__name__)
 
@@ -59,8 +57,7 @@ _LLM_CLIENT  = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
 
-REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 20))
-REFLECT_MAX_TURNS = int(os.getenv("REFLECT_MAX_TURNS", 40))
+REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 50))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run")
@@ -95,9 +92,6 @@ _DAILY_SUMMARY_UNLOCK = textwrap.dedent("""
 _REFLECTION_USER = textwrap.dedent("""
     Date being summarized: {date_str}
 
-    Chat turns from that day:
-    {turns}
-
     Persistent memory snippets from that day and recent context:
     {snippets}
 
@@ -108,7 +102,24 @@ _REFLECTION_USER = textwrap.dedent("""
 _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
     You are a concise image prompt writer for an anime illustration model.
     Given a short daily summary, write a single vivid scene prompt (under 60 words)
-    describing Aiko and OppaAI together in a moment that captures the day's mood.
+    that captures the day's mood.
+
+    Decide who appears based on what the summary actually describes:
+    - If the summary describes a moment OppaAI and Aiko shared, or something
+      Aiko was present for, depict them together.
+    - If the summary is primarily about OppaAI working, deciding, or going
+      through something on his own, depict OppaAI alone — Aiko's presence
+      can be implied rather than literal (a second mug, a glow from another
+      room, a note left on the desk), but do not force her into the frame.
+
+    Decide lighting and time of day from the overall atmosphere of the
+    summary, and state it explicitly in the prompt:
+    - A tense, exhausted, or late-feeling day: dim, cool-toned lighting
+      (monitor glow, a single desk lamp, dark windows) — not warm light.
+    - A bright, productive, or ordinary working day: natural daylight.
+    - A calm, settled, wind-down mood: warm lamp light is appropriate.
+    Do not default to warm lighting if the mood doesn't support it.
+
     Focus on setting, lighting, and activity — not emotions explicitly.
     Return ONLY the prompt text. No explanation, no quotes, no preamble.
 """).strip()
@@ -137,7 +148,7 @@ def _build_reflection_system() -> str:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def _llm_chat(system: str, user: str, max_tokens: int = 400) -> str:
+def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float = 0.75) -> str:
     resp = _LLM_CLIENT.chat.completions.create(
         model=LLM_MODEL,
         messages=[
@@ -146,27 +157,19 @@ def _llm_chat(system: str, user: str, max_tokens: int = 400) -> str:
         ],
         stream=False,
         max_tokens=max_tokens,
-        temperature=0.75,
+        temperature=temperature,
         timeout=120,
     )
     return (resp.choices[0].message.content or "").strip()
 
 
-def _generate_reflection(snippets: list[str], turns: list[dict], date: datetime) -> str:
+def _generate_reflection(snippets: list[str], date: datetime) -> str:
     bullet_list = "\n".join(f"- {s}" for s in snippets) or "- No memory snippets available."
-    turn_lines = []
-    for turn in turns[:REFLECT_MAX_TURNS]:
-        user = str(turn.get("user", "")).strip().replace("\n", " ")
-        assistant = str(turn.get("assistant", "")).strip().replace("\n", " ")
-        if user or assistant:
-            turn_lines.append(f"- User: {user[:600]}\n  Aiko: {assistant[:600]}")
-    turns_text = "\n".join(turn_lines) or "- No chat turns logged for this day."
     user_prompt = _REFLECTION_USER.format(
         date_str=date.strftime("%Y-%m-%d"),
-        turns=turns_text,
         snippets=bullet_list,
     )
-    return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500)
+    return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500, temperature=0.85)
 
 # ── image generation ──────────────────────────────────────────────────────────
 
@@ -204,8 +207,8 @@ def _generate_image(prose: str) -> Optional[str]:
         payload = {
             "prompt": (
                 f"{scene_prompt}, "
-                "anime illustration, manga style, soft warm lighting, "
-                "clean lineart, flat color, no text, no speech bubbles"
+                "anime illustration, manga style, clean lineart, flat color, "
+                "no text, no speech bubbles"
             ),
             "width": 1024,
             "height": 1024,
@@ -303,46 +306,106 @@ def _get_file_sha(repo: str, path: str, branch: str) -> Optional[str]:
     return None
 
 
-def _push_file(repo_path: str, content_b64: str, commit_msg: str) -> bool:
-    """Create or update any file in the GitHub repo via Contents API."""
+def _push_post_and_image(
+    slug: str,
+    content: str,
+    image_b64: Optional[str],
+    date: datetime,
+) -> bool:
     if not GITHUB_TOKEN or not GITHUB_REPO:
         log.error("GITHUB_TOKEN or GITHUB_REPO not set — skipping push.")
         return False
 
-    payload: dict = {
-        "message": commit_msg,
-        "content": content_b64,
-        "branch":  GITHUB_BRANCH,
-    }
-    existing_sha = _get_file_sha(GITHUB_REPO, repo_path, GITHUB_BRANCH)
-    if existing_sha:
-        payload["sha"] = existing_sha
+    headers = _github_headers()
+    base = f"{_GITHUB_API}/repos/{GITHUB_REPO}"
 
-    url  = f"{_GITHUB_API}/repos/{GITHUB_REPO}/contents/{repo_path}"
-    resp = requests.put(url, headers=_github_headers(), json=payload, timeout=30)
+    # 1. Get current HEAD SHA
+    ref_resp = requests.get(f"{base}/git/ref/heads/{GITHUB_BRANCH}", headers=headers, timeout=15)
+    ref_resp.raise_for_status()
+    head_sha = ref_resp.json()["object"]["sha"]
 
-    if resp.status_code in (200, 201):
-        action = "Updated" if existing_sha else "Created"
-        log.info(f"{action}: {repo_path}")
+    # 2. Get base tree SHA
+    commit_resp = requests.get(f"{base}/git/commits/{head_sha}", headers=headers, timeout=15)
+    commit_resp.raise_for_status()
+    base_tree_sha = commit_resp.json()["tree"]["sha"]
+
+    # 3. Build tree entries
+    tree = []
+
+    # Markdown post (text blob)
+    tree.append({
+        "path": f"{HUGO_CONTENT_PATH}/{slug}.md",
+        "mode": "100644",
+        "type": "blob",
+        "content": content,  # raw string, GitHub encodes it
+    })
+
+    # Image (binary blob — must pre-create blob)
+    if image_b64:
+        blob_resp = requests.post(
+            f"{base}/git/blobs",
+            headers=headers,
+            json={"content": image_b64, "encoding": "base64"},
+            timeout=30,
+        )
+        blob_resp.raise_for_status()
+        image_blob_sha = blob_resp.json()["sha"]
+        tree.append({
+            "path": f"{HUGO_IMAGES_PATH}/{slug}.png",
+            "mode": "100644",
+            "type": "blob",
+            "sha": image_blob_sha,
+        })
+
+    # 4. Create tree
+    tree_resp = requests.post(
+        f"{base}/git/trees",
+        headers=headers,
+        json={"base_tree": base_tree_sha, "tree": tree},
+        timeout=30,
+    )
+    tree_resp.raise_for_status()
+    new_tree_sha = tree_resp.json()["sha"]
+
+    # 5. Create commit
+    commit_msg = f"feat(reflect): daily reflection {date.strftime('%Y-%m-%d')}"
+    new_commit_resp = requests.post(
+        f"{base}/git/commits",
+        headers=headers,
+        json={"message": commit_msg, "tree": new_tree_sha, "parents": [head_sha]},
+        timeout=30,
+    )
+    new_commit_resp.raise_for_status()
+    new_commit_sha = new_commit_resp.json()["sha"]
+
+    # 6. Update branch ref
+    update_resp = requests.patch(
+        f"{base}/git/refs/heads/{GITHUB_BRANCH}",
+        headers=headers,
+        json={"sha": new_commit_sha},
+        timeout=15,
+    )
+    if update_resp.status_code in (200, 201):
+        log.info(f"Pushed single commit: {slug} + image → {GITHUB_BRANCH}")
         return True
     else:
-        log.error(f"GitHub push failed {resp.status_code}: {resp.text[:300]}")
+        log.error(f"Ref update failed {update_resp.status_code}: {update_resp.text[:300]}")
         return False
 
+# ── faithful daily record (non-LLM, permanent) ────────────────────────────────
 
-def _push_image(slug: str, image_b64: str, date: datetime) -> bool:
-    """Push the generated PNG to static/images/ in the GitHub repo."""
-    repo_path  = f"{HUGO_IMAGES_PATH}/{slug}.png"
-    commit_msg = f"feat(reflect): add reflection image {date.strftime('%Y-%m-%d')}"
-    return _push_file(repo_path, image_b64, commit_msg)
-
-
-def _push_post(slug: str, content: str, date: datetime) -> bool:
-    """Push the Hugo markdown post to content/posts/ in the GitHub repo."""
-    repo_path  = f"{HUGO_CONTENT_PATH}/{slug}.md"
-    encoded    = base64.b64encode(content.encode()).decode()
-    commit_msg = f"feat(reflect): add daily reflection {date.strftime('%Y-%m-%d')}"
-    return _push_file(repo_path, encoded, commit_msg)
+def build_daily_record(snippets: list[str], date: datetime) -> str:
+    """
+    Build a faithful, non-LLM record of one day's deduplicated memory facts.
+    No paraphrasing, no invention — verbatim facts in chronological order.
+    Meant to be pinned forever as ground truth, separate from the stylized
+    prose reflection.
+    """
+    date_str = date.strftime("%Y-%m-%d")
+    if not snippets:
+        return f"Day record for {date_str}: no memories recorded."
+    header = f"Day record for {date_str}:"
+    return header + "\n" + "\n".join(f"- {s}" for s in snippets)
 
 # ── public API ────────────────────────────────────────────────────────────────
 
@@ -363,7 +426,7 @@ def generate_and_post(
         dry_run:    Generate content but skip GitHub push/pin. Logs output instead.
         memorize:   Optional AikoMemorize instance used to pin the daily summary.
 
-    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, image_generated, pinned}
+    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, image_generated, pinned, record_pinned}
     """
     t_start    = time.perf_counter()
     local_tz   = datetime.now().astimezone().tzinfo
@@ -378,21 +441,14 @@ def generate_and_post(
         if text and text not in seen:
             seen.add(text)
             snippets.append(text)
-        if len(snippets) >= REFLECT_MAX_MEMS:
-            break
-
-    day_start = date.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end   = day_start + timedelta(days=1)
-    turns     = load_chat_turns(day_start, day_end, user_id=os.getenv("USER_ID", "OppaAI"))
 
     log.info(
-        f"Generating daily summary from {len(turns)} chat turns and "
-        f"{len(snippets)} memory snippets..."
+        f"Generating daily summary from {len(snippets)} memory snippets..."
     )
 
     # Step 1: factual prose summary
     try:
-        prose = _generate_reflection(snippets, turns, date)
+        prose = _generate_reflection(snippets, date)
     except Exception as e:
         log.error(f"Reflection generation failed: {e}")
         return {"success": False, "error": str(e)}
@@ -430,9 +486,10 @@ def generate_and_post(
             "prose":           prose,
             "image_generated": image_generated,
             "pinned":          False,
+            "record_pinned":   False,
         }
 
-    # Step 4: pin daily summary to persistent memory. Store a raw curated
+# Step 4: pin daily summary to persistent memory. Store a raw curated
     # summary with a stable prefix so monthly consolidation can replace older
     # daily summaries without relying on another extraction pass.
     pinned = False
@@ -443,27 +500,23 @@ def generate_and_post(
         except Exception as e:
             log.error(f"Daily summary pin failed: {e}")
 
-    # Step 5: push image first (post references it)
-    if image_generated:
-        img_ok = _push_image(slug, image_b64, date)
-        if not img_ok:
-            log.warning("Image push failed — post will render without image.")
-            # rebuild post without image reference
-            _, content = _build_hugo_post(
-                prose=prose,
-                image_slug=None,
-                date=date,
-                write_time=write_time,
-                mem_count=len(snippets),
-            )
+    # Step 4b: pin the faithful fact-list day record — ground truth, separate
+    # from the stylized prose above. Never paraphrased, never invented.
+    record_pinned = False
+    if memorize is not None:
+        try:
+            day_record = build_daily_record(snippets, date)
+            record_pinned = bool(memorize.add_raw(day_record, pinned=True))
+        except Exception as e:
+            log.error(f"Daily record pin failed: {e}")
 
-    # Step 6: push Hugo post
-    success = _push_post(slug, content, date)
+    # Step 5: push image and Hugo post together
+    success = _push_post_and_image(slug, content, image_b64 if image_generated else None, date)
 
     log.info(
         f"{'Done' if success else 'Failed'} — "
         f"slug={slug}, words={_count_words(prose)}, mems={len(snippets)}, "
-        f"image={image_generated}, pinned={pinned}, duration={duration}s"
+        f"image={image_generated}, pinned={pinned}, record_pinned={record_pinned}, duration={duration}s"
     )
 
     return {
@@ -475,4 +528,5 @@ def generate_and_post(
         "prose":           prose,
         "image_generated": image_generated,
         "pinned":          pinned,
+        "record_pinned":   record_pinned,
     }

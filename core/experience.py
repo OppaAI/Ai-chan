@@ -65,3 +65,29 @@ def load_chat_turns(start: datetime, end: datetime, user_id: str | None = None) 
                 continue
             turns.append(record)
     return turns
+
+def trim_experience_log(keep_days: int = 7) -> int:
+    """Remove entries older than keep_days. Returns count of removed lines."""
+    if not EXPERIENCE_LOG_PATH.exists():
+        return 0
+    cutoff = _coerce_utc(datetime.now(timezone.utc) - timedelta(days=keep_days))
+    kept = []
+    removed = 0
+    with EXPERIENCE_LOG_PATH.open("r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+                created_at = _coerce_utc(datetime.fromisoformat(
+                    str(record.get("created_at", "")).replace("Z", "+00:00")
+                ))
+                if created_at >= cutoff:
+                    kept.append(line)
+                else:
+                    removed += 1
+            except Exception:
+                kept.append(line)  # keep malformed lines, don't lose data
+    if removed:
+        tmp = EXPERIENCE_LOG_PATH.with_suffix(".tmp")
+        tmp.write_text("".join(kept), encoding="utf-8")
+        tmp.replace(EXPERIENCE_LOG_PATH)
+    return removed

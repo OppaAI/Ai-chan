@@ -151,15 +151,25 @@ class AikoWakeup:
                 log.error("Memory boot failed: %s", e)
             finally:
                 mem_ready.set()  # always unblock init_think, even on failure
-            if memorize[0] is None:
-                return
-            from core.dream import start as start_dream_scheduler
-            start_dream_scheduler(memorize[0])
 
         t1 = threading.Thread(target=init_think,    daemon=True)
         t2 = threading.Thread(target=init_memorize, daemon=True)
         t1.start(); t2.start()
         t1.join();  t2.join()
+
+        from core.schedule import ScheduleRunner
+        from core.reflect import generate_and_post
+        from core.consolidate import maybe_run_consolidation
+
+        if memorize[0] is None:
+            log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
+
+        ScheduleRunner(
+            on_due=think_ref[0].handle_scheduled_job if think_ref[0] else None,
+            memorize=memorize[0],
+            generate_and_post_fn=generate_and_post,
+            consolidate_fn=maybe_run_consolidation,
+        ).start()
 
         # ── voice subsystems ──────────────────────────────────────────────────
 

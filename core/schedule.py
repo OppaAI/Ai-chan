@@ -12,9 +12,15 @@ A scheduled job is a small local record with:
   - action: announce or agentic
 
 The scheduler is deliberately local-first: jobs are stored in JSON under
-AIKO_WORKSPACE_ROOT and a daemon thread polls for due entries.  It can announce
-or initiate jobs only while Aiko is running on an awake machine.  It does not
-install OS-level cron jobs, wake a sleeping computer, or run after Aiko exits.
+WORKSPACE_ROOT and a single daemon thread sleeps until the next due event.
+It can announce or initiate jobs only while Aiko is running on an awake machine.
+It does not install OS-level cron jobs, wake a sleeping computer, or run after
+Aiko exits.
+
+Two hardcoded system jobs run outside schedule.json and cannot be modified
+by the user:
+  - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
+  - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ import os
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -37,7 +43,12 @@ WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
 SCHEDULE_PATH = Path(os.getenv("SCHEDULE_PATH", WORKSPACE_ROOT / "schedule.json")).resolve()
 LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH", WORKSPACE_ROOT / "reminders.json")).resolve()
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
-POLL_SECONDS = float(os.getenv("SCHEDULE_POLL_SECONDS", 15))
+
+# System job timing — env overridable, not user-modifiable via schedule.json
+DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
+DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
+MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
+MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
 
 FREQUENCIES = {"once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 RELATIVE_DAY_ALIASES = {
@@ -361,14 +372,79 @@ class DueJob:
 
 DueReminder = DueJob
 
+# ── system job timing ─────────────────────────────────────────────────────────
+
+def _next_daily_reflect_and_dream() -> datetime:
+    """Next wall-clock occurrence of the daily reflect+dream window."""
+    tz  = _timezone()
+    now = datetime.now(tz)
+    candidate = now.replace(
+        hour=DAILY_JOB_HOUR,
+        minute=DAILY_JOB_MINUTE,
+        second=0,
+        microsecond=0,
+    )
+    if candidate <= now:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _next_monthly_consolidate() -> datetime:
+    """Next 1st-of-month occurrence of the monthly consolidation window."""
+    tz  = _timezone()
+    now = datetime.now(tz)
+    # advance to next month's 1st
+    if now.month == 12:
+        first = now.replace(year=now.year + 1, month=1, day=1,
+                            hour=MONTHLY_JOB_HOUR, minute=MONTHLY_JOB_MINUTE,
+                            second=0, microsecond=0)
+    else:
+        first = now.replace(month=now.month + 1, day=1,
+                            hour=MONTHLY_JOB_HOUR, minute=MONTHLY_JOB_MINUTE,
+                            second=0, microsecond=0)
+    return first
+
+
+# ── scheduler ─────────────────────────────────────────────────────────────────
 
 class ScheduleRunner:
-    """Background poller that announces due scheduled jobs while Aiko is running."""
+    """
+    Single daemon thread that sleeps until the next due event.
 
-    def __init__(self, on_due: Callable[[DueJob], None] | None = None) -> None:
-        self._on_due = on_due
-        self._stop = threading.Event()
+    Two hardcoded system jobs are managed internally and never written to
+    schedule.json:
+      - daily_reflect_and_dream   every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE
+      - monthly_consolidate       every 1st of month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE
+
+    User reminders and scheduled jobs are read from schedule.json.
+
+    The thread sleeps until the soonest of all targets, waking early only
+    when notify_new_job() is called (e.g. after a new job is registered at
+    runtime).
+    """
+
+    def __init__(
+        self,
+        on_due: Callable[[DueJob], None] | None = None,
+        memorize=None,
+        generate_and_post_fn: Callable | None = None,
+        consolidate_fn: Callable | None = None,
+    ) -> None:
+        self._on_due               = on_due
+        self._memorize             = memorize
+        self._generate_and_post_fn = generate_and_post_fn
+        self._consolidate_fn       = consolidate_fn
+        self._wakeup               = threading.Event()
+        self._stop                 = threading.Event()
         self._thread: threading.Thread | None = None
+
+        # calculated once at startup, updated after each fire
+        self._next_daily   = _next_daily_reflect_and_dream()
+        self._next_monthly = _next_monthly_consolidate()
+
+    def notify_new_job(self) -> None:
+        """Interrupt the sleep early so a newly added job is picked up immediately."""
+        self._wakeup.set()
 
     def start(self) -> None:
         """Start the daemon scheduler thread if it is not already running."""
@@ -376,22 +452,125 @@ class ScheduleRunner:
             return
         self._thread = threading.Thread(target=self._run, name="aiko-schedule", daemon=True)
         self._thread.start()
+        log.info(
+            "Scheduler started — daily_reflect_and_dream at %02d:%02d, "
+            "monthly_consolidate on 1st at %02d:%02d.",
+            DAILY_JOB_HOUR, DAILY_JOB_MINUTE,
+            MONTHLY_JOB_HOUR, MONTHLY_JOB_MINUTE,
+        )
 
     def stop(self) -> None:
         """Request scheduler shutdown."""
         self._stop.set()
+        self._wakeup.set()
 
     def _run(self) -> None:
-        """Poll schedule storage and announce due records."""
         while not self._stop.is_set():
-            try:
-                self._fire_due()
-            except Exception as e:
-                log.error("Schedule runner failed: %s", e)
-            self._stop.wait(POLL_SECONDS)
+            now = datetime.now(_timezone())
 
-    def _fire_due(self) -> None:
-        """Find due jobs, reschedule recurring ones, and disable one-shots."""
+            # ── fire overdue system jobs ──────────────────────────────────────
+            system_due = sorted(
+                [(t, name) for t, name in [
+                    (self._next_daily, "daily"),
+                    (self._next_monthly, "monthly"),
+                ] if t <= now],
+                key=lambda x: x[0],
+            )
+            for target, name in system_due:
+                if name == "daily":
+                    self._run_daily_reflect_and_dream()
+                    self._next_daily = _next_daily_reflect_and_dream()
+                else:
+                    self._run_monthly_consolidate()
+                    self._next_monthly = _next_monthly_consolidate()
+
+            # ── fire overdue user jobs ────────────────────────────────────────
+            self._fire_due_user_jobs()
+
+            # ── sleep until soonest next target ──────────────────────────────
+            user_jobs = [
+                datetime.fromisoformat(j["next_due"])
+                for j in _read_all()
+                if j.get("enabled", True)
+            ]
+            candidates = [self._next_daily, self._next_monthly] + user_jobs
+            next_target = min(candidates)
+
+            delta = (next_target - datetime.now(_timezone())).total_seconds()
+            if delta > 0:
+                log.debug("Scheduler sleeping %.0fs until %s", delta, next_target.isoformat())
+                self._wakeup.wait(timeout=delta)
+                self._wakeup.clear()
+
+    # ── system job runners ────────────────────────────────────────────────────
+
+    def _run_daily_reflect_and_dream(self) -> None:
+        """
+        Hardcoded nightly job. Not in schedule.json. Not user-modifiable.
+
+        Order:
+          1. reflect  — LLM summary + image + GitHub push (reads memories before dream prunes)
+          2. dream    — sqlite-vec consolidation, boost, merge, prune (no LLM)
+        """
+        if not self._memorize or not self._generate_and_post_fn:
+            log.warning("daily_reflect_and_dream: memorize or generate_and_post_fn not set — skipping.")
+            return
+
+        try:
+            log.info("daily_reflect_and_dream: starting.")
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0,
+            )
+
+            # fetch once — both reflect and dream share the same day's memories
+            from core.reflect import REFLECT_MAX_MEMS
+            yesterday_end = yesterday + timedelta(days=1)
+            memories = self._memorize.get_between(yesterday, yesterday_end)
+            log.info("daily_reflect_and_dream: %d memories fetched.", len(memories))
+
+            # reflect gets ctx-safe slice
+            log.info("daily_reflect_and_dream: running reflect...")
+            self._generate_and_post_fn(
+                memories[:REFLECT_MAX_MEMS],
+                date=yesterday,
+                memorize=self._memorize,
+            )
+            log.info("daily_reflect_and_dream: reflect done.")
+
+            # dream gets full set — pure sqlite-vec ops, no ctx concern
+            log.info("daily_reflect_and_dream: running dream...")
+            result = self._memorize.dream()
+            log.info("daily_reflect_and_dream: dream done — %s", result)
+
+            # clean up experience log
+            log.info("daily_reflect_and_dream: trimming experience log...")
+            from core.experience import trim_experience_log
+            trim_experience_log(keep_days=7)
+            log.info("daily_reflect_and_dream: experience log trimmed.")
+
+        except Exception as e:
+            log.error("daily_reflect_and_dream failed: %s", e)
+
+    def _run_monthly_consolidate(self) -> None:
+        """
+        Hardcoded monthly job. Not in schedule.json. Not user-modifiable.
+        Delegates entirely to consolidate.maybe_run_consolidation().
+        """
+        if not self._memorize or not self._consolidate_fn:
+            log.warning("monthly_consolidate: memorize or consolidate_fn not set — skipping.")
+            return
+
+        try:
+            log.info("monthly_consolidate: starting.")
+            result = self._consolidate_fn(self._memorize, now=datetime.now())
+            log.info("monthly_consolidate: done — %s", result)
+        except Exception as e:
+            log.error("monthly_consolidate failed: %s", e)
+
+    # ── user job runner ───────────────────────────────────────────────────────
+
+    def _fire_due_user_jobs(self) -> None:
+        """Find due user jobs, reschedule recurring ones, disable one-shots."""
         jobs = _read_all()
         changed = False
         due_events: list[DueJob] = []
@@ -436,6 +615,8 @@ class ScheduleRunner:
 
         if changed:
             _write_all(jobs)
+
+        # fire sequentially — preserves order and avoids concurrent job side effects
         for event in due_events:
             if self._on_due:
                 self._on_due(event)
