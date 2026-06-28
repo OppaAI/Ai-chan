@@ -224,3 +224,4 @@ __marimo__/
 logs/
 models/
 node_modules/onnxruntime_gpu-*.whl
+node_modules/
