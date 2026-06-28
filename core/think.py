@@ -196,23 +196,26 @@ class AikoThink:
     def _route_intent(self, user_input: str) -> str:
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
             return "chat"
-        if _ROUTE_MODE == "llm":
-            return self._classify_agent_intent(user_input)
 
-        # Stage 1
+        if _ROUTE_MODE == "llm":
+            label = self._classify_agent_intent(user_input)
+            if label != "chat":
+                return label
+            # still need to check websearch even in llm mode
+            self._pending_search_query = user_input if self._needs_websearch(user_input) else None
+            return "chat"
+
+        # Stage 1 — semantic
         if self._is_agentic(user_input):
             # Stage 2a
             return self._classify_agentic_tool(user_input)
 
-        # Stage 2b ambiguity: use LLM only to decide chat vs agentic, NOT to pick a tool
+        # Stage 2b
+        self._pending_search_query = user_input if self._needs_websearch(user_input) else None
         if _ROUTE_MODE != "semantic_only" and self._semantic_binary_is_ambiguous(user_input):
             llm_label = self._classify_agent_intent(user_input)
             if llm_label != "chat":
-                return llm_label  # LLM confirmed agentic + gave tool
-        return "chat"
-
-        if _ROUTE_MODE != "semantic_only" and self._semantic_binary_is_ambiguous(user_input):
-            return self._classify_agent_intent(user_input)
+                return llm_label
         return "chat"
 
     @staticmethod
@@ -248,7 +251,7 @@ class AikoThink:
     def _semantic_binary_is_ambiguous(self, user_input: str) -> bool:
         """Return True when chat and agentic are too close for semantic-only routing."""
         try:
-            _best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES)
+            _best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
             return best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap < _SEMANTIC_ROUTE_MIN_GAP
         except Exception as e:
             log.warning("Binary ambiguity check failed: %s", e)
@@ -258,7 +261,7 @@ class AikoThink:
         """Stage 2a: which agentic tool, called only when agentic is confirmed."""
         try:
             best_label, best_score, gap = self._semantic_best_label(
-                user_input, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH
+                user_input, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_TOOL
             )            
             log.debug("[route/tool] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
             if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_TOOL_MIN_GAP:
@@ -272,14 +275,16 @@ class AikoThink:
     def _needs_websearch(self, user_input: str) -> bool:
         """Stage 2b: does this chat turn need a websearch, called only when chat is confirmed."""
         try:
-            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_SEARCH_EXAMPLES)
+            best_label, best_score, gap = self._semantic_best_label(
+                user_input, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH
+            )
             log.debug("[route/search] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
             return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD and gap >= _SEMANTIC_SEARCH_MIN_GAP
         except Exception as e:
             log.warning("Search intent routing failed: %s", e)
             return False
 
-    def _semantic_all_scores(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> dict[str, float]:
+    def _semantic_all_scores(self, user_input: str, examples_by_label: dict, instruct: str) -> dict[str, float]:
         """Return top-k mean cosine score per label for stable close-vector routing."""
         query_vector = self._normalized_vector(
             self._memorize._mem._embedder.embed_query(user_input, instruct=instruct).tolist()
@@ -300,7 +305,7 @@ class AikoThink:
             scores[label] = sum(strongest) / len(strongest)
         return scores
 
-    def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float, float]:
+    def _semantic_best_label(self, user_input: str, examples_by_label: dict, instruct: str) -> tuple[str, float, float]:
         """Return the best semantic label, its score, and the gap to second best."""
         scores = self._semantic_all_scores(user_input, examples_by_label, instruct)
         if not scores:
@@ -310,7 +315,7 @@ class AikoThink:
         gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
         return best_label, best_score, gap
 
-    def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], np.ndarray]:
+    def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], np.ndarray]:
         """Return cached embeddings for a static semantic example corpus."""
         cache_key = (id(examples_by_label), instruct)
         cache = getattr(self, "_semantic_example_cache", None)
@@ -332,7 +337,7 @@ class AikoThink:
                 prompts.extend(examples)
 
             vectors = self._normalized_matrix(
-                self._memorize._mem._embedder.embed_queries(prompts, instruct=_ROUTE_INSTRUCT).tolist()
+                self._memorize._mem._embedder.embed_queries(prompts, instruct=instruct).tolist()
             )
             cached = (labels, vectors)
             cache[cache_key] = cached
@@ -397,7 +402,7 @@ class AikoThink:
             }:
                 return label
             # LLM returned an unrecognised label — fall back to semantic best guess
-            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES)
+            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
             if scores:
                 return max(scores, key=scores.__getitem__)
             return "coding"  # last resort: treat as coding task
@@ -432,7 +437,7 @@ class AikoThink:
 
         if not _skip_search and self._is_data_intent(user_input):
             try:
-                search_query = self._build_search_query(user_input)
+                search_query = self._resolve_search_query(user_input)
                 if token_callback: token_callback(f"__SEARCHING__:{search_query}")
                 
                 context = deep_search(search_query, fetch_top=1)
@@ -683,12 +688,49 @@ class AikoThink:
         # routing already set _pending_search_query in _route_intent
         return self._pending_search_query is not None
 
-    def _build_search_query(self, user_input: str) -> str:
-        pending = self._pending_search_query
-        if pending is not None:
-            self._pending_search_query = None
-            return pending
-        return user_input
+    def _resolve_search_query(self, user_input: str) -> str:
+        """Condense user message into a clean search query.
+        Strips conversational framing first; falls back to LLM only if still noisy."""
+        # fast pass — strip conversational wrapper
+        noise = re.compile(
+            r"^(go\s+)?(can\s+you\s+)?(please\s+)?"
+            r"(pull\s+up|find\s+out|check|look\s+up|search\s+for|tell\s+me)[\s,]*",
+            re.IGNORECASE,
+        )
+        resolved = noise.sub("", user_input).strip()
+
+        # if still looks like a full sentence (long + has verb framing), ask LLM to condense
+        if len(resolved.split()) > 8 or resolved.lower().startswith(("what", "who", "when", "where", "is ", "has ", "did ")):
+            return self._llm_resolve_search_query(resolved)
+
+        return resolved or user_input
+
+    def _llm_resolve_search_query(self, user_input: str) -> str:
+        """LLM fallback: condense a verbose query into 3-5 search keywords."""
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._router_model,
+                messages=[{"role": "user", "content": (
+                    f"Message: {user_input!r}\n\n"
+                    "Output only a 3-5 word search query. No explanation.\n\n"
+                    "Message: 'what's the latest llama.cpp version'\n"
+                    "Query: llama.cpp latest stable release\n\n"
+                    "Message: 'has NVIDIA released any new Jetson hardware this year'\n"
+                    "Query: NVIDIA Jetson new hardware 2025\n\n"
+                    "Message: 'what's the Canucks score from last night'\n"
+                    "Query: Canucks score last night\n\n"
+                    "Message: 'did llama.cpp merge the Vulkan backend yet'\n"
+                    "Query: llama.cpp Vulkan backend merged\n\n"
+                    "Query:"
+                )}],
+                stream=False, max_tokens=20, temperature=0.0, top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
+            )
+            resolved = (resp.choices[0].message.content or "").strip().split('\n')[0]
+            resolved = resolved.strip('*_`()').strip()[:100]
+            return resolved or user_input
+        except Exception as e:
+            log.warning("LLM search query resolution failed: %s", e)
+            return user_input
 
     def _sanitize_history(self, messages: list[dict]) -> list[dict]:
         if not messages: return []
