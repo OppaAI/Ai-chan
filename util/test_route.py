@@ -178,6 +178,10 @@ def trace_llm_search_classify(user_input: str) -> tuple[bool, str] | None:
     if not _ensure_llm_client():
         return None
 
+    # _classify_and_resolve reads _history for context — clear it so previous
+    # traced prompts don't bleed into the current classification
+    think._history = []
+
     print(f"\n{BOLD}▶ LLM search classifier  (_classify_and_resolve){RESET}")
     import time
     t0 = time.monotonic()
