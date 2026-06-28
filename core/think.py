@@ -144,7 +144,6 @@ class AikoThink:
         self._history:  list[dict] = []
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
-        self._route_chat_classified: str | None = None
         self._semantic_example_cache: dict[int, tuple[list[str], np.ndarray]] = {}
         self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
@@ -261,8 +260,8 @@ class AikoThink:
         """Stage 2a: which agentic tool, called only when agentic is confirmed."""
         try:
             best_label, best_score, gap = self._semantic_best_label(
-                user_input, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_TOOL
-            )            
+                user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL
+            )
             log.debug("[route/tool] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
             if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_TOOL_MIN_GAP:
                 return best_label
@@ -402,7 +401,7 @@ class AikoThink:
             }:
                 return label
             # LLM returned an unrecognised label — fall back to semantic best guess
-            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
+            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
             if scores:
                 return max(scores, key=scores.__getitem__)
             return "coding"  # last resort: treat as coding task
