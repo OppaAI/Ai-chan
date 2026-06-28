@@ -187,7 +187,7 @@ class AikoListen:
         self._model = _load_sense_voice_recognizer()
 
     def load_vad(self) -> None:
-        self._vad_model = load_silero_vad()
+        self._vad_model = load_silero_vad(onnx=True)
         self._vad_model.eval()
         self._warmup_thread = threading.Thread(target=self._warmup, daemon=True)
         self._warmup_thread.start()
