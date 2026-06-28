@@ -75,6 +75,9 @@ think._semantic_example_cache      = {}
 think._semantic_example_cache_lock = __import__("threading").RLock()
 think._pending_search_query        = None
 think._route_chat_classified       = None
+think._history                     = []
+think._history_lock                = __import__("threading").RLock()
+think._reasoning                   = False
 
 # ── read ROUTE_MODE (mirrors think.py logic) ─────────────────────────────────
 
