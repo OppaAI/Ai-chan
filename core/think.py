@@ -67,9 +67,13 @@ _MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 # instead, or ROUTE_MODE=chat to disable autonomous routing.
 _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 _ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
-_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.36"))
-_SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.36"))
+_ROUTE_INSTRUCT = "Does this message ask someone to perform a task or action, or is it just conversation or a question?"
+_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.65"))
+_SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
+_SEMANTIC_TOOL_MIN_GAP = float(os.getenv("ROUTE_TOOL_MIN_GAP", "0.015"))
+_SEMANTIC_SEARCH_MIN_GAP = float(os.getenv("ROUTE_SEARCH_MIN_GAP", "0.010"))
+_SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -108,78 +112,19 @@ def _play_beep() -> None:
             log.warning("Beep playback failed: %s", e)
     threading.Thread(target=_run, daemon=True).start()
 
-_SEMANTIC_ROUTE_EXAMPLES: dict[str, tuple[str, ...]] = {
-    "chat": (
-        "talk with me normally",
-        "I found something interesting to tell you",
-        "I was working on this and noticed something",
-        "let me explain what happened",
-        "here is what I found",
-        "I want to discuss this with you",
-    ),
-    "research": (
-        "search for information about this and summarize it",
-        "find out what this is and report back",
-        "look this up and give me the findings",
-    ),
-    "planning": (
-        "make a plan for this project",
-        "create a checklist for this task",
-        "break this down into steps for me",
-    ),
-    "writing": (
-        "draft this message for me",
-        "write a note with these details",
-        "prepare a document from this",
-    ),
-    "coding": (
-        "fix this bug in my code",
-        "implement this feature for me",
-        "help me write this function",
-    ),
-    "architecture": (
-        "open your codebase and show me this file",
-        "search your repository for this function",
-        "read your source code and explain this part",
-    ),
-    "decision": (
-        "evaluate these options and recommend one",
-        "help me decide between these choices",
-    ),
-    "reminder": (
-        "remind me to do this tomorrow",
-        "set an alarm for this time",
-        "wake me up at six",
-    ),
-    "ongoing_task": (
-        "continue the task we were working on",
-        "update the progress on this project",
-    ),
-}
+# load route examples
+_EXAMPLES_PATH = Path(__file__).resolve().parent.parent / "persona" / "router_prompts.json"
 
-_SEMANTIC_SEARCH_EXAMPLES: dict[str, tuple[str, ...]] = {
-    "chat": (
-        "talk with me normally",
-        "what do you think about this idea",
-        "help me reason through this from what you already know",
-        "explain this concept without looking anything up",
-        "where should I put this config in my project",
-    ),
-    "data": (
-        "what is the weather today",
-        "search for the latest news about this topic",
-        "what is the current price of bitcoin",
-        "who won the game last night",
-        "look up the newest release notes for this library",
-        "find current facts and cite the source",
-        "what is this tool and what does it do",
-        "what is this software",
-        "tell me about this technology",
-        "what is this and where can I find out more",
-        "look up what this software does",
-        "find information about this tool online",
-    ),
-}
+def _load_route_examples() -> tuple[dict, dict, dict]:
+    with open(_EXAMPLES_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    binary = {k: tuple(v) for k, v in data["binary"].items()}
+    tools  = {k: tuple(v) for k, v in data["tools"].items()}
+    search = {k: tuple(v) for k, v in data["search"].items()}
+    return binary, tools, search
+
+_ROUTE_BINARY_EXAMPLES, _ROUTE_TOOL_EXAMPLES, _ROUTE_SEARCH_EXAMPLES = _load_route_examples()
+
 
 # ── think ─────────────────────────────────────────────────────────────────────
 
@@ -244,12 +189,24 @@ class AikoThink:
             self._active_turn.clear()
 
     def _route_intent(self, user_input: str) -> str:
-        """Classify whether a turn needs autonomous task mode or normal chat."""
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
             return "chat"
         if _ROUTE_MODE == "llm":
             return self._classify_agent_intent(user_input)
-        return self._semantic_agent_intent(user_input)
+
+        # Stage 1
+        if self._is_agentic(user_input):
+            # Stage 2a
+            return self._classify_agentic_tool(user_input)
+
+        # Stage 2b
+        self._pending_search_query = user_input if self._needs_websearch(user_input) else None
+        if self._pending_search_query is not None:
+            return "chat"
+
+        if _ROUTE_MODE != "semantic_only" and self._semantic_binary_is_ambiguous(user_input):
+            return self._classify_agent_intent(user_input)
+        return "chat"
 
     @staticmethod
     def _normalized_vector(vector: list[float]) -> np.ndarray:
@@ -269,44 +226,78 @@ class AikoThink:
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
         return matrix / np.clip(norms, 1e-12, None)
 
-    def _semantic_agent_intent(self, user_input: str) -> str:
-        """Classify agentic intent by embedding similarity to route examples."""
+    def _is_agentic(self, user_input: str) -> bool:
+        """Stage 1: binary chat vs agentic."""
         try:
-            query_vector = self._normalized_vector(self._memorize.embed_text(user_input, query=True))
-            labels, example_vectors = self._semantic_example_vectors(_SEMANTIC_ROUTE_EXAMPLES)
-            raw_scores = example_vectors @ query_vector
-
-            scores: dict[str, float] = {}
-            for label, score in zip(labels, raw_scores, strict=True):
-                scores[label] = max(scores.get(label, 0.0), float(score))
-
-            best_label = max(scores, key=scores.get)
-            best_score = scores[best_label]
-            sorted_scores = sorted(scores.values(), reverse=True)
-            second_score = sorted_scores[1] if len(sorted_scores) > 1 else 0.0
-
-            log.debug("[route] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, best_score - second_score, user_input)
-
-            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and (best_score - second_score) >= _SEMANTIC_ROUTE_MIN_GAP:
-                return best_label
-            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and _ROUTE_MODE != "semantic_only":
-                return self._classify_agent_intent(user_input)
-            return "chat"
+            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES)
+            log.debug("[route/binary] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
+            return best_label == "agentic" and best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP
         except Exception as e:
-            log.warning("Semantic intent routing failed: %s", e)
-            if _ROUTE_MODE == "semantic_only":
-                return "chat"
+            log.warning("Binary intent routing failed: %s", e)
+            return False
+
+    def _semantic_binary_is_ambiguous(self, user_input: str) -> bool:
+        """Return True when chat and agentic are too close for semantic-only routing."""
+        try:
+            _best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES)
+            return best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap < _SEMANTIC_ROUTE_MIN_GAP
+        except Exception as e:
+            log.warning("Binary ambiguity check failed: %s", e)
+            return False
+
+    def _classify_agentic_tool(self, user_input: str) -> str:
+        """Stage 2a: which agentic tool, called only when agentic is confirmed."""
+        try:
+            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_TOOL_EXAMPLES)
+            log.debug("[route/tool] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_TOOL_MIN_GAP:
+                return best_label
+            # fallback to LLM classifier if score is weak
+            return self._classify_agent_intent(user_input)
+        except Exception as e:
+            log.warning("Tool intent routing failed: %s", e)
             return self._classify_agent_intent(user_input)
 
-    def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float]:
-        """Return the closest semantic label and cosine score for a prompt."""
-        query_vector = self._normalized_vector(self._memorize.embed_text(user_input, query=True))
+    def _needs_websearch(self, user_input: str) -> bool:
+        """Stage 2b: does this chat turn need a websearch, called only when chat is confirmed."""
+        try:
+            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_SEARCH_EXAMPLES)
+            log.debug("[route/search] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
+            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD and gap >= _SEMANTIC_SEARCH_MIN_GAP
+        except Exception as e:
+            log.warning("Search intent routing failed: %s", e)
+            return False
+
+    def _semantic_all_scores(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> dict[str, float]:
+        """Return top-k mean cosine score per label for stable close-vector routing."""
+        query_vector = self._normalized_vector(
+            self._memorize._mem._embedder.embed_query(user_input, instruct=_ROUTE_INSTRUCT).tolist()
+        )
         labels, example_vectors = self._semantic_example_vectors(examples_by_label)
         if example_vectors.size == 0:
-            return "chat", 0.0
+            return {}
         raw_scores = example_vectors @ query_vector
-        best_idx = int(np.argmax(raw_scores))
-        return labels[best_idx], float(raw_scores[best_idx])
+        from collections import defaultdict
+        label_scores: dict[str, list[float]] = defaultdict(list)
+        for label, score in zip(labels, raw_scores):
+            label_scores[label].append(float(score))
+
+        scores: dict[str, float] = {}
+        top_k = max(1, _SEMANTIC_LABEL_TOP_K)
+        for label, values in label_scores.items():
+            strongest = sorted(values, reverse=True)[:top_k]
+            scores[label] = sum(strongest) / len(strongest)
+        return scores
+
+    def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float, float]:
+        """Return the best semantic label, its score, and the gap to second best."""
+        scores = self._semantic_all_scores(user_input, examples_by_label)
+        if not scores:
+            return "chat", 0.0, 0.0
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        best_label, best_score = ranked[0]
+        gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
+        return best_label, best_score, gap
 
     def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], np.ndarray]:
         """Return cached embeddings for a static semantic example corpus."""
@@ -329,7 +320,9 @@ class AikoThink:
                 labels.extend([label] * len(examples))
                 prompts.extend(examples)
 
-            vectors = self._normalized_matrix(self._memorize.embed_texts(prompts))
+            vectors = self._normalized_matrix(
+                self._memorize._mem._embedder.embed_queries(prompts, instruct=_ROUTE_INSTRUCT).tolist()
+            )
             cached = (labels, vectors)
             cache[cache_key] = cached
             return cached
@@ -641,31 +634,8 @@ class AikoThink:
         return f"[LLM error] {reason}"
 
     def _is_data_intent(self, user_input: str) -> bool:
-        if self._route_chat_classified == user_input:
-            self._route_chat_classified = None
-            return False
-        if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
-            return False
-        if _ROUTE_MODE != "llm":
-            is_data, query = self._semantic_data_intent(user_input)
-            self._pending_search_query = query if is_data else None
-            return is_data
-        is_data, resolved_query = self._classify_and_resolve(user_input)
-        self._pending_search_query = resolved_query if is_data else None
-        return is_data
-
-    def _semantic_data_intent(self, user_input: str) -> tuple[bool, str]:
-        """Classify normal-chat web-search need by embedding similarity."""
-        try:
-            best_label, best_score = self._semantic_best_label(user_input, _SEMANTIC_SEARCH_EXAMPLES)
-            log.debug("[search] Semantic route best=%s score=%.3f for: %r", best_label, best_score, user_input)
-            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD, user_input
-        except Exception as e:
-            log.warning("Semantic search intent routing failed: %s", e)
-            if _ROUTE_MODE == "semantic_only":
-                return False, user_input
-            is_data, resolved_query = self._classify_and_resolve(user_input)
-            return is_data, resolved_query
+        # routing already set _pending_search_query in _route_intent
+        return self._pending_search_query is not None
 
     def _classify_and_resolve(self, user_input: str) -> tuple[bool, str]:
         with self._history_lock:

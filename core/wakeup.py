@@ -54,10 +54,11 @@ class BootResult:
 
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and search exemplars at boot so first-turn latency is cold-free."""
-    from core.think import _SEMANTIC_ROUTE_EXAMPLES, _SEMANTIC_SEARCH_EXAMPLES
+    from core.think import _ROUTE_BINARY_EXAMPLES, _ROUTE_TOOL_EXAMPLES, _ROUTE_SEARCH_EXAMPLES
     try:
-        think._semantic_example_vectors(_SEMANTIC_ROUTE_EXAMPLES)
-        think._semantic_example_vectors(_SEMANTIC_SEARCH_EXAMPLES)
+        think._semantic_example_vectors(_ROUTE_BINARY_EXAMPLES)
+        think._semantic_example_vectors(_ROUTE_TOOL_EXAMPLES)
+        think._semantic_example_vectors(_ROUTE_SEARCH_EXAMPLES)
         log.info("[wakeup] Semantic exemplar cache warmed")
     except Exception as e:
         log.warning("[wakeup] Semantic exemplar prewarm failed: %s", e)
@@ -164,12 +165,13 @@ class AikoWakeup:
         if memorize[0] is None:
             log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
 
-        ScheduleRunner(
+        _scheduler = ScheduleRunner(
             on_due=think_ref[0].handle_scheduled_job if think_ref[0] else None,
             memorize=memorize[0],
             generate_and_post_fn=generate_and_post,
             consolidate_fn=maybe_run_consolidation,
-        ).start()
+        )
+        _scheduler.start()
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
