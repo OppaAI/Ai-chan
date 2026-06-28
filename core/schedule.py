@@ -180,6 +180,22 @@ def _next_monthly(time_of_day: str, tz_name: str | None = None, anchor_day: int 
             year += 1
     raise ValueError("could not calculate next monthly occurrence")
 
+def _reflection_post_exists(date: datetime) -> bool:
+    """Check if a reflection post already exists on GitHub for the given date."""
+    import os, requests
+    token = os.getenv("GITHUB_TOKEN", "")
+    repo  = os.getenv("GITHUB_REPO", "")
+    branch = os.getenv("GITHUB_BRANCH", "main")
+    hugo_path = os.getenv("HUGO_CONTENT_PATH", "content/posts")
+    if not token or not repo:
+        return False
+    slug = date.strftime("%Y-%m-%d") + "-day-reflection"
+    url  = f"https://api.github.com/repos/{repo}/contents/{hugo_path}/{slug}.md"
+    resp = requests.get(url, headers={
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }, params={"ref": branch}, timeout=10)
+    return resp.status_code == 200
 
 def calculate_next_due(
     time_of_day: str,
@@ -442,6 +458,29 @@ class ScheduleRunner:
         self._next_daily   = _next_daily_reflect_and_dream()
         self._next_monthly = _next_monthly_consolidate()
 
+        # catch-up flag — checked on start()
+        self._catchup_needed = self._check_catchup()
+
+
+    def _check_catchup(self) -> bool:
+        """
+        Returns True if yesterday's reflection was missed.
+        Missed = next_daily is more than 20 hours away AND no post exists for yesterday.
+        """
+        tz  = _timezone()
+        now = datetime.now(tz)
+        hours_until_next = (self._next_daily - now).total_seconds() / 3600
+        if hours_until_next < 20:
+            return False  # job fired recently enough, no catchup needed
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0,
+        )
+        exists = _reflection_post_exists(yesterday)
+        if not exists:
+            log.info("Catch-up needed: no reflection post found for %s.", yesterday.date())
+            return True
+        return False
+
     def notify_new_job(self) -> None:
         """Interrupt the sleep early so a newly added job is picked up immediately."""
         self._wakeup.set()
@@ -458,6 +497,14 @@ class ScheduleRunner:
             DAILY_JOB_HOUR, DAILY_JOB_MINUTE,
             MONTHLY_JOB_HOUR, MONTHLY_JOB_MINUTE,
         )
+        if self._catchup_needed and self._memorize and self._generate_and_post_fn:
+            log.info("Scheduler: running missed daily reflect+dream on startup.")
+            catchup_thread = threading.Thread(
+                target=self._run_daily_reflect_and_dream,
+                name="aiko-schedule-catchup",
+                daemon=True,
+            )
+            catchup_thread.start()
 
     def stop(self) -> None:
         """Request scheduler shutdown."""
