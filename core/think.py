@@ -67,7 +67,12 @@ _MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 # instead, or ROUTE_MODE=chat to disable autonomous routing.
 _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 _ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
-_ROUTE_INSTRUCT = "Does this message ask someone to perform a task or action, or is it just conversation or a question?"
+
+# Three separate instruct strings, one per embedding context
+_ROUTE_INSTRUCT_BINARY = "Does this message ask someone to perform a task or action, or is it just conversation?"
+_ROUTE_INSTRUCT_TOOL   = "This is a task request. What kind of task is being asked for?"
+_ROUTE_INSTRUCT_SEARCH = "Does answering this require looking up current or external data?"
+
 _SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
@@ -199,10 +204,12 @@ class AikoThink:
             # Stage 2a
             return self._classify_agentic_tool(user_input)
 
-        # Stage 2b
-        self._pending_search_query = user_input if self._needs_websearch(user_input) else None
-        if self._pending_search_query is not None:
-            return "chat"
+        # Stage 2b ambiguity: use LLM only to decide chat vs agentic, NOT to pick a tool
+        if _ROUTE_MODE != "semantic_only" and self._semantic_binary_is_ambiguous(user_input):
+            llm_label = self._classify_agent_intent(user_input)
+            if llm_label != "chat":
+                return llm_label  # LLM confirmed agentic + gave tool
+        return "chat"
 
         if _ROUTE_MODE != "semantic_only" and self._semantic_binary_is_ambiguous(user_input):
             return self._classify_agent_intent(user_input)
@@ -229,7 +236,9 @@ class AikoThink:
     def _is_agentic(self, user_input: str) -> bool:
         """Stage 1: binary chat vs agentic."""
         try:
-            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES)
+            best_label, best_score, gap = self._semantic_best_label(
+                user_input, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY
+            )
             log.debug("[route/binary] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
             return best_label == "agentic" and best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP
         except Exception as e:
@@ -248,7 +257,9 @@ class AikoThink:
     def _classify_agentic_tool(self, user_input: str) -> str:
         """Stage 2a: which agentic tool, called only when agentic is confirmed."""
         try:
-            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_TOOL_EXAMPLES)
+            best_label, best_score, gap = self._semantic_best_label(
+                user_input, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH
+            )            
             log.debug("[route/tool] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
             if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_TOOL_MIN_GAP:
                 return best_label
@@ -271,9 +282,9 @@ class AikoThink:
     def _semantic_all_scores(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> dict[str, float]:
         """Return top-k mean cosine score per label for stable close-vector routing."""
         query_vector = self._normalized_vector(
-            self._memorize._mem._embedder.embed_query(user_input, instruct=_ROUTE_INSTRUCT).tolist()
+            self._memorize._mem._embedder.embed_query(user_input, instruct=instruct).tolist()
         )
-        labels, example_vectors = self._semantic_example_vectors(examples_by_label)
+        labels, example_vectors = self._semantic_example_vectors(examples_by_label, instruct)
         if example_vectors.size == 0:
             return {}
         raw_scores = example_vectors @ query_vector
@@ -291,7 +302,7 @@ class AikoThink:
 
     def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float, float]:
         """Return the best semantic label, its score, and the gap to second best."""
-        scores = self._semantic_all_scores(user_input, examples_by_label)
+        scores = self._semantic_all_scores(user_input, examples_by_label, instruct)
         if not scores:
             return "chat", 0.0, 0.0
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
@@ -301,7 +312,7 @@ class AikoThink:
 
     def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], np.ndarray]:
         """Return cached embeddings for a static semantic example corpus."""
-        cache_key = id(examples_by_label)
+        cache_key = (id(examples_by_label), instruct)
         cache = getattr(self, "_semantic_example_cache", None)
         cache_lock = getattr(self, "_semantic_example_cache_lock", None)
         if cache is None:
@@ -334,8 +345,8 @@ class AikoThink:
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
                     f"Message: {user_input!r}\n\n"
-                    "Output only the label. No explanation.\n"
-                    "Labels: [chat, research, reminder, planning, coding, writing, decision, architecture, ongoing_task]\n\n"
+                    "Output only the best tool label for the task. No explanation.\n"
+                    "Labels: [research, reminder, planning, coding, writing, decision, architecture, ongoing_task]\n\n"
                     "Message: 'set a reminder for 9pm'\n"
                     "Label: reminder\n\n"
                     "Message: 'write an email to my landlord'\n"
@@ -385,7 +396,11 @@ class AikoThink:
                 "architecture", "decision", "reminder", "ongoing_task",
             }:
                 return label
-            return "chat"
+            # LLM returned an unrecognised label — fall back to semantic best guess
+            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES)
+            if scores:
+                return max(scores, key=scores.__getitem__)
+            return "coding"  # last resort: treat as coding task
         except Exception as e:
             log.warning("Intent routing failed: %s", e)
             return "chat"
@@ -667,82 +682,6 @@ class AikoThink:
     def _is_data_intent(self, user_input: str) -> bool:
         # routing already set _pending_search_query in _route_intent
         return self._pending_search_query is not None
-
-    def _classify_and_resolve(self, user_input: str) -> tuple[bool, str]:
-        with self._history_lock:
-            last_user = next((m["content"] for m in reversed(self._history) if m["role"] == "user"), "")
-        has_context = bool(last_user and last_user != user_input)
-        context_block = f'Previous question: "{last_user}"\n' if has_context else ""
-
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._router_model,
-                messages=[{"role": "user", "content": (
-                    f"Message: {user_input!r}\n\n"
-                    "Output only one of these two formats, nothing else:\n"
-                    "data|<3-5 word search query>\n"
-                    "social|none\n\n"
-                    "Message: 'debug why asyncio.run() hangs forever'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'why does Python have the GIL'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'explain how attention works in transformers'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'what's the actual difference between X and Y'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'walk me through why X works'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'do you think X is a good approach'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'is it weird that I find X more satisfying than Y'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'help me think through this'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'what should I do next'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'how would you approach building a memory system'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'what are the tradeoffs of fastembed vs sentence-transformers'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'tell me something interesting about crows'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'write an email to my landlord'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'should I use X or Y for Z'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'which option is better for my use case'\n"
-                    "Output: social|none\n\n"
-                    "Message: 'what's the weather in Vancouver'\n"
-                    "Output: data|current weather Vancouver\n\n"
-                    "Message: 'who won the NHL game last night'\n"
-                    "Output: data|NHL game results last night\n\n"
-                    "Message: 'what's the latest llama.cpp version'\n"
-                    "Output: data|llama.cpp latest stable release\n\n"
-                    "Message: 'what's the current price of RTX 5090'\n"
-                    "Output: data|RTX 5090 current price 2025\n\n"
-                    f"{context_block}"
-                    "Output:"
-                )}],
-                stream=False, max_tokens=20, temperature=0.0, top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
-            )
-            answer = resp.choices[0].message.content.strip()
-            label, _, rest = answer.partition("|")
-            is_data = "data" in label.strip().lower()
-
-            if not is_data:
-                return False, user_input
-
-            # single sanitization pass — no second assignment
-            resolved = rest.strip().split('\n')[0].strip('*_`()').strip()[:100]
-            resolved = re.sub(r'\{[^}]*\}', '', resolved).strip()
-            if not resolved or resolved.lower() in ("none", "<search query>", "<3-5 word search query>"):
-                resolved = user_input
-
-            return True, resolved
-
-        except Exception as e:
-            log.warning(f"Intent classification failed: {e}")
-            return True, user_input
 
     def _build_search_query(self, user_input: str) -> str:
         pending = self._pending_search_query
