@@ -68,9 +68,10 @@ _MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 _ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
 _ROUTE_INSTRUCT = "Does this message ask someone to perform a task or action, or is it just conversation or a question?"
-_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.36"))
-_SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.36"))
+_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.65"))
+_SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
+_SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
@@ -221,12 +222,7 @@ class AikoThink:
     def _is_agentic(self, user_input: str) -> bool:
         """Stage 1: binary chat vs agentic."""
         try:
-            best_label, best_score = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES)
-            sorted_scores = sorted(
-                self._semantic_all_scores(user_input, _ROUTE_BINARY_EXAMPLES).values(),
-                reverse=True,
-            )
-            gap = sorted_scores[0] - sorted_scores[1] if len(sorted_scores) > 1 else 1.0
+            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES)
             log.debug("[route/binary] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
             return best_label == "agentic" and best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP
         except Exception as e:
@@ -236,9 +232,9 @@ class AikoThink:
     def _classify_agentic_tool(self, user_input: str) -> str:
         """Stage 2a: which agentic tool, called only when agentic is confirmed."""
         try:
-            best_label, best_score = self._semantic_best_label(user_input, _ROUTE_TOOL_EXAMPLES)
-            log.debug("[route/tool] best=%s score=%.3f for: %r", best_label, best_score, user_input)
-            if best_score >= _SEMANTIC_ROUTE_THRESHOLD:
+            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_TOOL_EXAMPLES)
+            log.debug("[route/tool] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
+            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP:
                 return best_label
             # fallback to LLM classifier if score is weak
             return self._classify_agent_intent(user_input)
@@ -249,16 +245,18 @@ class AikoThink:
     def _needs_websearch(self, user_input: str) -> bool:
         """Stage 2b: does this chat turn need a websearch, called only when chat is confirmed."""
         try:
-            best_label, best_score = self._semantic_best_label(user_input, _ROUTE_SEARCH_EXAMPLES)
-            log.debug("[route/search] best=%s score=%.3f for: %r", best_label, best_score, user_input)
-            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD
+            best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_SEARCH_EXAMPLES)
+            log.debug("[route/search] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
+            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP
         except Exception as e:
             log.warning("Search intent routing failed: %s", e)
             return False
 
     def _semantic_all_scores(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> dict[str, float]:
-        """Return mean cosine score per label for gap calculation."""
-        query_vector = self._memorize._mem._embedder.embed_query(user_input, instruct=_ROUTE_INSTRUCT).tolist()
+        """Return top-k mean cosine score per label for stable close-vector routing."""
+        query_vector = self._normalized_vector(
+            self._memorize._mem._embedder.embed_query(user_input, instruct=_ROUTE_INSTRUCT).tolist()
+        )
         labels, example_vectors = self._semantic_example_vectors(examples_by_label)
         if example_vectors.size == 0:
             return {}
@@ -267,17 +265,23 @@ class AikoThink:
         label_scores: dict[str, list[float]] = defaultdict(list)
         for label, score in zip(labels, raw_scores):
             label_scores[label].append(float(score))
-        return {label: sum(v) / len(v) for label, v in label_scores.items()}
 
-    def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float]:
-        """Return the closest semantic label and cosine score for a prompt."""
-        query_vector = self._memorize._mem._embedder.embed_query(user_input, instruct=_ROUTE_INSTRUCT).tolist()
-        labels, example_vectors = self._semantic_example_vectors(examples_by_label)
-        if example_vectors.size == 0:
-            return "chat", 0.0
-        raw_scores = example_vectors @ query_vector
-        best_idx = int(np.argmax(raw_scores))
-        return labels[best_idx], float(raw_scores[best_idx])
+        scores: dict[str, float] = {}
+        top_k = max(1, _SEMANTIC_LABEL_TOP_K)
+        for label, values in label_scores.items():
+            strongest = sorted(values, reverse=True)[:top_k]
+            scores[label] = sum(strongest) / len(strongest)
+        return scores
+
+    def _semantic_best_label(self, user_input: str, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[str, float, float]:
+        """Return the best semantic label, its score, and the gap to second best."""
+        scores = self._semantic_all_scores(user_input, examples_by_label)
+        if not scores:
+            return "chat", 0.0, 0.0
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        best_label, best_score = ranked[0]
+        gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
+        return best_label, best_score, gap
 
     def _semantic_example_vectors(self, examples_by_label: dict[str, tuple[str, ...]]) -> tuple[list[str], np.ndarray]:
         """Return cached embeddings for a static semantic example corpus."""

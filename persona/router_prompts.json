@@ -4,25 +4,32 @@
             "what do you think about this",
             "let me tell you what happened today",
             "I want to discuss something with you",
-            "can you explain this concept to me",
+            "can you explain this concept from your existing knowledge",
+            "why are these embedding vectors so close together",
+            "help me understand why the router scores look similar",
             "I noticed something interesting",
             "here is what I found, what do you think",
             "tell me your opinion on this",
             "I just wanted to share this with you",
             "I've been thinking about something",
             "does this make sense to you",
+            "is this bug caused by the threshold or the prompt examples",
             "what's your take on this",
             "I'm not sure how I feel about this",
             "just wanted to talk through something with you"
         ],
         "agentic": [
             "search for information about this online",
+            "use web search to find current information",
             "fix this bug in my code",
+            "change the router scoring code in think.py",
+            "edit think.py to improve semantic routing",
             "write a draft email for me",
             "remind me tomorrow at 9am",
             "make a step-by-step plan for this project",
             "look this up and report back with findings",
             "implement this feature in my codebase",
+            "modify the router prompt JSON examples",
             "set an alarm for six in the morning",
             "break this goal down into tasks",
             "open my codebase and find this function",
@@ -40,6 +47,7 @@
     "tools": {
         "research": [
             "search for information about this and summarize it",
+            "look up the latest documentation and summarize it",
             "find out what this is and report back",
             "look this up online and give me the findings"
         ],
@@ -69,6 +77,7 @@
         ],
         "architecture": [
             "open your codebase and show me this file",
+            "inspect Aiko source files and explain the route flow",
             "search your repository for this function",
             "read your source code and explain this part"
         ],
@@ -96,7 +105,9 @@
             "explain this concept without looking anything up",
             "where should I put this config in my project",
             "I want to talk about something personal",
-            "can you help me understand this"
+            "can you help me understand this",
+            "why are my embedding scores so close",
+            "explain why semantic routing can be ambiguous"
         ],
         "data": [
             "what is the weather today",
@@ -104,6 +115,7 @@
             "who won the game last night",
             "look up the newest release notes for this library",
             "what is the latest news about this topic",
+            "what changed in the newest release today",
             "find current facts and cite the source",
             "what is this tool and what does it do",
             "tell me about this technology",

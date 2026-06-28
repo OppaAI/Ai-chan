@@ -26,6 +26,7 @@ from core.think import (
     _SEMANTIC_ROUTE_THRESHOLD,
     _SEMANTIC_SEARCH_THRESHOLD,
     _SEMANTIC_ROUTE_MIN_GAP,
+    _SEMANTIC_LABEL_TOP_K,
 )
 
 # ── init embedder only (no LLM, no TTS, no schedule) ─────────────────────────
@@ -79,7 +80,7 @@ def trace_stage(label: str, examples_by_label: dict, user_input: str, threshold:
     pass_thresh = best_score >= threshold
     pass_gap    = gap >= _SEMANTIC_ROUTE_MIN_GAP
     verdict = GREEN + "PASS" + RESET if (pass_thresh and pass_gap) else RED + "FAIL" + RESET
-    print(f"\n  threshold={threshold}  gap_min={_SEMANTIC_ROUTE_MIN_GAP}")
+    print(f"\n  threshold={threshold}  gap_min={_SEMANTIC_ROUTE_MIN_GAP}  top_k={_SEMANTIC_LABEL_TOP_K}")
     print(f"  best={best_label}  score={best_score:.3f}  gap={gap:.3f}  [{verdict}]")
 
     return best_label, best_score
@@ -105,7 +106,10 @@ def trace(prompt: str) -> None:
         # ── Stage 2a ──────────────────────────────────────────────────────────
         print(f"\n{BOLD}▶ Stage 2a  which tool{RESET}")
         best2, score2 = trace_stage("tool classifier", _ROUTE_TOOL_EXAMPLES, prompt, _SEMANTIC_ROUTE_THRESHOLD)
-        if score2 >= _SEMANTIC_ROUTE_THRESHOLD:
+        scores2 = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES)
+        sorted2 = sorted(scores2.values(), reverse=True)
+        gap2 = sorted2[0] - sorted2[1] if len(sorted2) > 1 else 1.0
+        if score2 >= _SEMANTIC_ROUTE_THRESHOLD and gap2 >= _SEMANTIC_ROUTE_MIN_GAP:
             print(f"\n  {GREEN}→ ROUTE: agentic_chat  tool={best2}{RESET}")
         else:
             print(f"\n  {YELLOW}→ ROUTE: agentic_chat  tool=llm_fallback (score too low){RESET}")
@@ -115,7 +119,10 @@ def trace(prompt: str) -> None:
         # ── Stage 2b ──────────────────────────────────────────────────────────
         print(f"\n{BOLD}▶ Stage 2b  websearch needed?{RESET}")
         best3, score3 = trace_stage("search classifier", _ROUTE_SEARCH_EXAMPLES, prompt, _SEMANTIC_SEARCH_THRESHOLD)
-        needs_search = best3 == "data" and score3 >= _SEMANTIC_SEARCH_THRESHOLD
+        scores3 = think._semantic_all_scores(prompt, _ROUTE_SEARCH_EXAMPLES)
+        sorted3 = sorted(scores3.values(), reverse=True)
+        gap3 = sorted3[0] - sorted3[1] if len(sorted3) > 1 else 1.0
+        needs_search = best3 == "data" and score3 >= _SEMANTIC_SEARCH_THRESHOLD and gap3 >= _SEMANTIC_ROUTE_MIN_GAP
 
         if needs_search:
             print(f"\n  {GREEN}→ ROUTE: chat()  websearch=True  query={prompt!r}{RESET}")

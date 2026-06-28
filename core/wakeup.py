@@ -165,12 +165,13 @@ class AikoWakeup:
         if memorize[0] is None:
             log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
 
-        ScheduleRunner(
+        _scheduler = ScheduleRunner(
             on_due=think_ref[0].handle_scheduled_job if think_ref[0] else None,
             memorize=memorize[0],
             generate_and_post_fn=generate_and_post,
             consolidate_fn=maybe_run_consolidation,
-        ).start()
+        )
+        _scheduler.start()
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
