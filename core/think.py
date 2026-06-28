@@ -391,7 +391,7 @@ class AikoThink:
                     "Label: decision\n\n"
                     "Label:"
                 )}],
-                stream=False, max_tokens=6, temperature=0.0, top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
+                stream=False, max_tokens=6, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -722,7 +722,7 @@ class AikoThink:
                     "Query: llama.cpp Vulkan backend merged\n\n"
                     "Query:"
                 )}],
-                stream=False, max_tokens=20, temperature=0.0, top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
+                stream=False, max_tokens=20, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
             )
             resolved = (resp.choices[0].message.content or "").strip().split('\n')[0]
             resolved = resolved.strip('*_`()').strip()[:100]

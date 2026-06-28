@@ -46,6 +46,9 @@ from core.think import (
     _SEMANTIC_TOOL_MIN_GAP,
     _SEMANTIC_SEARCH_MIN_GAP,
     _SEMANTIC_LABEL_TOP_K,
+    _ROUTE_INSTRUCT_BINARY,
+    _ROUTE_INSTRUCT_TOOL,
+    _ROUTE_INSTRUCT_SEARCH,
 )
 
 # ── colour helpers ────────────────────────────────────────────────────────────
@@ -115,8 +118,9 @@ def trace_stage(
     user_input: str,
     threshold: float,
     min_gap: float,
+    instruct: str,
 ) -> tuple[str, float]:
-    scores = think._semantic_all_scores(user_input, examples_by_label)
+    scores = think._semantic_all_scores(user_input, examples_by_label, instruct)
     if not scores:
         return "chat", 0.0
 
@@ -173,66 +177,20 @@ def trace_llm_router(user_input: str) -> str | None:
         print(f"\n  {RED}LLM call failed: {e}{RESET}")
         return None
 
-def trace_llm_search_classify(user_input: str) -> tuple[bool, str] | None:
-    """Call think._classify_and_resolve — the exact production code path."""
+def trace_llm_search_classify(user_input: str) -> str | None:
+    """Call think._llm_resolve_search_query — the exact production code path."""
     if not _ensure_llm_client():
         return None
 
-    think._history = []
-
-    print(f"\n{BOLD}▶ LLM search classifier  (_classify_and_resolve){RESET}")
-    print(f"  {DIM}client={type(think._client).__name__}  model={think._router_model!r}{RESET}")
+    print(f"\n{BOLD}▶ LLM search query resolver  (_llm_resolve_search_query){RESET}")
     import time
     t0 = time.monotonic()
     try:
-        # call the LLM directly here instead of delegating to _classify_and_resolve
-        # so we can see exactly what's happening without the silent except swallowing it
-        resp = think._client.chat.completions.create(
-            model=think._router_model,
-            messages=[{"role": "user", "content": (
-                f"Message: {user_input!r}\n\n"
-                "Output only one of these two formats, nothing else:\n"
-                "data|<3-5 word search query>\n"
-                "social|none\n\n"
-                "Message: 'what's the weather in Vancouver'\n"
-                "Output: data|current weather Vancouver\n\n"
-                "Message: 'who won the NHL game last night'\n"
-                "Output: data|NHL game results last night\n\n"
-                "Message: 'debug why asyncio.run() hangs'\n"
-                "Output: social|none\n\n"
-                "Message: 'explain how attention works'\n"
-                "Output: social|none\n\n"
-                "Message: 'do you think embeddings are good for memory'\n"
-                "Output: social|none\n\n"
-                "Output:"
-            )}],
-            stream=False, max_tokens=20, temperature=0.0,
-            top_p=1.0, top_k=1, timeout=LLM_TIMEOUT,
-        )
+        result  = think._llm_resolve_search_query(user_input)
         elapsed = time.monotonic() - t0
-        raw = resp.choices[0].message.content if resp.choices else None
-        print(f"  {DIM}raw response: {raw!r}{RESET}")
-
-        if not raw:
-            print(f"  {RED}empty response from model{RESET}")
-            print(f"  latency    : {elapsed*1000:.0f} ms")
-            return None
-
-        label, _, rest = raw.strip().partition("|")
-        is_data = "data" in label.strip().lower()
-        resolved = rest.strip().split('\n')[0].strip('*_`()').strip()[:100]
-        import re
-        resolved = re.sub(r'\{[^}]*\}', '', resolved).strip()
-        if not resolved or resolved.lower() in ("none", "<search query>", "<3-5 word search query>"):
-            resolved = user_input
-
-        color = GREEN if is_data else CYAN
-        print(f"\n  decision   : {color}{'data' if is_data else 'social'}{RESET}")
-        if is_data:
-            print(f"  query      : {CYAN}{resolved!r}{RESET}")
+        print(f"\n  query      : {CYAN}{result!r}{RESET}")
         print(f"  latency    : {elapsed*1000:.0f} ms")
-        return is_data, resolved
-
+        return result
     except Exception as e:
         elapsed = time.monotonic() - t0
         print(f"\n  {RED}LLM call failed ({elapsed*1000:.0f} ms): {e!r}{RESET}")
@@ -256,8 +214,9 @@ def trace(prompt: str) -> None:
             prompt,
             _SEMANTIC_ROUTE_THRESHOLD,
             _SEMANTIC_ROUTE_MIN_GAP,
+            _ROUTE_INSTRUCT_BINARY,
         )
-        scores1     = think._semantic_all_scores(prompt, _ROUTE_BINARY_EXAMPLES)
+        scores1     = think._semantic_all_scores(prompt, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
         sorted1     = sorted(scores1.values(), reverse=True)
         gap1        = sorted1[0] - sorted1[1] if len(sorted1) > 1 else 1.0
         is_agentic  = (
@@ -277,8 +236,9 @@ def trace(prompt: str) -> None:
                 prompt,
                 _SEMANTIC_ROUTE_THRESHOLD,
                 _SEMANTIC_TOOL_MIN_GAP,
+                _ROUTE_INSTRUCT_TOOL,
             )
-            scores2 = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES)
+            scores2 = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
             sorted2 = sorted(scores2.values(), reverse=True)
             gap2    = sorted2[0] - sorted2[1] if len(sorted2) > 1 else 1.0
 
@@ -305,8 +265,9 @@ def trace(prompt: str) -> None:
                 prompt,
                 _SEMANTIC_SEARCH_THRESHOLD,
                 _SEMANTIC_SEARCH_MIN_GAP,
+                _ROUTE_INSTRUCT_SEARCH,
             )
-            scores3      = think._semantic_all_scores(prompt, _ROUTE_SEARCH_EXAMPLES)
+            scores3      = think._semantic_all_scores(prompt, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH)
             sorted3      = sorted(scores3.values(), reverse=True)
             gap3         = sorted3[0] - sorted3[1] if len(sorted3) > 1 else 1.0
             needs_search = (
