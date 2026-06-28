@@ -100,18 +100,11 @@ class HarrierEmbedder:
             return
 
         import onnxruntime as ort
-
-        from core.silence import silent_stderr
-        with silent_stderr():
-            sess_opts = ort.SessionOptions()
-            sess_opts.log_severity_level = 3  # suppress ort warnings too
-            available = ort.get_available_providers()
-            providers = ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
-            self._session = ort.InferenceSession(str(onnx_path), sess_opts, providers=providers)
         from tokenizers import Tokenizer
+        from core.silence import silent_stderr
 
-        snapshot = _find_snapshot(self._cache_dir, self._model_id)
-        onnx_path     = snapshot / self._model_file
+        snapshot       = _find_snapshot(self._cache_dir, self._model_id)
+        onnx_path      = snapshot / self._model_file
         tokenizer_path = snapshot / "tokenizer.json"
 
         if not onnx_path.exists():
@@ -119,17 +112,18 @@ class HarrierEmbedder:
         if not tokenizer_path.exists():
             raise FileNotFoundError(f"Tokenizer not found: {tokenizer_path}")
 
-        # prefer CUDA EP if available, fall back to CPU
+        sess_opts = ort.SessionOptions()
+        sess_opts.log_severity_level = 3
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
         available = ort.get_available_providers()
         providers  = ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
 
-        sess_opts = ort.SessionOptions()
-        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        with silent_stderr():
+            self._session = ort.InferenceSession(str(onnx_path), sess_opts, providers=providers)
 
-        self._session   = ort.InferenceSession(str(onnx_path), sess_opts, providers=providers)
         self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
-
-        # enable padding + truncation for stable batched ONNX inputs
+        # pyrefly: ignore [missing-import]
         from tokenizers import processors
         self._tokenizer.enable_padding(pad_id=0, pad_token="<pad>")
         self._tokenizer.enable_truncation(max_length=32768)
