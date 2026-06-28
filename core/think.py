@@ -357,6 +357,7 @@ class AikoThink:
                     "Label:"
                 )}],
                 stream=False, max_tokens=6, temperature=0.0, timeout=LLM_TIMEOUT,
+                extra_body={"cache_prompt": False},
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -677,6 +678,7 @@ class AikoThink:
                     "Output:"
                 )}],
                 stream=False, max_tokens=16, temperature=0.0, timeout=LLM_TIMEOUT,
+                extra_body={"cache_prompt": False},
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")
