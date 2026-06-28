@@ -8,25 +8,27 @@ Mode is driven by ROUTE_MODE in .env (same key think.py reads):
   ROUTE_MODE=chat          → routing disabled; tracer notes this and exits
 
 Usage:
-  python util/test_route.py [prompt]   # single prompt
-  python util/test_route.py            # interactive mode
+  python util/test_route.py                        # interactive REPL
+  python util/test_route.py "some prompt"          # single prompt
+  python util/test_route.py --suite                # run built-in suite + summary
+  python util/test_route.py --file test_prompts.json          # external prompt file
+  python util/test_route.py --file test_prompts.json --quiet  # progress lines only
+  python util/test_route.py --suite --quiet        # quiet built-in suite
 """
 
-import os, sys, logging
+import os, sys, time, json, logging, random
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.WARNING)
 
-# load .env so ROUTE_MODE (and LLM_BASE_URL etc.) are available before imports
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # dotenv optional; env vars may already be set
+    pass
 
 # ── minimal stubs so we can import without a running stack ────────────────────
 
-from unittest.mock import MagicMock, patch
-
+from unittest.mock import MagicMock
 sys.modules.setdefault("pygame", MagicMock())
 sys.modules.setdefault("openai", MagicMock())
 
@@ -36,7 +38,6 @@ from core.think import (
     LLM_BASE_URL,
     LLM_MODEL,
     ROUTER_MODEL,
-    LLM_TIMEOUT,
     _ROUTE_BINARY_EXAMPLES,
     _ROUTE_TOOL_EXAMPLES,
     _ROUTE_SEARCH_EXAMPLES,
@@ -53,27 +54,108 @@ from core.think import (
 
 # ── colour helpers ────────────────────────────────────────────────────────────
 
-CYAN   = "\033[96m"
-GREEN  = "\033[92m"
-YELLOW = "\033[93m"
-RED    = "\033[91m"
-MAGENTA= "\033[95m"
-BOLD   = "\033[1m"
-DIM    = "\033[2m"
-RESET  = "\033[0m"
+CYAN    = "\033[96m"
+GREEN   = "\033[92m"
+YELLOW  = "\033[93m"
+RED     = "\033[91m"
+MAGENTA = "\033[95m"
+BOLD    = "\033[1m"
+DIM     = "\033[2m"
+RESET   = "\033[0m"
 
 def score_bar(score: float, width: int = 20) -> str:
     filled = max(0, min(width, int(round(score * width))))
     color  = GREEN if score >= 0.5 else YELLOW if score >= 0.35 else RED
     return f"{color}{'█' * filled}{'░' * (width - filled)}{RESET} {score:.3f}"
 
+def pct_bar(pct: float, width: int = 16) -> str:
+    filled = int(round(pct / 100 * width))
+    color  = GREEN if pct == 100 else YELLOW if pct >= 50 else RED
+    return f"{color}{'█' * filled}{'░' * (width - filled)}{RESET}"
+
+# ── built-in mini suite (fallback when no --file given) ───────────────────────
+
+BUILTIN_SUITE: list[tuple[str, str]] = [
+    ("can you ping me when it's 8pm",                                        "reminder"),
+    ("don't let me forget to call my doctor on Friday",                       "reminder"),
+    ("buzz me in 45 minutes",                                                 "reminder"),
+    ("put together a message for my team about the deployment delay",          "writing"),
+    ("compose something professional to send to the client about the invoice", "writing"),
+    ("I need to send my prof an email asking for an extension",                "writing"),
+    ("pull up what's new in the ROS2 Jazzy release",                          "research"),
+    ("go find out if onnxruntime has aarch64 CUDA wheels yet",                 "research"),
+    ("what's shipping in the next sherpa-onnx version",                        "research"),
+    ("help me map out what I need to do before the hackathon deadline",        "planning"),
+    ("I want to get GRACE walking in 3 months, break that down",               "planning"),
+    ("give me a roadmap for integrating MioTTS into AIVA",                     "planning"),
+    ("this keeps segfaulting and I don't know why",                            "coding"),
+    ("refactor the schedule runner to use asyncio instead of threads",         "coding"),
+    ("there's a race condition in reflect.py, track it down",                  "architecture"),
+    ("should I run the embedder on CPU or offload to GPU for aarch64",         "decision"),
+    ("which quantization level is better for bilingual TTS quality",           "decision"),
+    ("I can't decide between sqlite-vec and qdrant for the memory backend",    "decision"),
+    ("pick up where we left off on the memory consolidation refactor",         "ongoing_task"),
+    ("we were in the middle of fixing the sshfs uid mapping, keep going",      "ongoing_task"),
+    ("jump back into the reflect script we were editing",                      "ongoing_task"),
+    ("is it weird that I find debugging more satisfying than writing features", "chat"),
+    ("what's the actual difference between a semaphore and a mutex",           "chat"),
+    ("do you think embeddings are a good long-term foundation for memory",     "chat"),
+    ("walk me through why cosine similarity works for semantic search",        "chat"),
+    ("I feel like my routing thresholds are tuned to my test set",             "chat"),
+    ("what's the Canucks score from last night",                               "chat+search"),
+    ("has NVIDIA released any new Jetson hardware this year",                  "chat+search"),
+    ("what's ethereum trading at right now",                                   "chat+search"),
+    ("did llama.cpp merge the Vulkan backend yet",                             "chat+search"),
+    ("what's the current onnxruntime stable release",                          "chat+search"),
+]
+
+# ── load external prompt file ─────────────────────────────────────────────────
+
+def load_prompt_file(path: str) -> list[tuple[str, str]]:
+    """
+    Load prompts from a JSON file.  Accepts two shapes:
+      { "prompts": [ {"prompt": "...", "expected": "..."}, ... ] }
+      [ {"prompt": "...", "expected": "..."}, ... ]
+    """
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    rows = data.get("prompts", data) if isinstance(data, dict) else data
+    if not isinstance(rows, list):
+        raise ValueError(f"Cannot parse prompt file {path!r}: expected a list or {{\"prompts\": [...]}}")
+
+    suite = []
+    for i, row in enumerate(rows):
+        p = row.get("prompt") or row.get("text") or row.get("input")
+        e = row.get("expected") or row.get("label") or row.get("route")
+        if not p:
+            raise ValueError(f"Entry {i} in {path!r} missing 'prompt' field")
+        if not e:
+            raise ValueError(f"Entry {i} in {path!r} missing 'expected' field")
+        suite.append((str(p).strip(), str(e).strip()))
+
+    return suite
+
+# ── result record ─────────────────────────────────────────────────────────────
+
+class RouteResult:
+    __slots__ = ("prompt", "expected", "got", "latency_ms", "llm_calls", "passed")
+
+    def __init__(self, prompt: str, expected: str):
+        self.prompt     = prompt
+        self.expected   = expected
+        self.got        = "?"
+        self.latency_ms = 0.0
+        self.llm_calls  = 0
+        self.passed     = False
+
 # ── init embedder only (no LLM, no TTS, no schedule) ─────────────────────────
 
 memorize = AikoMemorize()
 
 think = object.__new__(AikoThink)
-think._memorize = memorize
-think._speak    = None
+think._memorize                    = memorize
+think._speak                       = None
 think._semantic_example_cache      = {}
 think._semantic_example_cache_lock = __import__("threading").RLock()
 think._pending_search_query        = None
@@ -82,25 +164,20 @@ think._history                     = []
 think._history_lock                = __import__("threading").RLock()
 think._reasoning                   = False
 
-# ── read ROUTE_MODE (mirrors think.py logic) ─────────────────────────────────
+# ── read ROUTE_MODE ───────────────────────────────────────────────────────────
 
-_ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
-_RUN_SEMANTIC = _ROUTE_MODE not in {"llm", "0", "off", "false", "chat", "disabled"}
-# In production, ROUTE_MODE=semantic still falls back to LLM when scores are
-# ambiguous, so we always show the LLM path when mode=semantic.
-# ROUTE_MODE=semantic_only suppresses the LLM fallback display.
+_ROUTE_MODE        = os.getenv("ROUTE_MODE", "semantic").strip().lower()
+_RUN_SEMANTIC      = _ROUTE_MODE not in {"llm", "0", "off", "false", "chat", "disabled"}
 _SHOW_LLM_FALLBACK = _ROUTE_MODE not in {"semantic_only", "chat", "0", "off", "false", "disabled"}
 
-# ── lazy real OpenAI client (fired only when LLM stages are relevant) ─────────
+# ── lazy real OpenAI client ───────────────────────────────────────────────────
 
 _llm_client = None
 
 def _get_llm_client():
-    """Return a real OpenAI-compat client, importing the real openai package."""
     global _llm_client
     if _llm_client is not None:
         return _llm_client
-    # pop the MagicMock stub so we get the real package
     sys.modules.pop("openai", None)
     try:
         from openai import OpenAI
@@ -136,18 +213,14 @@ def trace_stage(
         marker = f" {BOLD}← best{RESET}" if lbl == best_label else ""
         print(f"  {lbl:<16} {score_bar(sc)}{marker}")
 
-    pass_thresh = best_score >= threshold
-    pass_gap    = gap >= min_gap
-    verdict     = GREEN + "PASS" + RESET if (pass_thresh and pass_gap) else RED + "FAIL" + RESET
+    verdict = GREEN + "PASS" + RESET if (best_score >= threshold and gap >= min_gap) else RED + "FAIL" + RESET
     print(f"\n  threshold={threshold}  gap_min={min_gap}  top_k={_SEMANTIC_LABEL_TOP_K}")
     print(f"  best={best_label}  score={best_score:.3f}  gap={gap:.3f}  [{verdict}]")
-
     return best_label, best_score
 
-# ── LLM tracer — delegates to think's real methods, no prompt duplication ─────
+# ── LLM tracer ────────────────────────────────────────────────────────────────
 
 def _ensure_llm_client() -> bool:
-    """Patch a real OpenAI client onto think. Returns False if unavailable."""
     if getattr(think, "_client", None) is not None and not isinstance(think._client, MagicMock):
         return True
     client = _get_llm_client()
@@ -158,146 +231,302 @@ def _ensure_llm_client() -> bool:
     think._llm_model    = LLM_MODEL
     return True
 
-def trace_llm_router(user_input: str) -> str | None:
-    """Call think._classify_agent_intent — the exact production code path."""
+def trace_llm_router(user_input: str, result: RouteResult | None = None, quiet: bool = False) -> str | None:
     if not _ensure_llm_client():
         return None
-
-    print(f"\n{BOLD}▶ LLM classifier  (ROUTER_MODEL={ROUTER_MODEL}){RESET}")
-    import time
+    if not quiet:
+        print(f"\n{BOLD}▶ LLM classifier  (ROUTER_MODEL={ROUTER_MODEL}){RESET}")
     t0 = time.monotonic()
     try:
-        result  = think._classify_agent_intent(user_input)
+        label   = think._classify_agent_intent(user_input)
         elapsed = time.monotonic() - t0
-        color   = GREEN if result != "chat" else CYAN
-        print(f"\n  parsed     : {color}{result}{RESET}")
-        print(f"  latency    : {elapsed*1000:.0f} ms")
-        return result
+        if not quiet:
+            color = GREEN if label != "chat" else CYAN
+            print(f"\n  parsed     : {color}{label}{RESET}")
+            print(f"  latency    : {elapsed*1000:.0f} ms")
+        if result is not None:
+            result.llm_calls += 1
+        return label
     except Exception as e:
-        print(f"\n  {RED}LLM call failed: {e}{RESET}")
+        elapsed = time.monotonic() - t0
+        if not quiet:
+            print(f"\n  {RED}LLM call failed ({elapsed*1000:.0f} ms): {e}{RESET}")
+        if result is not None:
+            result.llm_calls += 1
         return None
 
-def trace_llm_search_classify(user_input: str) -> str | None:
-    """Call think._llm_resolve_search_query — the exact production code path."""
+def trace_llm_search_resolve(user_input: str, result: RouteResult | None = None, quiet: bool = False) -> str | None:
     if not _ensure_llm_client():
         return None
-
-    print(f"\n{BOLD}▶ LLM search query resolver  (_llm_resolve_search_query){RESET}")
-    import time
+    if not quiet:
+        print(f"\n{BOLD}▶ LLM search query resolver  (_llm_resolve_search_query){RESET}")
     t0 = time.monotonic()
     try:
-        result  = think._llm_resolve_search_query(user_input)
+        query   = think._llm_resolve_search_query(user_input)
         elapsed = time.monotonic() - t0
-        print(f"\n  query      : {CYAN}{result!r}{RESET}")
-        print(f"  latency    : {elapsed*1000:.0f} ms")
-        return result
+        if not quiet:
+            print(f"\n  query      : {CYAN}{query!r}{RESET}")
+            print(f"  latency    : {elapsed*1000:.0f} ms")
+        if result is not None:
+            result.llm_calls += 1
+        return query
     except Exception as e:
         elapsed = time.monotonic() - t0
-        print(f"\n  {RED}LLM call failed ({elapsed*1000:.0f} ms): {e!r}{RESET}")
+        if not quiet:
+            print(f"\n  {RED}LLM call failed ({elapsed*1000:.0f} ms): {e!r}{RESET}")
+        if result is not None:
+            result.llm_calls += 1
         return None
 
-# ── full trace ────────────────────────────────────────────────────────────────
+# ── core routing logic (shared between verbose and quiet paths) ───────────────
 
-def trace(prompt: str) -> None:
-    print(f"\n{BOLD}{'═'*60}{RESET}")
-    print(f"{BOLD}PROMPT:{RESET} {CYAN}{prompt!r}{RESET}")
-    print(f"{'═'*60}")
+def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
+    """Compute the final route label, printing detail when quiet=False."""
 
-    is_agentic = False
+    final_route = "chat"
 
     if _RUN_SEMANTIC:
-        # ── Stage 1: semantic binary ──────────────────────────────────────────
-        print(f"\n{BOLD}▶ Stage 1  chat vs agentic  (semantic){RESET}")
-        best1, score1 = trace_stage(
-            "binary classifier",
-            _ROUTE_BINARY_EXAMPLES,
-            prompt,
-            _SEMANTIC_ROUTE_THRESHOLD,
-            _SEMANTIC_ROUTE_MIN_GAP,
-            _ROUTE_INSTRUCT_BINARY,
-        )
-        scores1     = think._semantic_all_scores(prompt, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
-        sorted1     = sorted(scores1.values(), reverse=True)
-        gap1        = sorted1[0] - sorted1[1] if len(sorted1) > 1 else 1.0
-        is_agentic  = (
-            best1 == "agentic"
-            and score1 >= _SEMANTIC_ROUTE_THRESHOLD
-            and gap1   >= _SEMANTIC_ROUTE_MIN_GAP
-        )
+        if not quiet:
+            print(f"\n{BOLD}▶ Stage 1  chat vs agentic  (semantic){RESET}")
+            trace_stage("binary classifier", _ROUTE_BINARY_EXAMPLES, prompt,
+                        _SEMANTIC_ROUTE_THRESHOLD, _SEMANTIC_ROUTE_MIN_GAP, _ROUTE_INSTRUCT_BINARY)
+
+        scores1 = think._semantic_all_scores(prompt, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
+        sorted1 = sorted(scores1.values(), reverse=True)
+        gap1    = sorted1[0] - sorted1[1] if len(sorted1) > 1 else 1.0
+        best1   = max(scores1, key=scores1.get) if scores1 else "chat"
+        score1  = scores1.get(best1, 0.0)
+
+        is_agentic = best1 == "agentic" and score1 >= _SEMANTIC_ROUTE_THRESHOLD and gap1 >= _SEMANTIC_ROUTE_MIN_GAP
 
         if is_agentic:
-            print(f"\n  {GREEN}→ AGENTIC{RESET}")
+            if not quiet:
+                print(f"\n  {GREEN}→ AGENTIC{RESET}")
+                print(f"\n{BOLD}▶ Stage 2a  which tool  (semantic){RESET}")
+                trace_stage("tool classifier", _ROUTE_TOOL_EXAMPLES, prompt,
+                            _SEMANTIC_ROUTE_THRESHOLD, _SEMANTIC_TOOL_MIN_GAP, _ROUTE_INSTRUCT_TOOL)
 
-            # ── Stage 2a: tool classifier ─────────────────────────────────────
-            print(f"\n{BOLD}▶ Stage 2a  which tool  (semantic){RESET}")
-            best2, score2 = trace_stage(
-                "tool classifier",
-                _ROUTE_TOOL_EXAMPLES,
-                prompt,
-                _SEMANTIC_ROUTE_THRESHOLD,
-                _SEMANTIC_TOOL_MIN_GAP,
-                _ROUTE_INSTRUCT_TOOL,
-            )
             scores2 = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
             sorted2 = sorted(scores2.values(), reverse=True)
             gap2    = sorted2[0] - sorted2[1] if len(sorted2) > 1 else 1.0
+            best2   = max(scores2, key=scores2.get) if scores2 else "coding"
+            score2  = scores2.get(best2, 0.0)
 
             if score2 >= _SEMANTIC_ROUTE_THRESHOLD and gap2 >= _SEMANTIC_TOOL_MIN_GAP:
-                print(f"\n  {GREEN}→ ROUTE: agentic_chat  tool={best2}{RESET}")
-                if _SHOW_LLM_FALLBACK:
-                    print(f"\n  {DIM}(LLM fallback skipped — semantic confident){RESET}")
+                final_route = best2
+                if not quiet:
+                    print(f"\n  {GREEN}→ ROUTE: agentic_chat  tool={best2}{RESET}")
+                    if _SHOW_LLM_FALLBACK:
+                        print(f"\n  {DIM}(LLM fallback skipped — semantic confident){RESET}")
             else:
-                print(f"\n  {YELLOW}→ semantic weak — LLM fallback fires{RESET}")
+                if not quiet:
+                    print(f"\n  {YELLOW}→ semantic weak — LLM fallback fires{RESET}")
                 if _SHOW_LLM_FALLBACK:
-                    llm_label = trace_llm_router(prompt)
+                    llm_label = trace_llm_router(prompt, result, quiet)
                     if llm_label:
-                        color = GREEN if llm_label != "chat" else CYAN
-                        print(f"\n  {color}→ ROUTE: agentic_chat  tool={llm_label}  (via LLM){RESET}")
+                        final_route = llm_label
+                        if not quiet:
+                            color = GREEN if llm_label != "chat" else CYAN
+                            print(f"\n  {color}→ ROUTE: agentic_chat  tool={llm_label}  (via LLM){RESET}")
+                else:
+                    final_route = best2 or "coding"
 
         else:
-            print(f"\n  {CYAN}→ CHAT{RESET}")
+            if not quiet:
+                print(f"\n  {CYAN}→ CHAT{RESET}")
+                print(f"\n{BOLD}▶ Stage 2b  websearch needed?  (semantic){RESET}")
+                trace_stage("search classifier", _ROUTE_SEARCH_EXAMPLES, prompt,
+                            _SEMANTIC_SEARCH_THRESHOLD, _SEMANTIC_SEARCH_MIN_GAP, _ROUTE_INSTRUCT_SEARCH)
 
-            # ── Stage 2b: websearch classifier ───────────────────────────────
-            print(f"\n{BOLD}▶ Stage 2b  websearch needed?  (semantic){RESET}")
-            best3, score3 = trace_stage(
-                "search classifier",
-                _ROUTE_SEARCH_EXAMPLES,
-                prompt,
-                _SEMANTIC_SEARCH_THRESHOLD,
-                _SEMANTIC_SEARCH_MIN_GAP,
-                _ROUTE_INSTRUCT_SEARCH,
-            )
-            scores3      = think._semantic_all_scores(prompt, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH)
-            sorted3      = sorted(scores3.values(), reverse=True)
-            gap3         = sorted3[0] - sorted3[1] if len(sorted3) > 1 else 1.0
-            needs_search = (
-                best3 == "data"
-                and score3 >= _SEMANTIC_SEARCH_THRESHOLD
-                and gap3   >= _SEMANTIC_SEARCH_MIN_GAP
-            )
+            scores3 = think._semantic_all_scores(prompt, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH)
+            sorted3 = sorted(scores3.values(), reverse=True)
+            gap3    = sorted3[0] - sorted3[1] if len(sorted3) > 1 else 1.0
+            best3   = max(scores3, key=scores3.get) if scores3 else "no"
+            score3  = scores3.get(best3, 0.0)
+
+            needs_search = best3 == "data" and score3 >= _SEMANTIC_SEARCH_THRESHOLD and gap3 >= _SEMANTIC_SEARCH_MIN_GAP
+            ambiguous    = score1 >= _SEMANTIC_ROUTE_THRESHOLD and gap1 < _SEMANTIC_ROUTE_MIN_GAP
 
             if needs_search:
-                print(f"\n  {GREEN}→ ROUTE: chat()  websearch=True  query={prompt!r}{RESET}")
-            elif score1 >= _SEMANTIC_ROUTE_THRESHOLD and gap1 < _SEMANTIC_ROUTE_MIN_GAP:
-                print(f"\n  {YELLOW}→ ROUTE: llm_fallback (binary scores too close){RESET}")
+                final_route = "chat+search"
+                if not quiet:
+                    print(f"\n  {GREEN}→ ROUTE: chat()  websearch=True  query={prompt!r}{RESET}")
+            elif ambiguous:
+                if not quiet:
+                    print(f"\n  {YELLOW}→ ROUTE: llm_fallback (binary scores too close){RESET}")
                 if _SHOW_LLM_FALLBACK:
-                    trace_llm_router(prompt)
+                    llm_label = trace_llm_router(prompt, result, quiet)
+                    final_route = llm_label if llm_label and llm_label != "chat" else "chat"
             else:
-                print(f"\n  {CYAN}→ ROUTE: chat()  websearch=False{RESET}")
+                final_route = "chat"
+                if not quiet:
+                    print(f"\n  {CYAN}→ ROUTE: chat()  websearch=False{RESET}")
 
-            # LLM search resolve (always shown for chat turns when LLM fallback is active)
-            if _SHOW_LLM_FALLBACK:
-                trace_llm_search_classify(prompt)
+            # search resolver: only in LLM fallback mode, not every chat turn
+            if _SHOW_LLM_FALLBACK and needs_search and _ROUTE_MODE == "llm":
+                trace_llm_search_resolve(prompt, result, quiet)
 
     # ── LLM-only mode ────────────────────────────────────────────────────────
     if not _RUN_SEMANTIC:
-        print(f"\n{BOLD}▶ Skipping semantic stages (ROUTE_MODE={_ROUTE_MODE}){RESET}")
+        if not quiet:
+            print(f"\n{BOLD}▶ Skipping semantic stages (ROUTE_MODE={_ROUTE_MODE}){RESET}")
         think._history = []
-        trace_llm_router(prompt)
+        llm_label = trace_llm_router(prompt, result, quiet)
         think._history = []
-        trace_llm_search_classify(prompt)
+
+        if llm_label and llm_label != "chat":
+            final_route = llm_label
+        else:
+            # search resolver only fires for chat-classified turns
+            search_query = trace_llm_search_resolve(prompt, result, quiet)
+            final_route  = "chat+search" if search_query else "chat"
+
+    return final_route
+
+# ── public trace entry point ──────────────────────────────────────────────────
+
+def trace(prompt: str, result: RouteResult | None = None, quiet: bool = False) -> str:
+    t_start = time.monotonic()
+
+    if not quiet:
+        print(f"\n{BOLD}{'═'*60}{RESET}")
+        print(f"{BOLD}PROMPT:{RESET} {CYAN}{prompt!r}{RESET}")
+        print(f"{'═'*60}")
+
+    final_route = _compute_route(prompt, result, quiet)
+
+    if result is not None:
+        result.latency_ms = (time.monotonic() - t_start) * 1000
+        result.got        = final_route
+        result.passed     = (final_route == result.expected)
+
+    if not quiet:
+        print()
+
+    return final_route
+
+# ── summary table ─────────────────────────────────────────────────────────────
+
+def print_summary(results: list[RouteResult], source_label: str = "") -> None:
+    from collections import defaultdict
+
+    total       = len(results)
+    passed      = sum(1 for r in results if r.passed)
+    total_lat   = sum(r.latency_ms for r in results)
+    total_llm   = sum(r.llm_calls  for r in results)
+    accuracy    = passed / total * 100 if total else 0.0
+    avg_lat     = total_lat / total if total else 0.0
+    llm_pct     = total_llm / total * 100 if total else 0.0   # avg LLM calls per prompt as %
+
+    C_PROMPT  = 50
+    C_EXP     = 14
+    C_GOT     = 14
+    C_LAT     = 8
+    C_LLM     = 5
+    C_VERDICT = 6
+
+    header = (
+        f"{'prompt':<{C_PROMPT}} "
+        f"{'expected':<{C_EXP}} "
+        f"{'got':<{C_GOT}} "
+        f"{'ms':>{C_LAT}} "
+        f"{'llm':>{C_LLM}} "
+        f"{'result':<{C_VERDICT}}"
+    )
+    W = len(header)
+    SEP = "─" * W
+
+    label_str = f"  [{source_label}]" if source_label else ""
+
+    print(f"\n{BOLD}{'═' * W}{RESET}")
+    print(f"{BOLD}RESULTS{label_str}{RESET}")
+    print(f"{'═' * W}")
+    print(f"  accuracy    {pct_bar(accuracy)} {passed}/{total}  ({accuracy:.1f}%)")
+    print(f"  avg latency {avg_lat:>7.0f} ms")
+    print(f"  total time  {total_lat:>7.0f} ms")
+    print(f"  LLM calls   {total_llm:>4}  ({llm_pct:.1f} per prompt avg)")
+    print(f"{'═' * W}")
+    print(f"\n{BOLD}{header}{RESET}")
+    print(SEP)
+
+    for r in results:
+        short   = r.prompt if len(r.prompt) <= C_PROMPT else r.prompt[:C_PROMPT - 1] + "…"
+        verdict = f"{GREEN}PASS{RESET}" if r.passed else f"{RED}FAIL{RESET}"
+        gc      = GREEN if r.passed else RED
+        print(
+            f"{short:<{C_PROMPT}} "
+            f"{r.expected:<{C_EXP}} "
+            f"{gc}{r.got:<{C_GOT}}{RESET} "
+            f"{r.latency_ms:>{C_LAT}.0f} "
+            f"{r.llm_calls:>{C_LLM}} "
+            f"{verdict}"
+        )
+
+    print(SEP)
+
+    # ── per-label breakdown ───────────────────────────────────────────────────
+    by_label: dict[str, list[RouteResult]] = defaultdict(list)
+    for r in results:
+        by_label[r.expected].append(r)
+
+    print(f"\n{BOLD}per-label breakdown{RESET}")
+    label_header = f"  {'label':<16} {'acc':>4}  bar               n    avg ms  llm/prompt"
+    print(label_header)
+    print("  " + "─" * (len(label_header) - 2))
+
+    for label in sorted(by_label):
+        rows   = by_label[label]
+        n      = len(rows)
+        n_pass = sum(1 for r in rows if r.passed)
+        pct    = n_pass / n * 100
+        a_lat  = sum(r.latency_ms for r in rows) / n
+        a_llm  = sum(r.llm_calls  for r in rows) / n
+        print(
+            f"  {label:<16} {pct:>3.0f}%  {pct_bar(pct)}  "
+            f"{n:>2}  {a_lat:>6.0f} ms  {a_llm:.2f}"
+        )
+
+    # ── failures list ─────────────────────────────────────────────────────────
+    failures = [r for r in results if not r.passed]
+    if failures:
+        print(f"\n{BOLD}{RED}failures ({len(failures)}){RESET}")
+        for r in failures:
+            short = r.prompt if len(r.prompt) <= 60 else r.prompt[:59] + "…"
+            print(f"  {RED}✗{RESET}  {short}")
+            print(f"       expected={r.expected}  got={r.got}  {r.latency_ms:.0f} ms  {r.llm_calls} llm")
+    else:
+        print(f"\n{GREEN}All {total} prompts passed.{RESET}")
 
     print()
+
+# ── batch runner ──────────────────────────────────────────────────────────────
+
+def run_suite(suite: list[tuple[str, str]], quiet: bool, source_label: str = "", seed: int | None = None) -> None:
+    mode_tag = {
+        "semantic":      f"{CYAN}semantic (+ LLM fallback){RESET}",
+        "semantic_only": f"{CYAN}semantic-only{RESET}",
+        "llm":           f"{MAGENTA}LLM-only{RESET}",
+    }.get(_ROUTE_MODE, f"{CYAN}{_ROUTE_MODE}{RESET}")
+
+    if seed is None:
+        seed = random.randint(0, 0xFFFF)
+    rng = random.Random(seed)
+    suite = list(suite)
+    rng.shuffle(suite)
+
+    print(f"\n{BOLD}Aiko route tracer{RESET}  ROUTE_MODE={mode_tag}  {len(suite)} prompts  source={source_label or 'built-in'}  seed={seed}")
+
+    results = []
+    for i, (prompt, expected) in enumerate(suite, 1):
+        r = RouteResult(prompt, expected)
+        trace(prompt, result=r, quiet=quiet)
+        if quiet:
+            verdict = f"{GREEN}✓{RESET}" if r.passed else f"{RED}✗{RESET}"
+            short   = prompt if len(prompt) <= 56 else prompt[:55] + "…"
+            print(f"  {verdict} [{i:>3}/{len(suite)}]  {short:<56}  {r.got:<14}  {r.latency_ms:>6.0f} ms  {r.llm_calls} llm")
+        results.append(r)
+
+    print_summary(results, source_label=source_label)
 
 # ── entrypoint ────────────────────────────────────────────────────────────────
 
@@ -306,15 +535,66 @@ def main():
         print(f"{YELLOW}ROUTE_MODE={_ROUTE_MODE} — routing is disabled in .env; nothing to trace.{RESET}")
         sys.exit(0)
 
+    # ── parse args properly: flags consume their value so it never leaks ────
+    raw            = sys.argv[1:]
+    run_suite_flag = False
+    quiet          = False
+    file_path: str | None = None
+    seed:      int | None = None
+    cli_prompt_parts: list[str] = []
+
+    i = 0
+    while i < len(raw):
+        a = raw[i]
+        if a == "--suite":
+            run_suite_flag = True
+        elif a == "--quiet":
+            quiet = True
+        elif a == "--file":
+            i += 1
+            if i >= len(raw):
+                print(f"{RED}--file requires a path argument{RESET}")
+                sys.exit(1)
+            file_path = raw[i]
+        elif a == "--seed":
+            i += 1
+            if i >= len(raw):
+                print(f"{RED}--seed requires an integer argument{RESET}")
+                sys.exit(1)
+            try:
+                seed = int(raw[i])
+            except ValueError:
+                print(f"{RED}--seed requires an integer, got {raw[i]!r}{RESET}")
+                sys.exit(1)
+        elif a.startswith("--"):
+            print(f"{YELLOW}unknown flag {a!r} — ignored{RESET}")
+        else:
+            cli_prompt_parts.append(a)
+        i += 1
+
+    if file_path:
+        try:
+            suite = load_prompt_file(file_path)
+        except Exception as e:
+            print(f"{RED}Failed to load {file_path!r}: {e}{RESET}")
+            sys.exit(1)
+        run_suite(suite, quiet=quiet, source_label=os.path.basename(file_path), seed=seed)
+        return
+
+    if run_suite_flag:
+        run_suite(BUILTIN_SUITE, quiet=quiet, source_label="built-in", seed=seed)
+        return
+
+    if cli_prompt_parts:
+        trace(" ".join(cli_prompt_parts))
+        return
+
+    # interactive REPL
     mode_tag = {
         "semantic":      f"{CYAN}semantic (+ LLM fallback){RESET}",
         "semantic_only": f"{CYAN}semantic-only (no LLM fallback){RESET}",
         "llm":           f"{MAGENTA}LLM-only{RESET}",
     }.get(_ROUTE_MODE, f"{CYAN}{_ROUTE_MODE}{RESET}")
-
-    if len(sys.argv) > 1:
-        trace(" ".join(sys.argv[1:]))
-        return
 
     print(f"{BOLD}Aiko route tracer{RESET}  {DIM}(Ctrl+C or empty line to quit){RESET}  ROUTE_MODE={mode_tag}")
     while True:
