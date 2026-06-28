@@ -25,7 +25,11 @@
             "why does X exist",
             "why does Python have the GIL",
             "how does X work internally",
-            "what is the purpose of X"
+            "what is the purpose of X",
+            "is it weird that I find X more satisfying than Y",
+            "what's the actual difference between X and Y",
+            "do you think X is a good long-term approach",
+            "walk me through why X works"
         ],
         "agentic": [
             "search for information about this online",
@@ -59,7 +63,17 @@
             "write a short email to my landlord about X",
             "draft a message to X about Y",
             "can you look something up for me",
-            "open soul.md and show me the persona block"
+            "open soul.md and show me the persona block",
+            "can you ping me when it's 8pm",
+            "buzz me in 45 minutes",
+            "go find out if X has Y yet",
+            "help me map out what I need to do for Z",
+            "I want to get X done in N months, break that down",
+            "give me a roadmap for X",
+            "should I use X or Y for Z",
+            "which is better for X, A or B",
+            "pick up where we left off on X",
+            "this keeps segfaulting and I don't know why"
         ]
     },
     "tools": {

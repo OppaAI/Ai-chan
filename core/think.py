@@ -354,6 +354,14 @@ class AikoThink:
                     "Label: ongoing_task\n\n"
                     "Message: 'what do you think about minimalism'\n"
                     "Label: chat\n\n"
+                    "Message: 'give me a roadmap for X'\n"
+                    "Label: planning\n\n"
+                    "Message: 'help me map out what I need to do before the deadline'\n"
+                    "Label: planning\n\n"
+                    "Message: 'pick up where we left off on X'\n"
+                    "Label: ongoing_task\n\n"
+                    "Message: 'which is better for X, option A or option B'\n"
+                    "Label: decision\n\n"
                     "Label:"
                 )}],
                 stream=False, max_tokens=6, temperature=0.0, timeout=LLM_TIMEOUT,
@@ -662,19 +670,19 @@ class AikoThink:
                     "Output only one of these two formats, nothing else:\n"
                     "data|<3-5 word search query>\n"
                     "social|none\n\n"
-                    "Message: 'what's the weather in Vancouver'\n"
-                    "Output: data|current weather Vancouver\n\n"
-                    "Message: 'who won the NHL game last night'\n"
-                    "Output: data|NHL game results last night\n\n"
-                    "Message: 'what's the latest llama.cpp version'\n"
-                    "Output: data|llama.cpp latest stable release\n\n"
-                    "Message: 'what's the current price of RTX 5090'\n"
-                    "Output: data|RTX 5090 current price 2025\n\n"
                     "Message: 'debug why asyncio.run() hangs forever'\n"
                     "Output: social|none\n\n"
                     "Message: 'why does Python have the GIL'\n"
                     "Output: social|none\n\n"
                     "Message: 'explain how attention works in transformers'\n"
+                    "Output: social|none\n\n"
+                    "Message: 'what's the actual difference between X and Y'\n"
+                    "Output: social|none\n\n"
+                    "Message: 'walk me through why X works'\n"
+                    "Output: social|none\n\n"
+                    "Message: 'do you think X is a good approach'\n"
+                    "Output: social|none\n\n"
+                    "Message: 'is it weird that I find X more satisfying than Y'\n"
                     "Output: social|none\n\n"
                     "Message: 'help me think through this'\n"
                     "Output: social|none\n\n"
@@ -688,21 +696,34 @@ class AikoThink:
                     "Output: social|none\n\n"
                     "Message: 'write an email to my landlord'\n"
                     "Output: social|none\n\n"
-                    "Message: 'explain how attention works'\n"
-                    "Output: social|none\n\n"
+                    "Message: 'what's the weather in Vancouver'\n"
+                    "Output: data|current weather Vancouver\n\n"
+                    "Message: 'who won the NHL game last night'\n"
+                    "Output: data|NHL game results last night\n\n"
+                    "Message: 'what's the latest llama.cpp version'\n"
+                    "Output: data|llama.cpp latest stable release\n\n"
+                    "Message: 'what's the current price of RTX 5090'\n"
+                    "Output: data|RTX 5090 current price 2025\n\n"
+                    f"{context_block}"
+                    "Output:"
                 )}],
-                stream=False, max_tokens=16, temperature=0.0, timeout=LLM_TIMEOUT,
+                stream=False, max_tokens=12, temperature=0.0, timeout=LLM_TIMEOUT,
             )
             answer = resp.choices[0].message.content.strip()
             label, _, rest = answer.partition("|")
-            
+            is_data = "data" in label.strip().lower()
+
+            if not is_data:
+                return False, user_input
+
+            # single sanitization pass — no second assignment
             resolved = rest.strip().split('\n')[0].strip('*_`()').strip()[:100]
-            if not resolved or resolved.lower() in ("none", "<search query>"):
+            resolved = re.sub(r'\{[^}]*\}', '', resolved).strip()
+            if not resolved or resolved.lower() in ("none", "<search query>", "<3-5 word search query>"):
                 resolved = user_input
 
-            is_data = "data" in label.strip().lower()
-            resolved = rest.strip() if (is_data and rest and rest.lower() != "none") else user_input
-            return is_data, resolved
+            return True, resolved
+
         except Exception as e:
             log.warning(f"Intent classification failed: {e}")
             return True, user_input
