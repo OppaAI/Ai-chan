@@ -442,7 +442,7 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
                 trace_llm_search_resolve(prompt, result, quiet)
 
     # ── LLM-only mode ────────────────────────────────────────────────────────
-if not _RUN_SEMANTIC:
+    if not _RUN_SEMANTIC:
         if not quiet:
             print(f"\n{BOLD}▶ Skipping semantic stages (ROUTE_MODE={_ROUTE_MODE}){RESET}")
         think._history = []
