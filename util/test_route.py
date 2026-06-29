@@ -502,7 +502,7 @@ def print_summary(results: list[RouteResult], source_label: str = "") -> None:
     total_llm   = sum(r.llm_calls  for r in results)
     accuracy    = passed / total * 100 if total else 0.0
     avg_lat     = total_lat / total if total else 0.0
-    llm_pct     = total_llm / total * 100 if total else 0.0   # avg LLM calls per prompt as %
+    llm_avg = total_llm / total if total else 0.0
 
     C_PROMPT  = 50
     C_EXP     = 16
@@ -530,7 +530,7 @@ def print_summary(results: list[RouteResult], source_label: str = "") -> None:
     print(f"  accuracy    {pct_bar(accuracy)} {passed}/{total}  ({accuracy:.1f}%)")
     print(f"  avg latency {avg_lat:>7.0f} ms")
     print(f"  total time  {total_lat:>7.0f} ms")
-    print(f"  LLM calls   {total_llm:>4}  ({llm_pct:.1f} per prompt avg)")
+    print(f"  LLM calls   {total_llm:>4}  ({llm_avg:.2f} per prompt avg)")
     print(f"{'═' * W}")
     print(f"\n{BOLD}{header}{RESET}")
     print(SEP)
@@ -587,6 +587,11 @@ def print_summary(results: list[RouteResult], source_label: str = "") -> None:
 
 # ── batch runner ──────────────────────────────────────────────────────────────
 
+def _warmup_embedder(suite: list[tuple[str, str]]) -> None:
+    if not suite:
+        return
+    think._semantic_all_scores(suite[0][0], _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
+
 def run_suite(suite: list[tuple[str, str]], quiet: bool, source_label: str = "", seed: int | None = None) -> None:
     mode_tag = {
         "semantic":      f"{CYAN}semantic (+ LLM fallback){RESET}",
@@ -602,6 +607,7 @@ def run_suite(suite: list[tuple[str, str]], quiet: bool, source_label: str = "",
 
     print(f"\n{BOLD}Aiko route tracer{RESET}  ROUTE_MODE={mode_tag}  {len(suite)} prompts  source={source_label or 'built-in'}  seed={seed}")
 
+    _warmup_embedder(suite)
     results = []
     for i, (prompt, expected) in enumerate(suite, 1):
         r = RouteResult(prompt, expected)
