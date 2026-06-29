@@ -1,371 +1,89 @@
 {
     "_meta": {
-        "description": "Aiko router test suite — 100 prompts with expected route labels",
+        "description": "Aiko router test suite \u2014 complex prompts for binary agentic routing plus chat websearch",
         "routes": [
+            "agentic",
             "chat",
-            "chat+search",
-            "reminder",
-            "research",
-            "planning",
-            "writing",
-            "coding",
-            "decision",
-            "architecture",
-            "ongoing_task"
+            "chat+search"
         ],
         "counts": {
-            "chat": 15,
-            "chat+search": 15,
-            "reminder": 8,
-            "research": 10,
-            "planning": 10,
-            "writing": 8,
-            "coding": 10,
-            "decision": 10,
-            "architecture": 7,
-            "ongoing_task": 7
+            "agentic": 12,
+            "chat": 5,
+            "chat+search": 5
         }
     },
     "prompts": [
         {
-            "prompt": "can you ping me when it's 8pm",
-            "expected": "reminder"
+            "prompt": "research how to bake a carrot cake, compare two credible recipes, plan ingredients with amounts, write steps and notes, and save a short report",
+            "expected": "agentic"
         },
         {
-            "prompt": "don't let me forget to call my doctor on Friday",
-            "expected": "reminder"
+            "prompt": "schedule a job to check my email every hour and notify me when abc company sends me an email, then write a summary of the scheduled task",
+            "expected": "agentic"
         },
         {
-            "prompt": "buzz me in 45 minutes",
-            "expected": "reminder"
+            "prompt": "open think.py, agentic.py, and persona/router_prompts.json; combine architecture routing into coding; update util/test_route.py and report what changed",
+            "expected": "agentic"
         },
         {
-            "prompt": "set a reminder for tomorrow morning at 9",
-            "expected": "reminder"
+            "prompt": "look up the newest llama.cpp release notes, fetch the relevant page, summarize important changes, and recommend whether I should update",
+            "expected": "agentic"
         },
         {
-            "prompt": "remind me to take my meds tonight",
-            "expected": "reminder"
+            "prompt": "inspect the repository for schedule_job usage, make a plan for adding weekly custom weekdays, patch the code if needed, and update tests",
+            "expected": "agentic"
         },
         {
-            "prompt": "alert me when it's been 2 hours",
-            "expected": "reminder"
+            "prompt": "compare sqlite-vec and qdrant for Aiko memory using current docs, decide which fits local Jetson constraints, and write the recommendation",
+            "expected": "agentic"
         },
         {
-            "prompt": "can you remind me about the standup at 10am",
-            "expected": "reminder"
+            "prompt": "continue the routing refactor we were doing, check current git diff first, finish the missing tests, and tell me exactly what remains",
+            "expected": "agentic"
         },
         {
-            "prompt": "ping me in 20 minutes to check the oven",
-            "expected": "reminder"
+            "prompt": "draft a professional email to my landlord about the broken heater, include a calm deadline, and save it as a note",
+            "expected": "agentic"
         },
         {
-            "prompt": "put together a message for my team about the deployment delay",
-            "expected": "writing"
+            "prompt": "research whether onnxruntime has aarch64 CUDA wheels now, fetch sources, list evidence, then write a concise answer",
+            "expected": "agentic"
         },
         {
-            "prompt": "compose something professional to send to the client about the invoice",
-            "expected": "writing"
+            "prompt": "debug why the memory write loop silently swallows exceptions, inspect the code path, implement a fix, and add a regression test",
+            "expected": "agentic"
         },
         {
-            "prompt": "I need to send my prof an email asking for an extension",
-            "expected": "writing"
+            "prompt": "make a roadmap for getting GRACE walking in 3 months, include milestones, risks, weekly checkpoints, and a final checklist",
+            "expected": "agentic"
         },
         {
-            "prompt": "draft a short apology message to the team for missing the deadline",
-            "expected": "writing"
+            "prompt": "set a reminder for tomorrow at 9am to submit the invoice and confirm what you scheduled",
+            "expected": "agentic"
         },
         {
-            "prompt": "write a polite decline to that vendor proposal",
-            "expected": "writing"
-        },
-        {
-            "prompt": "help me word an update to the stakeholders about the outage",
-            "expected": "writing"
-        },
-        {
-            "prompt": "I need to write a cover letter for the senior ML engineer position",
-            "expected": "writing"
-        },
-        {
-            "prompt": "can you draft a README section explaining the memory architecture",
-            "expected": "writing"
-        },
-        {
-            "prompt": "pull up what's new in the ROS2 Jazzy release",
-            "expected": "research"
-        },
-        {
-            "prompt": "go find out if onnxruntime has aarch64 CUDA wheels yet",
-            "expected": "research"
-        },
-        {
-            "prompt": "what's shipping in the next sherpa-onnx version",
-            "expected": "research"
-        },
-        {
-            "prompt": "look up whether llama.cpp supports KV cache quantization now",
-            "expected": "research"
-        },
-        {
-            "prompt": "find out what the current state of Vulkan compute on Jetson is",
-            "expected": "research"
-        },
-        {
-            "prompt": "check if faster-whisper dropped support for CTranslate2 3.x",
-            "expected": "research"
-        },
-        {
-            "prompt": "search for any recent papers on speculative decoding for edge LLMs",
-            "expected": "research"
-        },
-        {
-            "prompt": "look into what embedding models work best under 500MB on aarch64",
-            "expected": "research"
-        },
-        {
-            "prompt": "go find the latest benchmarks for Ministral-3B on edge hardware",
-            "expected": "research"
-        },
-        {
-            "prompt": "find out if sqlite-vec has batch insert support yet",
-            "expected": "research"
-        },
-        {
-            "prompt": "help me map out what I need to do before the hackathon deadline",
-            "expected": "planning"
-        },
-        {
-            "prompt": "I want to get GRACE walking in 3 months, break that down",
-            "expected": "planning"
-        },
-        {
-            "prompt": "give me a roadmap for integrating MioTTS into AIVA",
-            "expected": "planning"
-        },
-        {
-            "prompt": "give me a roadmap for setting up ROS2 on the Jetson Orin Nano",
-            "expected": "planning"
-        },
-        {
-            "prompt": "help me plan a migration from the old memory schema to sqlite-vec",
-            "expected": "planning"
-        },
-        {
-            "prompt": "what's a reasonable schedule to fine-tune Ministral-3B this week",
-            "expected": "planning"
-        },
-        {
-            "prompt": "map out the steps to get the VRM gesture system production-ready",
-            "expected": "planning"
-        },
-        {
-            "prompt": "I want to publish Aiko to HuggingFace in two weeks, what's the plan",
-            "expected": "planning"
-        },
-        {
-            "prompt": "break down what it would take to add LiDAR obstacle detection to GRACE",
-            "expected": "planning"
-        },
-        {
-            "prompt": "help me plan this week's sprint for the Aiko project",
-            "expected": "planning"
-        },
-        {
-            "prompt": "this keeps segfaulting and I don't know why",
-            "expected": "coding"
-        },
-        {
-            "prompt": "refactor the schedule runner to use asyncio instead of threads",
-            "expected": "coding"
-        },
-        {
-            "prompt": "fix it",
-            "expected": "coding"
-        },
-        {
-            "prompt": "this is broken",
-            "expected": "coding"
-        },
-        {
-            "prompt": "debug why the embedder is returning zero vectors intermittently",
-            "expected": "coding"
-        },
-        {
-            "prompt": "write a unit test for the RRF merge function in memorize.py",
-            "expected": "coding"
-        },
-        {
-            "prompt": "the memory write loop is silently swallowing exceptions, fix that",
-            "expected": "coding"
-        },
-        {
-            "prompt": "add retry logic to the llama.cpp health check on startup",
-            "expected": "coding"
-        },
-        {
-            "prompt": "profile why think.py takes 4 seconds to boot",
-            "expected": "coding"
-        },
-        {
-            "prompt": "why does my sqlite connection throw OperationalError after idle timeout",
-            "expected": "coding"
-        },
-        {
-            "prompt": "should I run the embedder on CPU or offload to GPU for aarch64",
-            "expected": "decision"
-        },
-        {
-            "prompt": "which quantization level is better for bilingual TTS quality",
-            "expected": "decision"
-        },
-        {
-            "prompt": "I can't decide between sqlite-vec and qdrant for the memory backend",
-            "expected": "decision"
-        },
-        {
-            "prompt": "is it better to chunk at the sentence level or paragraph level for RAG",
-            "expected": "decision"
-        },
-        {
-            "prompt": "should I use Modal for TTS or just run MioTTS locally on the Jetson",
-            "expected": "decision"
-        },
-        {
-            "prompt": "is Q4_K_M or Q5_K_M worth it for Ministral-3B given my RAM budget",
-            "expected": "decision"
-        },
-        {
-            "prompt": "would it be smarter to fine-tune or just use few-shot prompting here",
-            "expected": "decision"
-        },
-        {
-            "prompt": "compare using threads vs asyncio for the memory write loop",
-            "expected": "decision"
-        },
-        {
-            "prompt": "should Aiko's persona live in the system prompt or a tool call result",
-            "expected": "decision"
-        },
-        {
-            "prompt": "pick the better embedding model: BGE-base or harrier-oss-v1-270m",
-            "expected": "decision"
-        },
-        {
-            "prompt": "there's a race condition in reflect.py, track it down",
-            "expected": "architecture"
-        },
-        {
-            "prompt": "I feel like my routing thresholds are tuned to my test set",
-            "expected": "architecture"
-        },
-        {
-            "prompt": "open soul.md and show me the persona block",
-            "expected": "architecture"
-        },
-        {
-            "prompt": "explain how the memory consolidation pipeline flows end to end",
-            "expected": "architecture"
-        },
-        {
-            "prompt": "something in the boot sequence is hanging, help me trace it",
-            "expected": "architecture"
-        },
-        {
-            "prompt": "walk me through how agentic.py decides which tool to call",
-            "expected": "architecture"
-        },
-        {
-            "prompt": "the scheduler is firing jobs twice occasionally, help me find why",
-            "expected": "architecture"
-        },
-        {
-            "prompt": "pick up where we left off on the memory consolidation refactor",
-            "expected": "ongoing_task"
-        },
-        {
-            "prompt": "we were in the middle of fixing the sshfs uid mapping, keep going",
-            "expected": "ongoing_task"
-        },
-        {
-            "prompt": "jump back into the reflect script we were editing",
-            "expected": "ongoing_task"
-        },
-        {
-            "prompt": "continue from where we stopped on the gesture system",
-            "expected": "ongoing_task"
-        },
-        {
-            "prompt": "let's keep going on that dataset generation pipeline we were fixing",
-            "expected": "ongoing_task"
-        },
-        {
-            "prompt": "pick up where we left off on the sshfs uid mapping fix",
-            "expected": "ongoing_task"
-        },
-        {
-            "prompt": "finish what we started with the TTS chunking refactor",
-            "expected": "ongoing_task"
-        },
-        {
-            "prompt": "is it weird that I find debugging more satisfying than writing features",
+            "prompt": "what do you think about combining architecture and coding as one route category",
             "expected": "chat"
         },
         {
-            "prompt": "what's the actual difference between a semaphore and a mutex",
+            "prompt": "help me understand why binary routing is easier to test than many exclusive task labels",
             "expected": "chat"
         },
         {
-            "prompt": "do you think embeddings are a good long-term foundation for memory",
+            "prompt": "is it weird that I enjoy debugging router thresholds more than building features",
             "expected": "chat"
         },
         {
-            "prompt": "walk me through why cosine similarity works for semantic search",
+            "prompt": "explain from memory how cosine similarity can make nearby route examples ambiguous",
             "expected": "chat"
         },
         {
-            "prompt": "I feel like I'm overengineering this whole thing",
+            "prompt": "talk me through whether planning should be a first step in agentic work or just a tool the agent chooses",
             "expected": "chat"
         },
         {
-            "prompt": "why do you think so many people use regex for intent detection",
-            "expected": "chat"
-        },
-        {
-            "prompt": "honestly I'm not sure if RAG is even the right approach here",
-            "expected": "chat"
-        },
-        {
-            "prompt": "do you think local LLMs will catch up to GPT-4 class in two years",
-            "expected": "chat"
-        },
-        {
-            "prompt": "I'm kind of burnt out on this project, any thoughts",
-            "expected": "chat"
-        },
-        {
-            "prompt": "what makes a good AI companion different from a regular chatbot",
-            "expected": "chat"
-        },
-        {
-            "prompt": "why does attention work so much better than RNNs for long sequences",
-            "expected": "chat"
-        },
-        {
-            "prompt": "talk me through the tradeoffs of persistent memory for AI companions",
-            "expected": "chat"
-        },
-        {
-            "prompt": "what do you think is the hardest part of edge AI deployment",
-            "expected": "chat"
-        },
-        {
-            "prompt": "I keep second-guessing my architecture decisions, is that normal",
-            "expected": "chat"
-        },
-        {
-            "prompt": "how do you think about the difference between reasoning and retrieval",
-            "expected": "chat"
+            "prompt": "what's the current stable Python version",
+            "expected": "chat+search"
         },
         {
             "prompt": "what's the Canucks score from last night",
@@ -376,55 +94,11 @@
             "expected": "chat+search"
         },
         {
-            "prompt": "what's ethereum trading at right now",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "did llama.cpp merge the Vulkan backend yet",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "what's the current onnxruntime stable release",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "is the HuggingFace build small hackathon still accepting submissions",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "what's the latest sherpa-onnx release version",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "did Anthropic release any new models this week",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "what's the current price of an NVIDIA Jetson Orin Nano",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "is three-vrm still being actively maintained",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "what's the weather like in Vancouver right now",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "has faster-whisper pushed a new release recently",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "what's the current stable Python version",
+            "prompt": "what is ethereum trading at right now",
             "expected": "chat+search"
         },
         {
             "prompt": "did Modal change their pricing model recently",
-            "expected": "chat+search"
-        },
-        {
-            "prompt": "what's the latest version of sentence-transformers",
             "expected": "chat+search"
         }
     ]

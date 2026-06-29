@@ -29,7 +29,10 @@
             "is it weird that I find X more satisfying than Y",
             "what's the actual difference between X and Y",
             "do you think X is a good long-term approach",
-            "walk me through why X works"
+            "walk me through why X works",
+            "has NVIDIA released any new Jetson hardware this year",
+            "has this company released a new product this year",
+            "did this project release a new version recently"
         ],
         "agentic": [
             "search for information about this online",
@@ -78,70 +81,69 @@
     },
     "tools": {
         "research": [
-            "search for information about this and summarize it",
-            "look up the latest documentation and summarize it",
-            "find out what this is and report back",
-            "look this up online and give me the findings",
-            "what is the latest stable version of X",
-            "is there a new JetPack release for Orin",
-            "check the latest release of this project",
-            "find out what version of X is current"
+            "research carrot cake recipes and summarize ingredients steps and notes",
+            "search for current documentation fetch the relevant pages and report the findings",
+            "look up the latest release notes compare sources and write a concise summary",
+            "find recent benchmarks for edge LLMs and write down the results",
+            "check whether this library supports the feature now and cite what changed",
+            "investigate this topic online then prepare a short report",
+            "find current facts from external sources before answering",
+            "research options and gather evidence before recommending one"
         ],
         "planning": [
-            "make a plan for this project",
-            "create a checklist for this task",
-            "break this down into steps for me",
-            "make a checklist for this migration",
-            "give me the steps to migrate this system",
-            "what do I need to do to move to a new backend"
+            "make a plan before doing the task",
+            "break this multi step goal into ordered actions",
+            "create a checklist for this migration and then write the result",
+            "plan the schedule command with time task and action fields",
+            "map out the steps before editing files",
+            "decide the workflow sequence and execute it",
+            "turn this goal into tasks milestones risks and next actions",
+            "plan what to inspect research write and save"
         ],
         "writing": [
+            "write a report of what you found and what it means",
             "draft this message for me",
-            "write a note with these details",
-            "prepare a document from this",
-            "draft a readme for this project",
+            "prepare a document from the research and plan",
             "write documentation for this module",
-            "prepare release notes for this version",
-            "write a short email to my landlord about the broken heater",
-            "draft a message to my manager about X"
+            "save a note summarizing the completed task",
+            "write the final result unless I specifically ask not to",
+            "create a README section from the code inspection",
+            "write a concise completion report after scheduling the job"
         ],
         "coding": [
-            "fix this bug in my code",
-            "implement this feature for me",
-            "help me write this function",
-            "write a script that does this",
-            "code this up for me",
-            "implement this in python",
-            "debug why asyncio.run hangs forever",
-            "why would this function hang"
-        ],
-        "architecture": [
-            "open your codebase and show me this file",
-            "inspect Aiko source files and explain the route flow",
-            "search your repository for this function",
-            "read your source code and explain this part",
-            "open soul.md and show me the persona block",
-            "open think.py and show me the routing logic"
+            "fix this bug in my codebase",
+            "implement this feature and update the corresponding tests",
+            "inspect Aiko source files and explain or change the route flow",
+            "open think.py and agentic.py then modify the routing logic",
+            "search the repository for this function and patch the issue",
+            "refactor the schedule runner to use asyncio instead of threads",
+            "debug why this function hangs and add a regression test",
+            "read the architecture and code before making edits"
         ],
         "decision": [
-            "evaluate these options and recommend one",
-            "help me decide between these choices",
-            "compare these two tools for my use case",
-            "which should I use for my project",
-            "evaluate X vs Y and give me a recommendation",
-            "compare ollama vs llama.cpp for local inference",
-            "compare fastembed vs sentence-transformers"
+            "evaluate these options and recommend one after checking evidence",
+            "compare these tools for my use case and pick a direction",
+            "decide whether to use threads or asyncio for this code path",
+            "choose the better implementation plan and explain why",
+            "weigh tradeoffs then write the recommendation",
+            "research current support and decide which option is safer"
         ],
-        "reminder": [
-            "remind me to do this tomorrow",
+        "schedule": [
+            "schedule a job that checks email every hour and notifies me",
+            "add this recurring task to schedule.json",
+            "remind me tomorrow at 9am",
             "set an alarm for this time",
+            "create a scheduled agentic task with time task and action",
             "wake me up at six",
-            "remind me to take my meds at 9pm",
-            "set a timer for 30 minutes"
+            "ping me in 45 minutes",
+            "set up an ongoing scheduled check and report what it does"
         ],
-        "ongoing_task": [
+        "ongoing": [
             "continue the task we were working on",
-            "update the progress on this project"
+            "pick up where we left off and inspect the current state",
+            "resume this project from the last saved progress",
+            "keep going on the refactor we started",
+            "update progress and choose the next action"
         ]
     },
     "search": {
@@ -179,7 +181,9 @@
             "what is this software",
             "what is the current price of RTX 5090",
             "is there a new JetPack release for Orin",
-            "what's the latest stable version of llama.cpp"
+            "what's the latest stable version of llama.cpp",
+            "has NVIDIA released any new Jetson hardware this year",
+            "has this company released a new product this year"
         ]
     }
 }

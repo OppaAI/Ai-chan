@@ -70,7 +70,7 @@ _ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
 
 # Three separate instruct strings, one per embedding context
 _ROUTE_INSTRUCT_BINARY = "Does this message ask someone to perform a task or action, or is it just conversation?"
-_ROUTE_INSTRUCT_TOOL   = "This is a task request. What kind of task is being asked for?"
+_ROUTE_INSTRUCT_TOOL   = "This is an autonomous task request. Which work steps are likely needed?"
 _ROUTE_INSTRUCT_SEARCH = "Does answering this require looking up current or external data?"
 
 _SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.65"))
@@ -129,6 +129,17 @@ def _load_route_examples() -> tuple[dict, dict, dict]:
     return binary, tools, search
 
 _ROUTE_BINARY_EXAMPLES, _ROUTE_TOOL_EXAMPLES, _ROUTE_SEARCH_EXAMPLES = _load_route_examples()
+
+_AGENTIC_ROUTE_RE = re.compile(
+    r"\b("
+    r"research|look up|search|fetch|find out|check whether|check if|"
+    r"fix|debug|implement|refactor|patch|edit|modify|update tests?|inspect|open .*\.(?:py|json|md)|"
+    r"write|draft|compose|save|create|prepare|"
+    r"plan|roadmap|checklist|break down|schedule|remind|reminder|alarm|timer|ping me|notify me|"
+    r"continue|resume|pick up where we left off|keep going|compare .* recommend|decide .* and"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 # ── think ─────────────────────────────────────────────────────────────────────
@@ -207,8 +218,9 @@ class AikoThink:
 
         # Stage 1 — semantic
         if self._is_agentic(user_input):
-            # Stage 2a
-            return self._classify_agentic_tool(user_input)
+            # Stage 2a happens inside agentic.py as a sequence of tool calls.
+            # The router only decides whether to enter task mode.
+            return "agentic"
 
         # Stage 2b
         self._pending_search_query = user_input if self._needs_websearch(user_input) else None
@@ -257,20 +269,25 @@ class AikoThink:
             log.warning("Binary ambiguity check failed: %s", e)
             return False
 
-    def _classify_agentic_tool(self, user_input: str) -> str:
-        """Stage 2a: which agentic tool, called only when agentic is confirmed."""
+    def _classify_agentic_steps(self, user_input: str) -> list[tuple[str, float]]:
+        """Stage 2a trace aid: likely task steps, not a routing destination."""
         try:
-            best_label, best_score, gap = self._semantic_best_label(
-                user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL
-            )
-            log.debug("[route/tool] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
-            if best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_TOOL_MIN_GAP:
-                return best_label
-            # fallback to LLM classifier if score is weak
-            return self._classify_agent_intent(user_input)
+            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
+            ranked = [
+                (label, score)
+                for label, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+                if score >= _SEMANTIC_ROUTE_THRESHOLD
+            ]
+            log.debug("[route/steps] ranked=%s for: %r", ranked[:4], user_input)
+            return ranked
         except Exception as e:
-            log.warning("Tool intent routing failed: %s", e)
-            return self._classify_agent_intent(user_input)
+            log.warning("Agentic step hinting failed: %s", e)
+            return []
+
+    def _classify_agentic_tool(self, user_input: str) -> str:
+        """Backward-compatible shim: confirmed agentic requests enter the task loop."""
+        self._classify_agentic_steps(user_input)
+        return "agentic"
 
     def _needs_websearch(self, user_input: str) -> bool:
         """Stage 2b: does this chat turn need a websearch, called only when chat is confirmed."""
@@ -344,68 +361,45 @@ class AikoThink:
             return cached
 
     def _classify_agent_intent(self, user_input: str) -> str:
-        """Ask the local model for a compact route label when keywords miss."""
+        """Ask the local model for a compact binary route label when semantics are ambiguous."""
+        if _AGENTIC_ROUTE_RE.search(user_input):
+            return "agentic"
         try:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
                 messages=[{"role": "user", "content": (
                     f"Message: {user_input!r}\n\n"
-                    "Output only the best tool label for the task. No explanation.\n"
-                    "Labels: [research, reminder, planning, coding, writing, decision, architecture, ongoing_task]\n\n"
+                    "Output only the route label. No explanation.\n"
+                    "Labels: [agentic, chat]\n\n"
                     "Message: 'set a reminder for 9pm'\n"
-                    "Label: reminder\n\n"
+                    "Label: agentic\n\n"
                     "Message: 'write an email to my landlord'\n"
-                    "Label: writing\n\n"
+                    "Label: agentic\n\n"
                     "Message: 'debug why asyncio.run() hangs'\n"
-                    "Label: coding\n\n"
+                    "Label: agentic\n\n"
                     "Message: 'make a plan to learn Japanese'\n"
-                    "Label: planning\n\n"
-                    "Message: 'search for latest llama.cpp release'\n"
-                    "Label: research\n\n"
-                    "Message: 'compare ollama vs llama.cpp'\n"
-                    "Label: decision\n\n"
+                    "Label: agentic\n\n"
+                    "Message: 'search for latest llama.cpp release and summarize it'\n"
+                    "Label: agentic\n\n"
+                    "Message: 'compare ollama vs llama.cpp and recommend one'\n"
+                    "Label: agentic\n\n"
                     "Message: 'open soul.md and show the persona block'\n"
-                    "Label: architecture\n\n"
+                    "Label: agentic\n\n"
                     "Message: 'continue working on the reflection script'\n"
-                    "Label: ongoing_task\n\n"
+                    "Label: agentic\n\n"
                     "Message: 'what do you think about minimalism'\n"
                     "Label: chat\n\n"
-                    "Message: 'give me a roadmap for X'\n"
-                    "Label: planning\n\n"
-                    "Message: 'help me map out what I need to do before the deadline'\n"
-                    "Label: planning\n\n"
-                    "Message: 'pick up where we left off on X'\n"
-                    "Label: ongoing_task\n\n"
-                    "Message: 'which is better for X, option A or option B'\n"
-                    "Label: decision\n\n"
-                    "Message: 'give me a roadmap for integrating MioTTS into AIVA'\n"
-                    "Label: planning\n\n"
-                    "Message: 'give me a roadmap for setting up ROS2 on the Jetson'\n"
-                    "Label: planning\n\n"
-                    "Message: 'pick up where we left off on the memory consolidation refactor'\n"
-                    "Label: ongoing_task\n\n"
-                    "Message: 'pick up where we left off on the sshfs uid mapping fix'\n"
-                    "Label: ongoing_task\n\n"
+                    "Message: 'explain semaphores from memory'\n"
+                    "Label: chat\n\n"
                     "Message: 'is it weird that I find debugging more satisfying than writing features'\n"
                     "Label: chat\n\n"
-                    "Message: 'which quantization level is better for bilingual TTS quality'\n"
-                    "Label: decision\n\n"
                     "Label:"
                 )}],
                 stream=False, max_tokens=6, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
-            if label in {
-                "research", "planning", "writing", "coding",
-                "architecture", "decision", "reminder", "ongoing_task",
-            }:
-                return label
-            # LLM returned an unrecognised label — fall back to semantic best guess
-            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
-            if scores:
-                return max(scores, key=scores.__getitem__)
-            return "coding"  # last resort: treat as coding task
+            return label if label in {"agentic", "chat"} else "chat"
         except Exception as e:
             log.warning("Intent routing failed: %s", e)
             return "chat"

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Offline semantic + LLM route tracer for think.py cascade.
+Agentic prompts route to the task loop; Stage 2a prints likely work steps only.
 Mode is driven by ROUTE_MODE in .env (same key think.py reads):
-  ROUTE_MODE=semantic      → semantic stages only  (default)
+  ROUTE_MODE=semantic      → semantic stages + LLM fallback  (default)
   ROUTE_MODE=llm           → LLM stages only
   ROUTE_MODE=semantic_only → semantic stages only  (no LLM fallback)
   ROUTE_MODE=chat          → routing disabled; tracer notes this and exits
@@ -50,6 +51,7 @@ from core.think import (
     _ROUTE_INSTRUCT_BINARY,
     _ROUTE_INSTRUCT_TOOL,
     _ROUTE_INSTRUCT_SEARCH,
+    _AGENTIC_ROUTE_RE,
 )
 
 # ── colour helpers ────────────────────────────────────────────────────────────
@@ -76,27 +78,17 @@ def pct_bar(pct: float, width: int = 16) -> str:
 # ── built-in mini suite (fallback when no --file given) ───────────────────────
 
 BUILTIN_SUITE: list[tuple[str, str]] = [
-    ("can you ping me when it's 8pm",                                        "reminder"),
-    ("don't let me forget to call my doctor on Friday",                       "reminder"),
-    ("buzz me in 45 minutes",                                                 "reminder"),
-    ("put together a message for my team about the deployment delay",          "writing"),
-    ("compose something professional to send to the client about the invoice", "writing"),
-    ("I need to send my prof an email asking for an extension",                "writing"),
-    ("pull up what's new in the ROS2 Jazzy release",                          "research"),
-    ("go find out if onnxruntime has aarch64 CUDA wheels yet",                 "research"),
-    ("what's shipping in the next sherpa-onnx version",                        "research"),
-    ("help me map out what I need to do before the hackathon deadline",        "planning"),
-    ("I want to get GRACE walking in 3 months, break that down",               "planning"),
-    ("give me a roadmap for integrating MioTTS into AIVA",                     "planning"),
-    ("this keeps segfaulting and I don't know why",                            "coding"),
-    ("refactor the schedule runner to use asyncio instead of threads",         "coding"),
-    ("there's a race condition in reflect.py, track it down",                  "architecture"),
-    ("should I run the embedder on CPU or offload to GPU for aarch64",         "decision"),
-    ("which quantization level is better for bilingual TTS quality",           "decision"),
-    ("I can't decide between sqlite-vec and qdrant for the memory backend",    "decision"),
-    ("pick up where we left off on the memory consolidation refactor",         "ongoing_task"),
-    ("we were in the middle of fixing the sshfs uid mapping, keep going",      "ongoing_task"),
-    ("jump back into the reflect script we were editing",                      "ongoing_task"),
+    ("can you ping me when it's 8pm",                                        "agentic"),
+    ("schedule checking my email every hour and notify me when abc company writes", "agentic"),
+    ("research carrot cake recipes, plan ingredients and steps, then write a report", "agentic"),
+    ("put together a message for my team about the deployment delay",          "agentic"),
+    ("pull up what's new in the ROS2 Jazzy release and summarize it",          "agentic"),
+    ("help me map out what I need to do before the hackathon deadline",        "agentic"),
+    ("this keeps segfaulting and I don't know why",                            "agentic"),
+    ("refactor the schedule runner to use asyncio instead of threads",         "agentic"),
+    ("open think.py and agentic.py, combine architecture routing into coding, and update tests", "agentic"),
+    ("should I run the embedder on CPU or offload to GPU for aarch64",         "agentic"),
+    ("pick up where we left off on the memory consolidation refactor",         "agentic"),
     ("is it weird that I find debugging more satisfying than writing features", "chat"),
     ("what's the actual difference between a semaphore and a mutex",           "chat"),
     ("do you think embeddings are a good long-term foundation for memory",     "chat"),
@@ -302,8 +294,8 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
         if is_agentic:
             if not quiet:
                 print(f"\n  {GREEN}→ AGENTIC{RESET}")
-                print(f"\n{BOLD}▶ Stage 2a  which tool  (semantic){RESET}")
-                trace_stage("tool classifier", _ROUTE_TOOL_EXAMPLES, prompt,
+                print(f"\n{BOLD}▶ Stage 2a  likely work steps  (semantic hint only){RESET}")
+                trace_stage("step hints", _ROUTE_TOOL_EXAMPLES, prompt,
                             _SEMANTIC_ROUTE_THRESHOLD, _SEMANTIC_TOOL_MIN_GAP, _ROUTE_INSTRUCT_TOOL)
 
             scores2 = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
@@ -312,24 +304,16 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
             best2   = max(scores2, key=scores2.get) if scores2 else "coding"
             score2  = scores2.get(best2, 0.0)
 
-            if score2 >= _SEMANTIC_ROUTE_THRESHOLD and gap2 >= _SEMANTIC_TOOL_MIN_GAP:
-                final_route = best2
-                if not quiet:
-                    print(f"\n  {GREEN}→ ROUTE: agentic_chat  tool={best2}{RESET}")
-                    if _SHOW_LLM_FALLBACK:
-                        print(f"\n  {DIM}(LLM fallback skipped — semantic confident){RESET}")
-            else:
-                if not quiet:
-                    print(f"\n  {YELLOW}→ semantic weak — LLM fallback fires{RESET}")
-                if _SHOW_LLM_FALLBACK:
-                    llm_label = trace_llm_router(prompt, result, quiet)
-                    if llm_label:
-                        final_route = llm_label
-                        if not quiet:
-                            color = GREEN if llm_label != "chat" else CYAN
-                            print(f"\n  {color}→ ROUTE: agentic_chat  tool={llm_label}  (via LLM){RESET}")
-                else:
-                    final_route = best2 or "coding"
+            final_route = "agentic"
+            if not quiet:
+                likely = [
+                    label for label, score in sorted(scores2.items(), key=lambda item: item[1], reverse=True)
+                    if score >= _SEMANTIC_ROUTE_THRESHOLD
+                ]
+                hint = " -> ".join(likely[:4]) if likely else best2
+                print(f"\n  {GREEN}→ ROUTE: agentic_chat  steps≈{hint}{RESET}")
+                print(f"\n  {DIM}(Stage 2a is a hint; agentic.py chooses the actual tool sequence.){RESET}")
+
 
         else:
             if not quiet:
@@ -356,7 +340,7 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
                     print(f"\n  {YELLOW}→ ROUTE: llm_fallback (binary scores too close){RESET}")
                 if _SHOW_LLM_FALLBACK:
                     llm_label = trace_llm_router(prompt, result, quiet)
-                    final_route = llm_label if llm_label and llm_label != "chat" else "chat"
+                    final_route = "agentic" if llm_label == "agentic" else "chat"
             else:
                 final_route = "chat"
                 if not quiet:
@@ -371,15 +355,23 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
         if not quiet:
             print(f"\n{BOLD}▶ Skipping semantic stages (ROUTE_MODE={_ROUTE_MODE}){RESET}")
         think._history = []
-        llm_label = trace_llm_router(prompt, result, quiet)
+        if _AGENTIC_ROUTE_RE.search(prompt):
+            llm_label = "agentic"
+            if not quiet:
+                print(f"\n  {GREEN}→ ROUTE: agentic_chat  (deterministic task pattern){RESET}")
+        else:
+            llm_label = trace_llm_router(prompt, result, quiet)
         think._history = []
 
-        if llm_label and llm_label != "chat":
-            final_route = llm_label
+        if llm_label == "agentic":
+            final_route = "agentic"
         else:
-            # search resolver only fires for chat-classified turns
-            search_query = trace_llm_search_resolve(prompt, result, quiet)
-            final_route  = "chat+search" if search_query else "chat"
+            # Production routing gates search semantically before resolving a query.
+            if think._needs_websearch(prompt):
+                trace_llm_search_resolve(prompt, result, quiet)
+                final_route = "chat+search"
+            else:
+                final_route = "chat"
 
     return final_route
 
@@ -419,8 +411,8 @@ def print_summary(results: list[RouteResult], source_label: str = "") -> None:
     llm_pct     = total_llm / total * 100 if total else 0.0   # avg LLM calls per prompt as %
 
     C_PROMPT  = 50
-    C_EXP     = 14
-    C_GOT     = 14
+    C_EXP     = 16
+    C_GOT     = 16
     C_LAT     = 8
     C_LLM     = 5
     C_VERDICT = 6
