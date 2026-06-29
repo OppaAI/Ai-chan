@@ -209,8 +209,8 @@ class AikoThink:
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
             return "chat"
 
-        if _ROUTE_MODE == "llm":
-            label = self._classify_agent_intent(user_input)
+        if _ROUTE_MODE in {"llm", "llm_only"}:
+            label = self._classify_agent_intent(user_input, skip_regex=_ROUTE_MODE == "llm_only")
             if label != "chat":
                 return label
             self._pending_search_query = user_input if self._needs_websearch(user_input) else None
@@ -360,10 +360,10 @@ class AikoThink:
             cache[cache_key] = cached
             return cached
 
-    def _classify_agent_intent(self, user_input: str) -> str:
+    def _classify_agent_intent(self, user_input: str, skip_regex: bool = False) -> str:
         """Ask the local model for a compact binary route label when semantics are ambiguous."""
-        if _AGENTIC_ROUTE_RE.search(user_input):
-            return "agentic"
+        if not skip_regex and _AGENTIC_ROUTE_RE.search(user_input):
+            return "agentic"            
         try:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
