@@ -600,6 +600,7 @@ class AikoThink:
 
         karaoke_text = bool(
             self._speak and token_callback and getattr(self._speak, "karaoke_text", False)
+            and not self._reasoning
         )
         if self._speak:
             self._speak.start_speech_stream(token_callback if karaoke_text else None)

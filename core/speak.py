@@ -451,12 +451,16 @@ class AikoSpeak:
                     break
                 clean = sanitize_for_tts(chunk)
                 if not clean:
+                    if on_word:
+                        self._emit_words_timed(chunk, 0.0, on_word)
                     continue
                 for piece in self._chunk_text(clean):
                     if self._stop_flag.is_set():
                         break
                     wav = self._synthesize(piece)
                     if not wav:
+                        if on_word:
+                            self._emit_words_timed(piece, 0.0, on_word)
                         continue
                     if on_word or self._viseme_sink is not None:
                         duration = self._wav_duration(wav)
@@ -520,6 +524,10 @@ class AikoSpeak:
             if on_word:
                 on_word(word if i == 0 else " " + word)
             elapsed += usable_duration * (weight / total)
+        remaining = (start + usable_duration) - time.monotonic()
+        while remaining > 0 and not self._stop_flag.is_set():
+            time.sleep(min(0.05, remaining))
+            remaining = (start + usable_duration) - time.monotonic()
         self._emit_viseme("A", 0.0)
 
     def _speak_thread_synced(self, text: str, on_word=None) -> None:

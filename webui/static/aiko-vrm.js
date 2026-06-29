@@ -889,8 +889,9 @@ window.aikoSetViseme = (viseme, weight = 1.0) => {
   applyMouthShape(mouthOpen);
   const dot = document.getElementById('speak-dot');
   const lbl = document.getElementById('speak-label');
-  dot.className = mouthOpen > 0.03 ? 'dot speak' : 'dot';
-  lbl.textContent = viseme;
+  const speaking = mouthOpen > 0.03;
+  dot.className = speaking ? 'dot speak' : 'dot';
+  lbl.textContent = speaking ? activeViseme : 'idle';
 };
 
 window.aikoSetMouthOpen = (weight = 0) => {
