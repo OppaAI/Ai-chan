@@ -1,0 +1,1255 @@
+
+[1mAiko route tracer[0m  ROUTE_MODE=[96mllm_only[0m  50 prompts  source=test_prompts.json  seed=11912
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'schedule a one-time reminder for tomorrow at 9am to submit the invoice'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  schedule   schedule_job           call via core.agentic dispatch
+   2  planning   make_plan              call via core.agentic dispatch
+   3  planning   create_checklist       call via core.agentic dispatch
+   4  writing    save_note              call via core.agentic dispatch
+   5  ongoing    summarize_task_state   call via core.agentic dispatch
+   6  ongoing    repo_file_tree         call via core.agentic dispatch
+   7  coding     repo_search_text       query='schedule one-time reminder tomorrow 9am submit invoice'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  research   web_search             query='schedule one-time reminder tomorrow 9am submit invoice'  call via core.agentic dispatch
+  10  research   fetch_page             query='schedule one-time reminder tomorrow 9am submit invoice'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'debug why the memory write loop swallows exceptions, search for handlers, read files, plan a fix, and summarize'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  coding     repo_search_text       query='debug why memory write loop swallows exceptions search handlers'  call via core.agentic dispatch
+   2  coding     repo_read_file         call via core.agentic dispatch
+   3  coding     summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  writing    save_note              call via core.agentic dispatch
+   6  research   web_search             query='debug why memory write loop swallows exceptions search handlers'  call via core.agentic dispatch
+   7  research   fetch_page             query='debug why memory write loop swallows exceptions search handlers'  call via core.agentic dispatch
+   8  planning   make_plan              call via core.agentic dispatch
+   9  planning   create_checklist       call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'draft a professional deployment-delay update for my team and save it'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  ongoing    summarize_task_state   call via core.agentic dispatch
+   2  ongoing    repo_file_tree         call via core.agentic dispatch
+   3  writing    save_note              call via core.agentic dispatch
+   4  planning   make_plan              call via core.agentic dispatch
+   5  planning   create_checklist       call via core.agentic dispatch
+   6  schedule   schedule_job           call via core.agentic dispatch
+   7  coding     repo_search_text       query='draft professional deployment-delay update team save'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  research   web_search             query='draft professional deployment-delay update team save'  call via core.agentic dispatch
+  10  research   fetch_page             query='draft professional deployment-delay update team save'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'set up an hourly scheduled job to check email from abc company and notify me'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  schedule   schedule_job           call via core.agentic dispatch
+   2  planning   make_plan              call via core.agentic dispatch
+   3  planning   create_checklist       call via core.agentic dispatch
+   4  writing    save_note              call via core.agentic dispatch
+   5  ongoing    summarize_task_state   call via core.agentic dispatch
+   6  ongoing    repo_file_tree         call via core.agentic dispatch
+   7  coding     repo_search_text       query='set up hourly scheduled job check email abc company'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  research   web_search             query='set up hourly scheduled job check email abc company'  call via core.agentic dispatch
+  10  research   fetch_page             query='set up hourly scheduled job check email abc company'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'who won the most recent NBA finals'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1739 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'who won the most recent NBA finals'[0m
+  latency    : 1085 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='who won most recent nba finals'  retrieve current external facts
+   2  chat       chat                   query='who won the most recent NBA finals'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'research onnxruntime aarch64 CUDA wheel support, fetch sources, compare evidence, and answer'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  research   web_search             query='research onnxruntime aarch64 cuda wheel support fetch sources compare'  call via core.agentic dispatch
+   2  research   fetch_page             query='research onnxruntime aarch64 cuda wheel support fetch sources compare'  call via core.agentic dispatch
+   3  research   save_note              call via core.agentic dispatch
+   4  decision   make_plan              call via core.agentic dispatch
+   5  decision   summarize_task_state   call via core.agentic dispatch
+   6  coding     repo_search_text       query='research onnxruntime aarch64 cuda wheel support fetch sources compare'  call via core.agentic dispatch
+   7  coding     repo_read_file         call via core.agentic dispatch
+   8  ongoing    repo_file_tree         call via core.agentic dispatch
+   9  planning   create_checklist       call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'continue the memory consolidation refactor, inspect git context, search code paths, plan tests, and summarize remaining work'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  ongoing    summarize_task_state   call via core.agentic dispatch
+   2  ongoing    repo_file_tree         call via core.agentic dispatch
+   3  planning   make_plan              call via core.agentic dispatch
+   4  planning   create_checklist       call via core.agentic dispatch
+   5  writing    save_note              call via core.agentic dispatch
+   6  coding     repo_search_text       query='continue memory consolidation refactor inspect git context search code'  call via core.agentic dispatch
+   7  coding     repo_read_file         call via core.agentic dispatch
+   8  research   web_search             query='continue memory consolidation refactor inspect git context search code'  call via core.agentic dispatch
+   9  research   fetch_page             query='continue memory consolidation refactor inspect git context search code'  call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'search for the latest llama.cpp release notes and summarize what changed'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  research   web_search             query='search latest llama.cpp release notes summarize changed'  call via core.agentic dispatch
+   2  research   fetch_page             query='search latest llama.cpp release notes summarize changed'  call via core.agentic dispatch
+   3  research   save_note              call via core.agentic dispatch
+   4  coding     repo_search_text       query='search latest llama.cpp release notes summarize changed'  call via core.agentic dispatch
+   5  coding     repo_read_file         call via core.agentic dispatch
+   6  coding     summarize_task_state   call via core.agentic dispatch
+   7  ongoing    repo_file_tree         call via core.agentic dispatch
+   8  schedule   schedule_job           call via core.agentic dispatch
+   9  planning   make_plan              call via core.agentic dispatch
+  10  planning   create_checklist       call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'compare threads and asyncio for the schedule runner, inspect current code, weigh tradeoffs, and recommend a path'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  decision   make_plan              call via core.agentic dispatch
+   2  decision   summarize_task_state   call via core.agentic dispatch
+   3  coding     repo_search_text       query='compare threads asyncio schedule runner inspect current code weigh'  call via core.agentic dispatch
+   4  coding     repo_read_file         call via core.agentic dispatch
+   5  planning   create_checklist       call via core.agentic dispatch
+   6  ongoing    repo_file_tree         call via core.agentic dispatch
+   7  schedule   schedule_job           call via core.agentic dispatch
+   8  research   web_search             query='compare threads asyncio schedule runner inspect current code weigh'  call via core.agentic dispatch
+   9  research   fetch_page             query='compare threads asyncio schedule runner inspect current code weigh'  call via core.agentic dispatch
+  10  research   save_note              call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what is the conceptual difference between a semaphore and a mutex'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1810 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'explain from memory how cosine similarity can make nearby examples ambiguous'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 996 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what was the Canucks score from last night'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 996 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'what was the Canucks score from last night'[0m
+  latency    : 4785 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='was canucks score last night'  retrieve current external facts
+   2  chat       chat                   query='what was the Canucks score from last night'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'how does attention work in transformers'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 5940 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m"look up Modal's current pricing docs, fetch supporting pages, compare old assumptions, and answer"[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  research   web_search             query="look up modal's current pricing docs fetch supporting pages"  call via core.agentic dispatch
+   2  research   fetch_page             query="look up modal's current pricing docs fetch supporting pages"  call via core.agentic dispatch
+   3  research   save_note              call via core.agentic dispatch
+   4  decision   make_plan              call via core.agentic dispatch
+   5  decision   summarize_task_state   call via core.agentic dispatch
+   6  coding     repo_search_text       query="look up modal's current pricing docs fetch supporting pages"  call via core.agentic dispatch
+   7  coding     repo_read_file         call via core.agentic dispatch
+   8  ongoing    repo_file_tree         call via core.agentic dispatch
+   9  planning   create_checklist       call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'write a short README section explaining the route tracer and save it'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  writing    save_note              call via core.agentic dispatch
+   2  coding     repo_search_text       query='write short readme section explaining route tracer save'  call via core.agentic dispatch
+   3  coding     repo_read_file         call via core.agentic dispatch
+   4  coding     summarize_task_state   call via core.agentic dispatch
+   5  ongoing    repo_file_tree         call via core.agentic dispatch
+   6  planning   make_plan              call via core.agentic dispatch
+   7  planning   create_checklist       call via core.agentic dispatch
+   8  research   web_search             query='write short readme section explaining route tracer save'  call via core.agentic dispatch
+   9  research   fetch_page             query='write short readme section explaining route tracer save'  call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'why does Python have the GIL'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 828 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'create a project plan for getting GRACE walking in 3 months with milestones and checkpoints'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  planning   make_plan              call via core.agentic dispatch
+   2  planning   create_checklist       call via core.agentic dispatch
+   3  ongoing    summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  writing    save_note              call via core.agentic dispatch
+   6  schedule   schedule_job           call via core.agentic dispatch
+   7  coding     repo_search_text       query='create project plan getting grace walking 3 months milestones'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  research   web_search             query='create project plan getting grace walking 3 months milestones'  call via core.agentic dispatch
+  10  research   fetch_page             query='create project plan getting grace walking 3 months milestones'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'did Modal change their pricing model recently'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1450 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'did Modal change their pricing model recently'[0m
+  latency    : 1023 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='did modal change their pricing model recently'  retrieve current external facts
+   2  chat       chat                   query='did Modal change their pricing model recently'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'inspect util/test_route.py, find where suite prompts load, and explain how to add new cases'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  coding     repo_search_text       query='inspect util/test_route.py find where suite prompts load explain add'  call via core.agentic dispatch
+   2  coding     repo_read_file         call via core.agentic dispatch
+   3  coding     summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  research   web_search             query='inspect util/test_route.py find where suite prompts load explain add'  call via core.agentic dispatch
+   6  research   fetch_page             query='inspect util/test_route.py find where suite prompts load explain add'  call via core.agentic dispatch
+   7  research   save_note              call via core.agentic dispatch
+   8  decision   make_plan              call via core.agentic dispatch
+   9  planning   create_checklist       call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'draft a calm message to my landlord about the broken heater and save it as a note'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  writing    save_note              call via core.agentic dispatch
+   2  schedule   schedule_job           call via core.agentic dispatch
+   3  planning   make_plan              call via core.agentic dispatch
+   4  planning   create_checklist       call via core.agentic dispatch
+   5  ongoing    summarize_task_state   call via core.agentic dispatch
+   6  ongoing    repo_file_tree         call via core.agentic dispatch
+   7  research   web_search             query='draft calm message landlord about broken heater save note'  call via core.agentic dispatch
+   8  research   fetch_page             query='draft calm message landlord about broken heater save note'  call via core.agentic dispatch
+   9  coding     repo_search_text       query='draft calm message landlord about broken heater save note'  call via core.agentic dispatch
+  10  coding     repo_read_file         call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'talk me through whether planning should be a first step or just a tool choice'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 955 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'open agentic.py and think.py, map the full task-mode flow, inspect tool schemas, identify risks, plan tests, and write a report'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  coding     repo_search_text       query='open agentic.py think.py map full task-mode flow inspect tool'  call via core.agentic dispatch
+   2  coding     repo_read_file         call via core.agentic dispatch
+   3  coding     summarize_task_state   call via core.agentic dispatch
+   4  planning   make_plan              call via core.agentic dispatch
+   5  planning   create_checklist       call via core.agentic dispatch
+   6  schedule   schedule_job           call via core.agentic dispatch
+   7  ongoing    repo_file_tree         call via core.agentic dispatch
+   8  writing    save_note              call via core.agentic dispatch
+   9  research   web_search             query='open agentic.py think.py map full task-mode flow inspect tool'  call via core.agentic dispatch
+  10  research   fetch_page             query='open agentic.py think.py map full task-mode flow inspect tool'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what is the current price of bitcoin'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1161 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'what is the current price of bitcoin'[0m
+  latency    : 1099 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='current price bitcoin'  retrieve current external facts
+   2  chat       chat                   query='what is the current price of bitcoin'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'remind me in 45 minutes to stretch'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  schedule   schedule_job           call via core.agentic dispatch
+   2  planning   make_plan              call via core.agentic dispatch
+   3  planning   create_checklist       call via core.agentic dispatch
+   4  ongoing    summarize_task_state   call via core.agentic dispatch
+   5  ongoing    repo_file_tree         call via core.agentic dispatch
+   6  writing    save_note              call via core.agentic dispatch
+   7  coding     repo_search_text       query='remind 45 minutes stretch'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  research   web_search             query='remind 45 minutes stretch'  call via core.agentic dispatch
+  10  research   fetch_page             query='remind 45 minutes stretch'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what is ethereum trading at right now'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 5024 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'what is ethereum trading at right now'[0m
+  latency    : 1678 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='ethereum trading right now'  retrieve current external facts
+   2  chat       chat                   query='what is ethereum trading at right now'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'research current JetPack releases for Orin, fetch the source page, list evidence, and recommend whether to upgrade'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  research   web_search             query='research current jetpack releases orin fetch source page list'  call via core.agentic dispatch
+   2  research   fetch_page             query='research current jetpack releases orin fetch source page list'  call via core.agentic dispatch
+   3  research   save_note              call via core.agentic dispatch
+   4  decision   make_plan              call via core.agentic dispatch
+   5  decision   summarize_task_state   call via core.agentic dispatch
+   6  ongoing    repo_file_tree         call via core.agentic dispatch
+   7  coding     repo_search_text       query='research current jetpack releases orin fetch source page list'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  planning   create_checklist       call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'resume the routing threshold tune-up, inspect router_prompts.json, run the route suite mentally, and list next edits'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  coding     repo_search_text       query='resume routing threshold tune-up inspect router_prompts.json run route suite'  call via core.agentic dispatch
+   2  coding     repo_read_file         call via core.agentic dispatch
+   3  coding     summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  schedule   schedule_job           call via core.agentic dispatch
+   6  planning   make_plan              call via core.agentic dispatch
+   7  planning   create_checklist       call via core.agentic dispatch
+   8  writing    save_note              call via core.agentic dispatch
+   9  research   web_search             query='resume routing threshold tune-up inspect router_prompts.json run route suite'  call via core.agentic dispatch
+  10  research   fetch_page             query='resume routing threshold tune-up inspect router_prompts.json run route suite'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'help me reason through whether semantic routing is brittle'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1463 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'is it weird that debugging router thresholds feels more satisfying than building features'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 959 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'choose between local embeddings on CPU or GPU for aarch64, research current constraints, compare, and recommend'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  decision   make_plan              call via core.agentic dispatch
+   2  decision   summarize_task_state   call via core.agentic dispatch
+   3  research   web_search             query='choose between local embeddings cpu gpu aarch64 research current'  call via core.agentic dispatch
+   4  research   fetch_page             query='choose between local embeddings cpu gpu aarch64 research current'  call via core.agentic dispatch
+   5  research   save_note              call via core.agentic dispatch
+   6  coding     repo_search_text       query='choose between local embeddings cpu gpu aarch64 research current'  call via core.agentic dispatch
+   7  coding     repo_read_file         call via core.agentic dispatch
+   8  planning   create_checklist       call via core.agentic dispatch
+   9  ongoing    repo_file_tree         call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'search the repository for _needs_websearch, read the implementation, and explain the route behavior'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  coding     repo_search_text       query='search repository _needs_websearch read implementation explain route behavior'  call via core.agentic dispatch
+   2  coding     repo_read_file         call via core.agentic dispatch
+   3  coding     summarize_task_state   call via core.agentic dispatch
+   4  research   web_search             query='search repository _needs_websearch read implementation explain route behavior'  call via core.agentic dispatch
+   5  research   fetch_page             query='search repository _needs_websearch read implementation explain route behavior'  call via core.agentic dispatch
+   6  research   save_note              call via core.agentic dispatch
+   7  decision   make_plan              call via core.agentic dispatch
+   8  ongoing    repo_file_tree         call via core.agentic dispatch
+   9  planning   create_checklist       call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what are the tradeoffs of small local models versus cloud models'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 965 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'look up current ROS2 Jazzy release notes and prepare a concise update summary'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  research   web_search             query='look up current ros2 jazzy release notes prepare concise'  call via core.agentic dispatch
+   2  research   fetch_page             query='look up current ros2 jazzy release notes prepare concise'  call via core.agentic dispatch
+   3  research   save_note              call via core.agentic dispatch
+   4  ongoing    summarize_task_state   call via core.agentic dispatch
+   5  ongoing    repo_file_tree         call via core.agentic dispatch
+   6  coding     repo_search_text       query='look up current ros2 jazzy release notes prepare concise'  call via core.agentic dispatch
+   7  coding     repo_read_file         call via core.agentic dispatch
+   8  planning   make_plan              call via core.agentic dispatch
+   9  planning   create_checklist       call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what is the current stable Python version'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1294 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'what is the current stable Python version'[0m
+  latency    : 1268 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='current stable python version'  retrieve current external facts
+   2  chat       chat                   query='what is the current stable Python version'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'help me understand why binary routing is easier to test than many exclusive labels'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 923 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'make a checklist for migrating the router examples, include risks, then save the note'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  planning   make_plan              call via core.agentic dispatch
+   2  planning   create_checklist       call via core.agentic dispatch
+   3  writing    save_note              call via core.agentic dispatch
+   4  coding     repo_search_text       query='make checklist migrating router examples include risks save note'  call via core.agentic dispatch
+   5  coding     repo_read_file         call via core.agentic dispatch
+   6  coding     summarize_task_state   call via core.agentic dispatch
+   7  ongoing    repo_file_tree         call via core.agentic dispatch
+   8  schedule   schedule_job           call via core.agentic dispatch
+   9  research   web_search             query='make checklist migrating router examples include risks save note'  call via core.agentic dispatch
+  10  research   fetch_page             query='make checklist migrating router examples include risks save note'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'inspect the photo ingestion tools, find expected inputs, plan a dry run, and write a task summary'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  planning   make_plan              call via core.agentic dispatch
+   2  planning   create_checklist       call via core.agentic dispatch
+   3  ongoing    summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  writing    save_note              call via core.agentic dispatch
+   6  research   web_search             query='inspect photo ingestion tools find expected inputs plan dry'  call via core.agentic dispatch
+   7  research   fetch_page             query='inspect photo ingestion tools find expected inputs plan dry'  call via core.agentic dispatch
+   8  schedule   schedule_job           call via core.agentic dispatch
+   9  coding     repo_search_text       query='inspect photo ingestion tools find expected inputs plan dry'  call via core.agentic dispatch
+  10  coding     repo_read_file         call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'make a migration checklist for moving router data into JSON and include rollback steps'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  planning   make_plan              call via core.agentic dispatch
+   2  planning   create_checklist       call via core.agentic dispatch
+   3  coding     repo_search_text       query='make migration checklist moving router data into json include'  call via core.agentic dispatch
+   4  coding     repo_read_file         call via core.agentic dispatch
+   5  coding     summarize_task_state   call via core.agentic dispatch
+   6  ongoing    repo_file_tree         call via core.agentic dispatch
+   7  schedule   schedule_job           call via core.agentic dispatch
+   8  writing    save_note              call via core.agentic dispatch
+   9  research   web_search             query='make migration checklist moving router data into json include'  call via core.agentic dispatch
+  10  research   fetch_page             query='make migration checklist moving router data into json include'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what do you think about combining architecture and coding as one route category'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 991 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  chat       chat                   answer from existing context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'compare sqlite-vec and qdrant for local Jetson memory, research current docs, decide, and save a recommendation'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  decision   make_plan              call via core.agentic dispatch
+   2  decision   summarize_task_state   call via core.agentic dispatch
+   3  research   web_search             query='compare sqlite-vec qdrant local jetson memory research current docs'  call via core.agentic dispatch
+   4  research   fetch_page             query='compare sqlite-vec qdrant local jetson memory research current docs'  call via core.agentic dispatch
+   5  research   save_note              call via core.agentic dispatch
+   6  planning   create_checklist       call via core.agentic dispatch
+   7  ongoing    repo_file_tree         call via core.agentic dispatch
+   8  coding     repo_search_text       query='compare sqlite-vec qdrant local jetson memory research current docs'  call via core.agentic dispatch
+   9  coding     repo_read_file         call via core.agentic dispatch
+  10  schedule   schedule_job           call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'research current RTX 5090 availability, compare pricing signals, write a short report, and save it'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  research   web_search             query='research current rtx 5090 availability compare pricing signals write'  call via core.agentic dispatch
+   2  research   fetch_page             query='research current rtx 5090 availability compare pricing signals write'  call via core.agentic dispatch
+   3  research   save_note              call via core.agentic dispatch
+   4  decision   make_plan              call via core.agentic dispatch
+   5  decision   summarize_task_state   call via core.agentic dispatch
+   6  planning   create_checklist       call via core.agentic dispatch
+   7  ongoing    repo_file_tree         call via core.agentic dispatch
+   8  schedule   schedule_job           call via core.agentic dispatch
+   9  coding     repo_search_text       query='research current rtx 5090 availability compare pricing signals write'  call via core.agentic dispatch
+  10  coding     repo_read_file         call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what is the weather in Vancouver today'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 9628 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'what is the weather in Vancouver today'[0m
+  latency    : 1409 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='weather vancouver today'  retrieve current external facts
+   2  chat       chat                   query='what is the weather in Vancouver today'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'audit the agentic loop for repeated tool calls, inspect policy code, map failure handling, plan regression tests, and write a summary'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  coding     repo_search_text       query='audit agentic loop repeated tool calls inspect policy code'  call via core.agentic dispatch
+   2  coding     repo_read_file         call via core.agentic dispatch
+   3  coding     summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  planning   make_plan              call via core.agentic dispatch
+   6  planning   create_checklist       call via core.agentic dispatch
+   7  schedule   schedule_job           call via core.agentic dispatch
+   8  writing    save_note              call via core.agentic dispatch
+   9  research   web_search             query='audit agentic loop repeated tool calls inspect policy code'  call via core.agentic dispatch
+  10  research   fetch_page             query='audit agentic loop repeated tool calls inspect policy code'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'has NVIDIA released any new Jetson hardware this year'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 984 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'has NVIDIA released any new Jetson hardware this year'[0m
+  latency    : 894 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='nvidia released any new jetson hardware year'  retrieve current external facts
+   2  chat       chat                   query='has NVIDIA released any new Jetson hardware this year'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'debug why schedule_job custom weekdays fail, search the repo, read relevant files, plan a fix, and report'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  schedule   schedule_job           call via core.agentic dispatch
+   2  coding     repo_search_text       query='debug why schedule_job custom weekdays fail search repo read'  call via core.agentic dispatch
+   3  coding     repo_read_file         call via core.agentic dispatch
+   4  coding     summarize_task_state   call via core.agentic dispatch
+   5  writing    save_note              call via core.agentic dispatch
+   6  planning   make_plan              call via core.agentic dispatch
+   7  planning   create_checklist       call via core.agentic dispatch
+   8  ongoing    repo_file_tree         call via core.agentic dispatch
+   9  research   web_search             query='debug why schedule_job custom weekdays fail search repo read'  call via core.agentic dispatch
+  10  research   fetch_page             query='debug why schedule_job custom weekdays fail search repo read'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'continue the schedule refactor, list files, search call sites, inspect schedule.py, identify tests, and report remaining risks'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  ongoing    summarize_task_state   call via core.agentic dispatch
+   2  ongoing    repo_file_tree         call via core.agentic dispatch
+   3  schedule   schedule_job           call via core.agentic dispatch
+   4  planning   make_plan              call via core.agentic dispatch
+   5  planning   create_checklist       call via core.agentic dispatch
+   6  writing    save_note              call via core.agentic dispatch
+   7  coding     repo_search_text       query='continue schedule refactor list files search call sites inspect'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  research   web_search             query='continue schedule refactor list files search call sites inspect'  call via core.agentic dispatch
+  10  research   fetch_page             query='continue schedule refactor list files search call sites inspect'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'map all agentic tools, group them by workflow, identify missing validation, propose fixes, make a checklist, and save notes'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  planning   make_plan              call via core.agentic dispatch
+   2  planning   create_checklist       call via core.agentic dispatch
+   3  ongoing    summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  schedule   schedule_job           call via core.agentic dispatch
+   6  writing    save_note              call via core.agentic dispatch
+   7  coding     repo_search_text       query='map all agentic tools group them by workflow identify'  call via core.agentic dispatch
+   8  coding     repo_read_file         call via core.agentic dispatch
+   9  research   web_search             query='map all agentic tools group them by workflow identify'  call via core.agentic dispatch
+  10  research   fetch_page             query='map all agentic tools group them by workflow identify'  call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'what is the latest stable onnxruntime release'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1134 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'what is the latest stable onnxruntime release'[0m
+  latency    : 1073 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='latest stable onnxruntime release'  retrieve current external facts
+   2  chat       chat                   query='what is the latest stable onnxruntime release'  answer using search context
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'inspect think.py for the route_intent flow, find the agentic handoff, and summarize it'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [92magentic[0m
+  latency    : 0 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  coding     repo_search_text       query='inspect think.py route_intent flow find agentic handoff summarize'  call via core.agentic dispatch
+   2  coding     repo_read_file         call via core.agentic dispatch
+   3  coding     summarize_task_state   call via core.agentic dispatch
+   4  ongoing    repo_file_tree         call via core.agentic dispatch
+   5  schedule   schedule_job           call via core.agentic dispatch
+   6  planning   make_plan              call via core.agentic dispatch
+   7  planning   create_checklist       call via core.agentic dispatch
+   8  research   web_search             query='inspect think.py route_intent flow find agentic handoff summarize'  call via core.agentic dispatch
+   9  research   fetch_page             query='inspect think.py route_intent flow find agentic handoff summarize'  call via core.agentic dispatch
+  10  research   save_note              call via core.agentic dispatch
+
+
+[1m════════════════════════════════════════════════════════════[0m
+[1mPROMPT:[0m [96m'has llama.cpp merged any major backend changes recently'[0m
+════════════════════════════════════════════════════════════
+
+[1m▶ Skipping semantic stages (ROUTE_MODE=llm_only)[0m
+
+[1m▶ LLM classifier  (ROUTER_MODEL=minimax-m3:cloud)[0m
+
+  parsed     : [96mchat[0m
+  latency    : 1244 ms
+
+[1m▶ LLM search query resolver  (_llm_resolve_search_query)[0m
+
+  query      : [96m'has llama.cpp merged any major backend changes recently'[0m
+  latency    : 1197 ms
+
+[1m▶ dry-run sequence  (from core.agentic tool schemas)[0m
+   #  kind       tool                   query/run
+  ------------------------------------------------------------------------
+   1  websearch  web_search             query='llama.cpp merged any major backend changes recently'  retrieve current external facts
+   2  chat       chat                   query='has llama.cpp merged any major backend changes recently'  answer using search context
+
+
+[1m══════════════════════════════════════════════════════════════════════════════════════════════════════════[0m
+[1mRESULTS  [test_prompts.json][0m
+══════════════════════════════════════════════════════════════════════════════════════════════════════════
+  accuracy    [92m████████████████[0m 50/50  (100.0%)
+  avg latency    1180 ms
+  total time    58986 ms
+  LLM calls     60  (1.20 per prompt avg)
+══════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+[1mprompt                                             expected         got                    ms   llm result[0m
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+schedule a one-time reminder for tomorrow at 9am … agentic          [92magentic         [0m      832     1 [92mPASS[0m
+debug why the memory write loop swallows exceptio… agentic          [92magentic         [0m       37     1 [92mPASS[0m
+draft a professional deployment-delay update for … agentic          [92magentic         [0m       33     1 [92mPASS[0m
+set up an hourly scheduled job to check email fro… agentic          [92magentic         [0m       33     1 [92mPASS[0m
+who won the most recent NBA finals                 chat+search      [92mchat+search     [0m     3163     2 [92mPASS[0m
+research onnxruntime aarch64 CUDA wheel support, … agentic          [92magentic         [0m       32     1 [92mPASS[0m
+continue the memory consolidation refactor, inspe… agentic          [92magentic         [0m       35     1 [92mPASS[0m
+search for the latest llama.cpp release notes and… agentic          [92magentic         [0m       33     1 [92mPASS[0m
+compare threads and asyncio for the schedule runn… agentic          [92magentic         [0m       36     1 [92mPASS[0m
+what is the conceptual difference between a semap… chat             [92mchat            [0m     1838     1 [92mPASS[0m
+explain from memory how cosine similarity can mak… chat             [92mchat            [0m     1024     1 [92mPASS[0m
+what was the Canucks score from last night         chat+search      [92mchat+search     [0m     5809     2 [92mPASS[0m
+how does attention work in transformers            chat             [92mchat            [0m     5966     1 [92mPASS[0m
+look up Modal's current pricing docs, fetch suppo… agentic          [92magentic         [0m       34     1 [92mPASS[0m
+write a short README section explaining the route… agentic          [92magentic         [0m       33     1 [92mPASS[0m
+why does Python have the GIL                       chat             [92mchat            [0m      855     1 [92mPASS[0m
+create a project plan for getting GRACE walking i… agentic          [92magentic         [0m       33     1 [92mPASS[0m
+did Modal change their pricing model recently      chat+search      [92mchat+search     [0m     2501     2 [92mPASS[0m
+inspect util/test_route.py, find where suite prom… agentic          [92magentic         [0m       35     1 [92mPASS[0m
+draft a calm message to my landlord about the bro… agentic          [92magentic         [0m       34     1 [92mPASS[0m
+talk me through whether planning should be a firs… chat             [92mchat            [0m      984     1 [92mPASS[0m
+open agentic.py and think.py, map the full task-m… agentic          [92magentic         [0m       38     1 [92mPASS[0m
+what is the current price of bitcoin               chat+search      [92mchat+search     [0m     2288     2 [92mPASS[0m
+remind me in 45 minutes to stretch                 agentic          [92magentic         [0m       28     1 [92mPASS[0m
+what is ethereum trading at right now              chat+search      [92mchat+search     [0m     6730     2 [92mPASS[0m
+research current JetPack releases for Orin, fetch… agentic          [92magentic         [0m       35     1 [92mPASS[0m
+resume the routing threshold tune-up, inspect rou… agentic          [92magentic         [0m       38     1 [92mPASS[0m
+help me reason through whether semantic routing i… chat             [92mchat            [0m     1490     1 [92mPASS[0m
+is it weird that debugging router thresholds feel… chat             [92mchat            [0m      989     1 [92mPASS[0m
+choose between local embeddings on CPU or GPU for… agentic          [92magentic         [0m       34     1 [92mPASS[0m
+search the repository for _needs_websearch, read … agentic          [92magentic         [0m       33     1 [92mPASS[0m
+what are the tradeoffs of small local models vers… chat             [92mchat            [0m     1030     1 [92mPASS[0m
+look up current ROS2 Jazzy release notes and prep… agentic          [92magentic         [0m       73     1 [92mPASS[0m
+what is the current stable Python version          chat+search      [92mchat+search     [0m     2626     2 [92mPASS[0m
+help me understand why binary routing is easier t… chat             [92mchat            [0m      953     1 [92mPASS[0m
+make a checklist for migrating the router example… agentic          [92magentic         [0m       37     1 [92mPASS[0m
+inspect the photo ingestion tools, find expected … agentic          [92magentic         [0m       36     1 [92mPASS[0m
+make a migration checklist for moving router data… agentic          [92magentic         [0m       33     1 [92mPASS[0m
+what do you think about combining architecture an… chat             [92mchat            [0m     1021     1 [92mPASS[0m
+compare sqlite-vec and qdrant for local Jetson me… agentic          [92magentic         [0m       34     1 [92mPASS[0m
+research current RTX 5090 availability, compare p… agentic          [92magentic         [0m       36     1 [92mPASS[0m
+what is the weather in Vancouver today             chat+search      [92mchat+search     [0m    11064     2 [92mPASS[0m
+audit the agentic loop for repeated tool calls, i… agentic          [92magentic         [0m       37     1 [92mPASS[0m
+has NVIDIA released any new Jetson hardware this … chat+search      [92mchat+search     [0m     1907     2 [92mPASS[0m
+debug why schedule_job custom weekdays fail, sear… agentic          [92magentic         [0m       75     1 [92mPASS[0m
+continue the schedule refactor, list files, searc… agentic          [92magentic         [0m       80     1 [92mPASS[0m
+map all agentic tools, group them by workflow, id… agentic          [92magentic         [0m       77     1 [92mPASS[0m
+what is the latest stable onnxruntime release      chat+search      [92mchat+search     [0m     2270     2 [92mPASS[0m
+inspect think.py for the route_intent flow, find … agentic          [92magentic         [0m       46     1 [92mPASS[0m
+has llama.cpp merged any major backend changes re… chat+search      [92mchat+search     [0m     2469     2 [92mPASS[0m
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+[1mper-label breakdown[0m
+  label             acc  bar               n    avg ms  llm/prompt
+  ────────────────────────────────────────────────────────────────
+  agentic          100%  [92m████████████████[0m  30      67 ms  1.00
+  chat             100%  [92m████████████████[0m  10    1615 ms  1.00
+  chat+search      100%  [92m████████████████[0m  10    4083 ms  2.00
+
+[92mAll 50 prompts passed.[0m
+
