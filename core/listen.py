@@ -31,7 +31,7 @@ import onnxruntime as _ort
 # listen.py line 31
 if hasattr(_ort, "set_default_logger_severity"):
     _ort.set_default_logger_severity(3)
-    
+
 from huggingface_hub import hf_hub_download
 from silero_vad import load_silero_vad
 import json
@@ -87,20 +87,20 @@ MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))
 BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.65"))
 BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "2"))
 BARGE_IN_COOLDOWN_MS   = int(os.getenv("BARGE_IN_COOLDOWN_MS",     "800"))
-BARGE_IN_ALWAYS_ON      = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "true", "yes", "on"}
+BARGE_IN_ALWAYS_ON     = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "true", "yes", "on"}
 
 # ── speaker verification config ──────────────────────────────────────────────
 # Single-enrollment 1:1 verification (not multi-speaker identification) —
 # Aiko has exactly one "owner" voice to check against.
 
-SPEAKER_VERIFY_ENABLED = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
-SPEAKER_MODEL_PATH     = os.getenv("SPEAKER_MODEL_PATH", "")            # path to embedding .onnx
-USER_ID                = os.getenv("USER_ID", "owner")
-SPEAKER_ENROLL_PATH    = os.path.join("user", f"{USER_ID.lower()}.json")
+SPEAKER_VERIFY_ENABLED   = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+SPEAKER_MODEL_PATH       = os.getenv("SPEAKER_MODEL_PATH", "")            # path to embedding .onnx
+USER_ID                  = os.getenv("USER_ID", "owner")
+SPEAKER_ENROLL_PATH      = os.path.join("user", f"{USER_ID.lower()}.json")
 SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
-SPEAKER_NUM_THREADS       = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
+SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 
-_CHUNK_SAMPLES_VAD = 512                                            # at 16 kHz, ~32 ms
+_CHUNK_SAMPLES_VAD = 512                                             # at 16 kHz, ~32 ms
 _MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / CHUNK_DURATION_MS)
 
 # parec command — captures at 16kHz mono float32, uses default PulseAudio source
@@ -149,6 +149,14 @@ class AikoListen:
     Uses parec (PulseAudio) for mic capture — no PortAudio/sounddevice.
     Silero VAD gates recording for robust, noise-resilient speech detection.
 
+    When chunk_source is provided (WebUI path), the caller may set
+    vad_presegmented=True to indicate that VAD has already been performed
+    client-side (browser Silero WASM). In that case _record() skips the
+    MIN_SPEECH_CHUNKS gate so short utterances ("yes", "はい") are not
+    silently discarded by the server-side VAD minimum. Server-side VAD
+    scoring still runs to handle any stray silence frames that slip through,
+    but it no longer gates on utterance length.
+
     Staged init:
         listen = AikoListen()    # no heavy loading
         listen.load_asr()        # loads the SenseVoice model
@@ -169,7 +177,7 @@ class AikoListen:
         self._warmup_thread: threading.Thread | None = None
 
         self._barge_in_event:  threading.Event = threading.Event()
-        self._barge_in_armed:   threading.Event = threading.Event()
+        self._barge_in_armed:  threading.Event = threading.Event()
         self._barge_in_active: bool             = False
         self._barge_in_thread: threading.Thread | None = None
 
@@ -323,6 +331,7 @@ class AikoListen:
         wait_fn=None,
         speak=None,
         chunk_source=None,
+        vad_presegmented: bool = False,
     ) -> tuple[str, dict]:
         """
         Returns (text, info). info always has a "verified" key:
@@ -336,6 +345,13 @@ class AikoListen:
         chunk_source: optional callable(bytes_per_chunk) -> bytes | None,
             forwarded to _record(). See _record() docstring. None (default)
             preserves the existing local-mic (parec) behavior.
+
+        vad_presegmented: when True, _record() skips the MIN_SPEECH_CHUNKS
+            length gate. Set by the WebUI path (aiko_web.py) when the browser's
+            client-side Silero VAD has already segmented the utterance — avoids
+            silently discarding short valid replies like "yes" or "はい" that
+            pass the browser VAD but fall under the server-side minimum chunk
+            count. Has no effect when chunk_source is None (local mic path).
         """
         if speak is not None and speak.is_playing():
             _cb(status_callback, "__WAITING__")
@@ -351,7 +367,11 @@ class AikoListen:
 
         _cb(status_callback, "__LISTENING__")
         listen_started_at = time.monotonic()
-        audio = self._record(status_callback, chunk_source=chunk_source)
+        audio = self._record(
+            status_callback,
+            chunk_source=chunk_source,
+            vad_presegmented=vad_presegmented,
+        )
         recording_stopped_at = time.monotonic()
         if audio is None:
             _cb(status_callback, "__IDLE__")
@@ -412,7 +432,12 @@ class AikoListen:
             prob = self._vad_model(tensor, SAMPLE_RATE).item()
         return prob
 
-    def _record(self, status_callback=None, chunk_source=None) -> np.ndarray | None:
+    def _record(
+        self,
+        status_callback=None,
+        chunk_source=None,
+        vad_presegmented: bool = False,
+    ) -> np.ndarray | None:
         """
         Capture audio until silence after speech detected.
 
@@ -422,8 +447,16 @@ class AikoListen:
             If provided, that callable is polled instead of parec — used by
             the WebUI to feed mic audio streamed in from the browser over the
             WebSocket. Must return exactly `bytes_per_chunk` bytes of
-            float32LE PCM, or None to signal end-of-stream (e.g. client
-            disconnected).
+            float32LE PCM, or None to signal end-of-stream (e.g. the browser
+            VAD sentinel b"" was received, or client disconnected).
+
+        vad_presegmented: when True, the MIN_SPEECH_CHUNKS gate is skipped.
+            Browser Silero VAD has already filtered silence — only genuine
+            speech frames arrive via chunk_source. Short utterances that the
+            browser VAD accepted must not be re-rejected here on length alone.
+            Server-side VAD scoring still runs per-chunk so any stray silence
+            frames that slip through are handled correctly; only the final
+            utterance-length gate is bypassed.
         """
         audio_chunks   = []
         silence_count  = 0
@@ -448,6 +481,8 @@ class AikoListen:
                     raw = proc.stdout.read(bytes_per_chunk)
 
                 if raw is None or len(raw) < bytes_per_chunk:
+                    # None  → browser VAD end-of-utterance sentinel (b"") or timeout
+                    # short → parec pipe closed / underrun
                     break
 
                 chunk = np.frombuffer(raw, dtype=np.float32).copy()
@@ -464,6 +499,7 @@ class AikoListen:
                         audio_chunks.append(chunk)
                         if silence_count >= SILENCE_CHUNKS:
                             break
+
         except Exception:
             _cb(status_callback, "__IDLE__")
             return None
@@ -475,7 +511,16 @@ class AikoListen:
                 except Exception:
                     pass
 
-        if speech_count < MIN_SPEECH_CHUNKS:
+        if not audio_chunks:
+            return None
+
+        # ── utterance length gate ─────────────────────────────────────────────
+        # Skip when vad_presegmented=True: the browser's Silero VAD already
+        # confirmed there was real speech before sending frames. Applying the
+        # server-side minimum chunk count here would silently discard short
+        # but valid utterances ("yes", "はい", single-word commands) that the
+        # client VAD correctly identified as speech.
+        if not vad_presegmented and speech_count < MIN_SPEECH_CHUNKS:
             return None
 
         return np.concatenate(audio_chunks).astype(np.float32)
@@ -484,15 +529,15 @@ class AikoListen:
 
     def _transcribe(self, audio: np.ndarray) -> str:
         """Transcribe float32 16kHz audio using SenseVoice via sherpa-onnx."""
+        import re
         with self._lock:
             stream = self._model.create_stream()
             stream.accept_waveform(SAMPLE_RATE, audio)
             self._model.decode_stream(stream)  # decode_stream in sherpa-onnx >= 1.13.3
             result = stream.result
-            text = result.text.strip()
+            text   = result.text.strip()
             # SenseVoice prepends language/emotion tags like <|en|><|NEUTRAL|><|Speech|><|withitn|>
             # Strip them for clean output
-            import re
             text = re.sub(r'<\|[^|]+\|>', '', text).strip()
             return text
 
@@ -501,7 +546,7 @@ class AikoListen:
     def _warmup(self) -> None:
         try:
             silence = np.zeros(int(SAMPLE_RATE * 0.1), dtype=np.float32)
-            stream = self._model.create_stream()
+            stream  = self._model.create_stream()
             stream.accept_waveform(SAMPLE_RATE, silence)
             self._model.decode_stream(stream)  # decode_stream in sherpa-onnx >= 1.13.3
             tensor = torch.zeros(1, _CHUNK_SAMPLES_VAD)
