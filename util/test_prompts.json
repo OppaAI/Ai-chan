@@ -1,92 +1,215 @@
 {
     "_meta": {
-        "description": "Aiko router test suite \u2014 complex prompts for binary agentic routing plus chat websearch",
+        "description": "Aiko router test suite: 50 prompts covering chat, websearch, and agentic tool sequences",
         "routes": [
             "agentic",
             "chat",
             "chat+search"
         ],
         "counts": {
-            "agentic": 12,
-            "chat": 5,
-            "chat+search": 5
-        }
+            "agentic": 30,
+            "chat": 10,
+            "chat+search": 10
+        },
+        "agentic_step_range": "1-10, repeated three times"
     },
     "prompts": [
         {
-            "prompt": "research how to bake a carrot cake, compare two credible recipes, plan ingredients with amounts, write steps and notes, and save a short report",
-            "expected": "agentic"
+            "prompt": "schedule a one-time reminder for tomorrow at 9am to submit the invoice",
+            "expected": "agentic",
+            "steps": 1
         },
         {
-            "prompt": "schedule a job to check my email every hour and notify me when abc company sends me an email, then write a summary of the scheduled task",
-            "expected": "agentic"
+            "prompt": "draft a calm message to my landlord about the broken heater and save it as a note",
+            "expected": "agentic",
+            "steps": 2
         },
         {
-            "prompt": "open think.py, agentic.py, and persona/router_prompts.json; combine architecture routing into coding; update util/test_route.py and report what changed",
-            "expected": "agentic"
+            "prompt": "search for the latest llama.cpp release notes and summarize what changed",
+            "expected": "agentic",
+            "steps": 3
         },
         {
-            "prompt": "look up the newest llama.cpp release notes, fetch the relevant page, summarize important changes, and recommend whether I should update",
-            "expected": "agentic"
+            "prompt": "inspect think.py for the route_intent flow, find the agentic handoff, and summarize it",
+            "expected": "agentic",
+            "steps": 4
         },
         {
-            "prompt": "inspect the repository for schedule_job usage, make a plan for adding weekly custom weekdays, patch the code if needed, and update tests",
-            "expected": "agentic"
+            "prompt": "make a checklist for migrating the router examples, include risks, then save the note",
+            "expected": "agentic",
+            "steps": 5
         },
         {
-            "prompt": "compare sqlite-vec and qdrant for Aiko memory using current docs, decide which fits local Jetson constraints, and write the recommendation",
-            "expected": "agentic"
+            "prompt": "research onnxruntime aarch64 CUDA wheel support, fetch sources, compare evidence, and answer",
+            "expected": "agentic",
+            "steps": 6
         },
         {
-            "prompt": "continue the routing refactor we were doing, check current git diff first, finish the missing tests, and tell me exactly what remains",
-            "expected": "agentic"
+            "prompt": "debug why schedule_job custom weekdays fail, search the repo, read relevant files, plan a fix, and report",
+            "expected": "agentic",
+            "steps": 7
         },
         {
-            "prompt": "draft a professional email to my landlord about the broken heater, include a calm deadline, and save it as a note",
-            "expected": "agentic"
+            "prompt": "compare sqlite-vec and qdrant for local Jetson memory, research current docs, decide, and save a recommendation",
+            "expected": "agentic",
+            "steps": 8
         },
         {
-            "prompt": "research whether onnxruntime has aarch64 CUDA wheels now, fetch sources, list evidence, then write a concise answer",
-            "expected": "agentic"
+            "prompt": "continue the memory consolidation refactor, inspect git context, search code paths, plan tests, and summarize remaining work",
+            "expected": "agentic",
+            "steps": 9
         },
         {
-            "prompt": "debug why the memory write loop silently swallows exceptions, inspect the code path, implement a fix, and add a regression test",
-            "expected": "agentic"
+            "prompt": "open agentic.py and think.py, map the full task-mode flow, inspect tool schemas, identify risks, plan tests, and write a report",
+            "expected": "agentic",
+            "steps": 10
         },
         {
-            "prompt": "make a roadmap for getting GRACE walking in 3 months, include milestones, risks, weekly checkpoints, and a final checklist",
-            "expected": "agentic"
+            "prompt": "set up an hourly scheduled job to check email from abc company and notify me",
+            "expected": "agentic",
+            "steps": 1
         },
         {
-            "prompt": "set a reminder for tomorrow at 9am to submit the invoice and confirm what you scheduled",
-            "expected": "agentic"
+            "prompt": "write a short README section explaining the route tracer and save it",
+            "expected": "agentic",
+            "steps": 2
+        },
+        {
+            "prompt": "look up current ROS2 Jazzy release notes and prepare a concise update summary",
+            "expected": "agentic",
+            "steps": 3
+        },
+        {
+            "prompt": "search the repository for _needs_websearch, read the implementation, and explain the route behavior",
+            "expected": "agentic",
+            "steps": 4
+        },
+        {
+            "prompt": "create a project plan for getting GRACE walking in 3 months with milestones and checkpoints",
+            "expected": "agentic",
+            "steps": 5
+        },
+        {
+            "prompt": "research current JetPack releases for Orin, fetch the source page, list evidence, and recommend whether to upgrade",
+            "expected": "agentic",
+            "steps": 6
+        },
+        {
+            "prompt": "inspect the photo ingestion tools, find expected inputs, plan a dry run, and write a task summary",
+            "expected": "agentic",
+            "steps": 7
+        },
+        {
+            "prompt": "compare threads and asyncio for the schedule runner, inspect current code, weigh tradeoffs, and recommend a path",
+            "expected": "agentic",
+            "steps": 8
+        },
+        {
+            "prompt": "resume the routing threshold tune-up, inspect router_prompts.json, run the route suite mentally, and list next edits",
+            "expected": "agentic",
+            "steps": 9
+        },
+        {
+            "prompt": "map all agentic tools, group them by workflow, identify missing validation, propose fixes, make a checklist, and save notes",
+            "expected": "agentic",
+            "steps": 10
+        },
+        {
+            "prompt": "remind me in 45 minutes to stretch",
+            "expected": "agentic",
+            "steps": 1
+        },
+        {
+            "prompt": "draft a professional deployment-delay update for my team and save it",
+            "expected": "agentic",
+            "steps": 2
+        },
+        {
+            "prompt": "research current RTX 5090 availability, compare pricing signals, write a short report, and save it",
+            "expected": "agentic",
+            "steps": 3
+        },
+        {
+            "prompt": "inspect util/test_route.py, find where suite prompts load, and explain how to add new cases",
+            "expected": "agentic",
+            "steps": 4
+        },
+        {
+            "prompt": "make a migration checklist for moving router data into JSON and include rollback steps",
+            "expected": "agentic",
+            "steps": 5
+        },
+        {
+            "prompt": "look up Modal's current pricing docs, fetch supporting pages, compare old assumptions, and answer",
+            "expected": "agentic",
+            "steps": 6
+        },
+        {
+            "prompt": "debug why the memory write loop swallows exceptions, search for handlers, read files, plan a fix, and summarize",
+            "expected": "agentic",
+            "steps": 7
+        },
+        {
+            "prompt": "choose between local embeddings on CPU or GPU for aarch64, research current constraints, compare, and recommend",
+            "expected": "agentic",
+            "steps": 8
+        },
+        {
+            "prompt": "continue the schedule refactor, list files, search call sites, inspect schedule.py, identify tests, and report remaining risks",
+            "expected": "agentic",
+            "steps": 9
+        },
+        {
+            "prompt": "audit the agentic loop for repeated tool calls, inspect policy code, map failure handling, plan regression tests, and write a summary",
+            "expected": "agentic",
+            "steps": 10
         },
         {
             "prompt": "what do you think about combining architecture and coding as one route category",
             "expected": "chat"
         },
         {
-            "prompt": "help me understand why binary routing is easier to test than many exclusive task labels",
+            "prompt": "help me understand why binary routing is easier to test than many exclusive labels",
             "expected": "chat"
         },
         {
-            "prompt": "is it weird that I enjoy debugging router thresholds more than building features",
+            "prompt": "is it weird that debugging router thresholds feels more satisfying than building features",
             "expected": "chat"
         },
         {
-            "prompt": "explain from memory how cosine similarity can make nearby route examples ambiguous",
+            "prompt": "explain from memory how cosine similarity can make nearby examples ambiguous",
             "expected": "chat"
         },
         {
-            "prompt": "talk me through whether planning should be a first step in agentic work or just a tool the agent chooses",
+            "prompt": "talk me through whether planning should be a first step or just a tool choice",
             "expected": "chat"
         },
         {
-            "prompt": "what's the current stable Python version",
+            "prompt": "what is the conceptual difference between a semaphore and a mutex",
+            "expected": "chat"
+        },
+        {
+            "prompt": "why does Python have the GIL",
+            "expected": "chat"
+        },
+        {
+            "prompt": "how does attention work in transformers",
+            "expected": "chat"
+        },
+        {
+            "prompt": "help me reason through whether semantic routing is brittle",
+            "expected": "chat"
+        },
+        {
+            "prompt": "what are the tradeoffs of small local models versus cloud models",
+            "expected": "chat"
+        },
+        {
+            "prompt": "what is the current stable Python version",
             "expected": "chat+search"
         },
         {
-            "prompt": "what's the Canucks score from last night",
+            "prompt": "what was the Canucks score from last night",
             "expected": "chat+search"
         },
         {
@@ -99,6 +222,26 @@
         },
         {
             "prompt": "did Modal change their pricing model recently",
+            "expected": "chat+search"
+        },
+        {
+            "prompt": "what is the latest stable onnxruntime release",
+            "expected": "chat+search"
+        },
+        {
+            "prompt": "what is the weather in Vancouver today",
+            "expected": "chat+search"
+        },
+        {
+            "prompt": "who won the most recent NBA finals",
+            "expected": "chat+search"
+        },
+        {
+            "prompt": "what is the current price of bitcoin",
+            "expected": "chat+search"
+        },
+        {
+            "prompt": "has llama.cpp merged any major backend changes recently",
             "expected": "chat+search"
         }
     ]

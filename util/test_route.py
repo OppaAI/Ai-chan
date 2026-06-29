@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Offline semantic + LLM route tracer for think.py cascade.
-Agentic prompts route to the task loop; Stage 2a prints likely work steps only.
+Agentic prompts route to the task loop; Stage 2a prints a dry-run sequence
+using the tool names exposed by core/agentic.py.
 Mode is driven by ROUTE_MODE in .env (same key think.py reads):
   ROUTE_MODE=semantic      → semantic stages + LLM fallback  (default)
   ROUTE_MODE=llm           → LLM stages only
@@ -53,6 +54,7 @@ from core.think import (
     _ROUTE_INSTRUCT_SEARCH,
     _AGENTIC_ROUTE_RE,
 )
+from core.agentic import tool_schemas
 
 # ── colour helpers ────────────────────────────────────────────────────────────
 
@@ -270,6 +272,95 @@ def trace_llm_search_resolve(user_input: str, result: RouteResult | None = None,
             result.llm_calls += 1
         return None
 
+# -- dry-run execution sequence hints -----------------------------------------
+
+_AGENTIC_TOOL_NAMES = {
+    schema.get("function", {}).get("name", "")
+    for schema in tool_schemas()
+}
+
+_STEP_TOOLS: dict[str, list[str]] = {
+    "research": ["web_search", "fetch_page", "save_note"],
+    "planning": ["make_plan", "create_checklist"],
+    "writing": ["save_note"],
+    "coding": ["repo_search_text", "repo_read_file", "summarize_task_state"],
+    "decision": ["make_plan", "summarize_task_state"],
+    "schedule": ["schedule_job"],
+    "ongoing": ["summarize_task_state", "repo_file_tree"],
+}
+
+def _clean_query(prompt: str, max_words: int = 9) -> str:
+    words = [
+        w.strip(".,;:!?()[]{}\"'").lower()
+        for w in prompt.split()
+        if w.strip(".,;:!?()[]{}\"'")
+    ]
+    stop = {
+        "a", "an", "and", "are", "as", "at", "be", "can", "for", "from", "has",
+        "how", "i", "if", "in", "is", "it", "me", "my", "of", "on", "or", "the",
+        "then", "this", "to", "what", "when", "whether", "with", "you",
+    }
+    terms = [w for w in words if w not in stop]
+    return " ".join(terms[:max_words]) or prompt[:80]
+
+def _ranked_agentic_steps(prompt: str) -> list[str]:
+    scores = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
+    if not scores:
+        return ["planning"]
+    ranked = [label for label, _score in sorted(scores.items(), key=lambda item: item[1], reverse=True)]
+    selected = [
+        label for label, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        if score >= _SEMANTIC_ROUTE_THRESHOLD
+    ]
+    return (selected or ranked)[:10]
+
+def _sequence_for_route(route: str, prompt: str) -> list[dict]:
+    query = _clean_query(prompt)
+    if route == "chat":
+        return [{"step": 1, "kind": "chat", "tool": "chat", "query": "", "run": "answer from existing context"}]
+    if route == "chat+search":
+        return [
+            {"step": 1, "kind": "websearch", "tool": "web_search", "query": query, "run": "retrieve current external facts"},
+            {"step": 2, "kind": "chat", "tool": "chat", "query": prompt, "run": "answer using search context"},
+        ]
+
+    sequence: list[dict] = []
+    seen: set[str] = set()
+    for label in _ranked_agentic_steps(prompt):
+        for tool in _STEP_TOOLS.get(label, []):
+            if tool not in _AGENTIC_TOOL_NAMES or tool in seen:
+                continue
+            seen.add(tool)
+            sequence.append({
+                "step": len(sequence) + 1,
+                "kind": label,
+                "tool": tool,
+                "query": query if tool in {"web_search", "fetch_page", "repo_search_text", "search_skillsets"} else "",
+                "run": "call via core.agentic dispatch",
+            })
+            if len(sequence) >= 10:
+                break
+        if len(sequence) >= 10:
+            break
+
+    if "final_answer" in _AGENTIC_TOOL_NAMES and len(sequence) < 10:
+        sequence.append({
+            "step": len(sequence) + 1,
+            "kind": "final",
+            "tool": "final_answer",
+            "query": "",
+            "run": "report completed work naturally",
+        })
+    return sequence or [{"step": 1, "kind": "agentic", "tool": "final_answer", "query": "", "run": "report route decision"}]
+
+def print_sequence(route: str, prompt: str) -> None:
+    print(f"\n{BOLD}▶ dry-run sequence  (from core.agentic tool schemas){RESET}")
+    print(f"  {'#':>2}  {'kind':<10} {'tool':<22} query/run")
+    print(f"  {'-' * 72}")
+    for item in _sequence_for_route(route, prompt):
+        query = f"query={item['query']!r}  " if item.get("query") else ""
+        print(f"  {item['step']:>2}  {item['kind']:<10} {item['tool']:<22} {query}{item['run']}")
+
 # ── core routing logic (shared between verbose and quiet paths) ───────────────
 
 def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
@@ -386,6 +477,9 @@ def trace(prompt: str, result: RouteResult | None = None, quiet: bool = False) -
         print(f"{'═'*60}")
 
     final_route = _compute_route(prompt, result, quiet)
+
+    if not quiet:
+        print_sequence(final_route, prompt)
 
     if result is not None:
         result.latency_ms = (time.monotonic() - t_start) * 1000
