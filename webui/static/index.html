@@ -459,10 +459,64 @@
     let ttsContext = null;
     let ttsQueue   = [];
     let ttsPlaying = false;
+    let ttsAnalyser = null;
+    let ttsAnalyserData = null;
+    let ttsAnalyserConnected = false;
+    let ttsMouthLoop = false;
+    let ttsMouthLevel = 0;
 
     function getTtsContext() {
       if (!ttsContext) ttsContext = new AudioContext();
       return ttsContext;
+    }
+
+    function getTtsAnalyser() {
+      const ctx = getTtsContext();
+      if (!ttsAnalyser) {
+        ttsAnalyser = ctx.createAnalyser();
+        ttsAnalyser.fftSize = 1024;
+        ttsAnalyser.smoothingTimeConstant = 0.35;
+        ttsAnalyserData = new Float32Array(ttsAnalyser.fftSize);
+      }
+      if (!ttsAnalyserConnected) {
+        ttsAnalyser.connect(ctx.destination);
+        ttsAnalyserConnected = true;
+      }
+      return ttsAnalyser;
+    }
+
+    function startMouthAnalyserLoop() {
+      if (ttsMouthLoop) return;
+      ttsMouthLoop = true;
+      const tick = () => {
+        if (!ttsMouthLoop) return;
+        let target = 0;
+        if (ttsPlaying && ttsAnalyser && ttsAnalyserData) {
+          ttsAnalyser.getFloatTimeDomainData(ttsAnalyserData);
+          let sum = 0;
+          for (let i = 0; i < ttsAnalyserData.length; i++) {
+            const v = ttsAnalyserData[i];
+            sum += v * v;
+          }
+          const rms = Math.sqrt(sum / ttsAnalyserData.length);
+          target = Math.max(0, Math.min(1, (rms - 0.012) * 9.5));
+        }
+
+        // Fast attack, slower release. Pauses from punctuation naturally drop
+        // the analyser RMS, closing the mouth instead of racing ahead of audio.
+        const coeff = target > ttsMouthLevel ? 0.65 : 0.28;
+        ttsMouthLevel += (target - ttsMouthLevel) * coeff;
+        if (window.aikoSetMouthOpen) window.aikoSetMouthOpen(ttsMouthLevel);
+
+        if (!ttsPlaying && ttsMouthLevel < 0.01) {
+          ttsMouthLoop = false;
+          ttsMouthLevel = 0;
+          if (window.aikoSetMouthOpen) window.aikoSetMouthOpen(0);
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     }
 
     async function enqueueTtsAudio(arrayBuffer) {
@@ -477,11 +531,13 @@
       try {
         const ctx         = getTtsContext();
         const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
+        const analyser    = getTtsAnalyser();
         const src         = ctx.createBufferSource();
         src.buffer        = audioBuffer;
-        src.connect(ctx.destination);
+        src.connect(analyser);
         src.onended       = playNextTts;
         src.start();
+        startMouthAnalyserLoop();
       } catch (err) {
         console.error('[tts] decode/play failed:', err);
         playNextTts();

@@ -859,6 +859,16 @@ loader.load(VRM_URL,
 
 // ── expression / viseme API (called by WS handler) ───────────────────────────
 const VISEME = { A: 'aa', I: 'ih', U: 'ou', E: 'ee', O: 'oh' };
+let activeViseme = 'aa';
+let mouthOpen = 0;
+
+function applyMouthShape(weight = mouthOpen) {
+  const w = Math.max(0, Math.min(1, weight));
+  ['aa', 'ih', 'ou', 'ee', 'oh'].forEach(k => exprTargets[k] = 0);
+  exprTargets[activeViseme] = w;
+  mouthOpen = w;
+  if (w > 0.03) lastVisemeAt = performance.now();
+}
 
 window.aikoSetExpression = (name, intensity = 1.0) => {
   for (const k of Object.keys(exprTargets)) if (k !== 'blink') exprTargets[k] = 0;
@@ -875,14 +885,23 @@ window.aikoSetExpression = (name, intensity = 1.0) => {
 };
 
 window.aikoSetViseme = (viseme, weight = 1.0) => {
-  const v = VISEME[viseme] ?? viseme;
-  ['aa', 'ih', 'ou', 'ee', 'oh'].forEach(k => exprTargets[k] = 0);
-  exprTargets[v] = weight;
-  lastVisemeAt = performance.now();
+  activeViseme = VISEME[viseme] ?? viseme;
+  applyMouthShape(mouthOpen);
   const dot = document.getElementById('speak-dot');
   const lbl = document.getElementById('speak-label');
-  dot.className = 'dot speak';
+  dot.className = mouthOpen > 0.03 ? 'dot speak' : 'dot';
   lbl.textContent = viseme;
-  clearTimeout(window._vt);
-  window._vt = setTimeout(() => { dot.className = 'dot'; lbl.textContent = 'idle'; }, 300);
+};
+
+window.aikoSetMouthOpen = (weight = 0) => {
+  applyMouthShape(weight);
+  const dot = document.getElementById('speak-dot');
+  const lbl = document.getElementById('speak-label');
+  if (mouthOpen > 0.03) {
+    dot.className = 'dot speak';
+    lbl.textContent = activeViseme;
+  } else {
+    dot.className = 'dot';
+    lbl.textContent = 'idle';
+  }
 };
