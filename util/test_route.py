@@ -161,7 +161,7 @@ think._reasoning                   = False
 # ── read ROUTE_MODE ───────────────────────────────────────────────────────────
 
 _ROUTE_MODE        = os.getenv("ROUTE_MODE", "semantic").strip().lower()
-_RUN_SEMANTIC      = _ROUTE_MODE not in {"llm", "0", "off", "false", "chat", "disabled"}
+_RUN_SEMANTIC      = _ROUTE_MODE not in {"llm", "llm_only", "0", "off", "false", "chat", "disabled"}
 _SHOW_LLM_FALLBACK = _ROUTE_MODE not in {"semantic_only", "chat", "0", "off", "false", "disabled"}
 
 # ── lazy real OpenAI client ───────────────────────────────────────────────────
@@ -442,11 +442,11 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
                 trace_llm_search_resolve(prompt, result, quiet)
 
     # ── LLM-only mode ────────────────────────────────────────────────────────
-    if not _RUN_SEMANTIC:
+if not _RUN_SEMANTIC:
         if not quiet:
             print(f"\n{BOLD}▶ Skipping semantic stages (ROUTE_MODE={_ROUTE_MODE}){RESET}")
         think._history = []
-        if _AGENTIC_ROUTE_RE.search(prompt):
+        if _ROUTE_MODE != "llm_only" and _AGENTIC_ROUTE_RE.search(prompt):
             llm_label = "agentic"
             if not quiet:
                 print(f"\n  {GREEN}→ ROUTE: agentic_chat  (deterministic task pattern){RESET}")
