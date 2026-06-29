@@ -479,6 +479,7 @@ class AikoWeb:
                 speak=speak,
                 wait_fn=wait_fn,
                 chunk_source=_chunk_source,
+                vad_presegmented=True,  # browser Silero VAD already segmented — skip MIN_SPEECH_CHUNKS gate
             )
             done_event.set()
 
