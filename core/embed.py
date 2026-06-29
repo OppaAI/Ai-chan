@@ -1,15 +1,20 @@
 """
 embed.py
 ───────────
-Drop-in ONNX embedder for ferrisS/harrier-oss-v1-270m-fastembed.
+llama.cpp-backed text embedder for harrier-oss-v1-270m (GGUF, via llama-server).
 
-Replaces fastembed.TextEmbedding for harrier because fastembed's custom
-model API only supports MEAN/CLS pooling. Harrier is a decoder-only
-Gemma3 model that requires last-token pooling.  This wrapper uses
-onnxruntime + tokenizers directly and applies correct last-token pooling
-+ L2 normalisation.
+Replaces the previous ONNX Runtime implementation. The ONNX export of Harrier
+uses the GroupQueryAttention contrib op, which has no CUDA kernel in onnxruntime
+(confirmed via verbose EP logging) and no entry in the onnx-tensorrt operator
+support matrix either — so every embed call fell back to CPU for attention,
+dominating latency (~300ms/call on Jetson Orin Nano).
 
-Small iterable interface:
+llama.cpp has native GQA kernels (same family used for Ministral/smollm in this
+project) and runs Harrier via its own server with --pooling-type last, which
+matches the model's required last-token pooling. This wrapper talks to that
+server over HTTP instead of loading an ONNX graph directly.
+
+Small iterable interface (unchanged from the ONNX version):
     embedder = HarrierEmbedder()
     vectors = list(embedder.embed(["text one", "text two"]))
     # or
@@ -20,161 +25,90 @@ Query-side instruction prefix (set EMBED_QUERY_INSTRUCT in .env):
     Use embedder.embed() / embed_batch() for document/memory storage (no prefix).
 
 Used by core.memorize and util.migrate_embeddings.
+
+Requires the harrier llama-server instance to be running with:
+    embedding = true
+    pooling-type = last
 """
 
 import os
 import struct
-from pathlib import Path
 from typing import Generator, Iterable
 
 import numpy as np
+import requests
 
 # ── config from env ───────────────────────────────────────────────────────────
-_EMBED_CACHE      = os.getenv("EMBED_CACHE_PATH") or os.getenv("FASTEMBED_CACHE_PATH") or str(Path.home() / ".cache" / "huggingface" / "hub")
-_MODEL_ID         = os.getenv("EMBED_MODEL", "ferrisS/harrier-oss-v1-270m-fastembed")
-_MODEL_FILE       = os.getenv("EMBED_MODEL_FILE", "model_quantized.onnx")
+_EMBED_BASE_URL   = os.getenv("EMBED_BASE_URL", "http://127.0.0.1:8080")
+_EMBED_MODEL      = os.getenv("EMBED_MODEL", "harrier")
 _EMBED_DIMS       = int(os.getenv("EMBED_DIMS", "640"))
-_BATCH_SIZE       = int(os.getenv("EMBED_BATCH_SIZE", "64"))
+_BATCH_SIZE       = int(os.getenv("EMBED_BATCH_SIZE", "32"))
+_EMBED_TIMEOUT    = float(os.getenv("EMBED_TIMEOUT_S", "30"))
 _QUERY_INSTRUCT   = os.getenv(
     "EMBED_QUERY_INSTRUCT",
     "Retrieve relevant memories that answer the query",
 )
 
-# ── snapshot resolution ───────────────────────────────────────────────────────
-
-def _find_snapshot(cache_dir: str, model_id: str) -> Path:
-    """
-    Resolve model snapshot — checks HF hub cache first, then the configured cache.
-    HF hub layout: ~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<hash>/
-    legacy cache layout: ~/.cache/fastembed/models--<org>--<name>/snapshots/<hash>/
-    """
-    folder = "models--" + model_id.replace("/", "--")
-
-    # prefer HF hub cache (where hf download put it)
-    hf_cache = Path.home() / ".cache" / "huggingface" / "hub"
-    for base in [hf_cache, Path(cache_dir)]:
-        snapshots = base / folder / "snapshots"
-        if snapshots.exists():
-            hashes = sorted(snapshots.iterdir())
-            if hashes:
-                return hashes[0]
-
-    raise FileNotFoundError(
-        f"Harrier snapshot not found in HF hub cache ({hf_cache / folder}) "
-        f"or configured embedding cache ({Path(cache_dir) / folder}). "
-        f"Run: hf download {model_id} model_quantized.onnx model_quantized.onnx_data tokenizer.json tokenizer_config.json special_tokens_map.json config.json"
-    )
-
-
-# ── main embedder ─────────────────────────────────────────────────────────────
 
 class HarrierEmbedder:
     """
-    ONNX-based text embedder for harrier-oss-v1-270m with last-token pooling.
+    HTTP-based text embedder for harrier-oss-v1-270m via llama-server.
 
-    Loads the model once on first use (lazy init) and caches the session
-    for the lifetime of the object — safe to reuse across calls.
+    Talks to a running llama-server instance (started with `embedding = true`,
+    `pooling-type = last`) over its /embedding endpoint. Connection is lazy —
+    the first call just hits the HTTP endpoint, no local model loading happens
+    in this process.
     """
 
     def __init__(
         self,
-        cache_dir: str  = _EMBED_CACHE,
-        model_id: str   = _MODEL_ID,
-        model_file: str = _MODEL_FILE,
+        base_url: str   = _EMBED_BASE_URL,
+        model: str      = _EMBED_MODEL,
         dims: int       = _EMBED_DIMS,
         batch_size: int = _BATCH_SIZE,
+        timeout: float  = _EMBED_TIMEOUT,
     ) -> None:
-        self._cache_dir   = cache_dir
-        self._model_id    = model_id
-        self._model_file  = model_file
-        self.dims         = dims
-        self.batch_size   = batch_size
-        self._session     = None   # lazy — loaded on first embed call
-        self._tokenizer   = None   # lazy — loaded on first embed call
-
-    # ── lazy init ─────────────────────────────────────────────────────────────
-
-    def _ensure_loaded(self) -> None:
-        """Load ONNX session and tokenizer on first use."""
-        if self._session is not None:
-            return
-
-        import onnxruntime as ort
-        from tokenizers import Tokenizer
-        from core.silence import silent_stderr
-
-        snapshot       = _find_snapshot(self._cache_dir, self._model_id)
-        onnx_path      = snapshot / self._model_file
-        tokenizer_path = snapshot / "tokenizer.json"
-
-        if not onnx_path.exists():
-            raise FileNotFoundError(f"ONNX model not found: {onnx_path}")
-        if not tokenizer_path.exists():
-            raise FileNotFoundError(f"Tokenizer not found: {tokenizer_path}")
-
-        sess_opts = ort.SessionOptions()
-        sess_opts.log_severity_level = 3
-        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-        available = ort.get_available_providers()
-        providers  = ["CUDAExecutionProvider"] if "CUDAExecutionProvider" in available else ["CPUExecutionProvider"]
-
-        with silent_stderr():
-            self._session = ort.InferenceSession(str(onnx_path), sess_opts, providers=providers)
-
-        self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
-        # pyrefly: ignore [missing-import]
-        from tokenizers import processors
-        self._tokenizer.enable_padding(pad_id=0, pad_token="<pad>")
-        self._tokenizer.enable_truncation(max_length=32768)
-
-    # ── pooling ───────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _last_token_pool(hidden_states: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
-        """
-        Extract the last non-padding token embedding per sequence and L2-normalise.
-
-        hidden_states : (batch, seq_len, hidden_dim)
-        attention_mask: (batch, seq_len)  — 1 = real token, 0 = pad
-        returns       : (batch, hidden_dim)  L2-normalised
-        """
-        batch_size = hidden_states.shape[0]
-        # index of last real token per sequence
-        seq_lengths = attention_mask.sum(axis=1) - 1          # (batch,)
-        pooled = hidden_states[np.arange(batch_size), seq_lengths]  # (batch, dim)
-        # L2 normalise
-        norms = np.linalg.norm(pooled, axis=1, keepdims=True)
-        norms = np.where(norms == 0, 1.0, norms)               # avoid div-by-zero
-        return pooled / norms
+        self.base_url   = base_url.rstrip("/")
+        self.model      = model
+        self.dims       = dims
+        self.batch_size = batch_size
+        self.timeout    = timeout
+        self._session   = requests.Session()
 
     # ── core inference ────────────────────────────────────────────────────────
 
     def _embed_texts(self, texts: list[str]) -> np.ndarray:
         """
-        Embed a list of raw texts (no prefix).
-        Returns np.ndarray of shape (len(texts), dims).
+        Embed a list of raw texts via llama-server's /embedding endpoint.
+        Returns np.ndarray of shape (len(texts), dims), L2-normalised.
         """
-        self._ensure_loaded()
+        resp = self._session.post(
+            f"{self.base_url}/embedding",
+            json={"model": self.model, "content": texts},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-        encodings = self._tokenizer.encode_batch(texts)
-        input_ids      = np.array([e.ids      for e in encodings], dtype=np.int64)
-        attention_mask = np.array([e.attention_mask for e in encodings], dtype=np.int64)
+        # llama-server returns a list of {"embedding": [...]} or {"embedding": [[...]]}
+        # depending on version — handle both a flat vector and a nested batch-of-1 shape.
+        vecs = []
+        for item in data:
+            emb = item["embedding"]
+            if isinstance(emb[0], list):
+                emb = emb[0]  # unwrap nested batch dimension some versions return
+            vecs.append(emb)
 
-        # some harrier ONNX exports expect token_type_ids
-        inputs = {
-            "input_ids":      input_ids,
-            "attention_mask": attention_mask,
-        }
-        input_names = {inp.name for inp in self._session.get_inputs()}
-        if "token_type_ids" in input_names:
-            inputs["token_type_ids"] = np.zeros_like(input_ids)
+        arr = np.asarray(vecs, dtype=np.float32)
 
-        outputs = self._session.run(None, inputs)
-        # sentence_embedding is already pooled + L2-normalised: (batch, 640)
-        return outputs[0]
+        # L2 normalise defensively — llama-server's --pooling-type last gives the
+        # last-token hidden state, but normalisation behaviour has varied across
+        # versions, so we enforce it here to match the ONNX path's guarantee.
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        return arr / norms
 
-    # ── public API ────────────────────────────────────────────────────────────
+    # ── public API (unchanged from ONNX version) ────────────────────────────
 
     def embed(self, texts: Iterable[str]) -> Generator[np.ndarray, None, None]:
         """
@@ -191,7 +125,6 @@ class HarrierEmbedder:
     def embed_batch(self, texts: list[str]) -> np.ndarray:
         """
         Embed documents and return all vectors as np.ndarray (N, dims).
-        Convenience method — avoids materialising a list of 1-D arrays.
         """
         all_vecs = []
         for start in range(0, len(texts), self.batch_size):
