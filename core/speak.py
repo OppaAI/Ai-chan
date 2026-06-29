@@ -27,6 +27,7 @@ import time
 import threading
 import argparse
 import unicodedata
+import queue
 
 try:
     from dotenv import load_dotenv
@@ -206,10 +207,18 @@ class AikoSpeak:
             self._sd = _sd                 # eagerly loaded to avoid curses fd conflict
         self._token_buf: list[str] = []        # accumulate feed() tokens
         self._stream_chunks: list[str] = []
+        self._stream_queue = None
         self._stream_thread = None
+        self._stream_on_word = None
         self._streaming_active = False
         self._first_audio_callback = None
         self._first_audio_fired = threading.Event()
+
+        # When enabled, streamed TTS drives the UI token callback word-by-word
+        # against real WAV duration, instead of letting LLM tokens paint early.
+        self.karaoke_text = os.getenv("AIKO_KARAOKE_TEXT", "0").lower() in {
+            "1", "true", "yes", "on",
+        }
 
         # ── remote audio sink (WebUI) ────────────────────────────────────
         # If set, _play_wav_bytes() also hands each synthesized WAV chunk to
@@ -217,6 +226,7 @@ class AikoSpeak:
         # connected browser can play it — needed for remote/WAN use where
         # nobody's in the room to hear the Jetson's own speaker.
         self._audio_sink = None
+        self._viseme_sink = None
         # When True (default), local sounddevice playback still happens even
         # if a remote sink is set — fine on LAN where you might be near the
         # robot. Set False to silence the Jetson's own speaker entirely once
@@ -251,6 +261,36 @@ class AikoSpeak:
             voice.set_audio_sink(web.broadcast_audio_bytes)
         """
         self._audio_sink = callback
+
+    def set_viseme_sink(self, callback) -> None:
+        """
+        Register a callback(viseme: str, weight: float) -> None invoked during
+        TTS playback so a remote avatar can lip-sync to the synthesized voice.
+        """
+        self._viseme_sink = callback
+
+    def _emit_viseme(self, viseme: str, weight: float = 1.0) -> None:
+        if self._viseme_sink is None:
+            return
+        try:
+            self._viseme_sink(viseme, weight)
+        except Exception as e:
+            log.error("[speak] viseme sink error: %s", e)
+
+    def _viseme_for_word(self, word: str) -> str:
+        lowered = word.lower()
+        for char in lowered:
+            if char in "aあかがさざただなはばぱまやゃらわ":
+                return "A"
+            if char in "iいきぎしじちぢにひびぴみり":
+                return "I"
+            if char in "uうくぐすずつづぬふぶぷむゆゅる":
+                return "U"
+            if char in "eえけげせぜてでねへべぺめれ":
+                return "E"
+            if char in "oおこごそぞとどのほぼぽもよょろを":
+                return "O"
+        return "A"
 
     def warmup(self) -> bool:
         """Health-check the MioTTS server — called from wakeup.py during boot."""
@@ -396,7 +436,46 @@ class AikoSpeak:
         finally:
             self._playing.clear()
 
-    def _emit_words_timed(self, text: str, duration: float, on_word) -> None:
+    def _speech_stream_worker(self, chunk_queue, on_word=None) -> None:
+        """
+        Synthesize and play streamed sentence chunks as soon as they arrive.
+
+        The LLM/UI stream still owns text display; this worker only handles
+        sentence-level TTS so voice can start before the full answer is done.
+        """
+        self._playing.set()
+        try:
+            while not self._stop_flag.is_set():
+                chunk = chunk_queue.get()
+                if chunk is None:
+                    break
+                clean = sanitize_for_tts(chunk)
+                if not clean:
+                    if on_word:
+                        self._emit_words_timed(chunk, 0.0, on_word)
+                    continue
+                for piece in self._chunk_text(clean):
+                    if self._stop_flag.is_set():
+                        break
+                    wav = self._synthesize(piece)
+                    if not wav:
+                        if on_word:
+                            self._emit_words_timed(piece, 0.0, on_word)
+                        continue
+                    if on_word or self._viseme_sink is not None:
+                        duration = self._wav_duration(wav)
+                        play_thread = threading.Thread(
+                            target=self._play_wav_bytes, args=(wav,), daemon=True
+                        )
+                        play_thread.start()
+                        self._emit_words_timed(piece, duration, on_word)
+                        play_thread.join()
+                    else:
+                        self._play_wav_bytes(wav)
+        finally:
+            self._playing.clear()
+
+    def _emit_words_timed(self, text: str, duration: float, on_word=None) -> None:
         """
         Call on_word() for each word in `text`, paced so the words land
         roughly across `duration` seconds — the real audio length of this
@@ -413,7 +492,10 @@ class AikoSpeak:
         if duration <= 0:
             # couldn't determine audio length — just emit immediately
             for i, word in enumerate(words):
-                on_word(word if i == 0 else " " + word)
+                self._emit_viseme(self._viseme_for_word(word), 0.85)
+                if on_word:
+                    on_word(word if i == 0 else " " + word)
+            self._emit_viseme("A", 0.0)
             return
 
         # Keep a small lead-in so the first word appears when audio begins,
@@ -438,8 +520,15 @@ class AikoSpeak:
             sleep_time = (start + elapsed) - time.monotonic()
             if sleep_time > 0:
                 time.sleep(sleep_time)
-            on_word(word if i == 0 else " " + word)
+            self._emit_viseme(self._viseme_for_word(word), 0.85)
+            if on_word:
+                on_word(word if i == 0 else " " + word)
             elapsed += usable_duration * (weight / total)
+        remaining = (start + usable_duration) - time.monotonic()
+        while remaining > 0 and not self._stop_flag.is_set():
+            time.sleep(min(0.05, remaining))
+            remaining = (start + usable_duration) - time.monotonic()
+        self._emit_viseme("A", 0.0)
 
     def _speak_thread_synced(self, text: str, on_word=None) -> None:
         """
@@ -565,42 +654,45 @@ class AikoSpeak:
         t = threading.Thread(target=self._speak_thread, args=(text,), daemon=True)
         t.start()
 
-    def start_speech_stream(self) -> None:
-        """Start collecting streamed text for one complete TTS playback."""
+    def start_speech_stream(self, on_word=None) -> None:
+        """Start sentence-level TTS playback for one streamed response."""
         self.stop()
         self._first_audio_fired.clear()
         with self._lock:
             self._stream_chunks = []
+            self._stream_queue = queue.Queue()
+            self._stream_on_word = on_word
             self._streaming_active = True
             self._stop_flag.clear()
+            self._stream_thread = threading.Thread(
+                target=self._speech_stream_worker,
+                args=(self._stream_queue, self._stream_on_word),
+                daemon=True,
+            )
+            self._stream_thread.start()
 
     def feed_speech_stream(self, text: str) -> None:
-        """Buffer streamed text until the full response is ready to speak."""
+        """Queue a completed streamed sentence/chunk for immediate TTS."""
         if not text:
             return
         with self._lock:
             if self._streaming_active:
                 self._stream_chunks.append(text)
+                if self._stream_queue is not None:
+                    self._stream_queue.put(text)
 
     def stop_speech_stream(self) -> None:
-        """Finish the stream and play the complete buffered response."""
+        """Finish the current sentence-level TTS stream."""
         with self._lock:
             if not self._streaming_active:
                 return
             self._streaming_active = False
-            text = " ".join(chunk.strip() for chunk in self._stream_chunks if chunk.strip())
             self._stream_chunks = []
-
-        clean = sanitize_for_tts(text)
-        if not clean or self._stop_flag.is_set():
-            return
-        self._first_audio_fired.clear()
-        self._playing.set()
-        self._stop_flag.clear()
-        self._stream_thread = threading.Thread(
-            target=self._speak_thread, args=(clean,), daemon=True
-        )
-        self._stream_thread.start()
+            self._stream_on_word = None
+            stream_queue = self._stream_queue
+            self._stream_queue = None
+        if stream_queue is not None:
+            stream_queue.put(None)
 
     def is_playing(self) -> bool:
         return self._playing.is_set()
@@ -627,6 +719,11 @@ class AikoSpeak:
         with self._lock:
             self._streaming_active = False
             self._stream_chunks = []
+            self._stream_on_word = None
+            stream_queue = self._stream_queue
+            self._stream_queue = None
+        if stream_queue is not None:
+            stream_queue.put(None)
 
         try:
             sd = self._load_sd()

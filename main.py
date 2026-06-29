@@ -236,6 +236,13 @@ def _run_session(tui, args):
     speak    = result.speak
     listen   = result.listen
 
+    if speak and hasattr(tui, "broadcast_audio_bytes"):
+        speak.set_audio_sink(tui.broadcast_audio_bytes)
+        if hasattr(tui, "set_viseme"):
+            speak.set_viseme_sink(tui.set_viseme)
+        if os.getenv("AIKO_WEBUI_LOCAL_PLAYBACK", "1").lower() in {"0", "false", "no", "off"}:
+            speak.local_playback = False
+
     # ── transition to chat ────────────────────────────────────────────────────
 
     spin_stop.set()
@@ -541,10 +548,10 @@ def _run_session(tui, args):
 
         think.route(user_input, token_callback=token_cb)
         current_latency["assistant_done_at"] = time.monotonic()
-        tui.stream_commit()
-        tui._draw()
         if speak and tts_enabled:
             speak.wait()
+        tui.stream_commit()
+        tui._draw()
         current_latency["turn_done_at"] = time.monotonic()
         _update_latency_stats(current_latency)
         _log_latency(current_latency)

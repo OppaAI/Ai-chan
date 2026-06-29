@@ -598,8 +598,12 @@ class AikoThink:
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
         all_messages = [{"role": "system", "content": system}] + messages if system else messages
 
+        karaoke_text = bool(
+            self._speak and token_callback and getattr(self._speak, "karaoke_text", False)
+            and not self._reasoning
+        )
         if self._speak:
-            self._speak.start_speech_stream()
+            self._speak.start_speech_stream(token_callback if karaoke_text else None)
 
         sentence_buffer = ""
         stream_success = False
@@ -621,7 +625,7 @@ class AikoThink:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
                 
-                if token_callback and token:
+                if token_callback and token and not karaoke_text:
                     token_callback(token)
                 
                 full_response.append(token)
