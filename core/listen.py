@@ -486,6 +486,16 @@ class AikoListen:
                     break
 
                 chunk = np.frombuffer(raw, dtype=np.float32).copy()
+
+                if vad_presegmented and use_external:
+                    # Browser VAD has already decided these frames belong to an
+                    # utterance. Do not re-gate them here, or a client/server
+                    # VAD mismatch can silently discard the whole recording.
+                    hearing_speech = True
+                    speech_count += 1
+                    audio_chunks.append(chunk)
+                    continue
+
                 is_speech = self._score_chunk(chunk) >= VAD_THRESHOLD
 
                 if is_speech:

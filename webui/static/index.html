@@ -306,6 +306,9 @@
     const vUp   = document.getElementById('v-up');
     const vMode = document.getElementById('v-mode');
 
+    const AUTO_MIC = true;
+    let autoListenRequested = false;
+
     // ── clock ─────────────────────────────────────────────────────────────────
     function tickClock() {
       const now = new Date();
@@ -479,6 +482,11 @@
       vRam.textContent  = `RAM ${v.ram||'—'}`;
       vUp.textContent   = `↑ ${v.uptime||'—'}`;
       vMode.textContent = (v.asr ? '🎤 ASR' : '⌨ TXT') + '  ' + (v.tts ? '🔊 TTS' : '🔇 TTS');
+
+      if (AUTO_MIC && wsReady() && !v.asr && !autoListenRequested) {
+        autoListenRequested = true;
+        ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
+      }
     }
 
     // ── voice status ──────────────────────────────────────────────────────────
@@ -680,6 +688,7 @@
       ws.onopen = () => {
         wsDot.className  = 'dot on';
         wsLabel.textContent = 'ws connected';
+        if (AUTO_MIC) startMic();
       };
 
       ws.onmessage = (e) => {
