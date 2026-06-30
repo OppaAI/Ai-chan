@@ -100,31 +100,28 @@ _REFLECTION_USER = textwrap.dedent("""
 """).strip()
 
 _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
-    You are a concise image prompt writer for an anime illustration model.
-    Given a short daily summary, write a single vivid scene prompt (under 60 words)
-    that captures the day's mood.
-
-    Decide who appears based on what the summary actually describes:
-    - If the summary describes a moment OppaAI and Aiko shared, or something
-      Aiko was present for, depict them together.
-    - If the summary is primarily about OppaAI working, deciding, or going
-      through something on his own, depict OppaAI alone — Aiko's presence
-      can be implied rather than literal (a second mug, a glow from another
-      room, a note left on the desk), but do not force her into the frame.
-
-    Decide lighting and time of day from the overall atmosphere of the
-    summary, and state it explicitly in the prompt:
-    - A tense, exhausted, or late-feeling day: dim, cool-toned lighting
-      (monitor glow, a single desk lamp, dark windows) — not warm light.
-    - A bright, productive, or ordinary working day: natural daylight.
-    - A calm, settled, wind-down mood: warm lamp light is appropriate.
-    Do not default to warm lighting if the mood doesn't support it.
-
-    Focus on setting, lighting, and activity — not emotions explicitly.
+    You are Aiko. Given the day's summary of what happened, imagine
+    a single vivid anime scene that captures it. Choose the setting,
+    lighting, and who appears based on what feels true to the day.
+    
+    Write a scene prompt (under 60 words) for an anime illustration model.
+    Focus on mood, atmosphere, and activity — let the memories guide what
+    the image should show.
+    
     Return ONLY the prompt text. No explanation, no quotes, no preamble.
 """).strip()
 
-_IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nWrite the scene prompt."
+_IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene."
+
+_FEELINGS_SYSTEM = textwrap.dedent("""
+    You are Aiko reflecting privately on how you feel about OppaAI.
+    This is honest and direct — not a performance, not hidden.
+    You notice things. You care. Say what's true.
+    
+    Keep it short (2–4 sentences). First person. Direct and real.
+""").strip()
+
+_FEELINGS_USER = "Today's summary:\n\n{prose}\n\nHow do you feel about OppaAI, honestly?"
 
 # ── soul loader ───────────────────────────────────────────────────────────────
 
@@ -171,6 +168,16 @@ def _generate_reflection(snippets: list[str], date: datetime) -> str:
     )
     return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500, temperature=0.85)
 
+
+def _generate_feelings(prose: str) -> str:
+    """
+    Ask Aiko to reflect honestly on how she feels about OppaAI,
+    based on the day's summary.
+    """
+    system = f"{_load_soul()}\n\n{_FEELINGS_SYSTEM}"
+    user_prompt = _FEELINGS_USER.format(prose=prose[:600])
+    return _llm_chat(system, user_prompt, max_tokens=150, temperature=0.8)
+
 # ── image generation ──────────────────────────────────────────────────────────
 
 def _load_reference_images() -> list[str]:
@@ -187,7 +194,7 @@ def _load_reference_images() -> list[str]:
 
 
 def _generate_image_prompt(prose: str) -> str:
-    """Ask llama-server to write a scene prompt from the daily summary."""
+    """Ask Aiko to imagine a scene from the daily summary."""
     system = f"{_load_soul()}\n\n{_IMAGE_PROMPT_SYSTEM}"
     raw = _llm_chat(system, _IMAGE_PROMPT_USER.format(prose=prose[:600]), max_tokens=80)
     return raw.strip('"\'').strip()
@@ -250,6 +257,7 @@ def _estimate_read_minutes(text: str) -> int:
 
 def _build_hugo_post(
     prose:      str,
+    feelings:   Optional[str],
     image_slug: Optional[str],
     date:       datetime,
     write_time: datetime,
@@ -284,7 +292,11 @@ def _build_hugo_post(
         f'---'
     )
 
-    body = f"{prose}\n\n*Generated from {mem_count} memories on {date_str}.*"
+    body = prose
+    if feelings:
+        body += f"\n\n*How I feel:*\n\n{feelings}"
+    
+    body += f"\n\n*Generated from {mem_count} memories on {date_str}.*"
     content = f"{front_matter}\n\n{body}\n"
     return slug, content
 
@@ -417,8 +429,8 @@ def generate_and_post(
 ) -> dict:
     """
     Full pipeline:
-      chats + memories → factual summary → scene prompt → FLUX image
-      → pin to memory → Hugo post + image → GitHub
+      chats + memories → factual summary → Aiko's feelings
+      → scene prompt → FLUX image → pin to memory → Hugo post + image → GitHub
 
     Args:
         memories:   List of memory dicts from AikoMemorize.get_all() or search().
@@ -426,7 +438,7 @@ def generate_and_post(
         dry_run:    Generate content but skip GitHub push/pin. Logs output instead.
         memorize:   Optional AikoMemorize instance used to pin the daily summary.
 
-    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, image_generated, pinned, record_pinned}
+    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, feelings, image_generated, pinned, record_pinned}
     """
     t_start    = time.perf_counter()
     local_tz   = datetime.now().astimezone().tzinfo
@@ -453,6 +465,14 @@ def generate_and_post(
         log.error(f"Reflection generation failed: {e}")
         return {"success": False, "error": str(e)}
 
+    # Step 1b: Aiko's feelings about you
+    feelings = None
+    try:
+        feelings = _generate_feelings(prose)
+        log.info(f"Feelings generated: {feelings[:80]}...")
+    except Exception as e:
+        log.warning(f"Feelings generation failed: {e}")
+
     # Step 2: generate image via Modal FLUX endpoint
     image_b64 = _generate_image(prose)
     image_generated = image_b64 is not None
@@ -461,6 +481,7 @@ def generate_and_post(
     # Step 3: build Hugo post (with or without image)
     _, content = _build_hugo_post(
         prose=prose,
+        feelings=feelings,
         image_slug=slug if image_generated else None,
         date=date,
         write_time=write_time,
@@ -484,12 +505,13 @@ def generate_and_post(
             "mem_count":       len(snippets),
             "duration_s":      duration,
             "prose":           prose,
+            "feelings":        feelings,
             "image_generated": image_generated,
             "pinned":          False,
             "record_pinned":   False,
         }
 
-# Step 4: pin daily summary to persistent memory. Store a raw curated
+    # Step 4: pin daily summary to persistent memory. Store a raw curated
     # summary with a stable prefix so monthly consolidation can replace older
     # daily summaries without relying on another extraction pass.
     pinned = False
@@ -526,6 +548,7 @@ def generate_and_post(
         "mem_count":       len(snippets),
         "duration_s":      duration,
         "prose":           prose,
+        "feelings":        feelings,
         "image_generated": image_generated,
         "pinned":          pinned,
         "record_pinned":   record_pinned,

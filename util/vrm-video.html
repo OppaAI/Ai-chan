@@ -149,6 +149,8 @@
       <div class="section-label">Source video</div>
       <div style="margin-bottom:10px"><span id="mocapStatus" class="status-pill">choose a video</span></div>
       <input class="field" id="videoFile" type="file" accept="video/*" aria-label="source video">
+      <input class="field" id="videoUrl" type="url" placeholder="direct video URL (CORS-enabled .mp4/.webm)" aria-label="source video URL" style="margin-top:8px">
+      <button class="action-btn" style="margin:8px 0 0; width:100%" id="btnLoadUrl">load URL</button>
       <div class="toggle-row" style="margin-top:8px">
         <button class="toggle-btn" id="btnProcessVideo" disabled>track video</button>
         <button class="toggle-btn" id="btnCancelVideo" disabled>cancel</button>
@@ -157,7 +159,7 @@
         <button class="toggle-btn" id="btnPlayback" disabled>play take</button>
         <button class="toggle-btn" id="btnMirror">mirror L/R</button>
       </div>
-      <div class="mini-note">Runs MediaPipe Tasks Vision (pose + face landmarker) frame-by-frame on the video, feeds the landmarks into Kalidokit, and drives Aiko's actual VRM skeleton and face blendshapes directly — no hand-authored motion, it just follows what's in the footage.</div>
+      <div class="mini-note">Runs MediaPipe Tasks Vision (pose + face landmarker) frame-by-frame on the video, feeds the landmarks into Kalidokit, and drives Aiko's actual VRM skeleton and face blendshapes directly. URL loading needs a direct CORS-enabled media file; YouTube/Vimeo/watch pages can't be read by browser mocap code.</div>
     </div>
 
     <!-- Trim / export -->
@@ -325,6 +327,7 @@
     gltfLoader.register(parser => new VRMLoaderPlugin(parser));
 
     let currentVRM = null;
+    const restHipPosition = new THREE.Vector3(0, 0, 0);
 
     document.getElementById('vrmFile').addEventListener('change', async (event) => {
       const file = event.target.files?.[0];
@@ -346,6 +349,7 @@
         currentVRM = vrm;
         scene.add(vrm.scene);
         vrm.scene.traverse(o => { o.frustumCulled = false; });
+        cacheAvatarRestPose(vrm);
 
         // Frame the camera roughly at chest height of whatever scale this model is.
         const head = vrm.humanoid?.getNormalizedBoneNode('head');
@@ -355,6 +359,7 @@
         document.getElementById('activeLabel').textContent = file.name;
         document.getElementById('hudAvatar').textContent = file.name;
         setVrmStatus(`${file.name} loaded`, 'live');
+        document.getElementById('btnProcessVideo').disabled = !selectedVideoUrl;
         hideBanner();
       } catch (err) {
         setVrmStatus('load failed', '');
@@ -378,6 +383,9 @@
         },
         runningMode: 'VIDEO',
         numPoses: 1,
+        minPoseDetectionConfidence: 0.55,
+        minPosePresenceConfidence: 0.55,
+        minTrackingConfidence: 0.55,
       });
       faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
         baseOptions: {
@@ -410,6 +418,27 @@
     const tmpQuat = new THREE.Quaternion();
     const tmpVec = new THREE.Vector3();
 
+    function cacheAvatarRestPose(vrm) {
+      const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+      restHipPosition.copy(hips?.position ?? tmpVec.set(0, 0, 0));
+    }
+
+    function resetRigState(vrm) {
+      if (!vrm?.humanoid) return;
+      for (const name of THREE_VRM_HUMAN_BONE_NAMES) {
+        const bone = vrm.humanoid.getNormalizedBoneNode(name);
+        if (bone) bone.quaternion.identity();
+      }
+      const hips = vrm.humanoid.getNormalizedBoneNode('hips');
+      if (hips) hips.position.copy(restHipPosition);
+      if (vrm.expressionManager) {
+        for (const name of ['blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh']) {
+          vrm.expressionManager.setValue(name, 0);
+        }
+      }
+      vrm.update(0);
+    }
+
     function rigRotation(vrm, kName, rotation, dampener = 1, lerpAmount = 0.3) {
       if (!rotation) return;
       const bone = vrm.humanoid?.getNormalizedBoneNode(vrmBoneName(kName));
@@ -427,11 +456,12 @@
       bone.position.lerp(tmpVec, lerpAmount);
     }
 
-    // Monocular depth (Z) is the noisiest axis we get, even for a stationary subject — small
-    // per-frame jitter there accumulates through the position lerp into visible drift. Clamp the
-    // hip offset to a small box around the rest position instead of letting it free-run.
-    const HIP_DRIFT_CLAMP = 0.06; // meters
+    // Monocular root translation is very noisy in ordinary video. Keep it as a small expressive
+    // torso shift around the avatar's rest hips instead of letting MediaPipe depth become drift.
+    const HIP_DRIFT_CLAMP = 0.035; // normalized VRM local units
+    const HIP_DEADZONE = 0.018;
     function clamp(v, lim) { return Math.max(-lim, Math.min(lim, v)); }
+    function deadzone(v, zone = HIP_DEADZONE) { return Math.abs(v) < zone ? 0 : v - Math.sign(v) * zone; }
 
     // Legs (and arms, to a lesser extent) get noisy when their landmarks are partially occluded
     // or just less confidently tracked than the torso/face. Below this visibility we hold the
@@ -445,11 +475,15 @@
     function rigPose(vrm, riggedPose, poseLm) {
       if (!riggedPose || !poseLm) return;
       rigRotation(vrm, 'Hips', riggedPose.Hips.rotation, 0.7, 0.3);
-      rigPosition(vrm, 'Hips', {
-        x: clamp(-riggedPose.Hips.position.x, HIP_DRIFT_CLAMP),
-        y: 1 + clamp(riggedPose.Hips.position.y, HIP_DRIFT_CLAMP),
-        z: clamp(-riggedPose.Hips.position.z * 0.4, HIP_DRIFT_CLAMP), // depth is the least reliable axis, so trust it least
-      }, 1, 0.12);
+      const hips = vrm.humanoid?.getNormalizedBoneNode('hips');
+      if (hips && riggedPose.Hips?.position) {
+        tmpVec.set(
+          restHipPosition.x + clamp(deadzone(-riggedPose.Hips.position.x) * 0.25, HIP_DRIFT_CLAMP),
+          restHipPosition.y + clamp(deadzone(riggedPose.Hips.position.y) * 0.12, HIP_DRIFT_CLAMP),
+          restHipPosition.z + clamp(deadzone(-riggedPose.Hips.position.z) * 0.08, HIP_DRIFT_CLAMP * 0.6),
+        );
+        hips.position.lerp(tmpVec, 0.16);
+      }
 
       rigRotation(vrm, 'Chest', riggedPose.Spine, 0.25, 0.3);
       rigRotation(vrm, 'Spine', riggedPose.Spine, 0.45, 0.3);
@@ -474,12 +508,7 @@
       }
     }
 
-    // True mirroring has to happen on the raw landmarks *before* Kalidokit solves them — negating
-    // the x-axis of every point gives a geometrically correct mirror image (same as a person looking
-    // at themselves in a mirror), and Kalidokit's left/right labeling stays self-consistent because
-    // it's still reading the same indices, just reflected. Swapping output fields after solving
-    // (the previous approach) doesn't flip the underlying rotation math, which is why that only
-    // produced a different wrong pose instead of the correct one.
+    // True mirroring has to happen on the raw landmarks before Kalidokit solves them.
     function mirrorNormalized(landmarks) {
       return landmarks.map(p => ({ ...p, x: 1 - p.x }));
     }
@@ -557,16 +586,21 @@
     // ── Video element / state ────────────────────────────────────────
     const cameraPreview = document.getElementById('cameraPreview');
     let selectedVideoUrl = null;
+    let selectedVideoIsObjectUrl = false;
     let processingVideo = false;
     let recordedFrames = [];
     let mirrorLR = false;
 
-    document.getElementById('videoFile').addEventListener('change', (event) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-      if (selectedVideoUrl) URL.revokeObjectURL(selectedVideoUrl);
-      selectedVideoUrl = URL.createObjectURL(file);
+    function setVideoSource(src, label, isObjectUrl = false) {
+      if (selectedVideoIsObjectUrl && selectedVideoUrl) URL.revokeObjectURL(selectedVideoUrl);
+      selectedVideoUrl = src;
+      selectedVideoIsObjectUrl = isObjectUrl;
       recordedFrames = [];
+      cameraPreview.pause();
+      cameraPreview.removeAttribute('src');
+      cameraPreview.load();
+      if (isObjectUrl) cameraPreview.removeAttribute('crossorigin');
+      else cameraPreview.crossOrigin = 'anonymous';
       cameraPreview.src = selectedVideoUrl;
       cameraPreview.loop = false;
       cameraPreview.muted = true;
@@ -574,7 +608,28 @@
       cameraPreview.style.display = 'block';
       document.getElementById('btnProcessVideo').disabled = !currentVRM;
       updateTakeUi();
-      setMocapStatus(`loaded ${file.name}${currentVRM ? '' : ' — load a VRM avatar first'}`, currentVRM ? 'live' : '');
+      setMocapStatus(`loaded ${label}${currentVRM ? '' : ' - load a VRM avatar first'}`, currentVRM ? 'live' : '');
+    }
+
+    document.getElementById('videoFile').addEventListener('change', (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      setVideoSource(URL.createObjectURL(file), file.name, true);
+    });
+
+    document.getElementById('btnLoadUrl').addEventListener('click', () => {
+      const raw = document.getElementById('videoUrl').value.trim();
+      if (!raw) return showBanner('Paste a direct .mp4/.webm URL first.', 'info');
+      let url;
+      try {
+        url = new URL(raw, window.location.href);
+      } catch {
+        return showBanner('That video URL is not valid.');
+      }
+      if (/youtube\.com|youtu\.be|vimeo\.com/i.test(url.hostname)) {
+        showBanner('YouTube/Vimeo pages do not expose readable video frames to this page. Use an uploaded file or a direct CORS-enabled .mp4/.webm URL instead.', 'info');
+      }
+      setVideoSource(url.href, url.hostname, false);
     });
 
     document.getElementById('btnMirror').addEventListener('click', (e) => {
@@ -599,6 +654,7 @@
         await ensureVision();
         processingVideo = true;
         recordedFrames = [];
+        resetRigState(currentVRM);
 
         const processBtn = document.getElementById('btnProcessVideo');
         processBtn.disabled = true;
@@ -634,23 +690,22 @@
             const poseResult = poseLandmarker.detectForVideo(cameraPreview, t);
             const faceResult = faceLandmarker.detectForVideo(cameraPreview, t);
 
-            const poseLm = poseResult.landmarks?.[0];
-            const poseWorldLm = poseResult.worldLandmarks?.[0];
-            const faceLm = faceResult.faceLandmarks?.[0];
+            const rawPoseLm = poseResult.landmarks?.[0];
+            const rawPoseWorldLm = poseResult.worldLandmarks?.[0];
+            const rawFaceLm = faceResult.faceLandmarks?.[0];
+            const poseLm = rawPoseLm && mirrorLR ? mirrorNormalized(rawPoseLm) : rawPoseLm;
+            const poseWorldLm = rawPoseWorldLm && mirrorLR ? mirrorWorld(rawPoseWorldLm) : rawPoseWorldLm;
+            const faceLm = rawFaceLm && mirrorLR ? mirrorNormalized(rawFaceLm) : rawFaceLm;
 
             document.getElementById('dbgPose').textContent = poseLm ? 'tracked' : 'lost';
             document.getElementById('dbgFace').textContent = faceLm ? 'tracked' : 'lost';
 
-            const sideSign = mirrorLR ? 1 : -1;
-
             if (poseLm && poseWorldLm) {
-              const riggedPose = Kalidokit.Pose.solve(poseWorldLm, poseLm, { runtime: 'mediapipe', video: cameraPreview });
-              if (sideSign === -1) swapLR(riggedPose, ['UpperArm', 'LowerArm', 'Hand', 'UpperLeg', 'LowerLeg', 'Foot']);
-              rigPose(currentVRM, riggedPose, poseLm)
+              const riggedPose = Kalidokit.Pose.solve(poseWorldLm, poseLm, { runtime: 'mediapipe', video: cameraPreview, enableLegs: true });
+              rigPose(currentVRM, riggedPose, poseLm);
             }
             if (faceLm) {
               const riggedFace = Kalidokit.Face.solve(faceLm, { runtime: 'mediapipe', video: cameraPreview, imageSize: { width: cameraPreview.videoWidth, height: cameraPreview.videoHeight } });
-              if (sideSign === -1) [riggedFace.eye.l, riggedFace.eye.r] = [riggedFace.eye.r, riggedFace.eye.l];
               rigFace(currentVRM, riggedFace);
             }
 
@@ -685,15 +740,6 @@
         showBanner(`Couldn't start tracking: ${err.message}`);
       }
     });
-
-    function swapLR(riggedPose, parts) {
-      for (const part of parts) {
-        const l = riggedPose['Left' + part];
-        const r = riggedPose['Right' + part];
-        riggedPose['Left' + part] = r;
-        riggedPose['Right' + part] = l;
-      }
-    }
 
     // ── Trim ──────────────────────────────────────────────────────
     function updateTakeUi() {
@@ -871,7 +917,7 @@ export function ${exportName}(vrm, t) {
           if (bone) bone.quaternion.identity();
         }
         const hips = currentVRM.humanoid.getNormalizedBoneNode('hips');
-        if (hips) hips.position.set(0, 0, 0);
+        if (hips) hips.position.copy(restHipPosition);
         if (currentVRM.expressionManager) {
           for (const name of ['blinkLeft', 'blinkRight', 'aa', 'ih', 'ou', 'ee', 'oh']) {
             currentVRM.expressionManager.setValue(name, 0);
