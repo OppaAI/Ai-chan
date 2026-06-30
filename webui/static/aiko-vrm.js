@@ -169,6 +169,88 @@ function speakingRecently() {
   return performance.now() - lastVisemeAt < 650;
 }
 
+
+// ── Thinking pose animation ────────────────────────────────────────────────
+let thinkingPoseActive = false;
+let thinkingPose = 'chinThink';
+let thinkingPoseT = 0;
+let thinkingPoseCycle = 0;
+const THINKING_POSES = ['chinThink', 'handNearMouth', 'armsFoldThink', 'lookUpThink'];
+
+function pickThinkingPose() {
+  thinkingPose = THINKING_POSES[Math.floor(Math.random() * THINKING_POSES.length)];
+  thinkingPoseT = 0;
+  thinkingPoseCycle = 3.2 + Math.random() * 2.2;
+}
+
+function applyThinkingPose(dt) {
+  if (!vrm?.humanoid || !thinkingPoseActive) return false;
+
+  thinkingPoseT += dt;
+  if (thinkingPoseT > thinkingPoseCycle) pickThinkingPose();
+
+  const h = vrm.humanoid;
+  const get = n => h.getRawBoneNode(n);
+  const head = get('head');
+  const neck = get('neck');
+  const spine = get('spine');
+  const chest = get('chest');
+  const lUA = get('leftUpperArm');
+  const rUA = get('rightUpperArm');
+  const lLA = get('leftLowerArm');
+  const rLA = get('rightLowerArm');
+  const lH = get('leftHand');
+  const rH = get('rightHand');
+  const io = idleOffset;
+  const blend = (base, pose, amount) => base + pose * amount;
+  const settle = Math.min(1, thinkingPoseT / 0.35);
+  const held = easeInOutSine(settle);
+  const pulse = Math.sin(t * 2.1) * 0.5 + 0.5;
+  const micro = Math.sin(t * 5.0) * 0.018;
+
+  if (spine) spine.rotation.x = blend(io.spine.x, 0.025, held);
+  if (chest) chest.rotation.x = blend(io.chest.x, 0.035, held);
+
+  switch (thinkingPose) {
+    case 'chinThink':
+      if (head) { head.rotation.x = blend(io.head.x, 0.095 + micro, held); head.rotation.y = blend(io.head.y, -0.08, held); head.rotation.z = blend(io.head.z, -0.035, held); }
+      if (neck) { neck.rotation.x = blend(io.neck.x, 0.055, held); neck.rotation.y = blend(io.neck.y, -0.045, held); }
+      if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -0.58, held); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, 0.68, held); }
+      if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -1.08, held); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, 0.12, held); }
+      if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, -0.22 + pulse * 0.04, held); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -0.24, held); }
+      applyFingerCurl(1, 0.35 * held);
+      break;
+
+    case 'handNearMouth':
+      if (head) { head.rotation.x = blend(io.head.x, 0.05, held); head.rotation.y = blend(io.head.y, 0.10 + micro, held); }
+      if (neck) neck.rotation.y = blend(io.neck.y, 0.06, held);
+      if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -0.62, held); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -0.72, held); }
+      if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -0.98, held); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -0.16, held); }
+      if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, -0.12, held); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, 0.28 + pulse * 0.04, held); }
+      applyFingerCurl(-1, 0.28 * held);
+      break;
+
+    case 'armsFoldThink':
+      if (head) { head.rotation.x = blend(io.head.x, 0.07 + micro, held); head.rotation.z = blend(io.head.z, 0.045, held); }
+      if (neck) neck.rotation.z = blend(io.neck.z, 0.025, held);
+      if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -0.22, held); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -0.62, held); }
+      if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -0.22, held); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, 0.62, held); }
+      if (lLA) { lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -0.62, held); lLA.rotation.z = blend(REST.leftLowerArm.z + io.lLA.z, -0.46, held); }
+      if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -0.62, held); rLA.rotation.z = blend(REST.rightLowerArm.z + io.rLA.z, 0.46, held); }
+      break;
+
+    case 'lookUpThink':
+      if (head) { head.rotation.x = blend(io.head.x, -0.10 + micro, held); head.rotation.y = blend(io.head.y, 0.18, held); head.rotation.z = blend(io.head.z, -0.025, held); }
+      if (neck) { neck.rotation.x = blend(io.neck.x, -0.06, held); neck.rotation.y = blend(io.neck.y, 0.08, held); }
+      if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -0.35, held); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, 0.42, held); }
+      if (rLA) { rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -0.72, held); }
+      if (rH) rH.rotation.z = blend(REST.rightHand.z + io.rH.z, 0.18 + pulse * 0.05, held);
+      break;
+  }
+
+  return true;
+}
+
 function applyFingerCurl(side, intensity) {
   const prefix = side < 0 ? 'left' : 'right';
   const pulse = 0.5 + Math.sin(t * 8.0) * 0.5;
@@ -798,7 +880,7 @@ function animate() {
       }
     }
     applyIdle(dt);
-    applyGestures(dt);
+    if (!applyThinkingPose(dt)) applyGestures(dt);
     applyBlink(dt);
   }
   renderer.render(scene, camera);
@@ -904,5 +986,17 @@ window.aikoSetMouthOpen = (weight = 0) => {
   } else {
     dot.className = 'dot';
     lbl.textContent = 'idle';
+  }
+};
+
+window.aikoSetPose = (name, active = true) => {
+  if (name !== 'thinking') return;
+  const shouldActivate = Boolean(active);
+  if (shouldActivate && !thinkingPoseActive) pickThinkingPose();
+  thinkingPoseActive = shouldActivate;
+  if (!shouldActivate) {
+    thinkingPoseT = 0;
+    gestureState = 'none';
+    gestureCooldown = 1.2 + Math.random() * 2.0;
   }
 };

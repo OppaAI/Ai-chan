@@ -76,6 +76,10 @@ async function initVAD() {
     }
 }
 
+function resetVADState() {
+    _resetState();
+}
+
 function _resetState() {
     if (typeof ort !== 'undefined') {
         const z64 = new Float32Array(2 * 1 * 64);
