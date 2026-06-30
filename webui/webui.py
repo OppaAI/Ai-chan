@@ -3,7 +3,7 @@ webui/webui.py
 Aiko-chan's browser-based UI backend — drop-in replacement for AikoTUI.
 
 Responsibilities:
-    - Serve aiko.html + assets from webui/static/ over HTTP (localhost:PORT)
+    - Serve aiko.html + assets from webui/static/ over HTTP(S) (localhost:PORT)
     - Host a bidirectional WebSocket server (localhost:WS_PORT)
     - Expose the same public API as AikoTUI so main.py needs minimal changes:
         add_message / stream_token / stream_commit / turn_start
@@ -16,6 +16,9 @@ Environment variables (all optional):
     HTTP_PORT   — HTTP port for serving the UI (default 8787)
     WS_PORT     — WebSocket port                (default 8765)
     NO_BROWSER  — set to "1" to suppress auto-open
+    WEBUI_HTTPS — set to "1" to serve HTTPS/WSS for remote browser microphones
+    SSL_CERT    — optional TLS certificate path
+    SSL_KEY     — optional TLS private key path
 """
 
 import asyncio
@@ -24,6 +27,8 @@ import json
 import logging
 import os
 import queue
+import ssl
+import subprocess
 import threading
 import time
 import webbrowser
@@ -40,6 +45,49 @@ HTTP_PORT  = int(os.getenv("HTTP_PORT", "8787"))
 WS_PORT    = int(os.getenv("WS_PORT",   "8765"))
 STATIC_DIR = Path(__file__).parent / "static"
 NO_BROWSER = os.getenv("NO_BROWSER", "0") == "1"
+WEBUI_HTTPS = os.getenv("WEBUI_HTTPS", "0").lower() in {"1", "true", "yes", "on"}
+SSL_CERT = os.getenv("SSL_CERT", "")
+SSL_KEY = os.getenv("SSL_KEY", "")
+
+
+
+def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
+    """Return a server TLS context when WEBUI_HTTPS is enabled."""
+    if not WEBUI_HTTPS:
+        return None
+
+    cert_path = Path(SSL_CERT) if SSL_CERT else Path(__file__).parent / ".cert" / "webui.crt"
+    key_path = Path(SSL_KEY) if SSL_KEY else Path(__file__).parent / ".cert" / "webui.key"
+
+    if not cert_path.exists() or not key_path.exists():
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        alt_names = ["DNS:localhost", f"DNS:{hostname}", "IP:127.0.0.1"]
+        if host_ip and host_ip != "127.0.0.1":
+            alt_names.append(f"IP:{host_ip}")
+        try:
+            subprocess.run(
+                [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(key_path),
+                    "-out", str(cert_path),
+                    "-days", "3650",
+                    "-subj", f"/CN={hostname}",
+                    "-addext", f"subjectAltName={','.join(alt_names)}",
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            log.info("[aiko-web] generated self-signed TLS cert at %s", cert_path)
+        except Exception as exc:
+            raise RuntimeError(
+                "WEBUI_HTTPS=1 requires openssl or SSL_CERT/SSL_KEY pointing at an existing certificate."
+            ) from exc
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    return ctx
 
 # ── message types (server → browser) ─────────────────────────────────────────
 #
@@ -114,6 +162,7 @@ class AikoWeb:
         # asyncio event loop running in a background thread
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_ready = threading.Event()
+        self._ssl_context: ssl.SSLContext | None = None
 
         self._start_servers()
 
@@ -124,7 +173,10 @@ class AikoWeb:
     def _start_servers(self) -> None:
         """Spin up the HTTP file server and WebSocket server in daemon threads."""
         import socket
-        host_ip = socket.gethostbyname(socket.gethostname())
+        hostname = socket.gethostname()
+        host_ip = socket.gethostbyname(hostname)
+        self._ssl_context = _make_ssl_context(hostname, host_ip)
+        scheme = "https" if self._ssl_context else "http"
         http_t = threading.Thread(target=self._run_http, daemon=True, name="aiko-http")
         http_t.start()
 
@@ -134,12 +186,14 @@ class AikoWeb:
         self._loop_ready.wait(timeout=5)
 
         if not NO_BROWSER:
-            threading.Timer(0.6, lambda: webbrowser.open(f"http://{host_ip}:{HTTP_PORT}/")).start()
+            threading.Timer(0.6, lambda: webbrowser.open(f"{scheme}://{host_ip}:{HTTP_PORT}/")).start()
 
     def _run_http(self) -> None:
-        """Serve webui/static/ over plain HTTP."""
+        """Serve webui/static/ over HTTP or HTTPS."""
         handler = _make_static_handler(STATIC_DIR)
         with http.server.HTTPServer(("0.0.0.0", HTTP_PORT), handler) as srv:
+            if self._ssl_context is not None:
+                srv.socket = self._ssl_context.wrap_socket(srv.socket, server_side=True)
             srv.serve_forever()
 
     def _run_ws_loop(self) -> None:
@@ -150,7 +204,7 @@ class AikoWeb:
 
     async def _ws_main(self) -> None:
         """Async entry point: start the WS server then signal ready."""
-        async with ws_serve(self._ws_handler, "0.0.0.0", WS_PORT):
+        async with ws_serve(self._ws_handler, "0.0.0.0", WS_PORT, ssl=self._ssl_context):
             self._loop_ready.set()
             await asyncio.Future()          # run forever
 

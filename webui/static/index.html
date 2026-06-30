@@ -634,7 +634,8 @@
 
     function connectWS() {
       const wsPort = parseInt(new URLSearchParams(location.search).get('ws') || '8765');
-      ws = new WebSocket(`ws://${location.hostname}:${wsPort}/`);
+      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${wsProto}//${location.hostname}:${wsPort}/`);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
