@@ -217,7 +217,7 @@ def _generate_image(prose: str) -> Optional[str]:
                 "anime illustration, manga style, clean lineart, flat color, "
                 "no text, no speech bubbles"
             ),
-            "negative_prompt": "identical clothing to reference, same outfit",
+            "negative_prompt": "extra limbs, deformed, poorly drawn, bad anatomy, malformed hands",
             "width": 1024,
             "height": 1024,
             "steps": 4,
