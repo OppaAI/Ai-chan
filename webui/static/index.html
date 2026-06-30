@@ -654,7 +654,11 @@
     sendBtn.addEventListener('click', submitInput);
     micBtn.addEventListener('click', async () => {
       const ok = await startMic();
-      if (!ok || !wsReady()) return;
+      if (!ok) return;
+      if (!wsReady()) {
+        addMessage('sys', 'Microphone is active, but WebSocket bridge is offline. Check wss:// connection.');
+        return;
+      }
       if (vMode.textContent.includes('TXT')) {
         ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
       }
@@ -669,7 +673,8 @@
     function connectWS() {
       const wsPort = parseInt(new URLSearchParams(location.search).get('ws') || '8765');
       const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(`${wsProto}//${location.hostname}:${wsPort}/`);
+      const wsUrl = `${wsProto}//${location.hostname}:${wsPort}/`;
+      ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
@@ -707,9 +712,15 @@
         wsDot.className     = 'dot';
         wsLabel.textContent = 'ws offline';
         stopMic();
+        if (location.protocol === 'https:') {
+          toolStatus.textContent = `  ws offline: open https://${location.hostname}:${wsPort}/ once to accept the WSS certificate, or use localhost tunnel`;
+        }
         setTimeout(connectWS, 3000);
       };
-      ws.onerror = () => ws.close();
+      ws.onerror = () => {
+        console.error('[ws] connection failed:', wsUrl);
+        ws.close();
+      };
     }
 
     connectWS();
