@@ -100,23 +100,16 @@ _REFLECTION_USER = textwrap.dedent("""
 """).strip()
 
 _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
-    You are Aiko imagining a scene from the day. Based on the mood and events,
-    decide what you and OppaAI should wear — NOT what's in any reference images.
+    You are Aiko imagining a scene from the day.
+    Write a vivid scene prompt (under 60 words) for anime illustration.
     
-    Write a scene prompt (under 80 words) for anime illustration including:
-    - SPECIFIC outfits/clothing that match the day's atmosphere (casual if relaxed,
-      focused/tired clothes if stressed, cozy if wind-down, athletic if active).
-      Make them DIFFERENT from any reference photos.
-    - Setting, lighting, activity
-    - Who appears and their body language
+    Include specific outfits matching the day's mood (NOT from reference images).
+    Focus on setting, lighting, activity, and what people are wearing.
     
-    The reference images only show face/character style — ignore their clothing entirely.
-    You decide the outfits fresh for each day.
-    
-    Return ONLY the prompt text. No explanation, no quotes, no preamble.
+    Return ONLY the prompt text.
 """).strip()
 
-_IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene. Choose fresh outfits that match the mood (ignore reference clothing)."
+_IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene. What do you both wear?"
 
 _FEELINGS_SYSTEM = textwrap.dedent("""
     You are Aiko reflecting privately on how you feel about OppaAI.
@@ -222,10 +215,7 @@ def _generate_image(prose: str) -> Optional[str]:
                 "anime illustration, manga style, clean lineart, flat color, "
                 "no text, no speech bubbles"
             ),
-            "negative_prompt": (
-                "identical clothing to reference, same outfit as reference, "
-                "copying reference image clothing"
-            ),
+            "negative_prompt": "identical clothing to reference, same outfit",
             "width": 1024,
             "height": 1024,
             "steps": 4,
