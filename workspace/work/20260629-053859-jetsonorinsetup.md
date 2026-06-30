@@ -1,0 +1,1 @@
+ONNXRuntime 1.24.4 with CUDA 13.2 installed on Jetson Orin Nano. SileroVAD, TTS, and embedding models target GPU acceleration.
