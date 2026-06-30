@@ -9,7 +9,7 @@ from urllib.parse import quote
 def resolve_vrm_path() -> Path:
     """Return the configured VRM path, preferring the Space's static/Aiko.vrm."""
     candidates = [
-        Path(os.getenv("AIKO_VRM_PATH", "static/Aiko.vrm")),
+        Path(os.getenv("VRM_PATH", "static/Aiko.vrm")),
         Path("assets/Aiko.vrm"),
     ]
     for candidate in candidates:

@@ -1,5 +1,5 @@
 """Shared CSS for the Gradio/Hugging Face Space interface."""
-AIKO_CSS = r"""
+APP_CSS = r"""
 :root {
   --aiko-bg: #080810;
   --aiko-text: #dacdff;
@@ -405,7 +405,7 @@ textarea::placeholder, input::placeholder { color: var(--aiko-muted) !important;
   width: 100%;
 }
 """
-AIKO_CSS += r"""
+APP_CSS += r"""
 /* ── Login modal overlay ──────────────────────────────────────────── */
 #aiko-login-overlay {
   position: fixed !important;
@@ -465,7 +465,7 @@ AIKO_CSS += r"""
   font-weight: 600 !important;
 }
 """
-AIKO_CSS += r"""
+APP_CSS += r"""
 /* ── Info / "About Aiko" modal overlay (shown once after login) ───── */
 #aiko-info-overlay {
   position: fixed !important;

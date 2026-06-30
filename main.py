@@ -56,8 +56,8 @@ from webui.aiko_web import AikoWeb
 
 AI_NAME = os.getenv("AI_NAME", "Aiko")
 USER_ID = os.getenv("USER_ID", "")
-STREAM_DRAW_INTERVAL = float(os.getenv("AIKO_STREAM_DRAW_INTERVAL", "0.05"))
-LATENCY_LOG_ENABLED = os.getenv("AIKO_LATENCY_LOG", "1").lower() in {"1", "true", "yes", "on"}
+STREAM_DRAW_INTERVAL = float(os.getenv("STREAM_DRAW_INTERVAL", "0.05"))
+LATENCY_LOG_ENABLED = os.getenv("LATENCY_LOG", "1").lower() in {"1", "true", "yes", "on"}
 
 
 # ── voice command map ─────────────────────────────────────────────────────────
@@ -240,7 +240,7 @@ def _run_session(tui, args):
         speak.set_audio_sink(tui.broadcast_audio_bytes)
         if hasattr(tui, "set_viseme"):
             speak.set_viseme_sink(tui.set_viseme)
-        if os.getenv("AIKO_WEBUI_LOCAL_PLAYBACK", "1").lower() in {"0", "false", "no", "off"}:
+        if os.getenv("WEBUI_LOCAL_PLAYBACK", "1").lower() in {"0", "false", "no", "off"}:
             speak.local_playback = False
 
     # ── transition to chat ────────────────────────────────────────────────────

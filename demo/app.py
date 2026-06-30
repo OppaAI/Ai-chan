@@ -16,7 +16,7 @@ from core.wakeup import AikoWakeup
 from core.listen import transcribe_file
 from core.see import describe as vision_describe, is_supported as vision_supported
 from core.speak import speak_to_file
-from ui.css import AIKO_CSS
+from ui.css import APP_CSS
 from ui.vrm import avatar_html, gradio_file_urls, resolve_vrm_path
 
 # ─────────────────────────────────────────────
@@ -1169,5 +1169,5 @@ demo.launch(
     ssr_mode=False,
     share=False,
     allowed_paths=allowed_paths,
-    css=AIKO_CSS,
+    css=APP_CSS,
 )

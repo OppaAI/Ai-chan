@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_EXPERIENCE_LOG = Path.home() / ".aiko" / "daily_experience.jsonl"
-EXPERIENCE_LOG_PATH = Path(os.getenv("AIKO_EXPERIENCE_LOG_PATH", str(DEFAULT_EXPERIENCE_LOG)))
-MAX_TURN_CHARS = int(os.getenv("AIKO_EXPERIENCE_TURN_MAX_CHARS", "4000"))
+EXPERIENCE_LOG_PATH = Path(os.getenv("EXPERIENCE_LOG_PATH", str(DEFAULT_EXPERIENCE_LOG)))
+MAX_TURN_CHARS = int(os.getenv("EXPERIENCE_TURN_MAX_CHARS", "4000"))
 
 
 def _coerce_utc(dt: datetime) -> datetime:

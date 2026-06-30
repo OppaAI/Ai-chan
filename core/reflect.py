@@ -20,7 +20,7 @@ Optional:
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
   IMAGEGEN_URL        — Modal FLUX endpoint, default https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run
-  AIKO_REFERENCE_IMAGE — path to Aiko reference PNG (default ~/Aiko-chan/assets/Aiko-chan.png)
+  REFERENCE_IMAGE — path to Aiko reference PNG (default ~/Aiko-chan/assets/Aiko-chan.png)
   USER_REFERENCE_IMAGE — path to user reference PNG (default ~/Aiko-chan/assets/OppaAI.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
 """
@@ -61,7 +61,7 @@ REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 50))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run")
-AIKO_REFERENCE_IMAGE  = os.getenv("AIKO_REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/Aiko-chan.png"))
+REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/Aiko-chan.png"))
 USER_REFERENCE_IMAGE  = os.getenv("USER_REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/OppaAI.png"))
 
 _GITHUB_API = "https://api.github.com"
@@ -183,7 +183,7 @@ def _generate_feelings(prose: str) -> str:
 def _load_reference_images() -> list[str]:
     """Load Aiko and user reference images as base64 strings."""
     refs = []
-    for path in [AIKO_REFERENCE_IMAGE, USER_REFERENCE_IMAGE]:
+    for path in [REFERENCE_IMAGE, USER_REFERENCE_IMAGE]:
         if path and os.path.exists(path):
             with open(path, "rb") as f:
                 refs.append(base64.b64encode(f.read()).decode())

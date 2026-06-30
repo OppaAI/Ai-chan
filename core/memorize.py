@@ -395,7 +395,7 @@ class _MemoryBackend:
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
-        self._embedder = HarrierEmbedder(cache_dir=embed_cache) if embed_cache else HarrierEmbedder()
+        self._embedder = HarrierEmbedder() if embed_cache else HarrierEmbedder()
         self._conn = self._connect()
         self._apply_schema()
 

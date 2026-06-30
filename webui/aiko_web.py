@@ -13,9 +13,9 @@ Responsibilities:
     - Auto-open the browser on first connection
 
 Environment variables (all optional):
-    AIKO_HTTP_PORT   — HTTP port for serving the UI (default 8787)
-    AIKO_WS_PORT     — WebSocket port                (default 8765)
-    AIKO_NO_BROWSER  — set to "1" to suppress auto-open
+    HTTP_PORT   — HTTP port for serving the UI (default 8787)
+    WS_PORT     — WebSocket port                (default 8765)
+    NO_BROWSER  — set to "1" to suppress auto-open
 """
 
 import asyncio
@@ -36,10 +36,10 @@ log = logging.getLogger(__name__)
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-HTTP_PORT  = int(os.getenv("AIKO_HTTP_PORT", "8787"))
-WS_PORT    = int(os.getenv("AIKO_WS_PORT",   "8765"))
+HTTP_PORT  = int(os.getenv("HTTP_PORT", "8787"))
+WS_PORT    = int(os.getenv("WS_PORT",   "8765"))
 STATIC_DIR = Path(__file__).parent / "static"
-NO_BROWSER = os.getenv("AIKO_NO_BROWSER", "0") == "1"
+NO_BROWSER = os.getenv("NO_BROWSER", "0") == "1"
 
 # ── message types (server → browser) ─────────────────────────────────────────
 #

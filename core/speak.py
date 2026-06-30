@@ -216,7 +216,7 @@ class AikoSpeak:
 
         # When enabled, streamed TTS drives the UI token callback word-by-word
         # against real WAV duration, instead of letting LLM tokens paint early.
-        self.karaoke_text = os.getenv("AIKO_KARAOKE_TEXT", "0").lower() in {
+        self.karaoke_text = os.getenv("KARAOKE_TEXT", "0").lower() in {
             "1", "true", "yes", "on",
         }
 
