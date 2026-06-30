@@ -176,8 +176,10 @@
     #input-row { border-top: 1px solid var(--border); display: flex; align-items: center; padding: 8px 12px; gap: 8px; flex-shrink: 0; }
     #prompt-label { color: var(--purple); font-size: 13px; flex-shrink: 0; user-select: none; }
     #user-input { flex: 1; background: transparent; border: none; outline: none; font-family: 'Courier New', monospace; font-size: 12px; color: var(--input-fg); caret-color: var(--mauve); }
-    #send-btn { background: none; border: 1px solid var(--dimmer); color: var(--dim); font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: .15em; padding: 4px 10px; cursor: pointer; border-radius: 2px; text-transform: uppercase; transition: border-color .2s, color .2s; }
-    #send-btn:hover { border-color: var(--purple); color: var(--purple); }
+    .input-btn { background: none; border: 1px solid var(--dimmer); color: var(--dim); font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: .15em; padding: 4px 10px; cursor: pointer; border-radius: 2px; text-transform: uppercase; transition: border-color .2s, color .2s, box-shadow .2s; }
+    .input-btn:hover { border-color: var(--purple); color: var(--purple); }
+    #mic-btn { width: 30px; padding: 4px 0; letter-spacing: 0; font-size: 12px; }
+    #mic-btn.on { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 6px rgba(81, 212, 200, .35); }
 
     /* ── loading overlay ────────────────────────────────────────────── */
     #load-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 200; transition: opacity .8s; }
@@ -257,7 +259,8 @@
     <div id="input-row">
       <span id="prompt-label">❯</span>
       <input id="user-input" type="text" autocomplete="off" spellcheck="false" placeholder="type a message…">
-      <button id="send-btn">send</button>
+      <button id="mic-btn" class="input-btn" title="Enable microphone">🎤</button>
+      <button id="send-btn" class="input-btn">send</button>
     </div>
 
   </div><!-- #panel -->
@@ -291,6 +294,7 @@
     const content    = document.getElementById('content');
     const allOnline  = document.getElementById('all-online');
     const input      = document.getElementById('user-input');
+    const micBtn     = document.getElementById('mic-btn');
     const sendBtn    = document.getElementById('send-btn');
     const voiceSt    = document.getElementById('voice-status');
     const clock      = document.getElementById('panel-clock');
@@ -319,9 +323,9 @@
     // ── VAD init ──────────────────────────────────────────────────────────────
     // initVAD() is defined in vad.js (loaded above).
     // We kick it off immediately so the model is warm before the first mic use.
-    initVAD().then(() => {
-      vadDot.className    = 'dot on';
-      vadStatus.textContent = 'vad ready';
+    initVAD().then((status) => {
+      vadDot.className = 'dot on';
+      vadStatus.textContent = status?.fallback ? 'vad fallback' : 'vad ready';
       vadStatus.className = 'ready';
     }).catch(err => {
       vadStatus.textContent = 'vad failed';
@@ -551,9 +555,15 @@
     let micContext = null;
     let micSource  = null;
     let micWorklet = null;
+    let micFirstFrameSeen = false;
 
     async function startMic() {
-      if (micContext) return;
+      if (micContext) return true;
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        console.error('[mic] microphone requires localhost or HTTPS');
+        addMessage('sys', 'Microphone blocked — open the WebUI on localhost or serve it over HTTPS.');
+        return false;
+      }
       try {
         micStream = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true },
@@ -563,8 +573,12 @@
         micSource  = micContext.createMediaStreamSource(micStream);
         micWorklet = new AudioWorkletNode(micContext, 'pcm-capture-processor');
 
-        // ── KEY CHANGE: route through VAD instead of raw send ────────────────
+        micFirstFrameSeen = false;
         micWorklet.port.onmessage = (e) => {
+          if (!micFirstFrameSeen) {
+            micFirstFrameSeen = true;
+            console.log('[mic] AudioWorklet is sending PCM frames');
+          }
           if (wsReady()) processVADFrame(new Float32Array(e.data), ws);
         };
 
@@ -572,9 +586,12 @@
         vadDot.className = 'dot vad';
         vadStatus.textContent = 'vad active';
         vadStatus.className = 'active';
+        micBtn.classList.add('on');
+        return true;
       } catch (err) {
         console.error('[mic] getUserMedia/AudioWorklet failed:', err);
         addMessage('sys', 'Microphone access failed — check browser permissions.');
+        return false;
       }
     }
 
@@ -586,6 +603,7 @@
       vadDot.className = 'dot on';
       vadStatus.textContent = 'vad ready';
       vadStatus.className = 'ready';
+      micBtn.classList.remove('on');
     }
 
     // ── text input ────────────────────────────────────────────────────────────
@@ -600,6 +618,14 @@
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submitInput(); }
     });
     sendBtn.addEventListener('click', submitInput);
+    micBtn.addEventListener('click', async () => {
+      const ok = await startMic();
+      if (!ok || !wsReady()) return;
+      if (vMode.textContent.includes('TXT')) {
+        ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
+      }
+      input.focus();
+    });
 
     // ── WebSocket ─────────────────────────────────────────────────────────────
     let ws = null;

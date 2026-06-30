@@ -181,7 +181,7 @@ def _generate_feelings(prose: str) -> str:
     """
     system = f"{_load_soul()}\n\n{_FEELINGS_SYSTEM}"
     user_prompt = _FEELINGS_USER.format(prose=prose[:600])
-    return _llm_chat(system, user_prompt, max_tokens=150, temperature=0.8)
+    return _llm_chat(system, user_prompt, max_tokens=300, temperature=0.8)
 
 # ── image generation ──────────────────────────────────────────────────────────
 
