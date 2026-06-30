@@ -163,7 +163,7 @@ Aiko-chan/
 │   ├── tui.py           # curses TUI interface
 │   └── identity.py      # ASCII art of TUI interface
 ├── webui/
-│   ├── aiko_web.py      # browser UI backend + HTTP/WebSocket bridge
+│   ├── webui.py      # browser UI backend + HTTP/WebSocket bridge
 │   └── static/          # HTML/JS/CSS, VRM avatar, browser audio worklet
 ├── persona/
 │   ├── soul.md          # personality, rules, and voice

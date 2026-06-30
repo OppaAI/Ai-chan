@@ -5,7 +5,7 @@
 Aiko's runtime is already partly separated:
 
 - `main.py` is the launch orchestrator. It selects the curses TUI by default, keeps the browser WebUI behind `--webui`, boots the subsystems through `AikoWakeup`, and then runs the shared input → route → render loop.
-- `webui/aiko_web.py` is the browser UI adapter. It serves `webui/static/`, opens a WebSocket bridge, accepts browser mic-audio frames, broadcasts chat/vitals/voice/expression/viseme events, and implements the same draw/input methods as the curses TUI.
+- `webui/webui.py` is the browser UI adapter. It serves `webui/static/`, opens a WebSocket bridge, accepts browser mic-audio frames, broadcasts chat/vitals/voice/expression/viseme events, and implements the same draw/input methods as the curses TUI.
 - `tui/tui.py` is the legacy full-screen curses adapter. It implements the same UI contract used by the shared session loop.
 - `core/wakeup.py` owns parallel subsystem startup and returns a `BootResult` containing live references to thinking, memory, speech, and listening modules.
 - `core/tools.py` is the compatibility facade for pure callable tools and should stay as the stable import surface; focused implementations live under `core/toolkit/` (web, planning, scheduling, photo, architecture). These functions do not own the ReAct loop.
@@ -22,7 +22,7 @@ The runtime split should stay close to this shape:
 
 ```text
 main.py            CLI flags, default curses UI selection, optional WebUI selection, shared session loop
-webui/aiko_web.py  browser adapter: HTTP static server, WebSocket bridge, UI API
+webui/webui.py  browser adapter: HTTP static server, WebSocket bridge, UI API
 tui/tui.py         curses adapter implementing the same UI API
 core/wakeup.py     boot orchestration and BootResult assembly
 core/tools.py      compatibility facade for pure callables
@@ -191,7 +191,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    Browser[Browser\nwebui/static/index.html] <-->|WebSocket JSON| AikoWeb[AikoWeb\nwebui/aiko_web.py]
+    Browser[Browser\nwebui/static/index.html] <-->|WebSocket JSON| AikoWeb[AikoWeb\nwebui/webui.py]
     Browser -->|HTTP GET / and /assets/Aiko.vrm| Static[Static file server\nwebui/static]
     Browser -->|binary mic frames| AikoWeb
     AikoWeb -->|get_input queue| Main[main.py shared loop]

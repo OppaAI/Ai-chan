@@ -222,7 +222,7 @@ class AikoSpeak:
 
         # ── remote audio sink (WebUI) ────────────────────────────────────
         # If set, _play_wav_bytes() also hands each synthesized WAV chunk to
-        # this callback (e.g. aiko_web.py's broadcast_audio_bytes) so a
+        # this callback (e.g. webui.py's broadcast_audio_bytes) so a
         # connected browser can play it — needed for remote/WAN use where
         # nobody's in the room to hear the Jetson's own speaker.
         self._audio_sink = None

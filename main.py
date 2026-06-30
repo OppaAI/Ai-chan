@@ -50,7 +50,7 @@ with silent_stderr():
     from core.memorize import AikoMemorize
 
 from tui.tui import AikoTUI
-from webui.aiko_web import AikoWeb
+from webui.webui import AikoWeb
 
 # ── env ───────────────────────────────────────────────────────────────────────
 

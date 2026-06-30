@@ -11,7 +11,7 @@
  *     on start → ws.send({type:'vad', event:'start'})
  *     on end   → ws.send({type:'vad', event:'end'})
  *
- * The server (aiko_web.py) uses 'start'/'end' sentinels to gate
+ * The server (webui.py) uses 'start'/'end' sentinels to gate
  * _mic_active and signal listen.py to skip its own VAD pass.
  */
 

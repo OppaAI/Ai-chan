@@ -347,7 +347,7 @@ class AikoListen:
             preserves the existing local-mic (parec) behavior.
 
         vad_presegmented: when True, _record() skips the MIN_SPEECH_CHUNKS
-            length gate. Set by the WebUI path (aiko_web.py) when the browser's
+            length gate. Set by the WebUI path (webui.py) when the browser's
             client-side Silero VAD has already segmented the utterance — avoids
             silently discarding short valid replies like "yes" or "はい" that
             pass the browser VAD but fall under the server-side minimum chunk

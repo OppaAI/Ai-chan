@@ -1,5 +1,5 @@
 """
-webui/aiko_web.py
+webui/webui.py
 Aiko-chan's browser-based UI backend — drop-in replacement for AikoTUI.
 
 Responsibilities:
