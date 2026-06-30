@@ -574,6 +574,14 @@ def _make_static_handler(root: Path):
     index.html is served at /. All other paths resolve relative to root.
     """
     class _Handler(http.server.SimpleHTTPRequestHandler):
+        extensions_map = {
+            **http.server.SimpleHTTPRequestHandler.extensions_map,
+            ".mjs": "text/javascript",
+            ".js": "text/javascript",
+            ".wasm": "application/wasm",
+            ".onnx": "application/octet-stream",
+        }
+
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(root), **kwargs)
 

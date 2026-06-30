@@ -266,9 +266,6 @@
   </div><!-- #panel -->
 
 
-  <!-- ── ONNX Runtime Web (served locally — no CDN needed) ───────────────── -->
-  <script src="./ort.min.js"></script>
-
   <!-- ── Silero VAD processor ────────────────────────────────────────────── -->
   <script src="./vad.js"></script>
 
@@ -320,10 +317,47 @@
     tickClock();
     setInterval(tickClock, 1000);
 
+    async function assetExists(src) {
+      try {
+        const res = await fetch(src, { method: 'HEAD', cache: 'no-store' });
+        return res.ok;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function loadOptionalScript(src) {
+      if (!await assetExists(src)) return false;
+
+      return new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = src;
+        script.onload = () => resolve(true);
+        script.onerror = () => resolve(false);
+        document.head.appendChild(script);
+      });
+    }
+
+    async function loadOptionalOrt() {
+      const required = [
+        './ort.min.js',
+        './silero_vad.onnx',
+        './ort-wasm-simd-threaded.jsep.mjs',
+        './ort-wasm-simd-threaded.jsep.wasm',
+      ];
+      for (const asset of required) {
+        if (!await assetExists(asset)) {
+          console.warn(`[vad] ${asset} missing; using energy VAD fallback`);
+          return false;
+        }
+      }
+      return loadOptionalScript('./ort.min.js');
+    }
+
     // ── VAD init ──────────────────────────────────────────────────────────────
-    // initVAD() is defined in vad.js (loaded above).
-    // We kick it off immediately so the model is warm before the first mic use.
-    initVAD().then((status) => {
+    // initVAD() is defined in vad.js. ONNX Runtime is optional: when any ORT
+    // sidecar is absent, vad.js falls back to a simple local energy gate.
+    loadOptionalOrt().then(() => initVAD()).then((status) => {
       vadDot.className = 'dot on';
       vadStatus.textContent = status?.fallback ? 'vad fallback' : 'vad ready';
       vadStatus.className = 'ready';

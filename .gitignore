@@ -228,3 +228,7 @@ node_modules/onnxruntime_gpu-*.whl
 node_modules/
 # Local WebUI development TLS certs
 webui/.cert/
+webui/static/ort.min.js
+webui/static/ort-wasm-simd-threaded.wasm
+webui/static/ort-wasm-simd-threaded.jsep.wasm
+webui/static/silero_vad.onnx
