@@ -100,16 +100,21 @@ _REFLECTION_USER = textwrap.dedent("""
 """).strip()
 
 _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
-    You are Aiko. Given the day's summary of what happened, imagine
-    a single vivid anime scene that captures it. Choose the setting,
-    lighting, and who appears based on what feels true to the day.
+    You are Aiko imagining a scene from the day. Based on the mood and events,
+    decide what you and OppaAI should wear — not what's in reference images,
+    but what fits the atmosphere.
     
-    Write a scene prompt (under 60 words) for an anime illustration model.
-    Focus on mood, atmosphere, and activity — let the memories guide what
-    the image should show.
+    Write a scene prompt (under 80 words) for anime illustration including:
+    - Specific outfits/clothing that match the mood (casual if relaxed,
+      focused/tired clothes if stressed, cozy if wind-down)
+    - Setting, lighting, activity
+    - Who appears and their body language
     
+    Ignore reference clothing. Decide fresh outfits that feel right for the day.
     Return ONLY the prompt text. No explanation, no quotes, no preamble.
 """).strip()
+
+_IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene. What are you both wearing?"
 
 _IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene."
 
