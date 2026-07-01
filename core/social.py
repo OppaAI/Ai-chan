@@ -24,12 +24,13 @@ import mimetypes
 import os
 import re
 import shutil
+import tempfile
 import time
 import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -63,6 +64,9 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 MAX_POST_CHARS = int(os.getenv("WEEKLY_SOCIAL_MAX_CHARS", "260"))
+
+THREADS_REFRESH_WINDOW_DAYS = int(os.getenv("THREADS_REFRESH_WINDOW_DAYS", "55"))
+THREADS_TOKEN_ENV_PATH = os.getenv("THREADS_TOKEN_ENV_PATH", ".env")
 
 _WEEKDAYS = {
     "monday": 0, "mon": 0,
@@ -384,10 +388,131 @@ def _post_x_via_aisa(text: str, image_path: Path | None) -> dict[str, Any]:
         return {"ok": False, "provider": "x", "error": str(e)}
 
 
-def _post_threads(text: str, image_url: str | None) -> dict[str, Any]:
+def _threads_config() -> tuple[str, str, str]:
     token = os.getenv("THREADS_ACCESS_TOKEN", "").strip()
     user_id = os.getenv("THREADS_USER_ID", "").strip()
     base = os.getenv("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
+    return token, user_id, base
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _token_seconds_remaining(expires_at: str | None = None) -> int | None:
+    raw = (expires_at or os.getenv("THREADS_ACCESS_TOKEN_EXPIRES_AT", "")).strip()
+    if not raw:
+        return None
+    try:
+        expiry = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        log.warning("Invalid THREADS_ACCESS_TOKEN_EXPIRES_AT: %s", raw)
+        return None
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return int((expiry.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds())
+
+
+def _write_env_values(env_path: str | Path, values: Mapping[str, str]) -> None:
+    path = Path(env_path).expanduser().resolve()
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    remaining = dict(values)
+    updated: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            updated.append(line)
+            continue
+        key = line.split("=", 1)[0].strip().removeprefix("export ").strip()
+        if key in remaining:
+            updated.append(f"{key}={remaining.pop(key)}")
+        else:
+            updated.append(line)
+    for key, value in remaining.items():
+        updated.append(f"{key}={value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.write("\n".join(updated).rstrip() + "\n")
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+def refresh_threads_token(
+    *,
+    token: str | None = None,
+    persist_env: bool = False,
+    env_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Refresh an unexpired long-lived Threads token and optionally persist it to an env file."""
+    current_token = (token or os.getenv("THREADS_ACCESS_TOKEN", "")).strip()
+    base = os.getenv("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
+    if not current_token:
+        return {"ok": False, "provider": "threads", "error": "THREADS_ACCESS_TOKEN not set"}
+
+    try:
+        resp = requests.get(
+            f"{base}/refresh_access_token",
+            params={"grant_type": "th_refresh_token", "access_token": current_token},
+            timeout=120,
+        )
+        try:
+            payload: Any = resp.json()
+        except ValueError:
+            payload = {"raw": resp.text[:2000]}
+        ok = 200 <= resp.status_code < 300 and isinstance(payload, dict) and bool(payload.get("access_token"))
+        result: dict[str, Any] = {"ok": ok, "provider": "threads", "status_code": resp.status_code, "response": payload}
+        if not ok:
+            return result
+
+        new_token = str(payload["access_token"])
+        expires_in = int(payload.get("expires_in") or 0)
+        if expires_in > 0:
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            result["expires_at"] = expires_at.isoformat()
+            result["expires_in"] = expires_in
+        if persist_env:
+            values = {"THREADS_ACCESS_TOKEN": new_token}
+            if result.get("expires_at"):
+                values["THREADS_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
+            _write_env_values(env_path or THREADS_TOKEN_ENV_PATH, values)
+            result["env_updated"] = str(Path(env_path or THREADS_TOKEN_ENV_PATH).expanduser().resolve())
+        os.environ["THREADS_ACCESS_TOKEN"] = new_token
+        if result.get("expires_at"):
+            os.environ["THREADS_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
+        return result
+    except Exception as e:
+        return {"ok": False, "provider": "threads", "error": str(e)}
+
+
+def refresh_threads_token_if_due(*, persist_env: bool | None = None) -> dict[str, Any]:
+    seconds_remaining = _token_seconds_remaining()
+    threshold_seconds = THREADS_REFRESH_WINDOW_DAYS * 24 * 60 * 60
+    if seconds_remaining is not None and seconds_remaining > threshold_seconds:
+        return {
+            "ok": True,
+            "provider": "threads",
+            "skipped": True,
+            "reason": "not_due",
+            "seconds_remaining": seconds_remaining,
+        }
+    should_persist = _env_bool("THREADS_REFRESH_PERSIST_ENV", False) if persist_env is None else persist_env
+    result = refresh_threads_token(persist_env=should_persist)
+    result["seconds_remaining_before_refresh"] = seconds_remaining
+    return result
+
+
+def _post_threads(text: str, image_url: str | None) -> dict[str, Any]:
+    refresh_result = refresh_threads_token_if_due()
+    if not refresh_result.get("ok"):
+        return {"ok": False, "provider": "threads", "stage": "refresh", "refresh": refresh_result}
+    token, user_id, base = _threads_config()
     if not token or not user_id:
         return {"ok": False, "provider": "threads", "error": "THREADS_ACCESS_TOKEN or THREADS_USER_ID not set"}
 
@@ -466,12 +591,28 @@ def _cmd() -> int:
     parser.add_argument("--open-browser", action="store_true", help="open the AIsa/X authorization URL in a browser")
     parser.add_argument("--providers", default="", help="comma-separated providers overriding WEEKLY_SOCIAL_PROVIDERS")
     parser.add_argument("--copy-image-to", default="", help="copy draft image to a public hosting folder before posting")
+    parser.add_argument(
+        "--refresh-threads-token",
+        action="store_true",
+        help="refresh the configured long-lived Threads token",
+    )
+    parser.add_argument("--persist-env", action="store_true", help="write refreshed Threads token values back to THREADS_TOKEN_ENV_PATH/.env")
+    parser.add_argument("--env-path", default="", help="env file path used with --persist-env")
     args = parser.parse_args()
 
     providers = tuple(p.strip().lower() for p in args.providers.split(",") if p.strip()) or None
 
     if args.authorize_x:
         print(json.dumps(authorize_x(open_browser=args.open_browser), ensure_ascii=False, indent=2))
+        return 0
+    if args.refresh_threads_token:
+        print(
+            json.dumps(
+                refresh_threads_token(persist_env=args.persist_env, env_path=args.env_path or None),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         return 0
     if args.draft:
         mem = AikoMemorize(silent=True)
