@@ -21,6 +21,7 @@ Two hardcoded system jobs run outside schedule.json and cannot be modified
 by the user:
   - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
   - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
+  - weekly_social              optionally creates Aiko's weekly social-memory draft
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
 DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
 MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
 MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
+WEEKLY_SOCIAL_ENABLED = os.getenv("WEEKLY_SOCIAL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 
 FREQUENCIES = {"once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 RELATIVE_DAY_ALIASES = {
@@ -457,6 +459,7 @@ class ScheduleRunner:
         # calculated once at startup, updated after each fire
         self._next_daily   = _next_daily_reflect_and_dream()
         self._next_monthly = _next_monthly_consolidate()
+        self._next_weekly_social = self._next_weekly_social_post()
 
         # catch-up flag — checked on start()
         self._catchup_needed = self._check_catchup()
@@ -493,9 +496,10 @@ class ScheduleRunner:
         self._thread.start()
         log.info(
             "Scheduler started — daily_reflect_and_dream at %02d:%02d, "
-            "monthly_consolidate on 1st at %02d:%02d.",
+            "monthly_consolidate on 1st at %02d:%02d, weekly_social=%s.",
             DAILY_JOB_HOUR, DAILY_JOB_MINUTE,
             MONTHLY_JOB_HOUR, MONTHLY_JOB_MINUTE,
+            "on" if WEEKLY_SOCIAL_ENABLED else "off",
         )
         if self._catchup_needed and self._memorize and self._generate_and_post_fn:
             log.info("Scheduler: running missed daily reflect+dream on startup.")
@@ -520,16 +524,20 @@ class ScheduleRunner:
                 [(t, name) for t, name in [
                     (self._next_daily, "daily"),
                     (self._next_monthly, "monthly"),
+                    (self._next_weekly_social, "weekly_social"),
                 ] if t <= now],
                 key=lambda x: x[0],
             )
-            for target, name in system_due:
+            for _target, name in system_due:
                 if name == "daily":
                     self._run_daily_reflect_and_dream()
                     self._next_daily = _next_daily_reflect_and_dream()
-                else:
+                elif name == "monthly":
                     self._run_monthly_consolidate()
                     self._next_monthly = _next_monthly_consolidate()
+                else:
+                    self._run_weekly_social()
+                    self._next_weekly_social = self._next_weekly_social_post()
 
             # ── fire overdue user jobs ────────────────────────────────────────
             self._fire_due_user_jobs()
@@ -540,7 +548,7 @@ class ScheduleRunner:
                 for j in _read_all()
                 if j.get("enabled", True)
             ]
-            candidates = [self._next_daily, self._next_monthly] + user_jobs
+            candidates = [self._next_daily, self._next_monthly, self._next_weekly_social, *user_jobs]
             next_target = min(candidates)
 
             delta = (next_target - datetime.now(_timezone())).total_seconds()
@@ -613,6 +621,31 @@ class ScheduleRunner:
             log.info("monthly_consolidate: done — %s", result)
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)
+
+    def _next_weekly_social_post(self) -> datetime:
+        """Return the next configured weekly social-memory draft time."""
+        if not WEEKLY_SOCIAL_ENABLED:
+            return datetime.max.replace(tzinfo=_timezone())
+        try:
+            from core.weekly_social import next_weekly_due
+            return next_weekly_due()
+        except Exception as e:  # noqa: BLE001 - keep scheduler alive if optional job fails
+            log.error("weekly_social: failed to calculate next run: %s", e)
+            return datetime.max.replace(tzinfo=_timezone())
+
+    def _run_weekly_social(self) -> None:
+        """Create Aiko's weekly social-memory draft, and optionally post if enabled."""
+        if not WEEKLY_SOCIAL_ENABLED:
+            return
+        if not self._memorize:
+            log.warning("weekly_social: memorize not set — skipping.")
+            return
+        try:
+            from core.weekly_social import run_scheduled_weekly_social
+            result = run_scheduled_weekly_social(self._memorize)
+            log.info("weekly_social: done — %s", result)
+        except Exception as e:  # noqa: BLE001 - keep scheduler alive if optional job fails
+            log.error("weekly_social failed: %s", e)
 
     # ── user job runner ───────────────────────────────────────────────────────
 
