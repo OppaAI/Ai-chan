@@ -264,7 +264,7 @@
     <div id="input-row">
       <span id="prompt-label">❯</span>
       <input id="user-input" type="text" autocomplete="off" spellcheck="false" placeholder="type a message…">
-      <button id="mic-btn" class="input-btn on" title="Microphone starts enabled">🎤</button>
+      <button id="mic-btn" class="input-btn" title="Microphone auto-starts when available">🎤</button>
       <button id="send-btn" class="input-btn">send</button>
     </div>
 
@@ -604,6 +604,7 @@
     let micWorklet = null;
     let micFirstFrameSeen = false;
     let micStreamingEnabled = false;
+    let micCommandSeq = 0;
 
     async function startMic() {
       if (micContext) return true;
@@ -646,7 +647,9 @@
     }
 
     function stopMic() {
+      micCommandSeq++;
       micStreamingEnabled = false;
+      if (window.resetVADState) window.resetVADState();
       if (micWorklet) { micWorklet.port.onmessage = null; micWorklet.disconnect(); micWorklet = null; }
       if (micSource)  { micSource.disconnect(); micSource = null; }
       if (micContext) { micContext.close(); micContext = null; }
@@ -719,8 +722,9 @@
           case 'voice':      applyVoice(msg.status);                            break;
           case 'mic':
             if (msg.action === 'start') {
+              const seq = ++micCommandSeq;
               startMic().then((ok) => {
-                if (!ok) return;
+                if (!ok || seq !== micCommandSeq) return;
                 if (window.resetVADState) window.resetVADState();
                 micStreamingEnabled = true;
                 vadDot.className = 'dot vad';
@@ -728,6 +732,7 @@
                 vadStatus.className = 'active';
               });
             } else if (msg.action === 'stop') {
+              micCommandSeq++;
               micStreamingEnabled = false;
               if (window.resetVADState) window.resetVADState();
               vadDot.className = 'dot on';

@@ -251,13 +251,21 @@ function applyThinkingPose(dt) {
   return true;
 }
 
+function resetFingerCurl() {
+  for (const name of FINGER_BONES) {
+    const bone = getBone(name);
+    if (bone) bone.rotation.z = 0;
+  }
+}
+
 function applyFingerCurl(side, intensity) {
   const prefix = side < 0 ? 'left' : 'right';
   const pulse = 0.5 + Math.sin(t * 8.0) * 0.5;
+  const curl = intensity * (0.12 + pulse * 0.14);
   for (const name of FINGER_BONES) {
     if (!name.startsWith(prefix)) continue;
     const bone = getBone(name);
-    if (bone) bone.rotation.z += intensity * (0.12 + pulse * 0.14);
+    if (bone) bone.rotation.z = curl;
   }
 }
 
@@ -880,6 +888,7 @@ function animate() {
       }
     }
     applyIdle(dt);
+    resetFingerCurl();
     if (!applyThinkingPose(dt)) applyGestures(dt);
     applyBlink(dt);
   }
