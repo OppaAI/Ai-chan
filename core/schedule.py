@@ -528,7 +528,7 @@ class ScheduleRunner:
                 ] if t <= now],
                 key=lambda x: x[0],
             )
-            for target, name in system_due:
+            for _target, name in system_due:
                 if name == "daily":
                     self._run_daily_reflect_and_dream()
                     self._next_daily = _next_daily_reflect_and_dream()
@@ -548,7 +548,7 @@ class ScheduleRunner:
                 for j in _read_all()
                 if j.get("enabled", True)
             ]
-            candidates = [self._next_daily, self._next_monthly, self._next_weekly_social] + user_jobs
+            candidates = [self._next_daily, self._next_monthly, self._next_weekly_social, *user_jobs]
             next_target = min(candidates)
 
             delta = (next_target - datetime.now(_timezone())).total_seconds()
