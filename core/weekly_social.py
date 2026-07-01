@@ -43,17 +43,17 @@ load_dotenv()
 log = get_logger(__name__)
 
 WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
-WEEKLY_SOCIAL_ROOT = Path(os.getenv("AIKO_SOCIAL_ROOT", WORKSPACE_ROOT / "social" / "weekly")).resolve()
+WEEKLY_SOCIAL_ROOT = Path(os.getenv("SOCIAL_ROOT", WORKSPACE_ROOT / "social" / "weekly")).resolve()
 TIMEZONE_NAME = os.getenv("TIMEZONE", "UTC")
 
-WEEKLY_ENABLED = os.getenv("AIKO_WEEKLY_SOCIAL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
-WEEKLY_AUTODRAFT = os.getenv("AIKO_WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
-WEEKLY_AUTOPOST = os.getenv("AIKO_WEEKLY_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
-WEEKLY_POST_TIME = os.getenv("AIKO_WEEKLY_SOCIAL_TIME", "18:00")
-WEEKLY_POST_WEEKDAY = os.getenv("AIKO_WEEKLY_SOCIAL_WEEKDAY", "sunday").lower().strip()
+WEEKLY_ENABLED = os.getenv("WEEKLY_SOCIAL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
+WEEKLY_AUTOPOST = os.getenv("WEEKLY_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
+WEEKLY_POST_TIME = os.getenv("WEEKLY_SOCIAL_TIME", "18:00")
+WEEKLY_POST_WEEKDAY = os.getenv("WEEKLY_SOCIAL_WEEKDAY", "sunday").lower().strip()
 WEEKLY_PROVIDERS = tuple(
     p.strip().lower()
-    for p in os.getenv("AIKO_WEEKLY_SOCIAL_PROVIDERS", "x").split(",")
+    for p in os.getenv("WEEKLY_SOCIAL_PROVIDERS", "x").split(",")
     if p.strip()
 )
 
@@ -61,7 +61,7 @@ LLM_MODEL = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
-MAX_POST_CHARS = int(os.getenv("AIKO_WEEKLY_SOCIAL_MAX_CHARS", "260"))
+MAX_POST_CHARS = int(os.getenv("WEEKLY_SOCIAL_MAX_CHARS", "260"))
 
 _WEEKDAYS = {
     "monday": 0, "mon": 0,
@@ -376,7 +376,7 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
     path = Path(draft_dir).resolve()
     text, image_path, meta = _read_draft(path)
     providers = providers or WEEKLY_PROVIDERS
-    public_image_url = os.getenv("AIKO_WEEKLY_SOCIAL_IMAGE_URL", "").strip() or None
+    public_image_url = os.getenv("WEEKLY_SOCIAL_IMAGE_URL", "").strip() or None
 
     results = []
     for provider in providers:
@@ -404,9 +404,9 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
 def run_scheduled_weekly_social(memorize: AikoMemorize) -> dict[str, Any]:
     """Scheduler entrypoint: draft by default, post only when explicitly enabled."""
     if not WEEKLY_ENABLED:
-        return {"success": False, "skipped": True, "reason": "AIKO_WEEKLY_SOCIAL_ENABLED is off"}
+        return {"success": False, "skipped": True, "reason": "WEEKLY_SOCIAL_ENABLED is off"}
     if not WEEKLY_AUTODRAFT:
-        return {"success": False, "skipped": True, "reason": "AIKO_WEEKLY_SOCIAL_AUTODRAFT is off"}
+        return {"success": False, "skipped": True, "reason": "WEEKLY_SOCIAL_AUTODRAFT is off"}
     draft = generate_weekly_draft(memorize)
     if WEEKLY_AUTOPOST and draft.get("success") and not draft.get("skipped"):
         draft["post"] = post_draft(draft["draft_dir"])
@@ -418,7 +418,7 @@ def _cmd() -> int:
     parser.add_argument("--draft", action="store_true", help="create weekly draft bundle")
     parser.add_argument("--force", action="store_true", help="overwrite existing draft for the week")
     parser.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory")
-    parser.add_argument("--providers", default="", help="comma-separated providers overriding AIKO_WEEKLY_SOCIAL_PROVIDERS")
+    parser.add_argument("--providers", default="", help="comma-separated providers overriding WEEKLY_SOCIAL_PROVIDERS")
     parser.add_argument("--copy-image-to", default="", help="copy draft image to a public hosting folder before posting")
     args = parser.parse_args()
 
