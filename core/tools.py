@@ -1,27 +1,24 @@
 """
 core/tools.py
-
 Compatibility facade for Aiko's autonomous toolkit.
-
 Keep this file even though implementations live in ``core/toolkit``: it gives
 older callers and the agent loop one stable import surface while domain tools
 move into focused modules. New primitive capabilities should be implemented in
 ``core/toolkit/<domain>.py`` and re-exported here only when the chat facade or
 agent loop needs them.
 """
-
 from __future__ import annotations
-
 from core.toolkit.web import fetch_and_extract, deep_search, web_search, web_search_context
 from core.toolkit.planning import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
 from core.toolkit.scheduling import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
 from core.toolkit.photo import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
 from core.toolkit.architecture import repo_file_tree, repo_read_file, repo_search_text
-
+from core.toolkit.jobs import search_jobs, dedupe_postings
 __all__ = [
     "cancel_reminder",
     "cancel_schedule",
     "create_checklist",
+    "dedupe_postings",
     "deep_search",
     "fetch_and_extract",
     "list_reminders",
@@ -36,6 +33,7 @@ __all__ = [
     "scan_photo_workspace",
     "schedule_job",
     "schedule_reminder",
+    "search_jobs",
     "summarize_task_state",
     "web_search",
     "web_search_context",
