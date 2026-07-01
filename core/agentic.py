@@ -37,6 +37,7 @@ from core.tools import (
     repo_file_tree,
     repo_read_file,
     repo_search_text,
+    search_jobs,
 )
 
 log = get_logger(__name__)
@@ -293,6 +294,14 @@ _TOOL_SCHEMAS = [
                 "limit": {"type": "integer"}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
+            "name": "search_jobs", "description": "Search job boards for a role, filtered by location (required) and posting age. Deduped automatically.",
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string"},
+                "location": {"type": "string"},
+                "max_results": {"type": "integer"},
+                "max_age_days": {"type": "integer"}},
+                "required": ["query", "location"]}}},
+        {"type": "function", "function": {
             "name": "final_answer", "description": "Final answer.",
             "parameters": {"type": "object", "properties": {
                 "answer": {"type": "string", "description": "The final answer text."}},
@@ -324,6 +333,15 @@ def _register_tools() -> None:
         "repo_file_tree": lambda args: repo_file_tree(args.get("prefix", ""), int(args.get("limit", 200) or 200)),
         "repo_read_file": lambda args: repo_read_file(args.get("relative_path", ""), int(args.get("max_chars", 20000) or 20000)),
         "repo_search_text": lambda args: repo_search_text(args.get("query", ""), args.get("prefix", ""), int(args.get("limit", 50) or 50)),
+        "search_jobs": lambda args: json.dumps(
+            search_jobs(
+                args.get("query", ""),
+                args.get("location", ""),
+                int(args.get("max_results", 30) or 30),
+                int(args.get("max_age_days", 30) or 30),
+            ),
+            ensure_ascii=False,
+        ),
     }
     for schema in _TOOL_SCHEMAS:
         name = schema["function"]["name"]
