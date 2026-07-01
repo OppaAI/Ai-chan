@@ -76,15 +76,22 @@
 
     #ws-dots {
       position: absolute;
-      bottom: 12px;
-      left: 16px;
+      top: 34px;
+      right: 16px;
       display: flex;
-      gap: 8px;
-      align-items: center;
+      flex-direction: column;
+      gap: 4px;
+      align-items: flex-end;
       pointer-events: none;
       font-size: 10px;
       color: var(--dim);
+      background: rgba(10, 10, 15, .55);
+      border: 1px solid rgba(30, 20, 40, .7);
+      border-radius: 4px;
+      padding: 6px 8px;
+      backdrop-filter: blur(4px);
     }
+    .status-line { display: flex; gap: 8px; align-items: center; justify-content: flex-end; white-space: nowrap; }
 
     .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dimmer); transition: background .3s; }
     .dot.on    { background: var(--purple); box-shadow: 0 0 6px var(--purple); }
@@ -217,11 +224,9 @@
     </div>
 
     <div id="ws-dots">
-      <div class="dot" id="ws-dot"></div><span id="ws-label">ws offline</span>
-      &nbsp;
-      <div class="dot" id="speak-dot"></div><span id="speak-label">idle</span>
-      &nbsp;
-      <div class="dot" id="vad-dot"></div><span id="vad-status">vad loading…</span>
+      <div class="status-line"><div class="dot" id="ws-dot"></div><span id="ws-label">ws offline</span></div>
+      <div class="status-line"><div class="dot" id="speak-dot"></div><span id="speak-label">idle</span></div>
+      <div class="status-line"><div class="dot" id="vad-dot"></div><span id="vad-status">vad loading…</span></div>
     </div>
   </div>
 
@@ -259,7 +264,7 @@
     <div id="input-row">
       <span id="prompt-label">❯</span>
       <input id="user-input" type="text" autocomplete="off" spellcheck="false" placeholder="type a message…">
-      <button id="mic-btn" class="input-btn" title="Enable microphone">🎤</button>
+      <button id="mic-btn" class="input-btn" title="Microphone auto-starts when available">🎤</button>
       <button id="send-btn" class="input-btn">send</button>
     </div>
 
@@ -598,12 +603,15 @@
     let micSource  = null;
     let micWorklet = null;
     let micFirstFrameSeen = false;
+    let micStreamingEnabled = false;
+    let micCommandSeq = 0;
 
     async function startMic() {
       if (micContext) return true;
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
         console.error('[mic] microphone requires localhost or HTTPS');
         addMessage('sys', 'Microphone blocked — open the WebUI on localhost or serve it over HTTPS.');
+        micBtn.classList.remove('on');
         return false;
       }
       try {
@@ -621,23 +629,27 @@
             micFirstFrameSeen = true;
             console.log('[mic] AudioWorklet is sending PCM frames');
           }
-          if (wsReady()) processVADFrame(new Float32Array(e.data), ws);
+          if (wsReady() && micStreamingEnabled) processVADFrame(new Float32Array(e.data), ws);
         };
 
         micSource.connect(micWorklet);
-        vadDot.className = 'dot vad';
-        vadStatus.textContent = 'vad active';
-        vadStatus.className = 'active';
+        vadDot.className = 'dot on';
+        vadStatus.textContent = 'mic ready';
+        vadStatus.className = 'ready';
         micBtn.classList.add('on');
         return true;
       } catch (err) {
         console.error('[mic] getUserMedia/AudioWorklet failed:', err);
         addMessage('sys', 'Microphone access failed — check browser permissions.');
+        micBtn.classList.remove('on');
         return false;
       }
     }
 
     function stopMic() {
+      micCommandSeq++;
+      micStreamingEnabled = false;
+      if (window.resetVADState) window.resetVADState();
       if (micWorklet) { micWorklet.port.onmessage = null; micWorklet.disconnect(); micWorklet = null; }
       if (micSource)  { micSource.disconnect(); micSource = null; }
       if (micContext) { micContext.close(); micContext = null; }
@@ -709,11 +721,28 @@
           case 'vitals':     applyVitals(msg);                                  break;
           case 'voice':      applyVoice(msg.status);                            break;
           case 'mic':
-            if (msg.action === 'start') startMic();
-            else if (msg.action === 'stop') stopMic();
+            if (msg.action === 'start') {
+              const seq = ++micCommandSeq;
+              startMic().then((ok) => {
+                if (!ok || seq !== micCommandSeq) return;
+                if (window.resetVADState) window.resetVADState();
+                micStreamingEnabled = true;
+                vadDot.className = 'dot vad';
+                vadStatus.textContent = 'vad active';
+                vadStatus.className = 'active';
+              });
+            } else if (msg.action === 'stop') {
+              micCommandSeq++;
+              micStreamingEnabled = false;
+              if (window.resetVADState) window.resetVADState();
+              vadDot.className = 'dot on';
+              vadStatus.textContent = 'mic ready';
+              vadStatus.className = 'ready';
+            }
             break;
           case 'expression': if (window.aikoSetExpression) window.aikoSetExpression(msg.name, msg.intensity ?? 1.0); break;
           case 'viseme':     if (window.aikoSetViseme)     window.aikoSetViseme(msg.viseme, msg.weight ?? 1.0);      break;
+          case 'pose':       if (window.aikoSetPose)       window.aikoSetPose(msg.name, msg.active);                 break;
         }
       };
 

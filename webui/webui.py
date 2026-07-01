@@ -102,6 +102,7 @@ def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
 # tool      {"type":"tool",    "status":"..."|null}
 # expression{"type":"expression","name":"...","intensity":0.8}
 # viseme    {"type":"viseme",  "viseme":"A","weight":0.6}
+# pose      {"type":"pose",    "name":"thinking", "active":true}
 #
 # browser → server:
 # user_input{"type":"user_input","text":"..."}
@@ -359,6 +360,7 @@ class AikoWeb:
         """
         if token.startswith("__THINKING__"):
             self._broadcast({"type": "tool", "status": "thinking…"})
+            self._broadcast({"type": "pose", "name": "thinking", "active": True})
             return
         if token.startswith("__TOOL__:"):
             name = token[len("__TOOL__:"):].split("(", 1)[0].strip()
@@ -377,6 +379,7 @@ class AikoWeb:
             if self._stats["turn_start"] is None:
                 self._stats["turn_start"] = time.time()
 
+        self._broadcast({"type": "pose", "name": "thinking", "active": False})
         self._broadcast({"type": "token", "text": token})
 
     def stream_commit(self) -> None:
@@ -391,6 +394,7 @@ class AikoWeb:
             self._stats["turn_start"] = None
             self._streaming           = ""
 
+        self._broadcast({"type": "pose", "name": "thinking", "active": False})
         self._broadcast({"type": "commit"})
         self._push_vitals()
 
@@ -399,6 +403,7 @@ class AikoWeb:
         with self._lock:
             self._stats["turn_start"] = time.time()
             self._stats["turn_tok"]   = 0
+        self._broadcast({"type": "pose", "name": "thinking", "active": True})
 
     # ------------------------------------------------------------------
     # vitals
