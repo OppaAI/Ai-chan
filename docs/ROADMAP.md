@@ -138,7 +138,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 ---
 
-## Phase 2.2 — Messaging Gateways 🔲
+## Phase 2.2 — Message 🔲
 
 *Let trusted people message Aiko through everyday apps without exposing her core runtime directly to the internet.*
 
