@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import time
+import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -316,24 +317,67 @@ def _read_draft(draft_dir: Path) -> tuple[str, Path | None, dict[str, Any]]:
     return text, image if image.exists() else None, meta
 
 
-def _post_x_via_aisa(text: str, image_path: Path | None) -> dict[str, Any]:
+def _twitter_relay_config() -> tuple[str, str, int]:
     api_key = os.getenv("AISA_API_KEY", "").strip()
-    post_url = os.getenv("AISA_TWITTER_POST_URL", "").strip()
-    if not api_key or not post_url:
-        return {"ok": False, "provider": "x", "error": "AISA_API_KEY or AISA_TWITTER_POST_URL not set"}
+    base_url = os.getenv("TWITTER_RELAY_BASE_URL", "https://api.aisa.one/apis/v1/twitter").strip().rstrip("/")
+    timeout = int(os.getenv("TWITTER_RELAY_TIMEOUT", "30"))
+    return api_key, base_url, timeout
+
+
+def authorize_x(*, open_browser: bool = False) -> dict[str, Any]:
+    """Request an AIsa Twitter OAuth authorization URL for the configured account context."""
+    api_key, base_url, timeout = _twitter_relay_config()
+    if not api_key:
+        return {"ok": False, "provider": "x", "error": "AISA_API_KEY not set"}
+
+    try:
+        resp = requests.post(
+            f"{base_url}/auth_twitter",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"aisa_api_key": api_key},
+            timeout=timeout,
+        )
+        try:
+            payload: Any = resp.json()
+        except ValueError:
+            payload = {"raw": resp.text[:2000]}
+        auth_url = (payload.get("data") or {}).get("auth_url") if isinstance(payload, dict) else None
+        ok = 200 <= resp.status_code < 300 and bool(auth_url)
+        if ok and open_browser:
+            webbrowser.open(str(auth_url))
+        return {
+            "ok": ok,
+            "provider": "x",
+            "status_code": resp.status_code,
+            "authorization_url": auth_url,
+            "response": payload,
+        }
+    except Exception as e:
+        return {"ok": False, "provider": "x", "error": str(e)}
+
+
+def _post_x_via_aisa(text: str, image_path: Path | None) -> dict[str, Any]:
+    api_key, base_url, timeout = _twitter_relay_config()
+    if not api_key:
+        return {"ok": False, "provider": "x", "error": "AISA_API_KEY not set"}
 
     headers = {"Authorization": f"Bearer {api_key}"}
-    payload = {"text": text}
+    payload = {"aisa_api_key": api_key, "content": text}
     files = None
     if image_path and image_path.exists():
         mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
-        files = {"media": (image_path.name, image_path.open("rb"), mime)}
+        files = {"media_files": (image_path.name, image_path.open("rb"), mime)}
     try:
         if files:
-            resp = requests.post(post_url, headers=headers, data=payload, files=files, timeout=120)
-            files["media"][1].close()
+            resp = requests.post(f"{base_url}/post_twitter", headers=headers, data=payload, files=files, timeout=timeout)
+            files["media_files"][1].close()
         else:
-            resp = requests.post(post_url, headers={**headers, "Content-Type": "application/json"}, json=payload, timeout=120)
+            resp = requests.post(
+                f"{base_url}/post_twitter",
+                headers={**headers, "Content-Type": "application/json"},
+                json=payload,
+                timeout=timeout,
+            )
         ok = 200 <= resp.status_code < 300
         return {"ok": ok, "provider": "x", "status_code": resp.status_code, "response": resp.text[:2000]}
     except Exception as e:
@@ -418,12 +462,17 @@ def _cmd() -> int:
     parser.add_argument("--draft", action="store_true", help="create weekly draft bundle")
     parser.add_argument("--force", action="store_true", help="overwrite existing draft for the week")
     parser.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory")
+    parser.add_argument("--authorize-x", action="store_true", help="request an AIsa/X OAuth authorization URL")
+    parser.add_argument("--open-browser", action="store_true", help="open the AIsa/X authorization URL in a browser")
     parser.add_argument("--providers", default="", help="comma-separated providers overriding WEEKLY_SOCIAL_PROVIDERS")
     parser.add_argument("--copy-image-to", default="", help="copy draft image to a public hosting folder before posting")
     args = parser.parse_args()
 
     providers = tuple(p.strip().lower() for p in args.providers.split(",") if p.strip()) or None
 
+    if args.authorize_x:
+        print(json.dumps(authorize_x(open_browser=args.open_browser), ensure_ascii=False, indent=2))
+        return 0
     if args.draft:
         mem = AikoMemorize(silent=True)
         print(json.dumps(generate_weekly_draft(mem, force=args.force), ensure_ascii=False, indent=2))
