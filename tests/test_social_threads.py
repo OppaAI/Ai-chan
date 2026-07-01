@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import os
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-sys.modules.setdefault("requests", MagicMock())
+mock_requests = SimpleNamespace(get=MagicMock(), post=MagicMock(), RequestException=RuntimeError)
+sys.modules.setdefault("requests", mock_requests)
 sys.modules.setdefault("openai", MagicMock())
 sys.modules.setdefault("dotenv", MagicMock(load_dotenv=lambda: None))
 
@@ -44,7 +46,7 @@ def test_refresh_threads_token_updates_process_env_and_optional_env_file(monkeyp
         return DummyResponse(200, {"access_token": "new-token", "expires_in": 5_184_000})
 
     env_path = tmp_path / ".env"
-    env_path.write_text("THREADS_ACCESS_TOKEN=old-token\nKEEP=value\n", encoding="utf-8")
+    env_path.write_text("export THREADS_ACCESS_TOKEN=old-token\nKEEP=value\n", encoding="utf-8")
     monkeypatch.setenv("THREADS_ACCESS_TOKEN", "old-token")
     monkeypatch.setenv("THREADS_API_BASE", "https://graph.threads.net/v1.0")
     monkeypatch.setattr(social.requests, "get", fake_get)
@@ -53,6 +55,7 @@ def test_refresh_threads_token_updates_process_env_and_optional_env_file(monkeyp
 
     assert result["ok"] is True
     assert result["expires_in"] == 5_184_000
+    assert result["response"]["access_token"] == "[redacted]"
     assert calls == [
         (
             "https://graph.threads.net/v1.0/refresh_access_token",
@@ -62,9 +65,42 @@ def test_refresh_threads_token_updates_process_env_and_optional_env_file(monkeyp
     ]
     assert social.os.environ["THREADS_ACCESS_TOKEN"] == "new-token"
     written = env_path.read_text(encoding="utf-8")
-    assert "THREADS_ACCESS_TOKEN=new-token" in written
+    assert "export THREADS_ACCESS_TOKEN=new-token" in written
     assert "THREADS_ACCESS_TOKEN_EXPIRES_AT=" in written
     assert "KEEP=value" in written
+    assert "new-token" not in str(result["response"])
+
+
+def test_refresh_threads_token_failure_leaves_env_and_file_untouched(monkeypatch, tmp_path):
+    def fake_get(url, params, timeout):
+        return DummyResponse(400, {"error": "too early"})
+
+    env_path = tmp_path / ".env"
+    original_env = "THREADS_ACCESS_TOKEN=old-token\nKEEP=value\n"
+    env_path.write_text(original_env, encoding="utf-8")
+    monkeypatch.setenv("THREADS_ACCESS_TOKEN", "old-token")
+    monkeypatch.setattr(social.requests, "get", fake_get)
+
+    result = social.refresh_threads_token(persist_env=True, env_path=env_path)
+
+    assert result["ok"] is False
+    assert social.os.environ["THREADS_ACCESS_TOKEN"] == "old-token"
+    assert env_path.read_text(encoding="utf-8") == original_env
+
+
+def test_refresh_threads_token_if_due_skips_when_expiry_is_unknown(monkeypatch):
+    monkeypatch.delenv("THREADS_ACCESS_TOKEN_EXPIRES_AT", raising=False)
+
+    def fail_refresh(**kwargs):  # pragma: no cover - should never be called
+        raise AssertionError("refresh should not be called")
+
+    monkeypatch.setattr(social, "refresh_threads_token", fail_refresh)
+
+    result = social.refresh_threads_token_if_due()
+
+    assert result["ok"] is True
+    assert result["skipped"] is True
+    assert result["reason"] == "expiry_unknown"
 
 
 def test_refresh_threads_token_if_due_skips_when_expiry_is_after_threshold(monkeypatch):
@@ -99,3 +135,13 @@ def test_refresh_threads_token_if_due_refreshes_inside_threshold(monkeypatch):
     assert result["ok"] is True
     assert result["persist_env"] is True
     assert result["seconds_remaining_before_refresh"] is not None
+
+
+def test_refresh_threads_token_cli_returns_nonzero_on_failure(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["social.py", "--refresh-threads-token"])
+    monkeypatch.setattr(social, "refresh_threads_token", lambda **kwargs: {"ok": False, "error": "bad token"})
+
+    exit_code = social._cmd()
+
+    assert exit_code == 1
+    assert '"ok": false' in capsys.readouterr().out

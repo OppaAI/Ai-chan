@@ -65,7 +65,16 @@ _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 MAX_POST_CHARS = int(os.getenv("WEEKLY_SOCIAL_MAX_CHARS", "260"))
 
-THREADS_REFRESH_WINDOW_DAYS = int(os.getenv("THREADS_REFRESH_WINDOW_DAYS", "55"))
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        log.warning("Invalid integer env var %s; falling back to %s", name, default)
+        return default
+
+
+THREADS_REFRESH_WINDOW_DAYS = _int_env("THREADS_REFRESH_WINDOW_DAYS", 55)
 THREADS_TOKEN_ENV_PATH = os.getenv("THREADS_TOKEN_ENV_PATH", ".env")
 
 _WEEKDAYS = {
@@ -426,9 +435,12 @@ def _write_env_values(env_path: str | Path, values: Mapping[str, str]) -> None:
         if not stripped or stripped.startswith("#") or "=" not in line:
             updated.append(line)
             continue
-        key = line.split("=", 1)[0].strip().removeprefix("export ").strip()
+        lhs = line.split("=", 1)[0]
+        stripped_lhs = lhs.lstrip()
+        export_prefix = "export " if stripped_lhs.startswith("export ") else ""
+        key = stripped_lhs.removeprefix("export ").strip()
         if key in remaining:
-            updated.append(f"{key}={remaining.pop(key)}")
+            updated.append(f"{export_prefix}{key}={remaining.pop(key)}")
         else:
             updated.append(line)
     for key, value in remaining.items():
@@ -467,7 +479,15 @@ def refresh_threads_token(
         except ValueError:
             payload = {"raw": resp.text[:2000]}
         ok = 200 <= resp.status_code < 300 and isinstance(payload, dict) and bool(payload.get("access_token"))
-        result: dict[str, Any] = {"ok": ok, "provider": "threads", "status_code": resp.status_code, "response": payload}
+        safe_payload = dict(payload) if isinstance(payload, dict) else payload
+        if isinstance(safe_payload, dict) and "access_token" in safe_payload:
+            safe_payload["access_token"] = "[redacted]"
+        result: dict[str, Any] = {
+            "ok": ok,
+            "provider": "threads",
+            "status_code": resp.status_code,
+            "response": safe_payload,
+        }
         if not ok:
             return result
 
@@ -487,12 +507,19 @@ def refresh_threads_token(
         if result.get("expires_at"):
             os.environ["THREADS_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
         return result
-    except Exception as e:
+    except (requests.RequestException, ValueError, OSError) as e:
         return {"ok": False, "provider": "threads", "error": str(e)}
 
 
 def refresh_threads_token_if_due(*, persist_env: bool | None = None) -> dict[str, Any]:
     seconds_remaining = _token_seconds_remaining()
+    if seconds_remaining is None:
+        return {
+            "ok": True,
+            "provider": "threads",
+            "skipped": True,
+            "reason": "expiry_unknown",
+        }
     threshold_seconds = THREADS_REFRESH_WINDOW_DAYS * 24 * 60 * 60
     if seconds_remaining is not None and seconds_remaining > threshold_seconds:
         return {
@@ -606,14 +633,15 @@ def _cmd() -> int:
         print(json.dumps(authorize_x(open_browser=args.open_browser), ensure_ascii=False, indent=2))
         return 0
     if args.refresh_threads_token:
+        result = refresh_threads_token(persist_env=args.persist_env, env_path=args.env_path or None)
         print(
             json.dumps(
-                refresh_threads_token(persist_env=args.persist_env, env_path=args.env_path or None),
+                result,
                 ensure_ascii=False,
                 indent=2,
             )
         )
-        return 0
+        return 0 if result.get("ok") else 1
     if args.draft:
         mem = AikoMemorize(silent=True)
         print(json.dumps(generate_weekly_draft(mem, force=args.force), ensure_ascii=False, indent=2))
