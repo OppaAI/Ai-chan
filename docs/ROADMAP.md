@@ -103,6 +103,63 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 ---
 
+## Phase 2.1 — Social 🔲
+
+*Let Aiko introduce herself carefully. Social posting starts supervised, low-volume, and platform-aware before any autonomous public presence.*
+
+**Goal:** Give Aiko a safe outbound social layer for publishing introductions, status updates, workspace photos, and longer reflections with explicit owner approval, audit logs, and per-platform tone/risk controls.
+
+| Feature | Status |
+|---|---|
+| Social account connector registry — X, Threads, Instagram, Discord, Reddit, Bluesky, Mastodon, Pixelfed | 🔲 Planned |
+| Draft-first posting workflow — Aiko prepares posts, owner approves before publish | 🔲 Planned |
+| Platform policy and community-fit guardrails before posting | 🔲 Planned |
+| Social identity/persona card for public introductions | 🔲 Planned |
+| Workspace photo picker for future Instagram/Pixelfed posts | 🔲 Planned |
+| Discord and Reddit introduction posting with rate limits and community rules checks | 🔲 Planned |
+| Post history archive with links, timestamps, captions, and used media | 🔲 Planned |
+| Abuse/spam prevention — cooldowns, blocklists, and no unsolicited mass outreach | 🔲 Planned |
+| Human handoff mode for replies and moderation | 🔲 Planned |
+
+### Social platform stance
+
+| Platform | Roadmap stance | Reason |
+|---|---|---|
+| X | ✅ Primary experiment | Large public reach, already added, useful for short updates despite higher moderation/reputation risk |
+| Threads | ✅ Primary experiment | Already added, friendlier mainstream short-post channel and a natural Instagram-adjacent path |
+| Instagram | 🔲 Later, photo-gated | Best fit once Aiko can select approved workspace photos and write captions |
+| Discord | ✅ Community introduction channel | Good for controlled server-by-server introductions and future bot-style presence |
+| Reddit | 🟡 Careful experiment | Useful for long introductions, but subreddit rules and anti-promotion norms require strict approval |
+| Bluesky | 🟡 Optional experiment | Good replacement for users avoiding X; likely better for open-web identity if AI disclosure is clear |
+| Mastodon | 🟡 Optional experiment | Federation culture can be skeptical of bots/AI, so use only opt-in instances and explicit labeling |
+| Pixelfed | 🟡 Later, photo-gated | Instagram-like fediverse option, but AI-generated or AI-curated media needs careful labeling and instance fit |
+| Facebook | ❌ Not prioritized | Older social graph and lower value for Aiko's public identity experiments |
+| Flickr | ❌ Not prioritized | Mostly archival/photo-community use; not a strong discovery channel for Aiko |
+
+---
+
+## Phase 2.2 — Messaging Gateways 🔲
+
+*Let trusted people message Aiko through everyday apps without exposing her core runtime directly to the internet.*
+
+**Goal:** Add inbound and outbound private-message gateways for Telegram, Slack, Discord DMs, and email, with authentication, consent, memory boundaries, and clear separation between private conversation and public posting.
+
+| Feature | Status |
+|---|---|
+| Gateway abstraction for chat/email adapters | 🔲 Planned |
+| Telegram bot adapter for owner-approved private chat | 🔲 Planned |
+| Slack app adapter for workspace/team chat | 🔲 Planned |
+| Discord bot DM and server mention adapter | 🔲 Planned |
+| Email adapter — receive, summarize, draft, and send with approval | 🔲 Planned |
+| Identity and allowlist controls per channel/user | 🔲 Planned |
+| Per-channel memory policy — what can be remembered, ignored, or pinned | 🔲 Planned |
+| Notification routing into the TUI/WebUI/mobile app | 🔲 Planned |
+| Reply approval modes — manual, trusted-contact, and fully autonomous later | 🔲 Planned |
+| Attachment handling path into Phase 6 multimodal vision | 🔲 Planned |
+
+
+---
+
 ## Phase 2.5 — Agent ⌛
 ![Phase 2.5](../assets/phase-2.5.png)
 
