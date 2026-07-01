@@ -1,5 +1,5 @@
 """
-core/weekly_social.py
+core/social.py
 
 Non-agentic weekly social-memory postcard workflow for Aiko.
 

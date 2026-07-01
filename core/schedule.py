@@ -627,7 +627,7 @@ class ScheduleRunner:
         if not WEEKLY_SOCIAL_ENABLED:
             return datetime.max.replace(tzinfo=_timezone())
         try:
-            from core.weekly_social import next_weekly_due
+            from core.social import next_weekly_due
             return next_weekly_due()
         except Exception as e:  # noqa: BLE001 - keep scheduler alive if optional job fails
             log.error("weekly_social: failed to calculate next run: %s", e)
@@ -641,7 +641,7 @@ class ScheduleRunner:
             log.warning("weekly_social: memorize not set — skipping.")
             return
         try:
-            from core.weekly_social import run_scheduled_weekly_social
+            from core.social import run_scheduled_weekly_social
             result = run_scheduled_weekly_social(self._memorize)
             log.info("weekly_social: done — %s", result)
         except Exception as e:  # noqa: BLE001 - keep scheduler alive if optional job fails
