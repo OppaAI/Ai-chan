@@ -1,5 +1,5 @@
 [← Back to README](../README.md)
-# Aiko-chan 愛子ちゃん — Industrial Test Checklist
+# Aiko-chan 愛子ちゃん — Test Checklist
 
 This checklist is the release gate for Aiko's phase stack. It is intentionally detailed: run the relevant phase suite after installation, dependency upgrades, model swaps, prompt/persona changes, UI changes, and before declaring a phase stable.
 
