@@ -14,5 +14,21 @@
     "enabled": true,
     "kind": "scheduled_job",
     "action": "announce"
+  },
+  {
+    "id": "73bd0f634ba6",
+    "title": "Daily diary",
+    "task": "Announce the daily diary entry is ready for reading.",
+    "time_of_day": "00:00",
+    "frequency": "daily",
+    "days_of_week": [],
+    "relative_days": null,
+    "timezone": "America/Vancouver",
+    "next_due": "2026-07-01T00:00:00-07:00",
+    "created_at": "2026-06-30T01:32:03.770161-07:00",
+    "last_ran_at": null,
+    "enabled": true,
+    "kind": "scheduled_job",
+    "action": "announce"
   }
 ]
