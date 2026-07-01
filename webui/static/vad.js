@@ -39,6 +39,7 @@ let _speaking    = false;
 let _silTimer    = null;
 let _preBuf      = [];     // circular pre-speech context
 let _energyHits  = 0;
+let _vadEpoch    = 0;
 
 // -- init ---------------------------------------------------------------------
 
@@ -76,6 +77,11 @@ async function initVAD() {
     }
 }
 
+function resetVADState() {
+    _vadEpoch++;
+    _resetState();
+}
+
 function _resetState() {
     if (typeof ort !== 'undefined') {
         const z64 = new Float32Array(2 * 1 * 64);
@@ -100,9 +106,10 @@ function _resetState() {
  * @param {WebSocket}    ws     - live WebSocket to Jetson
  */
 async function processVADFrame(frame, ws) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const epoch = _vadEpoch;
+    if (!_canSend(ws, epoch)) return;
     if (!_session || _vadMode !== 'silero') {
-        processEnergyVADFrame(frame, ws);
+        processEnergyVADFrame(frame, ws, epoch);
         return;
     }
 
@@ -115,6 +122,8 @@ async function processVADFrame(frame, ws) {
         return;
     }
 
+    if (!_canSend(ws, epoch)) return;
+
     _h = out.hn;
     _c = out.cn;
     const prob = out.output.data[0];
@@ -124,21 +133,29 @@ async function processVADFrame(frame, ws) {
 
         if (!_speaking) {
             _speaking = true;
+            if (!_canSend(ws, epoch)) return;
             ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
-            for (const buf of _preBuf) ws.send(buf);
+            for (const buf of _preBuf) {
+                if (!_canSend(ws, epoch)) return;
+                ws.send(buf);
+            }
             _preBuf = [];
         }
 
+        if (!_canSend(ws, epoch)) return;
         ws.send(frame.buffer.slice(0));
     } else {
         if (_speaking) {
+            if (!_canSend(ws, epoch)) return;
             ws.send(frame.buffer.slice(0));
 
             if (!_silTimer) {
                 _silTimer = setTimeout(() => {
                     _silTimer = null;
+                    if (!_canSend(ws, epoch)) return;
                     _speaking = false;
                     _resetState();
+                    if (!_canSend(ws, epoch)) return;
                     ws.send(JSON.stringify({ type: 'vad', event: 'end' }));
                 }, SILENCE_TIMEOUT);
             }
@@ -148,7 +165,8 @@ async function processVADFrame(frame, ws) {
     }
 }
 
-function processEnergyVADFrame(frame, ws) {
+function processEnergyVADFrame(frame, ws, epoch = _vadEpoch) {
+    if (!_canSend(ws, epoch)) return;
     const rms = _rms(frame);
 
     if (!_speaking && rms >= ENERGY_START_RMS) {
@@ -161,14 +179,20 @@ function processEnergyVADFrame(frame, ws) {
         _speaking = true;
         _energyHits = 0;
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
+        if (!_canSend(ws, epoch)) return;
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
-        for (const buf of _preBuf) ws.send(buf);
+        for (const buf of _preBuf) {
+            if (!_canSend(ws, epoch)) return;
+            ws.send(buf);
+        }
         _preBuf = [];
+        if (!_canSend(ws, epoch)) return;
         ws.send(frame.buffer.slice(0));
         return;
     }
 
     if (_speaking) {
+        if (!_canSend(ws, epoch)) return;
         ws.send(frame.buffer.slice(0));
 
         if (rms > ENERGY_END_RMS) {
@@ -179,8 +203,10 @@ function processEnergyVADFrame(frame, ws) {
         if (!_silTimer) {
             _silTimer = setTimeout(() => {
                 _silTimer = null;
+                if (!_canSend(ws, epoch)) return;
                 _speaking = false;
                 _energyHits = 0;
+                if (!_canSend(ws, epoch)) return;
                 ws.send(JSON.stringify({ type: 'vad', event: 'end' }));
             }, SILENCE_TIMEOUT);
         }
@@ -189,6 +215,10 @@ function processEnergyVADFrame(frame, ws) {
 
     _energyHits = 0;
     _pushPreSpeech(frame);
+}
+
+function _canSend(ws, epoch) {
+    return epoch === _vadEpoch && ws && ws.readyState === WebSocket.OPEN;
 }
 
 function _rms(frame) {
