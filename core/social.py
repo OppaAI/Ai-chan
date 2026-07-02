@@ -397,6 +397,45 @@ def _post_x_via_aisa(text: str, image_path: Path | None) -> dict[str, Any]:
         return {"ok": False, "provider": "x", "error": str(e)}
 
 
+def _upload_to_imgbb(image_path: Path) -> dict[str, Any]:
+    api_key = os.getenv("IMGBB_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "provider": "imgbb", "error": "IMGBB_API_KEY not set"}
+    if not image_path.exists():
+        return {"ok": False, "provider": "imgbb", "error": f"image not found: {image_path}"}
+
+    timeout = _int_env("IMGBB_UPLOAD_TIMEOUT", 30)
+    try:
+        image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        resp = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={"key": api_key, "image": image_b64, "name": image_path.stem},
+            timeout=timeout,
+        )
+        try:
+            payload: Any = resp.json()
+        except ValueError:
+            payload = {"raw": resp.text[:2000]}
+        image_url = ""
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, dict):
+                image_url = str(data.get("url") or data.get("display_url") or "").strip()
+        ok = 200 <= resp.status_code < 300 and bool(image_url)
+        result: dict[str, Any] = {
+            "ok": ok,
+            "provider": "imgbb",
+            "status_code": resp.status_code,
+        }
+        if image_url:
+            result["url"] = image_url
+        if not ok:
+            result["response"] = payload
+        return result
+    except Exception as e:
+        return {"ok": False, "provider": "imgbb", "error": str(e)}
+
+
 def _threads_config() -> tuple[str, str, str]:
     token = os.getenv("THREADS_ACCESS_TOKEN", "").strip()
     user_id = os.getenv("THREADS_USER_ID", "").strip()
@@ -567,6 +606,26 @@ def _post_threads(text: str, image_url: str | None) -> dict[str, Any]:
         return {"ok": False, "provider": "threads", "error": str(e)}
 
 
+def _post_threads_with_image_upload(text: str, image_path: Path | None, fallback_image_url: str | None) -> dict[str, Any]:
+    image_url = fallback_image_url
+    upload_result: dict[str, Any] | None = None
+    if image_path and image_path.exists():
+        upload_result = _upload_to_imgbb(image_path)
+        if not upload_result.get("ok"):
+            return {
+                "ok": False,
+                "provider": "threads",
+                "stage": "image_upload",
+                "upload": upload_result,
+            }
+        image_url = str(upload_result["url"])
+
+    result = _post_threads(text, image_url)
+    if upload_result is not None:
+        result["image_upload"] = upload_result
+    return result
+
+
 def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Post an already-reviewed weekly draft to configured providers."""
     path = Path(draft_dir).resolve()
@@ -579,7 +638,7 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
         if provider == "x":
             results.append(_post_x_via_aisa(text, image_path))
         elif provider == "threads":
-            results.append(_post_threads(text, public_image_url))
+            results.append(_post_threads_with_image_upload(text, image_path, public_image_url))
         else:
             results.append({"ok": False, "provider": provider, "error": "unsupported provider"})
 
