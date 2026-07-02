@@ -24,5 +24,6 @@ THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # ISO UTC expiry timestamp for long-lived T
 THREADS_REFRESH_WINDOW_DAYS: "55"  # Refresh Threads token when this many days or fewer remain.
 THREADS_TOKEN_ENV_PATH: ".env"  # Env file updated when a refreshed Threads token is persisted.
 THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Official Threads API base URL.
+THREADS_TOPIC_TAG: "AI Threads"  # Optional Threads topic tag attached above the post; blank disables it.
 THREADS_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Threads media container create and publish.
 IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB draft image upload calls time out.

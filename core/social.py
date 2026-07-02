@@ -585,6 +585,9 @@ def _post_threads(text: str, image_url: str | None) -> dict[str, Any]:
     create_url = f"{base}/{user_id}/threads"
     publish_url = f"{base}/{user_id}/threads_publish"
     params: dict[str, Any] = {"access_token": token, "text": text}
+    topic_tag = os.getenv("THREADS_TOPIC_TAG", "AI Threads").strip()
+    if topic_tag:
+        params["topic_tag"] = topic_tag
     if image_url:
         params.update({"media_type": "IMAGE", "image_url": image_url})
     else:
