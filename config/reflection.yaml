@@ -1,0 +1,12 @@
+# Aiko reflection settings. Secrets stay in .env.
+GITHUB_REPO: OppaAI/aiko-blog
+GITHUB_BRANCH: main
+HUGO_CONTENT_PATH: content/posts
+HUGO_IMAGES_PATH: static/images
+SOUL_PATH: persona/soul.md
+IMAGEGEN_URL: https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run
+HF_HUB_OFFLINE: '0'
+REFERENCE_IMAGE: /home/oppa-ai/Aiko-chan/assets/Aiko-chan.png
+USER_REFERENCE_IMAGE: /home/oppa-ai/Aiko-chan/assets/OppaAI.png
+REFLECT_MAX_MEMS: '100'
+REFLECT_TAGS: daily-reflection,ai-journal,aiko

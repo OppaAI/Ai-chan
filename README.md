@@ -105,7 +105,7 @@ flowchart TD
 ```bash
 git clone https://github.com/OppaAI/Aiko-chan.git
 cd Aiko-chan
-cp .env.example .env        # edit: LLM_BASE_URL, LLM_MODEL, SQLITE_MEMORY_PATH, SEARXNG_URL, MIOTTS_API_URL
+cp .env.example .env        # fill secrets only; edit config/*.yaml for settings
 docker compose up -d
 uv sync
 uv run python main.py            # curses TUI, full voice if services are available
@@ -142,6 +142,7 @@ uv run python main.py --clear-mem # wipe all memories and exit
 ```text
 Aiko-chan/
 ├── main.py
+├── config/             # category YAML settings; secrets stay in .env
 ├── core/
 │   ├── think.py         # OpenAI-compatible chat loop, routing, streaming, scheduler
 │   ├── memorize.py      # sqlite-vec backend, pinned memories, decay

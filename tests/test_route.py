@@ -23,8 +23,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.WARNING)
 
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
+    from core.config import load_config
+    load_config()
 except ImportError:
     pass
 

@@ -1,0 +1,8 @@
+# Aiko routing settings. Secrets stay in .env.
+ROUTE_ENABLED: '1'
+ROUTE_MODE: semantic
+ROUTE_SEMANTIC_THRESHOLD: '0.70'
+ROUTE_MIN_GAP: '0.025'
+ROUTE_TOOL_MIN_GAP: '0.015'
+ROUTE_SEARCH_MIN_GAP: '0.010'
+ROUTE_LABEL_TOP_K: '3'

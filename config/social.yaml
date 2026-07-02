@@ -1,0 +1,16 @@
+# Aiko social settings. Secrets stay in .env.
+WEEKLY_SOCIAL_ENABLED: '1'
+WEEKLY_SOCIAL_AUTODRAFT: '1'
+WEEKLY_SOCIAL_AUTOPOST: '0'
+WEEKLY_SOCIAL_WEEKDAY: sunday
+WEEKLY_SOCIAL_TIME: '18:00'
+WEEKLY_SOCIAL_PROVIDERS: x, threads
+WEEKLY_SOCIAL_MAX_CHARS: '260'
+SOCIAL_ROOT: workspace/social/weekly
+TWITTER_RELAY_BASE_URL: https://api.aisa.one/apis/v1/twitter
+TWITTER_RELAY_TIMEOUT: '30'
+X_ACCOUNT_USERNAME: aiko_ai_waifu
+THREADS_USER_ID: oppa.ai_the.one.and.only
+THREADS_API_BASE: https://graph.threads.net/v1.0
+THREADS_PUBLISH_DELAY_SECONDS: '5'
+WEEKLY_SOCIAL_IMAGE_URL: ''

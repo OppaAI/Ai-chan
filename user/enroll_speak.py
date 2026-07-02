@@ -33,8 +33,8 @@ import numpy as np
 import sherpa_onnx
 
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
+    from core.config import load_config
+    load_config()
 except ImportError:
     pass
 

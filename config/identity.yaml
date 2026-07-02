@@ -1,0 +1,3 @@
+# Aiko identity settings. Secrets stay in .env.
+AI_NAME: Aiko
+USER_ID: OppaAI

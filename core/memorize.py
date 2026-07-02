@@ -51,8 +51,8 @@ Custom backend (replaces Qdrant + mem0):
 Dependencies:
   pip install sqlite-vec onnxruntime tokenizers
 """
-from dotenv import load_dotenv
-load_dotenv()
+from core.config import load_config
+load_config()
 
 import json
 import os

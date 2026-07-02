@@ -30,8 +30,8 @@ import unicodedata
 import queue
 
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
+    from core.config import load_config
+    load_config()
 except ImportError:
     pass
 
@@ -765,8 +765,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    load_dotenv()
+    from core.config import load_config
+    load_config()
     args = _parse_args()
 
     if args.devices:

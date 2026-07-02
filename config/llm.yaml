@@ -1,0 +1,15 @@
+# Aiko llm settings. Secrets stay in .env.
+LLM_BASE_URL: http://localhost:8080/v1
+LLM_MODEL: ministral
+REFLECT_MODEL: ministral
+ROUTER_MODEL: smollm
+LLM_TIMEOUT: '120'
+LLM_MAX_TOKENS: '280'
+BASE_PREDICT: '280'
+CONTEXT_WINDOW_TURNS: '8'
+TEMPERATURE: '0.80'
+REPEAT_PENALTY: '1.15'
+REPEAT_LAST_N: '64'
+TOP_P: '0.92'
+TOP_K: '50'
+REASONING_SCALE: '3'

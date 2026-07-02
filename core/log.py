@@ -16,9 +16,9 @@ Usage:
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-from dotenv import load_dotenv
+from core.config import load_config
 
-load_dotenv()
+load_config()
 
 # ── config ────────────────────────────────────────────────────────────────────
 LOG_DIR   = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")

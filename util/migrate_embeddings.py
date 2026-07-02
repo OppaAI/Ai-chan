@@ -38,8 +38,8 @@ if str(ROOT) not in sys.path:
 
 # ── optional dotenv ───────────────────────────────────────────────────────────
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
+    from core.config import load_config
+    load_config()
 except ImportError:
     pass
 

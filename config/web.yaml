@@ -1,0 +1,4 @@
+# Aiko web settings. Secrets stay in .env.
+SEARXNG_URL: http://localhost:8081
+SEARCH_SEMANTIC_THRESHOLD: '0.70'
+SEARXNG_MAX_RESULTS: '3'

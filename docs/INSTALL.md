@@ -169,53 +169,34 @@ If you do not need voice initially, run Aiko with `--text`; TTS and ASR still lo
 
 ## 8. Configure Environment
 
-Edit `.env`. At minimum, check these values:
+Copy `.env.example` to `.env` and fill secrets only:
 
 ```dotenv
-# Identity
-AI_NAME=Aiko
-USER_ID=OppaAI
-
-# Local OpenAI-compatible LLM
-LLM_BASE_URL=http://localhost:8080/v1
-LLM_MODEL=ministral
-LLM_TIMEOUT=120
-LLM_MAX_TOKENS=280
-
-# Memory
-SQLITE_MEMORY_PATH=/home/oppa-ai/.aiko/memory.db
-EMBED_CACHE_PATH=/home/oppa-ai/.cache/huggingface/hub
-EMBED_MODEL=ferrisS/harrier-oss-v1-270m-fastembed
-EMBED_DIMS=640
-MEMORY_RECALL_LIMIT=5
-
-# Web search
-SEARXNG_URL=http://localhost:8081
 SEARXNG_SECRET=<your_secret_from_searxng_settings.yml>
-
-# Voice output
-MIOTTS_API_URL=http://localhost:8001
-MIOTTS_PRESET=aiko_flat
-
-# Voice input
-ASR_DEVICE=cpu
-ASR_LANGUAGE=auto
-ASR_MODEL=csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
-
-# Routing and agentic mode (current names read by core/think.py)
-ROUTE_ENABLED=1
-ROUTE_MODE=semantic
-ROUTE_SEMANTIC_THRESHOLD=0.36
-SEARCH_SEMANTIC_THRESHOLD=0.36
-
-# Scheduling/workspace
-TIMEZONE=America/Vancouver
-WORKSPACE_ROOT=workspace
-SCHEDULE_PATH=workspace/schedule.json
-SCHEDULE_POLL_SECONDS=15
+GITHUB_TOKEN=<your_github_token>
+HF_TOKEN=<your_huggingface_token>
+AISA_API_KEY=<your_aisa_key>
+THREADS_ACCESS_TOKEN=<your_threads_token>
 ```
 
-If your `.env` still has only `AIKO_ROUTE_*` keys, add the `ROUTE_*` keys above; the current code reads `ROUTE_ENABLED`, `ROUTE_MODE`, and `ROUTE_SEMANTIC_THRESHOLD`.
+Non-secret runtime settings live in category YAML files under `config/`:
+
+```text
+config/identity.yaml    # AI_NAME, USER_ID
+config/llm.yaml         # LLM endpoints, model names, sampling, token limits
+config/memory.yaml      # sqlite-vec, embeddings, recall, dream/consolidation tuning
+config/voice.yaml       # MioTTS, ASR, VAD, speaker verification, barge-in
+config/web.yaml         # SearXNG URL and search limits
+config/ui.yaml          # WebUI/TUI ports, avatar path, streaming behavior
+config/routing.yaml     # chat vs agentic/search routing thresholds
+config/schedule.yaml    # timezone, schedule files, daily/monthly job timing
+config/agent.yaml       # agent loop limits, verification, retry behavior
+config/reflection.yaml  # Hugo/GitHub repo paths and image/reference settings
+config/social.yaml      # weekly social draft/post settings
+config/logging.yaml     # log level and rotation
+```
+
+Environment variables still override YAML at runtime, so one-off shell overrides continue to work.
 
 ---
 
@@ -234,7 +215,7 @@ For browser frontend asset experiments, the repo also has a `package.json` with 
 ## 10. Jetson Orin Nano Notes
 
 - The current `pyproject.toml` uses PyPI dependencies plus an ONNX Runtime CUDA nightly index for `onnxruntime-gpu`.
-- `ASR_DEVICE=cpu` is the documented SenseVoice setting in `.env.example` because CUDA EP availability can vary by JetPack/JP version.
+- `ASR_DEVICE` lives in `config/voice.yaml`; use `cpu` if CUDA EP availability varies by JetPack/JP version.
 - Keep `SQLITE_MEMORY_PATH` and `EMBED_CACHE_PATH` on persistent storage, not `/tmp`.
 - If audio output is silent, inspect devices and set `MIOTTS_DEVICE` or the system default sink:
 

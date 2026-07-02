@@ -4,13 +4,13 @@ import base64
 import tempfile
 import time
 from pathlib import Path
-from dotenv import load_dotenv
 from datetime import date
+from core.config import load_config
 import gradio as gr
 from gradio import OAuthProfile
 import re
 
-load_dotenv()
+load_config()
 
 from core.wakeup import AikoWakeup
 from core.listen import transcribe_file

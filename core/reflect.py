@@ -24,8 +24,8 @@ Optional:
   USER_REFERENCE_IMAGE — path to user reference PNG (default ~/Aiko-chan/assets/OppaAI.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
 """
-from dotenv import load_dotenv
-load_dotenv()
+from core.config import load_config
+load_config()
 
 import base64
 import io
