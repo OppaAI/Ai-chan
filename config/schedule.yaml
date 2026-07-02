@@ -1,9 +1,16 @@
-# Aiko schedule settings. Secrets stay in .env.
-TIMEZONE: America/Vancouver
-WORKSPACE_ROOT: workspace
-SCHEDULE_PATH: workspace/schedule.json
-REMINDERS_PATH: workspace/reminders.json
-DAILY_JOB_HOUR: '0'
-DAILY_JOB_MINUTE: '0'
-MONTHLY_JOB_HOUR: '0'
-MONTHLY_JOB_MINUTE: '5'
+# Schedule config
+#
+# Settings for core/schedule.py.
+# This config stores scheduler paths and system job times; user-created jobs remain in workspace/schedule.json.
+
+# -- Paths and timezone --
+TIMEZONE: "America/Vancouver"  # IANA timezone name for reminders/jobs; examples: America/Vancouver, UTC, Asia/Tokyo.
+WORKSPACE_ROOT: "workspace"  # Root folder for schedules, notes, reminders, and saved workspace files.
+SCHEDULE_PATH: "workspace/schedule.json"  # Runtime JSON job store path; keep in workspace unless you intentionally relocate state.
+REMINDERS_PATH: "workspace/reminders.json"  # Legacy reminders JSON path migrated into scheduled jobs.
+
+# -- System job timing --
+DAILY_JOB_HOUR: "0"  # Local hour for daily reflection/dream job; integer 0-23.
+DAILY_JOB_MINUTE: "0"  # Local minute for daily reflection/dream job; integer 0-59.
+MONTHLY_JOB_HOUR: "0"  # Local hour for monthly consolidation job on the 1st; integer 0-23.
+MONTHLY_JOB_MINUTE: "5"  # Local minute for monthly consolidation job; integer 0-59.

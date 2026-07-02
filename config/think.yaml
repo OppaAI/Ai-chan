@@ -1,15 +1,24 @@
-# Aiko think settings. Secrets stay in .env.
-LLM_BASE_URL: http://localhost:8080/v1
-LLM_MODEL: ministral
-REFLECT_MODEL: ministral
-ROUTER_MODEL: smollm
-LLM_TIMEOUT: '120'
-LLM_MAX_TOKENS: '280'
-BASE_PREDICT: '280'
-CONTEXT_WINDOW_TURNS: '8'
-TEMPERATURE: '0.80'
-REPEAT_PENALTY: '1.15'
-REPEAT_LAST_N: '64'
-TOP_P: '0.92'
-TOP_K: '50'
-REASONING_SCALE: '3'
+# Think config
+#
+# Settings consumed mostly by core/think.py and shared LLM callers.
+# Tune local OpenAI-compatible model endpoint, token budgets, and sampling behavior here.
+
+# -- Model endpoint --
+LLM_BASE_URL: "http://localhost:8080/v1"  # OpenAI-compatible chat endpoint, usually llama.cpp /v1 URL.
+LLM_MODEL: "ministral"  # Main chat model id/alias; must match the server model name.
+REFLECT_MODEL: "ministral"  # Model used for reflection/consolidation; often same as LLM_MODEL.
+ROUTER_MODEL: "smollm"  # Small model for LLM routing fallback; only used when ROUTE_MODE needs LLM routing.
+LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
+
+# -- Token budgets --
+LLM_MAX_TOKENS: "280"  # Base max tokens for normal chat replies.
+BASE_PREDICT: "280"  # Legacy alias for LLM_MAX_TOKENS; keep equal unless old scripts need another value.
+CONTEXT_WINDOW_TURNS: "8"  # Number of recent user+assistant turns sent as short-term context.
+REASONING_SCALE: "3"  # Multiplier applied to LLM_MAX_TOKENS for reasoning mode.
+
+# -- Sampling --
+TEMPERATURE: "0.80"  # Creativity/randomness; common range 0.2-1.0, higher is more varied.
+REPEAT_PENALTY: "1.15"  # Penalty for repeated tokens; common range 1.05-1.25.
+REPEAT_LAST_N: "64"  # Token lookback window for repeat penalty; 0 disables on some backends.
+TOP_P: "0.92"  # Nucleus sampling cutoff; common range 0.8-0.95.
+TOP_K: "50"  # Limits next-token choices to top K; common values 40-100, 0 may disable depending backend.

@@ -1,21 +1,32 @@
-# Aiko listen settings. Secrets stay in .env.
-ASR_DEVICE: cuda
-ASR_LANGUAGE: auto
-ASR_NUM_THREADS: '4'
-ASR_MODEL: csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
-LISTEN_VAD_SILENCE_MS: '300'
-LISTEN_VAD_PAD_MS: '100'
-LISTEN_CHUNK_MS: '30'
-LISTEN_VAD_THRESHOLD: '0.5'
-LISTEN_SILENCE_CHUNKS: '66'
-LISTEN_MIN_CHUNKS: '10'
-LISTEN_MAX_SECONDS: '30'
-LISTEN_DEVICE: ''
-SPEAKER_VERIFY_ENABLED: '1'
-SPEAKER_MODEL_PATH: models/3dspeaker_speech_eres2net_base_sv_en_voxceleb_16k.onnx
-SPEAKER_VERIFY_THRESHOLD: '0.5'
-SPEAKER_NUM_THREADS: '1'
-BARGE_IN_THRESHOLD: '0.65'
-BARGE_IN_CONFIRM_CHUNKS: '2'
-BARGE_IN_COOLDOWN_MS: '800'
-BARGE_IN_ALWAYS_ON: '0'
+# Listen config
+#
+# Settings for core/listen.py.
+# Controls ASR model/provider, Silero VAD thresholds, barge-in, and speaker verification.
+
+# -- ASR --
+ASR_DEVICE: "cuda"  # sherpa-onnx execution provider; options usually cpu or cuda.
+ASR_LANGUAGE: "auto"  # Transcription language; options: auto, en, ja, zh, ko, yue, nospeech.
+ASR_NUM_THREADS: "4"  # CPU inference threads for ASR.
+ASR_MODEL: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"  # sherpa-onnx SenseVoice model id/path; first run may download files.
+
+# -- Voice activity detection --
+LISTEN_VAD_SILENCE_MS: "300"  # Silence duration before ending an utterance, in milliseconds.
+LISTEN_VAD_PAD_MS: "100"  # Audio padding around detected speech, in milliseconds.
+LISTEN_CHUNK_MS: "30"  # Audio chunk size for VAD, in milliseconds; Silero minimum is around 30.
+LISTEN_VAD_THRESHOLD: "0.5"  # Silero speech probability threshold; range 0.0-1.0.
+LISTEN_SILENCE_CHUNKS: "66"  # Consecutive silent chunks before utterance ends.
+LISTEN_MIN_CHUNKS: "10"  # Minimum speech chunks required to accept audio and filter noise.
+LISTEN_MAX_SECONDS: "30"  # Hard cap on one recording length in seconds.
+LISTEN_DEVICE: ""  # sounddevice input index; blank means system default.
+
+# -- Speaker verification --
+SPEAKER_VERIFY_ENABLED: "1"  # Enable enrolled-speaker verification; options: 1/0, true/false, yes/no, on/off.
+SPEAKER_MODEL_PATH: "models/3dspeaker_speech_eres2net_base_sv_en_voxceleb_16k.onnx"  # Path to sherpa-onnx speaker embedding .onnx model.
+SPEAKER_VERIFY_THRESHOLD: "0.5"  # Cosine similarity cutoff for speaker match; range 0.0-1.0.
+SPEAKER_NUM_THREADS: "1"  # CPU threads for speaker embedding extraction.
+
+# -- Barge-in --
+BARGE_IN_THRESHOLD: "0.65"  # Speech probability threshold to interrupt TTS; range 0.0-1.0.
+BARGE_IN_CONFIRM_CHUNKS: "2"  # Consecutive chunks above threshold before barge-in fires.
+BARGE_IN_COOLDOWN_MS: "800"  # Cooldown in milliseconds before another barge-in event can fire.
+BARGE_IN_ALWAYS_ON: "0"  # Monitor barge-in outside TTS playback; options: 1/0, true/false, yes/no, on/off.

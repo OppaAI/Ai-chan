@@ -1,18 +1,27 @@
-# Aiko social settings. Secrets stay in .env.
-WEEKLY_SOCIAL_ENABLED: '1'
-WEEKLY_SOCIAL_AUTODRAFT: '1'
-WEEKLY_SOCIAL_AUTOPOST: '0'
-WEEKLY_SOCIAL_WEEKDAY: sunday
-WEEKLY_SOCIAL_TIME: '18:00'
-WEEKLY_SOCIAL_PROVIDERS: x, threads
-WEEKLY_SOCIAL_MAX_CHARS: '260'
-SOCIAL_ROOT: workspace/social/weekly
-TWITTER_RELAY_BASE_URL: https://api.aisa.one/apis/v1/twitter
-TWITTER_RELAY_TIMEOUT: '30'
-THREADS_USER_ID: oppa.ai_the.one.and.only
-THREADS_API_BASE: https://graph.threads.net/v1.0
-THREADS_PUBLISH_DELAY_SECONDS: '5'
-WEEKLY_SOCIAL_IMAGE_URL: ''
-THREADS_ACCESS_TOKEN_EXPIRES_AT: ''
-THREADS_REFRESH_WINDOW_DAYS: '55'
-THREADS_TOKEN_ENV_PATH: .env
+# Social config
+#
+# Settings for core/social.py.
+# Controls weekly social-memory drafting/posting and provider metadata.
+
+# -- Weekly workflow --
+WEEKLY_SOCIAL_ENABLED: "1"  # Enable weekly social job scheduling; options: 1/0, true/false, yes/no, on/off.
+WEEKLY_SOCIAL_AUTODRAFT: "1"  # Create local draft/image bundle automatically; boolean options.
+WEEKLY_SOCIAL_AUTOPOST: "0"  # Post automatically after drafting; boolean options, keep 0 while testing.
+WEEKLY_SOCIAL_WEEKDAY: "sunday"  # Weekday for weekly draft; options: monday..sunday or mon..sun.
+WEEKLY_SOCIAL_TIME: "18:00"  # Local wall-clock time for weekly draft in HH:MM 24-hour format.
+WEEKLY_SOCIAL_PROVIDERS: "x, threads"  # Comma-separated provider list; options currently include x, threads.
+WEEKLY_SOCIAL_MAX_CHARS: "260"  # Max post length; keep <= 260 for X with room for metadata/links.
+SOCIAL_ROOT: "workspace/social/weekly"  # Local folder for weekly review bundles.
+WEEKLY_SOCIAL_IMAGE_URL: ""  # Public image URL for Threads image posting; blank means text-only/fallback.
+
+# -- X relay metadata --
+TWITTER_RELAY_BASE_URL: "https://api.aisa.one/apis/v1/twitter"  # AIsa Twitter/X relay base URL.
+TWITTER_RELAY_TIMEOUT: "30"  # Seconds before AIsa relay calls time out.
+
+# -- Threads metadata --
+THREADS_USER_ID: "oppa.ai_the.one.and.only"  # Threads user id from Meta/Threads API.
+THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # ISO UTC expiry timestamp for long-lived Threads token; blank if unknown.
+THREADS_REFRESH_WINDOW_DAYS: "55"  # Refresh Threads token when this many days or fewer remain.
+THREADS_TOKEN_ENV_PATH: ".env"  # Env file updated when a refreshed Threads token is persisted.
+THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Official Threads API base URL.
+THREADS_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Threads media container create and publish.

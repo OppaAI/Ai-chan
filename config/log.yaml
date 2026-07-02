@@ -1,5 +1,10 @@
-# Aiko log settings. Secrets stay in .env.
-LOG_LEVEL: INFO
-DB_SIZE_TTL: '1.0'
-LOG_MAX_BYTES: '5242880'
-LOG_BACKUP_COUNT: '3'
+# Log config
+#
+# Settings for core/log.py and core/health.py.
+# Controls rotating log verbosity and small health-cache timing.
+
+# -- Logging --
+LOG_LEVEL: "INFO"  # Python log level; options: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+LOG_MAX_BYTES: "5242880"  # Maximum size of logs/aiko.log before rotation.
+LOG_BACKUP_COUNT: "3"  # Number of rotated log files to keep.
+DB_SIZE_TTL: "1.0"  # Seconds to cache memory DB size in health/vitals display.

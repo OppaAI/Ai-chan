@@ -227,6 +227,7 @@ models/
 node_modules/onnxruntime_gpu-*.whl
 node_modules/
 # Local WebUI development TLS certs
+archive/
 training/
 workspace/
 webui/.cert/

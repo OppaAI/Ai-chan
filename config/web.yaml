@@ -1,4 +1,9 @@
-# Aiko web settings. Secrets stay in .env.
-SEARXNG_URL: http://localhost:8081
-SEARCH_SEMANTIC_THRESHOLD: '0.70'
-SEARXNG_MAX_RESULTS: '3'
+# Web config
+#
+# Settings for core/toolkit/web.py and semantic web-search triggering.
+# Controls local SearXNG endpoint and how many search results the agent consumes.
+
+# -- SearXNG --
+SEARXNG_URL: "http://localhost:8081"  # Base URL for self-hosted SearXNG instance.
+SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from chat; higher means fewer searches.
+SEARXNG_MAX_RESULTS: "3"  # Maximum search results returned per query to agent tools.

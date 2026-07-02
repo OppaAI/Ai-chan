@@ -1,3 +1,8 @@
-# Aiko identity settings. Secrets stay in .env.
-AI_NAME: Aiko
-USER_ID: OppaAI
+# Identity config
+#
+# Names used in prompts, logs, memories, and UI labels.
+# Edit these when changing the assistant display name or the primary user profile.
+
+# -- Identity --
+AI_NAME: "Aiko"  # Assistant display name used in prompts and UI; usually Aiko.
+USER_ID: "OppaAI"  # Primary user/profile id stored with memories and speaker enrollment; use a stable short id.
