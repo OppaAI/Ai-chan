@@ -452,12 +452,15 @@ class AikoThink:
             system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
 
         if _should_use_local_knowledge(user_input):
-            local_context = knowledge_context_for(user_input, limit=3, max_chars=4500)
-            system = (
-                f"{system}\n\n{local_context}\n"
-                "Use <knowledge_context> for local Aiko/self-knowledge questions. "
-                "If it does not match the question, ignore it and answer normally."
-            )
+            try:
+                local_context = knowledge_context_for(user_input, limit=3, max_chars=4500)
+                system = (
+                    f"{system}\n\n{local_context}\n"
+                    "Use <knowledge_context> for local Aiko/self-knowledge questions. "
+                    "If it does not match the question, ignore it and answer normally."
+                )
+            except Exception as e:
+                log.error("Local knowledge lookup failed: %s", e)
 
         if not _skip_search and self._is_data_intent(user_input):
             try:
