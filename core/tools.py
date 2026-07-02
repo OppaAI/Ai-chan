@@ -13,7 +13,7 @@ from core.toolkit.planning import make_plan, create_checklist, save_note, read_w
 from core.toolkit.scheduling import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
 from core.toolkit.photo import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
 from core.toolkit.architecture import repo_file_tree, repo_read_file, repo_search_text
-from core.toolkit.jobs import search_jobs, dedupe_postings
+from core.toolkit.job_hunt import search_jobs, dedupe_postings
 __all__ = [
     "cancel_reminder",
     "cancel_schedule",

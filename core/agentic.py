@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from core.log import get_logger
 from core.skills import list_skillsets, load_skillset, search_skillsets_json, skill_context_for
+from core.knowledge import knowledge_context_for
 from core.tools import (
     fetch_and_extract,
     deep_search,
@@ -294,13 +295,14 @@ _TOOL_SCHEMAS = [
                 "limit": {"type": "integer"}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
-            "name": "search_jobs", "description": "Search job boards for a role, filtered by location (required) and posting age. Deduped automatically.",
+            "name": "search_jobs", "description": "Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string"},
-                "location": {"type": "string"},
+                "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."},
                 "max_results": {"type": "integer"},
-                "max_age_days": {"type": "integer"}},
-                "required": ["query", "location"]}}},
+                "max_age_days": {"type": "integer"},
+                "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
+                "required": ["query"]}}},
         {"type": "function", "function": {
             "name": "final_answer", "description": "Final answer.",
             "parameters": {"type": "object", "properties": {
@@ -337,8 +339,9 @@ def _register_tools() -> None:
             search_jobs(
                 args.get("query", ""),
                 args.get("location", ""),
-                int(args.get("max_results", 30) or 30),
-                int(args.get("max_age_days", 30) or 30),
+                int(args["max_results"]) if args.get("max_results") not in (None, "") else None,
+                int(args["max_age_days"]) if args.get("max_age_days") not in (None, "") else None,
+                args.get("job_type", ""),
             ),
             ensure_ascii=False,
         ),
@@ -562,6 +565,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
     skill_context = skill_context_for(user_input)
+    knowledge_context = knowledge_context_for(user_input)
 
     agent_system = (
         f"{owner._persona}\n\n"
@@ -570,6 +574,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "Output length is irrelevant until final_answer is reached.\n\n"
         f"{memory_context}\n\n"
         f"{skill_context}\n\n"
+        f"{knowledge_context}\n\n"
         "[TASK MODE] You MUST use tools to complete tasks. Treat agentic work as "
         "a sequence of steps, not one category: plan/decide when useful, research "
         "with web_search/fetch_page when current or external facts are needed, "
@@ -590,9 +595,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
         "confirmed from fetched content, omit it or flag it as unverified. "
-        "Use <skill_context> when it matches the task. For repeatable workflows, "
-        "prefer the predefined skill's workflow and tools over inventing a new process. "
-        "If no matching skill exists, continue with generic tools."
+        "Use <skill_context> and <knowledge_context> when they match the task. For repeatable workflows, "
+        "prefer the predefined skill's workflow and local knowledge and operating cards over inventing a new process. "
+        "If no matching skill exists, continue with generic tools. "
         "CRITICAL: When asked to save a file, call save_note BEFORE writing "
         "any content in chat. Do not describe what you will save — just save it. "
         "Never say 'I'll now open a file' or 'I'll generate' — call the tool immediately. "

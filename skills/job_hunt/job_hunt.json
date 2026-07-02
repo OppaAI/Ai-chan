@@ -1,0 +1,31 @@
+{
+  "default_location": "Vancouver, BC, Canada",
+  "radius_km": 50,
+  "nearby_locations": [
+    "Burnaby, BC",
+    "Richmond, BC",
+    "North Vancouver, BC",
+    "West Vancouver, BC",
+    "New Westminster, BC",
+    "Coquitlam, BC",
+    "Port Coquitlam, BC",
+    "Port Moody, BC",
+    "Surrey, BC",
+    "Delta, BC",
+    "Langley, BC"
+  ],
+  "max_results": 30,
+  "max_age_days": 30,
+  "fallback_max_age_days": 60,
+  "job_sites": [
+    "site:boards.greenhouse.io",
+    "site:jobs.lever.co",
+    "site:jobs.ashbyhq.com",
+    "site:remoteok.com",
+    "site:weworkremotely.com",
+    "site:wellfound.com"
+  ],
+  "default_job_type": "",
+  "include_remote": true,
+  "notes": "Job type/role should normally come from the user's prompt. Leave default_job_type blank unless OppaAI wants every search constrained."
+}
