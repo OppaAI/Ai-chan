@@ -14,10 +14,11 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from core.log import get_logger
-from core.skills import list_skillsets, load_skillset, search_skillsets_json, skill_context_for
-from core.knowledge import knowledge_context_for
+from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
+from core.knowledge import knowledge_context_for, wiki_context_for
 from core.tools import (
     fetch_and_extract,
     deep_search,
@@ -54,6 +55,31 @@ AGENT_VERIFY_LLM = os.getenv("AGENT_VERIFY_LLM", "1").lower() in {"1", "true", "
 AGENT_MAX_FINAL_REPAIRS = int(os.getenv("AGENT_MAX_FINAL_REPAIRS", 2))
 AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_AGENTIC_POLICY_PATHS = (
+    _REPO_ROOT / "persona" / "skills.md",
+    _REPO_ROOT / "persona" / "schedule.md",
+)
+
+
+def _agentic_policy_context() -> str:
+    """Load task-only persona policy for the agent loop.
+
+    Normal chat intentionally excludes these files to keep casual turns light;
+    task mode injects them explicitly so scheduling and tool discipline remain
+    available before the first tool-choice call.
+    """
+    blocks: list[str] = []
+    for path in _AGENTIC_POLICY_PATHS:
+        text = load_skills(path).strip()
+        if text:
+            rel = path.relative_to(_REPO_ROOT)
+            blocks.append(f'<agentic_policy path="{rel}">\n{text}\n</agentic_policy>')
+    if not blocks:
+        return "<agentic_policy_context>\nNo task policy files found.\n</agentic_policy_context>"
+    return "<agentic_policy_context>\n" + "\n\n".join(blocks) + "\n</agentic_policy_context>"
+
 
 _ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^\]:]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)
 _DISCLOSURE_RE = re.compile(
@@ -564,11 +590,15 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     memories = owner._memorize.search(user_input, limit=AGENT_MEMORY_RECALL_LIMIT)
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
+    agentic_policy_context = _agentic_policy_context()
+    wiki_context = wiki_context_for(user_input)
     skill_context = skill_context_for(user_input)
     knowledge_context = knowledge_context_for(user_input)
 
     agent_system = (
         f"{owner._persona}\n\n"
+        f"{agentic_policy_context}\n\n"
+        f"{wiki_context}\n\n"
         "[TASK MODE OVERRIDE] The speech style limits in the persona do NOT apply "
         "in task mode. Do not summarize in 1-2 sentences. Call tools first, speak after. "
         "Output length is irrelevant until final_answer is reached.\n\n"
