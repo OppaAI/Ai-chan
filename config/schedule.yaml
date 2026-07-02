@@ -3,7 +3,6 @@ TIMEZONE: America/Vancouver
 WORKSPACE_ROOT: workspace
 SCHEDULE_PATH: workspace/schedule.json
 REMINDERS_PATH: workspace/reminders.json
-SCHEDULE_POLL_SECONDS: '15'
 DAILY_JOB_HOUR: '0'
 DAILY_JOB_MINUTE: '0'
 MONTHLY_JOB_HOUR: '0'

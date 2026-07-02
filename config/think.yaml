@@ -1,4 +1,4 @@
-# Aiko llm settings. Secrets stay in .env.
+# Aiko think settings. Secrets stay in .env.
 LLM_BASE_URL: http://localhost:8080/v1
 LLM_MODEL: ministral
 REFLECT_MODEL: ministral

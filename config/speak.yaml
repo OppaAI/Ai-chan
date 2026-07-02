@@ -1,0 +1,6 @@
+# Aiko speak settings. Secrets stay in .env.
+MIOTTS_API_URL: http://localhost:8001
+MIOTTS_MODEL: MioTTS-0.4B-Q4_K_M
+MIOTTS_PRESET: jp_female
+MIOTTS_DEVICE: '-1'
+KARAOKE_TEXT: '0'

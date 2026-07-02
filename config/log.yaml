@@ -1,4 +1,4 @@
-# Aiko logging settings. Secrets stay in .env.
+# Aiko log settings. Secrets stay in .env.
 LOG_LEVEL: INFO
 DB_SIZE_TTL: '1.0'
 LOG_MAX_BYTES: '5242880'

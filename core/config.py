@@ -38,7 +38,7 @@ def _flatten(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 
 
 def load_config(*, override: bool = False) -> None:
-    """Load .env secrets and config/*.yaml settings into os.environ."""
+    """Load .env secrets and indexed config/*.yaml settings into os.environ."""
     global _LOADED
     if _LOADED and not override:
         return
@@ -48,7 +48,22 @@ def load_config(*, override: bool = False) -> None:
 
     config_dir = root / "config"
     if config_dir.exists():
-        for path in sorted(config_dir.glob("*.y*ml")):
+        index_path = config_dir / "index.yaml"
+        if index_path.exists():
+            index_data = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
+            config_names = index_data.get("configs", [])
+            if not isinstance(config_names, list):
+                raise ValueError(f"{index_path} configs must be a list")
+            paths = [config_dir / str(name) for name in config_names]
+        else:
+            paths = sorted(
+                path for path in config_dir.glob("*.y*ml")
+                if path.name != "index.yaml"
+            )
+
+        for path in paths:
+            if not path.exists():
+                raise FileNotFoundError(f"Configured YAML file not found: {path}")
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             if not isinstance(data, dict):
                 raise ValueError(f"{path} must contain a YAML mapping")

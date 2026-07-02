@@ -182,18 +182,19 @@ THREADS_ACCESS_TOKEN=<your_threads_token>
 Non-secret runtime settings live in category YAML files under `config/`:
 
 ```text
+config/index.yaml       # ordered list of YAML files loaded at startup
 config/identity.yaml    # AI_NAME, USER_ID
-config/llm.yaml         # LLM endpoints, model names, sampling, token limits
-config/memory.yaml      # sqlite-vec, embeddings, recall, dream/consolidation tuning
-config/voice.yaml       # MioTTS, ASR, VAD, speaker verification, barge-in
-config/web.yaml         # SearXNG URL and search limits
-config/ui.yaml          # WebUI/TUI ports, avatar path, streaming behavior
-config/routing.yaml     # chat vs agentic/search routing thresholds
-config/schedule.yaml    # timezone, schedule files, daily/monthly job timing
-config/agent.yaml       # agent loop limits, verification, retry behavior
-config/reflection.yaml  # Hugo/GitHub repo paths and image/reference settings
-config/social.yaml      # weekly social draft/post settings
-config/logging.yaml     # log level and rotation
+config/think.yaml       # core/think.py LLM endpoints, model names, sampling, token limits
+config/agentic.yaml     # core/agentic.py plus routing thresholds
+config/memorize.yaml    # core/memorize.py, embed, forget, experience, consolidation settings
+config/speak.yaml       # core/speak.py MioTTS and karaoke text settings
+config/listen.yaml      # core/listen.py ASR, VAD, speaker verification, barge-in
+config/web.yaml         # core/toolkit/web.py SearXNG URL and search limits
+config/ui.yaml          # main/webui/demo UI ports, avatar path, streaming behavior
+config/schedule.yaml    # core/schedule.py timezone, schedule files, job timing
+config/reflect.yaml     # core/reflect.py Hugo/GitHub repo paths and image/reference settings
+config/social.yaml      # core/social.py weekly social draft/post settings
+config/log.yaml         # core/log.py log level and rotation
 ```
 
 Environment variables still override YAML at runtime, so one-off shell overrides continue to work.
@@ -215,7 +216,7 @@ For browser frontend asset experiments, the repo also has a `package.json` with 
 ## 10. Jetson Orin Nano Notes
 
 - The current `pyproject.toml` uses PyPI dependencies plus an ONNX Runtime CUDA nightly index for `onnxruntime-gpu`.
-- `ASR_DEVICE` lives in `config/voice.yaml`; use `cpu` if CUDA EP availability varies by JetPack/JP version.
+- `ASR_DEVICE` lives in `config/listen.yaml`; use `cpu` if CUDA EP availability varies by JetPack/JP version.
 - Keep `SQLITE_MEMORY_PATH` and `EMBED_CACHE_PATH` on persistent storage, not `/tmp`.
 - If audio output is silent, inspect devices and set `MIOTTS_DEVICE` or the system default sink:
 

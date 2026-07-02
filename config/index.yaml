@@ -1,0 +1,14 @@
+# Aiko config index. Files are loaded in this order; secrets stay in .env.
+configs:
+- identity.yaml
+- think.yaml
+- agentic.yaml
+- memorize.yaml
+- speak.yaml
+- listen.yaml
+- web.yaml
+- ui.yaml
+- schedule.yaml
+- reflect.yaml
+- social.yaml
+- log.yaml

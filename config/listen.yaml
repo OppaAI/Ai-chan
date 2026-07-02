@@ -1,8 +1,4 @@
-# Aiko voice settings. Secrets stay in .env.
-MIOTTS_API_URL: http://localhost:8001
-MIOTTS_MODEL: MioTTS-0.4B-Q4_K_M
-MIOTTS_PRESET: jp_female
-MIOTTS_DEVICE: '-1'
+# Aiko listen settings. Secrets stay in .env.
 ASR_DEVICE: cuda
 ASR_LANGUAGE: auto
 ASR_NUM_THREADS: '4'
@@ -14,7 +10,6 @@ LISTEN_VAD_THRESHOLD: '0.5'
 LISTEN_SILENCE_CHUNKS: '66'
 LISTEN_MIN_CHUNKS: '10'
 LISTEN_MAX_SECONDS: '30'
-LISTEN_CAPTURE_RATE: '48000'
 LISTEN_DEVICE: ''
 SPEAKER_VERIFY_ENABLED: '1'
 SPEAKER_MODEL_PATH: models/3dspeaker_speech_eres2net_base_sv_en_voxceleb_16k.onnx
