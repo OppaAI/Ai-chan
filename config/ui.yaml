@@ -7,7 +7,7 @@
 HTTP_PORT: "8787"  # Browser WebUI HTTP port.
 WS_PORT: "8765"  # Browser WebSocket bridge port.
 NO_BROWSER: "0"  # Do not auto-open browser on launch; options: 1/0.
-WEBUI_HTTPS: "0"  # Serve WebUI over HTTPS; options: 1/0, true/false, yes/no, on/off.
+WEBUI_HTTPS: "1"  # Serve WebUI over HTTPS; required for microphone access from LAN hostnames.
 SSL_CERT: ""  # Path to TLS certificate file when WEBUI_HTTPS is enabled; blank disables cert loading.
 SSL_KEY: ""  # Path to TLS private key file when WEBUI_HTTPS is enabled; blank disables key loading.
 

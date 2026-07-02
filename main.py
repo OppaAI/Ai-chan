@@ -50,7 +50,7 @@ with silent_stderr():
     from core.memorize import AikoMemorize
 
 from tui.tui import AikoTUI
-from webui.webui import AikoWeb
+from webui.webui import AikoWeb, HTTP_PORT, WEBUI_HTTPS
 
 # ── env ───────────────────────────────────────────────────────────────────────
 
@@ -187,7 +187,8 @@ def _run_webui(args):
     tui = AikoWeb(no_voice=args.text, debug=args.debug)
     import socket
     host_ip = socket.gethostbyname(socket.gethostname())
-    print(f"\n  🌸 Aiko-chan is ready → http://{host_ip}:{8787}/\n")
+    scheme = "https" if WEBUI_HTTPS else "http"
+    print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
     _run_session(tui, args)
 
 

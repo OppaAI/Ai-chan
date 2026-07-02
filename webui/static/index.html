@@ -605,12 +605,19 @@
     let micFirstFrameSeen = false;
     let micStreamingEnabled = false;
     let micCommandSeq = 0;
+    let micSecureContextWarned = false;
 
     async function startMic() {
       if (micContext) return true;
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
         console.error('[mic] microphone requires localhost or HTTPS');
-        addMessage('sys', 'Microphone blocked — open the WebUI on localhost or serve it over HTTPS.');
+        if (!micSecureContextWarned) {
+          micSecureContextWarned = true;
+          const uiPort = location.port || '8787';
+          const localUrl = 'http://localhost:' + uiPort + '/';
+          const secureUrl = 'https://' + location.hostname + ':' + uiPort + '/';
+          addMessage('sys', 'Microphone blocked — browsers only allow mic access on localhost or HTTPS. Open ' + localUrl + ' on this machine, or restart with WEBUI_HTTPS=1 and use ' + secureUrl + '.');
+        }
         micBtn.classList.remove('on');
         return false;
       }
