@@ -1,3 +1,11 @@
+---
+id: runtime_state
+name: Runtime State
+summary: Directory and state-file rules that keep mutable runtime artifacts separate from static config.
+status: active
+owner: human
+related: agentic_workflow, schedule
+---
 # Runtime State
 
 Purpose: keep Aiko from mixing user settings, runtime state, and generated work.

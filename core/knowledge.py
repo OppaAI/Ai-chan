@@ -25,6 +25,7 @@ _SOURCE_GLOBS: tuple[tuple[str, str], ...] = (
     ("config", "config/*.yaml"),
     ("config", "config/*.json"),
     ("config", "config/*.toml"),
+    ("docs", "*.md"),
     ("docs", "docs/*.md"),
 )
 
@@ -69,7 +70,7 @@ def _title_from_text(path: Path, text: str) -> str:
     if front:
         for line in front.group("meta").splitlines():
             key, found, value = line.partition(":")
-            if found and key.strip() == "name":
+            if found and key.strip() in {"name", "title"}:
                 return value.strip().strip("'\"")
     heading = _HEADING_RE.search(text)
     if heading:
@@ -88,7 +89,7 @@ def _tags_for(kind: str, path: Path, text: str) -> tuple[str, ...]:
     if front:
         for line in front.group("meta").splitlines():
             key, found, value = line.partition(":")
-            if found and key.strip() in {"id", "triggers", "tools"}:
+            if found and key.strip() in {"id", "status", "owner", "related", "triggers", "tools"}:
                 tags.update(part.strip() for part in value.split(",") if part.strip())
     return tuple(sorted(tags))
 

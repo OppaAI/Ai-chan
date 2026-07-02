@@ -33,7 +33,7 @@ from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import deep_search
 from core.agentic  import run_agentic_chat
-from core.skills   import load_skills
+from core.knowledge import knowledge_context_for
 from core.log      import get_logger
 from core.schedule import DueJob, ScheduleRunner
 from core.experience import append_chat_turn
@@ -82,24 +82,46 @@ _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
-_SKILLS_PATH  = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
-_SCHEDULE_PATH = Path(__file__).resolve().parent.parent / "persona" / "schedule.md"
+_LOCAL_KNOWLEDGE_RE = re.compile(
+    r"\b("
+    r"aiko|your architecture|your hardware|your features?|your functions?|"
+    r"what can you do|how do you work|how are you built|"
+    r"knowledge base|wiki|docs?|readme|roadmap|install|config|"
+    r"soul\.md|user\.md|skills?\.md|schedule\.md|"
+    r"repo|repository|codebase|local files|your files"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def _load_persona() -> str:
-    """Read persona and skills definitions."""
+    """Read the lightweight normal-chat persona.
+
+    Task/tool policy lives in the agentic prompt so casual chat does not pay
+    for skills/schedule tokens on every turn.
+    """
     if not _PERSONA_PATH.exists():
         raise FileNotFoundError(f"soul.md not found at {_PERSONA_PATH}")
     persona = _PERSONA_PATH.read_text(encoding="utf-8").strip()
-    
+
     context_blocks = []
-    for path in (_USER_PATH, _SKILLS_PATH, _SCHEDULE_PATH):
-        if path.exists():
-            context_blocks.append(load_skills(path).strip())
-    skills_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
+    if _USER_PATH.exists():
+        context_blocks.append(_USER_PATH.read_text(encoding="utf-8").strip())
+    user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
 
     user_id = os.getenv("USER_ID", "OppaAI")
     today   = datetime.now().strftime("%B %d, %Y")
-    return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + skills_block
+    return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + user_block
+
+
+def _should_use_local_knowledge(user_input: str) -> bool:
+    """Return True for normal-chat questions about Aiko's local docs/files.
+
+    This keeps casual chat fast while still letting non-task questions about
+    Aiko's architecture, features, hardware/docs, wiki, and knowledge base use
+    the local markdown corpus without entering the tool loop.
+    """
+    return bool(_LOCAL_KNOWLEDGE_RE.search(user_input))
 
 # ── semantic intent examples ──────────────────────────────────────────────────
 
@@ -428,6 +450,17 @@ class AikoThink:
             system = f"{system}\n\n{memory_block}"
         else:
             system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
+
+        if _should_use_local_knowledge(user_input):
+            try:
+                local_context = knowledge_context_for(user_input, limit=3, max_chars=4500)
+                system = (
+                    f"{system}\n\n{local_context}\n"
+                    "Use <knowledge_context> for local Aiko/self-knowledge questions. "
+                    "If it does not match the question, ignore it and answer normally."
+                )
+            except Exception as e:
+                log.error("Local knowledge lookup failed: %s", e)
 
         if not _skip_search and self._is_data_intent(user_input):
             try:

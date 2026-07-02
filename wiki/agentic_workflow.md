@@ -1,3 +1,11 @@
+---
+id: agentic_workflow
+name: Agentic Workflow
+summary: Compact operating rules Aiko retrieves before task-mode tool selection.
+status: active
+owner: human
+related: runtime_state, skills
+---
 # Agentic Workflow
 
 Purpose: give Aiko compact operating rules before she chooses tools.

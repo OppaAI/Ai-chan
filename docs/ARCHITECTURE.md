@@ -168,7 +168,10 @@ flowchart TD
     Intent -->|research/planning/writing/coding/etc.| Task[AikoThink.agentic_chat]
 
     Chat --> Recall[Memory recall]
-    Recall --> LLM[Normal LLM generation]
+    Recall --> LocalKB{Aiko/self-knowledge question?}
+    LocalKB -->|yes| ChatKB[Retrieve local knowledge base]
+    LocalKB -->|no| LLM[Normal LLM generation]
+    ChatKB --> LLM
     LLM --> Stream[Token stream to UI]
 
     Task --> AgentLoop[core.agentic ReAct loop]
@@ -234,6 +237,12 @@ flowchart TD
     PinSummary --> Store
 ```
 
+## Knowledge Governance
+
+- Wiki cards and skill workflow files are treated as trusted local knowledge only when they include required front matter.
+- Run `python -m kb.lint` after changing `wiki/*.md` or `skills/*/SKILL.md`.
+- Aiko should draft proposed knowledge updates under `workspace/kb_proposals/` instead of silently rewriting trusted wiki or skill policy.
+
 ## Agentic Task Flow
 
 ```mermaid
@@ -241,9 +250,15 @@ flowchart TD
     TaskInput[Task-like user request] --> Owner[AikoThink.agentic_chat]
     Owner --> Agent[core.agentic.run_agentic_chat]
     Agent --> Mem[Retrieve memory context]
+    Agent --> Policy[Load agentic-only skills/schedule policy]
+    Agent --> Wiki[Retrieve matching wiki cards]
     Agent --> Skill[Retrieve matching SKILL.md context]
+    Agent --> Knowledge[Retrieve matching local knowledge base]
     Mem --> Prompt[Task-mode system prompt]
+    Policy --> Prompt
+    Wiki --> Prompt
     Skill --> Prompt
+    Knowledge --> Prompt
     Prompt --> Model[LLM chooses tool call]
     Model --> Schema[Validate against tool schemas]
     Schema --> Dispatch[Dispatch through tool map]
