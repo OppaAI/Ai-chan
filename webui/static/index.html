@@ -683,7 +683,7 @@
       const ok = await startMic();
       if (!ok) return;
       if (!wsReady()) {
-        addMessage('sys', 'Microphone is active, but WebSocket bridge is offline. Check wss:// connection.');
+        addMessage('sys', 'Microphone is active, but WebSocket bridge is offline. Check the WebSocket connection.');
         return;
       }
       if (vMode.textContent.includes('TXT')) {
@@ -697,10 +697,19 @@
 
     function wsReady() { return ws && ws.readyState === WebSocket.OPEN; }
 
+    function websocketURL() {
+      const params = new URLSearchParams(location.search);
+      const wsHost = params.get("ws_host") || location.hostname;
+      const wsPort = parseInt(params.get("ws") || "8765");
+      const protoOverride = (params.get("ws_proto") || "").toLowerCase();
+      const wsProto = protoOverride === "ws" || protoOverride === "wss"
+        ? protoOverride + ":"
+        : location.protocol === "https:" ? "wss:" : "ws:";
+      return wsProto + "//" + wsHost + ":" + wsPort + "/";
+    }
+
     function connectWS() {
-      const wsPort = parseInt(new URLSearchParams(location.search).get('ws') || '8765');
-      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${wsProto}//${location.hostname}:${wsPort}/`;
+      const wsUrl = websocketURL();
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
 
@@ -757,8 +766,10 @@
         wsDot.className     = 'dot';
         wsLabel.textContent = 'ws offline';
         stopMic();
-        if (location.protocol === 'https:') {
-          toolStatus.textContent = `  ws offline: open https://${location.hostname}:${wsPort}/ once to accept the WSS certificate, or use localhost tunnel`;
+        if (wsUrl.startsWith("wss:")) {
+          toolStatus.textContent = "  ws offline: open " + wsUrl.replace("wss:", "https:") + " once to accept the WSS certificate";
+        } else {
+          toolStatus.textContent = "  ws offline: " + wsUrl;
         }
         setTimeout(connectWS, 3000);
       };
