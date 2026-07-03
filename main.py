@@ -68,10 +68,10 @@ PROACTIVE_FIRST_IDLE_MAX_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MAX_SEC
 PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "1800"))
 PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", "2"))
 PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", "3600"))
-PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "1").lower() in {"1", "true", "yes", "on"}
-PROACTIVE_TIMEZONE = os.getenv("PROACTIVE_TIMEZONE", os.getenv("TIMEZONE", "")).strip()
+PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "0").lower() in {"1", "true", "yes", "on"}
+PROACTIVE_TIMEZONE = os.getenv("PROACTIVE_TIMEZONE", "").strip() or os.getenv("TIMEZONE", "").strip()
 PROACTIVE_QUIET_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_QUIET_WINDOWS", "00:00-06:00").split(",") if w.strip()]
-PROACTIVE_FOCUS_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_FOCUS_WINDOWS", "mon-fri 06:00-19:00,sat-sun 06:00-11:00").split(",") if w.strip()]
+PROACTIVE_FOCUS_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_FOCUS_WINDOWS", "").split(",") if w.strip()]
 PROACTIVE_SPEAK = os.getenv("PROACTIVE_SPEAK", "1").lower() in {"1", "true", "yes", "on"}
 PROACTIVE_MESSAGES = [
     msg.strip()
@@ -92,15 +92,15 @@ PROACTIVE_PROMPT_HINTS = [
     msg.strip()
     for msg in os.getenv(
         "PROACTIVE_PROMPT_HINTS",
-        "Oppa has not spoken to you for a while. What short gentle thing do you want to say to him now?,"
-        "Oppa has been quiet for a while. Offer company without being needy or disruptive.,"
-        "Oppa may be focused or away. Say one brief check-in and make it easy for him to ignore you.",
+        f"{USER_ID or 'the user'} has not spoken to you for a while. What short gentle thing do you want to say now?,"
+        f"{USER_ID or 'the user'} has been quiet for a while. Offer company without being needy or disruptive.,"
+        f"{USER_ID or 'the user'} may be focused or away. Say one brief check-in and make it easy to ignore.",
     ).split(",")
     if msg.strip()
 ]
 PROACTIVE_REST_PROMPT_HINT = os.getenv(
     "PROACTIVE_REST_PROMPT_HINT",
-    "Oppa has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until he returns.",
+    f"{USER_ID or 'the user'} has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until they return.",
 ).strip()
 
 
@@ -294,7 +294,7 @@ class ProactiveIdleRunner:
 
     def _next_prompt_hint(self) -> str:
         hints = PROACTIVE_PROMPT_HINTS or [
-            "Oppa has not spoken to you for a while. What short gentle thing do you want to say to him now?"
+            f"{USER_ID or 'the user'} has not spoken to you for a while. What short gentle thing do you want to say now?"
         ]
         hint = hints[self._message_index % len(hints)]
         self._message_index += 1
