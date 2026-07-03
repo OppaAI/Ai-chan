@@ -9,7 +9,6 @@ PROACTIVE_FIRST_IDLE_MIN_SECONDS: "300"  # Earliest first check-in after user ac
 PROACTIVE_FIRST_IDLE_MAX_SECONDS: "900"  # Latest first check-in after user activity; 900 = 15 minutes.
 PROACTIVE_COOLDOWN_SECONDS: "1800"  # Minimum seconds between proactive check-ins.
 PROACTIVE_MAX_PER_HOUR: "2"  # Hard cap for proactive check-ins in a rolling hour.
-PROACTIVE_POLL_SECONDS: "5"  # Background monitor cadence.
 PROACTIVE_REST_AFTER_SECONDS: "3600"  # After this much idle time, Aiko sends one rest note then stays quiet.
 PROACTIVE_USE_LLM: "1"  # Use prompt hints below so the LLM can vary the final wording.
 PROACTIVE_TIMEZONE: "America/Vancouver"  # Timezone used for quiet/focus windows.

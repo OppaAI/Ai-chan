@@ -27,7 +27,7 @@ load_config()
 
 import argparse
 import collections
-from datetime import datetime
+from datetime import datetime, timedelta
 import difflib
 import os
 import random
@@ -67,7 +67,6 @@ PROACTIVE_FIRST_IDLE_MIN_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MIN_SEC
 PROACTIVE_FIRST_IDLE_MAX_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MAX_SECONDS", "900"))
 PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "1800"))
 PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", "2"))
-PROACTIVE_POLL_SECONDS = float(os.getenv("PROACTIVE_POLL_SECONDS", "5"))
 PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", "3600"))
 PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "1").lower() in {"1", "true", "yes", "on"}
 PROACTIVE_TIMEZONE = os.getenv("PROACTIVE_TIMEZONE", os.getenv("TIMEZONE", "")).strip()
@@ -208,6 +207,27 @@ def _in_proactive_silence_window() -> bool:
     )
 
 
+def _seconds_until_proactive_silence_ends() -> float:
+    """Return seconds until configured quiet/focus windows no longer match."""
+    try:
+        now = datetime.now(ZoneInfo(PROACTIVE_TIMEZONE)) if PROACTIVE_TIMEZONE else datetime.now()
+    except ZoneInfoNotFoundError:
+        now = datetime.now()
+
+    windows = [*PROACTIVE_QUIET_WINDOWS, *PROACTIVE_FOCUS_WINDOWS]
+    if not any(_time_window_matches(window, now) for window in windows):
+        return 0.0
+
+    # Window definitions are minute-granular, so scan minute boundaries instead
+    # of waking every few seconds while Aiko is configured to be quiet.
+    cursor = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    for _ in range(8 * 24 * 60):  # enough to cover weekly wraparound windows
+        if not any(_time_window_matches(window, cursor) for window in windows):
+            return max(1.0, (cursor - now).total_seconds())
+        cursor += timedelta(minutes=1)
+    return 3600.0
+
+
 class ProactiveIdleRunner:
     """Lightweight monitor that lets Aiko send gentle idle check-ins.
 
@@ -224,6 +244,7 @@ class ProactiveIdleRunner:
         self._active_turn = active_turn
         self._generate_fn = generate_fn
         self._stop = threading.Event()
+        self._wakeup = threading.Event()
         self._lock = threading.Lock()
         self._last_activity = time.monotonic()
         self._last_prompt = 0.0
@@ -242,6 +263,7 @@ class ProactiveIdleRunner:
 
     def stop(self) -> None:
         self._stop.set()
+        self._wakeup.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
@@ -250,6 +272,7 @@ class ProactiveIdleRunner:
             self._last_activity = time.monotonic()
             self._next_checkin_after = self._random_first_idle_delay()
             self._resting = False
+        self._wakeup.set()
 
     def set_enabled(self, enabled: bool) -> None:
         with self._lock:
@@ -257,6 +280,7 @@ class ProactiveIdleRunner:
             self._last_activity = time.monotonic()
             self._next_checkin_after = self._random_first_idle_delay()
             self._resting = False
+        self._wakeup.set()
 
     def is_enabled(self) -> bool:
         with self._lock:
@@ -334,35 +358,69 @@ class ProactiveIdleRunner:
                 self._next_checkin_after = idle_for + PROACTIVE_COOLDOWN_SECONDS
                 self._prompt_times.append(now)
 
+    def _seconds_until_next_check(self, now: float) -> float:
+        """Sleep until the next meaningful proactive deadline or wakeup event."""
+        with self._lock:
+            enabled = self._enabled
+            resting = self._resting
+            last_activity = self._last_activity
+            last_prompt = self._last_prompt
+            next_checkin_after = self._next_checkin_after
+
+        if not enabled or resting:
+            return 3600.0
+
+        quiet_remaining = _seconds_until_proactive_silence_ends()
+        if quiet_remaining > 0:
+            return quiet_remaining
+
+        if self._active_turn.is_set():
+            return 30.0
+        if self._speak is not None and self._speak.is_playing():
+            return 10.0
+
+        candidates = [last_activity + next_checkin_after]
+        if last_prompt:
+            candidates.append(last_prompt + PROACTIVE_COOLDOWN_SECONDS)
+        if PROACTIVE_REST_AFTER_SECONDS > 0:
+            candidates.append(last_activity + PROACTIVE_REST_AFTER_SECONDS)
+        if PROACTIVE_MAX_PER_HOUR > 0 and len(self._prompt_times) >= PROACTIVE_MAX_PER_HOUR:
+            candidates.append(self._prompt_times[0] + 3600)
+
+        future = [target - now for target in candidates if target > now]
+        return max(1.0, min(future) if future else 1.0)
+
     def _loop(self) -> None:
-        poll = max(1.0, PROACTIVE_POLL_SECONDS)
-        while not self._stop.wait(poll):
+        while not self._stop.is_set():
             now = time.monotonic()
             due = self._prompt_due(now)
-            if not due:
-                continue
-            kind, payload = due
-            rest = kind.startswith("rest")
-            self._mark_prompt(now, rest=rest)
-            log.info("[proactive] idle %s: %s", "rest" if rest else "check-in", payload)
-            try:
-                if kind.endswith("_prompt") and self._generate_fn is not None:
-                    text = (self._generate_fn(payload) or "").strip()
-                    if not text:
-                        text = PROACTIVE_REST_MESSAGE if rest else self._next_message()
-                else:
-                    text = payload
-                self._tui.add_message("aiko", text)
-                if (
-                    not kind.endswith("_prompt")
-                    and PROACTIVE_SPEAK
-                    and self._speak is not None
-                    and self._speak_enabled_fn()
-                ):
-                    self._speak.speak(text)
-                self._tui._draw()
-            except Exception as e:
-                log.warning("Proactive idle check-in failed: %s", e)
+            if due:
+                kind, payload = due
+                rest = kind.startswith("rest")
+                self._mark_prompt(now, rest=rest)
+                log.info("[proactive] idle %s: %s", "rest" if rest else "check-in", payload)
+                try:
+                    if kind.endswith("_prompt") and self._generate_fn is not None:
+                        text = (self._generate_fn(payload) or "").strip()
+                        if not text:
+                            text = PROACTIVE_REST_MESSAGE if rest else self._next_message()
+                    else:
+                        text = payload
+                    self._tui.add_message("aiko", text)
+                    if (
+                        not kind.endswith("_prompt")
+                        and PROACTIVE_SPEAK
+                        and self._speak is not None
+                        and self._speak_enabled_fn()
+                    ):
+                        self._speak.speak(text)
+                    self._tui._draw()
+                except Exception as e:
+                    log.warning("Proactive idle check-in failed: %s", e)
+
+            sleep_for = self._seconds_until_next_check(time.monotonic())
+            self._wakeup.wait(timeout=sleep_for)
+            self._wakeup.clear()
 
 
 # ── voice command map ─────────────────────────────────────────────────────────
