@@ -500,6 +500,24 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolRes
 
 
 
+def _sanitize_user_facing_tool_detail(detail: str, max_chars: int = 300) -> str:
+    """Redact sensitive/internal-looking details before surfacing blockers."""
+    text = (detail or "").strip()
+    if not text:
+        return "unknown tool failure"
+    text = re.sub(
+        r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)",
+        r"\1\2[redacted]",
+        text,
+    )
+    text = re.sub(r"(?i)(authorization\s*:\s*bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", text)
+    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", text)
+    text = re.sub(r"(?i)(https?://)(localhost|127\.0\.0\.1|0\.0\.0\.0|[^\s/]+\.local)([^\s)]*)", r"\1[internal-url-redacted]", text)
+    text = re.sub(r"(?m)^\s*File \"[^\n]+", "File [internal path redacted]", text)
+    text = re.sub(r"(?m)^\s*(Traceback \(most recent call last\):|During handling of the above exception.*)$", "[stack trace redacted]", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars] or "unknown tool failure"
+
 def _build_incomplete_task_answer(state: TaskState, last_content: str = "") -> str:
     """Create a useful final response when the model never emits final_answer.
 
@@ -517,8 +535,8 @@ def _build_incomplete_task_answer(state: TaskState, last_content: str = "") -> s
     if state.failures:
         lines.append("I could not fully complete the task because of these blocker(s):")
         for failure in state.failures[-3:]:
-            detail = failure.content.strip() or failure.error_type or "unknown tool failure"
-            lines.append(f"- {failure.tool}: {detail[:300]}")
+            detail = _sanitize_user_facing_tool_detail(failure.content or failure.error_type or "")
+            lines.append(f"- {failure.tool}: {detail}")
     if last_content.strip():
         lines.append("Most recent model draft:")
         lines.append(last_content.strip())
