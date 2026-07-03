@@ -10,18 +10,20 @@ PROACTIVE_FIRST_IDLE_MAX_SECONDS: "900"  # Latest first check-in after user acti
 PROACTIVE_COOLDOWN_SECONDS: "1800"  # Minimum seconds between proactive check-ins.
 PROACTIVE_MAX_PER_HOUR: "2"  # Hard cap for proactive check-ins in a rolling hour.
 PROACTIVE_REST_AFTER_SECONDS: "3600"  # After this much idle time, Aiko sends one rest note then stays quiet.
-PROACTIVE_USE_LLM: "0"  # Set to 1 to use prompt hints below so the LLM can vary the final wording.
+PROACTIVE_USE_LLM: "1"  # Use prompt hints below so the LLM can vary the final wording.
 PROACTIVE_TIMEZONE: ""  # Blank inherits TIMEZONE from config/schedule.yaml; set an IANA timezone to override.
 PROACTIVE_QUIET_WINDOWS:
   - "00:00-06:00"  # Daily quiet hours.
-PROACTIVE_FOCUS_WINDOWS: []  # Optional, e.g. ["mon-fri 09:00-17:00", "sat-sun 06:00-11:00"].
+PROACTIVE_FOCUS_WINDOWS:
+  - "mon-fri 06:00-19:00"  # Work/focus block.
+  - "sat-sun 06:00-11:00"  # Weekend morning focus block.
 PROACTIVE_SPEAK: "1"  # Speak the check-in aloud when TTS is currently enabled.
 PROACTIVE_REST_MESSAGE: "You've been away for a while so I'll go quiet and rest. Ping me when you need me."
 PROACTIVE_PROMPT_HINTS:
-  - "The user has not spoken to you for a while. What short gentle thing do you want to say now?"
-  - "The user has been quiet for a while. Offer company without being needy or disruptive."
-  - "The user may be focused or away. Say one brief check-in and make it easy to ignore."
-PROACTIVE_REST_PROMPT_HINT: "The user has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until they return."
+  - "{user} has not spoken to you for a while. What short gentle thing do you want to say now?"
+  - "{user} has been quiet for a while. Offer company without being needy or disruptive."
+  - "{user} may be focused or away. Say one brief check-in and make it easy to ignore."
+PROACTIVE_REST_PROMPT_HINT: "{user} has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until they return."
 PROACTIVE_MESSAGES:
   - "You've been quiet for a bit. Still with me?"
   - "Checking in. Do you want focus time or should I keep you company?"

@@ -433,6 +433,7 @@ class AikoThink:
 
     def proactive_checkin(self, prompt_hint: str) -> str:
         """Generate one short proactive check-in without storing it as a user turn."""
+        user_id = os.getenv("USER_ID", "the user")
         system = (
             f"{self._persona}\n\n"
             "You are initiating a brief proactive check-in. "
@@ -443,7 +444,7 @@ class AikoThink:
             "role": "user",
             "content": (
                 f"{prompt_hint}\n\n"
-                "Write only the message Aiko should say to Oppa now."
+                f"Write only the message Aiko should say to {user_id} now."
             ),
         }]
         return self._stream_response(messages, system=system, token_callback=None)

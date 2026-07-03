@@ -68,10 +68,10 @@ PROACTIVE_FIRST_IDLE_MAX_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MAX_SEC
 PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "1800"))
 PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", "2"))
 PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", "3600"))
-PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "0").lower() in {"1", "true", "yes", "on"}
+PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "1").lower() in {"1", "true", "yes", "on"}
 PROACTIVE_TIMEZONE = os.getenv("PROACTIVE_TIMEZONE", "").strip() or os.getenv("TIMEZONE", "").strip()
 PROACTIVE_QUIET_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_QUIET_WINDOWS", "00:00-06:00").split(",") if w.strip()]
-PROACTIVE_FOCUS_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_FOCUS_WINDOWS", "").split(",") if w.strip()]
+PROACTIVE_FOCUS_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_FOCUS_WINDOWS", "mon-fri 06:00-19:00,sat-sun 06:00-11:00").split(",") if w.strip()]
 PROACTIVE_SPEAK = os.getenv("PROACTIVE_SPEAK", "1").lower() in {"1", "true", "yes", "on"}
 PROACTIVE_MESSAGES = [
     msg.strip()
@@ -92,16 +92,27 @@ PROACTIVE_PROMPT_HINTS = [
     msg.strip()
     for msg in os.getenv(
         "PROACTIVE_PROMPT_HINTS",
-        f"{USER_ID or 'the user'} has not spoken to you for a while. What short gentle thing do you want to say now?,"
-        f"{USER_ID or 'the user'} has been quiet for a while. Offer company without being needy or disruptive.,"
-        f"{USER_ID or 'the user'} may be focused or away. Say one brief check-in and make it easy to ignore.",
+        "{user} has not spoken to you for a while. What short gentle thing do you want to say now?,"
+        "{user} has been quiet for a while. Offer company without being needy or disruptive.,"
+        "{user} may be focused or away. Say one brief check-in and make it easy to ignore.",
     ).split(",")
     if msg.strip()
 ]
 PROACTIVE_REST_PROMPT_HINT = os.getenv(
     "PROACTIVE_REST_PROMPT_HINT",
-    f"{USER_ID or 'the user'} has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until they return.",
+    "{user} has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until they return.",
 ).strip()
+
+
+def _personalize_proactive_text(text: str) -> str:
+    """Fill lightweight proactive placeholders from identity config/env."""
+    user = USER_ID or "the user"
+    return (
+        text.replace("{user}", user)
+        .replace("{USER_ID}", user)
+        .replace("{ai}", AI_NAME)
+        .replace("{AI_NAME}", AI_NAME)
+    )
 
 
 _DAY_ALIASES = {
@@ -290,15 +301,15 @@ class ProactiveIdleRunner:
         messages = PROACTIVE_MESSAGES or ["You've been quiet for a bit. Still with me?"]
         msg = messages[self._message_index % len(messages)]
         self._message_index += 1
-        return msg
+        return _personalize_proactive_text(msg)
 
     def _next_prompt_hint(self) -> str:
         hints = PROACTIVE_PROMPT_HINTS or [
-            f"{USER_ID or 'the user'} has not spoken to you for a while. What short gentle thing do you want to say now?"
+            "{user} has not spoken to you for a while. What short gentle thing do you want to say now?"
         ]
         hint = hints[self._message_index % len(hints)]
         self._message_index += 1
-        return hint
+        return _personalize_proactive_text(hint)
 
     @staticmethod
     def _random_first_idle_delay() -> float:
@@ -332,9 +343,9 @@ class ProactiveIdleRunner:
             return None
         if PROACTIVE_REST_AFTER_SECONDS > 0 and idle_for >= PROACTIVE_REST_AFTER_SECONDS:
             if PROACTIVE_USE_LLM and self._generate_fn is not None and PROACTIVE_REST_PROMPT_HINT:
-                return ("rest_prompt", PROACTIVE_REST_PROMPT_HINT)
+                return ("rest_prompt", _personalize_proactive_text(PROACTIVE_REST_PROMPT_HINT))
             if PROACTIVE_REST_MESSAGE:
-                return ("rest_text", PROACTIVE_REST_MESSAGE)
+                return ("rest_text", _personalize_proactive_text(PROACTIVE_REST_MESSAGE))
             with self._lock:
                 self._resting = True
             return None
