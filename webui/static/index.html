@@ -23,7 +23,6 @@
       --cyan: #51d4c8;
       --dim: #4a3a6a;
       --dimmer: #2a1a4a;
-      --text: #c8b8e8;
       --you: #51d4c8;
       --aiko: #c8a8f0;
       --sys: #4a3a6a;
@@ -70,9 +69,19 @@
       letter-spacing: .15em;
     }
 
-    #vrm-title   { color: var(--purple); text-transform: uppercase; }
-    #vrm-emotion { color: var(--dim); transition: color .3s; }
-    #vrm-emotion.active { color: var(--mauve); }
+    #vrm-title {
+      color: var(--purple);
+      text-transform: uppercase;
+    }
+
+    #vrm-emotion {
+      color: var(--dim);
+      transition: color .3s;
+    }
+
+    #vrm-emotion.active {
+      color: var(--mauve);
+    }
 
     #ws-dots {
       position: absolute;
@@ -81,7 +90,7 @@
       display: flex;
       flex-direction: column;
       gap: 4px;
-      align-items: flex-end;
+      align-items: flex-start;
       pointer-events: none;
       font-size: 10px;
       color: var(--dim);
@@ -91,14 +100,51 @@
       padding: 6px 8px;
       backdrop-filter: blur(4px);
     }
-    .status-line { display: flex; gap: 8px; align-items: center; justify-content: flex-end; white-space: nowrap; }
 
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dimmer); transition: background .3s; }
-    .dot.on    { background: var(--purple); box-shadow: 0 0 6px var(--purple); }
-    .dot.speak { background: var(--pink);   box-shadow: 0 0 8px var(--pink); animation: blink .6s infinite; }
-    .dot.vad   { background: var(--cyan);   box-shadow: 0 0 8px var(--cyan); animation: blink .4s infinite; }
+    .status-line {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-start;
+      white-space: nowrap;
+    }
 
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--dimmer);
+      transition: background .3s;
+    }
+
+    .dot.on {
+      background: var(--purple);
+      box-shadow: 0 0 6px var(--purple);
+    }
+
+    .dot.speak {
+      background: var(--pink);
+      box-shadow: 0 0 8px var(--pink);
+      animation: blink .6s infinite;
+    }
+
+    .dot.vad {
+      background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+      animation: blink .4s infinite;
+    }
+
+    @keyframes blink {
+
+      0%,
+      100% {
+        opacity: 1
+      }
+
+      50% {
+        opacity: .4
+      }
+    }
 
     /* ── right panel ────────────────────────────────────────────────── */
     #panel {
@@ -117,8 +163,17 @@
       flex-shrink: 0;
     }
 
-    #panel-title  { font-size: 12px; letter-spacing: .25em; color: var(--pink); text-transform: uppercase; }
-    #panel-clock  { font-size: 10px; color: var(--dim); }
+    #panel-title {
+      font-size: 12px;
+      letter-spacing: .25em;
+      color: var(--pink);
+      text-transform: uppercase;
+    }
+
+    #panel-clock {
+      font-size: 10px;
+      color: var(--dim);
+    }
 
     #content {
       overflow-y: auto;
@@ -131,76 +186,327 @@
       scrollbar-color: var(--scrollbar) transparent;
     }
 
-    #content::-webkit-scrollbar       { width: 4px; }
-    #content::-webkit-scrollbar-track { background: transparent; }
-    #content::-webkit-scrollbar-thumb { background: var(--scrollbar); border-radius: 2px; }
+    #content::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    #content::-webkit-scrollbar-thumb {
+      background: var(--scrollbar);
+      border-radius: 2px;
+    }
 
     /* ── init panel ─────────────────────────────────────────────────── */
-    #init-panel { display: flex; flex-direction: column; gap: 3px; }
-    #init-panel.hidden { display: none; }
+    #init-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
 
-    .init-heading { font-size: 11px; letter-spacing: .2em; color: var(--pink); text-transform: uppercase; margin-bottom: 6px; }
+    #init-panel.hidden {
+      display: none;
+    }
 
-    .step-row { display: grid; grid-template-columns: 20px 1fr; gap: 0 8px; font-size: 11px; line-height: 1.7; align-items: baseline; }
-    .step-icon        { color: var(--dim);  text-align: center; }
-    .step-icon.ok     { color: var(--cyan); }
-    .step-icon.skip   { color: var(--dim);  }
-    .step-icon.err    { color: var(--pink); }
-    .step-label       { color: var(--text); }
-    .step-detail      { color: var(--dim);  font-size: 10px; }
+    .init-heading {
+      font-size: 11px;
+      letter-spacing: .2em;
+      color: var(--pink);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
 
-    .all-online { margin-top: 10px; font-size: 11px; letter-spacing: .2em; color: var(--cyan); text-transform: uppercase; display: none; }
-    .all-online.show { display: block; }
+    .step-row {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 0 8px;
+      font-size: 11px;
+      line-height: 1.7;
+      align-items: baseline;
+    }
+
+    .step-icon {
+      color: var(--dim);
+      text-align: center;
+    }
+
+    .step-icon.ok {
+      color: var(--cyan);
+    }
+
+    .step-icon.skip {
+      color: var(--dim);
+    }
+
+    .step-icon.err {
+      color: var(--pink);
+    }
+
+    .step-label {
+      color: var(--text);
+    }
+
+    .step-detail {
+      color: var(--dim);
+      font-size: 10px;
+    }
+
+    .all-online {
+      margin-top: 10px;
+      font-size: 11px;
+      letter-spacing: .2em;
+      color: var(--cyan);
+      text-transform: uppercase;
+      display: none;
+    }
+
+    .all-online.show {
+      display: block;
+    }
 
     /* ── chat area ──────────────────────────────────────────────────── */
-    #chat-panel { display: none; flex-direction: column; gap: 2px; }
-    #chat-panel.show { display: flex; }
+    #chat-panel {
+      display: none;
+      flex-direction: column;
+      gap: 2px;
+    }
 
-    .msg         { font-size: 12px; line-height: 1.65; padding: 1px 0; }
-    .msg-you     { color: var(--you);  }
-    .msg-aiko    { color: var(--aiko); }
-    .msg-sys     { color: var(--sys);  font-size: 11px; }
-    .msg-prefix  { font-weight: 700; }
+    #chat-panel.show {
+      display: flex;
+    }
 
-    .cursor::after { content: '▋'; animation: cur .7s infinite; color: var(--mauve); margin-left: 1px; }
-    @keyframes cur { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+    .msg {
+      font-size: 12px;
+      line-height: 1.65;
+      padding: 1px 0;
+    }
 
-    #tool-status { font-size: 10px; color: var(--dim); letter-spacing: .1em; min-height: 16px; margin-top: 2px; transition: opacity .2s; }
-    #tool-status:empty { opacity: 0; }
+    .msg-you {
+      color: var(--you);
+    }
+
+    .msg-aiko {
+      color: var(--aiko);
+    }
+
+    .msg-sys {
+      color: var(--sys);
+      font-size: 11px;
+    }
+
+    .msg-prefix {
+      font-weight: 700;
+    }
+
+    .cursor::after {
+      content: '▋';
+      animation: cur .7s infinite;
+      color: var(--mauve);
+      margin-left: 1px;
+    }
+
+    @keyframes cur {
+
+      0%,
+      49% {
+        opacity: 1
+      }
+
+      50%,
+      100% {
+        opacity: 0
+      }
+    }
+
+    #tool-status {
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: .1em;
+      min-height: 16px;
+      margin-top: 2px;
+      transition: opacity .2s;
+    }
+
+    #tool-status:empty {
+      opacity: 0;
+    }
 
     /* ── vitals bar ─────────────────────────────────────────────────── */
-    #vitals { border-top: 1px solid var(--border); padding: 5px 16px; font-size: 10px; color: var(--dim); letter-spacing: .1em; display: flex; gap: 12px; flex-wrap: wrap; flex-shrink: 0; }
-    #vitals span { white-space: nowrap; }
-    #vitals .hi  { color: var(--purple); }
+    #vitals {
+      border-top: 1px solid var(--border);
+      padding: 5px 16px;
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: .1em;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+    }
+
+    #vitals span {
+      white-space: nowrap;
+    }
+
+    #vitals .hi {
+      color: var(--purple);
+    }
 
     /* ── voice status ───────────────────────────────────────────────── */
-    #voice-status { border-top: 1px solid var(--border); padding: 5px 16px; font-size: 10px; color: var(--dim); letter-spacing: .12em; text-transform: uppercase; min-height: 24px; flex-shrink: 0; transition: color .2s; }
-    #voice-status.listening    { color: var(--cyan);  }
-    #voice-status.transcribing { color: var(--mauve); }
-    #voice-status.waiting      { color: var(--dim);   }
+    #voice-status {
+      border-top: 1px solid var(--border);
+      padding: 5px 16px;
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      min-height: 24px;
+      flex-shrink: 0;
+      transition: color .2s;
+    }
+
+    #voice-status.listening {
+      color: var(--cyan);
+    }
+
+    #voice-status.transcribing {
+      color: var(--mauve);
+    }
+
+    #voice-status.waiting {
+      color: var(--dim);
+    }
 
     /* ── input row ──────────────────────────────────────────────────── */
-    #input-row { border-top: 1px solid var(--border); display: flex; align-items: center; padding: 8px 12px; gap: 8px; flex-shrink: 0; }
-    #prompt-label { color: var(--purple); font-size: 13px; flex-shrink: 0; user-select: none; }
-    #user-input { flex: 1; background: transparent; border: none; outline: none; font-family: 'Courier New', monospace; font-size: 12px; color: var(--input-fg); caret-color: var(--mauve); }
-    .input-btn { background: none; border: 1px solid var(--dimmer); color: var(--dim); font-family: 'Courier New', monospace; font-size: 10px; letter-spacing: .15em; padding: 4px 10px; cursor: pointer; border-radius: 2px; text-transform: uppercase; transition: border-color .2s, color .2s, box-shadow .2s; }
-    .input-btn:hover { border-color: var(--purple); color: var(--purple); }
-    #mic-btn { width: 30px; padding: 4px 0; letter-spacing: 0; font-size: 12px; }
-    #mic-btn.on { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 6px rgba(81, 212, 200, .35); }
+    #input-row {
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    #prompt-label {
+      color: var(--purple);
+      font-size: 13px;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    #user-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: var(--input-fg);
+      caret-color: var(--mauve);
+    }
+
+    .input-btn {
+      background: none;
+      border: 1px solid var(--dimmer);
+      color: var(--dim);
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: .15em;
+      padding: 4px 10px;
+      cursor: pointer;
+      border-radius: 2px;
+      text-transform: uppercase;
+      transition: border-color .2s, color .2s, box-shadow .2s;
+    }
+
+    .input-btn:hover {
+      border-color: var(--purple);
+      color: var(--purple);
+    }
+
+    #mic-btn {
+      width: 30px;
+      padding: 4px 0;
+      letter-spacing: 0;
+      font-size: 12px;
+    }
+
+    #mic-btn.on {
+      border-color: var(--cyan);
+      color: var(--cyan);
+      box-shadow: 0 0 6px rgba(81, 212, 200, .35);
+    }
 
     /* ── loading overlay ────────────────────────────────────────────── */
-    #load-overlay { position: fixed; inset: 0; background: var(--bg); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 200; transition: opacity .8s; }
-    #load-overlay.fade { opacity: 0; pointer-events: none; }
-    #load-title    { font-size: 22px; letter-spacing: .35em; color: var(--purple); text-transform: uppercase; }
-    #load-sub      { font-size: 10px; color: var(--dim); letter-spacing: .2em; }
-    #progress-bar  { width: 180px; height: 1px; background: var(--dimmer); position: relative; overflow: hidden; }
-    #progress-fill { height: 100%; background: var(--purple); width: 0%; transition: width .3s; box-shadow: 0 0 8px var(--purple); }
-    #load-msg      { font-size: 10px; color: var(--dim); letter-spacing: .15em; }
+    #load-overlay {
+      position: fixed;
+      inset: 0;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      z-index: 200;
+      transition: opacity .8s;
+    }
+
+    #load-overlay.fade {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #load-title {
+      font-size: 22px;
+      letter-spacing: .35em;
+      color: var(--purple);
+      text-transform: uppercase;
+    }
+
+    #load-sub {
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: .2em;
+    }
+
+    #progress-bar {
+      width: 180px;
+      height: 1px;
+      background: var(--dimmer);
+      position: relative;
+      overflow: hidden;
+    }
+
+    #progress-fill {
+      height: 100%;
+      background: var(--purple);
+      width: 0%;
+      transition: width .3s;
+      box-shadow: 0 0 8px var(--purple);
+    }
+
+    #load-msg {
+      font-size: 10px;
+      color: var(--dim);
+      letter-spacing: .15em;
+    }
 
     /* ── VAD indicator ──────────────────────────────────────────────── */
-    #vad-status { font-size: 9px; color: var(--dimmer); letter-spacing: .1em; }
-    #vad-status.ready { color: var(--dim); }
-    #vad-status.active { color: var(--cyan); }
+    #vad-status {
+      font-size: 9px;
+      color: var(--dim);
+      letter-spacing: .1em;
+    }
+
+    #vad-status.ready {
+      color: var(--purple);
+    }
+
+    #vad-status.active {
+      color: var(--cyan);
+    }
   </style>
 </head>
 
@@ -210,7 +516,9 @@
   <div id="load-overlay">
     <div id="load-title">Aiko-chan</div>
     <div id="load-sub">VRM VIEWER // OPPAAI</div>
-    <div id="progress-bar"><div id="progress-fill"></div></div>
+    <div id="progress-bar">
+      <div id="progress-fill"></div>
+    </div>
     <div id="load-msg">loading model…</div>
   </div>
 
@@ -224,9 +532,15 @@
     </div>
 
     <div id="ws-dots">
-      <div class="status-line"><div class="dot" id="ws-dot"></div><span id="ws-label">ws offline</span></div>
-      <div class="status-line"><div class="dot" id="speak-dot"></div><span id="speak-label">idle</span></div>
-      <div class="status-line"><div class="dot" id="vad-dot"></div><span id="vad-status">vad loading…</span></div>
+      <div class="status-line">
+        <div class="dot" id="ws-dot"></div><span id="ws-label">ws offline</span>
+      </div>
+      <div class="status-line">
+        <div class="dot" id="speak-dot"></div><span id="speak-label">idle</span>
+      </div>
+      <div class="status-line">
+        <div class="dot" id="vad-dot"></div><span id="vad-status">vad loading…</span>
+      </div>
     </div>
   </div>
 
@@ -290,25 +604,25 @@
   <!-- ── Chat UI + WebSocket ─────────────────────────────────────────────── -->
   <script>
     // ── DOM refs ──────────────────────────────────────────────────────────────
-    const initPanel  = document.getElementById('init-panel');
-    const chatPanel  = document.getElementById('chat-panel');
+    const initPanel = document.getElementById('init-panel');
+    const chatPanel = document.getElementById('chat-panel');
     const toolStatus = document.getElementById('tool-status');
-    const content    = document.getElementById('content');
-    const allOnline  = document.getElementById('all-online');
-    const input      = document.getElementById('user-input');
-    const micBtn     = document.getElementById('mic-btn');
-    const sendBtn    = document.getElementById('send-btn');
-    const voiceSt    = document.getElementById('voice-status');
-    const clock      = document.getElementById('panel-clock');
-    const wsDot      = document.getElementById('ws-dot');
-    const wsLabel    = document.getElementById('ws-label');
-    const vadDot     = document.getElementById('vad-dot');
-    const vadStatus  = document.getElementById('vad-status');
+    const content = document.getElementById('content');
+    const allOnline = document.getElementById('all-online');
+    const input = document.getElementById('user-input');
+    const micBtn = document.getElementById('mic-btn');
+    const sendBtn = document.getElementById('send-btn');
+    const voiceSt = document.getElementById('voice-status');
+    const clock = document.getElementById('panel-clock');
+    const wsDot = document.getElementById('ws-dot');
+    const wsLabel = document.getElementById('ws-label');
+    const vadDot = document.getElementById('vad-dot');
+    const vadStatus = document.getElementById('vad-status');
 
-    const vTok  = document.getElementById('v-tok');
+    const vTok = document.getElementById('v-tok');
     const vToks = document.getElementById('v-toks');
-    const vRam  = document.getElementById('v-ram');
-    const vUp   = document.getElementById('v-up');
+    const vRam = document.getElementById('v-ram');
+    const vUp = document.getElementById('v-up');
     const vMode = document.getElementById('v-mode');
 
     const AUTO_MIC = true;
@@ -318,8 +632,8 @@
     function tickClock() {
       const now = new Date();
       clock.textContent = now.toLocaleString('en-CA', {
-        month:'short', day:'2-digit', year:'numeric',
-        hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: true,
+        month: 'short', day: '2-digit', year: 'numeric',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
       });
     }
     tickClock();
@@ -376,20 +690,20 @@
 
     // ── step / init tracking ──────────────────────────────────────────────────
     const INIT_LABELS = {
-      think_start:    'Inference Engine',
-      think_warmup:   'Model Warm-up',
+      think_start: 'Inference Engine',
+      think_warmup: 'Model Warm-up',
       mem_sqlite_vec: 'Vector Database',
-      mem_embed:      'Embedding Model',
-      mem_cleanup:    'Memory Lifecycle',
-      mem_ready:      'Memory Cortex',
-      speak_miotts:   'TTS Engine',
-      speak_ready:    'Voice Output',
-      speak_skip:     'Voice Output',
-      listen_ready:   'Speech Input',
-      listen_skip:    'Speech Input',
+      mem_embed: 'Embedding Model',
+      mem_cleanup: 'Memory Lifecycle',
+      mem_ready: 'Memory Cortex',
+      speak_miotts: 'TTS Engine',
+      speak_ready: 'Voice Output',
+      speak_skip: 'Voice Output',
+      listen_ready: 'Speech Input',
+      listen_skip: 'Speech Input',
     };
 
-    const SPINNER_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+    const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let spinFrame = 0;
     setInterval(() => {
       spinFrame = (spinFrame + 1) % SPINNER_FRAMES.length;
@@ -419,11 +733,11 @@
       const { icon, detail: detEl } = stepRows[key];
       detEl.textContent = detail ? ` — ${detail}` : '';
       if (state === 'loading') {
-        icon.className   = 'step-icon spin';
+        icon.className = 'step-icon spin';
         icon.textContent = SPINNER_FRAMES[spinFrame];
-      } else if (state === 'done')  { icon.className = 'step-icon ok';   icon.textContent = '✓'; doneCount++; }
-        else if (state === 'skip')  { icon.className = 'step-icon skip'; icon.textContent = '–'; doneCount++; }
-        else if (state === 'error') { icon.className = 'step-icon err';  icon.textContent = '✗'; doneCount++; }
+      } else if (state === 'done') { icon.className = 'step-icon ok'; icon.textContent = '✓'; doneCount++; }
+      else if (state === 'skip') { icon.className = 'step-icon skip'; icon.textContent = '–'; doneCount++; }
+      else if (state === 'error') { icon.className = 'step-icon err'; icon.textContent = '✗'; doneCount++; }
       if (totalSteps > 0 && doneCount >= totalSteps) allOnline.classList.add('show');
       scrollBottom();
     }
@@ -475,17 +789,17 @@
     }
 
     function esc(s) {
-      return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     function scrollBottom() { content.scrollTop = content.scrollHeight; }
 
     // ── vitals ────────────────────────────────────────────────────────────────
     function applyVitals(v) {
-      vTok.textContent  = `${(v.tokens||0).toLocaleString()} tok`;
+      vTok.textContent = `${(v.tokens || 0).toLocaleString()} tok`;
       vToks.textContent = v.tok_s > 0 ? `${v.tok_s} t/s` : '— t/s';
-      vRam.textContent  = `RAM ${v.ram||'—'}`;
-      vUp.textContent   = `↑ ${v.uptime||'—'}`;
+      vRam.textContent = `RAM ${v.ram || '—'}`;
+      vUp.textContent = `↑ ${v.uptime || '—'}`;
       vMode.textContent = (v.asr ? '🎤 ASR' : '⌨ TXT') + '  ' + (v.tts ? '🔊 TTS' : '🔇 TTS');
 
       if (AUTO_MIC && wsReady() && !v.asr && !autoListenRequested) {
@@ -496,19 +810,19 @@
 
     // ── voice status ──────────────────────────────────────────────────────────
     const VOICE_LABELS = {
-      waiting:      '⏸  waiting for Aiko…',
-      listening:    '🎤  listening…',
+      waiting: '⏸  waiting for Aiko…',
+      listening: '🎤  listening…',
       transcribing: '⚙  transcribing…',
-      idle:         '',
+      idle: '',
     };
     function applyVoice(status) {
       voiceSt.textContent = VOICE_LABELS[status] ?? '';
-      voiceSt.className   = status === 'idle' ? '' : status;
+      voiceSt.className = status === 'idle' ? '' : status;
     }
 
     // ── TTS playback (binary WAV frames from server) ──────────────────────────
     let ttsContext = null;
-    let ttsQueue   = [];
+    let ttsQueue = [];
     let ttsPlaying = false;
     let ttsAnalyser = null;
     let ttsAnalyserData = null;
@@ -580,13 +894,13 @@
       if (!buf) { ttsPlaying = false; return; }
       ttsPlaying = true;
       try {
-        const ctx         = getTtsContext();
+        const ctx = getTtsContext();
         const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
-        const analyser    = getTtsAnalyser();
-        const src         = ctx.createBufferSource();
-        src.buffer        = audioBuffer;
+        const analyser = getTtsAnalyser();
+        const src = ctx.createBufferSource();
+        src.buffer = audioBuffer;
         src.connect(analyser);
-        src.onended       = playNextTts;
+        src.onended = playNextTts;
         src.start();
         startMouthAnalyserLoop();
       } catch (err) {
@@ -598,9 +912,9 @@
     // ── mic capture ───────────────────────────────────────────────────────────
     // Opened/closed by server mic.start / mic.stop messages.
     // Frames go through processVADFrame() in vad.js — only speech reaches server.
-    let micStream  = null;
+    let micStream = null;
     let micContext = null;
-    let micSource  = null;
+    let micSource = null;
     let micWorklet = null;
     let micFirstFrameSeen = false;
     let micStreamingEnabled = false;
@@ -623,11 +937,11 @@
       }
       try {
         micStream = await navigator.mediaDevices.getUserMedia({
-          audio: { channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true },
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
         });
         micContext = new AudioContext({ sampleRate: 16000 });
         await micContext.audioWorklet.addModule('./pcm-worklet.js');
-        micSource  = micContext.createMediaStreamSource(micStream);
+        micSource = micContext.createMediaStreamSource(micStream);
         micWorklet = new AudioWorkletNode(micContext, 'pcm-capture-processor');
 
         micFirstFrameSeen = false;
@@ -658,9 +972,9 @@
       micStreamingEnabled = false;
       if (window.resetVADState) window.resetVADState();
       if (micWorklet) { micWorklet.port.onmessage = null; micWorklet.disconnect(); micWorklet = null; }
-      if (micSource)  { micSource.disconnect(); micSource = null; }
+      if (micSource) { micSource.disconnect(); micSource = null; }
       if (micContext) { micContext.close(); micContext = null; }
-      if (micStream)  { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
       vadDot.className = 'dot on';
       vadStatus.textContent = 'vad ready';
       vadStatus.className = 'ready';
@@ -714,7 +1028,7 @@
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        wsDot.className  = 'dot on';
+        wsDot.className = 'dot on';
         wsLabel.textContent = 'ws connected';
         if (AUTO_MIC) startMic();
       };
@@ -728,14 +1042,14 @@
         try { msg = JSON.parse(e.data); } catch (_) { return; }
 
         switch (msg.type) {
-          case 'step':       upsertStep(msg.key, msg.state, msg.detail || ''); break;
-          case 'phase':      if (msg.value === 'chat') switchToChat();          break;
-          case 'chat':       addMessage(msg.sender, msg.text);                  break;
-          case 'token':      appendToken(msg.text);                             break;
-          case 'commit':     flushStream();                                     break;
-          case 'tool':       toolStatus.textContent = msg.status ? `  ⚙  ${msg.status}` : ''; break;
-          case 'vitals':     applyVitals(msg);                                  break;
-          case 'voice':      applyVoice(msg.status);                            break;
+          case 'step': upsertStep(msg.key, msg.state, msg.detail || ''); break;
+          case 'phase': if (msg.value === 'chat') switchToChat(); break;
+          case 'chat': addMessage(msg.sender, msg.text); break;
+          case 'token': appendToken(msg.text); break;
+          case 'commit': flushStream(); break;
+          case 'tool': toolStatus.textContent = msg.status ? `  ⚙  ${msg.status}` : ''; break;
+          case 'vitals': applyVitals(msg); break;
+          case 'voice': applyVoice(msg.status); break;
           case 'mic':
             if (msg.action === 'start') {
               const seq = ++micCommandSeq;
@@ -757,13 +1071,13 @@
             }
             break;
           case 'expression': if (window.aikoSetExpression) window.aikoSetExpression(msg.name, msg.intensity ?? 1.0); break;
-          case 'viseme':     if (window.aikoSetViseme)     window.aikoSetViseme(msg.viseme, msg.weight ?? 1.0);      break;
-          case 'pose':       if (window.aikoSetPose)       window.aikoSetPose(msg.name, msg.active);                 break;
+          case 'viseme': if (window.aikoSetViseme) window.aikoSetViseme(msg.viseme, msg.weight ?? 1.0); break;
+          case 'pose': if (window.aikoSetPose) window.aikoSetPose(msg.name, msg.active); break;
         }
       };
 
       ws.onclose = () => {
-        wsDot.className     = 'dot';
+        wsDot.className = 'dot';
         wsLabel.textContent = 'ws offline';
         stopMic();
         if (wsUrl.startsWith("wss:")) {
@@ -783,4 +1097,5 @@
   </script>
 
 </body>
+
 </html>
