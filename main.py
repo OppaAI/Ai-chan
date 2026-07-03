@@ -26,8 +26,10 @@ from core.config import load_config
 load_config()
 
 import argparse
+import collections
 import difflib
 import os
+import random
 import re
 import sys
 import threading
@@ -58,6 +60,159 @@ AI_NAME = os.getenv("AI_NAME", "Aiko")
 USER_ID = os.getenv("USER_ID", "")
 STREAM_DRAW_INTERVAL = float(os.getenv("STREAM_DRAW_INTERVAL", "0.05"))
 LATENCY_LOG_ENABLED = os.getenv("LATENCY_LOG", "1").lower() in {"1", "true", "yes", "on"}
+PROACTIVE_ENABLED = os.getenv("PROACTIVE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+PROACTIVE_FIRST_IDLE_MIN_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MIN_SECONDS", os.getenv("PROACTIVE_IDLE_SECONDS", "300")))
+PROACTIVE_FIRST_IDLE_MAX_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MAX_SECONDS", "900"))
+PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "1800"))
+PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", "2"))
+PROACTIVE_POLL_SECONDS = float(os.getenv("PROACTIVE_POLL_SECONDS", "5"))
+PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", "3600"))
+PROACTIVE_SPEAK = os.getenv("PROACTIVE_SPEAK", "1").lower() in {"1", "true", "yes", "on"}
+PROACTIVE_MESSAGES = [
+    msg.strip()
+    for msg in os.getenv(
+        "PROACTIVE_MESSAGES",
+        "You've been quiet for a bit. Still with me?,"
+        "Checking in. Do you want focus time or should I keep you company?,"
+        "Still here. If you're deep in something I can stay quiet.,"
+        "Tiny ping. Need anything or are we in quiet mode?",
+    ).split(",")
+    if msg.strip()
+]
+PROACTIVE_REST_MESSAGE = os.getenv(
+    "PROACTIVE_REST_MESSAGE",
+    "You've been away for a while, so I'll go quiet and rest. Ping me when you need me.",
+).strip()
+
+
+class ProactiveIdleRunner:
+    """Lightweight monitor that lets Aiko send gentle idle check-ins.
+
+    This is deliberately local: it does not call the LLM, does not inspect the
+    screen/camera, and never runs while a turn is active. The first check-in is
+    jittered so Aiko feels less timer-like; after a longer idle window she goes
+    quiet until the user returns.
+    """
+
+    def __init__(self, tui, speak, speak_enabled_fn, active_turn: threading.Event) -> None:
+        self._tui = tui
+        self._speak = speak
+        self._speak_enabled_fn = speak_enabled_fn
+        self._active_turn = active_turn
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._last_activity = time.monotonic()
+        self._last_prompt = 0.0
+        self._prompt_times: collections.deque[float] = collections.deque()
+        self._message_index = 0
+        self._enabled = PROACTIVE_ENABLED
+        self._next_checkin_after = self._random_first_idle_delay()
+        self._resting = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if PROACTIVE_FIRST_IDLE_MAX_SECONDS <= 0:
+            return
+        self._thread = threading.Thread(target=self._loop, name="aiko-proactive", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+    def touch(self) -> None:
+        with self._lock:
+            self._last_activity = time.monotonic()
+            self._next_checkin_after = self._random_first_idle_delay()
+            self._resting = False
+
+    def set_enabled(self, enabled: bool) -> None:
+        with self._lock:
+            self._enabled = enabled
+            self._last_activity = time.monotonic()
+            self._next_checkin_after = self._random_first_idle_delay()
+            self._resting = False
+
+    def is_enabled(self) -> bool:
+        with self._lock:
+            return self._enabled
+
+    def _next_message(self) -> str:
+        messages = PROACTIVE_MESSAGES or ["You've been quiet for a bit. Still with me?"]
+        msg = messages[self._message_index % len(messages)]
+        self._message_index += 1
+        return msg
+
+    @staticmethod
+    def _random_first_idle_delay() -> float:
+        low = max(0.0, min(PROACTIVE_FIRST_IDLE_MIN_SECONDS, PROACTIVE_FIRST_IDLE_MAX_SECONDS))
+        high = max(low, PROACTIVE_FIRST_IDLE_MAX_SECONDS)
+        return random.uniform(low, high)
+
+    def _rate_limit_allows_prompt(self, now: float) -> bool:
+        one_hour_ago = now - 3600
+        while self._prompt_times and self._prompt_times[0] < one_hour_ago:
+            self._prompt_times.popleft()
+        return PROACTIVE_MAX_PER_HOUR > 0 and len(self._prompt_times) < PROACTIVE_MAX_PER_HOUR
+
+    def _prompt_due(self, now: float) -> str | None:
+        with self._lock:
+            enabled = self._enabled
+            idle_for = now - self._last_activity
+            cooldown_for = now - self._last_prompt if self._last_prompt else float("inf")
+            next_checkin_after = self._next_checkin_after
+            resting = self._resting
+
+        if not enabled:
+            return None
+        if resting:
+            return None
+        if self._active_turn.is_set():
+            return None
+        if self._speak is not None and self._speak.is_playing():
+            return None
+        if PROACTIVE_REST_AFTER_SECONDS > 0 and idle_for >= PROACTIVE_REST_AFTER_SECONDS:
+            if PROACTIVE_REST_MESSAGE:
+                return PROACTIVE_REST_MESSAGE
+            with self._lock:
+                self._resting = True
+            return None
+        if idle_for < next_checkin_after:
+            return None
+        if cooldown_for < PROACTIVE_COOLDOWN_SECONDS:
+            return None
+        if not self._rate_limit_allows_prompt(now):
+            return None
+        return self._next_message()
+
+    def _mark_prompt(self, now: float, *, rest: bool) -> None:
+        with self._lock:
+            self._last_prompt = now
+            if rest:
+                self._resting = True
+            else:
+                idle_for = now - self._last_activity
+                self._next_checkin_after = idle_for + PROACTIVE_COOLDOWN_SECONDS
+                self._prompt_times.append(now)
+
+    def _loop(self) -> None:
+        poll = max(1.0, PROACTIVE_POLL_SECONDS)
+        while not self._stop.wait(poll):
+            now = time.monotonic()
+            text = self._prompt_due(now)
+            if not text:
+                continue
+            rest = text == PROACTIVE_REST_MESSAGE
+            self._mark_prompt(now, rest=rest)
+            log.info("[proactive] idle check-in: %s", text)
+            try:
+                self._tui.add_message("aiko", text)
+                if PROACTIVE_SPEAK and self._speak is not None and self._speak_enabled_fn():
+                    self._speak.speak(text)
+                self._tui._draw()
+            except Exception as e:
+                log.warning("Proactive idle check-in failed: %s", e)
 
 
 # ── voice command map ─────────────────────────────────────────────────────────
@@ -314,8 +469,18 @@ def _run_session(tui, args):
 
     # ── shutdown helper ───────────────────────────────────────────────────────
 
+    session_active = threading.Event()
+    proactive = ProactiveIdleRunner(
+        tui,
+        speak,
+        speak_enabled_fn=lambda: tts_enabled,
+        active_turn=session_active,
+    )
+    proactive.start()
+
     def _shutdown():
         """Stop background daemons and flush memory writes before exit."""
+        proactive.stop()
         if listen is not None:
             listen.stop_barge_in_monitor()
         think.wait_for_memory()
@@ -345,6 +510,8 @@ def _run_session(tui, args):
 
         if not user_input:
             continue
+
+        proactive.touch()
 
         # ── voice command check (ASR mode only) ───────────────────────────────
         #
@@ -471,6 +638,11 @@ def _run_session(tui, args):
                     tui.add_message('sys',
                         f'Voice input  (ASR): {"ON  🎤" if asr_enabled else "OFF ⌨ "}')
 
+            elif cmd == '/proactive':
+                proactive.set_enabled(not proactive.is_enabled())
+                tui.add_message('sys',
+                    f'Proactive idle check-ins: {"ON  🌸" if proactive.is_enabled() else "OFF 💤"}')
+
             elif cmd == '/help':
                 for line in [
                     '/quit /exit              — end session',
@@ -482,6 +654,7 @@ def _run_session(tui, args):
                     '/web <query>             — web search',
                     '/voice                   — toggle TTS on/off',
                     '/listen                  — toggle ASR on/off',
+                    '/proactive               — toggle idle check-ins on/off',
                     '/help                    — show this list',
                     '',
                     'Voice commands (say aloud in ASR mode):',
@@ -545,19 +718,24 @@ def _run_session(tui, args):
 
         tui.add_message('you', user_input)
         tui.turn_start()
+        session_active.set()
         tui._draw()
 
-        think.route(user_input, token_callback=token_cb)
-        current_latency["assistant_done_at"] = time.monotonic()
-        if speak and tts_enabled:
-            speak.wait()
-        tui.stream_commit()
-        tui._draw()
-        current_latency["turn_done_at"] = time.monotonic()
-        _update_latency_stats(current_latency)
-        _log_latency(current_latency)
-        tui._draw()
-        current_latency = None
+        try:
+            think.route(user_input, token_callback=token_cb)
+            current_latency["assistant_done_at"] = time.monotonic()
+            if speak and tts_enabled:
+                speak.wait()
+            tui.stream_commit()
+            tui._draw()
+            current_latency["turn_done_at"] = time.monotonic()
+            _update_latency_stats(current_latency)
+            _log_latency(current_latency)
+            tui._draw()
+        finally:
+            session_active.clear()
+            proactive.touch()
+            current_latency = None
 
 
 # ═════════════════════════════════════════════════════════════════════════════
