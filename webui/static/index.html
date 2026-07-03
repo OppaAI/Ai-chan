@@ -1001,15 +1001,21 @@
         addMessage('sys', 'WebSocket bridge is offline. Cannot toggle voice mode.');
         return;
       }
-      if (vMode.textContent.includes('ASR')) {
-        // Toggle ASR OFF
-        ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
+
+      const asrEnabled = vMode.textContent.includes('ASR');
+
+      if (micContext) {
+        // Mic is already open: close it and disable ASR so the backend stops
+        // waiting for browser voice frames.
         stopMic();
+        if (asrEnabled) ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
       } else {
-        // Toggle ASR ON
+        // Mic is closed: open it first. If ASR was already on at startup, do
+        // not send /listen because that would toggle ASR off right as the
+        // browser starts capturing.
         const ok = await startMic();
         if (!ok) return;
-        ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
+        if (!asrEnabled) ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
       }
       input.focus();
     });

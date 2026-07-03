@@ -262,6 +262,24 @@ class AikoSpeak:
         """
         self._audio_sink = callback
 
+    def _has_remote_listener(self) -> bool:
+        """Return True when the registered WebUI audio sink has clients.
+
+        The WebUI passes a bound method (AikoWeb.broadcast_audio_bytes) as the
+        audio sink. Looking through the bound method lets speak.py avoid local
+        playback only when a browser is actually connected, while keeping normal
+        Jetson/TUI playback unchanged when no remote listener exists.
+        """
+        sink_owner = getattr(self._audio_sink, "__self__", None)
+        checker = getattr(sink_owner, "has_remote_listener", None)
+        if checker is None:
+            return False
+        try:
+            return bool(checker())
+        except Exception as e:
+            log.warning("[speak] remote listener check failed: %s", e)
+            return False
+
     def set_viseme_sink(self, callback) -> None:
         """
         Register a callback(viseme: str, weight: float) -> None invoked during
@@ -377,11 +395,13 @@ class AikoSpeak:
             except Exception as e:
                 log.error(f"[speak] audio sink error: {e}")
 
-        if not self.local_playback:
-            # Nothing is playing locally to block on, but callers (wait(),
-            # wait_or_barge_in(), the karaoke word-pacing in
-            # _speak_thread_synced) all assume this call blocks for roughly
-            # the real audio duration. Sleep it out instead, interruptibly.
+        # If a browser is connected to the WebUI audio sink, do not also play
+        # through the Jetson/local sounddevice. Hearing both endpoints at once
+        # (or a remotely forwarded local speaker plus browser playback) can sound
+        # like stereo/phasing/doubling. Keep the call blocking for the WAV
+        # duration so callers preserve normal turn timing.
+        skip_local = self._audio_sink is not None and self.local_playback and self._has_remote_listener()
+        if not self.local_playback or skip_local:
             duration = self._wav_duration(wav_bytes)
             deadline = time.monotonic() + duration
             while time.monotonic() < deadline:
