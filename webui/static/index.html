@@ -997,13 +997,18 @@
     });
     sendBtn.addEventListener('click', submitInput);
     micBtn.addEventListener('click', async () => {
-      const ok = await startMic();
-      if (!ok) return;
       if (!wsReady()) {
-        addMessage('sys', 'Microphone is active, but WebSocket bridge is offline. Check the WebSocket connection.');
+        addMessage('sys', 'WebSocket bridge is offline. Cannot toggle voice mode.');
         return;
       }
-      if (vMode.textContent.includes('TXT')) {
+      if (vMode.textContent.includes('ASR')) {
+        // Toggle ASR OFF
+        ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
+        stopMic();
+      } else {
+        // Toggle ASR ON
+        const ok = await startMic();
+        if (!ok) return;
         ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
       }
       input.focus();

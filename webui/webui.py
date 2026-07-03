@@ -546,14 +546,33 @@ class AikoWeb:
         self._broadcast({"type": "mic", "action": "start", "bytes_per_chunk": BYTES_PER_CHUNK})
         threading.Thread(target=_run, daemon=True).start()
 
+        text_input = None
         try:
-            while not done_event.wait(timeout=1.0):
+            while not done_event.wait(timeout=0.1):
                 self._push_vitals()
+                try:
+                    text_input = self._input_q.get_nowait()
+                    self._audio_q.put(b"")  # Signal end-of-utterance to stop recording
+                    done_event.wait()       # Wait for the listen thread to exit
+                    break
+                except queue.Empty:
+                    pass
         finally:
             self._mic_active.clear()
             self._broadcast({"type": "mic", "action": "stop"})
 
         self._broadcast({"type": "voice", "status": "idle"})
+
+        # Check one last time if a text input arrived as we finished
+        if text_input is None:
+            try:
+                text_input = self._input_q.get_nowait()
+            except queue.Empty:
+                pass
+
+        if text_input is not None:
+            return (text_input, {})
+
         raw = result_holder[0]
         if isinstance(raw, tuple):
             return raw
