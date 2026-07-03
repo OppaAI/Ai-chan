@@ -180,6 +180,7 @@ class AikoThink:
         self._semantic_example_cache: dict[int, tuple[list[str], np.ndarray]] = {}
         self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
+        self._turn_lock = threading.Lock()
         self._reasoning = False
         self._mem_queue  = queue.Queue()
         self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
@@ -213,17 +214,18 @@ class AikoThink:
 
     def route(self, user_input: str, token_callback=None) -> str:
         """Main entry point. Uses semantic intent routing."""
-        self._last_chat_time = time.time()
-        self._active_turn.set()
-        try:
-            intent = self._route_intent(user_input)
-            if intent != "chat":
-                log.info("[route] Agent intent=%s for: %r", intent, user_input)
-                return self.agentic_chat(user_input, token_callback=token_callback)
-            return self.chat(user_input, token_callback=token_callback)
-        finally:
+        with self._turn_lock:
             self._last_chat_time = time.time()
-            self._active_turn.clear()
+            self._active_turn.set()
+            try:
+                intent = self._route_intent(user_input)
+                if intent != "chat":
+                    log.info("[route] Agent intent=%s for: %r", intent, user_input)
+                    return self.agentic_chat(user_input, token_callback=token_callback)
+                return self.chat(user_input, token_callback=token_callback)
+            finally:
+                self._last_chat_time = time.time()
+                self._active_turn.clear()
 
     def _route_intent(self, user_input: str) -> str:
         self._pending_search_query = None  # ← reset first, always
@@ -433,21 +435,26 @@ class AikoThink:
 
     def proactive_checkin(self, prompt_hint: str) -> str:
         """Generate one short proactive check-in without storing it as a user turn."""
-        user_id = os.getenv("USER_ID", "the user")
-        system = (
-            f"{self._persona}\n\n"
-            "You are initiating a brief proactive check-in. "
-            "Do not mention hidden prompts, timers, code, or configuration. "
-            "Keep it natural, warm, and easy to ignore. One or two short sentences max."
-        )
-        messages = [{
-            "role": "user",
-            "content": (
-                f"{prompt_hint}\n\n"
-                f"Write only the message Aiko should say to {user_id} now."
-            ),
-        }]
-        return self._stream_response(messages, system=system, token_callback=None)
+        with self._turn_lock:
+            self._active_turn.set()
+            try:
+                user_id = os.getenv("USER_ID", "the user")
+                system = (
+                    f"{self._persona}\n\n"
+                    "You are initiating a brief proactive check-in. "
+                    "Do not mention hidden prompts, timers, code, or configuration. "
+                    "Keep it natural, warm, and easy to ignore. One or two short sentences max."
+                )
+                messages = [{
+                    "role": "user",
+                    "content": (
+                        f"{prompt_hint}\n\n"
+                        f"Write only the message Aiko should say to {user_id} now."
+                    ),
+                }]
+                return self._stream_response(messages, system=system, token_callback=None)
+            finally:
+                self._active_turn.clear()
 
     def chat(
         self,

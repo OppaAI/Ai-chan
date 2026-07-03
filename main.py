@@ -29,6 +29,7 @@ import argparse
 import collections
 from datetime import datetime, timedelta
 import difflib
+import json
 import os
 import random
 import re
@@ -69,35 +70,43 @@ PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "1800
 PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", "2"))
 PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", "3600"))
 PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "1").lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_env_list(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 PROACTIVE_TIMEZONE = os.getenv("PROACTIVE_TIMEZONE", "").strip() or os.getenv("TIMEZONE", "").strip()
-PROACTIVE_QUIET_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_QUIET_WINDOWS", "00:00-06:00").split(",") if w.strip()]
-PROACTIVE_FOCUS_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_FOCUS_WINDOWS", "mon-fri 06:00-19:00,sat-sun 06:00-11:00").split(",") if w.strip()]
+PROACTIVE_QUIET_WINDOWS = _parse_env_list("PROACTIVE_QUIET_WINDOWS", ["00:00-06:00"])
+PROACTIVE_FOCUS_WINDOWS = _parse_env_list(
+    "PROACTIVE_FOCUS_WINDOWS",
+    ["mon-fri 06:00-19:00", "sat-sun 06:00-11:00"],
+)
 PROACTIVE_SPEAK = os.getenv("PROACTIVE_SPEAK", "1").lower() in {"1", "true", "yes", "on"}
-PROACTIVE_MESSAGES = [
-    msg.strip()
-    for msg in os.getenv(
-        "PROACTIVE_MESSAGES",
-        "You've been quiet for a bit. Still with me?,"
-        "Checking in. Do you want focus time or should I keep you company?,"
-        "Still here. If you're deep in something I can stay quiet.,"
-        "Tiny ping. Need anything or are we in quiet mode?",
-    ).split(",")
-    if msg.strip()
-]
+PROACTIVE_MESSAGES = _parse_env_list("PROACTIVE_MESSAGES", [
+    "You've been quiet for a bit. Still with me?",
+    "Checking in. Do you want focus time or should I keep you company?",
+    "Still here. If you're deep in something I can stay quiet.",
+    "Tiny ping. Need anything or are we in quiet mode?",
+])
 PROACTIVE_REST_MESSAGE = os.getenv(
     "PROACTIVE_REST_MESSAGE",
     "You've been away for a while, so I'll go quiet and rest. Ping me when you need me.",
 ).strip()
-PROACTIVE_PROMPT_HINTS = [
-    msg.strip()
-    for msg in os.getenv(
-        "PROACTIVE_PROMPT_HINTS",
-        "{user} has not spoken to you for a while. What short gentle thing do you want to say now?,"
-        "{user} has been quiet for a while. Offer company without being needy or disruptive.,"
-        "{user} may be focused or away. Say one brief check-in and make it easy to ignore.",
-    ).split(",")
-    if msg.strip()
-]
+PROACTIVE_PROMPT_HINTS = _parse_env_list("PROACTIVE_PROMPT_HINTS", [
+    "{user} has not spoken to you for a while. What short gentle thing do you want to say now?",
+    "{user} has been quiet for a while. Offer company without being needy or disruptive.",
+    "{user} may be focused or away. Say one brief check-in and make it easy to ignore.",
+])
 PROACTIVE_REST_PROMPT_HINT = os.getenv(
     "PROACTIVE_REST_PROMPT_HINT",
     "{user} has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until they return.",
@@ -426,8 +435,8 @@ class ProactiveIdleRunner:
                     ):
                         self._speak.speak(text)
                     self._tui._draw()
-                except Exception as e:
-                    log.warning("Proactive idle check-in failed: %s", e)
+                except Exception:
+                    log.exception("Proactive idle check-in failed")
 
             sleep_for = self._seconds_until_next_check(time.monotonic())
             self._wakeup.wait(timeout=sleep_for)
@@ -694,11 +703,11 @@ def _run_session(tui, args):
         session_active.set()
         original_speak = getattr(think, "_speak", None)
         try:
-            if not tts_enabled:
+            if not tts_enabled or not PROACTIVE_SPEAK:
                 think.set_speak(None)
             return think.proactive_checkin(prompt_hint)
         finally:
-            if not tts_enabled:
+            if not tts_enabled or not PROACTIVE_SPEAK:
                 think.set_speak(original_speak)
             session_active.clear()
             if hasattr(think, "_last_chat_time"):

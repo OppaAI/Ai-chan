@@ -6,6 +6,7 @@ Existing process environment variables win over both, and .env wins over YAML.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ def _stringify(value: Any) -> str:
     if isinstance(value, bool):
         return "1" if value else "0"
     if isinstance(value, (list, tuple)):
-        return ",".join(str(item) for item in value)
+        return json.dumps([str(item) for item in value], ensure_ascii=False)
     return str(value)
 
 
