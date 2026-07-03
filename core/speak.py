@@ -227,10 +227,11 @@ class AikoSpeak:
         # nobody's in the room to hear the Jetson's own speaker.
         self._audio_sink = None
         self._viseme_sink = None
-        # When True (default), local sounddevice playback still happens even
-        # if a remote sink is set — fine on LAN where you might be near the
-        # robot. Set False to silence the Jetson's own speaker entirely once
-        # you're working remotely full-time, so it doesn't talk to an empty room.
+        # When True (default), local sounddevice playback is allowed. If a
+        # WebUI audio sink is registered and a browser is actively connected,
+        # _play_wav_bytes() temporarily suppresses local playback to avoid
+        # doubled/phased audio. With no connected browser, playback remains
+        # local as usual. Set False to always silence the local speaker.
         self.local_playback = True
 
         if not silent:
@@ -400,8 +401,8 @@ class AikoSpeak:
         # (or a remotely forwarded local speaker plus browser playback) can sound
         # like stereo/phasing/doubling. Keep the call blocking for the WAV
         # duration so callers preserve normal turn timing.
-        skip_local = self._audio_sink is not None and self.local_playback and self._has_remote_listener()
-        if not self.local_playback or skip_local:
+        remote_listener_active = self._audio_sink is not None and self._has_remote_listener()
+        if not self.local_playback or remote_listener_active:
             duration = self._wav_duration(wav_bytes)
             deadline = time.monotonic() + duration
             while time.monotonic() < deadline:
