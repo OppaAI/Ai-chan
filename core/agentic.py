@@ -499,6 +499,54 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolRes
     return last
 
 
+
+def _sanitize_user_facing_tool_detail(detail: str, max_chars: int = 300) -> str:
+    """Redact sensitive/internal-looking details before surfacing blockers."""
+    text = (detail or "").strip()
+    if not text:
+        return "unknown tool failure"
+    text = re.sub(
+        r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)",
+        r"\1\2[redacted]",
+        text,
+    )
+    text = re.sub(r"(?i)(authorization\s*:\s*bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", text)
+    text = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", text)
+    text = re.sub(r"(?i)(https?://)(localhost|127\.0\.0\.1|0\.0\.0\.0|[^\s/]+\.local)([^\s)]*)", r"\1[internal-url-redacted]", text)
+    text = re.sub(r"(?m)^\s*File \"[^\n]+", "File [internal path redacted]", text)
+    text = re.sub(r"(?m)^\s*(Traceback \(most recent call last\):|During handling of the above exception.*)$", "[stack trace redacted]", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars] or "unknown tool failure"
+
+def _build_incomplete_task_answer(state: TaskState, last_content: str = "") -> str:
+    """Create a useful final response when the model never emits final_answer.
+
+    This is the last-resort path for small/local models that keep looping,
+    produce invalid tool calls, or spend the whole iteration budget repairing a
+    final answer. It should disclose blockers without using the generic
+    "got lost" apology that makes successful partial work look like a total
+    failure.
+    """
+    lines: list[str] = []
+    if state.evidence:
+        lines.append("I completed these step(s):")
+        for item in state.evidence[-5:]:
+            lines.append(f"- {item[:600]}")
+    if state.failures:
+        lines.append("I could not fully complete the task because of these blocker(s):")
+        for failure in state.failures[-3:]:
+            detail = _sanitize_user_facing_tool_detail(failure.content or failure.error_type or "")
+            lines.append(f"- {failure.tool}: {detail}")
+    if last_content.strip():
+        lines.append("Most recent model draft:")
+        lines.append(last_content.strip())
+    if not lines:
+        lines.append(
+            "I could not complete the task before the agent loop reached its step limit, "
+            "and no tool results were recorded."
+        )
+    return "\n".join(lines)
+
 def _coerce_verifier_bool(value) -> bool:
     """Parse verifier booleans without treating non-empty strings as True."""
     if isinstance(value, bool):
@@ -758,15 +806,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             break
 
     if not final_text:
-        if state.failures:
-            failed = "; ".join(f"{f.tool}: {f.content[:160]}" for f in state.failures[-3:])
-            final_text = (
-                "I got a bit lost trying to complete that task. "
-                f"Recent blocker(s): {failed}\n"
-                f"Here is what I have so far:\n{last_content}"
-            )
-        else:
-            final_text = "I got a bit lost trying to complete that task. Here is what I have so far:\n" + last_content
+        log.warning(
+            "Agent loop ended without a final answer after %s iterations; tools=%s failures=%s",
+            MAX_AGENT_ITER, len(state.steps), len(state.failures),
+        )
+        final_text = _build_incomplete_task_answer(state, last_content)
 
     owner._emit(final_text, token_callback=token_callback)
 
