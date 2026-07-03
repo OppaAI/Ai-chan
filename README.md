@@ -133,7 +133,7 @@ uv run python main.py --clear-mem # wipe all memories and exit
 | `/web <query>` | SearXNG search → grounded answer |
 | `/voice` | Toggle TTS on/off |
 | `/listen` | Toggle ASR on/off |
-| `/proactive` | Toggle proactive idle check-ins on/off; timing is configured in `config/proactive.yaml` |
+| `/proactive` | Toggle proactive idle check-ins on/off; timing, quiet/focus windows, and prompt hints are configured in `config/proactive.yaml` |
 | `/help` | Show the command list |
 
 ---

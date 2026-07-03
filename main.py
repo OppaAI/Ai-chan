@@ -27,6 +27,7 @@ load_config()
 
 import argparse
 import collections
+from datetime import datetime
 import difflib
 import os
 import random
@@ -35,6 +36,7 @@ import sys
 import threading
 import time
 import warnings
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 warnings.filterwarnings("ignore")
 
@@ -67,6 +69,10 @@ PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "1800
 PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", "2"))
 PROACTIVE_POLL_SECONDS = float(os.getenv("PROACTIVE_POLL_SECONDS", "5"))
 PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", "3600"))
+PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "1").lower() in {"1", "true", "yes", "on"}
+PROACTIVE_TIMEZONE = os.getenv("PROACTIVE_TIMEZONE", os.getenv("TIMEZONE", "")).strip()
+PROACTIVE_QUIET_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_QUIET_WINDOWS", "00:00-06:00").split(",") if w.strip()]
+PROACTIVE_FOCUS_WINDOWS = [w.strip() for w in os.getenv("PROACTIVE_FOCUS_WINDOWS", "mon-fri 06:00-19:00,sat-sun 06:00-11:00").split(",") if w.strip()]
 PROACTIVE_SPEAK = os.getenv("PROACTIVE_SPEAK", "1").lower() in {"1", "true", "yes", "on"}
 PROACTIVE_MESSAGES = [
     msg.strip()
@@ -83,6 +89,123 @@ PROACTIVE_REST_MESSAGE = os.getenv(
     "PROACTIVE_REST_MESSAGE",
     "You've been away for a while, so I'll go quiet and rest. Ping me when you need me.",
 ).strip()
+PROACTIVE_PROMPT_HINTS = [
+    msg.strip()
+    for msg in os.getenv(
+        "PROACTIVE_PROMPT_HINTS",
+        "Oppa has not spoken to you for a while. What short gentle thing do you want to say to him now?,"
+        "Oppa has been quiet for a while. Offer company without being needy or disruptive.,"
+        "Oppa may be focused or away. Say one brief check-in and make it easy for him to ignore you.",
+    ).split(",")
+    if msg.strip()
+]
+PROACTIVE_REST_PROMPT_HINT = os.getenv(
+    "PROACTIVE_REST_PROMPT_HINT",
+    "Oppa has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until he returns.",
+).strip()
+
+
+_DAY_ALIASES = {
+    "mon": 0, "monday": 0,
+    "tue": 1, "tues": 1, "tuesday": 1,
+    "wed": 2, "wednesday": 2,
+    "thu": 3, "thur": 3, "thurs": 3, "thursday": 3,
+    "fri": 4, "friday": 4,
+    "sat": 5, "saturday": 5,
+    "sun": 6, "sunday": 6,
+}
+
+
+def _parse_day_spec(spec: str) -> set[int] | None:
+    """Parse day specs like mon-fri, sat-sun, weekdays, weekend, or daily."""
+    spec = spec.strip().lower()
+    if not spec or spec in {"daily", "everyday", "all"}:
+        return None
+    if spec in {"weekday", "weekdays"}:
+        return {0, 1, 2, 3, 4}
+    if spec in {"weekend", "weekends"}:
+        return {5, 6}
+    days: set[int] = set()
+    for part in spec.split("|"):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_name, end_name = [p.strip() for p in part.split("-", 1)]
+            start = _DAY_ALIASES.get(start_name)
+            end = _DAY_ALIASES.get(end_name)
+            if start is None or end is None:
+                continue
+            day = start
+            while True:
+                days.add(day)
+                if day == end:
+                    break
+                day = (day + 1) % 7
+        else:
+            day = _DAY_ALIASES.get(part)
+            if day is not None:
+                days.add(day)
+    return days or None
+
+
+def _parse_hhmm(value: str) -> int | None:
+    try:
+        hour_s, minute_s = value.strip().split(":", 1)
+        hour = int(hour_s)
+        minute = int(minute_s)
+    except ValueError:
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour * 60 + minute
+
+
+def _time_window_matches(window: str, now: datetime | None = None) -> bool:
+    """Return True when now is inside a YAML window.
+
+    Supported examples:
+      - "00:00-06:00"
+      - "mon-fri 06:00-19:00"
+      - "weekend 06:00-11:00"
+      - "fri-mon 22:00-06:00"
+    """
+    if now is None:
+        try:
+            now = datetime.now(ZoneInfo(PROACTIVE_TIMEZONE)) if PROACTIVE_TIMEZONE else datetime.now()
+        except ZoneInfoNotFoundError:
+            now = datetime.now()
+    raw = window.strip().lower()
+    if not raw:
+        return False
+    if " " in raw:
+        day_spec, time_spec = raw.rsplit(" ", 1)
+    else:
+        day_spec, time_spec = "", raw
+    if "-" not in time_spec:
+        return False
+    start_s, end_s = [part.strip() for part in time_spec.split("-", 1)]
+    start = _parse_hhmm(start_s)
+    end = _parse_hhmm(end_s)
+    if start is None or end is None:
+        return False
+
+    days = _parse_day_spec(day_spec)
+    if days is not None and now.weekday() not in days:
+        return False
+
+    minute = now.hour * 60 + now.minute
+    if start <= end:
+        return start <= minute < end
+    return minute >= start or minute < end
+
+
+def _in_proactive_silence_window() -> bool:
+    """True during configured quiet/focus windows."""
+    return any(
+        _time_window_matches(window)
+        for window in [*PROACTIVE_QUIET_WINDOWS, *PROACTIVE_FOCUS_WINDOWS]
+    )
 
 
 class ProactiveIdleRunner:
@@ -94,11 +217,12 @@ class ProactiveIdleRunner:
     quiet until the user returns.
     """
 
-    def __init__(self, tui, speak, speak_enabled_fn, active_turn: threading.Event) -> None:
+    def __init__(self, tui, speak, speak_enabled_fn, active_turn: threading.Event, generate_fn=None) -> None:
         self._tui = tui
         self._speak = speak
         self._speak_enabled_fn = speak_enabled_fn
         self._active_turn = active_turn
+        self._generate_fn = generate_fn
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._last_activity = time.monotonic()
@@ -144,6 +268,14 @@ class ProactiveIdleRunner:
         self._message_index += 1
         return msg
 
+    def _next_prompt_hint(self) -> str:
+        hints = PROACTIVE_PROMPT_HINTS or [
+            "Oppa has not spoken to you for a while. What short gentle thing do you want to say to him now?"
+        ]
+        hint = hints[self._message_index % len(hints)]
+        self._message_index += 1
+        return hint
+
     @staticmethod
     def _random_first_idle_delay() -> float:
         low = max(0.0, min(PROACTIVE_FIRST_IDLE_MIN_SECONDS, PROACTIVE_FIRST_IDLE_MAX_SECONDS))
@@ -156,7 +288,7 @@ class ProactiveIdleRunner:
             self._prompt_times.popleft()
         return PROACTIVE_MAX_PER_HOUR > 0 and len(self._prompt_times) < PROACTIVE_MAX_PER_HOUR
 
-    def _prompt_due(self, now: float) -> str | None:
+    def _prompt_due(self, now: float) -> tuple[str, str] | None:
         with self._lock:
             enabled = self._enabled
             idle_for = now - self._last_activity
@@ -168,13 +300,17 @@ class ProactiveIdleRunner:
             return None
         if resting:
             return None
+        if _in_proactive_silence_window():
+            return None
         if self._active_turn.is_set():
             return None
         if self._speak is not None and self._speak.is_playing():
             return None
         if PROACTIVE_REST_AFTER_SECONDS > 0 and idle_for >= PROACTIVE_REST_AFTER_SECONDS:
+            if PROACTIVE_USE_LLM and self._generate_fn is not None and PROACTIVE_REST_PROMPT_HINT:
+                return ("rest_prompt", PROACTIVE_REST_PROMPT_HINT)
             if PROACTIVE_REST_MESSAGE:
-                return PROACTIVE_REST_MESSAGE
+                return ("rest_text", PROACTIVE_REST_MESSAGE)
             with self._lock:
                 self._resting = True
             return None
@@ -184,7 +320,9 @@ class ProactiveIdleRunner:
             return None
         if not self._rate_limit_allows_prompt(now):
             return None
-        return self._next_message()
+        if PROACTIVE_USE_LLM and self._generate_fn is not None:
+            return ("checkin_prompt", self._next_prompt_hint())
+        return ("checkin_text", self._next_message())
 
     def _mark_prompt(self, now: float, *, rest: bool) -> None:
         with self._lock:
@@ -200,15 +338,27 @@ class ProactiveIdleRunner:
         poll = max(1.0, PROACTIVE_POLL_SECONDS)
         while not self._stop.wait(poll):
             now = time.monotonic()
-            text = self._prompt_due(now)
-            if not text:
+            due = self._prompt_due(now)
+            if not due:
                 continue
-            rest = text == PROACTIVE_REST_MESSAGE
+            kind, payload = due
+            rest = kind.startswith("rest")
             self._mark_prompt(now, rest=rest)
-            log.info("[proactive] idle check-in: %s", text)
+            log.info("[proactive] idle %s: %s", "rest" if rest else "check-in", payload)
             try:
+                if kind.endswith("_prompt") and self._generate_fn is not None:
+                    text = (self._generate_fn(payload) or "").strip()
+                    if not text:
+                        text = PROACTIVE_REST_MESSAGE if rest else self._next_message()
+                else:
+                    text = payload
                 self._tui.add_message("aiko", text)
-                if PROACTIVE_SPEAK and self._speak is not None and self._speak_enabled_fn():
+                if (
+                    not kind.endswith("_prompt")
+                    and PROACTIVE_SPEAK
+                    and self._speak is not None
+                    and self._speak_enabled_fn()
+                ):
                     self._speak.speak(text)
                 self._tui._draw()
             except Exception as e:
@@ -470,11 +620,27 @@ def _run_session(tui, args):
     # ── shutdown helper ───────────────────────────────────────────────────────
 
     session_active = threading.Event()
+
+    def _generate_proactive_checkin(prompt_hint: str) -> str:
+        session_active.set()
+        original_speak = getattr(think, "_speak", None)
+        try:
+            if not tts_enabled:
+                think.set_speak(None)
+            return think.proactive_checkin(prompt_hint)
+        finally:
+            if not tts_enabled:
+                think.set_speak(original_speak)
+            session_active.clear()
+            if hasattr(think, "_last_chat_time"):
+                think._last_chat_time = time.time()
+
     proactive = ProactiveIdleRunner(
         tui,
         speak,
         speak_enabled_fn=lambda: tts_enabled,
         active_turn=session_active,
+        generate_fn=_generate_proactive_checkin,
     )
     proactive.start()
 

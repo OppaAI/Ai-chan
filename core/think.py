@@ -431,6 +431,23 @@ class AikoThink:
         """Delegate task-mode execution to core.agentic."""
         return run_agentic_chat(self, user_input, token_callback=token_callback)
 
+    def proactive_checkin(self, prompt_hint: str) -> str:
+        """Generate one short proactive check-in without storing it as a user turn."""
+        system = (
+            f"{self._persona}\n\n"
+            "You are initiating a brief proactive check-in. "
+            "Do not mention hidden prompts, timers, code, or configuration. "
+            "Keep it natural, warm, and easy to ignore. One or two short sentences max."
+        )
+        messages = [{
+            "role": "user",
+            "content": (
+                f"{prompt_hint}\n\n"
+                "Write only the message Aiko should say to Oppa now."
+            ),
+        }]
+        return self._stream_response(messages, system=system, token_callback=None)
+
     def chat(
         self,
         user_input: str,
