@@ -914,13 +914,16 @@
 
     // ── mic capture ───────────────────────────────────────────────────────────
     // Opened/closed by server mic.start / mic.stop messages.
-    // Frames go through processVADFrame() in vad.js — only speech reaches server.
+    // Frames go through processVADFrame() in vad.js. By default browser VAD gates
+    // network audio; WEBUI_BROWSER_VAD_GATE=0 asks the browser to stream raw PCM
+    // for diagnostics so server-side VAD can be tested.
     let micStream = null;
     let micContext = null;
     let micSource = null;
     let micWorklet = null;
     let micFirstFrameSeen = false;
     let micStreamingEnabled = false;
+    let browserVadGate = true;
     let micCommandSeq = 0;
     let micSecureContextWarned = false;
 
@@ -953,7 +956,7 @@
             micFirstFrameSeen = true;
             console.log('[mic] AudioWorklet is sending PCM frames');
           }
-          if (wsReady() && micStreamingEnabled) processVADFrame(new Float32Array(e.data), ws);
+          if (wsReady() && micStreamingEnabled) processVADFrame(new Float32Array(e.data), ws, browserVadGate);
         };
 
         micSource.connect(micWorklet);
@@ -1071,12 +1074,13 @@
           case 'mic':
             if (msg.action === 'start') {
               const seq = ++micCommandSeq;
+              browserVadGate = msg.browser_vad_gate !== false;
               startMic().then((ok) => {
                 if (!ok || seq !== micCommandSeq) return;
                 if (window.resetVADState) window.resetVADState();
                 micStreamingEnabled = true;
                 vadDot.className = 'dot vad';
-                vadStatus.textContent = 'vad active';
+                vadStatus.textContent = browserVadGate ? 'vad active' : 'raw mic';
                 vadStatus.className = 'active';
               });
             } else if (msg.action === 'stop') {

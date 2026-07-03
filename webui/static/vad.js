@@ -2,23 +2,23 @@
  * vad.js
  * Browser-side VAD between pcm-worklet.js and the WebSocket.
  * Silero ONNX is preferred when its browser assets are present. If ONNX Runtime
- * Web or silero_vad.onnx is missing, this falls back to a simple energy gate so
- * microphone input still works instead of silently dropping every frame.
+ * Web or silero_vad.onnx is missing, this falls back to a simple energy gate.
  *
- * Flow:
- *   pcm-worklet -> Float32Array frame -> processVADFrame(frame, ws)
- *     silence  -> dropped (never leaves the device)
+ * Default flow (browser VAD gate on):
+ *   pcm-worklet -> Float32Array frame -> processVADFrame(frame, ws, true)
+ *     silence  -> kept locally, not sent to the server
  *     speech   -> ws.send(binary frame)
- *     on start -> ws.send({type:'vad', event:'start'})
+ *     on start -> ws.send({type:'vad', event:'start'}) + pre-speech context
  *     on end   -> ws.send({type:'vad', event:'end'})
  *
- * The server (webui.py) uses 'start'/'end' sentinels to gate _mic_active and
- * signal listen.py to skip its own VAD pass.
+ * Diagnostic flow (browser VAD gate off):
+ *   processVADFrame(frame, ws, false) forwards every PCM frame so server-side VAD
+ *   can be used to test whether browser VAD is the failing component.
  */
 
 // -- tunables -----------------------------------------------------------------
 
-const VAD_THRESHOLD = 0.5;    // Silero speech probability cutoff (0-1)
+const VAD_THRESHOLD = 0.5;      // Silero speech probability cutoff (0-1)
 const SILENCE_TIMEOUT = 1200;   // ms of silence before utterance ends
 const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
 
@@ -101,12 +101,14 @@ function _resetState() {
  * Sends binary frames + VAD sentinel JSON messages over `ws`.
  * @param {Float32Array} frame  - 512 samples at 16 kHz mono
  * @param {WebSocket}    ws     - live WebSocket to Jetson
+ * @param {boolean}      gate   - true: browser VAD gates network audio;
+ *                                false: diagnostic raw PCM passthrough
  */
-async function processVADFrame(frame, ws) {
+async function processVADFrame(frame, ws, gate = true) {
     const epoch = _vadEpoch;
     if (!_canSend(ws, epoch)) return;
     if (!_session || _vadMode !== 'silero') {
-        processEnergyVADFrame(frame, ws, epoch);
+        processEnergyVADFrame(frame, ws, epoch, gate);
         return;
     }
 
@@ -124,6 +126,10 @@ async function processVADFrame(frame, ws) {
     _state = out.stateN;
     const prob = out.output.data[0];
 
+    if (!gate) {
+        ws.send(frame.buffer.slice(0));
+    }
+
     if (prob >= VAD_THRESHOLD) {
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
 
@@ -131,19 +137,25 @@ async function processVADFrame(frame, ws) {
             _speaking = true;
             if (!_canSend(ws, epoch)) return;
             ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
-            for (const buf of _preBuf) {
-                if (!_canSend(ws, epoch)) return;
-                ws.send(buf);
+            if (gate) {
+                for (const buf of _preBuf) {
+                    if (!_canSend(ws, epoch)) return;
+                    ws.send(buf);
+                }
             }
             _preBuf = [];
         }
 
-        if (!_canSend(ws, epoch)) return;
-        ws.send(frame.buffer.slice(0));
-    } else {
-        if (_speaking) {
+        if (gate) {
             if (!_canSend(ws, epoch)) return;
             ws.send(frame.buffer.slice(0));
+        }
+    } else {
+        if (_speaking) {
+            if (gate) {
+                if (!_canSend(ws, epoch)) return;
+                ws.send(frame.buffer.slice(0));
+            }
 
             if (!_silTimer) {
                 _silTimer = setTimeout(() => {
@@ -155,20 +167,23 @@ async function processVADFrame(frame, ws) {
                     ws.send(JSON.stringify({ type: 'vad', event: 'end' }));
                 }, SILENCE_TIMEOUT);
             }
-        } else {
+        } else if (gate) {
             _pushPreSpeech(frame);
         }
     }
 }
 
-function processEnergyVADFrame(frame, ws, epoch = _vadEpoch) {
+function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
     if (!_canSend(ws, epoch)) return;
+    if (!gate) {
+        ws.send(frame.buffer.slice(0));
+    }
     const rms = _rms(frame);
 
     if (!_speaking && rms >= ENERGY_START_RMS) {
         _energyHits++;
         if (_energyHits < ENERGY_MIN_FRAMES) {
-            _pushPreSpeech(frame);
+            if (gate) _pushPreSpeech(frame);
             return;
         }
 
@@ -177,19 +192,23 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch) {
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
         if (!_canSend(ws, epoch)) return;
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
-        for (const buf of _preBuf) {
+        if (gate) {
+            for (const buf of _preBuf) {
+                if (!_canSend(ws, epoch)) return;
+                ws.send(buf);
+            }
             if (!_canSend(ws, epoch)) return;
-            ws.send(buf);
+            ws.send(frame.buffer.slice(0));
         }
         _preBuf = [];
-        if (!_canSend(ws, epoch)) return;
-        ws.send(frame.buffer.slice(0));
         return;
     }
 
     if (_speaking) {
-        if (!_canSend(ws, epoch)) return;
-        ws.send(frame.buffer.slice(0));
+        if (gate) {
+            if (!_canSend(ws, epoch)) return;
+            ws.send(frame.buffer.slice(0));
+        }
 
         if (rms > ENERGY_END_RMS) {
             if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
@@ -210,7 +229,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch) {
     }
 
     _energyHits = 0;
-    _pushPreSpeech(frame);
+    if (gate) _pushPreSpeech(frame);
 }
 
 function _canSend(ws, epoch) {

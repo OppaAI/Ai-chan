@@ -17,6 +17,7 @@ Environment variables (all optional):
     WS_PORT     — WebSocket port                (default 8765)
     NO_BROWSER  — set to "1" to suppress auto-open
     WEBUI_HTTPS — set to "1" to serve HTTPS/WSS for remote browser microphones
+    WEBUI_BROWSER_VAD_GATE — set to "0" to stream raw WebUI PCM for VAD diagnostics
     SSL_CERT    — optional TLS certificate path
     SSL_KEY     — optional TLS private key path
 """
@@ -48,6 +49,7 @@ NO_BROWSER = os.getenv("NO_BROWSER", "0") == "1"
 WEBUI_HTTPS = os.getenv("WEBUI_HTTPS", "0").lower() in {"1", "true", "yes", "on"}
 SSL_CERT = os.getenv("SSL_CERT", "")
 SSL_KEY = os.getenv("SSL_KEY", "")
+WEBUI_BROWSER_VAD_GATE = os.getenv("WEBUI_BROWSER_VAD_GATE", "1").lower() in {"1", "true", "yes", "on"}
 
 
 
@@ -116,12 +118,9 @@ class AikoWeb:
     All drawing methods become JSON WebSocket broadcasts.
     get_input() blocks on a threading.Queue until the browser submits a message.
 
-    VAD is handled entirely in the browser (vad.js / Silero ONNX WASM).
-    The browser sends {"type":"vad","event":"start"} when it detects speech onset
-    and {"type":"vad","event":"end"} when silence is detected after speech ends.
-    "end" is translated to an empty-bytes sentinel in _audio_q so _chunk_source
-    can signal listen.py to skip its own VAD pass and treat the frame stream as
-    a pre-segmented utterance.
+    Browser VAD gates WebUI microphone audio by default so silence/private
+    background audio is not streamed to the server. For diagnostics, set
+    WEBUI_BROWSER_VAD_GATE=0 to stream raw PCM and let server-side VAD segment it.
     """
 
     # ------------------------------------------------------------------
@@ -245,7 +244,7 @@ class AikoWeb:
                         # speech ended — push empty-bytes sentinel so _chunk_source
                         # returns None cleanly, ending the recording loop in listen.py
                         self._broadcast({"type": "voice", "status": "transcribing"})
-                        if self._mic_active.is_set():
+                        if WEBUI_BROWSER_VAD_GATE and self._mic_active.is_set():
                             self._audio_q.put(b"")  # end-of-utterance sentinel
 
         except websockets.exceptions.ConnectionClosed:
@@ -475,14 +474,10 @@ class AikoWeb:
         Capture a voice utterance via the browser's microphone and return the
         same (text, info) shape as AikoTUI.get_voice_input().
 
-        The browser's Silero VAD (vad.js) handles speech/silence detection:
-          - Only speech frames are sent as binary WS frames → _audio_q
-          - vad:start  → UI status update (handled in _ws_handler)
-          - vad:end    → empty-bytes sentinel pushed into _audio_q
-
-        _chunk_source feeds these frames into listen.py. When it receives the
-        empty-bytes sentinel it returns None, signalling end-of-utterance to
-        listen.py so it can skip its own VAD pass and go straight to ASR.
+        By default, the browser VAD gates 16 kHz float32 PCM before it enters
+        _audio_q, so only browser-detected speech is sent over the network. Set
+        WEBUI_BROWSER_VAD_GATE=0 for a diagnostic raw-stream mode that bypasses
+        browser gating and lets listen.py run server-side VAD.
         """
         result_holder = [None]
         done_event    = threading.Event()
@@ -495,8 +490,7 @@ class AikoWeb:
                 break
 
         BYTES_PER_CHUNK = 512 * 4   # 512 float32 samples = 2048 bytes
-        FRAME_TIMEOUT_S = 5.0       # longer timeout — browser VAD may take a moment
-                                    # to detect speech onset; 2 s was too aggressive
+        FRAME_TIMEOUT_S = 5.0       # browser disconnected / stopped delivering PCM
 
         def _chunk_source(n: int):
             """
@@ -538,12 +532,17 @@ class AikoWeb:
                 speak=speak,
                 wait_fn=wait_fn,
                 chunk_source=_chunk_source,
-                vad_presegmented=True,  # browser Silero VAD already segmented — skip MIN_SPEECH_CHUNKS gate
+                vad_presegmented=WEBUI_BROWSER_VAD_GATE,
             )
             done_event.set()
 
         self._mic_active.set()
-        self._broadcast({"type": "mic", "action": "start", "bytes_per_chunk": BYTES_PER_CHUNK})
+        self._broadcast({
+            "type": "mic",
+            "action": "start",
+            "bytes_per_chunk": BYTES_PER_CHUNK,
+            "browser_vad_gate": WEBUI_BROWSER_VAD_GATE,
+        })
         threading.Thread(target=_run, daemon=True).start()
 
         text_input = None
