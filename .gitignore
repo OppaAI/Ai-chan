@@ -231,6 +231,9 @@ archive/
 training/
 workspace/
 webui/.cert/
+certs/
+*.pem
+*-key.pem
 webui/static/ort.min.js
 webui/static/ort-wasm-simd-threaded.wasm
 webui/static/ort-wasm-simd-threaded.jsep.wasm
