@@ -625,7 +625,7 @@
     const vUp = document.getElementById('v-up');
     const vMode = document.getElementById('v-mode');
 
-    const AUTO_MIC = true;
+    const AUTO_MIC = false;
     let autoListenRequested = false;
 
     // ── clock ─────────────────────────────────────────────────────────────────
@@ -743,7 +743,10 @@
     }
 
     // ── phase switch ──────────────────────────────────────────────────────────
+    let chatPhaseActive = false;
+
     function switchToChat() {
+      chatPhaseActive = true;
       initPanel.classList.add('hidden');
       chatPanel.classList.add('show');
       input.focus();
@@ -1040,6 +1043,10 @@
         }
         let msg;
         try { msg = JSON.parse(e.data); } catch (_) { return; }
+
+        if (!chatPhaseActive && ['chat', 'token', 'vitals', 'voice', 'mic'].includes(msg.type)) {
+          switchToChat();
+        }
 
         switch (msg.type) {
           case 'step': upsertStep(msg.key, msg.state, msg.detail || ''); break;

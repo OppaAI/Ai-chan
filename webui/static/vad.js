@@ -18,28 +18,27 @@
 
 // -- tunables -----------------------------------------------------------------
 
-const VAD_THRESHOLD    = 0.5;    // Silero speech probability cutoff (0-1)
-const SILENCE_TIMEOUT  = 1200;   // ms of silence before utterance ends
-const PRE_SPEECH_BUFS  = 10;     // ~320 ms of context kept before speech starts
+const VAD_THRESHOLD = 0.5;    // Silero speech probability cutoff (0-1)
+const SILENCE_TIMEOUT = 1200;   // ms of silence before utterance ends
+const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
 
 // Energy fallback tunables. Conservative enough to avoid streaming normal room
 // tone, but intentionally simple so missing optional assets do not break input.
-const ENERGY_START_RMS  = 0.018;
-const ENERGY_END_RMS    = 0.010;
+const ENERGY_START_RMS = 0.018;
+const ENERGY_END_RMS = 0.010;
 const ENERGY_MIN_FRAMES = 3;
 
 // -- state --------------------------------------------------------------------
 
-let _session     = null;   // ort.InferenceSession
-let _h           = null;   // GRU hidden state tensor  [2, 1, 64]
-let _c           = null;   // GRU cell  state tensor   [2, 1, 64]
-let _srTensor    = null;
-let _vadMode     = 'energy';
-let _speaking    = false;
-let _silTimer    = null;
-let _preBuf      = [];     // circular pre-speech context
-let _energyHits  = 0;
-let _vadEpoch    = 0;
+let _session = null;
+let _state = null;   // combined recurrent state tensor [2, 1, 128] (Silero v4+)
+let _srTensor = null;
+let _vadMode = 'energy';
+let _speaking = false;
+let _silTimer = null;
+let _preBuf = [];     // circular pre-speech context
+let _energyHits = 0;
+let _vadEpoch = 0;
 
 // -- init ---------------------------------------------------------------------
 
@@ -84,12 +83,10 @@ function resetVADState() {
 
 function _resetState() {
     if (typeof ort !== 'undefined') {
-        const z64 = new Float32Array(2 * 1 * 64);
-        _h = new ort.Tensor('float32', z64.slice(), [2, 1, 64]);
-        _c = new ort.Tensor('float32', z64.slice(), [2, 1, 64]);
+        const zeros = new Float32Array(2 * 1 * 128);
+        _state = new ort.Tensor('float32', zeros, [2, 1, 128]);
     } else {
-        _h = null;
-        _c = null;
+        _state = null;
     }
     _preBuf = [];
     _speaking = false;
@@ -116,7 +113,7 @@ async function processVADFrame(frame, ws) {
     const input = new ort.Tensor('float32', frame, [1, frame.length]);
     let out;
     try {
-        out = await _session.run({ input, sr: _srTensor, h: _h, c: _c });
+        out = await _session.run({ input, sr: _srTensor, state: _state });
     } catch (err) {
         console.error('[vad] inference error:', err);
         return;
@@ -124,8 +121,7 @@ async function processVADFrame(frame, ws) {
 
     if (!_canSend(ws, epoch)) return;
 
-    _h = out.hn;
-    _c = out.cn;
+    _state = out.stateN;
     const prob = out.output.data[0];
 
     if (prob >= VAD_THRESHOLD) {

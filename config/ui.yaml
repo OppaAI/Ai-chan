@@ -12,7 +12,7 @@ SSL_CERT: "/home/oppa-ai/Aiko-chan/webui/.cert/aiko-cert.pem"  # Path to TLS cer
 SSL_KEY: "/home/oppa-ai/Aiko-chan/webui/.cert/aiko-key.pem"  # Path to TLS private key file when WEBUI_HTTPS is enabled; blank disables key loading.
 
 # -- Rendering --
-WEBUI_LOCAL_PLAYBACK: "1"  # Play TTS locally as well as in browser; options: 1/0, true/false, yes/no, on/off.
+WEBUI_LOCAL_PLAYBACK: "0"  # Play TTS locally as well as in browser; options: 1/0, true/false, yes/no, on/off.
 STREAM_DRAW_INTERVAL: "0.05"  # Seconds between streamed-token redraws in active UI.
 EMIT_DELAY: "0.012"  # Delay in seconds between word emits for TUI/TTS pacing.
 LATENCY_LOG: "1"  # Log per-turn latency timing; options: 1/0, true/false, yes/no, on/off.
