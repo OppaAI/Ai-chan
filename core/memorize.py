@@ -32,30 +32,52 @@ Storage layout (single .db file):
   memories_fts    — FTS5 virtual table for lexical search (BM25)
   memories_vec    — vec0 virtual table for KNN cosine search
 
-Recall strategy — Reciprocal Rank Fusion (RRF), tiered quick/wide:
+Recall strategy — Reciprocal Rank Fusion (RRF), tiered quick/wide, with
+recency-among-relevant reranking and a pinned reserve:
+
   score = 1/(k + rank_knn) + 1/(k + rank_fts)
   k=60 (standard RRF constant — dampens outlier ranks)
 
-  KNN catches semantic similarity ("I love cats" ↔ "I adore cats")
+  KNN catches semantic similarity ("I love cats" <-> "I adore cats")
   FTS5 catches exact token matches ("Max", "birthday", proper nouns)
   RRF fuses both without weighting either arbitrarily.
 
-  Search runs a narrow "quick" pass first (QUICK_KNN_LIMIT/QUICK_FTS_LIMIT
-  candidates). If that pass already fills `limit` results whose weakest
-  final score clears MEMORY_RECALL_SCORE_THRESHOLD, it is returned as-is —
-  most turns stop here. Otherwise the search widens to the full
-  KNN_LIMIT/FTS_LIMIT candidate pool and re-ranks from scratch. The query
-  embedding is computed exactly once regardless of which path runs; only
-  the (cheap) SQL scans are ever repeated.
+  Stage 1 — tiered candidate fetch:
+    Search runs a narrow "quick" pass first (QUICK_KNN_LIMIT/QUICK_FTS_LIMIT
+    candidates). If that pass already fills `limit` results whose weakest
+    final score clears MEMORY_RECALL_SCORE_THRESHOLD, it is used as-is —
+    most turns stop here. Otherwise the search widens to the full
+    KNN_LIMIT/FTS_LIMIT candidate pool and re-ranks from scratch. The query
+    embedding is computed exactly once regardless of which path runs; only
+    the (cheap) SQL scans are ever repeated.
 
-  On top of the fused score, recall applies:
-    - a small recency bonus (exponential decay, configurable half-life)
-    - a small access-count bonus (capped, normalized)
-    - a pinned bonus (weighted higher than the above two, so pinned facts
-      reliably outrank equivalent unpinned ones — but still bounded so a
-      pinned entry can't out-rank something genuinely more relevant)
+  Stage 2 — scoring:
+    On top of the fused RRF score, recall applies:
+      - a small recency bonus (exponential decay, configurable half-life) —
+        this is a continuous blend applied to every candidate, separate
+        from stage 3's discrete recency-among-relevant reorder below.
+      - a small access-count bonus (capped, normalized)
+      - a small pinned bonus (a mild tiebreaker only — the real pinned
+        guarantee is stage 4's reserved-slot mechanism, not this bonus)
 
-  Dedup-on-recall: before final ranking, candidates are collapsed by
+  Stage 3 — recency-among-relevant rerank (MEMORY_RECENCY_RERANK_ENABLED):
+    Candidates whose score clears MEMORY_RECENCY_RERANK_THRESHOLD are
+    considered "relevant enough" and are reordered by created_at
+    descending among themselves (most recent first), ahead of everything
+    that didn't clear the bar. This is a genuine reorder — not another
+    additive weight — so among several similarly-relevant memories, the
+    newest one surfaces first rather than whichever happened to score
+    marginally higher on RRF/access/pinned terms.
+
+  Stage 4 — pinned reserve (MEMORY_PINNED_RESERVED_SLOTS):
+    The top MEMORY_PINNED_RESERVED_SLOTS highest-scoring pinned candidates
+    (if any exist in the pool) are guaranteed a place in the final result,
+    ahead of the stage-3 ordering, regardless of whether their blended
+    score would have naturally made the cut. Remaining slots fill from the
+    stage-3 order. This runs last so it's a hard guarantee, not a bonus
+    that can be crowded out.
+
+  Dedup-on-recall: before any of the above, candidates are collapsed by
   normalized memory text. If the same text exists as multiple rows
   (e.g. several pinned inserts of the same daily record), only the most
   recently created row survives into the ranked result set. This runs
@@ -123,6 +145,11 @@ BOOT_LABELS = {
     'mem_ready':   'Memory backend ready',
 }
 
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _env_bool(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
 # ── constants ─────────────────────────────────────────────────────────────────
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "ferrisS/harrier-oss-v1-270m-fastembed")
@@ -144,13 +171,25 @@ MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"
 # reliably outranking unpinned ones of similar relevance. 0.01 makes pinned
 # status a meaningful tiebreaker while staying below a full RRF rank-1 term,
 # so a highly relevant unpinned memory can still beat a barely-relevant
-# pinned one.
+# pinned one. The hard guarantee for pinned visibility now lives in
+# MEMORY_PINNED_RESERVED_SLOTS below, not in this bonus.
 MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01"))
 SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
 MEMORY_CONTEXT_TOTAL_CHARS = int(os.getenv("MEMORY_CONTEXT_TOTAL_CHARS", 1200))
 LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
+
+# Pinned reserve — guarantees the top N highest-scoring pinned candidates a
+# place in the final result regardless of blended score (see module docstring
+# stage 4). Set to 0 to disable and rely solely on MEMORY_RANK_PINNED_WEIGHT.
+MEMORY_PINNED_RESERVED_SLOTS = int(os.getenv("MEMORY_PINNED_RESERVED_SLOTS", "2"))
+
+# Recency-among-relevant rerank — candidates clearing this score are
+# reordered by created_at descending among themselves (see module docstring
+# stage 3). Independent of MEMORY_RANK_RECENCY_WEIGHT's continuous blend.
+MEMORY_RECENCY_RERANK_ENABLED = _env_bool("MEMORY_RECENCY_RERANK_ENABLED", "1")
+MEMORY_RECENCY_RERANK_THRESHOLD = float(os.getenv("MEMORY_RECENCY_RERANK_THRESHOLD", "0.012"))
 
 USER_ID = os.getenv("USER_ID", "OppaAI")
 
@@ -471,9 +510,10 @@ class _MemoryBackend:
       - add_raw() now runs the same dedup check as add() (previously it had
         none, which allowed unbounded duplicate pinned inserts).
       - search() collapses exact-text duplicates before final ranking,
-        keeping only the most recently created row per duplicate cluster,
-        and runs a tiered quick/wide candidate pass (see module docstring)
-        so most turns only pay for a narrow SQL scan.
+        keeping only the most recently created row per duplicate cluster;
+        runs a tiered quick/wide candidate pass; applies a recency-among-
+        relevant rerank; and finishes with a pinned-slot reserve. See
+        module docstring for the full stage breakdown.
     """
 
     def __init__(
@@ -767,7 +807,10 @@ class _MemoryBackend:
            row per duplicate cluster.
         3. Score every surviving id: RRF fusion + recency/access/pinned bonuses.
 
-        Returns (ids sorted best-first, {id: score}, {id: row}).
+        Returns (ids sorted best-first by score, {id: score}, {id: row}).
+        Recency-among-relevant reranking and pinned-reserve are applied
+        afterward by the caller (search()), not here — this method only
+        produces the base score-ordered list.
         """
         all_ids = set(rank_knn) | set(rank_fts)
         if not all_ids:
@@ -829,25 +872,89 @@ class _MemoryBackend:
         scores = {mid: final_score(mid) for mid in scored_ids}
         return scored_ids, scores, row_by_id
 
+    def _apply_recency_rerank(
+        self,
+        scored_ids: list[str],
+        scores: dict,
+        row_by_id: dict,
+    ) -> list[str]:
+        """
+        Stage 3 — recency-among-relevant reorder (see module docstring).
+
+        Candidates whose score clears MEMORY_RECENCY_RERANK_THRESHOLD are
+        pulled to the front, sorted by created_at descending among
+        themselves (most recent first). Candidates below the threshold keep
+        their original score-descending relative order and follow behind.
+
+        This is a genuine reorder, not another additive weight: two
+        similarly-relevant memories can swap places here even if their RRF
+        scores differ, as long as both clear the bar.
+        """
+        if not MEMORY_RECENCY_RERANK_ENABLED or not scored_ids:
+            return scored_ids
+
+        relevant = [mid for mid in scored_ids if scores.get(mid, 0.0) >= MEMORY_RECENCY_RERANK_THRESHOLD]
+        if not relevant:
+            return scored_ids
+
+        relevant_sorted = sorted(
+            relevant,
+            key=lambda mid: row_by_id[mid]["created_at"] if mid in row_by_id else "",
+            reverse=True,
+        )
+        relevant_set = set(relevant)
+        rest = [mid for mid in scored_ids if mid not in relevant_set]
+        return relevant_sorted + rest
+
+    def _apply_pinned_reserve(
+        self,
+        scored_ids: list[str],
+        row_by_id: dict,
+        limit: int,
+    ) -> list[str]:
+        """
+        Stage 4 — pinned reserve (see module docstring).
+
+        Guarantees up to MEMORY_PINNED_RESERVED_SLOTS highest-scoring pinned
+        candidates a place in the final `limit`-sized result, ahead of
+        whatever order stage 3 produced — regardless of whether their
+        blended score would have naturally made the cut. Runs last so it is
+        a hard guarantee, not a bonus that can be crowded out by an
+        unrelated but higher-scoring unpinned candidate.
+
+        Only reserves slots for pinned candidates that actually exist in
+        this candidate pool — it does not reach outside the pool to pull in
+        pinned memories the KNN/FTS passes never surfaced.
+        """
+        if MEMORY_PINNED_RESERVED_SLOTS <= 0 or not scored_ids:
+            return scored_ids[:limit]
+
+        pinned_front = [
+            mid for mid in scored_ids
+            if mid in row_by_id and int(row_by_id[mid]["pinned"] or 0)
+        ][:MEMORY_PINNED_RESERVED_SLOTS]
+        pinned_set = set(pinned_front)
+        rest = [mid for mid in scored_ids if mid not in pinned_set]
+        return (pinned_front + rest)[:limit]
+
     def search(self, query: str, user_id: str, limit: int = 5) -> list[dict]:
         """
-        KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate pass.
+        KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate
+        pass, recency-among-relevant reranking, and a pinned-slot reserve.
+        See module docstring for the full stage-by-stage description.
 
         1. Embed the query once (_embed) — this is the dominant cost
            regardless of which pass runs below, so it is never repeated.
         2. Quick pass: pull QUICK_KNN_LIMIT / QUICK_FTS_LIMIT candidates,
            dedup + score them. If that already fills `limit` results and the
-           weakest of them clears MEMORY_RECALL_SCORE_THRESHOLD, return
-           immediately — most turns stop here and never pay for the wider
-           SQL scan.
+           weakest of them clears MEMORY_RECALL_SCORE_THRESHOLD, use it as-is
+           — most turns stop here and never pay for the wider SQL scan.
         3. Otherwise widen to KNN_LIMIT / FTS_LIMIT and re-rank the larger
            pool from scratch (rank positions shift when the pool grows, so
            this is a fresh scoring pass, not a merge with the quick pass).
-           Both SQL queries here are still sub-millisecond at typical table
-           sizes — the embedding call is the only expensive step, and it is
-           not repeated.
-
-        Returns top `limit` results by final score as payload dicts.
+        4. Reorder the resulting candidates by recency-among-relevant.
+        5. Apply the pinned-slot reserve as a final guarantee.
+        6. Truncate to `limit` and return as payload dicts.
         """
         vector = self._embed(query, query=True)
         fts_query = _sanitize_fts_query(query)
@@ -873,7 +980,9 @@ class _MemoryBackend:
             rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
             scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w)
 
-        top_ids = scored_ids[:limit]
+        ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
+        top_ids = self._apply_pinned_reserve(ordered_ids, row_by_id, limit)
+
         return [dict(row_by_id[mid]) for mid in top_ids if mid in row_by_id]
 
     def iter_all(self, user_id: str, batch_size: int = LIFECYCLE_BATCH_SIZE):
@@ -976,7 +1085,9 @@ class AikoMemorize:
 
     Pinned memories:
         Created via pin() — the pinned=1 column flag makes them
-        immune to cleanup(), dream prune, and dream merge (as the loser).
+        immune to cleanup(), dream prune, and dream merge (as the loser),
+        and eligible for the pinned-slot reserve at recall time (see
+        _MemoryBackend.search() stage 4).
         Recall-time dedup (in _MemoryBackend.search) still collapses
         multiple pinned rows with identical text down to the most recent
         one, since dream() structurally cannot do this for pinned rows.
@@ -1120,6 +1231,11 @@ class AikoMemorize:
         row per duplicate cluster) before the LIMIT is applied, so pinned
         duplicate rows (e.g. several identical daily-record pins) can't
         eat multiple slots of the broad-recall result set.
+
+        Note: this is a separate code path from _MemoryBackend.search() and
+        was already pinned-first (ORDER BY pinned DESC, ...) before the
+        pinned-reserve / recency-rerank stages were added there — it is
+        untouched by those changes.
         """
         # Fetch a wider candidate window than `limit` so dedup doesn't
         # leave fewer than `limit` results when duplicates are present.

@@ -37,7 +37,7 @@ DREAM_BOOST_AMOUNT: "2"  # Access-count boost for memories promoted during dream
 # -- Search ranking and context budget --
 MEMORY_SEARCH_CACHE_SIZE: "128"  # Max number of memory search results cached in-process.
 MEMORY_SEARCH_CACHE_TTL: "20.0"  # Seconds before cached memory search result expires.
-MEMORY_RANK_RECENCY_WEIGHT: "0.004"  # Small retrieval boost for recent memories.
+MEMORY_RANK_RECENCY_WEIGHT: "0.004"  # Small retrieval boost for recent memories (continuous blending, applies to every candidate).
 MEMORY_RANK_RECENCY_HALF_LIFE_DAYS: "30"  # Days for recency boost to halve.
 MEMORY_RANK_ACCESS_WEIGHT: "0.002"  # Small retrieval boost for frequently recalled memories.
 MEMORY_RANK_PINNED_WEIGHT: "0.002"  # Small retrieval boost for pinned memories.
@@ -49,6 +49,11 @@ MEMORY_LIFECYCLE_BATCH_SIZE: "500"  # Memories processed per batch during cleanu
 QUICK_KNN_LIMIT: "6"  # Narrow KNN candidate count tried before falling back to full search.
 QUICK_FTS_LIMIT: "6"  # Narrow FTS5 candidate count tried before falling back to full search.
 MEMORY_RECALL_SCORE_THRESHOLD: "0.015"  # Min final-rank score required at position `limit` for the quick pass to be accepted; below this, search widens to KNN_LIMIT/FTS_LIMIT.
+
+# -- Pinned reserve and recency-among-relevant rerank --
+MEMORY_PINNED_RESERVED_SLOTS: "2"  # Top result slots guaranteed to the highest-scoring pinned memories (if any exist in the candidate pool), ahead of normal ranked order, before filling remaining slots.
+MEMORY_RECENCY_RERANK_ENABLED: "1"  # Toggle recency-among-relevant reranking; boolean options (1/0, true/false, yes/no, on/off).
+MEMORY_RECENCY_RERANK_THRESHOLD: "0.012"  # Min final score for a candidate to be considered "relevant enough" to be reordered by recency instead of by raw score.
 
 # -- Experience and consolidation --
 EXPERIENCE_LOG_PATH: "/home/oppa-ai/.aiko/daily_experience.jsonl"  # JSONL file storing raw daily chat turns for reflection/consolidation.
