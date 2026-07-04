@@ -815,6 +815,7 @@ class AikoSimpleCLI:
         self.no_voice = no_voice
         self.debug = debug
         self._chat_started = False
+        self._spin_generation = 0
         self._stats: dict = {"tts_on": not no_voice, "asr_on": not no_voice}
         self._streaming = False
         self._stream_buf: list[str] = []
@@ -834,7 +835,13 @@ class AikoSimpleCLI:
         print("\r" + " " * 40 + "\r", end="", flush=True)
 
     def _stop_step_spinner(self) -> None:
-        """Stop whatever step spinner is currently running, if any."""
+        """Stop whatever step spinner is currently running, if any.
+
+        Bumps _spin_generation regardless of whether join() actually caught
+        the thread in time — the generation check inside _spin() is what
+        actually prevents a late/starved wakeup from printing, not the join.
+        The join is just a best-effort tidy-up."""
+        self._spin_generation += 1
         if self._step_stop is not None:
             self._step_stop.set()
             if self._step_thread and self._step_thread.is_alive():
@@ -855,6 +862,9 @@ class AikoSimpleCLI:
             log.debug(f"step_loading({name!r}) called post-boot — ignoring.")
             return
         self._stop_step_spinner()  # safety: end any stray previous spinner
+
+        self._spin_generation += 1
+        my_generation = self._spin_generation
         self._step_stop = threading.Event()
         stop_event = self._step_stop
 
@@ -862,13 +872,20 @@ class AikoSimpleCLI:
             frames = "|/-\\"
             i = 0
             while not stop_event.is_set():
+                # Re-check generation on every wake, not just at spawn time.
+                # If this thread got starved of the GIL (heavy embedding/LLM
+                # calls on the main thread) and only gets scheduled again
+                # after status_finish()/a newer step already bumped the
+                # generation, it must not print — otherwise a stale frame
+                # lands mid-turn, well after this step was supposed to be done.
+                if self._spin_generation != my_generation or self._chat_started:
+                    return
                 print(f"\r  {frames[i % len(frames)]} {name}...", end="", flush=True)
                 i += 1
                 time.sleep(0.1)
 
         self._step_thread = threading.Thread(target=_spin, daemon=True)
         self._step_thread.start()
-
     def step_done(self, name: str) -> None:
         if self._chat_started:
             return
@@ -891,7 +908,7 @@ class AikoSimpleCLI:
         self._stop_step_spinner()
         self._chat_started = True
         print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
-        
+
     # ── rendering ────────────────────────────────────────────────────────
     def _draw(self, buf: list | None = None) -> None:
         # Plain scrolling CLI — nothing to redraw, output is already live.
