@@ -185,7 +185,7 @@ class AikoThink:
         self._semantic_example_cache: dict[int, tuple[list[str], np.ndarray]] = {}
         self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
-        self._turn_lock = threading.Lock()
+        self._turn_lock = threading.RLock()
         self._reasoning = False
         self.last_usage: dict = {}
         self.last_prompt_debug: dict = {}
@@ -438,7 +438,14 @@ class AikoThink:
 
     def agentic_chat(self, user_input: str, token_callback=None) -> str:
         """Delegate task-mode execution to core.agentic."""
-        return run_agentic_chat(self, user_input, token_callback=token_callback)
+        with self._turn_lock:
+            self._last_chat_time = time.time()
+            self._active_turn.set()
+            try:
+                return run_agentic_chat(self, user_input, token_callback=token_callback)
+            finally:
+                self._last_chat_time = time.time()
+                self._active_turn.clear()
 
     def proactive_checkin(self, prompt_hint: str) -> str:
         """Generate one short proactive check-in without storing it as a user turn."""

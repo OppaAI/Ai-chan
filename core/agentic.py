@@ -515,6 +515,11 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolRes
     return last
 
 
+def _has_successful_tool_call(state: TaskState, tool_name: str) -> bool:
+    """Return True only when a prior call to a tool completed successfully."""
+    return any(step["tool"] == tool_name and step["ok"] for step in state.steps)
+
+
 def _compact_processed_research_context(messages: list[dict]) -> None:
     """Replace already-consumed fetched-page observations with tiny placeholders.
 
@@ -833,7 +838,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 continue
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
-            if name == "deep_search" and any(s["tool"] == "deep_search" for s in state.steps):
+            if name == "deep_search" and _has_successful_tool_call(state, "deep_search"):
                 result = ToolResult(
                     ok=False, tool=name, args=args,
                     content=(
