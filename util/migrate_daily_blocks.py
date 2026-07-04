@@ -1,11 +1,15 @@
 """
-scripts/migrate_daily_blocks.py
+util/migrate_daily_blocks.py
 One-off: breaks old monolithic pinned daily-summary/day-record blocks
 into individual atomic pinned entries tagged "[YYYY-MM-DD] fact".
 """
 from __future__ import annotations
 import argparse
 import re
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from datetime import datetime
 
 from core.config import load_config
