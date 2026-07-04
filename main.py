@@ -45,6 +45,7 @@ import queue
 import random
 import re
 import sys
+import textwrap
 import threading
 import time
 import warnings
@@ -84,6 +85,73 @@ PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "1").lower() in {"1", "true",
 # instead of the instant the LLM emits tokens. See TypewriterSync below.
 KARAOKE_SYNC = os.getenv("KARAOKE_SYNC", "1").lower() in {"1", "true", "yes", "on"}
 KARAOKE_WPS = float(os.getenv("KARAOKE_WPS", "2.6"))  # fallback reveal pace (words/sec) when no per-chunk audio timing is available
+
+# Debug token accounting — hits the local LLM server's /tokenize endpoint
+# (llama-server compatible) for real counts; falls back to a crude
+# whitespace-split estimate if that endpoint isn't reachable.
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1").rstrip("/")
+if LLM_BASE_URL.endswith("/v1"):
+    _TOKENIZE_BASE_URL = LLM_BASE_URL[: -len("/v1")]
+else:
+    _TOKENIZE_BASE_URL = LLM_BASE_URL
+
+# ── debug ANSI colors ────────────────────────────────────────────────────────
+# Kept as plain ANSI escapes (not curses) since this is the no-frills CLI.
+# Auto-disabled when stdout isn't a real terminal (e.g. piped/redirected)
+# so log files and pipes don't fill up with escape codes.
+_COLOR_ENABLED = sys.stdout.isatty()
+
+
+def _c(code: str, text: str) -> str:
+    if not _COLOR_ENABLED:
+        return text
+    return f"{code}{text}\033[0m"
+
+
+_GREY      = "\033[38;5;250m"   # system prompt
+_LAVENDER  = "\033[38;5;183m"   # memory entries
+_DIM       = "\033[2m"
+
+
+def _box_text(text: str, color: str, width: int = 66) -> str:
+    """Wrap `text` in a simple ASCII box, colored with `color`."""
+    inner = max(20, width - 4)
+    lines = textwrap.wrap(text, inner) or [""]
+    top = "┌" + "─" * (inner + 2) + "┐"
+    bot = "└" + "─" * (inner + 2) + "┘"
+    body = "\n".join(f"│ {ln.ljust(inner)} │" for ln in lines)
+    block = f"{top}\n{body}\n{bot}"
+    if not _COLOR_ENABLED:
+        return block
+    return f"{color}{block}\033[0m"
+
+
+def _count_tokens(text: str) -> int:
+    """
+    Best-effort token count via the local LLM server's /tokenize endpoint
+    (llama-server compatible: POST {content: str} -> {tokens: [...]})
+    Falls back to a crude whitespace-split estimate on any failure so
+    debug output degrades gracefully instead of raising.
+    """
+    if not text:
+        return 0
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"{_TOKENIZE_BASE_URL}/tokenize",
+            data=json.dumps({"content": text}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            tokens = data.get("tokens")
+            if isinstance(tokens, list):
+                return len(tokens)
+    except Exception:
+        pass
+    # crude fallback — roughly ~0.75 tokens/word for English text
+    return max(1, int(len(text.split()) * 1.3))
 
 
 def _parse_env_list(name: str, default: list[str]) -> list[str]:
@@ -473,10 +541,11 @@ class ProactiveIdleRunner:
 #     duration_seconds / word_count — genuinely in sync with the voice.
 #   - fallback: only speak.set_first_audio_callback exists (this is the
 #     hook already wired into _run_session below). The whole buffered
-#     reply is released at once when audio starts, paced by KARAOKE_WPS.
-#     This is what runs today with zero other files touched — accurate
-#     for short replies, drifts a bit on long multi-sentence ones since
-#     only the very first chunk's start time is known.
+#     reply is released at once when audio starts, paced by KARAOKE_WPS,
+#     and — importantly — any further sentences fed in AFTER first audio
+#     has already fired are released to the reveal queue immediately
+#     (previously they silently accumulated in the buffer forever and
+#     were dropped from the UI; see feed_sentence()/on_first_audio() below).
 
 _SENTENCE_END_RE = re.compile(r'(?<=[.!?…])\s+')
 
@@ -492,6 +561,14 @@ class TypewriterSync:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._fallback_buf: list[str] = []
+        # Tracks whether on_first_audio() has already fired for this turn.
+        # Before it fires, fed sentences are buffered and released together
+        # once audio starts (original behavior). After it fires, any newly
+        # fed sentence is a *later* chunk of the same reply and must be
+        # released to the reveal queue immediately — otherwise it just sits
+        # in _fallback_buf until stop() and is never drained (this was the
+        # bug causing tail text to go missing on longer replies).
+        self._first_audio_fired = False
         self.precise = speak is not None and hasattr(speak, "set_chunk_playback_callback")
         if self.precise:
             speak.set_chunk_playback_callback(self._on_chunk_start)
@@ -502,6 +579,7 @@ class TypewriterSync:
         """Begin a fresh reveal for a new turn — call right before think.route()."""
         self._stop.clear()
         self._fallback_buf = []
+        self._first_audio_fired = False
         while not self._q.empty():
             try:
                 self._q.get_nowait()
@@ -516,6 +594,15 @@ class TypewriterSync:
         swallowed); otherwise assumes the queue is already empty (normal
         end-of-turn, after speak.wait() has returned)."""
         if flush:
+            # Flush anything still sitting in the fallback buffer too — this
+            # covers turns where on_first_audio() never fired at all (e.g.
+            # TTS was toggled off mid-turn, or speak failed silently), which
+            # previously meant the entire buffered reply was lost.
+            if self._fallback_buf:
+                leftover = " ".join(self._fallback_buf)
+                self._fallback_buf = []
+                for w in leftover.split():
+                    self._ui.stream_token(w + " ")
             while not self._q.empty():
                 try:
                     word, _ = self._q.get_nowait()
@@ -529,20 +616,32 @@ class TypewriterSync:
 
     # ── feed path: token_cb calls this as complete sentences accumulate ────
     def feed_sentence(self, sentence: str) -> None:
-        """In fallback mode, buffer the sentence for release on first audio.
-        In precise mode this is a no-op — speak's own chunk callback drives
-        the reveal instead."""
+        """In fallback mode: buffer the sentence until first audio starts,
+        then release it (and everything fed afterward) straight to the
+        reveal queue paced by KARAOKE_WPS. In precise mode this is a
+        no-op — speak's own chunk callback drives the reveal instead."""
         if self.precise:
             return
         sentence = sentence.strip()
-        if sentence:
+        if not sentence:
+            return
+        if self._first_audio_fired:
+            # Audio already started for this turn — this is a later chunk
+            # of the same reply, so reveal it immediately instead of
+            # letting it pile up unseen in _fallback_buf.
+            for w in sentence.split():
+                self._q.put((w, 1.0 / KARAOKE_WPS))
+        else:
             self._fallback_buf.append(sentence)
 
     def on_first_audio(self) -> None:
         """Fallback-mode trigger: release the whole buffered reply, paced by
-        KARAOKE_WPS, the instant TTS playback actually starts."""
+        KARAOKE_WPS, the instant TTS playback actually starts. Marks
+        first-audio as fired so any further feed_sentence() calls this turn
+        release immediately instead of buffering forever."""
         if self.precise:
             return
+        self._first_audio_fired = True
         text = " ".join(self._fallback_buf)
         self._fallback_buf = []
         for w in text.split():
@@ -719,6 +818,9 @@ class AikoSimpleCLI:
         self._streaming = False
         self._stream_buf: list[str] = []
         self._latency_stats: dict = {}
+        # per-step spinner state for step_loading/step_done/step_skip
+        self._step_stop: threading.Event | None = None
+        self._step_thread: threading.Thread | None = None
 
     # ── boot / status ────────────────────────────────────────────────────
     def spin_loop(self, stop_event: threading.Event) -> None:
@@ -730,14 +832,41 @@ class AikoSimpleCLI:
             time.sleep(0.15)
         print("\r" + " " * 40 + "\r", end="", flush=True)
 
+    def _stop_step_spinner(self) -> None:
+        """Stop whatever step spinner is currently running, if any."""
+        if self._step_stop is not None:
+            self._step_stop.set()
+            if self._step_thread and self._step_thread.is_alive():
+                self._step_thread.join(timeout=1.0)
+        self._step_stop = None
+        self._step_thread = None
+
     def step_loading(self, name: str) -> None:
-        print(f"  ⏳ loading {name}...")
+        """Start an inline spinner for this boot step, on its own line.
+        step_done()/step_skip() replace the spinner with a checkmark/skip
+        icon on that same line rather than printing a new one."""
+        self._stop_step_spinner()  # safety: end any stray previous spinner
+        self._step_stop = threading.Event()
+        stop_event = self._step_stop
+
+        def _spin():
+            frames = "|/-\\"
+            i = 0
+            while not stop_event.is_set():
+                print(f"\r  {frames[i % len(frames)]} {name}...", end="", flush=True)
+                i += 1
+                time.sleep(0.1)
+
+        self._step_thread = threading.Thread(target=_spin, daemon=True)
+        self._step_thread.start()
 
     def step_done(self, name: str) -> None:
-        print(f"  ✅ {name} ready")
+        self._stop_step_spinner()
+        print(f"\r  ✅ {name} ready" + " " * 20)
 
     def step_skip(self, name: str) -> None:
-        print(f"  ⏭  {name} skipped")
+        self._stop_step_spinner()
+        print(f"\r  ⏭  {name} skipped" + " " * 20)
 
     def status_finish(self) -> None:
         print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
@@ -806,6 +935,26 @@ class AikoSimpleCLI:
         ]
         extra_parts = [f"{label}={stats.get(key, 'n/a')}" for key, label in extra_labels]
         print(f"  ⏱  totals: {' | '.join(extra_parts)}")
+
+        # ── token accounting breakdown (system prompt / memory / output) ──
+        # Only prints when the corresponding keys were populated this turn
+        # (see _run_session's debug block below) — silently no-ops on
+        # earlier turns/paths that don't set them.
+        tok_breakdown = stats.get("token_breakdown")
+        if tok_breakdown:
+            print(_c(_DIM, "  🧮 token breakdown:"))
+            print(_c(_DIM, f"     system prompt : {tok_breakdown.get('system_prompt_tokens', 'n/a')}"))
+            mem_counts = tok_breakdown.get("memory_entry_tokens", [])
+            if mem_counts:
+                per_entry = ", ".join(str(c) for c in mem_counts)
+                print(_c(_DIM,
+                    f"     memory entries: {tok_breakdown.get('memory_entry_count', len(mem_counts))} "
+                    f"entries ({per_entry}) = {sum(mem_counts)} tok"))
+            else:
+                print(_c(_DIM, "     memory entries: 0"))
+            print(_c(_DIM, f"     agentic       : {tok_breakdown.get('agentic_tokens', 0)}"))
+            print(_c(_DIM, f"     ai output     : {tok_breakdown.get('output_tokens', stats.get('output_tokens', 'n/a'))}"))
+            print(_c(_DIM, f"     TOTAL         : {tok_breakdown.get('total_tokens', 'n/a')}"))
 
     # ── input ────────────────────────────────────────────────────────────
     def get_input(self):
@@ -929,6 +1078,13 @@ def _run_session(ui, args):
                 current_latency["mode"] = "agentic"
             elif stripped.startswith("__TOOL__:"):
                 current_latency["mode"] = "agentic"
+                # crude agentic token accounting: count the marker payload
+                # itself as agentic tokens (tool name + args), since it
+                # doesn't count toward the final assistant reply tokens.
+                payload = stripped[len("__TOOL__:"):]
+                current_latency["agentic_tokens"] = (
+                    current_latency.get("agentic_tokens", 0) + _count_tokens(payload)
+                )
             elif stripped == "__SEARCHING__":
                 current_latency.setdefault("search_start_at", now)
             if token and not token.startswith("__"):
@@ -1042,7 +1198,7 @@ def _run_session(ui, args):
         # as a "model is slow" gap. Honest n/a beats a plausible-looking lie.
         asr_time = _latency_seconds(timing, "voice_recording_stopped_at", "asr_done_at")
 
-        return {
+        parts = {
             "voice_end_to_submit":           _latency_seconds(timing, "voice_recording_stopped_at", "submitted_at"),
             "asr_inference":                 asr_time,
             "agentic_intent":                _latency_seconds(timing, "intent_start_at", "intent_done_at"),
@@ -1060,14 +1216,37 @@ def _run_session(ui, args):
             "tokens_per_second":             round(tok_per_sec, 1) if tok_per_sec is not None else None,
         }
 
+        # ── token accounting breakdown ──────────────────────────────────
+        # Populated only when the debug memory-retrieval block below set
+        # these keys on `timing` (i.e. args.debug is on for this turn).
+        if "system_prompt_tokens" in timing:
+            mem_tok_list = timing.get("memory_entry_tokens", [])
+            agentic_tok = timing.get("agentic_tokens", 0)
+            out_tok_val = out_tok or 0
+            total = timing["system_prompt_tokens"] + sum(mem_tok_list) + agentic_tok + out_tok_val
+            parts["token_breakdown"] = {
+                "system_prompt_tokens": timing["system_prompt_tokens"],
+                "memory_entry_tokens":  mem_tok_list,
+                "memory_entry_count":   timing.get("memory_entry_count", len(mem_tok_list)),
+                "agentic_tokens":       agentic_tok,
+                "output_tokens":        out_tok_val,
+                "total_tokens":         total,
+            }
+
+        return parts
+
     def _update_latency_stats(timing: dict) -> None:
         if not hasattr(ui, "set_latency_stats"):
             return
         parts = _latency_parts(timing)
         if args.debug:
             # full breakdown — formatted values, "n/a" for anything unavailable
-            display = {k: (_fmt_latency(v) if k not in ("input_tokens", "output_tokens", "tokens_per_second") else (v if v is not None else "n/a"))
-                       for k, v in parts.items()}
+            display = {
+                k: (_fmt_latency(v) if k not in (
+                        "input_tokens", "output_tokens", "tokens_per_second", "token_breakdown"
+                    ) else v)
+                for k, v in parts.items()
+            }
             ui.set_latency_stats(display)
         else:
             ui.set_latency_stats({
@@ -1358,14 +1537,6 @@ def _run_session(ui, args):
 
         # ── normal turn ───────────────────────────────────────────────────────
 
-        if args.debug:
-            hits = memorize.search(user_input)
-            if hits:
-                ui.add_message('sys', f'{len(hits)} memories retrieved:')
-                for m in hits:
-                    ui.add_message('sys',
-                        f'  → {m.get("memory") or m.get("text") or m}')
-
         current_latency = {
             "mode": "voice" if (listen and asr_enabled and voice_info) else "text",
             "submitted_at": time.monotonic(),
@@ -1375,6 +1546,39 @@ def _run_session(ui, args):
             current_latency["voice_recording_stopped_at"] = voice_info.get("recording_stopped_at")
             if voice_info.get("asr_done_at") is not None:
                 current_latency["asr_done_at"] = voice_info["asr_done_at"]
+
+        if args.debug:
+            # ── system prompt (grey) ────────────────────────────────────
+            system_prompt = None
+            for attr in ("system_prompt", "_system_prompt", "get_system_prompt"):
+                candidate = getattr(think, attr, None)
+                if callable(candidate):
+                    try:
+                        system_prompt = candidate()
+                    except Exception:
+                        system_prompt = None
+                elif isinstance(candidate, str):
+                    system_prompt = candidate
+                if system_prompt:
+                    break
+            if system_prompt:
+                ui.add_message('sys', _c(_GREY, f'[system prompt]\n{system_prompt}'))
+                current_latency["system_prompt_tokens"] = _count_tokens(system_prompt)
+            else:
+                current_latency["system_prompt_tokens"] = 0
+
+            # ── memory retrieval (lavender, boxed) ──────────────────────
+            hits = memorize.search(user_input)
+            if hits:
+                ui.add_message('sys', f'{len(hits)} memories retrieved:')
+                mem_texts = [m.get("memory") or m.get("text") or str(m) for m in hits]
+                for text in mem_texts:
+                    ui.add_message('sys', _box_text(text, _LAVENDER))
+                current_latency["memory_entry_tokens"] = [_count_tokens(t) for t in mem_texts]
+                current_latency["memory_entry_count"] = len(mem_texts)
+            else:
+                current_latency["memory_entry_tokens"] = []
+                current_latency["memory_entry_count"] = 0
 
         ui.add_message('you', user_input)
         ui.turn_start()
