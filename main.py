@@ -24,7 +24,7 @@ Responsibilities:
     - Clean shutdown on Ctrl-C / Ctrl-D
 
 Note: the old curses TUI (tui/tui.py) has been retired in favor of the
-WebUI as the default front end, plus a simple CLI for quick, no-frills
+WebUI as the default front end, plus cli/simple_cli.py for quick, no-frills
 local testing. Move tui/tui.py to archive/tui/ in your own checkout —
 nothing here imports curses anymore.
 """
@@ -669,21 +669,33 @@ class AikoSimpleCLI:
         Rename to match your real ASR backend's single-utterance API if it
         differs — this is a testing convenience, not the primary voice path
         (that's the WebUI's AudioWorklet pipeline).
+
+        Returns (text, timing_dict) on a successful voice capture so
+        _run_session() can compute V->A latency. `recording_stopped_at` here
+        is approximate — it's stamped when the blocking listen call returns,
+        which includes ASR transcription time, not just end-of-speech. The
+        WebUI's real pipeline stamps this earlier (right at end-of-speech),
+        so CLI latency numbers will read a bit higher than the WebUI's.
         """
         for method_name in ("listen_once", "transcribe_once", "listen"):
             method = getattr(listen, method_name, None)
             if callable(method):
                 print("🎤 listening... (speak now)")
+                listen_started_at = time.monotonic()
                 try:
                     result = method()
                 except Exception as e:
                     print(f"  [voice input failed: {e}]")
                     return self.get_input()
+                recording_stopped_at = time.monotonic()
                 text = (result[0] if isinstance(result, tuple) else result) or ""
                 text = text.strip()
                 if text:
                     print(f"You (voice): {text}")
-                return text
+                return text, {
+                    "listen_started_at": listen_started_at,
+                    "recording_stopped_at": recording_stopped_at,
+                }
         # No compatible voice API found on this backend — fall back to typed input.
         return self.get_input()
 
