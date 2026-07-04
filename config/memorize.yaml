@@ -45,6 +45,11 @@ MEMORY_CONTEXT_FACT_CHARS: "220"  # Max characters per individual memory fact in
 MEMORY_CONTEXT_TOTAL_CHARS: "1200"  # Total character budget for all memory facts injected per turn.
 MEMORY_LIFECYCLE_BATCH_SIZE: "500"  # Memories processed per batch during cleanup/decay lifecycle runs.
 
+# -- Tiered recall (quick/wide) --
+QUICK_KNN_LIMIT: "6"  # Narrow KNN candidate count tried before falling back to full search.
+QUICK_FTS_LIMIT: "6"  # Narrow FTS5 candidate count tried before falling back to full search.
+MEMORY_RECALL_SCORE_THRESHOLD: "0.015"  # Min final-rank score required at position `limit` for the quick pass to be accepted; below this, search widens to KNN_LIMIT/FTS_LIMIT.
+
 # -- Experience and consolidation --
 EXPERIENCE_LOG_PATH: "/home/oppa-ai/.aiko/daily_experience.jsonl"  # JSONL file storing raw daily chat turns for reflection/consolidation.
 EXPERIENCE_TURN_MAX_CHARS: "4000"  # Max chars saved per side of one chat turn in experience log.

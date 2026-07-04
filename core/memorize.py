@@ -32,13 +32,21 @@ Storage layout (single .db file):
   memories_fts    — FTS5 virtual table for lexical search (BM25)
   memories_vec    — vec0 virtual table for KNN cosine search
 
-Recall strategy — Reciprocal Rank Fusion (RRF):
+Recall strategy — Reciprocal Rank Fusion (RRF), tiered quick/wide:
   score = 1/(k + rank_knn) + 1/(k + rank_fts)
   k=60 (standard RRF constant — dampens outlier ranks)
 
   KNN catches semantic similarity ("I love cats" ↔ "I adore cats")
   FTS5 catches exact token matches ("Max", "birthday", proper nouns)
   RRF fuses both without weighting either arbitrarily.
+
+  Search runs a narrow "quick" pass first (QUICK_KNN_LIMIT/QUICK_FTS_LIMIT
+  candidates). If that pass already fills `limit` results whose weakest
+  final score clears MEMORY_RECALL_SCORE_THRESHOLD, it is returned as-is —
+  most turns stop here. Otherwise the search widens to the full
+  KNN_LIMIT/FTS_LIMIT candidate pool and re-ranks from scratch. The query
+  embedding is computed exactly once regardless of which path runs; only
+  the (cheap) SQL scans are ever repeated.
 
   On top of the fused score, recall applies:
     - a small recency bonus (exponential decay, configurable half-life)
@@ -55,6 +63,15 @@ Recall strategy — Reciprocal Rank Fusion (RRF):
   so a duplicate that slipped through either of those (most commonly:
   pinned duplicates, which dream() can never delete) still can't occupy
   more than one of the returned slots.
+
+Trivial-input skip:
+  AikoMemorize.search() short-circuits to [] for turns that are nothing
+  but filler (greetings, acks, the assistant's wake-word alone) BEFORE the
+  cache lookup or the embedding call — this is the single choke point all
+  callers (CLI, WebUI, voice, think.py) go through, so every input path
+  gets the optimization without duplicating the check anywhere else. Any
+  message with real content attached (a question, a name, a request)
+  always searches normally, regardless of what it starts with.
 
 Custom backend (replaces Qdrant + mem0):
   - _MemoryBackend handles LLM-based fact extraction, ONNX embeddings (HarrierEmbedder),
@@ -114,8 +131,11 @@ EMBED_QUERY_INSTRUCT = os.getenv("EMBED_QUERY_INSTRUCT", "Retrieve relevant memo
 EMBED_MODEL_FILE = os.getenv("EMBED_MODEL_FILE", "model_quantized.onnx")
 EMBED_MODEL_DATA_FILE = os.getenv("EMBED_MODEL_DATA_FILE", "model_quantized.onnx_data").strip()
 RRF_K       = 60          # standard RRF constant — dampens outlier ranks
-KNN_LIMIT   = 20          # candidates fetched before RRF re-rank
-FTS_LIMIT   = 20          # candidates fetched before RRF re-rank
+KNN_LIMIT   = 20          # candidates fetched before RRF re-rank (wide pass)
+FTS_LIMIT   = 20          # candidates fetched before RRF re-rank (wide pass)
+QUICK_KNN_LIMIT = int(os.getenv("QUICK_KNN_LIMIT", "6"))   # narrow first-pass candidate count
+QUICK_FTS_LIMIT = int(os.getenv("QUICK_FTS_LIMIT", "6"))   # narrow first-pass candidate count
+MEMORY_RECALL_SCORE_THRESHOLD = float(os.getenv("MEMORY_RECALL_SCORE_THRESHOLD", "0.015"))
 MEMORY_RANK_RECENCY_WEIGHT = float(os.getenv("MEMORY_RANK_RECENCY_WEIGHT", "0.004"))
 MEMORY_RANK_RECENCY_HALF_LIFE_DAYS = float(os.getenv("MEMORY_RANK_RECENCY_HALF_LIFE_DAYS", "30"))
 MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"))
@@ -133,6 +153,34 @@ MEMORY_CONTEXT_TOTAL_CHARS = int(os.getenv("MEMORY_CONTEXT_TOTAL_CHARS", 1200))
 LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 
 USER_ID = os.getenv("USER_ID", "OppaAI")
+
+# ── trivial-input skip ────────────────────────────────────────────────────────
+# Words that carry no retrievable intent on their own. Built dynamically so
+# the assistant's configured name (identity.yaml -> AI_NAME) is also a valid
+# stand-alone trivial input — e.g. "Hey Aiko" with nothing else attached.
+# This check lives here (not in main.py) because AikoMemorize.search() is
+# the single choke point every input path (CLI, WebUI, voice, think.py)
+# already goes through — putting it in main.py would mean duplicating the
+# check at every call site instead of once.
+AI_NAME = os.getenv("AI_NAME", "Aiko").strip().lower()
+
+_FILLER_WORDS = (
+    "hi", "hey", "hello", "ok", "okay", "thanks", "thank you",
+    "yes", "no", "yeah", "nah", "lol", "sure", "bye",
+)
+_filler_alt = "|".join(re.escape(w) for w in _FILLER_WORDS)
+_name_alt = re.escape(AI_NAME) if AI_NAME else ""
+
+# Matches ONLY when the entire message is filler (+ optional wake-word),
+# e.g. "hi", "hey aiko", "ok thanks", "thanks aiko". Anything with real
+# content attached — "hi aiko, what's the weather" — fails the ^...$
+# anchor and falls through to a normal search.
+_TRIVIAL_INPUT_RE = re.compile(
+    rf"^\s*(?:{_filler_alt})"
+    rf"(?:\s*[,.]?\s*(?:{_filler_alt}" + (rf"|{_name_alt}" if _name_alt else "") + r"))?"
+    r"[.!?]*\s*$",
+    re.IGNORECASE,
+)
 
 # Cosine similarity threshold for near-duplicate detection during dream pass
 # and dedup-on-write. 0.95 on write is tight (near-identical only).
@@ -423,7 +471,9 @@ class _MemoryBackend:
       - add_raw() now runs the same dedup check as add() (previously it had
         none, which allowed unbounded duplicate pinned inserts).
       - search() collapses exact-text duplicates before final ranking,
-        keeping only the most recently created row per duplicate cluster.
+        keeping only the most recently created row per duplicate cluster,
+        and runs a tiered quick/wide candidate pass (see module docstring)
+        so most turns only pay for a narrow SQL scan.
     """
 
     def __init__(
@@ -687,48 +737,41 @@ class _MemoryBackend:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, user_id: str, limit: int = 5) -> list[dict]:
+    def _fts_pass(self, fts_query: Optional[str], user_id: str, fts_limit: int) -> list[sqlite3.Row]:
+        """Run one FTS5 BM25 pass. Returns [] if fts_query is None (nothing usable to match)."""
+        if fts_query is None:
+            return []
+        return self._conn.execute(
+            """
+            SELECT f.id
+            FROM memories_fts f
+            JOIN memories m ON m.id = f.id
+            WHERE memories_fts MATCH ?
+            AND m.user_id = ?
+            ORDER BY rank
+            LIMIT ?
+            """,
+            (fts_query, user_id, fts_limit),
+        ).fetchall()
+
+    def _rank_and_score(
+        self,
+        rank_knn: dict,
+        rank_fts: dict,
+    ) -> tuple[list[str], dict, dict]:
         """
-        KNN + FTS5 → RRF fusion search.
+        Dedup + score one candidate pool (from either the quick or wide pass).
 
-        1. KNN: top-KNN_LIMIT by cosine distance from memories_vec
-        2. FTS5: top-FTS_LIMIT by BM25 from memories_fts
-        3. Dedup: collapse exact-text duplicate rows, keeping only the most
-           recently created row per duplicate cluster (see
-           _normalize_memory_text). This runs before scoring so a duplicate
-           can never occupy more than one of the returned slots, regardless
-           of pinned status.
-        4. RRF + secondary weights: score = 1/(k+rank_knn) + 1/(k+rank_fts)
-           plus recency/access/pinned bonuses.
-        5. Return top `limit` by final score as payload dicts.
+        1. Fetch full rows for the union of KNN/FTS candidate ids.
+        2. Collapse exact-text duplicates, keeping the most recently created
+           row per duplicate cluster.
+        3. Score every surviving id: RRF fusion + recency/access/pinned bonuses.
+
+        Returns (ids sorted best-first, {id: score}, {id: row}).
         """
-        vector = self._embed(query, query=True)
-
-        knn_rows = _sqlite_knn_search(self._conn, vector, user_id, KNN_LIMIT)
-        rank_knn = {row["id"]: i + 1 for i, row in enumerate(knn_rows)}
-
-        fts_query = _sanitize_fts_query(query)
-        if fts_query is not None:
-            fts_rows = self._conn.execute(
-                """
-                SELECT f.id
-                FROM memories_fts f
-                JOIN memories m ON m.id = f.id
-                WHERE memories_fts MATCH ?
-                AND m.user_id = ?
-                ORDER BY rank
-                LIMIT ?
-                """,
-                (fts_query, user_id, FTS_LIMIT),
-            ).fetchall()
-        else:
-            fts_rows = []
-
-        rank_fts = {row["id"]: i + 1 for i, row in enumerate(fts_rows)}
-
         all_ids = set(rank_knn) | set(rank_fts)
         if not all_ids:
-            return []
+            return [], {}, {}
 
         placeholders = ",".join("?" * len(all_ids))
         rows = self._conn.execute(
@@ -753,7 +796,7 @@ class _MemoryBackend:
                 continue
             if row["created_at"] > row_by_id[current_best]["created_at"]:
                 best_by_text[norm] = mid
-        all_ids = set(best_by_text.values())
+        deduped_ids = set(best_by_text.values())
 
         def _recency_score(created_at: str) -> float:
             try:
@@ -782,11 +825,56 @@ class _MemoryBackend:
                     score += MEMORY_RANK_PINNED_WEIGHT
             return score
 
-        ranked = sorted(all_ids, key=final_score, reverse=True)[:limit]
-        order = {mid: i for i, mid in enumerate(ranked)}
-        rows_sorted = sorted((row_by_id[mid] for mid in ranked if mid in row_by_id), key=lambda r: order.get(r["id"], 999))
+        scored_ids = sorted(deduped_ids, key=final_score, reverse=True)
+        scores = {mid: final_score(mid) for mid in scored_ids}
+        return scored_ids, scores, row_by_id
 
-        return [dict(r) for r in rows_sorted]
+    def search(self, query: str, user_id: str, limit: int = 5) -> list[dict]:
+        """
+        KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate pass.
+
+        1. Embed the query once (_embed) — this is the dominant cost
+           regardless of which pass runs below, so it is never repeated.
+        2. Quick pass: pull QUICK_KNN_LIMIT / QUICK_FTS_LIMIT candidates,
+           dedup + score them. If that already fills `limit` results and the
+           weakest of them clears MEMORY_RECALL_SCORE_THRESHOLD, return
+           immediately — most turns stop here and never pay for the wider
+           SQL scan.
+        3. Otherwise widen to KNN_LIMIT / FTS_LIMIT and re-rank the larger
+           pool from scratch (rank positions shift when the pool grows, so
+           this is a fresh scoring pass, not a merge with the quick pass).
+           Both SQL queries here are still sub-millisecond at typical table
+           sizes — the embedding call is the only expensive step, and it is
+           not repeated.
+
+        Returns top `limit` results by final score as payload dicts.
+        """
+        vector = self._embed(query, query=True)
+        fts_query = _sanitize_fts_query(query)
+
+        # ── quick pass ──────────────────────────────────────────────────────
+        quick_knn_rows = _sqlite_knn_search(self._conn, vector, user_id, QUICK_KNN_LIMIT)
+        rank_knn_q = {row["id"]: i + 1 for i, row in enumerate(quick_knn_rows)}
+        quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT)
+        rank_fts_q = {row["id"]: i + 1 for i, row in enumerate(quick_fts_rows)}
+
+        scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q)
+
+        confident = (
+            len(scored_ids) >= limit
+            and scores.get(scored_ids[limit - 1], 0.0) >= MEMORY_RECALL_SCORE_THRESHOLD
+        )
+
+        # ── widen only if the quick pass was under-filled or under-confident ──
+        if not confident:
+            wide_knn_rows = _sqlite_knn_search(self._conn, vector, user_id, KNN_LIMIT)
+            rank_knn_w = {row["id"]: i + 1 for i, row in enumerate(wide_knn_rows)}
+            wide_fts_rows = self._fts_pass(fts_query, user_id, FTS_LIMIT)
+            rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
+            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w)
+
+        top_ids = scored_ids[:limit]
+        return [dict(row_by_id[mid]) for mid in top_ids if mid in row_by_id]
 
     def iter_all(self, user_id: str, batch_size: int = LIFECYCLE_BATCH_SIZE):
         """Yield memory records for a user in rowid order without one giant list."""
@@ -984,7 +1072,18 @@ class AikoMemorize:
         Retrieve top-k memories relevant to the current query.
         Side-effect: increments access_count and updates last_accessed_at
         for all returned memories in a single batched UPDATE.
+
+        Trivial-input skip: turns that are nothing but filler (a greeting,
+        an ack, the assistant's wake-word alone) return [] immediately,
+        before the cache lookup or the embedding call. This is the single
+        choke point every caller (CLI, WebUI, voice, think.py) goes
+        through, so the skip applies everywhere without duplication. Any
+        message with real content attached always searches normally.
         """
+        if _TRIVIAL_INPUT_RE.match(query or ""):
+            log.debug(f"Skipping search for trivial input: {query!r}")
+            return []
+
         if _BROAD_RECALL_RE.search(query or ""):
             results = self._recent_or_important_memories(user_id=user_id, limit=limit)
             self._touch_memories(results)
