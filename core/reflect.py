@@ -210,6 +210,17 @@ def _extract_json_arrays(raw: str) -> list[list]:
         i = end + 1
     return arrays
 
+def _salvage_truncated_facts(raw: str) -> list[str]:
+    """
+    Last-resort recovery when an array never closes (true max_tokens
+    truncation — confirmed by no closing bracket/quote at all). Pulls out
+    every complete "..." string that appears before the cutoff, discarding
+    only the partial fragment at the very end. Better to keep 15 clean
+    facts than throw away a whole day's extraction over the 16th being
+    cut off mid-word.
+    """
+    strings = re.findall(r'"((?:[^"\\]|\\.)*)"\s*,?', raw)
+    return [s.strip() for s in strings if s.strip() and len(s) <= 200]
 
 def _generate_daily_facts(
     prose: str,
@@ -238,7 +249,7 @@ def _generate_daily_facts(
     raw = _llm_chat(
         system="You are a precise fact-extraction assistant.",
         user=user_prompt,
-        max_tokens=800,
+        max_tokens=1536,
         temperature=0.0,
     )
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
@@ -260,8 +271,16 @@ def _generate_daily_facts(
         return _generate_daily_facts(prose, snippets, date, _retry=True)
 
     if not facts:
-        log.warning(f"Failed to parse daily-facts JSON after retry: {raw[:600]!r}")
-        return []
+        salvaged = _salvage_truncated_facts(raw)
+        if salvaged:
+            log.warning(
+                f"Daily-facts array truncated for {date.strftime('%Y-%m-%d')} — "
+                f"salvaged {len(salvaged)} complete fact(s) from partial output."
+            )
+            facts = salvaged
+        else:
+            log.warning(f"Failed to parse daily-facts JSON after retry: {raw[:600]!r}")
+            return []
 
     facts = [f for f in facts if len(f) <= 200]
     return facts
