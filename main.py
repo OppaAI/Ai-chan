@@ -24,7 +24,7 @@ Responsibilities:
     - Clean shutdown on Ctrl-C / Ctrl-D
 
 Note: the old curses TUI (tui/tui.py) has been retired in favor of the
-WebUI as the default front end, plus a simple CLI for quick, no-frills
+WebUI as the default front end, plus cli/simple_cli.py for quick, no-frills
 local testing. Move tui/tui.py to archive/tui/ in your own checkout —
 nothing here imports curses anymore.
 """
@@ -644,6 +644,9 @@ class AikoSimpleCLI:
 
     def set_latency_stats(self, stats: dict) -> None:
         self._latency_stats = stats
+        v_to_a = stats.get("voice_end_to_first_audio")
+        if v_to_a and v_to_a != "n/a":
+            print(f"  ⏱  V→A (voice end → Aiko's first audio): {v_to_a}")
         if self.debug:
             print(f"  [latency] {stats}")
 
