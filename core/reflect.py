@@ -155,9 +155,82 @@ _DAILY_FACTS_PROMPT = textwrap.dedent("""
     {notes}
 """).strip()
 
-def _generate_daily_facts(prose: str, snippets: list[str], date: datetime) -> list[str]:
+def _extract_json_arrays(raw: str) -> list[list]:
+    r"""
+    Scan raw text for top-level JSON arrays using bracket-depth tracking
+    (aware of string quoting/escaping), rather than a regex that assumes
+    no '[' or ']' characters appear inside the array's own string content.
+    A naive `\[.*?\]` regex truncates early on any fact containing a
+    literal bracket (e.g. "[CUDA 13]", file paths, version tags) — common
+    in Oppa's technical daily notes. Returns every syntactically complete
+    top-level array found, in order of appearance.
+    """
+    arrays: list[list] = []
+    i, n = 0, len(raw)
+    while i < n:
+        start = raw.find("[", i)
+        if start == -1:
+            break
+        depth = 0
+        in_string = False
+        escape = False
+        end = None
+        for j in range(start, n):
+            ch = raw[j]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+                elif ch == "[":
+                    depth += 1
+                elif ch == "]":
+                    depth -= 1
+                    if depth == 0:
+                        end = j
+                        break
+            i = j
+        if end is None:
+            # Unterminated array from this start point — likely genuine
+            # truncation (max_tokens hit mid-array). Nothing further to
+            # scan from here.
+            break
+        candidate = raw[start:end + 1]
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, list):
+                arrays.append(parsed)
+        except json.JSONDecodeError:
+            pass
+        i = end + 1
+    return arrays
+
+
+def _generate_daily_facts(
+    prose: str,
+    snippets: list[str],
+    date: datetime,
+    _retry: bool = False,
+) -> list[str]:
     notes = "\n".join(f"- {s}" for s in snippets[:REFLECT_MAX_MEMS]) or "- none"
-    user_prompt = _DAILY_FACTS_PROMPT.format(
+    prompt_template = _DAILY_FACTS_PROMPT
+    if _retry:
+        # Second attempt: push back on empty-array laziness. Only used
+        # when the first pass returned [] — the narrative almost always
+        # has *something* concrete, even if stylized.
+        prompt_template += (
+            "\n\nIMPORTANT: Only return [] if the narrative truly describes "
+            "nothing but atmosphere with zero concrete events. If any "
+            "activity, decision, bug, plan, or interaction is mentioned — "
+            "even briefly or metaphorically — extract at least one fact "
+            "from it."
+        )
+    user_prompt = prompt_template.format(
         date_str=date.strftime("%Y-%m-%d"),
         prose=prose,
         notes=notes,
@@ -165,33 +238,31 @@ def _generate_daily_facts(prose: str, snippets: list[str], date: datetime) -> li
     raw = _llm_chat(
         system="You are a precise fact-extraction assistant.",
         user=user_prompt,
-        max_tokens=800,  # was 500 — outputs were getting truncated mid-array
+        max_tokens=800,
         temperature=0.0,
     )
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
 
-    # Model sometimes emits multiple bracket-matched arrays (e.g. an
-    # empty "[]" preamble before the real one). Find every top-level
-    # array via non-greedy matching, then use the LAST one that parses
-    # successfully and is non-empty — greedy re.search across multiple
-    # arrays produces invalid concatenated JSON.
-    candidates = re.findall(r"\[.*?\]", raw, re.DOTALL)
+    # Always log the full raw response at debug level so future parse
+    # failures can be diagnosed without guessing from a 300-char preview.
+    log.debug(f"Raw daily-facts response for {date.strftime('%Y-%m-%d')}: {raw}")
+
+    arrays = _extract_json_arrays(raw)
     facts: list[str] = []
-    for candidate in reversed(candidates):
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, list) and parsed:
-                facts = [f.strip() for f in parsed if isinstance(f, str) and f.strip()]
-                break
-        except json.JSONDecodeError:
-            continue
+    for candidate in reversed(arrays):
+        if candidate and all(isinstance(f, str) for f in candidate):
+            facts = [f.strip() for f in candidate if isinstance(f, str) and f.strip()]
+            break
+
+    if not facts and not _retry:
+        log.info(f"Empty/unparseable facts for {date.strftime('%Y-%m-%d')} — retrying with stronger prompt.")
+        return _generate_daily_facts(prose, snippets, date, _retry=True)
 
     if not facts:
-        log.warning(f"Failed to parse daily-facts JSON: {raw[:300]!r}")
+        log.warning(f"Failed to parse daily-facts JSON after retry: {raw[:600]!r}")
         return []
 
-    # Guard against the model echoing whole blocks instead of atomic facts
     facts = [f for f in facts if len(f) <= 200]
     return facts
 
