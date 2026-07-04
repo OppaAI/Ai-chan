@@ -24,7 +24,7 @@ Responsibilities:
     - Clean shutdown on Ctrl-C / Ctrl-D
 
 Note: the old curses TUI (tui/tui.py) has been retired in favor of the
-WebUI as the default front end, plus cli/simple_cli.py for quick, no-frills
+WebUI as the default front end, plus a simple cli for quick, no-frills
 local testing. Move tui/tui.py to archive/tui/ in your own checkout —
 nothing here imports curses anymore.
 """
