@@ -21,6 +21,10 @@ Responsibilities:
     - Fuzzy-match spoken voice commands to slash equivalents in ASR mode
     - Surface live agentic status (thinking / tool calls / search) as
       readable status lines instead of a generic "thinking..." spinner
+    - Reveal the streamed reply text in sync with TTS playback (karaoke
+      typewriter) instead of dumping it the instant tokens arrive
+    - Track a detailed per-turn latency/debug breakdown (tokens, tok/s,
+      ASR/intent/search/LLM/TTS timing) when --debug is set
     - Clean shutdown on Ctrl-C / Ctrl-D
 
 Note: the old curses TUI (tui/tui.py) has been retired in favor of the
@@ -37,6 +41,7 @@ from datetime import datetime, timedelta
 import difflib
 import json
 import os
+import queue
 import random
 import re
 import sys
@@ -74,6 +79,11 @@ PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", "1800
 PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", "2"))
 PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", "3600"))
 PROACTIVE_USE_LLM = os.getenv("PROACTIVE_USE_LLM", "1").lower() in {"1", "true", "yes", "on"}
+
+# Karaoke typewriter — reveal streamed reply text paced to TTS playback
+# instead of the instant the LLM emits tokens. See TypewriterSync below.
+KARAOKE_SYNC = os.getenv("KARAOKE_SYNC", "1").lower() in {"1", "true", "yes", "on"}
+KARAOKE_WPS = float(os.getenv("KARAOKE_WPS", "2.6"))  # fallback reveal pace (words/sec) when no per-chunk audio timing is available
 
 
 def _parse_env_list(name: str, default: list[str]) -> list[str]:
@@ -447,6 +457,118 @@ class ProactiveIdleRunner:
             self._wakeup.clear()
 
 
+# ── karaoke typewriter sync ─────────────────────────────────────────────────
+#
+# Decouples "when the LLM emits a token" from "when the UI reveals it", so
+# the streamed reply reads more like a trailing caption for the TTS audio
+# instead of a spoiler that finishes long before the voice does.
+#
+# Two modes, auto-detected purely from what `speak` happens to expose
+# (duck-typed — no changes to speak.py required to run, but speak.py can
+# opt this into precise per-sentence sync later just by adding the method):
+#
+#   - precise: speak.set_chunk_playback_callback(fn) exists on the speak
+#     object. fn(text, duration_seconds) is expected to fire the instant
+#     that sentence-chunk's audio starts playing, so each word is paced by
+#     duration_seconds / word_count — genuinely in sync with the voice.
+#   - fallback: only speak.set_first_audio_callback exists (this is the
+#     hook already wired into _run_session below). The whole buffered
+#     reply is released at once when audio starts, paced by KARAOKE_WPS.
+#     This is what runs today with zero other files touched — accurate
+#     for short replies, drifts a bit on long multi-sentence ones since
+#     only the very first chunk's start time is known.
+
+_SENTENCE_END_RE = re.compile(r'(?<=[.!?…])\s+')
+
+
+class TypewriterSync:
+    """Reveal streamed reply text to the UI paced to TTS playback, not to
+    LLM token arrival. See module-level comment above for the two modes."""
+
+    def __init__(self, ui, speak) -> None:
+        self._ui = ui
+        self._speak = speak
+        self._q: "queue.Queue[tuple[str, float] | None]" = queue.Queue()
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+        self._fallback_buf: list[str] = []
+        self.precise = speak is not None and hasattr(speak, "set_chunk_playback_callback")
+        if self.precise:
+            speak.set_chunk_playback_callback(self._on_chunk_start)
+        # fallback mode is driven externally via on_first_audio(), wired to
+        # whatever first-audio hook _run_session already sets up on speak.
+
+    def start(self) -> None:
+        """Begin a fresh reveal for a new turn — call right before think.route()."""
+        self._stop.clear()
+        self._fallback_buf = []
+        while not self._q.empty():
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+        self._thread = threading.Thread(target=self._drain, name="aiko-typewriter", daemon=True)
+        self._thread.start()
+
+    def stop(self, flush: bool = True) -> None:
+        """Stop the reveal thread. If flush, dump any still-queued words to
+        the UI immediately (used on interrupt/quit so nothing is silently
+        swallowed); otherwise assumes the queue is already empty (normal
+        end-of-turn, after speak.wait() has returned)."""
+        if flush:
+            while not self._q.empty():
+                try:
+                    word, _ = self._q.get_nowait()
+                except queue.Empty:
+                    break
+                self._ui.stream_token(word + " ")
+        self._stop.set()
+        self._q.put(None)
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+
+    # ── feed path: token_cb calls this as complete sentences accumulate ────
+    def feed_sentence(self, sentence: str) -> None:
+        """In fallback mode, buffer the sentence for release on first audio.
+        In precise mode this is a no-op — speak's own chunk callback drives
+        the reveal instead."""
+        if self.precise:
+            return
+        sentence = sentence.strip()
+        if sentence:
+            self._fallback_buf.append(sentence)
+
+    def on_first_audio(self) -> None:
+        """Fallback-mode trigger: release the whole buffered reply, paced by
+        KARAOKE_WPS, the instant TTS playback actually starts."""
+        if self.precise:
+            return
+        text = " ".join(self._fallback_buf)
+        self._fallback_buf = []
+        for w in text.split():
+            self._q.put((w, 1.0 / KARAOKE_WPS))
+
+    def _on_chunk_start(self, text: str, duration_s: float) -> None:
+        """Precise-mode trigger: called by speak.py the instant a given
+        sentence-chunk's audio begins playing."""
+        words = text.split()
+        if not words:
+            return
+        per_word = duration_s / len(words) if duration_s and duration_s > 0 else 1.0 / KARAOKE_WPS
+        for w in words:
+            self._q.put((w, per_word))
+
+    def _drain(self) -> None:
+        while not self._stop.is_set():
+            item = self._q.get()
+            if item is None:
+                return
+            word, delay = item
+            self._ui.stream_token(word + " ")
+            self._ui._draw(buf=[])
+            time.sleep(delay)
+
+
 # ── voice command map ─────────────────────────────────────────────────────────
 #
 # Maps spoken phrases to their slash-command equivalents.
@@ -647,12 +769,43 @@ class AikoSimpleCLI:
         self._stream_buf = []
 
     def set_latency_stats(self, stats: dict) -> None:
+        """
+        Render the per-turn debug breakdown.
+
+        `stats` is either the old-style single-key dict (kept for backward
+        compatibility with any other UI implementing this same interface)
+        or the full breakdown dict from _latency_parts() when --debug is on.
+        """
         self._latency_stats = stats
         v_to_a = stats.get("voice_end_to_first_audio")
         if v_to_a and v_to_a != "n/a":
             print(f"  ⏱  V→A (voice end → Aiko's first audio): {v_to_a}")
-        if self.debug:
-            print(f"  [latency] {stats}")
+        if not self.debug:
+            return
+        # full breakdown, only in --debug mode
+        tok_line = (
+            f"  🧮 tokens: in={stats.get('input_tokens', 'n/a')} "
+            f"out={stats.get('output_tokens', 'n/a')} "
+            f"({stats.get('tokens_per_second', 'n/a')} tok/s)"
+        )
+        print(tok_line)
+        stage_labels = [
+            ("asr_inference",   "ASR"),
+            ("agentic_intent",  "Intent"),
+            ("web_search",      "Search"),
+            ("llm_inference",   "LLM"),
+            ("tts_inference",   "TTS"),
+        ]
+        stage_parts = [f"{label}={stats.get(key, 'n/a')}" for key, label in stage_labels]
+        print(f"  ⏱  stages: {' | '.join(stage_parts)}")
+        extra_labels = [
+            ("voice_end_to_submit",           "voice→submit"),
+            ("submit_to_first_token",         "submit→1st_tok"),
+            ("assistant_done_to_first_audio", "done→1st_audio"),
+            ("submit_to_turn_done",           "submit→turn_done"),
+        ]
+        extra_parts = [f"{label}={stats.get(key, 'n/a')}" for key, label in extra_labels]
+        print(f"  ⏱  totals: {' | '.join(extra_parts)}")
 
     # ── input ────────────────────────────────────────────────────────────
     def get_input(self):
@@ -676,6 +829,13 @@ class AikoSimpleCLI:
         which includes ASR transcription time, not just end-of-speech. The
         WebUI's real pipeline stamps this earlier (right at end-of-speech),
         so CLI latency numbers will read a bit higher than the WebUI's.
+
+        `asr_done_at` is also stamped here (right after the blocking call
+        returns) so main.py can report an ASR-only inference time, even
+        though for this CLI backend it will read the same as
+        recording_stopped_at above — the WebUI path can eventually pass a
+        tighter one from the real ASR component if it starts separating
+        end-of-speech from transcription-complete.
         """
         for method_name in ("listen_once", "transcribe_once", "listen"):
             method = getattr(listen, method_name, None)
@@ -688,6 +848,7 @@ class AikoSimpleCLI:
                     print(f"  [voice input failed: {e}]")
                     return self.get_input()
                 recording_stopped_at = time.monotonic()
+                asr_done_at = recording_stopped_at
                 text = (result[0] if isinstance(result, tuple) else result) or ""
                 text = text.strip()
                 if text:
@@ -695,6 +856,7 @@ class AikoSimpleCLI:
                 return text, {
                     "listen_started_at": listen_started_at,
                     "recording_stopped_at": recording_stopped_at,
+                    "asr_done_at": asr_done_at,
                 }
         # No compatible voice API found on this backend — fall back to typed input.
         return self.get_input()
@@ -744,19 +906,54 @@ def _run_session(ui, args):
     """Run Aiko using any UI object that implements the AikoTUI-compatible API."""
     last_stream_draw = 0.0
 
+    # Karaoke typewriter state — created after `speak` boots below.
+    typewriter: "TypewriterSync | None" = None
+    _sentence_buf: list[str] = []
+
     def token_cb(token):
-        nonlocal last_stream_draw
+        nonlocal last_stream_draw, _sentence_buf
+        now = time.monotonic()
+        stripped = token.rstrip("\r\n") if token else ""
+
         if token:
             _latency_mark("first_token_at")
-            if not token.startswith("__"):
-                _latency_mark("first_assistant_token_at")
-        if token.startswith("__THINKING__") or token.startswith("__TOOL__:"):
-            if current_latency is not None:
+
+        # ── detailed stage timing (debug breakdown) ─────────────────────
+        # __THINKING__ / __TOOL__: brackets the agentic intent-resolution
+        # stage; __SEARCHING__ brackets web search. The first non-marker
+        # token after either closes that stage and marks first assistant
+        # token / start of LLM generation proper.
+        if current_latency is not None:
+            if stripped == "__THINKING__":
+                current_latency.setdefault("intent_start_at", now)
                 current_latency["mode"] = "agentic"
+            elif stripped.startswith("__TOOL__:"):
+                current_latency["mode"] = "agentic"
+            elif stripped == "__SEARCHING__":
+                current_latency.setdefault("search_start_at", now)
+            if token and not token.startswith("__"):
+                if "intent_start_at" in current_latency and "intent_done_at" not in current_latency:
+                    current_latency["intent_done_at"] = now
+                if "search_start_at" in current_latency and "search_done_at" not in current_latency:
+                    current_latency["search_done_at"] = now
+                _latency_mark("first_assistant_token_at")
+
         if _handle_status_marker(ui, token):
             return
+
+        # ── karaoke reveal path ──────────────────────────────────────────
+        if KARAOKE_SYNC and tts_enabled and typewriter is not None:
+            _sentence_buf.append(token)
+            joined = "".join(_sentence_buf)
+            parts = _SENTENCE_END_RE.split(joined)
+            if len(parts) > 1:
+                for complete in parts[:-1]:
+                    if complete.strip():
+                        typewriter.feed_sentence(complete)
+                _sentence_buf = [parts[-1]]
+            return  # typewriter thread owns the reveal, not the raw stream
+
         ui.stream_token(token)
-        now = time.monotonic()
         if now - last_stream_draw >= STREAM_DRAW_INTERVAL:
             ui._draw(buf=[])
             last_stream_draw = now
@@ -808,53 +1005,100 @@ def _run_session(ui, args):
         if current_latency is not None and name not in current_latency:
             current_latency[name] = time.monotonic()
 
+    # Karaoke typewriter needs speak, so build it after boot. Purely
+    # duck-typed against whatever speak.py exposes — see class docstring.
+    typewriter = TypewriterSync(ui, speak) if speak is not None else None
+
+    def _on_first_audio():
+        _latency_mark("first_audio_at")
+        if typewriter is not None:
+            typewriter.on_first_audio()
+
     if speak is not None and hasattr(speak, "set_first_audio_callback"):
-        speak.set_first_audio_callback(lambda: _latency_mark("first_audio_at"))
+        speak.set_first_audio_callback(_on_first_audio)
 
     def _latency_seconds(timing: dict, start: str, end: str) -> float | None:
         if timing.get(start) is None or timing.get(end) is None:
             return None
         return max(0.0, timing[end] - timing[start])
 
-    def _fmt_latency(value: float | None) -> str:
-        return "n/a" if value is None else f"{value:.3f}s"
+    def _fmt_latency(value) -> str:
+        if value is None:
+            return "n/a"
+        if isinstance(value, int):
+            return str(value)
+        return f"{value:.3f}s"
 
     def _latency_parts(timing: dict) -> dict:
+        gen_time = _latency_seconds(timing, "first_assistant_token_at", "assistant_done_at")
+        out_tok = timing.get("output_tokens")
+        tok_per_sec = (out_tok / gen_time) if (out_tok and gen_time and gen_time > 0) else None
+        # Only report a real ASR inference figure when asr_done_at is
+        # distinguishable from voice_recording_stopped_at (i.e. some caller
+        # is actually stamping transcription-complete separately from
+        # end-of-speech). If not, don't guess via listen_started_at — that
+        # window includes however long the user sat silent before talking,
+        # which isn't inference time and would misreport a "listening" gap
+        # as a "model is slow" gap. Honest n/a beats a plausible-looking lie.
+        asr_time = _latency_seconds(timing, "voice_recording_stopped_at", "asr_done_at")
+
         return {
-            "voice_end_to_submit": _latency_seconds(timing, "voice_recording_stopped_at", "submitted_at"),
-            "submit_to_first_token": _latency_seconds(timing, "submitted_at", "first_assistant_token_at"),
-            "submit_to_assistant_done": _latency_seconds(timing, "submitted_at", "assistant_done_at"),
+            "voice_end_to_submit":           _latency_seconds(timing, "voice_recording_stopped_at", "submitted_at"),
+            "asr_inference":                 asr_time,
+            "agentic_intent":                _latency_seconds(timing, "intent_start_at", "intent_done_at"),
+            "web_search":                    _latency_seconds(timing, "search_start_at", "search_done_at"),
+            "submit_to_first_token":         _latency_seconds(timing, "submitted_at", "first_assistant_token_at"),
+            "llm_inference":                 gen_time,
+            "tts_inference":                 timing.get("tts_synth_total"),
+            "submit_to_assistant_done":      _latency_seconds(timing, "submitted_at", "assistant_done_at"),
             "assistant_done_to_first_audio": _latency_seconds(timing, "assistant_done_at", "first_audio_at"),
-            "voice_end_to_first_audio": _latency_seconds(timing, "voice_recording_stopped_at", "first_audio_at"),
-            "submit_to_first_audio": _latency_seconds(timing, "submitted_at", "first_audio_at"),
-            "submit_to_turn_done": _latency_seconds(timing, "submitted_at", "turn_done_at"),
+            "voice_end_to_first_audio":      _latency_seconds(timing, "voice_recording_stopped_at", "first_audio_at"),
+            "submit_to_first_audio":         _latency_seconds(timing, "submitted_at", "first_audio_at"),
+            "submit_to_turn_done":           _latency_seconds(timing, "submitted_at", "turn_done_at"),
+            "input_tokens":                  timing.get("input_tokens"),
+            "output_tokens":                 out_tok,
+            "tokens_per_second":             round(tok_per_sec, 1) if tok_per_sec is not None else None,
         }
 
     def _update_latency_stats(timing: dict) -> None:
         if not hasattr(ui, "set_latency_stats"):
             return
         parts = _latency_parts(timing)
-        ui.set_latency_stats({
-            "voice_end_to_first_audio": _fmt_latency(parts["voice_end_to_first_audio"]),
-        })
+        if args.debug:
+            # full breakdown — formatted values, "n/a" for anything unavailable
+            display = {k: (_fmt_latency(v) if k not in ("input_tokens", "output_tokens", "tokens_per_second") else (v if v is not None else "n/a"))
+                       for k, v in parts.items()}
+            ui.set_latency_stats(display)
+        else:
+            ui.set_latency_stats({
+                "voice_end_to_first_audio": _fmt_latency(parts["voice_end_to_first_audio"]),
+            })
 
     def _log_latency(timing: dict) -> None:
         if not LATENCY_LOG_ENABLED:
             return
         mode = timing.get("mode", "text")
-        parts = _latency_parts(timing)
+        p = _latency_parts(timing)
         log.info(
-            "[latency] mode=%s voice_end→submit=%s submit→first_token=%s "
-            "submit→assistant_done=%s assistant_done→first_audio=%s "
-            "voice_end→first_audio=%s submit→first_audio=%s submit→turn_done=%s",
+            "[latency] mode=%s in_tok=%s out_tok=%s tok/s=%s | "
+            "asr=%s intent=%s search=%s llm=%s tts=%s | "
+            "voice→submit=%s submit→1st_tok=%s submit→done=%s "
+            "done→1st_audio=%s voice→1st_audio=%s submit→turn_done=%s",
             mode,
-            _fmt_latency(parts["voice_end_to_submit"]),
-            _fmt_latency(parts["submit_to_first_token"]),
-            _fmt_latency(parts["submit_to_assistant_done"]),
-            _fmt_latency(parts["assistant_done_to_first_audio"]),
-            _fmt_latency(parts["voice_end_to_first_audio"]),
-            _fmt_latency(parts["submit_to_first_audio"]),
-            _fmt_latency(parts["submit_to_turn_done"]),
+            p["input_tokens"] if p["input_tokens"] is not None else "n/a",
+            p["output_tokens"] if p["output_tokens"] is not None else "n/a",
+            p["tokens_per_second"] if p["tokens_per_second"] is not None else "n/a",
+            _fmt_latency(p["asr_inference"]),
+            _fmt_latency(p["agentic_intent"]),
+            _fmt_latency(p["web_search"]),
+            _fmt_latency(p["llm_inference"]),
+            _fmt_latency(p["tts_inference"]),
+            _fmt_latency(p["voice_end_to_submit"]),
+            _fmt_latency(p["submit_to_first_token"]),
+            _fmt_latency(p["submit_to_assistant_done"]),
+            _fmt_latency(p["assistant_done_to_first_audio"]),
+            _fmt_latency(p["voice_end_to_first_audio"]),
+            _fmt_latency(p["submit_to_turn_done"]),
         )
 
     # ── shutdown helper ───────────────────────────────────────────────────────
@@ -887,6 +1131,8 @@ def _run_session(ui, args):
     def _shutdown():
         """Stop background daemons and flush memory writes before exit."""
         proactive.stop()
+        if typewriter is not None:
+            typewriter.stop(flush=True)
         if listen is not None:
             listen.stop_barge_in_monitor()
         think.wait_for_memory()
@@ -1049,6 +1295,11 @@ def _run_session(ui, args):
                 ui.add_message('sys',
                     f'Proactive idle check-ins: {"ON  🌸" if proactive.is_enabled() else "OFF 💤"}')
 
+            elif cmd == '/karaoke':
+                globals()['KARAOKE_SYNC'] = not KARAOKE_SYNC
+                ui.add_message('sys',
+                    f'Karaoke text sync: {"ON  🎤📝" if KARAOKE_SYNC else "OFF (instant stream)"}')
+
             elif cmd == '/help':
                 for line in [
                     '/quit /exit              — end session',
@@ -1061,6 +1312,7 @@ def _run_session(ui, args):
                     '/voice                   — toggle TTS on/off',
                     '/listen                  — toggle ASR on/off',
                     '/proactive               — toggle idle check-ins on/off',
+                    '/karaoke                 — toggle text-sync-to-voice reveal on/off',
                     '/help                    — show this list',
                     '',
                     'Voice commands (say aloud in ASR mode):',
@@ -1121,17 +1373,48 @@ def _run_session(ui, args):
         if voice_info:
             current_latency["listen_started_at"] = voice_info.get("listen_started_at")
             current_latency["voice_recording_stopped_at"] = voice_info.get("recording_stopped_at")
+            if voice_info.get("asr_done_at") is not None:
+                current_latency["asr_done_at"] = voice_info["asr_done_at"]
 
         ui.add_message('you', user_input)
         ui.turn_start()
         session_active.set()
         ui._draw()
 
+        if typewriter is not None:
+            typewriter.start()
+            _sentence_buf = []
+
+        # Reset speak's per-turn synth-time accumulator if it exposes one
+        # (duck-typed — no-op if speak.py doesn't track this yet).
+        if speak is not None and hasattr(speak, "reset_synth_timer"):
+            speak.reset_synth_timer()
+
         try:
             think.route(user_input, token_callback=token_cb)
             current_latency["assistant_done_at"] = time.monotonic()
+
+            # pull token usage if think.py exposes it (duck-typed — "n/a" if not)
+            usage = getattr(think, "last_usage", None) or {}
+            if usage.get("prompt_tokens") is not None:
+                current_latency["input_tokens"] = usage["prompt_tokens"]
+            if usage.get("completion_tokens") is not None:
+                current_latency["output_tokens"] = usage["completion_tokens"]
+
+            if typewriter is not None and _sentence_buf:
+                typewriter.feed_sentence("".join(_sentence_buf))
+                _sentence_buf = []
+
             if speak and tts_enabled:
                 speak.wait()
+
+            # pull accumulated TTS synth time if speak.py exposes it
+            if speak is not None and hasattr(speak, "pop_synth_time"):
+                current_latency["tts_synth_total"] = speak.pop_synth_time()
+
+            if typewriter is not None:
+                typewriter.stop(flush=True)  # flush any words not yet drained (e.g. TTS disabled this turn)
+
             ui.stream_commit()
             ui._draw()
             current_latency["turn_done_at"] = time.monotonic()

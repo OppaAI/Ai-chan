@@ -23,6 +23,24 @@ Optional:
   REFERENCE_IMAGE — path to Aiko reference PNG (default ~/Aiko-chan/assets/Aiko-chan.png)
   USER_REFERENCE_IMAGE — path to user reference PNG (default ~/Aiko-chan/assets/OppaAI.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
+
+Idempotency:
+  generate_and_post() pins two kinds of permanent memory per date: a
+  stylized prose summary ("Daily experience summary for YYYY-MM-DD: ...")
+  and a faithful fact-list ("Day record for YYYY-MM-DD: ..."). Both are
+  pinned (immune to dream()'s decay cleanup and merge-as-loser), so if this
+  function runs more than once for the same date — a double-fired
+  scheduler, a crash-and-restart, a manual rerun after a dry run — it used
+  to just keep stacking new pinned rows, since the prose is regenerated
+  fresh each call (temperature=0.85) and rarely lands close enough in
+  embedding space to trip add_raw()'s write-time cosine dedup.
+
+  _delete_existing_daily_pins() now runs immediately before the pin step,
+  matching by content prefix (the date string embedded in the memory text)
+  rather than created_at (created_at reflects when the job ran, not which
+  day the pin describes — so it can't be used to detect "already pinned
+  for this date"). Any stale pins for the target date are deleted first,
+  so a rerun replaces rather than accumulates.
 """
 from core.config import load_config
 load_config()
@@ -65,6 +83,14 @@ REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/
 USER_REFERENCE_IMAGE  = os.getenv("USER_REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/OppaAI.png"))
 
 _GITHUB_API = "https://api.github.com"
+
+# ── pin content prefixes ──────────────────────────────────────────────────────
+# These prefixes are how pinned daily memories are identified for both
+# creation (below) and idempotency-guard deletion (_delete_existing_daily_pins).
+# If you change either f-string's wording at the call sites, update these too.
+
+_DAILY_SUMMARY_PREFIX_TMPL = "Daily experience summary for {date_str}:"
+_DAY_RECORD_PREFIX_TMPL    = "Day record for {date_str}:"
 
 # ── daily summary mode unlock ─────────────────────────────────────────────────
 
@@ -420,6 +446,58 @@ def build_daily_record(snippets: list[str], date: datetime) -> str:
     header = f"Day record for {date_str}:"
     return header + "\n" + "\n".join(f"- {s}" for s in snippets)
 
+# ── idempotency guard ─────────────────────────────────────────────────────────
+
+def _delete_existing_daily_pins(memorize, date: datetime) -> int:
+    """
+    Remove any previously pinned daily-summary / day-record entries for
+    this date before pinning fresh ones.
+
+    Matches by content prefix rather than created_at: created_at reflects
+    when the reflect job actually ran, not which day the pin describes, so
+    it can't be used to detect "this date is already pinned." The date
+    string is embedded directly in the pinned text (see
+    _DAILY_SUMMARY_PREFIX_TMPL / _DAY_RECORD_PREFIX_TMPL), so prefix
+    matching is stable regardless of how many times the LLM-generated
+    prose wording changes between reruns.
+
+    Without this guard, any rerun of generate_and_post() for a date that
+    was already processed (double-fired scheduler, crash-and-restart,
+    manual rerun) piles up additional pinned rows — and because they're
+    pinned, dream()'s cleanup/merge can never remove them afterward.
+
+    Returns the number of stale pins deleted.
+    """
+    date_str = date.strftime("%Y-%m-%d")
+    prefixes = (
+        _DAILY_SUMMARY_PREFIX_TMPL.format(date_str=date_str),
+        _DAY_RECORD_PREFIX_TMPL.format(date_str=date_str),
+    )
+
+    try:
+        all_mems = memorize.get_all()
+    except Exception as e:
+        log.warning(f"Could not fetch existing memories for date-dedup ({date_str}): {e}")
+        return 0
+
+    deleted = 0
+    for m in all_mems:
+        text = m.get("memory") or ""
+        if not text.startswith(prefixes):
+            continue
+        mem_id = m.get("id")
+        if not mem_id:
+            continue
+        try:
+            memorize.delete(mem_id)
+            deleted += 1
+        except Exception as e:
+            log.warning(f"Failed to delete stale daily pin {mem_id}: {e}")
+
+    if deleted:
+        log.info(f"Removed {deleted} stale pinned entr{'y' if deleted == 1 else 'ies'} for {date_str} before re-pinning.")
+    return deleted
+
 # ── public API ────────────────────────────────────────────────────────────────
 
 def generate_and_post(
@@ -438,6 +516,11 @@ def generate_and_post(
         date:       UTC datetime for the post (defaults to yesterday UTC).
         dry_run:    Generate content but skip GitHub push/pin. Logs output instead.
         memorize:   Optional AikoMemorize instance used to pin the daily summary.
+
+    Idempotent per date: if pinned entries already exist for this date
+    (from a prior run), they are deleted before the new ones are pinned,
+    so reruns replace rather than accumulate. See
+    _delete_existing_daily_pins() for why this can't be done via created_at.
 
     Returns dict: {success, slug, word_count, mem_count, duration_s, prose, feelings, image_generated, pinned, record_pinned}
     """
@@ -512,13 +595,18 @@ def generate_and_post(
             "record_pinned":   False,
         }
 
+    # Step 3b: idempotency guard — remove any stale pins for this date
+    # before pinning fresh ones, so reruns replace rather than accumulate.
+    if memorize is not None:
+        _delete_existing_daily_pins(memorize, date)
+
     # Step 4: pin daily summary to persistent memory. Store a raw curated
     # summary with a stable prefix so monthly consolidation can replace older
     # daily summaries without relying on another extraction pass.
     pinned = False
     if memorize is not None:
         try:
-            daily_text = f"Daily experience summary for {date.strftime('%Y-%m-%d')}: {prose}"
+            daily_text = f"{_DAILY_SUMMARY_PREFIX_TMPL.format(date_str=date.strftime('%Y-%m-%d'))} {prose}"
             pinned = bool(memorize.add_raw(daily_text, pinned=True))
         except Exception as e:
             log.error(f"Daily summary pin failed: {e}")

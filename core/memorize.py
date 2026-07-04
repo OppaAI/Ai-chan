@@ -40,6 +40,22 @@ Recall strategy — Reciprocal Rank Fusion (RRF):
   FTS5 catches exact token matches ("Max", "birthday", proper nouns)
   RRF fuses both without weighting either arbitrarily.
 
+  On top of the fused score, recall applies:
+    - a small recency bonus (exponential decay, configurable half-life)
+    - a small access-count bonus (capped, normalized)
+    - a pinned bonus (weighted higher than the above two, so pinned facts
+      reliably outrank equivalent unpinned ones — but still bounded so a
+      pinned entry can't out-rank something genuinely more relevant)
+
+  Dedup-on-recall: before final ranking, candidates are collapsed by
+  normalized memory text. If the same text exists as multiple rows
+  (e.g. several pinned inserts of the same daily record), only the most
+  recently created row survives into the ranked result set. This runs
+  independently of write-time dedup and independently of dream() merge,
+  so a duplicate that slipped through either of those (most commonly:
+  pinned duplicates, which dream() can never delete) still can't occupy
+  more than one of the returned slots.
+
 Custom backend (replaces Qdrant + mem0):
   - _MemoryBackend handles LLM-based fact extraction, ONNX embeddings (HarrierEmbedder),
     and direct sqlite-vec upsert/search/delete/scroll.
@@ -47,6 +63,12 @@ Custom backend (replaces Qdrant + mem0):
     atomic facts, strips <think> blocks for CoT models, skips trivial turns.
   - All schema fields (memory, user_id, created_at, access_count,
     last_accessed_at, pinned) are owned by this module — no hidden schema.
+  - Both add() and add_raw() run the same write-time dedup check (cosine
+    >= WRITE_DEDUP_THRESHOLD against existing vectors) before inserting.
+    Previously add_raw() had no such guard, which let repeated calls
+    (e.g. a nightly daily-record pin job re-running for the same day)
+    insert unbounded duplicate rows that dream()'s merge pass could never
+    clean up once pinned=1 was set.
 
 Dependencies:
   pip install sqlite-vec onnxruntime tokenizers
@@ -97,7 +119,13 @@ FTS_LIMIT   = 20          # candidates fetched before RRF re-rank
 MEMORY_RANK_RECENCY_WEIGHT = float(os.getenv("MEMORY_RANK_RECENCY_WEIGHT", "0.004"))
 MEMORY_RANK_RECENCY_HALF_LIFE_DAYS = float(os.getenv("MEMORY_RANK_RECENCY_HALF_LIFE_DAYS", "30"))
 MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"))
-MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.002"))
+# Bumped from 0.002 -> 0.01: at the old weight, pinned status barely moved
+# ranking relative to RRF terms (~0.016 at rank 1), so pinned facts weren't
+# reliably outranking unpinned ones of similar relevance. 0.01 makes pinned
+# status a meaningful tiebreaker while staying below a full RRF rank-1 term,
+# so a highly relevant unpinned memory can still beat a barely-relevant
+# pinned one.
+MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01"))
 SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -193,6 +221,17 @@ def _sanitize_fts_query(query: str) -> Optional[str]:
     cleaned = re.sub(r'[^\w\s]', ' ', query or "")
     cleaned = ' '.join(cleaned.split())
     return cleaned or None
+
+
+def _normalize_memory_text(text: str) -> str:
+    """
+    Normalize memory text for exact-duplicate comparison at recall time.
+    Lowercased, whitespace-collapsed. Intentionally cheap/exact (not
+    fuzzy) — recall-time dedup targets true copies (e.g. the same
+    daily-record string inserted multiple times via add_raw), not
+    semantic near-duplicates. Semantic near-duplicates are dream()'s job.
+    """
+    return " ".join((text or "").split()).lower()
 
 # ── schema ────────────────────────────────────────────────────────────────────
 
@@ -381,6 +420,10 @@ class _MemoryBackend:
       - add() runs a dedup check per fact before insert: if a near-identical
         vector already exists (cosine >= WRITE_DEDUP_THRESHOLD), the fact is
         skipped rather than creating a redundant entry.
+      - add_raw() now runs the same dedup check as add() (previously it had
+        none, which allowed unbounded duplicate pinned inserts).
+      - search() collapses exact-text duplicates before final ranking,
+        keeping only the most recently created row per duplicate cluster.
     """
 
     def __init__(
@@ -596,14 +639,33 @@ class _MemoryBackend:
         return ids
 
     def add_raw(self, memory: str, user_id: str, *, pinned: bool = False) -> str | None:
-        """Persist one already-curated memory string without LLM extraction."""
+        """
+        Persist one already-curated memory string without LLM extraction.
+
+        Now runs the same write-time dedup check as add(): if a near-identical
+        vector already exists (cosine >= WRITE_DEDUP_THRESHOLD), the insert is
+        skipped and None is returned. This closes the gap that previously let
+        repeated calls (e.g. a daily-record pin job re-running for the same
+        day) accumulate unbounded duplicate rows — especially dangerous for
+        pinned=True inserts, since dream()'s merge pass can never delete a
+        pinned memory even as a duplicate loser.
+        """
         text = (memory or "").strip()
         if not text:
             return None
-        mem_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
         try:
             vector = self._embed(text)
+
+            existing = _sqlite_knn_search(
+                self._conn, vector, user_id,
+                limit=1, threshold=WRITE_DEDUP_THRESHOLD,
+            )
+            if existing:
+                log.debug(f"Skipping near-duplicate raw memory: {text[:80]!r}")
+                return None
+
+            mem_id = str(uuid.uuid4())
+            now = datetime.now(timezone.utc).isoformat()
             self._conn.execute(
                 """
                 INSERT INTO memories
@@ -619,7 +681,7 @@ class _MemoryBackend:
             self._conn.commit()
             return mem_id
         except Exception as e:
-            log.warning("Failed to insert raw memory %r: %s", mem_id, e)
+            log.warning("Failed to insert raw memory: %s", e)
             self._conn.rollback()
             return None
 
@@ -631,8 +693,14 @@ class _MemoryBackend:
 
         1. KNN: top-KNN_LIMIT by cosine distance from memories_vec
         2. FTS5: top-FTS_LIMIT by BM25 from memories_fts
-        3. RRF: score = 1/(k+rank_knn) + 1/(k+rank_fts)
-        4. Return top `limit` by RRF score as payload dicts
+        3. Dedup: collapse exact-text duplicate rows, keeping only the most
+           recently created row per duplicate cluster (see
+           _normalize_memory_text). This runs before scoring so a duplicate
+           can never occupy more than one of the returned slots, regardless
+           of pinned status.
+        4. RRF + secondary weights: score = 1/(k+rank_knn) + 1/(k+rank_fts)
+           plus recency/access/pinned bonuses.
+        5. Return top `limit` by final score as payload dicts.
         """
         vector = self._embed(query, query=True)
 
@@ -668,6 +736,24 @@ class _MemoryBackend:
             list(all_ids),
         ).fetchall()
         row_by_id = {row["id"]: row for row in rows}
+
+        # ── recall-time dedup: collapse exact-text duplicates, keep newest ──
+        # Handles the case dream() structurally can't: pinned duplicate rows
+        # (dream's merge never deletes a pinned memory, even as the loser),
+        # and any duplicate created between dream() runs.
+        best_by_text: dict[str, str] = {}
+        for mid in all_ids:
+            row = row_by_id.get(mid)
+            if row is None:
+                continue
+            norm = _normalize_memory_text(row["memory"])
+            current_best = best_by_text.get(norm)
+            if current_best is None:
+                best_by_text[norm] = mid
+                continue
+            if row["created_at"] > row_by_id[current_best]["created_at"]:
+                best_by_text[norm] = mid
+        all_ids = set(best_by_text.values())
 
         def _recency_score(created_at: str) -> float:
             try:
@@ -803,6 +889,9 @@ class AikoMemorize:
     Pinned memories:
         Created via pin() — the pinned=1 column flag makes them
         immune to cleanup(), dream prune, and dream merge (as the loser).
+        Recall-time dedup (in _MemoryBackend.search) still collapses
+        multiple pinned rows with identical text down to the most recent
+        one, since dream() structurally cannot do this for pinned rows.
 
     Dream pass (call nightly at 00:00):
         1. Boost salient memories' access_count so they survive decay.
@@ -925,7 +1014,17 @@ class AikoMemorize:
         return results
 
     def _recent_or_important_memories(self, user_id: str, limit: int) -> list[dict]:
-        """Return useful memories for broad recall prompts."""
+        """
+        Return useful memories for broad recall prompts.
+
+        Deduplicated by normalized text (keeping the most recently created
+        row per duplicate cluster) before the LIMIT is applied, so pinned
+        duplicate rows (e.g. several identical daily-record pins) can't
+        eat multiple slots of the broad-recall result set.
+        """
+        # Fetch a wider candidate window than `limit` so dedup doesn't
+        # leave fewer than `limit` results when duplicates are present.
+        fetch_n = max(int(limit) * 4, int(limit) + 10)
         rows = self._conn.execute(
             """
             SELECT *
@@ -934,9 +1033,22 @@ class AikoMemorize:
             ORDER BY pinned DESC, created_at DESC, access_count DESC
             LIMIT ?
             """,
-            (user_id, int(limit)),
+            (user_id, fetch_n),
         ).fetchall()
-        return [dict(r) for r in rows]
+
+        best_by_text: dict[str, sqlite3.Row] = {}
+        order: list[str] = []
+        for row in rows:
+            norm = _normalize_memory_text(row["memory"])
+            existing = best_by_text.get(norm)
+            if existing is None:
+                best_by_text[norm] = row
+                order.append(norm)
+            elif row["created_at"] > existing["created_at"]:
+                best_by_text[norm] = row
+
+        deduped = [best_by_text[norm] for norm in order][:int(limit)]
+        return [dict(r) for r in deduped]
 
     def _touch_memories(self, results: list[dict]) -> None:
         """Update decay access metadata for a search result set."""
