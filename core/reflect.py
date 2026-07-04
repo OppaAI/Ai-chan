@@ -127,24 +127,31 @@ _REFLECTION_USER = textwrap.dedent("""
 """).strip()
 
 _DAILY_FACTS_PROMPT = textwrap.dedent("""
-    Extract atomic, memorable facts about Oppa from this day's summary and notes.
+    Rewrite this day's narrative summary as a list of short, atomic factual
+    statements about Oppa's activities, decisions, and events that day.
 
     Rules:
-    - One fact per line, third person, about Oppa specifically.
-    - Only include facts explicitly stated in the input — never invent or infer.
-    - Keep each fact short and self-contained (readable without the day's context).
-    - No hedging language (might, probably, seems, maybe).
-    - No facts about Aiko's feelings or behavior.
-    - If nothing is worth remembering, return: []
+    - Distill the narrative's real content (projects, bugs, decisions, plans,
+      names, deadlines) into plain factual statements — even if the source
+      text is written in a stylized or metaphorical voice.
+    - Strip flavor language, mood-setting, and metaphor; keep only the
+      underlying events and facts.
+    - Do not invent details, outcomes, or facts not supported by the narrative
+      — only translate what's actually there into plainer language.
+    - One fact per line, third person, about Oppa.
+    - Each fact must be self-contained and short (readable without the
+      day's context).
+    - If the narrative genuinely contains no concrete events (pure mood/
+      atmosphere with nothing happening), return: []
 
     Return ONLY a JSON array of short strings. No markdown, no explanation.
 
-    Day being summarized: {date_str}
+    Date: {date_str}
 
-    Daily summary prose:
+    Narrative:
     {prose}
 
-    Additional raw notes from the day:
+    Additional raw notes:
     {notes}
 """).strip()
 
@@ -158,22 +165,35 @@ def _generate_daily_facts(prose: str, snippets: list[str], date: datetime) -> li
     raw = _llm_chat(
         system="You are a precise fact-extraction assistant.",
         user=user_prompt,
-        max_tokens=500,
+        max_tokens=800,  # was 500 — outputs were getting truncated mid-array
         temperature=0.0,
     )
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if match:
-        raw = match.group(0)
-    try:
-        facts = json.loads(raw)
-        if not isinstance(facts, list):
-            return []
-        return [f.strip() for f in facts if isinstance(f, str) and f.strip()]
-    except json.JSONDecodeError:
-        log.warning(f"Failed to parse daily-facts JSON: {raw[:200]!r}")
+
+    # Model sometimes emits multiple bracket-matched arrays (e.g. an
+    # empty "[]" preamble before the real one). Find every top-level
+    # array via non-greedy matching, then use the LAST one that parses
+    # successfully and is non-empty — greedy re.search across multiple
+    # arrays produces invalid concatenated JSON.
+    candidates = re.findall(r"\[.*?\]", raw, re.DOTALL)
+    facts: list[str] = []
+    for candidate in reversed(candidates):
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, list) and parsed:
+                facts = [f.strip() for f in parsed if isinstance(f, str) and f.strip()]
+                break
+        except json.JSONDecodeError:
+            continue
+
+    if not facts:
+        log.warning(f"Failed to parse daily-facts JSON: {raw[:300]!r}")
         return []
+
+    # Guard against the model echoing whole blocks instead of atomic facts
+    facts = [f for f in facts if len(f) <= 200]
+    return facts
 
 _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
     You are Aiko. Given the day's summary of what happened, imagine
