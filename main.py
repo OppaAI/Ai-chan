@@ -814,6 +814,7 @@ class AikoSimpleCLI:
     def __init__(self, no_voice: bool = False, debug: bool = False) -> None:
         self.no_voice = no_voice
         self.debug = debug
+        self._chat_started = False
         self._stats: dict = {"tts_on": not no_voice, "asr_on": not no_voice}
         self._streaming = False
         self._stream_buf: list[str] = []
@@ -844,7 +845,15 @@ class AikoSimpleCLI:
     def step_loading(self, name: str) -> None:
         """Start an inline spinner for this boot step, on its own line.
         step_done()/step_skip() replace the spinner with a checkmark/skip
-        icon on that same line rather than printing a new one."""
+        icon on that same line rather than printing a new one.
+
+        No-ops once chat has started: post-boot callers (e.g. a per-turn
+        model warm-up) would otherwise spawn a spinner thread that writes
+        raw \\r output concurrently with stream_token()/add_message() from
+        the main thread, garbling the terminal."""
+        if self._chat_started:
+            log.debug(f"step_loading({name!r}) called post-boot — ignoring.")
+            return
         self._stop_step_spinner()  # safety: end any stray previous spinner
         self._step_stop = threading.Event()
         stop_event = self._step_stop
@@ -861,15 +870,20 @@ class AikoSimpleCLI:
         self._step_thread.start()
 
     def step_done(self, name: str) -> None:
+        if self._chat_started:
+            return
         self._stop_step_spinner()
         print(f"\r  ✅ {name} ready" + " " * 20)
 
     def step_skip(self, name: str) -> None:
+        if self._chat_started:
+            return
         self._stop_step_spinner()
         print(f"\r  ⏭  {name} skipped" + " " * 20)
 
     def status_finish(self) -> None:
-        print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
+            self._chat_started = True
+            print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
 
     # ── rendering ────────────────────────────────────────────────────────
     def _draw(self, buf: list | None = None) -> None:

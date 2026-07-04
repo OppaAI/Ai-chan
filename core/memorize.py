@@ -207,19 +207,51 @@ _FILLER_WORDS = (
     "hi", "hey", "hello", "ok", "okay", "thanks", "thank you",
     "yes", "no", "yeah", "nah", "lol", "sure", "bye",
 )
-_filler_alt = "|".join(re.escape(w) for w in _FILLER_WORDS)
+
+# Social/wellbeing phrases that carry no retrievable intent on their own —
+# distinct from _FILLER_WORDS since these are multi-word and never a
+# stand-alone ack.
+_GREETING_PHRASES = (
+    "how are you", "how are you doing", "hows it going", "how's it going",
+    "how are things", "how you doing", "whats up", "what's up",
+)
+
 _name_alt = re.escape(AI_NAME) if AI_NAME else ""
 
-# Matches ONLY when the entire message is filler (+ optional wake-word),
-# e.g. "hi", "hey aiko", "ok thanks", "thanks aiko". Anything with real
-# content attached — "hi aiko, what's the weather" — fails the ^...$
-# anchor and falls through to a normal search.
-_TRIVIAL_INPUT_RE = re.compile(
-    rf"^\s*(?:{_filler_alt})"
-    rf"(?:\s*[,.]?\s*(?:{_filler_alt}" + (rf"|{_name_alt}" if _name_alt else "") + r"))?"
-    r"[.!?]*\s*$",
-    re.IGNORECASE,
-)
+# Combined trivial vocabulary: filler acks + greeting/wellbeing phrases.
+# Sorted longest-first so e.g. "how are you doing" matches before the
+# shorter "how are you" prefix inside the alternation.
+_TRIVIAL_PHRASES = sorted(_FILLER_WORDS + _GREETING_PHRASES, key=len, reverse=True)
+_trivial_alt = "|".join(re.escape(p) for p in _TRIVIAL_PHRASES)
+_CLAUSE_SPLIT_RE = re.compile(r"[,.!?]+")
+
+
+def _is_trivial_input(text: str) -> bool:
+    """
+    True when every clause of the message (split on , . ! ?) is filler,
+    a greeting/wellbeing phrase, or the wake-word alone — i.e. no clause
+    carries retrievable intent.
+
+    Replaces the old single-anchor _TRIVIAL_INPUT_RE, which could only
+    match one-or-two-token messages and had no concept of multi-word
+    social phrases like "how are you doing". Splitting into clauses also
+    handles ragged ASR transcripts like "Hi, I. How are you doing." —
+    each clause is checked independently rather than requiring the whole
+    string to match one rigid pattern.
+
+    Any clause that doesn't fully match the trivial vocabulary (a real
+    question, name, or request) makes the whole input non-trivial, so
+    "hi aiko, what's the weather" still searches normally.
+    """
+    clauses = [c.strip().lower() for c in _CLAUSE_SPLIT_RE.split(text or "") if c.strip()]
+    if not clauses:
+        return True
+    for clause in clauses:
+        if _name_alt and re.fullmatch(_name_alt, clause, re.IGNORECASE):
+            continue
+        if not re.fullmatch(_trivial_alt, clause, re.IGNORECASE):
+            return False
+    return True
 
 # Cosine similarity threshold for near-duplicate detection during dream pass
 # and dedup-on-write. 0.95 on write is tight (near-identical only).
@@ -1191,7 +1223,7 @@ class AikoMemorize:
         through, so the skip applies everywhere without duplication. Any
         message with real content attached always searches normally.
         """
-        if _TRIVIAL_INPUT_RE.match(query or ""):
+        if _is_trivial_input(query or ""):
             log.debug(f"Skipping search for trivial input: {query!r}")
             return []
 
