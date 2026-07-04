@@ -4,11 +4,10 @@ main.py
 Aiko-chan CLI — entry point and session orchestrator.
 
 Usage:
-    python main.py               # full voice — ASR (SenseVoice + Silero VAD) + TTS (MioTTS)
-    python main.py --text        # keyboard input + TTS/ASR loaded but toggled off
-    python main.py --no-asr      # keyboard input + TTS on, ASR loaded but toggled off
-    python main.py               # browser WebUI (default)
-    python main.py --tui         # curses TUI
+    python main.py               # browser WebUI (default) — full voice, ASR + TTS
+    python main.py --text        # WebUI, keyboard input + TTS/ASR toggled off
+    python main.py --no-asr      # WebUI, keyboard input but keep TTS on
+    python main.py --cli         # plain no-curses CLI, for local testing only
     python main.py --debug       # show memory debug info each turn
     python main.py --clear-mem   # wipe all stored memories and exit
 
@@ -20,7 +19,14 @@ Responsibilities:
     - Handle commands (/quit, /reset, /memory, /clear, /remember, /think,
                        /voice, /listen, /web, /help)
     - Fuzzy-match spoken voice commands to slash equivalents in ASR mode
+    - Surface live agentic status (thinking / tool calls / search) as
+      readable status lines instead of a generic "thinking..." spinner
     - Clean shutdown on Ctrl-C / Ctrl-D
+
+Note: the old curses TUI (tui/tui.py) has been retired in favor of the
+WebUI as the default front end, plus a simple CLI for quick, no-frills
+local testing. Move tui/tui.py to archive/tui/ in your own checkout —
+nothing here imports curses anymore.
 """
 from core.config import load_config
 load_config()
@@ -41,7 +47,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 warnings.filterwarnings("ignore")
 
-import curses
 import logging
 
 from core.silence import silent_stderr
@@ -54,7 +59,6 @@ log = get_logger(__name__)
 with silent_stderr():
     from core.memorize import AikoMemorize
 
-from tui.tui import AikoTUI
 from webui.webui import AikoWeb, HTTP_PORT, WEBUI_HTTPS
 
 # ── env ───────────────────────────────────────────────────────────────────────
@@ -257,8 +261,8 @@ class ProactiveIdleRunner:
     quiet until the user returns.
     """
 
-    def __init__(self, tui, speak, speak_enabled_fn, active_turn: threading.Event, generate_fn=None) -> None:
-        self._tui = tui
+    def __init__(self, ui, speak, speak_enabled_fn, active_turn: threading.Event, generate_fn=None) -> None:
+        self._ui = ui
         self._speak = speak
         self._speak_enabled_fn = speak_enabled_fn
         self._active_turn = active_turn
@@ -426,7 +430,7 @@ class ProactiveIdleRunner:
                             text = PROACTIVE_REST_MESSAGE if rest else self._next_message()
                     else:
                         text = payload
-                    self._tui.add_message("aiko", text)
+                    self._ui.add_message("aiko", text)
                     if (
                         not kind.endswith("_prompt")
                         and PROACTIVE_SPEAK
@@ -434,7 +438,7 @@ class ProactiveIdleRunner:
                         and self._speak_enabled_fn()
                     ):
                         self._speak.speak(text)
-                    self._tui._draw()
+                    self._ui._draw()
                 except Exception:
                     log.exception("Proactive idle check-in failed")
 
@@ -522,23 +526,176 @@ def _match_voice_command(text: str) -> str | None:
     return None
 
 
+# ── agentic status markers ─────────────────────────────────────────────────────
+#
+# core/think.py streams special "__MARKER__" or "__MARKER__:payload" tokens
+# to surface what Aiko is actually doing mid-turn (searching, calling a tool,
+# reasoning) instead of a generic "thinking" spinner. This maps each marker
+# to an icon + label, and _handle_status_marker() renders it as a 'sys'
+# message rather than letting the raw marker leak into the streamed reply.
+#
+# If core/think.py emits additional marker types, add them here rather than
+# letting them fall through to ui.stream_token() as literal text.
+
+_STATUS_MARKERS: dict[str, tuple[str, str]] = {
+    "__THINKING__":  ("🤔", "Thinking"),
+    "__TOOL__":      ("🔧", "Using tool"),
+    "__SEARCHING__": ("🔍", "Searching"),
+}
+
+
+def _handle_status_marker(ui, token: str) -> bool:
+    """
+    Detect a "__MARKER__" or "__MARKER__:payload" token and render it as a
+    live status line describing what Aiko is actually doing, instead of
+    streaming the raw marker into the chat text.
+
+    Returns True if the token was a recognized status marker (caller should
+    not also pass it to ui.stream_token), False otherwise.
+    """
+    for marker, (icon, label) in _STATUS_MARKERS.items():
+        if token == marker:
+            ui.add_message('sys', f'{icon} {label}...')
+            ui._draw()
+            return True
+        prefix = marker + ":"
+        if token.startswith(prefix):
+            payload = token[len(prefix):].strip()
+            text = f'{icon} {label}: {payload}' if payload else f'{icon} {label}...'
+            ui.add_message('sys', text)
+            ui._draw()
+            return True
+    return False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SIMPLE CLI (testing only — no curses, no layout, just plain stdout)
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Implements the same duck-typed "ui" interface _run_session() expects
+# (add_message, turn_start, stream_token, stream_commit, get_input,
+# get_voice_input, _draw, _stats, boot callbacks) but renders everything as
+# plain scrolling stdout lines. Intended for quick manual testing — the
+# WebUI is the default front end for real use.
+
+_CLI_ROLE_PREFIX = {
+    "you":  "You",
+    "aiko": "Aiko",
+    "sys":  "·",
+}
+
+
+class AikoSimpleCLI:
+    def __init__(self, no_voice: bool = False, debug: bool = False) -> None:
+        self.no_voice = no_voice
+        self.debug = debug
+        self._stats: dict = {"tts_on": not no_voice, "asr_on": not no_voice}
+        self._streaming = False
+        self._stream_buf: list[str] = []
+        self._latency_stats: dict = {}
+
+    # ── boot / status ────────────────────────────────────────────────────
+    def spin_loop(self, stop_event: threading.Event) -> None:
+        frames = "|/-\\"
+        i = 0
+        while not stop_event.is_set():
+            print(f"\r  {frames[i % len(frames)]} booting Aiko...", end="", flush=True)
+            i += 1
+            time.sleep(0.15)
+        print("\r" + " " * 40 + "\r", end="", flush=True)
+
+    def step_loading(self, name: str) -> None:
+        print(f"  ⏳ loading {name}...")
+
+    def step_done(self, name: str) -> None:
+        print(f"  ✅ {name} ready")
+
+    def step_skip(self, name: str) -> None:
+        print(f"  ⏭  {name} skipped")
+
+    def status_finish(self) -> None:
+        print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
+
+    # ── rendering ────────────────────────────────────────────────────────
+    def _draw(self, buf: list | None = None) -> None:
+        # Plain scrolling CLI — nothing to redraw, output is already live.
+        pass
+
+    def add_message(self, role: str, text: str) -> None:
+        prefix = _CLI_ROLE_PREFIX.get(role, role)
+        print(f"{prefix}: {text}")
+
+    def turn_start(self) -> None:
+        self._streaming = True
+        self._stream_buf = []
+        print("Aiko: ", end="", flush=True)
+
+    def stream_token(self, token: str) -> None:
+        if not token:
+            return
+        self._stream_buf.append(token)
+        print(token, end="", flush=True)
+
+    def stream_commit(self) -> None:
+        if self._streaming:
+            print()  # newline after streamed reply
+        self._streaming = False
+        self._stream_buf = []
+
+    def set_latency_stats(self, stats: dict) -> None:
+        self._latency_stats = stats
+        if self.debug:
+            print(f"  [latency] {stats}")
+
+    # ── input ────────────────────────────────────────────────────────────
+    def get_input(self):
+        try:
+            text = input("You: ").strip()
+        except EOFError:
+            return "/quit"
+        return text
+
+    def get_voice_input(self, listen, speak=None, wait_fn=None):
+        """
+        Best-effort voice input for CLI testing. The CLI is text-first; if a
+        `listen` backend is loaded, try a few common blocking method names.
+        Rename to match your real ASR backend's single-utterance API if it
+        differs — this is a testing convenience, not the primary voice path
+        (that's the WebUI's AudioWorklet pipeline).
+        """
+        for method_name in ("listen_once", "transcribe_once", "listen"):
+            method = getattr(listen, method_name, None)
+            if callable(method):
+                print("🎤 listening... (speak now)")
+                try:
+                    result = method()
+                except Exception as e:
+                    print(f"  [voice input failed: {e}]")
+                    return self.get_input()
+                text = (result[0] if isinstance(result, tuple) else result) or ""
+                text = text.strip()
+                if text:
+                    print(f"You (voice): {text}")
+                return text
+        # No compatible voice API found on this backend — fall back to typed input.
+        return self.get_input()
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # ARGUMENT PARSING
 # ═════════════════════════════════════════════════════════════════════════════
 
 def parse_args():
     """Parse and return the CLI argument namespace for Aiko-chan's launch options."""
-    p = argparse.ArgumentParser(description="Aiko-chan CLI")
+    p = argparse.ArgumentParser(description="Aiko-chan")
     p.add_argument("--text",      action="store_true",
                    help="keyboard input + TTS/ASR initially off; both subsystems still load for /voice and /listen toggles")
     p.add_argument("--no-asr",    action="store_true",
                    help="keyboard input but keep TTS on; ASR still loads for /listen")
     p.add_argument("--debug",     action="store_true",
                    help="show memory hits each turn")
-    p.add_argument("--tui",       action="store_true",
-                   help="use the curses TUI (default)")
-    p.add_argument("--webui",     action="store_true",
-                   help="use the browser WebUI instead of the default curses TUI")
+    p.add_argument("--cli",       action="store_true",
+                   help="use the plain no-curses CLI instead of the WebUI — for local testing only")
     p.add_argument("--clear-mem", action="store_true",
                    help="wipe all stored memories and exit")
     return p.parse_args()
@@ -547,35 +704,24 @@ def parse_args():
 # ═════════════════════════════════════════════════════════════════════════════
 # SESSION ORCHESTRATOR
 # ═════════════════════════════════════════════════════════════════════════════
-        
-def _run_tui(stdscr, args):
-    """
-    Orchestrate the full session lifecycle from boot to shutdown inside the
-    curses wrapper.
 
-    Stages:
-        1. Spawn the TUI and begin the init spin loop.
-        2. Delegate all subsystem boot to AikoWakeup, passing TUI callbacks.
-        3. Transition the TUI to the active chat phase.
-        4. Enter the main input → inference → render loop.
-        5. On exit, stop the barge-in monitor and wait for background memory
-           writes to complete.
-    """
-    tui = AikoTUI(stdscr, no_voice=args.text, debug=args.debug)
-    _run_session(tui, args)
+def _run_cli(args):
+    """Launch Aiko with the plain no-curses CLI (testing only)."""
+    ui = AikoSimpleCLI(no_voice=args.text, debug=args.debug)
+    _run_session(ui, args)
 
 
 def _run_webui(args):
-    """Launch Aiko with the browser WebUI."""
-    tui = AikoWeb(no_voice=args.text, debug=args.debug)
+    """Launch Aiko with the browser WebUI (default)."""
+    ui = AikoWeb(no_voice=args.text, debug=args.debug)
     import socket
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
-    _run_session(tui, args)
+    _run_session(ui, args)
 
 
-def _run_session(tui, args):
+def _run_session(ui, args):
     """Run Aiko using any UI object that implements the AikoTUI-compatible API."""
     last_stream_draw = 0.0
 
@@ -588,21 +734,18 @@ def _run_session(tui, args):
         if token.startswith("__THINKING__") or token.startswith("__TOOL__:"):
             if current_latency is not None:
                 current_latency["mode"] = "agentic"
-        if token.startswith("__SEARCHING__:"):
-            query = token.split(":", 1)[1]
-            tui.add_message('sys', f'Searching: {query}...')
-            tui._draw()
-        else:
-            tui.stream_token(token)
-            now = time.monotonic()
-            if now - last_stream_draw >= STREAM_DRAW_INTERVAL:
-                tui._draw(buf=[])
-                last_stream_draw = now
+        if _handle_status_marker(ui, token):
+            return
+        ui.stream_token(token)
+        now = time.monotonic()
+        if now - last_stream_draw >= STREAM_DRAW_INTERVAL:
+            ui._draw(buf=[])
+            last_stream_draw = now
 
     # ── init spin ─────────────────────────────────────────────────────────────
 
     spin_stop = threading.Event()
-    spin_t    = threading.Thread(target=tui.spin_loop, args=(spin_stop,), daemon=True)
+    spin_t    = threading.Thread(target=ui.spin_loop, args=(spin_stop,), daemon=True)
     spin_t.start()
 
     # ── boot all subsystems via wakeup ────────────────────────────────────────
@@ -610,9 +753,9 @@ def _run_session(tui, args):
     # Load voice subsystems even when initially toggled off so /voice and
     # /listen can turn them on without a second boot-time model load.
     result = AikoWakeup(text_mode=False).boot(
-        on_loading = tui.step_loading,
-        on_done    = tui.step_done,
-        on_skip    = tui.step_skip,
+        on_loading = ui.step_loading,
+        on_done    = ui.step_done,
+        on_skip    = ui.step_skip,
     )
 
     think    = result.think
@@ -620,10 +763,10 @@ def _run_session(tui, args):
     speak    = result.speak
     listen   = result.listen
 
-    if speak and hasattr(tui, "broadcast_audio_bytes"):
-        speak.set_audio_sink(tui.broadcast_audio_bytes)
-        if hasattr(tui, "set_viseme"):
-            speak.set_viseme_sink(tui.set_viseme)
+    if speak and hasattr(ui, "broadcast_audio_bytes"):
+        speak.set_audio_sink(ui.broadcast_audio_bytes)
+        if hasattr(ui, "set_viseme"):
+            speak.set_viseme_sink(ui.set_viseme)
         if os.getenv("WEBUI_LOCAL_PLAYBACK", "1").lower() in {"0", "false", "no", "off"}:
             speak.local_playback = False
 
@@ -631,14 +774,14 @@ def _run_session(tui, args):
 
     spin_stop.set()
     spin_t.join()
-    tui.status_finish()
-    tui._draw()
+    ui.status_finish()
+    ui._draw()
 
     tts_enabled = not args.text
     asr_enabled = not args.text and not args.no_asr
-    if hasattr(tui, "_stats"):
-        tui._stats['tts_on'] = tts_enabled
-        tui._stats['asr_on'] = asr_enabled
+    if hasattr(ui, "_stats"):
+        ui._stats['tts_on'] = tts_enabled
+        ui._stats['asr_on'] = asr_enabled
 
     current_latency: dict | None = None
 
@@ -669,10 +812,10 @@ def _run_session(tui, args):
         }
 
     def _update_latency_stats(timing: dict) -> None:
-        if not hasattr(tui, "set_latency_stats"):
+        if not hasattr(ui, "set_latency_stats"):
             return
         parts = _latency_parts(timing)
-        tui.set_latency_stats({
+        ui.set_latency_stats({
             "voice_end_to_first_audio": _fmt_latency(parts["voice_end_to_first_audio"]),
         })
 
@@ -714,7 +857,7 @@ def _run_session(tui, args):
                 think._last_chat_time = time.time()
 
     proactive = ProactiveIdleRunner(
-        tui,
+        ui,
         speak,
         speak_enabled_fn=lambda: tts_enabled,
         active_turn=session_active,
@@ -735,7 +878,7 @@ def _run_session(tui, args):
         try:
             voice_info = None
             if listen and asr_enabled:
-                result = tui.get_voice_input(
+                result = ui.get_voice_input(
                     listen,
                     speak   = speak if tts_enabled else None,
                     wait_fn = None,
@@ -743,11 +886,11 @@ def _run_session(tui, args):
                 user_input = result[0] if isinstance(result, tuple) else result
                 voice_info = result[1] if isinstance(result, tuple) and len(result) > 1 and isinstance(result[1], dict) else None
             else:
-                result = tui.get_input()
+                result = ui.get_input()
                 user_input = result[0] if isinstance(result, tuple) else result
         except KeyboardInterrupt:
-            tui.add_message('sys', "Fine... I'll be here when you come back.")
-            tui._draw()
+            ui.add_message('sys', "Fine... I'll be here when you come back.")
+            ui._draw()
             _shutdown()
             time.sleep(0.8)
             return
@@ -774,35 +917,35 @@ def _run_session(tui, args):
             cmd = user_input.lower().strip()
 
             if cmd in ('/quit', '/exit'):
-                tui.add_message('sys', 'Already leaving? ...Be safe out there.')
-                tui._draw()
+                ui.add_message('sys', 'Already leaving? ...Be safe out there.')
+                ui._draw()
                 _shutdown()
                 time.sleep(0.8)
                 return
 
             elif cmd == '/reset':
                 think.reset_context()
-                tui.add_message('sys', 'Short-term context cleared.')
+                ui.add_message('sys', 'Short-term context cleared.')
 
             elif cmd == '/memory':
                 all_mem = memorize.get_all()
                 if not all_mem:
-                    tui.add_message('sys', 'No memories stored yet.')
+                    ui.add_message('sys', 'No memories stored yet.')
                 else:
-                    tui.add_message('sys', f'{len(all_mem)} memories stored:')
+                    ui.add_message('sys', f'{len(all_mem)} memories stored:')
                     for i, m in enumerate(all_mem, 1):
-                        tui.add_message('sys',
+                        ui.add_message('sys',
                             f'  {i:02d}. {m.get("memory") or m.get("text") or m}')
 
             elif cmd == '/clear':
                 memorize.clear()
-                tui.add_message('sys', 'All persistent memories cleared.')
+                ui.add_message('sys', 'All persistent memories cleared.')
 
             elif cmd == '/remember':
                 # pin the last user + assistant exchange permanently
                 turn = think.last_turn()
                 if not turn:
-                    tui.add_message('sys', 'Nothing to remember yet — send a message first.')
+                    ui.add_message('sys', 'Nothing to remember yet — send a message first.')
                 else:
                     think.wait_for_memory()
                     user_text, ai_text = turn
@@ -812,21 +955,21 @@ def _run_session(tui, args):
                     ]
                     ok = memorize.pin(msgs)
                     if ok:
-                        tui.add_message('sys', "Got it — I'll remember that forever.")
+                        ui.add_message('sys', "Got it — I'll remember that forever.")
                     else:
-                        tui.add_message('sys', 'Failed to pin memory — check logs.')
+                        ui.add_message('sys', 'Failed to pin memory — check logs.')
 
             elif cmd.startswith('/think'):
                 query = user_input[6:].strip()
                 if not query:
-                    tui.add_message('sys', 'Usage: /think <question>')
-                    tui._draw()
+                    ui.add_message('sys', 'Usage: /think <question>')
+                    ui._draw()
                     continue
 
                 think.set_reasoning(True)
-                tui.add_message('you', f'[think] {query}')
-                tui.turn_start()
-                tui._draw()
+                ui.add_message('you', f'[think] {query}')
+                ui.turn_start()
+                ui._draw()
 
                 raw_chunks     = []
                 in_think_block = False
@@ -846,8 +989,8 @@ def _run_session(tui, args):
                                 think_closed   = True
                             return
 
-                    tui.stream_token(token)
-                    tui._draw(buf=[])
+                    ui.stream_token(token)
+                    ui._draw(buf=[])
 
                 think.chat(query, token_callback=_think_token_cb)
 
@@ -856,35 +999,35 @@ def _run_session(tui, args):
                 if scratchpad_match:
                     inner = scratchpad_match.group(1).strip()
                     if inner:
-                        tui.add_message('sys',
+                        ui.add_message('sys',
                             f'[scratchpad] {inner[:300]}{"…" if len(inner) > 300 else ""}')
 
-                tui.stream_commit()
-                tui._draw()
+                ui.stream_commit()
+                ui._draw()
                 continue
 
             elif cmd == '/voice':
                 if speak is None:
-                    tui.add_message('sys', 'TTS unavailable — voice subsystem did not load.')
+                    ui.add_message('sys', 'TTS unavailable — voice subsystem did not load.')
                 else:
                     tts_enabled = not tts_enabled
                     think.set_speak(speak if tts_enabled else None)
-                    tui._stats['tts_on'] = tts_enabled
-                    tui.add_message('sys',
+                    ui._stats['tts_on'] = tts_enabled
+                    ui.add_message('sys',
                         f'Voice output (TTS): {"ON  🔊" if tts_enabled else "OFF 🔇"}')
 
             elif cmd == '/listen':
                 if listen is None:
-                    tui.add_message('sys', 'ASR unavailable — voice subsystem did not load.')
+                    ui.add_message('sys', 'ASR unavailable — voice subsystem did not load.')
                 else:
                     asr_enabled = not asr_enabled
-                    tui._stats['asr_on'] = asr_enabled
-                    tui.add_message('sys',
+                    ui._stats['asr_on'] = asr_enabled
+                    ui.add_message('sys',
                         f'Voice input  (ASR): {"ON  🎤" if asr_enabled else "OFF ⌨ "}')
 
             elif cmd == '/proactive':
                 proactive.set_enabled(not proactive.is_enabled())
-                tui.add_message('sys',
+                ui.add_message('sys',
                     f'Proactive idle check-ins: {"ON  🌸" if proactive.is_enabled() else "OFF 💤"}')
 
             elif cmd == '/help':
@@ -910,36 +1053,36 @@ def _run_session(tui, args):
                     '  "stop" / "goodbye"     → /quit',
                     '  "help"                 → /help',
                 ]:
-                    tui.add_message('sys', line)
+                    ui.add_message('sys', line)
 
             elif cmd.startswith('/web '):
                 query = user_input[5:].strip()
                 if not query:
-                    tui.add_message('sys', 'Usage: /web <query>')
+                    ui.add_message('sys', 'Usage: /web <query>')
                 else:
-                    tui.add_message('sys', f'Searching: "{query}"')
-                    tui._draw()
+                    ui.add_message('sys', f'Searching: "{query}"')
+                    ui._draw()
                     try:
                         results = web_search(query)
                     except Exception as e:
-                        tui.add_message('sys', f'Search failed: {e}')
-                        tui._draw()
+                        ui.add_message('sys', f'Search failed: {e}')
+                        ui._draw()
                         continue
-                    tui.turn_start()
+                    ui.turn_start()
                     def _web_token_cb(token):
-                        tui.stream_token(token)
-                        tui._draw(buf=[])
+                        ui.stream_token(token)
+                        ui._draw(buf=[])
                     think.chat(
                         f"Use these web search results to answer the question: {query}\n\n{results}",
                         token_callback=_web_token_cb,
                     )
-                    tui.stream_commit()
-                tui._draw()
+                    ui.stream_commit()
+                ui._draw()
 
             else:
-                tui.add_message('sys', f'Unknown command: {user_input}')
+                ui.add_message('sys', f'Unknown command: {user_input}')
 
-            tui._draw()
+            ui._draw()
             continue
 
         # ── normal turn ───────────────────────────────────────────────────────
@@ -947,9 +1090,9 @@ def _run_session(tui, args):
         if args.debug:
             hits = memorize.search(user_input)
             if hits:
-                tui.add_message('sys', f'{len(hits)} memories retrieved:')
+                ui.add_message('sys', f'{len(hits)} memories retrieved:')
                 for m in hits:
-                    tui.add_message('sys',
+                    ui.add_message('sys',
                         f'  → {m.get("memory") or m.get("text") or m}')
 
         current_latency = {
@@ -960,22 +1103,22 @@ def _run_session(tui, args):
             current_latency["listen_started_at"] = voice_info.get("listen_started_at")
             current_latency["voice_recording_stopped_at"] = voice_info.get("recording_stopped_at")
 
-        tui.add_message('you', user_input)
-        tui.turn_start()
+        ui.add_message('you', user_input)
+        ui.turn_start()
         session_active.set()
-        tui._draw()
+        ui._draw()
 
         try:
             think.route(user_input, token_callback=token_cb)
             current_latency["assistant_done_at"] = time.monotonic()
             if speak and tts_enabled:
                 speak.wait()
-            tui.stream_commit()
-            tui._draw()
+            ui.stream_commit()
+            ui._draw()
             current_latency["turn_done_at"] = time.monotonic()
             _update_latency_stats(current_latency)
             _log_latency(current_latency)
-            tui._draw()
+            ui._draw()
         finally:
             session_active.clear()
             proactive.touch()
@@ -993,12 +1136,10 @@ def main():
         log.info("Clearing all memories...")
         AikoMemorize().clear()
         sys.exit(0)
-    if args.tui and args.webui:
-        raise SystemExit("Choose only one UI: --tui or --webui")
-    if args.webui:
-        _run_webui(args)
+    if args.cli:
+        _run_cli(args)
     else:
-        curses.wrapper(lambda scr: _run_tui(scr, args))
+        _run_webui(args)
 
 
 if __name__ == '__main__':
