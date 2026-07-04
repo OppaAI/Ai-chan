@@ -882,9 +882,16 @@ class AikoSimpleCLI:
         print(f"\r  ⏭  {name} skipped" + " " * 20)
 
     def status_finish(self) -> None:
-            self._chat_started = True
-            print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
-
+        # Some boot steps (e.g. think_warmup) can finish asynchronously
+        # after boot() returns, meaning their step_done()/step_skip() call
+        # lands after chat has already started. If that spinner thread is
+        # still looping when we transition here, kill it now rather than
+        # waiting for its (late) completion callback — otherwise it keeps
+        # printing raw \r frames that collide with stream_token() output.
+        self._stop_step_spinner()
+        self._chat_started = True
+        print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
+        
     # ── rendering ────────────────────────────────────────────────────────
     def _draw(self, buf: list | None = None) -> None:
         # Plain scrolling CLI — nothing to redraw, output is already live.
