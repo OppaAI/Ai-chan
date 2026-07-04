@@ -33,7 +33,7 @@ Storage layout (single .db file):
   memories_vec    — vec0 virtual table for KNN cosine search
 
 Recall strategy — Reciprocal Rank Fusion (RRF), tiered quick/wide, with
-recency-among-relevant reranking and a pinned reserve:
+recency-among-relevant reranking:
 
   score = 1/(k + rank_knn) + 1/(k + rank_fts)
   k=60 (standard RRF constant — dampens outlier ranks)
@@ -57,8 +57,10 @@ recency-among-relevant reranking and a pinned reserve:
         this is a continuous blend applied to every candidate, separate
         from stage 3's discrete recency-among-relevant reorder below.
       - a small access-count bonus (capped, normalized)
-      - a small pinned bonus (a mild tiebreaker only — the real pinned
-        guarantee is stage 4's reserved-slot mechanism, not this bonus)
+      - a small pinned bonus (MEMORY_RANK_PINNED_WEIGHT) — a mild
+        tiebreaker only. There is no separate guarantee stage anymore:
+        pinned candidates compete purely on this blended score like
+        everything else.
 
   Stage 3 — recency-among-relevant rerank (MEMORY_RECENCY_RERANK_ENABLED):
     Candidates whose score clears MEMORY_RECENCY_RERANK_THRESHOLD are
@@ -69,13 +71,14 @@ recency-among-relevant reranking and a pinned reserve:
     newest one surfaces first rather than whichever happened to score
     marginally higher on RRF/access/pinned terms.
 
-  Stage 4 — pinned reserve (MEMORY_PINNED_RESERVED_SLOTS):
-    The top MEMORY_PINNED_RESERVED_SLOTS highest-scoring pinned candidates
-    (if any exist in the pool) are guaranteed a place in the final result,
-    ahead of the stage-3 ordering, regardless of whether their blended
-    score would have naturally made the cut. Remaining slots fill from the
-    stage-3 order. This runs last so it's a hard guarantee, not a bonus
-    that can be crowded out.
+  Stage 4 — removed (previously: pinned reserve via
+    MEMORY_PINNED_RESERVED_SLOTS). Pinned candidates now compete on the
+    same blended score as everything else (RRF + recency + access +
+    MEMORY_RANK_PINNED_WEIGHT tiebreaker) — no guaranteed slot. Removed
+    because guaranteeing whole pinned daily-summary blocks a spot
+    regardless of score let oversized entries blow the LLM context
+    window on recall. Pinned entries are now atomic per-fact rows (see
+    core/reflect.py), so a normal score-based ranking is sufficient.
 
   Dedup-on-recall: before any of the above, candidates are collapsed by
   normalized memory text. If the same text exists as multiple rows
@@ -172,18 +175,12 @@ MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"
 # status a meaningful tiebreaker while staying below a full RRF rank-1 term,
 # so a highly relevant unpinned memory can still beat a barely-relevant
 # pinned one. The hard guarantee for pinned visibility now lives in
-# MEMORY_PINNED_RESERVED_SLOTS below, not in this bonus.
 MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01"))
 SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
 MEMORY_CONTEXT_TOTAL_CHARS = int(os.getenv("MEMORY_CONTEXT_TOTAL_CHARS", 1200))
 LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
-
-# Pinned reserve — guarantees the top N highest-scoring pinned candidates a
-# place in the final result regardless of blended score (see module docstring
-# stage 4). Set to 0 to disable and rely solely on MEMORY_RANK_PINNED_WEIGHT.
-MEMORY_PINNED_RESERVED_SLOTS = int(os.getenv("MEMORY_PINNED_RESERVED_SLOTS", "2"))
 
 # Recency-among-relevant rerank — candidates clearing this score are
 # reordered by created_at descending among themselves (see module docstring
@@ -938,37 +935,6 @@ class _MemoryBackend:
         rest = [mid for mid in scored_ids if mid not in relevant_set]
         return relevant_sorted + rest
 
-    def _apply_pinned_reserve(
-        self,
-        scored_ids: list[str],
-        row_by_id: dict,
-        limit: int,
-    ) -> list[str]:
-        """
-        Stage 4 — pinned reserve (see module docstring).
-
-        Guarantees up to MEMORY_PINNED_RESERVED_SLOTS highest-scoring pinned
-        candidates a place in the final `limit`-sized result, ahead of
-        whatever order stage 3 produced — regardless of whether their
-        blended score would have naturally made the cut. Runs last so it is
-        a hard guarantee, not a bonus that can be crowded out by an
-        unrelated but higher-scoring unpinned candidate.
-
-        Only reserves slots for pinned candidates that actually exist in
-        this candidate pool — it does not reach outside the pool to pull in
-        pinned memories the KNN/FTS passes never surfaced.
-        """
-        if MEMORY_PINNED_RESERVED_SLOTS <= 0 or not scored_ids:
-            return scored_ids[:limit]
-
-        pinned_front = [
-            mid for mid in scored_ids
-            if mid in row_by_id and int(row_by_id[mid]["pinned"] or 0)
-        ][:MEMORY_PINNED_RESERVED_SLOTS]
-        pinned_set = set(pinned_front)
-        rest = [mid for mid in scored_ids if mid not in pinned_set]
-        return (pinned_front + rest)[:limit]
-
     def search(self, query: str, user_id: str, limit: int = 5) -> list[dict]:
         """
         KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate
@@ -1013,7 +979,7 @@ class _MemoryBackend:
             scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w)
 
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
-        top_ids = self._apply_pinned_reserve(ordered_ids, row_by_id, limit)
+        top_ids = ordered_ids[:limit]
 
         return [dict(row_by_id[mid]) for mid in top_ids if mid in row_by_id]
 

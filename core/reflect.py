@@ -47,6 +47,7 @@ load_config()
 
 import base64
 import io
+import json
 import os
 import re
 import textwrap
@@ -124,6 +125,55 @@ _REFLECTION_USER = textwrap.dedent("""
     Write the factual daily experience summary. Return ONLY the prose — no
     title, no front matter, no markdown formatting.
 """).strip()
+
+_DAILY_FACTS_PROMPT = textwrap.dedent("""
+    Extract atomic, memorable facts about Oppa from this day's summary and notes.
+
+    Rules:
+    - One fact per line, third person, about Oppa specifically.
+    - Only include facts explicitly stated in the input — never invent or infer.
+    - Keep each fact short and self-contained (readable without the day's context).
+    - No hedging language (might, probably, seems, maybe).
+    - No facts about Aiko's feelings or behavior.
+    - If nothing is worth remembering, return: []
+
+    Return ONLY a JSON array of short strings. No markdown, no explanation.
+
+    Day being summarized: {date_str}
+
+    Daily summary prose:
+    {prose}
+
+    Additional raw notes from the day:
+    {notes}
+""").strip()
+
+def _generate_daily_facts(prose: str, snippets: list[str], date: datetime) -> list[str]:
+    notes = "\n".join(f"- {s}" for s in snippets[:REFLECT_MAX_MEMS]) or "- none"
+    user_prompt = _DAILY_FACTS_PROMPT.format(
+        date_str=date.strftime("%Y-%m-%d"),
+        prose=prose,
+        notes=notes,
+    )
+    raw = _llm_chat(
+        system="You are a precise fact-extraction assistant.",
+        user=user_prompt,
+        max_tokens=500,
+        temperature=0.0,
+    )
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if match:
+        raw = match.group(0)
+    try:
+        facts = json.loads(raw)
+        if not isinstance(facts, list):
+            return []
+        return [f.strip() for f in facts if isinstance(f, str) and f.strip()]
+    except json.JSONDecodeError:
+        log.warning(f"Failed to parse daily-facts JSON: {raw[:200]!r}")
+        return []
 
 _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
     You are Aiko. Given the day's summary of what happened, imagine
@@ -449,30 +499,8 @@ def build_daily_record(snippets: list[str], date: datetime) -> str:
 # ── idempotency guard ─────────────────────────────────────────────────────────
 
 def _delete_existing_daily_pins(memorize, date: datetime) -> int:
-    """
-    Remove any previously pinned daily-summary / day-record entries for
-    this date before pinning fresh ones.
-
-    Matches by content prefix rather than created_at: created_at reflects
-    when the reflect job actually ran, not which day the pin describes, so
-    it can't be used to detect "this date is already pinned." The date
-    string is embedded directly in the pinned text (see
-    _DAILY_SUMMARY_PREFIX_TMPL / _DAY_RECORD_PREFIX_TMPL), so prefix
-    matching is stable regardless of how many times the LLM-generated
-    prose wording changes between reruns.
-
-    Without this guard, any rerun of generate_and_post() for a date that
-    was already processed (double-fired scheduler, crash-and-restart,
-    manual rerun) piles up additional pinned rows — and because they're
-    pinned, dream()'s cleanup/merge can never remove them afterward.
-
-    Returns the number of stale pins deleted.
-    """
     date_str = date.strftime("%Y-%m-%d")
-    prefixes = (
-        _DAILY_SUMMARY_PREFIX_TMPL.format(date_str=date_str),
-        _DAY_RECORD_PREFIX_TMPL.format(date_str=date_str),
-    )
+    date_tag = f"[{date_str}]"
 
     try:
         all_mems = memorize.get_all()
@@ -483,7 +511,7 @@ def _delete_existing_daily_pins(memorize, date: datetime) -> int:
     deleted = 0
     for m in all_mems:
         text = m.get("memory") or ""
-        if not text.startswith(prefixes):
+        if not text.startswith(date_tag):
             continue
         mem_id = m.get("id")
         if not mem_id:
@@ -495,7 +523,7 @@ def _delete_existing_daily_pins(memorize, date: datetime) -> int:
             log.warning(f"Failed to delete stale daily pin {mem_id}: {e}")
 
     if deleted:
-        log.info(f"Removed {deleted} stale pinned entr{'y' if deleted == 1 else 'ies'} for {date_str} before re-pinning.")
+        log.info(f"Removed {deleted} stale pinned fact(s) for {date_str} before re-pinning.")
     return deleted
 
 # ── public API ────────────────────────────────────────────────────────────────
@@ -592,7 +620,6 @@ def generate_and_post(
             "feelings":        feelings,
             "image_generated": image_generated,
             "pinned":          False,
-            "record_pinned":   False,
         }
 
     # Step 3b: idempotency guard — remove any stale pins for this date
@@ -600,16 +627,28 @@ def generate_and_post(
     if memorize is not None:
         _delete_existing_daily_pins(memorize, date)
 
-    # Step 4: pin daily summary to persistent memory. Store a raw curated
-    # summary with a stable prefix so monthly consolidation can replace older
-    # daily summaries without relying on another extraction pass.
-    pinned = False
+    # Step 4: extract atomic facts and pin each individually. Replaces the
+    # old single-block pin (whole prose paragraph or bullet-list day-record)
+    # — those blew the context budget on recall since format_for_context()
+    # truncates per-fact, not per-block.
+    date_str = date.strftime("%Y-%m-%d")
+    date_tag = f"[{date_str}]"
+    pinned_count = 0
     if memorize is not None:
+        _delete_existing_daily_pins(memorize, date)
         try:
-            daily_text = f"{_DAILY_SUMMARY_PREFIX_TMPL.format(date_str=date.strftime('%Y-%m-%d'))} {prose}"
-            pinned = bool(memorize.add_raw(daily_text, pinned=True))
+            facts = _generate_daily_facts(prose, snippets, date)
         except Exception as e:
-            log.error(f"Daily summary pin failed: {e}")
+            log.error(f"Daily fact extraction failed: {e}")
+            facts = []
+        for fact in facts:
+            try:
+                if memorize.add_raw(f"{date_tag} {fact}", pinned=True):
+                    pinned_count += 1
+            except Exception as e:
+                log.warning(f"Failed to pin fact {fact!r}: {e}")
+
+    pinned = pinned_count > 0
 
     # Step 4b: pin the faithful fact-list day record — ground truth, separate
     # from the stylized prose above. Never paraphrased, never invented.
@@ -627,7 +666,7 @@ def generate_and_post(
     log.info(
         f"{'Done' if success else 'Failed'} — "
         f"slug={slug}, words={_count_words(prose)}, mems={len(snippets)}, "
-        f"image={image_generated}, pinned={pinned}, record_pinned={record_pinned}, duration={duration}s"
+        f"image={image_generated}, pinned={pinned}, duration={duration}s"
     )
 
     return {
@@ -640,5 +679,4 @@ def generate_and_post(
         "feelings":        feelings,
         "image_generated": image_generated,
         "pinned":          pinned,
-        "record_pinned":   record_pinned,
     }
