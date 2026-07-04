@@ -706,6 +706,12 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             messages.append(msg.model_dump(exclude_none=True))
         except Exception as e:
             log.error("Agent LLM call failed: %s", e)
+            state.record(ToolResult(
+                ok=False, tool="llm_call", args={},
+                content=f"[llm_call_failed: {e}]",
+                error_type="llm_call_failed",
+                retryable=False,
+            ))
             break
 
         if not msg.tool_calls:

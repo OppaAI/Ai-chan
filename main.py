@@ -24,7 +24,7 @@ Responsibilities:
     - Clean shutdown on Ctrl-C / Ctrl-D
 
 Note: the old curses TUI (tui/tui.py) has been retired in favor of the
-WebUI as the default front end, plus a simple cli for quick, no-frills
+WebUI as the default front end, plus cli/simple_cli.py for quick, no-frills
 local testing. Move tui/tui.py to archive/tui/ in your own checkout —
 nothing here imports curses anymore.
 """
@@ -550,17 +550,21 @@ def _handle_status_marker(ui, token: str) -> bool:
     live status line describing what Aiko is actually doing, instead of
     streaming the raw marker into the chat text.
 
+    core/agentic.py emits these with a trailing newline (e.g. "__THINKING__\n"
+    and "__TOOL__:name(args)\n"), so strip trailing newlines before matching.
+
     Returns True if the token was a recognized status marker (caller should
     not also pass it to ui.stream_token), False otherwise.
     """
+    stripped_token = token.rstrip("\r\n")
     for marker, (icon, label) in _STATUS_MARKERS.items():
-        if token == marker:
+        if stripped_token == marker:
             ui.add_message('sys', f'{icon} {label}...')
             ui._draw()
             return True
         prefix = marker + ":"
-        if token.startswith(prefix):
-            payload = token[len(prefix):].strip()
+        if stripped_token.startswith(prefix):
+            payload = stripped_token[len(prefix):].strip()
             text = f'{icon} {label}: {payload}' if payload else f'{icon} {label}...'
             ui.add_message('sys', text)
             ui._draw()
