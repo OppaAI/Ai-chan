@@ -18,6 +18,9 @@ import subprocess
 import time
 import urllib.request
 
+from core.config import load_config
+load_config()
+
 _DB_SIZE_CACHE: tuple[float, str] = (0.0, "? mem")
 _DB_SIZE_TTL = float(os.getenv("DB_SIZE_TTL", "1.0"))
 

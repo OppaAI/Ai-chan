@@ -34,6 +34,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+
+from core.config import load_config
+load_config()
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.log import get_logger

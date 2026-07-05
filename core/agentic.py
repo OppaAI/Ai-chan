@@ -16,6 +16,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.config import load_config
+load_config()
+
 from core.log import get_logger
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from core.knowledge import knowledge_context_for, wiki_context_for

@@ -1,7 +1,8 @@
 """Configuration bootstrap for Aiko.
 
-Loads secrets from .env and non-secret defaults from category YAML files.
-Existing process environment variables win over both, and .env wins over YAML.
+Loads non-secret defaults from category YAML files and local values from .env.
+Real process environment variables win over both, and YAML wins over stale .env
+constants while .env still fills in secrets or deployment-specific gaps.
 """
 
 from __future__ import annotations
@@ -12,7 +13,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from dotenv import load_dotenv
+try:
+    from dotenv import dotenv_values
+except ImportError:  # pragma: no cover - optional dependency fallback
+    def dotenv_values(*_args, **_kwargs):
+        return {}
 
 _LOADED = False
 
@@ -39,13 +44,23 @@ def _flatten(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
 
 
 def load_config(*, override: bool = False) -> None:
-    """Load .env secrets and indexed config/*.yaml settings into os.environ."""
+    """Load indexed config/*.yaml settings and .env secrets into os.environ.
+
+    Precedence is:
+    1. Real process environment variables, unless ``override=True``.
+    2. Non-secret YAML constants from config/*.yaml.
+    3. Values from .env that YAML did not already define.
+
+    This keeps stale constants in .env from shadowing the YAML files while
+    preserving .env as the local place for tokens, keys, URLs, DSNs, and other
+    deployment-specific values whose names may not follow a strict pattern.
+    """
     global _LOADED
     if _LOADED and not override:
         return
 
     root = Path(__file__).resolve().parent.parent
-    load_dotenv(root / ".env", override=False)
+    original_env = set(os.environ)
 
     config_dir = root / "config"
     if config_dir.exists():
@@ -69,7 +84,15 @@ def load_config(*, override: bool = False) -> None:
             if not isinstance(data, dict):
                 raise ValueError(f"{path} must contain a YAML mapping")
             for key, value in _flatten(data).items():
-                if override or key not in os.environ:
+                if override or key not in original_env:
                     os.environ[key] = _stringify(value)
+
+    env_path = root / ".env"
+    if env_path.exists():
+        for key, value in dotenv_values(env_path).items():
+            if not key or value is None:
+                continue
+            if override or key not in os.environ:
+                os.environ[key] = value
 
     _LOADED = True

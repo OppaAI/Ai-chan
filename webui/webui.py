@@ -36,6 +36,9 @@ import webbrowser
 from pathlib import Path
 
 import websockets
+
+from core.config import load_config
+load_config()
 from websockets.server import serve as ws_serve
 
 log = logging.getLogger(__name__)
