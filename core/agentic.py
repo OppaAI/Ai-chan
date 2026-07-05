@@ -16,9 +16,6 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.config import load_config
-load_config()
-
 from core.log import get_logger
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from core.knowledge import knowledge_context_for, wiki_context_for
@@ -753,9 +750,15 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     # "let's make cookies" turn. Cap all three here; the relevance-scoring
     # fixes in knowledge.py/skills.py reduce *bad* matches, but these caps
     # bound the damage even from a still-imperfect match.
-    wiki_context = wiki_context_for(user_input, limit=1, max_chars=1500)
-    skill_context = skill_context_for(user_input, limit=2, max_chars=3000)
-    knowledge_context = knowledge_context_for(user_input, limit=2, max_chars=2500)
+    # Reuse the same HarrierEmbedder instance already warm for memory search
+    # and intent routing (think.py's _semantic_all_scores uses the same
+    # object) — no extra model load, just one more embed_query() call per
+    # context type. Falls back to keyword scoring automatically if this
+    # embedder is missing or an embed call fails (see knowledge.py/skills.py).
+    _embedder = getattr(getattr(owner._memorize, "_mem", None), "_embedder", None)
+    wiki_context = wiki_context_for(user_input, limit=1, max_chars=1500, embedder=_embedder)
+    skill_context = skill_context_for(user_input, limit=2, max_chars=3000, embedder=_embedder)
+    knowledge_context = knowledge_context_for(user_input, limit=2, max_chars=2500, embedder=_embedder)
     wiki_context, skill_context, knowledge_context = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,
         wiki_context, skill_context, knowledge_context,

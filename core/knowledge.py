@@ -7,12 +7,16 @@ skips secrets and mutable workspace artifacts.
 
 from __future__ import annotations
 
+import os
 import re
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
+
+import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,9 +53,83 @@ _STOPWORDS = frozenset({
 })
 
 # Minimum score a knowledge item must reach before it's considered a genuine
-# match. Without this floor, search_knowledge includes anything with
-# score > 0, which one stray substring hit satisfies.
+# match under the keyword fallback path. Without this floor, search_knowledge
+# includes anything with score > 0, which one stray substring hit satisfies.
 _MIN_RELEVANCE_SCORE = 3
+
+# ── semantic retrieval (Harrier embeddings) ─────────────────────────────────
+#
+# knowledge.py has no owner/session object of its own, so it can't reach
+# think.py's HarrierEmbedder directly. Callers pass one in explicitly (duck
+# typed to embed_query/embed_queries, matching think.py's usage) via the
+# `embedder` parameter on search_knowledge/knowledge_context_for/
+# wiki_context_for. When no embedder is given, or embedding fails for any
+# reason, everything falls back to the keyword scoring above — semantic
+# retrieval is strictly additive, never a hard dependency.
+
+_KNOWLEDGE_INSTRUCT = "Which document is most relevant to this request or question?"
+_KNOWLEDGE_SEMANTIC_THRESHOLD = float(os.getenv("KNOWLEDGE_SEMANTIC_THRESHOLD", "0.35"))
+_EMBED_TEXT_CHARS = 800  # condensed per-item representation, not the full doc
+
+
+class Embedder(Protocol):
+    def embed_query(self, text: str, instruct: str = "") -> object: ...
+    def embed_queries(self, texts: list[str], instruct: str = "") -> object: ...
+
+
+_item_embed_cache: dict[tuple[str, str], np.ndarray] = {}
+_item_embed_cache_lock = threading.RLock()
+
+
+def _normalize(vector: np.ndarray) -> np.ndarray:
+    arr = np.asarray(vector, dtype=np.float32)
+    norm = float(np.linalg.norm(arr))
+    return arr / norm if norm > 1e-12 else arr
+
+
+def _embed_source_text(item: "KnowledgeItem") -> str:
+    """Condensed text to embed per item — title + tags + a text excerpt,
+    not the full document (keeps embedding calls cheap and keeps the
+    vector focused on what the item is about rather than diluted by
+    boilerplate deep in a long file)."""
+    body = _FRONT_MATTER_RE.sub("", item.text, count=1).strip()
+    return f"{item.title}\n{' '.join(item.tags)}\n{body[:_EMBED_TEXT_CHARS]}"
+
+
+def _get_item_embedding(item: "KnowledgeItem", embedder: Embedder) -> np.ndarray:
+    """Cached per (item_id, updated_at) — unchanged files never get
+    re-embedded, only new/edited ones."""
+    cache_key = (item.item_id, item.updated_at)
+    with _item_embed_cache_lock:
+        cached = _item_embed_cache.get(cache_key)
+        if cached is not None:
+            return cached
+    vector = _normalize(np.asarray(embedder.embed_query(_embed_source_text(item)), dtype=np.float32))
+    with _item_embed_cache_lock:
+        _item_embed_cache[cache_key] = vector
+    return vector
+
+
+def _semantic_rank(
+    query: str, items: list["KnowledgeItem"], embedder: Embedder, threshold: float,
+) -> list["KnowledgeItem"] | None:
+    """Return items ranked by cosine similarity to the query, filtered by
+    `threshold`, or None if embedding fails (caller falls back to keyword
+    scoring in that case)."""
+    if not items:
+        return []
+    try:
+        query_vector = _normalize(np.asarray(embedder.embed_query(query, instruct=_KNOWLEDGE_INSTRUCT), dtype=np.float32))
+        scored: list[tuple[float, "KnowledgeItem"]] = []
+        for item in items:
+            item_vector = _get_item_embedding(item, embedder)
+            score = float(np.dot(query_vector, item_vector))
+            if score >= threshold:
+                scored.append((score, item))
+        scored.sort(key=lambda pair: -pair[0])
+        return [item for _score, item in scored]
+    except Exception:
+        return None
 
 
 @dataclass(frozen=True)
@@ -173,11 +251,23 @@ def _score_item(item: KnowledgeItem, terms: Iterable[str]) -> int:
     return score
 
 
-def search_knowledge(query: str, limit: int = 6, kinds: Iterable[str] | None = None) -> list[KnowledgeItem]:
+def search_knowledge(
+    query: str,
+    limit: int = 6,
+    kinds: Iterable[str] | None = None,
+    embedder: Embedder | None = None,
+) -> list[KnowledgeItem]:
     wanted = {kind for kind in kinds} if kinds is not None else None
     items = [item for item in discover_knowledge_items() if wanted is None or item.kind in wanted]
     if not query.strip():
         return items[:limit]
+
+    if embedder is not None:
+        ranked = _semantic_rank(query, items, embedder, _KNOWLEDGE_SEMANTIC_THRESHOLD)
+        if ranked is not None:
+            return ranked[:limit]
+        # embedding failed for some reason — fall through to keyword scoring
+
     query_terms = _terms(query)
     if not query_terms:
         # Query had content but it was entirely stopwords (e.g. "how do we
@@ -198,8 +288,10 @@ def _attr(value: object) -> str:
     return escape(str(value), quote=True)
 
 
-def knowledge_context_for(query: str, limit: int = 5, max_chars: int = 9000) -> str:
-    selected = search_knowledge(query, limit=limit)
+def knowledge_context_for(
+    query: str, limit: int = 5, max_chars: int = 9000, embedder: Embedder | None = None,
+) -> str:
+    selected = search_knowledge(query, limit=limit, embedder=embedder)
     if not selected:
         return "<knowledge_context>\nNo matching local knowledge found.\n</knowledge_context>"
 
@@ -225,8 +317,10 @@ def knowledge_context_for(query: str, limit: int = 5, max_chars: int = 9000) -> 
     return "<knowledge_context>\n" + "\n\n".join(chunks) + "\n</knowledge_context>"
 
 
-def wiki_context_for(query: str, limit: int = 2, max_chars: int = 5000) -> str:
-    selected = search_knowledge(query, limit=limit, kinds=("wiki",))
+def wiki_context_for(
+    query: str, limit: int = 2, max_chars: int = 5000, embedder: Embedder | None = None,
+) -> str:
+    selected = search_knowledge(query, limit=limit, kinds=("wiki",), embedder=embedder)
     if not selected:
         return "<wiki_context>\nNo operational wiki pages found.\n</wiki_context>"
 

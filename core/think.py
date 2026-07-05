@@ -13,9 +13,6 @@ import os
 import json
 import warnings
 
-from core.config import load_config
-load_config()
-
 warnings.filterwarnings("ignore")
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
 logging.getLogger("torch").setLevel(logging.ERROR)
@@ -495,7 +492,10 @@ class AikoThink:
 
         if _should_use_local_knowledge(user_input):
             try:
-                local_context = knowledge_context_for(user_input, limit=3, max_chars=4500)
+                local_context = knowledge_context_for(
+                    user_input, limit=3, max_chars=4500,
+                    embedder=self._memorize._mem._embedder,
+                )
                 system = (
                     f"{system}\n\n{local_context}\n"
                     "Use <knowledge_context> for local Aiko/self-knowledge questions. "
@@ -939,4 +939,4 @@ def split_stream_sentences(buffer: str) -> tuple[list[str], str]:
             sentence = remaining[:split_pt + 1].strip()
             tail = remaining[split_pt + 1:]
             return ([sentence] if sentence else []), tail
-    return sentences, remaining
+    return sentences, remaining 
