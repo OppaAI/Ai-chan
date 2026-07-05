@@ -380,6 +380,23 @@ def cancel_reminder_record(reminder_id: str) -> bool:
     return cancel_schedule_record(reminder_id)
 
 
+# ── scheduler instance registry ───────────────────────────────────────────────
+
+_scheduler_instance: ScheduleRunner | None = None
+
+
+def register_scheduler(scheduler: ScheduleRunner) -> None:
+    """Register the active scheduler instance so tools can notify it of new jobs."""
+    global _scheduler_instance
+    _scheduler_instance = scheduler
+
+
+def notify_scheduler_new_job() -> None:
+    """Notify the scheduler that a new job was added, so it wakes early to pick it up."""
+    if _scheduler_instance is not None:
+        _scheduler_instance.notify_new_job()
+
+
 @dataclass
 class DueJob:
     """A scheduled job event ready to announce or execute."""

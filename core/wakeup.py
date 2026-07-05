@@ -165,7 +165,7 @@ class AikoWakeup:
         t1.start(); t2.start()
         t1.join();  t2.join()
 
-        from core.schedule import ScheduleRunner
+        from core.schedule import ScheduleRunner, register_scheduler
         from core.reflect import generate_and_post
         from core.consolidate import maybe_run_consolidation
 
@@ -178,6 +178,7 @@ class AikoWakeup:
             generate_and_post_fn=generate_and_post,
             consolidate_fn=maybe_run_consolidation,
         )
+        register_scheduler(_scheduler)  # Allow tools to notify scheduler of new jobs
         _scheduler.start()
 
         # ── voice subsystems ──────────────────────────────────────────────────

@@ -35,6 +35,9 @@ def schedule_job(
             action,
             relative_days,
         )
+        # Notify the running scheduler so it picks up the new job immediately
+        from core.schedule import notify_scheduler_new_job
+        notify_scheduler_new_job()
         return json_block("scheduled job created", job)
     except Exception as e:
         return f"[schedule failed: {e}]"
@@ -63,6 +66,9 @@ def schedule_reminder(
     """Schedule a local reminder/alarm while Aiko is running."""
     try:
         reminder = schedule_reminder_record(title, message, time_of_day, repeat, timezone)
+        # Notify the running scheduler so it picks up the new reminder immediately
+        from core.schedule import notify_scheduler_new_job
+        notify_scheduler_new_job()
         return json_block("reminder scheduled", reminder)
     except Exception as e:
         return f"[reminder failed: {e}]"
