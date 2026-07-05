@@ -42,9 +42,6 @@ Idempotency:
   for this date"). Any stale pins for the target date are deleted first,
   so a rerun replaces rather than accumulates.
 """
-from core.config import load_config
-load_config()
-
 import base64
 import io
 import json

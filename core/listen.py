@@ -39,8 +39,6 @@ import logging
 import numpy as np
 import os
 
-from core.config import load_config
-load_config()
 from scipy.signal import resample_poly
 import sherpa_onnx
 import subprocess

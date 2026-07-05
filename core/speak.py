@@ -28,13 +28,6 @@ import threading
 import argparse
 import unicodedata
 import queue
-
-try:
-    from core.config import load_config
-    load_config()
-except ImportError:
-    pass
-
 from core.silence import silent_stderr
 from core.log import get_logger
 

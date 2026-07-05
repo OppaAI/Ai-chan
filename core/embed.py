@@ -38,9 +38,6 @@ from typing import Generator, Iterable
 import numpy as np
 import requests
 
-from core.config import load_config
-load_config()
-
 # ── config from env ───────────────────────────────────────────────────────────
 _EMBED_BASE_URL   = os.getenv("EMBED_BASE_URL", "http://127.0.0.1:8080")
 _EMBED_MODEL      = os.getenv("EMBED_MODEL", "harrier")

@@ -36,12 +36,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
 from openai import OpenAI
 
-from core.config import load_config
 from core.log import get_logger
 from core.memorize import AikoMemorize, USER_ID
 from core.reflect import _generate_image, _load_soul
 
-load_config()
 log = get_logger(__name__)
 
 WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()

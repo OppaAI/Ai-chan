@@ -16,9 +16,6 @@ Usage:
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-from core.config import load_config
-
-load_config()
 
 # ── config ────────────────────────────────────────────────────────────────────
 LOG_DIR   = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
