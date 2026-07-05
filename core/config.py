@@ -1,8 +1,8 @@
 """Configuration bootstrap for Aiko.
 
-Loads non-secret defaults from category YAML files and secrets from .env.
-Real process environment variables win over both, YAML wins over stale .env
-constants, and only secret/API credential values are copied from .env.
+Loads non-secret defaults from category YAML files and local values from .env.
+Real process environment variables win over both, and YAML wins over stale .env
+constants while .env still fills in secrets or deployment-specific gaps.
 """
 
 from __future__ import annotations
@@ -20,25 +20,6 @@ except ImportError:  # pragma: no cover - optional dependency fallback
         return {}
 
 _LOADED = False
-
-_SECRET_KEY_PARTS = (
-    "API_KEY",
-    "ACCESS_TOKEN",
-    "AUTH_TOKEN",
-    "BEARER_TOKEN",
-    "CLIENT_SECRET",
-    "SECRET_KEY",
-    "TOKEN",
-    "PASSWORD",
-    "PASSWD",
-    "PRIVATE_KEY",
-)
-
-
-def _is_secret_key(key: str) -> bool:
-    """Return True for .env names that should remain secret-backed."""
-    upper = key.upper()
-    return upper in {"HF_TOKEN", "GITHUB_TOKEN"} or any(part in upper for part in _SECRET_KEY_PARTS)
 
 
 def _stringify(value: Any) -> str:
@@ -68,10 +49,11 @@ def load_config(*, override: bool = False) -> None:
     Precedence is:
     1. Real process environment variables, unless ``override=True``.
     2. Non-secret YAML constants from config/*.yaml.
-    3. Secret/API credential values from .env.
+    3. Values from .env that YAML did not already define.
 
     This keeps stale constants in .env from shadowing the YAML files while
-    preserving .env as the local place for tokens and keys.
+    preserving .env as the local place for tokens, keys, URLs, DSNs, and other
+    deployment-specific values whose names may not follow a strict pattern.
     """
     global _LOADED
     if _LOADED and not override:
@@ -108,7 +90,7 @@ def load_config(*, override: bool = False) -> None:
     env_path = root / ".env"
     if env_path.exists():
         for key, value in dotenv_values(env_path).items():
-            if not key or value is None or not _is_secret_key(key):
+            if not key or value is None:
                 continue
             if override or key not in os.environ:
                 os.environ[key] = value
