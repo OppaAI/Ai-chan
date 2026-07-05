@@ -9,6 +9,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.config import load_config
+load_config()
+
 WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
 NOTES_DIR = WORKSPACE_ROOT / "notes"
 MAX_WRITE_CHARS = int(os.getenv("MAX_WRITE_CHARS", 20_000))

@@ -13,6 +13,9 @@ import os
 import json
 import warnings
 
+from core.config import load_config
+load_config()
+
 warnings.filterwarnings("ignore")
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
 logging.getLogger("torch").setLevel(logging.ERROR)
