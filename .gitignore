@@ -229,7 +229,6 @@ node_modules/
 # Local WebUI development TLS certs
 archive/
 training/
-workspace/
 webui/.cert/
 certs/
 *.pem

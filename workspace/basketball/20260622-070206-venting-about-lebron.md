@@ -1,0 +1,1 @@
+Layups blocked by LeBron's size/defense. Slower than an old man. Can't outrun him. Weak post-moves would get pushed over.
