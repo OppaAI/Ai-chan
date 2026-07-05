@@ -58,7 +58,7 @@ import logging
 from core.silence import silent_stderr
 from core.log     import get_logger
 from core.wakeup  import AikoWakeup
-from core.toolkit.web import web_search
+from core.toolkit.researcher import web_search
 
 log = get_logger(__name__)
 

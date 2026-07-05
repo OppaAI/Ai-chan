@@ -1,6 +1,6 @@
 # Web config
 #
-# Settings for core/toolkit/web.py and semantic web-search triggering.
+# Settings for core/toolkit/researcher.py and semantic web-search triggering.
 # Controls local SearXNG endpoint and how many search results the agent consumes.
 
 # -- SearXNG --

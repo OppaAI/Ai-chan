@@ -86,7 +86,7 @@ flowchart TD
 | Long-term memory | custom sqlite-vec backend (no server required) |
 | Embeddings | custom ONNX Harrier embedder, `ferrisS/harrier-oss-v1-270m-fastembed` |
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
-| Web search | local SearXNG instance through `core/toolkit/web.py` |
+| Web search | local SearXNG instance through `core/toolkit/researcher.py` |
 | TTS | external MioTTS HTTP server |
 | ASR | SenseVoice via sherpa-onnx with Silero VAD |
 | Reflection publishing | optional GitHub REST API + Hugo markdown |

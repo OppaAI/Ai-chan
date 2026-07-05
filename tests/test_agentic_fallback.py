@@ -62,7 +62,7 @@ def test_incomplete_task_answer_handles_empty_state():
 def test_tool_failure_detail_is_sanitized_for_user_facing_fallback():
     raw = (
         "Traceback (most recent call last):\n"
-        "  File \"/workspace/Aiko-chan/core/toolkit/web.py\", line 1\n"
+        "  File \"/workspace/Aiko-chan/core/toolkit/researcher.py\", line 1\n"
         "Authorization: Bearer abc.def.ghi token=super-secret "
         "http://localhost:8081/search?q=private"
     )

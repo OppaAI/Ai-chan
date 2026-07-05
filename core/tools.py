@@ -8,12 +8,12 @@ move into focused modules. New primitive capabilities should be implemented in
 agent loop needs them.
 """
 from __future__ import annotations
-from core.toolkit.web import fetch_and_extract, deep_search, web_search, web_search_context
-from core.toolkit.planning import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
-from core.toolkit.scheduling import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
-from core.toolkit.photo import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
-from core.toolkit.architecture import repo_file_tree, repo_read_file, repo_search_text
-from core.toolkit.job_hunt import search_jobs, dedupe_postings
+from core.toolkit.researcher import fetch_and_extract, deep_search, web_search, web_search_context
+from core.toolkit.planner import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
+from core.toolkit.organizer import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
+from core.toolkit.photo_grader import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
+from core.toolkit.system_architect import repo_file_tree, repo_read_file, repo_search_text
+from core.toolkit.job_hunter import search_jobs, dedupe_postings
 __all__ = [
     "cancel_reminder",
     "cancel_schedule",
