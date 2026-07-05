@@ -22,6 +22,7 @@ from core.knowledge import knowledge_context_for, wiki_context_for
 from core.tools import (
     fetch_and_extract,
     deep_search,
+    web_search,
     make_plan,
     create_checklist,
     save_note,
@@ -89,6 +90,7 @@ _DISCLOSURE_RE = re.compile(
 )
 _EXTERNAL_ACTION_RE = re.compile(r"\b(send|sent|email|post|posted|buy|bought|book|booked|order|ordered|delete|deleted)\b", re.IGNORECASE)
 _LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|draft|note|workspace)\b", re.IGNORECASE)
+_RESEARCH_CONTEXT_TOOLS = {"deep_search", "fetch_page"}
 
 
 def _tool(schema: dict):
@@ -188,12 +190,19 @@ def tool_schemas() -> list[dict]:
 
 _TOOL_SCHEMAS = [
         {"type": "function", "function": {
-            "name": "web_search", "description": "Search web.",
+            "name": "web_search",
+            "description": "Snippet-only web search for discovering candidate sources. Does not fetch page text.",
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The search query."}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
-            "name": "fetch_page", "description": "Fetch page text.",
+            "name": "deep_search",
+            "description": "Agentic research fetch: search once, fetch the top pages, and return a compact evidence bundle. Use at most once per workflow, then plan/summarize/save from that evidence instead of calling more web tools.",
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "The focused research query to search and fetch."}},
+                "required": ["query"]}}},
+        {"type": "function", "function": {
+            "name": "fetch_page", "description": "Fetch one explicitly supplied URL when the user provides it or a prior snippet result must be verified. Prefer deep_search for research workflows; do not use fetch_page to bulk-fetch search results.",
             "parameters": {"type": "object", "properties": {
                 "url": {"type": "string", "description": "The URL to fetch."}},
                 "required": ["url"]}}},
@@ -339,7 +348,8 @@ _TOOL_SCHEMAS = [
 
 def _register_tools() -> None:
     handlers = {
-        "web_search": lambda args: deep_search(args.get("query", "")),
+        "web_search": lambda args: web_search(args.get("query", "")),
+        "deep_search": lambda args: deep_search(args.get("query", "")),
         "fetch_page": lambda args: fetch_and_extract(args.get("url", "")),
         "make_plan": lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
         "create_checklist": lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
@@ -415,6 +425,12 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content="Missing required argument: query must be a non-empty string. Reissue with a specific search query.",
             error_type="missing_args", retryable=True,
         )
+    if name == "deep_search" and not (args.get("query") or "").strip():
+        return ToolResult(
+            ok=False, tool=name, args=args,
+            content="Missing required argument: query must be a non-empty string. Reissue with a focused research query.",
+            error_type="missing_args", retryable=True,
+        )
     if name == "fetch_page" and not (args.get("url") or "").strip():
         return ToolResult(
             ok=False, tool=name, args=args,
@@ -472,7 +488,7 @@ def dispatch_tool_checked(name: str, args: dict) -> ToolResult:
 
 
 def _max_attempts_for(name: str) -> int:
-    if name in {"web_search", "fetch_page"}:
+    if name in {"web_search", "deep_search", "fetch_page"}:
         return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
     if name in {"save_note", "schedule_job", "schedule_reminder"}:
         return max(1, int(os.getenv("AGENT_LOCAL_TOOL_ATTEMPTS", 1)))
@@ -497,6 +513,43 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolRes
 
     state.record(last)
     return last
+
+
+def _has_successful_tool_call(state: TaskState, tool_name: str) -> bool:
+    """Return True only when a prior call to a tool completed successfully."""
+    return any(step["tool"] == tool_name and step["ok"] for step in state.steps)
+
+
+def _compact_processed_research_context(messages: list[dict]) -> None:
+    """Replace already-consumed fetched-page observations with tiny placeholders.
+
+    The model has processed tool observations once a later assistant message has
+    arrived. Keeping full fetched pages in every subsequent request bloats small
+    context windows, so task mode preserves only the fact that research evidence
+    was consumed. The durable ledger keeps a short evidence preview separately.
+    """
+    for message in messages:
+        if message.get("role") != "tool" or message.get("name") not in _RESEARCH_CONTEXT_TOOLS:
+            continue
+        content = str(message.get("content") or "")
+        if '"research_context_compacted"' in content:
+            continue
+        if len(content) < 800:
+            continue
+        message["content"] = json.dumps(
+            {
+                "ok": True,
+                "tool": message.get("name"),
+                "research_context_compacted": True,
+                "content": (
+                    "Fetched research evidence was provided to and consumed by "
+                    "the previous reasoning step; use the derived plan/summary/"
+                    "artifact from subsequent context instead of re-reading raw pages."
+                ),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 
@@ -655,7 +708,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         f"{knowledge_context}\n\n"
         "[TASK MODE] You MUST use tools to complete tasks. Treat agentic work as "
         "a sequence of steps, not one category: plan/decide when useful, research "
-        "with web_search/fetch_page when current or external facts are needed, "
+        "with web_search for snippet-only discovery and deep_search for fetched-page evidence when current or external facts are needed, "
         "inspect repository files for coding or architecture work, schedule with "
         "schedule_job or schedule_reminder when requested, and write or save the "
         "result when the user asks for an artifact. Research tasks should normally "
@@ -669,6 +722,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "Tool observations are structured JSON. If ok=false, do not pretend the "
         "action succeeded: retry with corrected arguments, choose another tool or "
         "query, or clearly disclose the limitation in the final answer. "
+        "Use deep_search at most once per agentic workflow. After deep_search returns, read its evidence and continue with the next productive step (plan, summarize, save, or answer) instead of searching again. Use web_search only for lightweight snippet discovery; snippets alone are not enough for verified detailed notes. "
         "When writing notes after research: cross-check any hardware specs, "
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
@@ -684,6 +738,27 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         {"role": "system", "content": agent_system},
         {"role": "user", "content": user_input},
     ]
+    owner.last_prompt_debug = {
+        "mode": "agentic",
+        "system_prompt": owner._persona,
+        "memory_prompt": memory_context,
+        "web_prompt": "",
+        "agentic_prompts": [
+            {"label": "agentic_policy", "content": agentic_policy_context},
+            {"label": "wiki_context", "content": wiki_context},
+            {"label": "skill_context", "content": skill_context},
+            {"label": "knowledge_context", "content": knowledge_context},
+            {"label": "task_mode_system", "content": agent_system},
+        ],
+        "previous_chat_messages": [],
+    }
+    owner.last_usage = {
+        "prompt_messages": list(messages),
+        "completion_text": "",
+        "prompt_tokens": None,
+        "completion_tokens": None,
+        "total_tokens": None,
+    }
 
     final_text = ""
     last_content = ""
@@ -701,9 +776,18 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 tool_choice="auto", stream=False, max_tokens=AGENT_MAX_TOKENS,
                 temperature=0.3,
             )
+            usage = getattr(resp, "usage", None)
             msg = resp.choices[0].message
             last_content = msg.content or ""
+            owner.last_usage = {
+                "prompt_messages": list(messages),
+                "completion_text": last_content,
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+                "total_tokens": getattr(usage, "total_tokens", None),
+            }
             messages.append(msg.model_dump(exclude_none=True))
+            _compact_processed_research_context(messages)
         except Exception as e:
             log.error("Agent LLM call failed: %s", e)
             state.record(ToolResult(
@@ -754,6 +838,24 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 continue
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
+            if name == "deep_search" and _has_successful_tool_call(state, "deep_search"):
+                result = ToolResult(
+                    ok=False, tool=name, args=args,
+                    content=(
+                        "deep_search was already used in this agentic workflow. "
+                        "Do not search again; use the fetched evidence already "
+                        "processed in the prior step to plan, summarize, save, "
+                        "or answer."
+                    ),
+                    error_type="deep_search_limit_reached",
+                    retryable=False,
+                )
+                state.record(result)
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": result.observation(),
+                })
+                continue
             call_key = (name, json.dumps(args, sort_keys=True))
             if name != "final_answer" and call_key in seen_calls:
                 result = ToolResult(
