@@ -19,6 +19,25 @@ from pathlib import Path
 DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
 
+# Same rationale as knowledge.py's _STOPWORDS: without filtering, common
+# words in the query can incidentally match inside an unrelated skill's
+# summary/triggers/tools text and pull the whole skill doc into context.
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "how", "what", "who", "when", "where", "why",
+    "we", "you", "i", "he", "she", "they", "this", "that", "these",
+    "those", "some", "any", "all", "each", "can", "could", "will",
+    "would", "should", "shall", "may", "might", "must", "to", "of", "in",
+    "on", "at", "for", "with", "and", "or", "not", "no", "yes", "make",
+    "made", "get", "got", "go", "going", "let", "lets", "want", "wants",
+    "just", "so", "up", "down", "out", "about", "if", "then", "than",
+})
+
+# Minimum score before a skill counts as a genuine match — mirrors
+# knowledge.py's _MIN_RELEVANCE_SCORE so both retrieval paths behave the
+# same way with the same "one stray substring hit isn't enough" logic.
+_MIN_RELEVANCE_SCORE = 3
+
 
 @dataclass(frozen=True)
 class SkillDoc:
@@ -184,10 +203,15 @@ def list_skillsets() -> str:
 
 def search_skillsets(query: str, limit: int = 3) -> list[SkillDoc]:
     """Search local skill workflows by id/name/summary/triggers/tools."""
-    terms = [t.casefold() for t in query.split() if t.strip()]
+    if not query.strip():
+        return discover_skill_docs()[:limit]
+
+    terms = [t.casefold() for t in query.split() if t.strip() and t.casefold() not in _STOPWORDS]
     docs = discover_skill_docs()
     if not terms:
-        return docs[:limit]
+        # Query was entirely stopwords/junk — not a real topical query, so
+        # match nothing rather than returning arbitrary skills.
+        return []
 
     scored: list[tuple[int, SkillDoc]] = []
     for doc in docs:
@@ -199,7 +223,7 @@ def search_skillsets(query: str, limit: int = 3) -> list[SkillDoc]:
             " ".join(doc.tools),
         ]).casefold()
         score = sum(3 if term in doc.skill_id.casefold() else 1 for term in terms if term in haystack)
-        if score:
+        if score >= _MIN_RELEVANCE_SCORE:
             scored.append((score, doc))
     scored.sort(key=lambda item: (-item[0], item[1].skill_id))
     return [doc for _score, doc in scored[:limit]]
@@ -223,10 +247,17 @@ def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:
     return f"[skill not found: {skill_id}]"
 
 
-def skill_context_for(query: str, limit: int = 2) -> str:
-    """Build compact context for the most relevant skill workflows."""
+def skill_context_for(query: str, limit: int = 2, max_chars: int = 6000) -> str:
+    """Build compact context for the most relevant skill workflows.
+
+    `max_chars` is a *total* budget shared across all loaded skills (split
+    evenly per match), not a per-skill cap — previously each matched skill
+    got its own fixed 6000-char allowance regardless of `limit`, so raising
+    `limit` silently multiplied the total injected size.
+    """
     matches = search_skillsets(query, limit=limit)
     if not matches:
         return "<skill_context>\nNo matching predefined skills found. Use generic task tools.\n</skill_context>"
-    loaded = [load_skillset(doc.skill_id, max_chars=6000) for doc in matches]
+    per_skill_chars = max(500, max_chars // max(1, len(matches)))
+    loaded = [load_skillset(doc.skill_id, max_chars=per_skill_chars) for doc in matches]
     return "<skill_context>\n" + "\n\n".join(loaded) + "\n</skill_context>"

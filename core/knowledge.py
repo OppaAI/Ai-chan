@@ -33,6 +33,26 @@ _WORD_RE = re.compile(r"[a-z0-9_./-]+", re.IGNORECASE)
 _HEADING_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 _FRONT_MATTER_RE = re.compile(r"^---\n(?P<meta>.*?)\n---\n", re.DOTALL)
 
+# Common words that appear in nearly every document regardless of topic.
+# Without filtering these, a long unrelated doc (e.g. an install guide) can
+# rack up incidental +1 "text" hits on words like "how"/"make"/"we" and
+# qualify for injection even though it has nothing to do with the query.
+_STOPWORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "do", "does", "did", "how", "what", "who", "when", "where", "why",
+    "we", "you", "i", "he", "she", "they", "this", "that", "these",
+    "those", "some", "any", "all", "each", "can", "could", "will",
+    "would", "should", "shall", "may", "might", "must", "to", "of", "in",
+    "on", "at", "for", "with", "and", "or", "not", "no", "yes", "make",
+    "made", "get", "got", "go", "going", "let", "lets", "want", "wants",
+    "just", "so", "up", "down", "out", "about", "if", "then", "than",
+})
+
+# Minimum score a knowledge item must reach before it's considered a genuine
+# match. Without this floor, search_knowledge includes anything with
+# score > 0, which one stray substring hit satisfies.
+_MIN_RELEVANCE_SCORE = 3
+
 
 @dataclass(frozen=True)
 class KnowledgeItem:
@@ -128,7 +148,11 @@ def discover_knowledge_items(root: str | Path = REPO_ROOT) -> list[KnowledgeItem
 
 
 def _terms(text: str) -> list[str]:
-    return [match.group(0).casefold() for match in _WORD_RE.finditer(text) if match.group(0).strip()]
+    return [
+        match.group(0).casefold()
+        for match in _WORD_RE.finditer(text)
+        if match.group(0).strip() and match.group(0).casefold() not in _STOPWORDS
+    ]
 
 
 def _score_item(item: KnowledgeItem, terms: Iterable[str]) -> int:
@@ -152,11 +176,20 @@ def _score_item(item: KnowledgeItem, terms: Iterable[str]) -> int:
 def search_knowledge(query: str, limit: int = 6, kinds: Iterable[str] | None = None) -> list[KnowledgeItem]:
     wanted = {kind for kind in kinds} if kinds is not None else None
     items = [item for item in discover_knowledge_items() if wanted is None or item.kind in wanted]
+    if not query.strip():
+        return items[:limit]
     query_terms = _terms(query)
     if not query_terms:
-        return items[:limit]
+        # Query had content but it was entirely stopwords (e.g. "how do we
+        # do this") — that's not a real topical query, so match nothing
+        # rather than silently returning arbitrary items.
+        return []
 
-    scored = [(score, item) for item in items if (score := _score_item(item, query_terms)) > 0]
+    scored = [
+        (score, item)
+        for item in items
+        if (score := _score_item(item, query_terms)) >= _MIN_RELEVANCE_SCORE
+    ]
     scored.sort(key=lambda pair: (-pair[0], pair[1].kind, pair[1].item_id))
     return [item for _score, item in scored[:limit]]
 

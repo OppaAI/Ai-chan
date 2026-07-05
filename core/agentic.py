@@ -47,6 +47,13 @@ log = get_logger(__name__)
 
 MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 512)))
+# Belt-and-suspenders budget check: even with better relevance scoring in
+# knowledge.py/skills.py, a coincidental match can still slip through. This
+# is a rough chars/4 ≈ tokens estimate (no tokenizer call here), used only
+# to decide whether to drop the lowest-priority context blocks before ever
+# reaching llama.cpp — a soft degradation instead of a hard 400 mid-task.
+LLM_CTX_SIZE = int(os.getenv("LLM_CTX_SIZE", 12288))
+AGENT_CONTEXT_BUDGET_RATIO = float(os.getenv("AGENT_CONTEXT_BUDGET_RATIO", 0.65))
 AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("AGENT_MEMORY_DRAIN_TIMEOUT", os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25)))
 AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", 1500))
@@ -682,6 +689,49 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
         return VerificationResult(ok=True, feedback="Verifier unavailable; deterministic checks passed.", score=0.75)
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough chars/4 token estimate — good enough for a budget guard, not
+    for billing/accounting (those use the real /tokenize endpoint elsewhere)."""
+    return max(1, len(text) // 4)
+
+
+def _enforce_agentic_context_budget(
+    persona: str,
+    agentic_policy_context: str,
+    memory_context: str,
+    user_input: str,
+    wiki_context: str,
+    skill_context: str,
+    knowledge_context: str,
+) -> tuple[str, str, str]:
+    """Drop wiki/knowledge/skill context, lowest priority first, if the
+    assembled prompt would still exceed the ctx budget after the per-call
+    caps applied at the call site. Returns the (possibly trimmed) three
+    context strings in their original order."""
+    budget = int(LLM_CTX_SIZE * AGENT_CONTEXT_BUDGET_RATIO)
+    fixed = persona + agentic_policy_context + memory_context + user_input
+    fixed_tokens = _estimate_tokens(fixed)
+
+    # Priority order to drop, weakest first: wiki > knowledge > skill.
+    # Skill workflows are kept longest since they carry concrete tool
+    # instructions the agent loop actually needs to act correctly; wiki
+    # pages are the most "nice to have" background context.
+    blocks = {"wiki": wiki_context, "knowledge": knowledge_context, "skill": skill_context}
+    drop_order = ["wiki", "knowledge", "skill"]
+
+    for name in drop_order:
+        total_tokens = fixed_tokens + sum(_estimate_tokens(v) for v in blocks.values())
+        if total_tokens <= budget:
+            break
+        log.warning(
+            "[agentic] context budget exceeded (%s > %s est. tokens); dropping %s block",
+            total_tokens, budget, name,
+        )
+        blocks[name] = f"<{name}_context>\nOmitted this turn — context budget exceeded.\n</{name}_context>"
+
+    return blocks["wiki"], blocks["skill"], blocks["knowledge"]
+
+
 def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     """Run task mode using the owning AikoThink instance for model/memory/output."""
     tools = tool_schemas()
@@ -692,9 +742,21 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
     agentic_policy_context = _agentic_policy_context()
-    wiki_context = wiki_context_for(user_input)
-    skill_context = skill_context_for(user_input)
-    knowledge_context = knowledge_context_for(user_input)
+    # These previously had no size caps at all in the agentic path (unlike
+    # think.py's normal chat path, which caps knowledge_context_for at
+    # limit=3/max_chars=4500). An unrelated but coincidentally-matched skill
+    # or doc could inject thousands of tokens into a task-mode turn with no
+    # ceiling, which is what caused the 12288-ctx overflow on a routine
+    # "let's make cookies" turn. Cap all three here; the relevance-scoring
+    # fixes in knowledge.py/skills.py reduce *bad* matches, but these caps
+    # bound the damage even from a still-imperfect match.
+    wiki_context = wiki_context_for(user_input, limit=1, max_chars=1500)
+    skill_context = skill_context_for(user_input, limit=2, max_chars=3000)
+    knowledge_context = knowledge_context_for(user_input, limit=2, max_chars=2500)
+    wiki_context, skill_context, knowledge_context = _enforce_agentic_context_budget(
+        owner._persona, agentic_policy_context, memory_context, user_input,
+        wiki_context, skill_context, knowledge_context,
+    )
 
     agent_system = (
         f"{owner._persona}\n\n"
