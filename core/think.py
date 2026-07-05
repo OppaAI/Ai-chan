@@ -31,7 +31,7 @@ import numpy as np
 
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
-from core.tools    import deep_search
+from core.tools    import web_search_context
 from core.agentic  import run_agentic_chat
 from core.knowledge import knowledge_context_for
 from core.log      import get_logger
@@ -164,6 +164,11 @@ _AGENTIC_ROUTE_RE = re.compile(
 )
 
 
+
+def _extract_search_results_block(system_prompt: str) -> str:
+    match = re.search(r"<search_results\b[^>]*>.*?</search_results>", system_prompt or "", re.DOTALL)
+    return match.group(0) if match else ""
+
 # ── think ─────────────────────────────────────────────────────────────────────
 
 class AikoThink:
@@ -180,8 +185,10 @@ class AikoThink:
         self._semantic_example_cache: dict[int, tuple[list[str], np.ndarray]] = {}
         self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
-        self._turn_lock = threading.Lock()
+        self._turn_lock = threading.RLock()
         self._reasoning = False
+        self.last_usage: dict = {}
+        self.last_prompt_debug: dict = {}
         self._mem_queue  = queue.Queue()
         self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
         self._mem_worker.start()
@@ -431,7 +438,14 @@ class AikoThink:
 
     def agentic_chat(self, user_input: str, token_callback=None) -> str:
         """Delegate task-mode execution to core.agentic."""
-        return run_agentic_chat(self, user_input, token_callback=token_callback)
+        with self._turn_lock:
+            self._last_chat_time = time.time()
+            self._active_turn.set()
+            try:
+                return run_agentic_chat(self, user_input, token_callback=token_callback)
+            finally:
+                self._last_chat_time = time.time()
+                self._active_turn.clear()
 
     def proactive_checkin(self, prompt_hint: str) -> str:
         """Generate one short proactive check-in without storing it as a user turn."""
@@ -492,7 +506,7 @@ class AikoThink:
                 search_query = self._resolve_search_query(user_input)
                 if token_callback: token_callback(f"__SEARCHING__:{search_query}")
                 
-                context = deep_search(search_query, fetch_top=1)
+                context = web_search_context(search_query)
                 if context and not context.startswith("[search failed"):
                     system = (
                         f"{system}\n\n"
@@ -521,6 +535,16 @@ class AikoThink:
         if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != history_entry:
             trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
 
+        previous_chat_messages = [dict(m) for m in trimmed]
+        self.last_prompt_debug = {
+            "mode": "chat",
+            "system_prompt": system,
+            "memory_prompt": memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>",
+            "web_prompt": _extract_search_results_block(system),
+            "agentic_prompts": [],
+            "previous_chat_messages": previous_chat_messages,
+        }
+
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
 
         with self._history_lock:
@@ -535,8 +559,8 @@ class AikoThink:
 
     def web_search(self, query: str, token_callback=None) -> str:
         """Explicit /web command path."""
-        context = deep_search(query, fetch_top=1)
-        if "no results" in context or "failed" in context:
+        context = web_search_context(query)
+        if not context or "no results" in context or "failed" in context:
             msg = f"[no results for: {query}]"
             if token_callback: token_callback(msg)
             return msg
@@ -655,6 +679,13 @@ class AikoThink:
         full_response = []
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
         all_messages = [{"role": "system", "content": system}] + messages if system else messages
+        self.last_usage = {
+            "prompt_messages": all_messages,
+            "completion_text": "",
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+        }
 
         karaoke_text = bool(
             self._speak and token_callback and getattr(self._speak, "karaoke_text", False)
@@ -696,6 +727,7 @@ class AikoThink:
 
             text = "".join(full_response).strip()
             if text:
+                self.last_usage["completion_text"] = text
                 stream_success = True
                 if self._speak and sentence_buffer.strip():
                     self._speak.feed_speech_stream(sentence_buffer)
@@ -731,6 +763,13 @@ class AikoThink:
             )
             text = (resp.choices[0].message.content or "").strip()
             if text:
+                usage = getattr(resp, "usage", None)
+                self.last_usage.update({
+                    "completion_text": text,
+                    "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                    "completion_tokens": getattr(usage, "completion_tokens", None),
+                    "total_tokens": getattr(usage, "total_tokens", None),
+                })
                 log.warning("%s; recovered with non-streaming completion", reason)
                 return text
             reason = f"{reason}; non-streaming completion was also empty"

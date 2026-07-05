@@ -109,6 +109,8 @@ def _c(code: str, text: str) -> str:
 
 
 _GREY      = "\033[38;5;250m"   # system prompt
+_MED_RED   = "\033[38;5;203m"   # web prompt
+_MED_CYAN  = "\033[38;5;80m"    # agentic prompts
 _LAVENDER  = "\033[38;5;183m"   # memory entries
 _DIM       = "\033[2m"
 
@@ -950,49 +952,40 @@ class AikoSimpleCLI:
         if not self.debug:
             return
         # full breakdown, only in --debug mode
-        tok_line = (
-            f"  🧮 tokens: in={stats.get('input_tokens', 'n/a')} "
-            f"out={stats.get('output_tokens', 'n/a')} "
-            f"({stats.get('tokens_per_second', 'n/a')} tok/s)"
-        )
-        print(tok_line)
-        stage_labels = [
-            ("asr_inference",   "ASR"),
-            ("agentic_intent",  "Intent"),
-            ("web_search",      "Search"),
-            ("llm_inference",   "LLM"),
-            ("tts_inference",   "TTS"),
+        print("  ┌────────────── debug metrics ──────────────┐")
+        print(f"  │ tokens in/out/total │ {stats.get('input_tokens', 'n/a')} / {stats.get('output_tokens', 'n/a')} / {stats.get('total_tokens', 'n/a')}")
+        print(f"  │ generation speed   │ {stats.get('tokens_per_second', 'n/a')} tok/s")
+        print("  ├────────────── latency ────────────────────┤")
+        latency_rows = [
+            ("ASR", "asr_inference"),
+            ("Intent", "agentic_intent"),
+            ("Search", "web_search"),
+            ("LLM", "llm_inference"),
+            ("TTS", "tts_inference"),
+            ("voice→submit", "voice_end_to_submit"),
+            ("submit→1st_tok", "submit_to_first_token"),
+            ("submit→done", "submit_to_assistant_done"),
+            ("done→1st_audio", "assistant_done_to_first_audio"),
+            ("submit→turn_done", "submit_to_turn_done"),
         ]
-        stage_parts = [f"{label}={stats.get(key, 'n/a')}" for key, label in stage_labels]
-        print(f"  ⏱  stages: {' | '.join(stage_parts)}")
-        extra_labels = [
-            ("voice_end_to_submit",           "voice→submit"),
-            ("submit_to_first_token",         "submit→1st_tok"),
-            ("assistant_done_to_first_audio", "done→1st_audio"),
-            ("submit_to_turn_done",           "submit→turn_done"),
-        ]
-        extra_parts = [f"{label}={stats.get(key, 'n/a')}" for key, label in extra_labels]
-        print(f"  ⏱  totals: {' | '.join(extra_parts)}")
-
-        # ── token accounting breakdown (system prompt / memory / output) ──
-        # Only prints when the corresponding keys were populated this turn
-        # (see _run_session's debug block below) — silently no-ops on
-        # earlier turns/paths that don't set them.
+        for label, key in latency_rows:
+            print(f"  │ {label:<16} │ {stats.get(key, 'n/a')}")
         tok_breakdown = stats.get("token_breakdown")
         if tok_breakdown:
-            print(_c(_DIM, "  🧮 token breakdown:"))
-            print(_c(_DIM, f"     system prompt : {tok_breakdown.get('system_prompt_tokens', 'n/a')}"))
-            mem_counts = tok_breakdown.get("memory_entry_tokens", [])
-            if mem_counts:
-                per_entry = ", ".join(str(c) for c in mem_counts)
-                print(_c(_DIM,
-                    f"     memory entries: {tok_breakdown.get('memory_entry_count', len(mem_counts))} "
-                    f"entries ({per_entry}) = {sum(mem_counts)} tok"))
-            else:
-                print(_c(_DIM, "     memory entries: 0"))
-            print(_c(_DIM, f"     agentic       : {tok_breakdown.get('agentic_tokens', 0)}"))
-            print(_c(_DIM, f"     ai output     : {tok_breakdown.get('output_tokens', stats.get('output_tokens', 'n/a'))}"))
-            print(_c(_DIM, f"     TOTAL         : {tok_breakdown.get('total_tokens', 'n/a')}"))
+            print("  ├──────────── token breakdown ──────────────┤")
+            rows = [
+                ("system", tok_breakdown.get("system_prompt_tokens", 0)),
+                ("web", tok_breakdown.get("web_prompt_tokens", 0)),
+                ("agentic", tok_breakdown.get("agentic_prompt_tokens", 0)),
+                ("memory", tok_breakdown.get("memory_prompt_tokens", 0)),
+                ("prev chat", tok_breakdown.get("previous_chat_tokens", 0)),
+                ("user", tok_breakdown.get("user_turn_tokens", 0)),
+                ("assistant out", tok_breakdown.get("output_tokens", 0)),
+            ]
+            for label, value in rows:
+                print(f"  │ {label:<16} │ {value} tok")
+            print(f"  │ previous turns   │ {tok_breakdown.get('previous_chat_message_count', 0)} messages")
+        print("  └───────────────────────────────────────────┘")
 
     # ── input ────────────────────────────────────────────────────────────
     def get_input(self):
@@ -1251,6 +1244,7 @@ def _run_session(ui, args):
             "submit_to_turn_done":           _latency_seconds(timing, "submitted_at", "turn_done_at"),
             "input_tokens":                  timing.get("input_tokens"),
             "output_tokens":                 out_tok,
+            "total_tokens":                  timing.get("total_tokens"),
             "tokens_per_second":             round(tok_per_sec, 1) if tok_per_sec is not None else None,
         }
 
@@ -1261,15 +1255,34 @@ def _run_session(ui, args):
             mem_tok_list = timing.get("memory_entry_tokens", [])
             agentic_tok = timing.get("agentic_tokens", 0)
             out_tok_val = out_tok or 0
-            total = timing["system_prompt_tokens"] + sum(mem_tok_list) + agentic_tok + out_tok_val
+            web_tok = timing.get("web_prompt_tokens", 0)
+            agentic_prompt_tok = timing.get("agentic_prompt_tokens", agentic_tok)
+            memory_prompt_tok = timing.get("memory_prompt_tokens", sum(mem_tok_list))
+            previous_chat_tok = timing.get("previous_chat_tokens", 0)
+            user_turn_tok = timing.get("user_turn_tokens", 0)
+            total = timing.get("total_tokens") or (
+                timing["system_prompt_tokens"]
+                + web_tok
+                + agentic_prompt_tok
+                + memory_prompt_tok
+                + previous_chat_tok
+                + user_turn_tok
+                + out_tok_val
+            )
             parts["token_breakdown"] = {
                 "system_prompt_tokens": timing["system_prompt_tokens"],
+                "web_prompt_tokens":    web_tok,
+                "agentic_prompt_tokens": agentic_prompt_tok,
+                "memory_prompt_tokens": memory_prompt_tok,
                 "memory_entry_tokens":  mem_tok_list,
                 "memory_entry_count":   timing.get("memory_entry_count", len(mem_tok_list)),
-                "agentic_tokens":       agentic_tok,
+                "previous_chat_tokens": timing.get("previous_chat_tokens", 0),
+                "previous_chat_message_count": timing.get("previous_chat_message_count", 0),
+                "user_turn_tokens":     user_turn_tok,
                 "output_tokens":        out_tok_val,
                 "total_tokens":         total,
             }
+            parts["total_tokens"] = total
 
         return parts
 
@@ -1281,7 +1294,7 @@ def _run_session(ui, args):
             # full breakdown — formatted values, "n/a" for anything unavailable
             display = {
                 k: (_fmt_latency(v) if k not in (
-                        "input_tokens", "output_tokens", "tokens_per_second", "token_breakdown"
+                        "input_tokens", "output_tokens", "total_tokens", "tokens_per_second", "token_breakdown"
                     ) else v)
                 for k, v in parts.items()
             }
@@ -1587,18 +1600,7 @@ def _run_session(ui, args):
 
         if args.debug:
             # ── system prompt (grey) ────────────────────────────────────
-            system_prompt = None
-            for attr in ("system_prompt", "_system_prompt", "get_system_prompt"):
-                candidate = getattr(think, attr, None)
-                if callable(candidate):
-                    try:
-                        system_prompt = candidate()
-                    except Exception:
-                        system_prompt = None
-                elif isinstance(candidate, str):
-                    system_prompt = candidate
-                if system_prompt:
-                    break
+            system_prompt = getattr(think, "_persona", None)
             if system_prompt:
                 ui.add_message('sys', _c(_GREY, f'[system prompt]\n{system_prompt}'))
                 current_latency["system_prompt_tokens"] = _count_tokens(system_prompt)
@@ -1642,6 +1644,57 @@ def _run_session(ui, args):
                 current_latency["input_tokens"] = usage["prompt_tokens"]
             if usage.get("completion_tokens") is not None:
                 current_latency["output_tokens"] = usage["completion_tokens"]
+            if usage.get("total_tokens") is not None:
+                current_latency["total_tokens"] = usage["total_tokens"]
+
+            if args.debug:
+                prompt_debug = getattr(think, "last_prompt_debug", None) or {}
+                system_prompt = prompt_debug.get("system_prompt") or system_prompt or ""
+                web_prompt = prompt_debug.get("web_prompt") or ""
+                memory_prompt = prompt_debug.get("memory_prompt") or ""
+                agentic_prompts = prompt_debug.get("agentic_prompts") or []
+                previous_chat_messages = prompt_debug.get("previous_chat_messages") or []
+
+                if web_prompt:
+                    ui.add_message('sys', _c(_MED_RED, f'[web prompt]\n{web_prompt}'))
+                if agentic_prompts:
+                    for prompt_item in agentic_prompts:
+                        label = prompt_item.get("label", "agentic_prompt") if isinstance(prompt_item, dict) else "agentic_prompt"
+                        content = prompt_item.get("content", "") if isinstance(prompt_item, dict) else str(prompt_item)
+                        if content:
+                            ui.add_message('sys', _c(_MED_CYAN, f'[{label}]\n{content}'))
+
+                previous_chat_texts = [
+                    f"{m.get('role', 'unknown')}: {m.get('content', '')}"
+                    for m in previous_chat_messages
+                    if isinstance(m, dict)
+                ]
+                prompt_messages = usage.get("prompt_messages") or []
+                completion_text = usage.get("completion_text") or ""
+
+                current_latency["system_prompt_tokens"] = _count_tokens(system_prompt)
+                current_latency["web_prompt_tokens"] = _count_tokens(web_prompt)
+                current_latency["memory_prompt_tokens"] = _count_tokens(memory_prompt)
+                current_latency["agentic_prompt_tokens"] = sum(
+                    _count_tokens((item.get("content", "") if isinstance(item, dict) else str(item)))
+                    for item in agentic_prompts
+                )
+                current_latency["previous_chat_tokens"] = sum(_count_tokens(t) for t in previous_chat_texts)
+                current_latency["previous_chat_message_count"] = len(previous_chat_texts)
+                current_latency["user_turn_tokens"] = _count_tokens(user_input)
+
+                if current_latency.get("input_tokens") is None and prompt_messages:
+                    current_latency["input_tokens"] = sum(
+                        _count_tokens(str(m.get("content", "")))
+                        for m in prompt_messages
+                        if isinstance(m, dict)
+                    )
+                if current_latency.get("output_tokens") is None and completion_text:
+                    current_latency["output_tokens"] = _count_tokens(completion_text)
+                if current_latency.get("total_tokens") is None:
+                    in_tok = current_latency.get("input_tokens") or 0
+                    out_tok = current_latency.get("output_tokens") or 0
+                    current_latency["total_tokens"] = in_tok + out_tok
 
             if typewriter is not None and _sentence_buf:
                 typewriter.feed_sentence("".join(_sentence_buf))

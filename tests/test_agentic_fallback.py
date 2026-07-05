@@ -11,6 +11,8 @@ from core.agentic import (
     TaskState,
     ToolResult,
     _build_incomplete_task_answer,
+    _compact_processed_research_context,
+    _has_successful_tool_call,
     _sanitize_user_facing_tool_detail,
 )
 
@@ -73,3 +75,26 @@ def test_tool_failure_detail_is_sanitized_for_user_facing_fallback():
     assert "/workspace/Aiko-chan" not in sanitized
     assert "[redacted]" in sanitized
     assert "[internal-url-redacted]" in sanitized
+
+
+def test_processed_deep_search_context_is_compacted_after_use():
+    messages = [
+        {"role": "tool", "name": "deep_search", "content": "x" * 1200},
+        {"role": "assistant", "content": "I processed the evidence and will save a note."},
+    ]
+
+    _compact_processed_research_context(messages)
+
+    assert len(messages[0]["content"]) < 800
+    assert "research_context_compacted" in messages[0]["content"]
+
+
+def test_deep_search_limit_only_counts_successful_calls():
+    state = TaskState(goal="research with one successful deep search")
+    state.record(ToolResult(ok=False, tool="deep_search", args={"query": "bad"}, content="[search failed: timeout]"))
+
+    assert not _has_successful_tool_call(state, "deep_search")
+
+    state.record(ToolResult(ok=True, tool="deep_search", args={"query": "good"}, content="[Web search results]"))
+
+    assert _has_successful_tool_call(state, "deep_search")
