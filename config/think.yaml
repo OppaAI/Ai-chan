@@ -12,7 +12,7 @@ LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
 # -- Token budgets --
 LLM_MAX_TOKENS: "280"  # Base max tokens for normal chat replies.
 BASE_PREDICT: "280"  # Legacy alias for LLM_MAX_TOKENS; keep equal unless old scripts need another value.
-CONTEXT_WINDOW_TURNS: "8"  # Number of recent user+assistant turns sent as short-term context.
+CONTEXT_WINDOW_TURNS: "5"  # Number of recent user+assistant turns sent as short-term context.
 REASONING_SCALE: "3"  # Multiplier applied to LLM_MAX_TOKENS for reasoning mode.
 
 # -- Sampling --

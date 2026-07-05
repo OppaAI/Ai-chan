@@ -21,7 +21,7 @@ MEMORY_EXTRACT_MIN_CHARS: "80"  # Minimum turn length before extracting a memory
 MEMORY_EXTRACT_MAX_TOKENS: "128"  # Max tokens for memory extraction summaries.
 MEMORY_EXTRACT_TIMEOUT: "18"  # Seconds before memory extraction LLM call times out.
 EXTRACT_MODEL: ""  # Optional smaller model for extraction; blank falls back to LLM_MODEL.
-MEMORY_RECALL_LIMIT: "5"  # Number of memories injected into normal chat context.
+MEMORY_RECALL_LIMIT: "3"  # Number of memories injected into normal chat context.
 WRITE_DEDUP_THRESHOLD: "0.95"  # Similarity threshold above which a new memory write is skipped as duplicate; range 0.0-1.0.
 MEMORY_WRITE_IDLE_GRACE: "3.0"  # Seconds of idle chat before background memory writes proceed.
 MEMORY_WRITE_MAX_WAIT: "45.0"  # Max seconds memory writer waits before forcing the write.
