@@ -106,8 +106,8 @@
     "timezone": "America/Vancouver",
     "next_due": "2026-07-05T00:50:00-07:00",
     "created_at": "2026-07-05T00:36:36.003562-07:00",
-    "last_ran_at": null,
-    "enabled": true,
+    "last_ran_at": "2026-07-05T11:12:35.063909-07:00",
+    "enabled": false,
     "kind": "scheduled_job",
     "action": "announce"
   }
