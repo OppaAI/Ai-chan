@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import importlib
 import importlib.util
 
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8081")
+SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 
 
