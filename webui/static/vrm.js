@@ -1,3 +1,18 @@
+/**
+ * vrm.js
+ * Three.js VRM loader and real-time skeletal animation engine.
+ * Loads Aiko.vrm, manages idle breathing/sway, gesture library (20+ animations),
+ * thinking poses (chin-think, hand-near-mouth, etc.), and mouth shapes via blendshapes.
+ * Expression/viseme/pose updates driven by window.aikoSetX() callbacks from WebSocket.
+ *
+ * Animation layers:
+ *   - idle: breathing, natural sway, head look-around (computed via sine waves)
+ *   - gestures: 20 contextual animations (lookAround, hairBrush, raiseHand, etc.)
+ *   - thinking: 4 introspective poses (cycled during LLM inference)
+ *   - blink: automatic eye closure + reopening
+ *   - mouth: vowel-based visemes (aa, ih, ou, ee, oh) + RMS-driven amplitude
+ */
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
