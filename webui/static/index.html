@@ -3,6 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Aiko-chan · OppaAI</title>
   <link rel="icon" type="image/png" href="/favicon.png">
   <style>
@@ -40,6 +41,54 @@
       display: grid;
       grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
       grid-template-rows: 100dvh;
+    }
+
+    /* ── Portrait phones / narrow viewports ───────────────────────────
+       Stack the VRM viewer on top of the chat panel instead of side by
+       side. Triggers on portrait orientation OR narrow width, so it also
+       kicks in on small landscape phones and split-screen views. */
+    @media (orientation: portrait), (max-width: 820px) {
+      body {
+        grid-template-columns: 1fr;
+        grid-template-rows: 40vh 1fr;
+      }
+
+      #vrm-side {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        min-height: 0;
+      }
+
+      #panel {
+        height: auto;
+        min-height: 0;
+      }
+
+      #vrm-hud {
+        padding: 8px 10px;
+        font-size: 10px;
+      }
+
+      #ws-dots {
+        top: 26px;
+        right: 10px;
+        font-size: 9px;
+        padding: 5px 6px;
+      }
+    }
+
+    /* Very short landscape phones (e.g. phone rotated, address bar visible):
+       shrink the viewer further so the chat + input row stay usable. */
+    @media (orientation: landscape) and (max-height: 480px) {
+      body {
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr);
+        grid-template-rows: 100dvh;
+      }
+
+      #vrm-side {
+        border-right: 1px solid var(--border);
+        border-bottom: none;
+      }
     }
 
     /* ── VRM side ───────────────────────────────────────────────────── */
@@ -438,6 +487,25 @@
       border-color: var(--cyan);
       color: var(--cyan);
       box-shadow: 0 0 6px rgba(81, 212, 200, .35);
+    }
+
+    /* Touch devices: bigger tap targets, and 16px input font so iOS Safari
+       doesn't auto-zoom the page when the text field gets focus. */
+    @media (hover: none) and (pointer: coarse) {
+      #user-input {
+        font-size: 16px;
+      }
+
+      .input-btn {
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+
+      #mic-btn {
+        width: 40px;
+        padding: 8px 0;
+        font-size: 15px;
+      }
     }
 
     /* ── loading overlay ────────────────────────────────────────────── */
