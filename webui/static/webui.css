@@ -573,3 +573,116 @@ body {
 #vad-status.active {
   color: var(--cyan);
 }
+
+/* ── OAuth Login ────────────────────────────────────────────────────────── */
+.auth-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  opacity: 1;
+  transition: opacity .6s;
+}
+
+.auth-overlay.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.auth-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  align-items: center;
+  padding: 40px;
+  max-width: 360px;
+  text-align: center;
+}
+
+.auth-title {
+  font-size: 28px;
+  letter-spacing: .3em;
+  color: var(--purple);
+  text-transform: uppercase;
+}
+
+.auth-subtitle {
+  font-size: 11px;
+  letter-spacing: .2em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+
+.auth-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.auth-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--dimmer);
+  background: transparent;
+  color: var(--dim);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all .2s;
+}
+
+.auth-btn:hover {
+  border-color: var(--purple);
+  color: var(--purple);
+  box-shadow: 0 0 8px rgba(155, 127, 212, .2);
+}
+
+.auth-btn.github:hover {
+  border-color: #c8b8e8;
+  color: #c8b8e8;
+  box-shadow: 0 0 8px rgba(200, 184, 232, .2);
+}
+
+.auth-btn.huggingface:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  box-shadow: 0 0 8px rgba(81, 212, 200, .2);
+}
+
+.auth-btn.proton:hover {
+  border-color: var(--pink);
+  color: var(--pink);
+  box-shadow: 0 0 8px rgba(198, 81, 168, .2);
+}
+
+.auth-btn.discord:hover {
+  border-color: var(--mauve);
+  color: var(--mauve);
+  box-shadow: 0 0 8px rgba(200, 168, 240, .2);
+}
+
+.auth-btn .icon {
+  font-size: 14px;
+}
+
+.auth-footer {
+  margin-top: 12px;
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: .1em;
+}
+
+.auth-status {
+  display: block;
+  height: 16px;
+}
