@@ -1,3 +1,17 @@
+/**
+ * webui.js
+ * Real-time chat UI with WebSocket bridge to Aiko backend.
+ * Handles voice I/O (mic capture via pcm-worklet + VAD, TTS playback with mouth sync),
+ * WebSocket message routing (chat, token streaming, vitals, expressions, visemes),
+ * initialization status tracking (step progress), and mic/text input modes.
+ *
+ * Core flows:
+ *   - mic capture: AudioWorklet → VAD frame → server (if speech detected)
+ *   - TTS playback: binary WAV frames → decode → analyser RMS → lip-sync blendshapes
+ *   - chat: text input or voice transcription → user_input message → token streaming
+ *   - gestures: server sends expression/viseme/pose → window.aikoSetX() → vrm.js
+ */
+
 // ── DOM refs ──────────────────────────────────────────────────────────────
 const initPanel = document.getElementById('init-panel');
 const chatPanel = document.getElementById('chat-panel');
