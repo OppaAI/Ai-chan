@@ -608,6 +608,7 @@ def build_daily_record(snippets: list[str], date: datetime) -> str:
 def _delete_existing_daily_pins(memorize, date: datetime) -> int:
     date_str = date.strftime("%Y-%m-%d")
     date_tag = f"[{date_str}]"
+    day_record_prefix = _DAY_RECORD_PREFIX_TMPL.format(date_str=date_str)
 
     try:
         all_mems = memorize.get_all()
@@ -618,7 +619,13 @@ def _delete_existing_daily_pins(memorize, date: datetime) -> int:
     deleted = 0
     for m in all_mems:
         text = m.get("memory") or ""
-        if not text.startswith(date_tag):
+        # Matches both pin shapes for this date: atomic facts tagged
+        # "[YYYY-MM-DD] ..." and the single "Day record for YYYY-MM-DD:"
+        # block. Previously only the fact tag was checked, so a rerun for
+        # the same date (double-fired scheduler, crash+restart, manual
+        # rerun) left the old day-record block in place and pinned a
+        # second, near-identical one alongside it instead of replacing it.
+        if not (text.startswith(date_tag) or text.startswith(day_record_prefix)):
             continue
         mem_id = m.get("id")
         if not mem_id:

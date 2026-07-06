@@ -176,7 +176,11 @@ def _public_memory_rows(memorize: AikoMemorize, window: WeekWindow) -> list[dict
 
     def is_weekly_source(row: dict[str, Any]) -> bool:
         text = (row.get("memory") or row.get("text") or "").strip()
-        return text.startswith("Daily experience summary for ") or text.startswith("Day record for ")
+        return (
+            text.startswith("Daily experience summary for ")  # legacy single-blob prose
+            or text.startswith("Day record for ")               # faithful day-record block
+            or bool(re.match(r"^\[\d{4}-\d{2}-\d{2}\]\s", text))  # per-fact pins, e.g. "[2026-07-05] ..."
+        )
 
     preferred = [r for r in pinned if is_weekly_source(r)]
     return preferred or pinned
