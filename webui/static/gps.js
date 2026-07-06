@@ -1,5 +1,5 @@
 /**
- * Aiko GPS capture module.
+ * GPS capture module.
  * Include in index.html with: <script src="gps.js"></script>
  * (before your main app script, since that script will construct an AikoLocation instance)
  *
