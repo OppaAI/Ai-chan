@@ -532,4 +532,75 @@ function connectWS() {
   };
 }
 
+// ── OAuth Login ──────────────────────────────────────────────────────────
+const authOverlay = document.getElementById('auth-overlay');
+const authStatus = document.getElementById('auth-status');
+
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/auth/me', { credentials: 'include' });
+    if (res.ok) {
+      hideAuthOverlay();
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
+function hideAuthOverlay() {
+  authOverlay.classList.add('hidden');
+  setTimeout(() => authOverlay.style.display = 'none', 600);
+}
+
+function setAuthStatus(msg) {
+  authStatus.textContent = msg;
+}
+
+function loginGitHub() {
+  setAuthStatus('Redirecting to GitHub…');
+  const clientId = window.OAUTH_CONFIG?.github_id;
+  const redirectUri = `${window.location.origin}/auth/github/callback`;
+  window.location.href = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email`;
+}
+
+function loginHuggingFace() {
+  setAuthStatus('Redirecting to Hugging Face…');
+  const clientId = window.OAUTH_CONFIG?.hf_id;
+  const redirectUri = `${window.location.origin}/auth/huggingface/callback`;
+  window.location.href = `https://huggingface.co/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code`;
+}
+
+function loginProton() {
+  setAuthStatus('Redirecting to Proton…');
+  const clientId = window.OAUTH_CONFIG?.proton_id;
+  const redirectUri = `${window.location.origin}/auth/proton/callback`;
+  window.location.href = `https://account.proton.me/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=openid%20profile%20email`;
+}
+
+function loginDiscord() {
+  setAuthStatus('Redirecting to Discord…');
+  const clientId = window.OAUTH_CONFIG?.discord_id;
+  const redirectUri = `${window.location.origin}/auth/discord/callback`;
+  window.location.href = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${encodeURIComponent('identify email')}`;
+}
+
+// Load config and check auth
+fetch('/api/auth/config')
+  .then(r => r.json())
+  .then(cfg => {
+    window.OAUTH_CONFIG = cfg;
+    return checkAuth();
+  })
+  .catch(() => {
+    authOverlay.style.display = 'none';
+    connectWS();
+  })
+  .then(authenticated => {
+    if (!authenticated) {
+      authOverlay.classList.remove('hidden');
+    } else {
+      connectWS();
+    }
+  });
+
 connectWS();
