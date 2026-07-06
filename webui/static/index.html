@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,8 +7,33 @@
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="./webui.css">
 </head>
-
 <body>
+  <!-- ── OAuth Login Modal ──────────────────────────────────────────────────── -->
+  <div id="auth-overlay" class="auth-overlay show">
+    <div class="auth-panel">
+      <div class="auth-title">Aiko-chan</div>
+      <div class="auth-subtitle">Neural Interface Access</div>
+      
+      <div class="auth-buttons">
+        <button class="auth-btn github" onclick="loginGitHub()">
+          <span class="icon">◆</span> GitHub
+        </button>
+        <button class="auth-btn huggingface" onclick="loginHuggingFace()">
+          <span class="icon">⬢</span> Hugging Face
+        </button>
+        <button class="auth-btn proton" onclick="loginProton()">
+          <span class="icon">◉</span> Proton
+        </button>
+        <button class="auth-btn discord" onclick="loginDiscord()">
+          <span class="icon">◆</span> Discord
+        </button>
+      </div>
+      
+      <div class="auth-footer">
+        <span class="auth-status" id="auth-status"></span>
+      </div>
+    </div>
+  </div>
 
   <!-- loading splash -->
   <div id="load-overlay">
