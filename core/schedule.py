@@ -21,7 +21,16 @@ Two hardcoded system jobs run outside schedule.json and cannot be modified
 by the user:
   - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
   - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
-  - weekly_social              optionally creates Aiko's weekly social-memory draft
+
+Other system-style behaviors (e.g. weekly_social) live entirely in
+schedule.json as ordinary jobs, but instead of routing through on_due/chat,
+they name a "handler" — a Python callable registered once at startup via
+register_system_handler(). schedule.json can only ever select a handler
+from that pre-registered allowlist; it can never name or execute an
+arbitrary function. This lets timing/enable/disable be fully data-driven
+(edit schedule.json, no code change, no restart needed if the caller
+notifies the scheduler) while the actual behavior each handler runs is
+still something a human explicitly wired up in code.
 """
 
 from __future__ import annotations
@@ -33,7 +42,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -51,7 +60,6 @@ DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
 DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
 MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
 MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
-WEEKLY_SOCIAL_ENABLED = os.getenv("WEEKLY_SOCIAL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 
 FREQUENCIES = {"once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 RELATIVE_DAY_ALIASES = {
@@ -397,6 +405,25 @@ def notify_scheduler_new_job() -> None:
         _scheduler_instance.notify_new_job()
 
 
+# ── system handler registry ───────────────────────────────────────────────────
+# Allows schedule.json jobs to trigger a real Python function on fire, without
+# giving the JSON file the ability to name or execute arbitrary code. Only
+# names registered here via register_system_handler() at startup can ever be
+# invoked — a job in schedule.json can select a handler, never define one.
+
+_SYSTEM_HANDLERS: dict[str, Callable[[Any], Any]] = {}
+
+
+def register_system_handler(name: str, fn: Callable[[Any], Any]) -> None:
+    """Register a callable that a schedule.json job can reference by name.
+
+    `fn` is called as fn(memorize) when a job with matching "handler" fires.
+    Call this once at startup for each system-style behavior you want
+    schedule.json to be able to schedule (e.g. weekly_social).
+    """
+    _SYSTEM_HANDLERS[name] = fn
+
+
 @dataclass
 class DueJob:
     """A scheduled job event ready to announce or execute."""
@@ -452,7 +479,9 @@ class ScheduleRunner:
       - daily_reflect_and_dream   every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE
       - monthly_consolidate       every 1st of month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE
 
-    User reminders and scheduled jobs are read from schedule.json.
+    User reminders and scheduled jobs are read from schedule.json. Jobs with
+    a "handler" field call into a registered Python function directly
+    (see register_system_handler) instead of going through on_due/chat.
 
     The thread sleeps until the soonest of all targets, waking early only
     when notify_new_job() is called (e.g. after a new job is registered at
@@ -477,7 +506,6 @@ class ScheduleRunner:
         # calculated once at startup, updated after each fire
         self._next_daily   = _next_daily_reflect_and_dream()
         self._next_monthly = _next_monthly_consolidate()
-        self._next_weekly_social = self._next_weekly_social_post()
 
         # catch-up flag — checked on start()
         self._catchup_needed = self._check_catchup()
@@ -514,10 +542,9 @@ class ScheduleRunner:
         self._thread.start()
         log.info(
             "Scheduler started — daily_reflect_and_dream at %02d:%02d, "
-            "monthly_consolidate on 1st at %02d:%02d, weekly_social=%s.",
+            "monthly_consolidate on 1st at %02d:%02d.",
             DAILY_JOB_HOUR, DAILY_JOB_MINUTE,
             MONTHLY_JOB_HOUR, MONTHLY_JOB_MINUTE,
-            "on" if WEEKLY_SOCIAL_ENABLED else "off",
         )
         if self._catchup_needed and self._memorize and self._generate_and_post_fn:
             log.info("Scheduler: running missed daily reflect+dream on startup.")
@@ -542,7 +569,6 @@ class ScheduleRunner:
                 [(t, name) for t, name in [
                     (self._next_daily, "daily"),
                     (self._next_monthly, "monthly"),
-                    (self._next_weekly_social, "weekly_social"),
                 ] if t <= now],
                 key=lambda x: x[0],
             )
@@ -550,12 +576,9 @@ class ScheduleRunner:
                 if name == "daily":
                     self._run_daily_reflect_and_dream()
                     self._next_daily = _next_daily_reflect_and_dream()
-                elif name == "monthly":
+                else:
                     self._run_monthly_consolidate()
                     self._next_monthly = _next_monthly_consolidate()
-                else:
-                    self._run_weekly_social()
-                    self._next_weekly_social = self._next_weekly_social_post()
 
             # ── fire overdue user jobs ────────────────────────────────────────
             self._fire_due_user_jobs()
@@ -566,7 +589,7 @@ class ScheduleRunner:
                 for j in _read_all()
                 if j.get("enabled", True)
             ]
-            candidates = [self._next_daily, self._next_monthly, self._next_weekly_social, *user_jobs]
+            candidates = [self._next_daily, self._next_monthly, *user_jobs]
             next_target = min(candidates)
 
             delta = (next_target - datetime.now(_timezone())).total_seconds()
@@ -592,14 +615,6 @@ class ScheduleRunner:
         try:
             log.info("daily_reflect_and_dream: starting.")
 
-            # Compute "yesterday" against the *local* calendar day, since the job
-            # fires on a local-midnight clock (_next_daily_reflect_and_dream uses
-            # _timezone()). Truncating datetime.now(timezone.utc) to UTC midnight
-            # is wrong here — for offsets like Vancouver's UTC-7/-8, any chat from
-            # roughly mid-afternoon onward local time already has a created_at
-            # timestamp that has rolled into the *next* UTC day, so a UTC-anchored
-            # window silently excludes it and the whole day's date tag comes out
-            # one calendar day off from what the user actually experienced.
             tz = _timezone()
             now_local = datetime.now(tz)
             yesterday_local = (now_local - timedelta(days=1)).replace(
@@ -607,23 +622,15 @@ class ScheduleRunner:
             )
             yesterday_end_local = yesterday_local + timedelta(days=1)
 
-            # get_between expects UTC bounds (matches the pattern used in
-            # core.social's WeekWindow) — convert only at the query boundary so the
-            # calendar-day math above stays anchored to the local day throughout.
             yesterday_query_start = yesterday_local.astimezone(timezone.utc)
             yesterday_query_end   = yesterday_end_local.astimezone(timezone.utc)
 
-            # 'date' passed downstream is used purely for strftime("%Y-%m-%d") in
-            # reflect.py — keep it as the local-aware value so the date tag matches
-            # the calendar day the user actually lived, not a UTC-shifted one.
             yesterday = yesterday_local
 
-            # fetch once — both reflect and dream share the same day's memories
             from core.reflect import REFLECT_MAX_MEMS
             memories = self._memorize.get_between(yesterday_query_start, yesterday_query_end)
             log.info("daily_reflect_and_dream: %d memories fetched.", len(memories))
 
-            # reflect gets ctx-safe slice
             log.info("daily_reflect_and_dream: running reflect...")
             self._generate_and_post_fn(
                 memories[:REFLECT_MAX_MEMS],
@@ -632,12 +639,10 @@ class ScheduleRunner:
             )
             log.info("daily_reflect_and_dream: reflect done.")
 
-            # dream gets full set — pure sqlite-vec ops, no ctx concern
             log.info("daily_reflect_and_dream: running dream...")
             result = self._memorize.dream()
             log.info("daily_reflect_and_dream: dream done — %s", result)
 
-            # clean up experience log
             log.info("daily_reflect_and_dream: trimming experience log...")
             from core.experience import trim_experience_log
             trim_experience_log(keep_days=7)
@@ -662,35 +667,15 @@ class ScheduleRunner:
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)
 
-    def _next_weekly_social_post(self) -> datetime:
-        """Return the next configured weekly social-memory draft time."""
-        if not WEEKLY_SOCIAL_ENABLED:
-            return datetime.max.replace(tzinfo=_timezone())
-        try:
-            from core.social import next_weekly_due
-            return next_weekly_due()
-        except Exception as e:  # noqa: BLE001 - keep scheduler alive if optional job fails
-            log.error("weekly_social: failed to calculate next run: %s", e)
-            return datetime.max.replace(tzinfo=_timezone())
-
-    def _run_weekly_social(self) -> None:
-        """Create Aiko's weekly social-memory draft, and optionally post if enabled."""
-        if not WEEKLY_SOCIAL_ENABLED:
-            return
-        if not self._memorize:
-            log.warning("weekly_social: memorize not set — skipping.")
-            return
-        try:
-            from core.social import run_scheduled_weekly_social
-            result = run_scheduled_weekly_social(self._memorize)
-            log.info("weekly_social: done — %s", result)
-        except Exception as e:  # noqa: BLE001 - keep scheduler alive if optional job fails
-            log.error("weekly_social failed: %s", e)
-
     # ── user job runner ───────────────────────────────────────────────────────
 
     def _fire_due_user_jobs(self) -> None:
-        """Find due user jobs, reschedule recurring ones, disable one-shots."""
+        """Find due user jobs, reschedule recurring ones, disable one-shots.
+
+        Jobs whose "handler" (or legacy "kind": "system_weekly_social") names
+        a registered system handler call directly into that Python function
+        instead of going through on_due/chat.
+        """
         jobs = _read_all()
         changed = False
         due_events: list[DueJob] = []
@@ -714,12 +699,23 @@ class ScheduleRunner:
                 changed = True
 
             if due <= _now(tz_name):
-                due_events.append(DueJob(
-                    id=job.get("id", ""),
-                    title=job.get("title", "Scheduled job"),
-                    task=job.get("task", "Scheduled job"),
-                    action=job.get("action", "agentic"),
-                ))
+                handler_name = job.get("handler") or (
+                    "weekly_social" if job.get("kind") == "system_weekly_social" else None
+                )
+                if handler_name and handler_name in _SYSTEM_HANDLERS:
+                    try:
+                        _SYSTEM_HANDLERS[handler_name](self._memorize)
+                    except Exception as e:
+                        log.error("system handler %r failed: %s", handler_name, e)
+                elif handler_name:
+                    log.warning("job references unregistered handler %r — skipping fire.", handler_name)
+                else:
+                    due_events.append(DueJob(
+                        id=job.get("id", ""),
+                        title=job.get("title", "Scheduled job"),
+                        task=job.get("task", "Scheduled job"),
+                        action=job.get("action", "agentic"),
+                    ))
                 job["last_ran_at"] = _now(tz_name).isoformat()
                 if job.get("frequency") == "once":
                     job["enabled"] = False

@@ -1,21 +1,5 @@
 [
   {
-    "id": "933bd72262d1",
-    "title": "Surprise reminder",
-    "task": "You have a surprise for Oppa.",
-    "time_of_day": "23:20",
-    "frequency": "daily",
-    "days_of_week": [],
-    "relative_days": null,
-    "timezone": "America/Vancouver",
-    "next_due": "2026-07-06T23:20:00-07:00",
-    "created_at": "2026-06-28T23:16:07.034531-07:00",
-    "last_ran_at": "2026-07-05T23:28:18.244566-07:00",
-    "enabled": true,
-    "kind": "scheduled_job",
-    "action": "announce"
-  },
-  {
     "id": "73bd0f634ba6",
     "title": "Daily diary",
     "task": "Announce the daily diary entry is ready for reading.",
@@ -46,5 +30,21 @@
     "enabled": true,
     "kind": "scheduled_job",
     "action": "announce"
+  },
+  {
+    "id": "8f2a1c9d0e3b",
+    "title": "Weekly social draft",
+    "task": "system:weekly_social",
+    "time_of_day": "09:00",
+    "frequency": "weekly",
+    "days_of_week": ["sunday"],
+    "relative_days": null,
+    "timezone": "America/Vancouver",
+    "next_due": "2026-07-12T09:00:00-07:00",
+    "created_at": "2026-07-06T00:00:00.000000-07:00",
+    "last_ran_at": null,
+    "enabled": true,
+    "kind": "system_weekly_social",
+    "action": "system"
   }
 ]

@@ -14,6 +14,3 @@ DAILY_JOB_HOUR: "0"  # Local hour for daily reflection/dream job; integer 0-23.
 DAILY_JOB_MINUTE: "0"  # Local minute for daily reflection/dream job; integer 0-59.
 MONTHLY_JOB_HOUR: "0"  # Local hour for monthly consolidation job on the 1st; integer 0-23.
 MONTHLY_JOB_MINUTE: "5"  # Local minute for monthly consolidation job; integer 0-59.
-
-# -- Weekly social job --
-WEEKLY_SOCIAL_ENABLED: "1"  # Enable weekly social job scheduling; options: 1/0, true/false, yes/no, on/off.

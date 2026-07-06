@@ -29,6 +29,16 @@ specific date burned into the fact text itself, since the tag alone
 (month-only after consolidation) is the only remaining source of truth for
 *when* — if the date isn't in the text, it's gone permanently.
 
+Catch-up: target_month_for() anchors its month math to the 1st of the
+*current* calendar month regardless of what day `now` actually is (it forces
+now.replace(day=1, ...) before doing any arithmetic), so the target month is
+stable across the entire month, not just on the 1st. That means if Aiko is
+offline through the 1st and comes back online on, say, the 5th, running
+consolidation then computes the exact same target month as if it had run on
+time. The only gate that matters is whether that month's key has already been
+consolidated (state["last_consolidated_month"]), not whether today happens to
+be the 1st — so there is no separate now.day == 1 requirement here.
+
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
 
@@ -86,6 +96,12 @@ def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
     function does month arithmetic in that local frame and returns local
     (not UTC-mislabeled) boundaries. Convert to UTC only at the query call
     site, same pattern as core.schedule's daily reflect job.
+
+    Note: `now` is forced to day=1 before any month math, so the target
+    month is identical no matter what day of the month `now` actually falls
+    on. This is what makes catch-up correct (see module docstring) — a late
+    run on, say, the 5th, targets the exact same month as an on-time run on
+    the 1st would have.
     """
     local_first  = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     target_end   = _add_months(local_first, -CONSOLIDATION_KEEP_MONTHS)
@@ -263,10 +279,17 @@ def _merge_monthly_facts(month_key: str, chunk_facts: list[list[str]]) -> list[s
 
 def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
     """
-    Run monthly consolidation if enabled, due, and not already done this month.
+    Run monthly consolidation if enabled and the target month is not already
+    consolidated.
 
-    Called by ScheduleRunner._run_monthly_consolidate() on the 1st of each month.
-    The state file guards against double-runs on reboot.
+    Called by ScheduleRunner._run_monthly_consolidate() on/after the 1st of
+    each month. The state file guards against double-runs on reboot AND is
+    the sole gate for catch-up — there is no separate "must be exactly the
+    1st" requirement, since target_month_for() anchors its arithmetic to the
+    1st of the current calendar month regardless of what day `now` actually
+    falls on. A late run (e.g. Aiko was offline through the 1st and comes
+    back on the 5th) computes the same target month an on-time run would
+    have, and the state check below correctly recognizes it as not yet done.
 
     Compresses pinned daily-granularity memory (atomic "[YYYY-MM-DD] fact"
     rows and "Day record for YYYY-MM-DD:" blocks) for the target month into
@@ -282,8 +305,6 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
         return {"ran": False, "reason": "disabled"}
 
     now = now or datetime.now()
-    if now.day != 1:
-        return {"ran": False, "reason": "not_first_day"}
 
     start, end, month_key = target_month_for(now)
     state = _load_state()

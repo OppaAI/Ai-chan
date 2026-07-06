@@ -35,10 +35,12 @@ from core.tools    import web_search_context
 from core.agentic  import run_agentic_chat
 from core.knowledge import knowledge_context_for
 from core.log      import get_logger
-from core.schedule import DueJob, ScheduleRunner
+from core.social import run_scheduled_weekly_social
+from core.schedule import DueJob, ScheduleRunner, register_system_handler
 from core.experience import append_chat_turn
 
 log = get_logger(__name__)
+register_system_handler("weekly_social", run_scheduled_weekly_social)
 
 # ── boot labels ───────────────────────────────────────────────────────────────
 

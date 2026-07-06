@@ -46,11 +46,8 @@ WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
 WEEKLY_SOCIAL_ROOT = Path(os.getenv("SOCIAL_ROOT", WORKSPACE_ROOT / "social" / "weekly")).resolve()
 TIMEZONE_NAME = os.getenv("TIMEZONE", "UTC")
 
-WEEKLY_ENABLED = os.getenv("WEEKLY_SOCIAL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
 WEEKLY_AUTOPOST = os.getenv("WEEKLY_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
-WEEKLY_POST_TIME = os.getenv("WEEKLY_SOCIAL_TIME", "18:00")
-WEEKLY_POST_WEEKDAY = os.getenv("WEEKLY_SOCIAL_WEEKDAY", "sunday").lower().strip()
 WEEKLY_PROVIDERS = tuple(
     p.strip().lower()
     for p in os.getenv("WEEKLY_SOCIAL_PROVIDERS", "x").split(",")
@@ -73,16 +70,6 @@ def _int_env(name: str, default: int) -> int:
 
 
 THREADS_REFRESH_WINDOW_DAYS = _int_env("THREADS_REFRESH_WINDOW_DAYS", 55)
-
-_WEEKDAYS = {
-    "monday": 0, "mon": 0,
-    "tuesday": 1, "tue": 1, "tues": 1,
-    "wednesday": 2, "wed": 2,
-    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
-    "friday": 4, "fri": 4,
-    "saturday": 5, "sat": 5,
-    "sunday": 6, "sun": 6,
-}
 
 _SELECT_SYSTEM = """\
 You are Aiko choosing one memory from a completed week for a public social-media postcard.
@@ -151,22 +138,6 @@ def last_completed_sunday_saturday(now: datetime | None = None, tz_name: str | N
     start = this_sunday - timedelta(days=7)
     end = this_sunday
     return WeekWindow(start=start.astimezone(timezone.utc), end=end.astimezone(timezone.utc))
-
-
-def next_weekly_due(now: datetime | None = None, tz_name: str | None = None) -> datetime:
-    """Calculate next configured weekly social run time."""
-    tz = _timezone(tz_name)
-    current = now.astimezone(tz) if now else datetime.now(tz)
-    target_weekday = _WEEKDAYS.get(WEEKLY_POST_WEEKDAY, 6)
-    hour_text, _, minute_text = WEEKLY_POST_TIME.partition(":")
-    hour = int(hour_text or "18")
-    minute = int(minute_text or "0")
-    base = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    offset = (target_weekday - base.weekday()) % 7
-    candidate = base + timedelta(days=offset)
-    if candidate <= current:
-        candidate += timedelta(days=7)
-    return candidate
 
 
 def _public_memory_rows(memorize: AikoMemorize, window: WeekWindow) -> list[dict[str, Any]]:
@@ -662,8 +633,6 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
 
 def run_scheduled_weekly_social(memorize: AikoMemorize) -> dict[str, Any]:
     """Scheduler entrypoint: draft by default, post only when explicitly enabled."""
-    if not WEEKLY_ENABLED:
-        return {"success": False, "skipped": True, "reason": "WEEKLY_SOCIAL_ENABLED is off"}
     if not WEEKLY_AUTODRAFT:
         return {"success": False, "skipped": True, "reason": "WEEKLY_SOCIAL_AUTODRAFT is off"}
     draft = generate_weekly_draft(memorize)
