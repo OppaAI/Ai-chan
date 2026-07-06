@@ -4,6 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Aiko-chan · OppaAI</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
   <style>
     *,
     *::before,
@@ -1031,11 +1032,19 @@
     function websocketURL() {
       const params = new URLSearchParams(location.search);
       const wsHost = params.get("ws_host") || location.hostname;
-      const wsPort = parseInt(params.get("ws") || "8765");
+      const wsPortParam = params.get("ws");
       const protoOverride = (params.get("ws_proto") || "").toLowerCase();
       const wsProto = protoOverride === "ws" || protoOverride === "wss"
         ? protoOverride + ":"
         : location.protocol === "https:" ? "wss:" : "ws:";
+
+      // If accessed via Tailscale (.ts.net), use path-based routing (no port)
+      if (wsHost.endsWith(".ts.net")) {
+        return wsProto + "//" + wsHost + "/ws";
+      }
+
+      // Local/LAN access: keep port-based connection
+      const wsPort = parseInt(wsPortParam || "8765");
       return wsProto + "//" + wsHost + ":" + wsPort + "/";
     }
 
