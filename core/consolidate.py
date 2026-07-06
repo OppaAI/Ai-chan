@@ -5,8 +5,29 @@ Monthly memory consolidation.
 
 Runs on/after the first day of a month and consolidates the month before the
 most recent full month. Example: on July 1, keep June intact and summarize May.
-The summary is inserted as a pinned raw memory, then unpinned detailed memories
-from the consolidated month are deleted to reduce vector DB size.
+
+Scope: this ONLY touches pinned daily-granularity memory (atomic facts tagged
+"[YYYY-MM-DD] ..." and "Day record for YYYY-MM-DD:" blocks written nightly by
+core.reflect). Unpinned memory is entirely out of scope here — its lifecycle
+is owned by core.forget's decay scoring, applied nightly via memorize.dream().
+Consolidation never reads, scores, or deletes unpinned rows.
+
+Why this exists: pinned memory has no decay mechanism by design (permanent =
+immune to forget.py). Without this step, daily atomic facts would accumulate
+forever with no ceiling. This step gives pinned memory the equivalent of what
+dream() already gives unpinned memory — compression instead of unbounded
+growth — but on a monthly cadence instead of nightly, and via merge/compress
+rather than delete-if-unused (since pinned facts were deliberately chosen as
+worth keeping; the compression only reduces resolution, it doesn't judge
+whether the content still matters).
+
+Date handling: like human memory, most facts lose day-level resolution once
+consolidated — a fact from mid-May becomes "sometime in May," not "May 18."
+But facts describing a genuinely date-significant occasion (birthdays,
+anniversaries, deadlines, one-off notable events) are instructed to keep the
+specific date burned into the fact text itself, since the tag alone
+(month-only after consolidation) is the only remaining source of truth for
+*when* — if the date isn't in the text, it's gone permanently.
 
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
@@ -15,12 +36,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
 from openai import OpenAI
 
 from core.log import get_logger
+from core.reflect import _extract_json_arrays, _salvage_truncated_facts, _DAY_RECORD_PREFIX_TMPL
 
 log = get_logger(__name__)
 
@@ -29,8 +53,6 @@ CONSOLIDATION_KEEP_MONTHS     = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_KEEP
 CONSOLIDATION_CHUNK_MEMS      = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_MEMS", "25")))
 CONSOLIDATION_MAX_INPUT_CHARS = max(1000, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS", "6000")))
 CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MEMS", "5")))
-CONSOLIDATION_DELETE_ORIGINALS       = os.getenv("MONTHLY_CONSOLIDATION_DELETE_ORIGINALS", "1").lower() in {"1", "true", "yes", "on"}
-CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES", "1").lower() in {"1", "true", "yes", "on"}
 CONSOLIDATION_STATE_PATH      = Path(os.getenv(
     "MONTHLY_CONSOLIDATION_STATE_PATH",
     str(Path.home() / ".aiko" / "consolidation_state.json"),
@@ -40,6 +62,15 @@ LLM_BASE_URL          = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
 CONSOLIDATION_LLM_TIMEOUT = float(os.getenv("MONTHLY_CONSOLIDATION_LLM_TIMEOUT", os.getenv("LLM_TIMEOUT", "120")))
 
+# Matches the per-day tag reflect.py pins facts with, e.g. "[2026-05-18] ...".
+# Used to identify which pinned rows belong to daily-granularity memory (the
+# only thing this module ever compresses/deletes) as opposed to any other
+# pinned content (identity facts, standing preferences, etc.) that should
+# never be touched by consolidation.
+_DAILY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
+
+
+# ── month math ─────────────────────────────────────────────────────────────
 
 def _add_months(dt: datetime, months: int) -> datetime:
     month_index = dt.month - 1 + months
@@ -57,6 +88,8 @@ def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
     return target_start, target_end, key
 
 
+# ── state ────────────────────────────────────────────────────────────────────
+
 def _load_state() -> dict:
     try:
         return json.loads(CONSOLIDATION_STATE_PATH.read_text(encoding="utf-8"))
@@ -69,14 +102,19 @@ def _save_state(state: dict) -> None:
     CONSOLIDATION_STATE_PATH.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
 
-def _chat(prompt: str, max_tokens: int = 700) -> str:
+# ── LLM helpers ───────────────────────────────────────────────────────────────
+
+def _chat(system: str, user: str, max_tokens: int = 900, temperature: float = 0.1) -> str:
     client = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=CONSOLIDATION_LLM_TIMEOUT)
     resp = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
         stream=False,
         max_tokens=max_tokens,
-        temperature=0.1,
+        temperature=temperature,
     )
     return (resp.choices[0].message.content or "").strip()
 
@@ -89,40 +127,133 @@ def _bounded_lines(items: list[str]) -> str:
             break
         lines.append(line)
         total += len(line) + 1
-    return "\n".join(lines)
+    return "\n".join(lines) or "- none"
 
 
 def _memory_lines(memories: list[dict]) -> str:
     return _bounded_lines([
-        f"- {m.get('created_at', '')}: {(m.get('memory') or m.get('text') or '').strip()}"
+        f"- {(m.get('memory') or m.get('text') or '').strip()}"
         for m in memories
         if (m.get("memory") or m.get("text") or "").strip()
     ])
 
 
-def _summarize_memory_chunk(month_key: str, memories: list[dict], idx: int, total: int) -> str:
-    prompt = (
-        "Summarize these long-term memory facts for Aiko's monthly memory consolidation. "
-        "Keep stable preferences, identity facts, projects, deadlines, relationships, and recurring patterns. "
-        "Drop trivial chatter, duplicates, and implementation details about the memory system. "
-        "Use compact bullet points only. Do not invent facts.\n\n"
-        f"Month: {month_key}\nChunk: {idx}/{total}\n\n"
-        f"Memories:\n{_memory_lines(memories)}"
+# ── monthly fact extraction (mirrors reflect.py's daily fact extraction,
+#    applied at month scope instead of day scope) ────────────────────────────
+
+_MONTHLY_FACTS_SYSTEM = textwrap.dedent("""
+    You are compressing a month's worth of daily memory facts about Oppa into
+    a smaller set of durable long-term facts, for monthly archival. This is
+    how long-term memory works: routine, repeated activity fades into a
+    general sense of "this was going on that month," while genuinely
+    significant, date-specific occasions stay sharp and dated.
+
+    Rules:
+    - Merge near-duplicate or repeated facts describing the same ongoing
+      project, activity, or theme across multiple days into ONE combined
+      fact (e.g. five separate days of "iterated on webui.py port
+      consolidation" become one fact summarizing that overall effort).
+    - Drop trivial, one-off chatter with no lasting significance.
+    - Preserve every fact describing a distinct notable event, milestone,
+      deadline, decision, incident, or occasion, even if mentioned only once.
+    - CRITICAL: for any fact describing a genuinely date-specific occasion —
+      a birthday, anniversary, one-off event, deadline hit or missed, a
+      notable incident, a release/milestone date — keep the EXACT date
+      written directly in the fact's own text (e.g. "On June 3rd, Oppa
+      celebrated his birthday with fruit tarts."). The specific date will
+      NOT be preserved anywhere else after this — if it is not in the text,
+      it is permanently lost. When in doubt about whether something counts
+      as date-significant, err on the side of keeping the date.
+    - For routine or recurring facts with no specific date significance, do
+      NOT include a specific date — summarize at month-level only (e.g.
+      "Spent much of the month refining Aiko-chan's memory retrieval
+      pipeline.").
+    - Do not invent details, outcomes, dates, or facts not supported by the
+      source material.
+    - One fact per line, third person, about Oppa.
+    - Each fact must be self-contained and short, readable without needing
+      the surrounding month's context.
+
+    Return ONLY a JSON array of short strings. No markdown, no explanation.
+""").strip()
+
+_MONTHLY_FACTS_USER = textwrap.dedent("""
+    Month: {month_key}
+    Chunk: {idx}/{total}
+
+    Daily facts and records from this month:
+    {facts}
+""").strip()
+
+_MONTHLY_MERGE_SYSTEM = textwrap.dedent("""
+    You are merging several partial lists of monthly facts about Oppa into
+    ONE final deduplicated list for permanent archival.
+
+    Rules:
+    - Combine facts that describe the same underlying event, project, or
+      theme, even if worded differently across the partial lists — keep
+      only one merged version.
+    - Keep every fact that includes a specific date in its text UNCHANGED
+      and UNMERGED with anything else — these are date-significant and must
+      not be diluted or combined with unrelated material.
+    - Drop exact or near-exact duplicates.
+    - Do not invent anything not present in the source lists.
+    - One fact per line, third person, about Oppa.
+
+    Return ONLY a JSON array of short strings. No markdown, no explanation.
+""").strip()
+
+_MONTHLY_MERGE_USER = textwrap.dedent("""
+    Month: {month_key}
+
+    Partial fact lists to merge:
+    {chunks}
+""").strip()
+
+
+def _parse_fact_array(raw: str) -> list[str]:
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+
+    arrays = _extract_json_arrays(raw)
+    for candidate in reversed(arrays):
+        if candidate and all(isinstance(f, str) for f in candidate):
+            return [f.strip() for f in candidate if isinstance(f, str) and f.strip()]
+
+    salvaged = _salvage_truncated_facts(raw)
+    if salvaged:
+        log.warning("Monthly-facts array truncated — salvaged %d fact(s) from partial output.", len(salvaged))
+        return salvaged
+
+    log.warning("Failed to parse monthly-facts JSON: %r", raw[:600])
+    return []
+
+
+def _extract_monthly_facts_chunk(month_key: str, facts: list[str], idx: int, total: int) -> list[str]:
+    user_prompt = _MONTHLY_FACTS_USER.format(
+        month_key=month_key,
+        idx=idx,
+        total=total,
+        facts=_bounded_lines([f"- {f}" for f in facts]),
     )
-    return _chat(prompt, max_tokens=500)
+    raw = _chat(_MONTHLY_FACTS_SYSTEM, user_prompt, max_tokens=900, temperature=0.1)
+    return _parse_fact_array(raw)
 
 
-def _final_summary(month_key: str, chunk_summaries: list[str]) -> str:
-    prompt = (
-        "Merge these chunk summaries into ONE durable pinned memory for Aiko. "
-        "Write concise bullet points grouped by theme. Preserve only facts worth keeping long-term. "
-        "Do not mention vectors, databases, consolidation, chunks, or internal processes. "
-        "Do not invent facts.\n\n"
-        f"Month: {month_key}\n\n"
-        + "\n\n".join(f"Chunk summary {i+1}:\n{s}" for i, s in enumerate(chunk_summaries))
+def _merge_monthly_facts(month_key: str, chunk_facts: list[list[str]]) -> list[str]:
+    if len(chunk_facts) == 1:
+        return chunk_facts[0]
+    chunks_text = "\n\n".join(
+        f"List {i+1}:\n" + "\n".join(f"- {f}" for f in facts)
+        for i, facts in enumerate(chunk_facts)
     )
-    return _chat(prompt, max_tokens=900)
+    user_prompt = _MONTHLY_MERGE_USER.format(month_key=month_key, chunks=chunks_text)
+    raw = _chat(_MONTHLY_MERGE_SYSTEM, user_prompt, max_tokens=1200, temperature=0.1)
+    merged = _parse_fact_array(raw)
+    return merged or [f for facts in chunk_facts for f in facts]  # fallback: concatenate if merge parse fails
 
+
+# ── main entrypoint ───────────────────────────────────────────────────────────
 
 def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
     """
@@ -131,8 +262,15 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
     Called by ScheduleRunner._run_monthly_consolidate() on the 1st of each month.
     The state file guards against double-runs on reboot.
 
-    Returns a result dict with keys: ran, reason (on skip), month, source,
-    count, deleted, daily_deleted, summary_id.
+    Compresses pinned daily-granularity memory (atomic "[YYYY-MM-DD] fact"
+    rows and "Day record for YYYY-MM-DD:" blocks) for the target month into
+    a smaller set of pinned "[YYYY-MM] fact" rows, then deletes the
+    daily-granularity originals for that month. Unpinned memory is never
+    read, scored, or deleted here — that lifecycle belongs entirely to
+    core.forget / memorize.dream(), independent of this job.
+
+    Returns a result dict with keys: ran, reason (on skip), month, count,
+    facts_written, daily_deleted.
     """
     if not CONSOLIDATION_ENABLED:
         return {"ran": False, "reason": "disabled"}
@@ -148,58 +286,81 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
 
     start_utc = start.replace(tzinfo=timezone.utc)
     end_utc   = end.replace(tzinfo=timezone.utc)
-    memories  = memorize.get_between(start_utc, end_utc)
+    all_memories = memorize.get_between(start_utc, end_utc)
 
-    if len(memories) < CONSOLIDATION_MIN_MEMS:
+    # Scope to pinned daily-granularity rows only — atomic fact pins and
+    # day-record blocks. Anything else pinned (identity facts, standing
+    # preferences, etc.) is left completely untouched, and unpinned memory
+    # is never considered here at all.
+    daily_rows = [
+        m for m in all_memories
+        if int(m.get("pinned") or 0) == 1
+        and (
+            _DAILY_FACT_TAG_RE.match((m.get("memory") or "").strip())
+            or (m.get("memory") or "").startswith("Day record for ")
+        )
+    ]
+
+    if len(daily_rows) < CONSOLIDATION_MIN_MEMS:
         state["last_consolidated_month"] = month_key
         _save_state(state)
-        return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(memories)}
-    chunks = [memories[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(memories), CONSOLIDATION_CHUNK_MEMS)]
-    chunk_summaries = [
-        _summarize_memory_chunk(month_key, chunk, i + 1, len(chunks))
+        return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(daily_rows)}
+
+    source_facts = [(m.get("memory") or "").strip() for m in daily_rows if (m.get("memory") or "").strip()]
+    chunks = [source_facts[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(source_facts), CONSOLIDATION_CHUNK_MEMS)]
+
+    chunk_facts = [
+        _extract_monthly_facts_chunk(month_key, chunk, i + 1, len(chunks))
         for i, chunk in enumerate(chunks)
     ]
-    source_count = len(memories)
-    source = "memory"
+    chunk_facts = [c for c in chunk_facts if c]  # drop empty chunks (parse failures)
 
-    summary = _final_summary(month_key, chunk_summaries)
-    if not summary:
-        return {"ran": False, "reason": "empty_summary", "month": month_key, "count": source_count, "source": source}
+    if not chunk_facts:
+        return {"ran": False, "reason": "empty_extraction", "month": month_key, "count": len(daily_rows)}
 
-    summary_text = f"Monthly memory summary for {month_key}:\n{summary}"
-    summary_id   = memorize.add_raw(summary_text, pinned=True)
-    if not summary_id:
-        return {"ran": False, "reason": "summary_insert_failed", "month": month_key, "count": len(memories)}
+    final_facts = _merge_monthly_facts(month_key, chunk_facts)
+    if not final_facts:
+        return {"ran": False, "reason": "empty_merge", "month": month_key, "count": len(daily_rows)}
 
-    deleted = 0
+    facts_written = 0
+    written_ids: list[str] = []
+    for fact in final_facts:
+        try:
+            mem_id = memorize.add_raw(f"[{month_key}] {fact}", pinned=True)
+            if mem_id:
+                facts_written += 1
+                written_ids.append(mem_id)
+        except Exception as e:
+            log.warning("Failed to pin monthly fact %r: %s", fact, e)
+
+    if facts_written == 0:
+        return {"ran": False, "reason": "no_facts_written", "month": month_key, "count": len(daily_rows)}
+
+    # Only now delete the daily-granularity originals for this month —
+    # their content has been folded into the facts just pinned above.
     daily_deleted = 0
-    if CONSOLIDATION_DELETE_ORIGINALS:
-        for memory in memories:
-            mem_id = memory.get("id")
-            text   = (memory.get("memory") or "")
-            is_daily_summary = text.startswith("Daily experience summary for ")
-            if mem_id and not memorize._is_pinned(mem_id):
-                memorize.delete(mem_id)
-                deleted += 1
-            elif mem_id and is_daily_summary and CONSOLIDATION_DELETE_DAILY_SUMMARIES:
-                memorize.delete(mem_id)
-                daily_deleted += 1
+    for m in daily_rows:
+        mem_id = m.get("id")
+        if not mem_id:
+            continue
+        try:
+            memorize.delete(mem_id)
+            daily_deleted += 1
+        except Exception as e:
+            log.warning("Failed to delete consolidated daily row %s: %s", mem_id, e)
 
     state["last_consolidated_month"] = month_key
-    state["last_summary_id"]         = summary_id
+    state["last_summary_ids"]        = written_ids
     _save_state(state)
 
     log.info(
-        "monthly_consolidate complete: month=%s source=%s count=%s "
-        "deleted=%s daily_deleted=%s summary_id=%s",
-        month_key, source, source_count, deleted, daily_deleted, summary_id,
+        "monthly_consolidate complete: month=%s source_count=%s facts_written=%s daily_deleted=%s",
+        month_key, len(daily_rows), facts_written, daily_deleted,
     )
     return {
-        "ran":           True,
-        "month":         month_key,
-        "source":        source,
-        "count":         source_count,
-        "deleted":       deleted,
-        "daily_deleted": daily_deleted,
-        "summary_id":    summary_id,
+        "ran":            True,
+        "month":          month_key,
+        "count":          len(daily_rows),
+        "facts_written":  facts_written,
+        "daily_deleted":  daily_deleted,
     }
