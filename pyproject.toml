@@ -9,6 +9,7 @@ dependencies = [
     "flatbuffers>=25.12.19",
     "httpx",
     "huggingface-hub>=1.21.0",
+    "itsdangerous",
     "ninja>=1.13.0",
     "numpy<2",
     "onnxruntime-gpu==1.24.4; platform_machine == 'x86_64'",
