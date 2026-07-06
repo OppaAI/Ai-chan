@@ -30,7 +30,7 @@ MEMORY_WRITE_MAX_WAIT: "45.0"  # Max seconds memory writer waits before forcing 
 FORGET_HALF_LIFE_DAYS: "7.0"  # Days until memory retention score halves.
 FORGET_ACCESS_COUNT_CAP: "255"  # Maximum access_count retained for decay scoring.
 FORGET_CLEANUP_THRESHOLD: "0.1"  # Decay score below which cleanup may prune a memory.
-FORGET_GRACE_PERIOD_DAYS: "31"  # Minimum age before ordinary memories can be cleaned up.
+FORGET_GRACE_PERIOD_DAYS: "35"  # Minimum age before ordinary memories can be cleaned up.
 DREAM_MERGE_THRESHOLD: "0.88"  # Similarity threshold for merging near-duplicate memories; range 0.0-1.0.
 DREAM_BOOST_AMOUNT: "2"  # Access-count boost for memories promoted during dream/reflection.
 
@@ -61,8 +61,7 @@ MONTHLY_CONSOLIDATION_ENABLED: "1"  # Monthly consolidation toggle; options: 1/0
 MONTHLY_CONSOLIDATION_KEEP_MONTHS: "1"  # Number of recent full months to keep as detailed memories.
 MONTHLY_CONSOLIDATION_CHUNK_MEMS: "25"  # Memory facts per fallback monthly summary chunk.
 MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS: "6000"  # Max source chars per monthly consolidation LLM request.
-MONTHLY_CONSOLIDATION_DELETE_ORIGINALS: "1"  # Delete detailed memories after monthly pinned summary; boolean options.
-MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "1"  # Delete older pinned daily summaries after monthly summary; boolean options.
+MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "1"  # After folding a month's pinned daily facts/day-records into "[YYYY-MM] ..." consolidated facts, delete the daily-granularity originals. Set to 0 to keep consolidation purely additive (compress + archive, no deletion) until you've verified retrieval/growth behavior.
 MONTHLY_CONSOLIDATION_MIN_MEMS: "5"  # Skip fallback months with fewer memories than this.
 MONTHLY_CONSOLIDATION_LLM_TIMEOUT: "120"  # Seconds before monthly summary LLM calls time out.
 MONTHLY_CONSOLIDATION_STATE_PATH: "/home/oppa-ai/.aiko/monthly_consolidation_state.json"  # Path to monthly consolidation state JSON file.

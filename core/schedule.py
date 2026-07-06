@@ -591,14 +591,36 @@ class ScheduleRunner:
 
         try:
             log.info("daily_reflect_and_dream: starting.")
-            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+
+            # Compute "yesterday" against the *local* calendar day, since the job
+            # fires on a local-midnight clock (_next_daily_reflect_and_dream uses
+            # _timezone()). Truncating datetime.now(timezone.utc) to UTC midnight
+            # is wrong here — for offsets like Vancouver's UTC-7/-8, any chat from
+            # roughly mid-afternoon onward local time already has a created_at
+            # timestamp that has rolled into the *next* UTC day, so a UTC-anchored
+            # window silently excludes it and the whole day's date tag comes out
+            # one calendar day off from what the user actually experienced.
+            tz = _timezone()
+            now_local = datetime.now(tz)
+            yesterday_local = (now_local - timedelta(days=1)).replace(
                 hour=0, minute=0, second=0, microsecond=0,
             )
+            yesterday_end_local = yesterday_local + timedelta(days=1)
+
+            # get_between expects UTC bounds (matches the pattern used in
+            # core.social's WeekWindow) — convert only at the query boundary so the
+            # calendar-day math above stays anchored to the local day throughout.
+            yesterday_query_start = yesterday_local.astimezone(timezone.utc)
+            yesterday_query_end   = yesterday_end_local.astimezone(timezone.utc)
+
+            # 'date' passed downstream is used purely for strftime("%Y-%m-%d") in
+            # reflect.py — keep it as the local-aware value so the date tag matches
+            # the calendar day the user actually lived, not a UTC-shifted one.
+            yesterday = yesterday_local
 
             # fetch once — both reflect and dream share the same day's memories
             from core.reflect import REFLECT_MAX_MEMS
-            yesterday_end = yesterday + timedelta(days=1)
-            memories = self._memorize.get_between(yesterday, yesterday_end)
+            memories = self._memorize.get_between(yesterday_query_start, yesterday_query_end)
             log.info("daily_reflect_and_dream: %d memories fetched.", len(memories))
 
             # reflect gets ctx-safe slice
@@ -635,7 +657,7 @@ class ScheduleRunner:
 
         try:
             log.info("monthly_consolidate: starting.")
-            result = self._consolidate_fn(self._memorize, now=datetime.now())
+            result = self._consolidate_fn(self._memorize, now=datetime.now(_timezone()))
             log.info("monthly_consolidate: done — %s", result)
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)

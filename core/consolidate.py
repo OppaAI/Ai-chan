@@ -61,6 +61,7 @@ CONSOLIDATION_STATE_PATH      = Path(os.getenv(
 LLM_BASE_URL          = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
 CONSOLIDATION_LLM_TIMEOUT = float(os.getenv("MONTHLY_CONSOLIDATION_LLM_TIMEOUT", os.getenv("LLM_TIMEOUT", "120")))
+CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES", "1").lower() in {"1", "true", "yes", "on"}
 
 # Matches the per-day tag reflect.py pins facts with, e.g. "[2026-05-18] ...".
 # Used to identify which pinned rows belong to daily-granularity memory (the
@@ -80,7 +81,12 @@ def _add_months(dt: datetime, months: int) -> datetime:
 
 
 def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
-    """Return (start, end, key) for the month ready to consolidate."""
+    """Return (start, end, key) for the month ready to consolidate.
+    `now` is expected to be a local-aware or naive-local datetime; this
+    function does month arithmetic in that local frame and returns local
+    (not UTC-mislabeled) boundaries. Convert to UTC only at the query call
+    site, same pattern as core.schedule's daily reflect job.
+    """
     local_first  = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     target_end   = _add_months(local_first, -CONSOLIDATION_KEEP_MONTHS)
     target_start = _add_months(target_end, -1)
@@ -284,8 +290,8 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
     if state.get("last_consolidated_month") == month_key:
         return {"ran": False, "reason": "already_done", "month": month_key}
 
-    start_utc = start.replace(tzinfo=timezone.utc)
-    end_utc   = end.replace(tzinfo=timezone.utc)
+    start_utc = start.astimezone(timezone.utc)
+    end_utc   = end.astimezone(timezone.utc)
     all_memories = memorize.get_between(start_utc, end_utc)
 
     # Scope to pinned daily-granularity rows only — atomic fact pins and
@@ -338,16 +344,20 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
 
     # Only now delete the daily-granularity originals for this month —
     # their content has been folded into the facts just pinned above.
+    # Gated by MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES so consolidation
+    # can run purely additively (archive-only) if you want a safety margin
+    # before trusting deletion.
     daily_deleted = 0
-    for m in daily_rows:
-        mem_id = m.get("id")
-        if not mem_id:
-            continue
-        try:
-            memorize.delete(mem_id)
-            daily_deleted += 1
-        except Exception as e:
-            log.warning("Failed to delete consolidated daily row %s: %s", mem_id, e)
+    if CONSOLIDATION_DELETE_DAILY_SUMMARIES:
+        for m in daily_rows:
+            mem_id = m.get("id")
+            if not mem_id:
+                continue
+            try:
+                memorize.delete(mem_id)
+                daily_deleted += 1
+            except Exception as e:
+                log.warning("Failed to delete consolidated daily row %s: %s", mem_id, e)
 
     state["last_consolidated_month"] = month_key
     state["last_summary_ids"]        = written_ids
