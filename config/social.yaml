@@ -19,10 +19,8 @@ TWITTER_RELAY_BASE_URL: "https://api.aisa.one/apis/v1/twitter"  # AIsa Twitter/X
 TWITTER_RELAY_TIMEOUT: "30"  # Seconds before AIsa relay calls time out.
 
 # -- Threads metadata --
-THREADS_USER_ID: "27954229830836316"  # Threads user id from Meta/Threads API.
 THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # ISO UTC expiry timestamp for long-lived Threads token; blank if unknown.
 THREADS_REFRESH_WINDOW_DAYS: "55"  # Refresh Threads token when this many days or fewer remain.
-THREADS_TOKEN_ENV_PATH: ".env"  # Env file updated when a refreshed Threads token is persisted.
 THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Official Threads API base URL.
 THREADS_TOPIC_TAG: "AI Threads"  # Optional Threads topic tag attached above the post; blank disables it.
 THREADS_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Threads media container create and publish.

@@ -73,7 +73,6 @@ def _int_env(name: str, default: int) -> int:
 
 
 THREADS_REFRESH_WINDOW_DAYS = _int_env("THREADS_REFRESH_WINDOW_DAYS", 55)
-THREADS_TOKEN_ENV_PATH = os.getenv("THREADS_TOKEN_ENV_PATH", ".env")
 
 _WEEKDAYS = {
     "monday": 0, "mon": 0,
@@ -542,8 +541,8 @@ def refresh_threads_token(
             values = {"THREADS_ACCESS_TOKEN": new_token}
             if result.get("expires_at"):
                 values["THREADS_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
-            _write_env_values(env_path or THREADS_TOKEN_ENV_PATH, values)
-            result["env_updated"] = str(Path(env_path or THREADS_TOKEN_ENV_PATH).expanduser().resolve())
+            _write_env_values(env_path or ".env", values)
+            result["env_updated"] = str(Path(env_path or ".env").expanduser().resolve())
         os.environ["THREADS_ACCESS_TOKEN"] = new_token
         if result.get("expires_at"):
             os.environ["THREADS_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
@@ -687,7 +686,7 @@ def _cmd() -> int:
         action="store_true",
         help="refresh the configured long-lived Threads token",
     )
-    parser.add_argument("--persist-env", action="store_true", help="write refreshed Threads token values back to THREADS_TOKEN_ENV_PATH/.env")
+    parser.add_argument("--persist-env", action="store_true", help="write refreshed Threads token values back to .env")
     parser.add_argument("--env-path", default="", help="env file path used with --persist-env")
     args = parser.parse_args()
 
