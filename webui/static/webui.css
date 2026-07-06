@@ -1,3 +1,11 @@
+/**
+ * webui.css
+ * Monochromatic cyberpunk aesthetic: dark purples, cyans, pinks.
+ * Two-column layout (VRM viewer | chat panel) responsive to portrait.
+ * Grid-based typography, thin borders, minimal animations (spinners, cursor blink).
+ * CSS variables for theme colors; supports both desktop and touch input sizing.
+ */
+
 *,
 *::before,
 *::after {
