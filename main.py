@@ -67,6 +67,11 @@ with silent_stderr():
 
 from webui.webui import AikoWeb, HTTP_PORT, WEBUI_HTTPS
 
+from fastapi import FastAPI
+from auth import app as auth_app
+
+app = FastAPI()
+app.include_router(auth_app.router)
 # ── env ───────────────────────────────────────────────────────────────────────
 
 AI_NAME = os.getenv("AI_NAME", "Aiko")
