@@ -5,7 +5,6 @@ version = "0.1.5"
 description = "Aiko-chan: AI companion with persistent memory, web search, and conversational interface"
 readme = "README.md"
 dependencies = [
-    "click>=8.4.1",
     "coloredlogs>=15.0.1",
     "flatbuffers>=25.12.19",
     "huggingface-hub>=1.21.0",
