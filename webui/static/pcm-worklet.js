@@ -1,8 +1,10 @@
-// pcm-worklet.js
-// Runs on the audio render thread. Web Audio delivers 128-sample render
-// quanta; we accumulate them into 512-sample frames (matching listen.py's
-// _CHUNK_SAMPLES_VAD) and post each full frame to the main thread as a
-// transferable Float32Array buffer.
+/**
+ * pcm-worklet.js
+ * AudioWorklet processor running on the audio render thread.
+ * Accumulates Web Audio's 128-sample render quanta into 512-sample PCM frames
+ * (matching listen.py _CHUNK_SAMPLES_VAD) and posts each full frame to main thread
+ * as a transferable Float32Array buffer for VAD processing.
+ */
 
 class PCMCaptureProcessor extends AudioWorkletProcessor {
     constructor() {
