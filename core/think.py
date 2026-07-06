@@ -631,35 +631,41 @@ class AikoThink:
             time.sleep(300)  # check every 5 minutes
             if time.time() - self._last_chat_time < _IDLE_LEARN_SECONDS:
                 continue  # user has been active recently, don't interrupt
-                
+
             if self._speak and self._speak.is_playing():
                 continue
-                
+
             log.info("[learner] Aiko is idle. Starting autonomous learning...")
             try:
-                # Pick a gap from history (simplified: just grab a previous noun-heavy user msg)
                 with self._history_lock:
                     candidates = [m["content"] for m in self._history if m["role"] == "user" and len(m["content"].split()) > 3]
-                
+
                 if not candidates:
+                    log.info("[learner] skipped: no eligible candidate topics in current history.")
                     continue
-                    
-                topic = candidates[-1] # simplistic: look at last user query
+
+                topic = candidates[-1]  # simplistic: look at last user query
                 learned_tag = f"[self-learned:{topic}]"
                 if any(learned_tag in (m.get("content") or "") for m in self._history):
+                    log.info("[learner] skipped: topic already tagged as learned this session: %r", topic)
                     continue
-                if self._memorize.search(learned_tag, limit=1):
+                existing = self._memorize.search(learned_tag, limit=1)
+                if existing:
+                    log.info(
+                        "[learner] skipped: topic already found in memory (closest match: %r), topic=%r",
+                        (existing[0].get("memory") or existing[0].get("text") or "")[:120],
+                        topic,
+                    )
                     continue
-                
-                # Run silent agentic research
+
+                log.info("[learner] researching topic: %r", topic)
                 result = self.agentic_chat(f"Research this topic briefly: {topic}")
-                
-                # Store as self-learned memory
+
                 self._memorize.add([
                     {"role": "system", "content": learned_tag},
                     {"role": "assistant", "content": result[:800]}
                 ])
-                log.info(f"[learner] Successfully learned about: {topic}")
+                log.info("[learner] learned about %r — summary: %s", topic, result[:300].replace("\n", " "))
             except Exception as e:
                 log.error(f"[learner] Autonomous learning failed: {e}")
 
