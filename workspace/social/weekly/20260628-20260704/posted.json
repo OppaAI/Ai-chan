@@ -1,0 +1,19 @@
+{
+  "posted": true,
+  "posted_at": "2026-07-06T08:27:29.465679+00:00",
+  "results": [
+    {
+      "ok": true,
+      "provider": "threads",
+      "status_code": 200,
+      "creation_id": "17928440127359375",
+      "response": "{\"id\":\"17991280121990355\"}",
+      "image_upload": {
+        "ok": true,
+        "provider": "imgbb",
+        "status_code": 200,
+        "url": "https://i.ibb.co/fYRfxpGc/image.png"
+      }
+    }
+  ]
+}
