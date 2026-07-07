@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy · Aiko-chan</title>
+<style>
+  body {
+    background:#0d0f14; color:#d8dee9; font-family: -apple-system, Segoe UI, sans-serif;
+    max-width: 720px; margin: 0 auto; padding: 40px 24px; line-height: 1.6;
+  }
+  h1,h2 { color:#8ecdf7; }
+  a { color:#8ecdf7; }
+  code { background:#1a1d24; padding:2px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<h1>Privacy Policy — Aiko-chan (OppaAI)</h1>
+<p><em>Last updated: [DATE]</em></p>
+<p>Aiko-chan is an independent, self-hosted AI companion project run by a single developer (OppaAI). This policy explains what data is collected when you use it and how it's handled.</p>
+<h2>1. Who runs this</h2>
+<p>Aiko-chan is operated by an individual developer, not a company. Infrastructure runs on personally-owned hardware (Jetson + PC). There is no dedicated support team, and this policy may be updated informally as the project evolves.</p>
+<h2>2. What data is collected</h2>
+<p><strong>Account / identity data</strong>
+- If you sign in with <strong>Patreon</strong>, we receive your Patreon member ID and membership/pledge status (used only to verify paid access).
+- If you sign in with <strong>GitHub</strong>, we receive your GitHub username and public profile info (used only to verify contributor access).
+- We do not receive your Patreon or GitHub password — authentication happens via OAuth, and credentials never pass through our servers.</p>
+<p><strong>Conversation data</strong>
+- Messages you send to Aiko, and Aiko's responses, are logged.
+- Conversations are used to build short-term and long-term <strong>memory</strong> (e.g. semantic embeddings stored in a local vector database) so Aiko can recall context across sessions.
+- Voice input (if used) is processed for speech-to-text; audio is not retained after transcription unless stated otherwise.</p>
+<p><strong>Technical data</strong>
+- Basic connection metadata (timestamps, session/WebSocket status) may be logged for debugging.</p>
+<h2>3. How data is used</h2>
+<ul>
+<li>To operate the chat and memory features (i.e. Aiko "remembering" past conversations).</li>
+<li>To verify access tier (Patreon supporter vs. GitHub contributor).</li>
+<li>To debug and improve the system.</li>
+<li>Data is <strong>not</strong> sold, and is <strong>not</strong> shared with advertisers.</li>
+</ul>
+<h2>4. Where data is stored</h2>
+<ul>
+<li>Conversation logs and memory embeddings are stored locally on infrastructure operated by the developer (not a third-party cloud data warehouse), unless otherwise noted.</li>
+<li>Because this runs on personal hardware rather than enterprise infrastructure, standard consumer-grade data-protection guarantees (redundancy, formal audits, SOC2, etc.) do <strong>not</strong> apply.</li>
+</ul>
+<h2>5. Third parties involved</h2>
+<ul>
+<li><strong>Patreon</strong> and <strong>GitHub</strong> — used solely for OAuth login. Their own privacy policies govern the data they hold about you.</li>
+<li>Any AI/ML APIs or model-hosting services used behind the scenes may process your messages to generate responses. [Add specific vendors here if you use hosted APIs alongside your local stack, e.g. image/video generation endpoints.]</li>
+</ul>
+<h2>6. Retention &amp; deletion</h2>
+<ul>
+<li>Conversation history and memory data are retained to preserve the companion experience across sessions.</li>
+<li>You may request deletion of your account data and memory history by contacting the developer at <strong>[contact email or Discord/GitHub handle]</strong>. Requests will be honored on a best-effort basis.</li>
+</ul>
+<h2>7. Your choices</h2>
+<ul>
+<li>You can stop using the service at any time.</li>
+<li>You can request an export or deletion of your data.</li>
+<li>Access can also be revoked by the operator at their discretion (see Terms of Service).</li>
+</ul>
+<h2>8. Security</h2>
+<ul>
+<li>Reasonable, good-faith efforts are made to secure data, but as a solo-maintained hobby project, no formal security certification or guarantee is provided.</li>
+</ul>
+<h2>9. Changes to this policy</h2>
+<p>This policy may change as the project evolves. Continued use after changes are posted constitutes acceptance of the updated policy.</p>
+<h2>10. Contact</h2>
+<p>Questions about this policy: <strong>[your contact info]</strong></p>
+<p style="margin-top:40px;"><a href="../index.html">← Back to Aiko-chan</a></p>
+</body>
+</html>
