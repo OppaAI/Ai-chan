@@ -30,12 +30,16 @@
   --input-fg: #c8b8e8;
   --scrollbar: #1e1428;
 
-  /* Official brand colors, used only on the OAuth login buttons so each
-     provider stays recognizable even inside the cyberpunk theme. */
-  --brand-github: #ffffff;
+  /* Official brand colors, used as solid backgrounds on the OAuth login
+     buttons so each one reads as its provider's actual login button. */
+  --brand-github: #24292e;
+  --brand-github-fg: #ffffff;
   --brand-huggingface: #ffd21e;
+  --brand-huggingface-fg: #000000;
   --brand-simplelogin: #4c4b96;
+  --brand-simplelogin-fg: #ffffff;
   --brand-discord: #5865f2;
+  --brand-discord-fg: #ffffff;
 }
 
 body {
@@ -645,7 +649,7 @@ body {
   font-family: 'Courier New', monospace;
   font-size: 12px;
   letter-spacing: .15em;
-  text-transform: uppercase;
+  text-transform: none;
   cursor: pointer;
   border-radius: 2px;
   transition: all .2s;
@@ -657,39 +661,64 @@ body {
   box-shadow: 0 0 8px rgba(155, 127, 212, .2);
 }
 
-/* Each provider's hover state uses its official brand color, and the
-   <img> icon (loaded from Simple Icons in webui.html) is tinted to
-   match via the same hex so it reads clearly against the dark panel. */
-.auth-btn.github:hover {
+/* Each provider button is filled with its official brand color so it
+   reads as that provider's actual login button, with a matching
+   foreground color for contrast. The <img> icon is pre-tinted to the
+   same foreground color via the Simple Icons CDN param in webui.html. */
+.auth-btn.github {
+  background: var(--brand-github);
   border-color: var(--brand-github);
-  color: var(--brand-github);
-  box-shadow: 0 0 8px rgba(255, 255, 255, .15);
+  color: var(--brand-github-fg);
+}
+
+.auth-btn.github:hover {
+  background: #32383e;
+  border-color: #32383e;
+  box-shadow: 0 0 10px rgba(255, 255, 255, .15);
+}
+
+.auth-btn.huggingface {
+  background: var(--brand-huggingface);
+  border-color: var(--brand-huggingface);
+  color: var(--brand-huggingface-fg);
 }
 
 .auth-btn.huggingface:hover {
-  border-color: var(--brand-huggingface);
-  color: var(--brand-huggingface);
-  box-shadow: 0 0 8px rgba(255, 210, 30, .25);
+  background: #ffda4d;
+  border-color: #ffda4d;
+  box-shadow: 0 0 10px rgba(255, 210, 30, .35);
+}
+
+.auth-btn.simplelogin {
+  background: var(--brand-simplelogin);
+  border-color: var(--brand-simplelogin);
+  color: var(--brand-simplelogin-fg);
 }
 
 .auth-btn.simplelogin:hover {
-  border-color: var(--brand-simplelogin);
-  color: var(--brand-simplelogin);
-  box-shadow: 0 0 8px rgba(76, 75, 150, .35);
+  background: #5f5eb0;
+  border-color: #5f5eb0;
+  box-shadow: 0 0 10px rgba(76, 75, 150, .4);
+}
+
+.auth-btn.discord {
+  background: var(--brand-discord);
+  border-color: var(--brand-discord);
+  color: var(--brand-discord-fg);
 }
 
 .auth-btn.discord:hover {
-  border-color: var(--brand-discord);
-  color: var(--brand-discord);
-  box-shadow: 0 0 8px rgba(88, 101, 242, .3);
+  background: #707bf4;
+  border-color: #707bf4;
+  box-shadow: 0 0 10px rgba(88, 101, 242, .4);
 }
 
 .auth-btn .icon {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
-  /* icons ship pre-tinted per-provider via the Simple Icons CDN color
-     param in webui.html, so no filter needed here */
+  /* icons ship pre-tinted to match each button's foreground color via
+     the Simple Icons CDN color param in webui.html */
 }
 
 .auth-footer {
