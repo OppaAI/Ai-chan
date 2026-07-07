@@ -5,7 +5,7 @@ from __future__ import annotations
 import textwrap
 from datetime import datetime, timezone
 
-from core.toolkit.common import MAX_READ_CHARS, MAX_WRITE_CHARS, NOTES_DIR, json_block, now_stamp, safe_path, slugify
+from core.toolkit.common import MAX_READ_CHARS, MAX_WRITE_CHARS, json_block, notes_dir, now_stamp, safe_path, slugify
 
 
 def make_plan(goal: str, constraints: str = "", max_steps: int = 8) -> str:
@@ -44,7 +44,7 @@ def create_checklist(title: str, items: list[str] | str) -> str:
 
 def save_note(title: str, content: str, folder: str = "notes") -> str:
     """Save a note, plan, draft, or task artifact under WORKSPACE_ROOT."""
-    base = NOTES_DIR if folder == "notes" else safe_path(folder)
+    base = notes_dir() if folder == "notes" else safe_path(folder)
     base.mkdir(parents=True, exist_ok=True)
     filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{slugify(title)}.md"
     path = base / filename

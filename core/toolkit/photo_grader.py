@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from itertools import islice
 from pathlib import Path
 
-from core.toolkit.common import WORKSPACE_ROOT, json_block, now_stamp, safe_path, slugify
+from core.toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
 DEFAULT_PHOTO_INBOX = "photos/inbox"
@@ -34,7 +34,7 @@ def scan_photo_workspace(inbox: str = DEFAULT_PHOTO_INBOX, limit: int = 100) -> 
             "exists": root.exists(),
             "image_count": len(files),
             "by_extension": dict(sorted(by_ext.items())),
-            "files": [str(p.relative_to(WORKSPACE_ROOT)) for p in files[:50]],
+            "files": [str(p.relative_to(workspace_root())) for p in files[:50]],
             "note": "Use propose_photo_ingestion to create a dry-run plan before moving or editing metadata.",
         })
     except Exception as e:
@@ -48,7 +48,7 @@ def propose_photo_ingestion(inbox: str = DEFAULT_PHOTO_INBOX, library_root: str 
         files = _image_files(root, 100)
         planned = []
         for path in files:
-            rel = path.relative_to(WORKSPACE_ROOT)
+            rel = path.relative_to(workspace_root())
             stem_slug = slugify(path.stem, fallback="photo")
             planned.append({
                 "source": str(rel),

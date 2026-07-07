@@ -334,7 +334,7 @@ Run before any phase suite.
 
 ### 2.5.6 Scheduling and reminders
 
-- [ ] Asking Aiko to schedule a reminder creates/updates `workspace/schedule.json`.
+- [ ] Asking Aiko to schedule a reminder creates/updates `~/.aiko/<user_id>/schedule.json`.
 - [ ] `list_schedule` reports IDs, titles, due times, frequency, action, and timezone clearly.
 - [ ] `cancel_schedule` removes the selected job and persists the change.
 - [ ] Once, hourly, daily, weekdays, weekly, biweekly, monthly, and custom weekday schedules are tested.
@@ -342,7 +342,7 @@ Run before any phase suite.
 - [ ] Invalid times, unsupported frequencies, invalid weekdays, duplicate jobs, and past-due once jobs are handled safely.
 - [ ] Due announce jobs play a notification/beep when available and inject a reminder turn into chat.
 - [ ] Agentic scheduled jobs execute only local approved actions and disclose failures.
-- [ ] Corrupt `workspace/schedule.json` is handled with backup/recovery or a clear error; no silent data loss.
+- [ ] Corrupt `~/.aiko/<user_id>/schedule.json` is handled with backup/recovery or a clear error; no silent data loss.
 
 ### 2.5.7 Photo workflow
 

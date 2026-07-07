@@ -4,7 +4,7 @@
 # Tune local sqlite memory, embedding model behavior, memory decay, and monthly consolidation here.
 
 # -- Storage and embedding endpoint --
-SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/users/<user_id>/memory.db.
+SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory.db.
 EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by core/embed.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.
@@ -62,5 +62,5 @@ MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS: "6000"  # Max source chars per monthly co
 MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "1"  # After folding a month's pinned daily facts/day-records into "[YYYY-MM] ..." consolidated facts, delete the daily-granularity originals. Set to 0 to keep consolidation purely additive (compress + archive, no deletion) until you've verified retrieval/growth behavior.
 MONTHLY_CONSOLIDATION_MIN_MEMS: "5"  # Skip fallback months with fewer memories than this.
 MONTHLY_CONSOLIDATION_LLM_TIMEOUT: "120"  # Seconds before monthly summary LLM calls time out.
-MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user consolidation_state.json.
+MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/monthly_consolidation_state.jsonl.
 IDLE_LEARN_SECONDS: "1800"  # Seconds of inactivity before idle self-learning may start.

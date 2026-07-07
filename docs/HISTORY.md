@@ -140,7 +140,7 @@ Major additions:
 - agentic skill discovery and retrieval in `core/skills.py`
 - agentic task-mode skill context injection
 - initial `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch` skill projects
-- local scheduling/reminder infrastructure using `workspace/schedule.json`
+- local scheduling/reminder infrastructure using per-user `schedule.json`
 - final-answer verification/repair safeguards in the agentic loop
 - monthly memory consolidation for older full months, using memory facts so the LLM never needs an entire month in one context window
 - routing decision upgrade: keyword-only task detection was replaced by a dual path — fast semantic exemplar routing by default, with optional LLM routing/fallback for context-heavy cases

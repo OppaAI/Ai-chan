@@ -92,7 +92,7 @@ flowchart TD
 | Reflection publishing | optional GitHub REST API + Hugo markdown |
 | Agentic task mode | `core/agentic.py` ReAct loop + `core/tools.py` facade + `core/toolkit/` modules |
 | Skills | `skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py` |
-| Scheduling | local schedule/reminder runner using `workspace/schedule.json` |
+| Scheduling | local schedule/reminder runner using `~/.aiko/<user_id>/schedule.json` |
 
 ---
 

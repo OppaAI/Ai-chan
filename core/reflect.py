@@ -75,6 +75,7 @@ SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
 
 REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 50))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
+REFLECT_BLOG_POST_ENABLED = os.getenv("REFLECT_BLOG_POST_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run")
 REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/Aiko-chan.png"))
@@ -774,8 +775,13 @@ def generate_and_post(
         except Exception as e:
             log.error(f"Daily record pin failed: {e}")
 
-    # Step 5: push image and Hugo post together
-    success = _push_post_and_image(slug, content, image_b64 if image_generated else None, date)
+    # Step 5: optionally push image and Hugo post together. Daily memory
+    # pins still happen even when public blog posting is disabled.
+    if REFLECT_BLOG_POST_ENABLED:
+        success = _push_post_and_image(slug, content, image_b64 if image_generated else None, date)
+    else:
+        log.info("Daily reflection blog posting disabled; skipping GitHub push for %s.", slug)
+        success = True
 
     log.info(
         f"{'Done' if success else 'Failed'} — "

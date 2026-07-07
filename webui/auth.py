@@ -138,7 +138,10 @@ def _create_session(user_id, username: str, email: str | None, provider: str) ->
         "created_at": datetime.now(),
         # gate stays closed until they check the box, unless they've already
         # accepted this exact terms version in a previous session
-        "accepted_terms": _has_accepted_terms(provider, runtime_user_id),
+        "accepted_terms": (
+            _has_accepted_terms(provider, runtime_user_id)
+            or _has_accepted_terms(provider, user_id)
+        ),
     }
     return session_id
 

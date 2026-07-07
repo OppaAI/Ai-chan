@@ -37,14 +37,20 @@ import requests
 from openai import OpenAI
 
 from core.log import get_logger
-from core.memorize import AikoMemorize, USER_ID
+from core.memorize import AikoMemorize
 from core.user_context import user_workspace_root
 from core.reflect import _generate_image, _load_soul
 
 log = get_logger(__name__)
 
-WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
-WEEKLY_SOCIAL_ROOT = Path(os.getenv("SOCIAL_ROOT") or WORKSPACE_ROOT / "social" / "weekly").resolve()
+def workspace_root() -> Path:
+    """Resolve the active user workspace root lazily."""
+    return Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
+
+
+def weekly_social_root() -> Path:
+    """Resolve the active user weekly social output root lazily."""
+    return Path(os.getenv("SOCIAL_ROOT") or workspace_root() / "social" / "weekly").resolve()
 TIMEZONE_NAME = os.getenv("TIMEZONE", "UTC")
 
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
@@ -236,7 +242,7 @@ def _decode_image(image_b64: str, path: Path) -> bool:
 def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: datetime | None = None) -> dict[str, Any]:
     """Create a weekly social draft bundle for review."""
     window = last_completed_sunday_saturday(now=now)
-    draft_dir = WEEKLY_SOCIAL_ROOT / window.label
+    draft_dir = weekly_social_root() / window.label
     meta_path = draft_dir / "draft.json"
     if meta_path.exists() and not force:
         return {"success": True, "skipped": True, "reason": "draft_exists", "draft_dir": str(draft_dir)}

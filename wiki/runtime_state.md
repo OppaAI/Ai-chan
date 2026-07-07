@@ -15,16 +15,16 @@ Purpose: keep Aiko from mixing user settings, runtime state, and generated work.
 - `config/`: human-maintained defaults and settings that shape Aiko's behavior.
 - `skills/`: reusable workflows plus skill-specific defaults.
 - `wiki/`: operational routing cards and examples Aiko can retrieve before acting.
-- `workspace/`: Aiko's working area for generated notes, reports, schedules, reminders, and task artifacts.
+- `workspace/`: Aiko's working area for generated notes, reports, and task artifacts.
 - `logs/`: runtime logs and diagnostics.
 
 ## Schedule Files
 
 Keep scheduler defaults in `config/schedule.yaml`.
 
-Keep user-created scheduled jobs in `workspace/schedule.json`. This file is runtime state: Aiko and the scheduler update it while running. It should stay in workspace unless the scheduler is intentionally redesigned to use another state directory.
+Keep user-created scheduled jobs in `~/.aiko/<user_id>/schedule.json`. This file is runtime state: Aiko and the scheduler update it while running. It should stay in the per-user state directory, not in config or shared workspace directories.
 
-Do not move `workspace/schedule.json` into `config/` just because it looks like settings. It contains mutable jobs, not static defaults.
+Do not move `~/.aiko/<user_id>/schedule.json` into `config/` just because it looks like settings. It contains mutable jobs, not static defaults.
 
 ## When To Use Runtime
 

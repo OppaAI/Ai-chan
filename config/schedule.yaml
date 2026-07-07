@@ -1,13 +1,12 @@
 # Schedule config
 #
 # Settings for core/schedule.py.
-# This config stores scheduler paths and system job times; user-created jobs remain in workspace/schedule.json.
+# This config stores scheduler paths and system job times; user-created jobs remain in per-user schedule.json.
 
 # -- Paths and timezone --
 TIMEZONE: "America/Vancouver"  # IANA timezone name for reminders/jobs; examples: America/Vancouver, UTC, Asia/Tokyo.
-WORKSPACE_ROOT: ""  # Optional override; blank uses per-user ~/.aiko/users/<user_id>/workspace.
-SCHEDULE_PATH: ""  # Optional override; blank uses <workspace>/schedule.json.
-REMINDERS_PATH: ""  # Optional override; blank uses <workspace>/reminders.json.
+WORKSPACE_ROOT: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/workspace.
+SCHEDULE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/schedule.json.
 
 # -- System job timing --
 DAILY_JOB_HOUR: "0"  # Local hour for daily reflection/dream job; integer 0-23.

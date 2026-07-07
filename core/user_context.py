@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+import contextvars
 import os
 import re
 from pathlib import Path
 
 _DEFAULT_USER_ID = "OppaAI"
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_CURRENT_USER_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("aiko_current_user_id", default=None)
+
+
+def set_current_user_id(user_id: str | None) -> contextvars.Token[str | None]:
+    """Set the request-local active user id and return a token for reset()."""
+    return _CURRENT_USER_ID.set(user_id)
+
+
+def reset_current_user_id(token: contextvars.Token[str | None]) -> None:
+    """Reset the request-local active user id using a token from set_current_user_id()."""
+    _CURRENT_USER_ID.reset(token)
 
 
 def current_user_id() -> str:
     """Return the active runtime user id from OAuth/session or local env."""
-    return os.getenv("AIKO_USER_ID") or os.getenv("USER_ID") or _DEFAULT_USER_ID
+    return _CURRENT_USER_ID.get() or os.getenv("AIKO_USER_ID") or os.getenv("USER_ID") or _DEFAULT_USER_ID
 
 
 def normalize_user_id(provider: str | None, user_id: object) -> str:
@@ -24,7 +36,8 @@ def normalize_user_id(provider: str | None, user_id: object) -> str:
 
 def user_state_dir(user_id: str | None = None) -> Path:
     """Root directory for user-private mutable state."""
-    root = Path(os.getenv("AIKO_USER_STATE_ROOT", str(Path.home() / ".aiko" / "users"))).expanduser()
+    root_value = os.getenv("AIKO_USER_STATE_ROOT") or str(Path.home() / ".aiko")
+    root = Path(root_value).expanduser()
     uid = _SAFE_RE.sub("_", user_id or current_user_id()).strip("._-") or _DEFAULT_USER_ID
     return root / uid
 

@@ -64,10 +64,14 @@ CONSOLIDATION_KEEP_MONTHS     = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_KEEP
 CONSOLIDATION_CHUNK_MEMS      = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_MEMS", "25")))
 CONSOLIDATION_MAX_INPUT_CHARS = max(1000, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS", "6000")))
 CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MEMS", "5")))
-CONSOLIDATION_STATE_PATH      = Path(
-    os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
-    or str(user_state_path("consolidation_state.json", current_user_id()))
-)
+def consolidation_state_path(user_id: str | None = None) -> Path:
+    """Resolve monthly consolidation state path for the active user."""
+    override = os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
+    if override:
+        return Path(override).expanduser()
+    return user_state_path("monthly_consolidation_state.jsonl", user_id or current_user_id())
+
+
 
 LLM_BASE_URL          = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
@@ -115,14 +119,15 @@ def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
 
 def _load_state() -> dict:
     try:
-        return json.loads(CONSOLIDATION_STATE_PATH.read_text(encoding="utf-8"))
+        return json.loads(consolidation_state_path().read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
 def _save_state(state: dict) -> None:
-    CONSOLIDATION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CONSOLIDATION_STATE_PATH.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    path = consolidation_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────

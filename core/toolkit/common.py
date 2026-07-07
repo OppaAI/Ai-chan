@@ -11,10 +11,18 @@ from typing import Any
 
 from core.user_context import user_workspace_root
 
-WORKSPACE_ROOT = user_workspace_root()
-NOTES_DIR = WORKSPACE_ROOT / "notes"
 MAX_WRITE_CHARS = int(os.getenv("MAX_WRITE_CHARS", 20_000))
 MAX_READ_CHARS = int(os.getenv("MAX_READ_CHARS", 12_000))
+
+
+def workspace_root() -> Path:
+    """Resolve the active user workspace root lazily."""
+    return user_workspace_root()
+
+
+def notes_dir() -> Path:
+    """Resolve the active user notes directory lazily."""
+    return workspace_root() / "notes"
 
 
 def now_stamp() -> str:
@@ -29,10 +37,11 @@ def slugify(text: str, fallback: str = "task") -> str:
 
 
 def safe_path(relative_path: str) -> Path:
-    """Resolve a user path under WORKSPACE_ROOT, rejecting path traversal."""
+    """Resolve a user path under the active WORKSPACE_ROOT, rejecting traversal."""
+    root = workspace_root()
     cleaned = relative_path.strip().lstrip("/\\")
-    path = (WORKSPACE_ROOT / cleaned).resolve()
-    if path != WORKSPACE_ROOT and WORKSPACE_ROOT not in path.parents:
+    path = (root / cleaned).resolve()
+    if path != root and root not in path.parents:
         raise ValueError(f"path escapes workspace: {relative_path}")
     return path
 
