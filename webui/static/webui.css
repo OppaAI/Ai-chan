@@ -656,9 +656,9 @@ body {
 }
 
 .auth-btn.huggingface:hover {
-  background: #cc6f00;
-  border-color: #cc6f00;
-  box-shadow: 0 0 10px rgba(179, 95, 0, .4);
+  background: #c2660a;
+  border-color: #c2660a;
+  box-shadow: 0 0 8px rgba(179, 95, 0, .35);
 }
 
 /* Each provider button is filled with its official brand color so it
