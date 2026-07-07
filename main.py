@@ -39,6 +39,7 @@ import argparse
 import collections
 from datetime import datetime, timedelta
 import difflib
+from fastapi import FastAPI
 import json
 import os
 import queue
@@ -66,9 +67,8 @@ with silent_stderr():
     from core.memorize import AikoMemorize
 
 from webui.webui import AikoWeb, HTTP_PORT, WEBUI_HTTPS
+from webui.auth import app as auth_app
 
-from fastapi import FastAPI
-from auth import app as auth_app
 
 app = FastAPI()
 app.include_router(auth_app.router)
