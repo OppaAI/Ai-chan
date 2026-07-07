@@ -142,7 +142,7 @@ Major additions:
 - initial `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch` skill projects
 - local scheduling/reminder infrastructure using `workspace/schedule.json`
 - final-answer verification/repair safeguards in the agentic loop
-- monthly memory consolidation for older full months, using chunked daily experience turns first and memory facts as fallback so the LLM never needs an entire month in one context window
+- monthly memory consolidation for older full months, using memory facts so the LLM never needs an entire month in one context window
 - routing decision upgrade: keyword-only task detection was replaced by a dual path — fast semantic exemplar routing by default, with optional LLM routing/fallback for context-heavy cases
 - embedding decision upgrade: BGE v1.5 was replaced by Harrier OSS v1 270M because BGE is aging and produced compressed route-example cosine bands, while Harrier gives a newer 640-dimensional retrieval model with query-instruction support and better expected semantic separation
 - embedding implementation upgrade: fastembed was replaced by Aiko's custom `core/embed.py` ONNX Harrier embedder because Harrier is decoder-only and needs last-token pooling; fastembed custom registration exposed `PoolingType.MEAN`/CLS-style pooling for this path

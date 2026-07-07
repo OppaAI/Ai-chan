@@ -12,6 +12,8 @@ import httpx
 from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
+from core.user_context import normalize_user_id
+
 load_dotenv()
 
 app = FastAPI()
@@ -126,15 +128,17 @@ def _consume_state(state: str | None) -> None:
 
 def _create_session(user_id, username: str, email: str | None, provider: str) -> str:
     session_id = secrets.token_urlsafe(32)
+    runtime_user_id = normalize_user_id(provider, user_id)
     sessions[session_id] = {
-        "user_id": user_id,
+        "user_id": runtime_user_id,
+        "provider_user_id": str(user_id),
         "username": username,
         "email": email,
         "provider": provider,
         "created_at": datetime.now(),
         # gate stays closed until they check the box, unless they've already
         # accepted this exact terms version in a previous session
-        "accepted_terms": _has_accepted_terms(provider, user_id),
+        "accepted_terms": _has_accepted_terms(provider, runtime_user_id),
     }
     return session_id
 

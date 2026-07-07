@@ -54,6 +54,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from core.log import get_logger
+from core.user_context import current_user_id, user_state_path
 from core.reflect import _extract_json_arrays, _salvage_truncated_facts, _DAY_RECORD_PREFIX_TMPL
 
 log = get_logger(__name__)
@@ -63,10 +64,10 @@ CONSOLIDATION_KEEP_MONTHS     = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_KEEP
 CONSOLIDATION_CHUNK_MEMS      = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_MEMS", "25")))
 CONSOLIDATION_MAX_INPUT_CHARS = max(1000, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS", "6000")))
 CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MEMS", "5")))
-CONSOLIDATION_STATE_PATH      = Path(os.getenv(
-    "MONTHLY_CONSOLIDATION_STATE_PATH",
-    str(Path.home() / ".aiko" / "consolidation_state.json"),
-))
+CONSOLIDATION_STATE_PATH      = Path(
+    os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
+    or str(user_state_path("consolidation_state.json", current_user_id()))
+)
 
 LLM_BASE_URL          = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))

@@ -13,7 +13,6 @@ Aiko's runtime is already partly separated:
 - `core/agentic.py` owns task-mode tool schemas, ReAct loop execution, and tool dispatch.
 - `core/skills.py` owns local skill document CRUD/search helpers and the `skills/<skill_id>/SKILL.md` registry used by task mode.
 - `core/memorize.py` owns persistent memory CRUD, recall, pinning, decay, cleanup, and nightly consolidation.
-- `core/experience.py` owns the daily JSONL chat-turn log used by factual daily summaries.
 - `core/reflect.py` owns factual daily summary generation, blog publishing, and pinning the generated daily summary.
 
 ## Module Boundaries
@@ -216,7 +215,6 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Turn[Completed chat turn] --> Experience[core.experience\ndaily JSONL log]
     Turn --> Queue[Background memory queue]
     Queue --> Extract[Memory extraction / write]
     Extract --> Store[(sqlite-vec memory store)]

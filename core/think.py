@@ -4,7 +4,7 @@ core/think.py
 Aiko's chat facade.
   - Routes between single-shot chat and the agentic task loop in core.agentic.
   - Streams llama.cpp response to console + TTS simultaneously.
-  - Records daily experience turns and queues long-term memory writes.
+  - Queues long-term memory writes.
   - Owns scheduled-job callbacks and idle learner handoff.
 """
 
@@ -37,7 +37,6 @@ from core.knowledge import knowledge_context_for
 from core.log      import get_logger
 from core.social import run_scheduled_weekly_social
 from core.schedule import DueJob, ScheduleRunner, register_system_handler
-from core.experience import append_chat_turn
 
 log = get_logger(__name__)
 register_system_handler("weekly_social", run_scheduled_weekly_social)
@@ -83,7 +82,6 @@ _SEMANTIC_SEARCH_MIN_GAP = float(os.getenv("ROUTE_SEARCH_MIN_GAP", "0.010"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
-_USER_PATH = Path(__file__).resolve().parent.parent / "persona" / "user.md"
 _LOCAL_KNOWLEDGE_RE = re.compile(
     r"\b("
     r"aiko|your architecture|your hardware|your features?|your functions?|"
@@ -107,11 +105,12 @@ def _load_persona() -> str:
     persona = _PERSONA_PATH.read_text(encoding="utf-8").strip()
 
     context_blocks = []
-    if _USER_PATH.exists():
-        context_blocks.append(_USER_PATH.read_text(encoding="utf-8").strip())
+    user_path = user_profile_path()
+    if user_path.exists():
+        context_blocks.append(user_path.read_text(encoding="utf-8").strip())
     user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
 
-    user_id = os.getenv("USER_ID", "OppaAI")
+    user_id = current_user_id()
     today   = datetime.now().strftime("%B %d, %Y")
     return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + user_block
 
@@ -454,7 +453,7 @@ class AikoThink:
         with self._turn_lock:
             self._active_turn.set()
             try:
-                user_id = os.getenv("USER_ID", "the user")
+                user_id = current_user_id()
                 system = (
                     f"{self._persona}\n\n"
                     "You are initiating a brief proactive check-in. "
@@ -557,7 +556,6 @@ class AikoThink:
             if len(self._history) > _HISTORY_HARD_CAP:
                 self._history = self._history[-_HISTORY_HARD_CAP:]
 
-        self._record_experience(history_entry, raw_response)
         self._store_async(history_entry, raw_response)
         self._reasoning = False
         return raw_response
@@ -847,11 +845,6 @@ class AikoThink:
         while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
 
-    def _record_experience(self, user_input: str, response_text: str) -> None:
-        try:
-            append_chat_turn(user_input, response_text, user_id=os.getenv("USER_ID", "OppaAI"))
-        except Exception as e:
-            log.warning("Daily experience logging failed: %s", e)
 
     def _store_async(self, user_input: str, response_text: str) -> None:
         self._mem_queue.put((user_input, response_text))

@@ -5,9 +5,9 @@
 
 # -- Paths and timezone --
 TIMEZONE: "America/Vancouver"  # IANA timezone name for reminders/jobs; examples: America/Vancouver, UTC, Asia/Tokyo.
-WORKSPACE_ROOT: "workspace"  # Root folder for schedules, notes, reminders, and saved workspace files.
-SCHEDULE_PATH: "workspace/schedule.json"  # Runtime JSON job store path; keep in workspace unless you intentionally relocate state.
-REMINDERS_PATH: "workspace/reminders.json"  # Legacy reminders JSON path migrated into scheduled jobs.
+WORKSPACE_ROOT: ""  # Optional override; blank uses per-user ~/.aiko/users/<user_id>/workspace.
+SCHEDULE_PATH: ""  # Optional override; blank uses <workspace>/schedule.json.
+REMINDERS_PATH: ""  # Optional override; blank uses <workspace>/reminders.json.
 
 # -- System job timing --
 DAILY_JOB_HOUR: "0"  # Local hour for daily reflection/dream job; integer 0-23.

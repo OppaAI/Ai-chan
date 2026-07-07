@@ -12,6 +12,8 @@ Provides:
 import json
 import os
 from pathlib import Path
+
+from core.user_context import current_user_id, user_state_path
 import platform
 import re
 import subprocess
@@ -136,7 +138,7 @@ def _db_size_str() -> str:
     conn = None
     try:
         import sqlite3, sqlite_vec
-        db_path = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
+        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory.db", current_user_id()))
         conn = sqlite3.connect(db_path)
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)

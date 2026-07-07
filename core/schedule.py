@@ -47,12 +47,13 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.log import get_logger
+from core.user_context import user_workspace_root
 
 log = get_logger(__name__)
 
-WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
-SCHEDULE_PATH = Path(os.getenv("SCHEDULE_PATH", WORKSPACE_ROOT / "schedule.json")).resolve()
-LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH", WORKSPACE_ROOT / "reminders.json")).resolve()
+WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
+SCHEDULE_PATH = Path(os.getenv("SCHEDULE_PATH") or WORKSPACE_ROOT / "schedule.json").resolve()
+LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH") or WORKSPACE_ROOT / "reminders.json").resolve()
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
 
 # System job timing — env overridable, not user-modifiable via schedule.json
@@ -642,11 +643,6 @@ class ScheduleRunner:
             log.info("daily_reflect_and_dream: running dream...")
             result = self._memorize.dream()
             log.info("daily_reflect_and_dream: dream done — %s", result)
-
-            log.info("daily_reflect_and_dream: trimming experience log...")
-            from core.experience import trim_experience_log
-            trim_experience_log(keep_days=7)
-            log.info("daily_reflect_and_dream: experience log trimmed.")
 
         except Exception as e:
             log.error("daily_reflect_and_dream failed: %s", e)

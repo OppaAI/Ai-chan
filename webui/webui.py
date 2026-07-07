@@ -261,6 +261,7 @@ class AikoWeb:
             await ws.close(code=1008)
             return
 
+        os.environ["AIKO_USER_ID"] = str(session["user_id"])
         await ws.accept()
 
         with self._clients_lock:
@@ -291,6 +292,7 @@ class AikoWeb:
                     if mtype == "user_input":
                         text = (msg.get("text") or "").strip()
                         if text:
+                            os.environ["AIKO_USER_ID"] = str(session["user_id"])
                             self._input_q.put(text)
 
                     elif mtype == "vad":
