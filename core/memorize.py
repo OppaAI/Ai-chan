@@ -128,6 +128,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core.secure import connect_sqlite
+from core.user_context import current_user_id, user_state_path
+
 import sqlite_vec
 from openai import OpenAI
 
@@ -185,7 +188,7 @@ LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 MEMORY_RECENCY_RERANK_ENABLED = _env_bool("MEMORY_RECENCY_RERANK_ENABLED", "1")
 MEMORY_RECENCY_RERANK_THRESHOLD = float(os.getenv("MEMORY_RECENCY_RERANK_THRESHOLD", "0.012"))
 
-USER_ID = os.getenv("USER_ID", "OppaAI")
+USER_ID = current_user_id()
 
 # ── trivial-input skip ────────────────────────────────────────────────────────
 # Words that carry no retrievable intent on their own. Built dynamically so
@@ -551,6 +554,7 @@ class _MemoryBackend:
     ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path  = db_path
+        self._user_id = current_user_id()
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
@@ -559,7 +563,7 @@ class _MemoryBackend:
         self._apply_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        conn = connect_sqlite(self._db_path, user_id=self._user_id)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout = 5000")  # wait up to 5s on lock contention
         conn.execute("PRAGMA journal_mode = WAL")
@@ -1094,10 +1098,7 @@ class AikoMemorize:
     """
 
     def __init__(self, silent: bool = False) -> None:
-        db_path = os.getenv(
-            "SQLITE_MEMORY_PATH",
-            str(Path.home() / ".aiko" / "memory" / f"{USER_ID}.db"),
-        )
+        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory.db", current_user_id()))
 
         if not silent:
             log.info("Opening sqlite-vec memory store...")

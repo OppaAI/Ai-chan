@@ -1,10 +1,10 @@
 # Memorize config
 #
-# Settings for core/memorize.py, core/embed.py, core/forget.py, core/experience.py, and core/consolidate.py.
+# Settings for core/memorize.py, core/embed.py, core/forget.py, and core/consolidate.py.
 # Tune local sqlite memory, embedding model behavior, memory decay, and monthly consolidation here.
 
 # -- Storage and embedding endpoint --
-SQLITE_MEMORY_PATH: "/home/oppa-ai/.aiko/memory.db"  # Path to persistent sqlite-vec memory database; do not put under /tmp.
+SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/users/<user_id>/memory.db.
 EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by core/embed.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.
@@ -55,8 +55,6 @@ MEMORY_RECENCY_RERANK_ENABLED: "1"  # Toggle recency-among-relevant reranking; b
 MEMORY_RECENCY_RERANK_THRESHOLD: "0.012"  # Min final score for a candidate to be considered "relevant enough" to be reordered by recency instead of by raw score.
 
 # -- Experience and consolidation --
-EXPERIENCE_LOG_PATH: "/home/oppa-ai/.aiko/daily_experience.jsonl"  # JSONL file storing raw daily chat turns for reflection/consolidation.
-EXPERIENCE_TURN_MAX_CHARS: "4000"  # Max chars saved per side of one chat turn in experience log.
 MONTHLY_CONSOLIDATION_ENABLED: "1"  # Monthly consolidation toggle; options: 1/0, true/false, yes/no, on/off.
 MONTHLY_CONSOLIDATION_KEEP_MONTHS: "1"  # Number of recent full months to keep as detailed memories.
 MONTHLY_CONSOLIDATION_CHUNK_MEMS: "25"  # Memory facts per fallback monthly summary chunk.
@@ -64,5 +62,5 @@ MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS: "6000"  # Max source chars per monthly co
 MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "1"  # After folding a month's pinned daily facts/day-records into "[YYYY-MM] ..." consolidated facts, delete the daily-granularity originals. Set to 0 to keep consolidation purely additive (compress + archive, no deletion) until you've verified retrieval/growth behavior.
 MONTHLY_CONSOLIDATION_MIN_MEMS: "5"  # Skip fallback months with fewer memories than this.
 MONTHLY_CONSOLIDATION_LLM_TIMEOUT: "120"  # Seconds before monthly summary LLM calls time out.
-MONTHLY_CONSOLIDATION_STATE_PATH: "/home/oppa-ai/.aiko/monthly_consolidation_state.json"  # Path to monthly consolidation state JSON file.
+MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user consolidation_state.json.
 IDLE_LEARN_SECONDS: "1800"  # Seconds of inactivity before idle self-learning may start.

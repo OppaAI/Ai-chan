@@ -84,6 +84,10 @@ def load_config(*, override: bool = False) -> None:
             if not isinstance(data, dict):
                 raise ValueError(f"{path} must contain a YAML mapping")
             for key, value in _flatten(data).items():
+                # Empty YAML values mean "unset": allow code defaults or .env/deployment
+                # secrets to provide the value instead of exporting an empty string.
+                if value is None or (isinstance(value, str) and value == ""):
+                    continue
                 if override or key not in original_env:
                     os.environ[key] = _stringify(value)
 

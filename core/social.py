@@ -38,12 +38,13 @@ from openai import OpenAI
 
 from core.log import get_logger
 from core.memorize import AikoMemorize, USER_ID
+from core.user_context import user_workspace_root
 from core.reflect import _generate_image, _load_soul
 
 log = get_logger(__name__)
 
-WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT", "workspace")).resolve()
-WEEKLY_SOCIAL_ROOT = Path(os.getenv("SOCIAL_ROOT", WORKSPACE_ROOT / "social" / "weekly")).resolve()
+WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
+WEEKLY_SOCIAL_ROOT = Path(os.getenv("SOCIAL_ROOT") or WORKSPACE_ROOT / "social" / "weekly").resolve()
 TIMEZONE_NAME = os.getenv("TIMEZONE", "UTC")
 
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
