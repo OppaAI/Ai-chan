@@ -601,7 +601,11 @@ function loginSimpleLogin() {
   setAuthStatus('Redirecting to SimpleLogin…');
   const redirectUri = encodeURIComponent(`${window.location.origin}/auth/simplelogin/callback`);
   const scope = encodeURIComponent('openid email');
-  window.location.href = `https://app.simplelogin.io/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}`;
+
+  const state = crypto.randomUUID();
+  document.cookie = `sl_oauth_state=${state}; path=/; max-age=600; samesite=lax`;
+
+  window.location.href = `https://app.simplelogin.io/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${state}`;
 }
 
 function loginDiscord() {
