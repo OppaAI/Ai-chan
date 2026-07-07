@@ -2,6 +2,7 @@ import os
 import time
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
@@ -18,10 +19,15 @@ GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 HF_CLIENT_ID = os.getenv("HUGGINGFACE_CLIENT_ID")
 HF_CLIENT_SECRET = os.getenv("HUGGINGFACE_CLIENT_SECRET")
-PROTON_CLIENT_ID = os.getenv("PROTON_CLIENT_ID")
-PROTON_CLIENT_SECRET = os.getenv("PROTON_CLIENT_SECRET")
+SIMPLELOGIN_CLIENT_ID = os.getenv("SIMPLELOGIN_CLIENT_ID")
+SIMPLELOGIN_CLIENT_SECRET = os.getenv("SIMPLELOGIN_CLIENT_SECRET")
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
+
+# IMPORTANT: this must be the EXACT origin registered with every provider.
+# Since AuRoRA now runs behind Tailscale Funnel, this should be:
+#   REDIRECT_BASE=https://aurora.ide-chroma.ts.net
+# (no trailing slash). For local dev, keep the localhost fallback.
 REDIRECT_BASE = os.getenv("REDIRECT_BASE", "http://localhost:8787")
 
 # ── allowlist — only these identities may ever get a session ────────────────
@@ -34,7 +40,9 @@ def _parse_allowlist(name: str) -> set[str]:
 ALLOWED_GITHUB_USERS = _parse_allowlist("ALLOWED_GITHUB_USERS")
 ALLOWED_HF_USERS = _parse_allowlist("ALLOWED_HF_USERS")
 ALLOWED_DISCORD_IDS = _parse_allowlist("ALLOWED_DISCORD_IDS")
-ALLOWED_PROTON_USERS = _parse_allowlist("ALLOWED_PROTON_USERS")
+# SimpleLogin's userinfo endpoint returns email (and optionally a client-scoped
+# alias), so gate on email/alias rather than a numeric id.
+ALLOWED_SIMPLELOGIN_EMAILS = _parse_allowlist("ALLOWED_SIMPLELOGIN_EMAILS")
 
 # ── in-memory state ──────────────────────────────────────────────────────────
 # Use redis or a DB in production; fine for solo/single-user use for now.
@@ -86,6 +94,21 @@ def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
     )
 
 
+def _callback_url(provider: str) -> str:
+    """Single source of truth for building a callback URL. Keeping this in
+    one place means every /login and /callback pair always agrees, and it
+    must exactly match what's registered in that provider's app settings."""
+    return f"{REDIRECT_BASE}/auth/{provider}/callback"
+
+
+def _authorize_url(base: str, **params: str) -> str:
+    """Properly URL-encode query params instead of raw f-string interpolation
+    (this was the source of the broken redirect_uri — anything with special
+    characters, or a REDIRECT_BASE with a trailing slash mismatch, could
+    silently corrupt the query string)."""
+    return f"{base}?{urlencode(params)}"
+
+
 # ── dependency for gating protected routes later ─────────────────────────────
 
 async def require_session(request: Request) -> dict:
@@ -109,7 +132,7 @@ async def get_auth_config():
     return {
         "github_id": GITHUB_CLIENT_ID,
         "hf_id": HF_CLIENT_ID,
-        "proton_id": PROTON_CLIENT_ID,
+        "simplelogin_id": SIMPLELOGIN_CLIENT_ID,
         "discord_id": DISCORD_CLIENT_ID,
     }
 
@@ -119,12 +142,12 @@ async def get_auth_config():
 @app.get("/auth/github/login")
 async def github_login():
     state = _new_state()
-    url = (
-        "https://github.com/login/oauth/authorize"
-        f"?client_id={GITHUB_CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_BASE}/auth/github/callback"
-        f"&scope=read:user"
-        f"&state={state}"
+    url = _authorize_url(
+        "https://github.com/login/oauth/authorize",
+        client_id=GITHUB_CLIENT_ID,
+        redirect_uri=_callback_url("github"),
+        scope="read:user",
+        state=state,
     )
     return RedirectResponse(url)
 
@@ -140,7 +163,7 @@ async def github_callback(code: str, state: str | None = None):
                 "client_id": GITHUB_CLIENT_ID,
                 "client_secret": GITHUB_CLIENT_SECRET,
                 "code": code,
-                "redirect_uri": f"{REDIRECT_BASE}/auth/github/callback",
+                "redirect_uri": _callback_url("github"),
             },
             headers={"Accept": "application/json"},
         )
@@ -170,13 +193,13 @@ async def github_callback(code: str, state: str | None = None):
 @app.get("/auth/huggingface/login")
 async def huggingface_login():
     state = _new_state()
-    url = (
-        "https://huggingface.co/oauth/authorize"
-        f"?client_id={HF_CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_BASE}/auth/huggingface/callback"
-        f"&scope=openid%20profile"
-        f"&response_type=code"
-        f"&state={state}"
+    url = _authorize_url(
+        "https://huggingface.co/oauth/authorize",
+        client_id=HF_CLIENT_ID,
+        redirect_uri=_callback_url("huggingface"),
+        scope="openid profile",
+        response_type="code",
+        state=state,
     )
     return RedirectResponse(url)
 
@@ -193,7 +216,7 @@ async def huggingface_callback(code: str, state: str | None = None):
                 "client_secret": HF_CLIENT_SECRET,
                 "code": code,
                 "grant_type": "authorization_code",
-                "redirect_uri": f"{REDIRECT_BASE}/auth/huggingface/callback",
+                "redirect_uri": _callback_url("huggingface"),
             },
         )
         token_data = token_res.json()
@@ -217,18 +240,77 @@ async def huggingface_callback(code: str, state: str | None = None):
     return response
 
 
+# ── SimpleLogin ───────────────────────────────────────────────────────────────
+# Docs: https://simplelogin.io/docs/siwsl/code-flow/
+# Register your app + this exact callback URL at: https://app.simplelogin.io/developer
+
+SIMPLELOGIN_AUTHORIZE_URL = "https://app.simplelogin.io/oauth2/authorize"
+SIMPLELOGIN_TOKEN_URL = "https://app.simplelogin.io/oauth2/token"
+SIMPLELOGIN_USERINFO_URL = "https://app.simplelogin.io/oauth2/userinfo"
+
+
+@app.get("/auth/simplelogin/login")
+async def simplelogin_login():
+    state = _new_state()
+    url = _authorize_url(
+        SIMPLELOGIN_AUTHORIZE_URL,
+        client_id=SIMPLELOGIN_CLIENT_ID,
+        redirect_uri=_callback_url("simplelogin"),
+        response_type="code",
+        scope="profile",
+        state=state,
+    )
+    return RedirectResponse(url)
+
+
+@app.get("/auth/simplelogin/callback")
+async def simplelogin_callback(code: str, state: str | None = None):
+    _consume_state(state)
+
+    async with httpx.AsyncClient() as client:
+        token_res = await client.post(
+            SIMPLELOGIN_TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _callback_url("simplelogin"),
+                "client_id": SIMPLELOGIN_CLIENT_ID,
+                "client_secret": SIMPLELOGIN_CLIENT_SECRET,
+            },
+        )
+        token_data = token_res.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=401, detail="SimpleLogin token exchange failed")
+
+        user_res = await client.get(
+            SIMPLELOGIN_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        user = user_res.json()
+
+    email = user.get("email")
+    if not email or email not in ALLOWED_SIMPLELOGIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    session_id = _create_session(email, user.get("name", email), email, "simplelogin")
+    response = RedirectResponse(url="/")
+    _set_session_cookie(response, session_id)
+    return response
+
+
 # ── Discord ───────────────────────────────────────────────────────────────────
 
 @app.get("/auth/discord/login")
 async def discord_login():
     state = _new_state()
-    url = (
-        "https://discord.com/api/oauth2/authorize"
-        f"?client_id={DISCORD_CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_BASE}/auth/discord/callback"
-        f"&response_type=code"
-        f"&scope=identify"
-        f"&state={state}"
+    url = _authorize_url(
+        "https://discord.com/api/oauth2/authorize",
+        client_id=DISCORD_CLIENT_ID,
+        redirect_uri=_callback_url("discord"),
+        response_type="code",
+        scope="identify",
+        state=state,
     )
     return RedirectResponse(url)
 
@@ -245,7 +327,7 @@ async def discord_callback(code: str, state: str | None = None):
                 "client_secret": DISCORD_CLIENT_SECRET,
                 "code": code,
                 "grant_type": "authorization_code",
-                "redirect_uri": f"{REDIRECT_BASE}/auth/discord/callback",
+                "redirect_uri": _callback_url("discord"),
             },
         )
         token_data = token_res.json()
