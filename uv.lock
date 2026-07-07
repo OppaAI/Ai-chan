@@ -12,10 +12,11 @@ name = "aiko-chan"
 version = "0.1.5"
 source = { virtual = "." }
 dependencies = [
-    { name = "click" },
     { name = "coloredlogs" },
     { name = "flatbuffers" },
+    { name = "httpx" },
     { name = "huggingface-hub" },
+    { name = "itsdangerous" },
     { name = "ninja" },
     { name = "numpy" },
     { name = "onnxruntime-gpu", version = "1.24.4", source = { registry = "https://pypi.org/simple/" }, marker = "platform_machine != 'aarch64'" },
@@ -44,10 +45,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "click", specifier = ">=8.4.1" },
     { name = "coloredlogs", specifier = ">=15.0.1" },
     { name = "flatbuffers", specifier = ">=25.12.19" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", specifier = ">=1.21.0" },
+    { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "ninja", specifier = ">=1.13.0" },
     { name = "numpy", specifier = "<2" },
     { name = "onnxruntime-gpu", marker = "platform_machine != 'aarch64'" },
@@ -438,6 +440,15 @@ source = { registry = "https://pypi.org/simple/" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/63/9496c57188a2ee585e0f1db071d75089a11e98aa86eb99d9d7618fc1edce/idna-3.18.tar.gz", hash = "sha256:ffb385a7e039654cef1ab9ef32c6fafe283c0c0467bba1d9029738ce4a14a848", size = 196711, upload-time = "2026-06-02T14:34:07.794Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/5e/d4e9f1a599fb8e573b7b87160658329fbf28d19eac2718f51fc3def3aa5a/idna-3.18-py3-none-any.whl", hash = "sha256:7f952cbe720b688055e3f87de14f5c3e5fdaa8bc3928985c4077ca689de849a2", size = 65455, upload-time = "2026-06-02T14:34:06.319Z" },
+]
+
+[[package]]
+name = "itsdangerous"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/9c/cb/8ac0172223afbccb63986cc25049b154ecfb5e85932587206f42317be31d/itsdangerous-2.2.0.tar.gz", hash = "sha256:e0050c0b7da1eea53ffaf149c0cfbb5c6e2e2b69c4bef22c81fa6eb73e5f6173", size = 54410, upload-time = "2024-04-16T21:28:15.614Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/96/92447566d16df59b2a776c0fb82dbc4d9e07cd95062562af01e408583fc4/itsdangerous-2.2.0-py3-none-any.whl", hash = "sha256:c6242fc49e35958c8b15141343aa660db5fc54d4f13a1db01a3f5891b98700ef", size = 16234, upload-time = "2024-04-16T21:28:14.499Z" },
 ]
 
 [[package]]
