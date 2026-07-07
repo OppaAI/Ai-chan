@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -7,28 +8,33 @@
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="stylesheet" href="./webui.css">
 </head>
+
 <body>
   <!-- ── OAuth Login Modal ──────────────────────────────────────────────────── -->
   <div id="auth-overlay" class="auth-overlay show">
     <div class="auth-panel">
       <div class="auth-title">Aiko-chan</div>
       <div class="auth-subtitle">Neural Interface Access</div>
-      
+
       <div class="auth-buttons">
         <button class="auth-btn github" onclick="loginGitHub()">
-          <span class="icon">◆</span> GitHub
+          <img class="icon" src="https://cdn.simpleicons.org/github/ffffff" alt="" width="16" height="16">
+          Sign in with GitHub
         </button>
         <button class="auth-btn huggingface" onclick="loginHuggingFace()">
-          <span class="icon">⬢</span> Hugging Face
+          <img class="icon" src="https://cdn.simpleicons.org/huggingface/ffd21e" alt="" width="16" height="16">
+          Sign in with Hugging Face
         </button>
-        <button class="auth-btn proton" onclick="loginProton()">
-          <span class="icon">◉</span> Proton
+        <button class="auth-btn simplelogin" onclick="loginSimpleLogin()">
+          <img class="icon" src="https://cdn.simpleicons.org/simplelogin/4c4b96" alt="" width="16" height="16">
+          Sign in with SimpleLogin
         </button>
         <button class="auth-btn discord" onclick="loginDiscord()">
-          <span class="icon">◆</span> Discord
+          <img class="icon" src="https://cdn.simpleicons.org/discord/5865f2" alt="" width="16" height="16">
+          Sign in with Discord
         </button>
       </div>
-      
+
       <div class="auth-footer">
         <span class="auth-status" id="auth-status"></span>
       </div>

@@ -24,9 +24,9 @@
     "days_of_week": [],
     "relative_days": null,
     "timezone": "America/Vancouver",
-    "next_due": "2026-07-06T23:55:00-07:00",
+    "next_due": "2026-07-07T23:55:00-07:00",
     "created_at": "2026-07-04T23:47:14.528639-07:00",
-    "last_ran_at": "2026-07-05T23:55:00.007990-07:00",
+    "last_ran_at": "2026-07-06T23:55:00.011599-07:00",
     "enabled": true,
     "kind": "scheduled_job",
     "action": "announce"
@@ -37,7 +37,9 @@
     "task": "system:weekly_social",
     "time_of_day": "09:00",
     "frequency": "weekly",
-    "days_of_week": ["sunday"],
+    "days_of_week": [
+      "sunday"
+    ],
     "relative_days": null,
     "timezone": "America/Vancouver",
     "next_due": "2026-07-12T09:00:00-07:00",
