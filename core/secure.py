@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import os
@@ -32,19 +31,13 @@ def _data_secret() -> bytes:
 
 
 def derive_user_sqlite_key(user_id: str) -> str:
-    """Derive a stable per-user SQLCipher passphrase from server secret + user id.
+    """Derive a stable per-user 256-bit SQLCipher raw key.
 
     OAuth user ids are public identifiers, so they are context/salt only. The
     secrecy comes from AIKO_DATA_KEY_SECRET (preferred) or SECRET_KEY.
-    HMAC-SHA256 is intentionally fast because the input secret is server-side
-    high entropy; Argon2id is mainly for low-entropy human passwords.
     """
     digest = hmac.new(_data_secret(), f"aiko-sqlite:{user_id}".encode("utf-8"), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii")
-
-
-def _quote_sqlcipher_key(key: str) -> str:
-    return "'" + key.replace("'", "''") + "'"
+    return digest.hex()
 
 
 def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
@@ -66,11 +59,14 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
         ) from exc
 
     conn = sqlcipher.connect(str(path), check_same_thread=False)
-    key = derive_user_sqlite_key(user_id)
-    conn.execute(f"PRAGMA key = {_quote_sqlcipher_key(key)}")
-    conn.execute("PRAGMA cipher_page_size = 4096")
-    conn.execute("PRAGMA kdf_iter = 256000")
-    # Force key validation immediately, so a wrong key fails at boot instead of
-    # later after partial initialization.
-    conn.execute("SELECT count(*) FROM sqlite_master")
-    return conn
+    try:
+        key = derive_user_sqlite_key(user_id)
+        conn.execute(f"PRAGMA key = \"x'{key}'\"")
+        conn.execute("PRAGMA cipher_page_size = 4096")
+        # Force key validation immediately, so a wrong key fails at boot instead of
+        # later after partial initialization.
+        conn.execute("SELECT count(*) FROM sqlite_master")
+        return conn
+    except Exception:
+        conn.close()
+        raise

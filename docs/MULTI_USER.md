@@ -5,11 +5,12 @@ This is the simple `$5 Patreon tester` isolation model for Aiko. OAuth is the so
 ## Current implementation
 
 - OAuth sessions store a provider-scoped runtime id, such as `github_123456` or `patreon_987654321`, to avoid collisions between providers.
-- User-private state defaults to `~/.aiko/users/<user_id>/`:
+- User-private state defaults to `~/.aiko/<user_id>/`:
   - `user.md` for the user's editable bio/profile.
   - `memory.db` for that user's sqlite-vec memory store.
-  - `consolidation_state.json` for that user's monthly consolidation state.
-  - `workspace/` for that user's notes, schedules, reminders, and tool artifacts.
+  - `monthly_consolidation_state.jsonl` for that user's monthly consolidation state.
+  - `schedule.json` for that user's scheduled jobs/reminders.
+  - `workspace/` for that user's notes and tool artifacts; this can later be redirected to a mounted/synced Google Drive workspace via `WORKSPACE_ROOT`.
 - Existing env overrides still work for local/owner operation; leave YAML path overrides blank for per-user defaults:
   - `USER_ID` or `AIKO_USER_ID`
   - `SQLITE_MEMORY_PATH`
@@ -30,7 +31,7 @@ Do **not** derive an encryption key from only the OAuth user id. User ids are no
 - public context: `provider:user_id`
 - output: per-user encryption key
 
-`sqlite-vec` itself does not provide encryption with a normal SQLite `PRAGMA`. Aiko now has an optional SQLCipher hook for the memory DB: set `AIKO_SQLITE_ENCRYPTION=1`, install a SQLCipher-capable Python driver such as `pysqlcipher3`, and set `AIKO_DATA_KEY_SECRET` in `.env`, Modal secrets, or another secret manager. Aiko derives a per-user SQLCipher passphrase from the server secret plus provider-scoped user id. This keeps latency low because encryption happens at SQLite page I/O, not per vector operation. If SQLCipher is not available in the deployment image, keep using OS/disk encryption, strict filesystem permissions, and per-user files/directories until the image is upgraded.
+`sqlite-vec` itself does not provide encryption with a normal SQLite `PRAGMA`. Aiko now has an optional SQLCipher hook for the memory DB: set `AIKO_SQLITE_ENCRYPTION=1`, install a SQLCipher-capable Python driver such as `pysqlcipher3`, and set `AIKO_DATA_KEY_SECRET` in `.env`, Modal secrets, or another secret manager. Aiko derives a per-user SQLCipher raw key from the server secret plus provider-scoped user id. This keeps latency low because encryption happens at SQLite page I/O, not per vector operation. If SQLCipher is not available in the deployment image, keep using OS/disk encryption, strict filesystem permissions, and per-user files/directories until the image is upgraded.
 
 ## Workspace encryption
 
@@ -41,16 +42,20 @@ For a simple online tester tier, prefer encrypting the storage layer instead of 
 3. Keep each user in a separate directory.
 4. Avoid writing secrets into workspace files.
 
-If the backend runs in Modal, the workspace is server-side unless you explicitly build a client upload/download feature. A browser app cannot silently read arbitrary files from a user's PC; users must upload files through a file picker, and Aiko can only access files that were uploaded to the backend workspace. To let a user take their workspace home, add an authenticated export endpoint that zips only `~/.aiko/users/<user_id>/workspace/` and streams it to the browser.
+If the backend runs in Modal, the workspace is server-side unless you explicitly build a client upload/download feature. A browser app cannot silently read arbitrary files from a user's PC; users must upload files through a file picker, and Aiko can only access files that were uploaded to the backend workspace. To let a user take their workspace home, add an authenticated export endpoint that zips only `~/.aiko/<user_id>/workspace/` and streams it to the browser.
 
 Per-file encryption can come later, but it complicates search, previews, scheduled jobs, and tool access because every tool must decrypt/re-encrypt correctly.
+
+## Google Drive workspace direction
+
+No agentic-tool changes are required just to move Aiko's writable workspace later. The existing workspace tools already go through `WORKSPACE_ROOT`. When Google Drive/Gmail access is added, initialize or mount/sync the Drive-backed workspace during boot/warmup, then point `WORKSPACE_ROOT` at that mounted directory. Keep private runtime state such as `memory.db`, `schedule.json`, and `monthly_consolidation_state.jsonl` under `~/.aiko/<user_id>/` rather than in Drive unless you explicitly want those files synced.
 
 ## Other per-user state to keep isolated
 
 - OAuth sessions and terms acceptance records.
 - Memory DB and daily reflection facts.
 - Monthly consolidation state.
-- Workspace files, schedules, reminders, generated reports, and photo inboxes.
+- Schedule/reminder state, workspace files, generated reports, and photo inboxes.
 - User profile/bio markdown.
 - Any future upload/cache directory that can contain private user content.
 

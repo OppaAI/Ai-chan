@@ -38,6 +38,7 @@ from pathlib import Path
 import websockets
 
 from core.config import load_config
+from core.user_context import reset_current_user_id, set_current_user_id
 load_config()
 from websockets.server import serve as ws_serve
 
@@ -261,6 +262,7 @@ class AikoWeb:
             await ws.close(code=1008)
             return
 
+        user_context_token = set_current_user_id(str(session["user_id"]))
         os.environ["AIKO_USER_ID"] = str(session["user_id"])
         await ws.accept()
 
@@ -292,6 +294,7 @@ class AikoWeb:
                     if mtype == "user_input":
                         text = (msg.get("text") or "").strip()
                         if text:
+                            set_current_user_id(str(session["user_id"]))
                             os.environ["AIKO_USER_ID"] = str(session["user_id"])
                             self._input_q.put(text)
 
@@ -312,6 +315,7 @@ class AikoWeb:
         except Exception as e:
             log.exception("[aiko-web] error in WebSocket loop")
         finally:
+            reset_current_user_id(user_context_token)
             with self._clients_lock:
                 self._clients.discard(ws)
             log.info("[aiko-web] browser disconnected (total=%d)", len(self._clients))

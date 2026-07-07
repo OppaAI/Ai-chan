@@ -47,13 +47,19 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.log import get_logger
-from core.user_context import user_workspace_root
+from core.user_context import user_state_path, user_workspace_root
 
 log = get_logger(__name__)
 
-WORKSPACE_ROOT = Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
-SCHEDULE_PATH = Path(os.getenv("SCHEDULE_PATH") or WORKSPACE_ROOT / "schedule.json").resolve()
-LEGACY_REMINDERS_PATH = Path(os.getenv("REMINDERS_PATH") or WORKSPACE_ROOT / "reminders.json").resolve()
+def workspace_root() -> Path:
+    """Resolve the active user workspace root lazily."""
+    return Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
+
+
+def schedule_path() -> Path:
+    """Resolve the active user schedule path lazily."""
+    return Path(os.getenv("SCHEDULE_PATH") or user_state_path("schedule.json")).resolve()
+
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
 
 # System job timing — env overridable, not user-modifiable via schedule.json
@@ -263,46 +269,18 @@ def _read_raw(path: Path) -> list[dict]:
         return []
 
 
-def _migrate_legacy_reminders(records: list[dict]) -> list[dict]:
-    """Convert older reminder records into the scheduled-job shape."""
-    migrated = []
-    for record in records:
-        migrated.append({
-            "id": record.get("id", uuid.uuid4().hex[:12]),
-            "title": record.get("title", "Reminder"),
-            "task": record.get("message", record.get("title", "Reminder")),
-            "time_of_day": record.get("time_of_day", "06:00"),
-            "frequency": "daily" if record.get("repeat") == "daily" else "once",
-            "days_of_week": [],
-            "timezone": record.get("timezone", DEFAULT_TIMEZONE),
-            "next_due": record.get("next_due"),
-            "created_at": record.get("created_at", _now(record.get("timezone")).isoformat()),
-            "last_ran_at": None,
-            "enabled": record.get("enabled", True),
-            "kind": "reminder",
-            "action": "announce",
-        })
-    return migrated
-
-
 def _read_all() -> list[dict]:
-    """Read scheduled jobs, including one-time migration from reminders.json."""
-    records = _read_raw(SCHEDULE_PATH)
-    if records:
-        return records
-    legacy = _read_raw(LEGACY_REMINDERS_PATH)
-    if legacy:
-        records = _migrate_legacy_reminders(legacy)
-        _write_all(records)
-    return records
+    """Read scheduled jobs for the active user."""
+    return _read_raw(schedule_path())
 
 
 def _write_all(jobs: list[dict]) -> None:
     """Persist scheduled jobs atomically enough for a single local process."""
-    SCHEDULE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = SCHEDULE_PATH.with_suffix(".tmp")
+    path = schedule_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(SCHEDULE_PATH)
+    tmp.replace(path)
 
 
 def schedule_job_record(

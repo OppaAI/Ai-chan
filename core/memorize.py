@@ -188,7 +188,11 @@ LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 MEMORY_RECENCY_RERANK_ENABLED = _env_bool("MEMORY_RECENCY_RERANK_ENABLED", "1")
 MEMORY_RECENCY_RERANK_THRESHOLD = float(os.getenv("MEMORY_RECENCY_RERANK_THRESHOLD", "0.012"))
 
-USER_ID = current_user_id()
+USER_ID = current_user_id  # Backward-compatible callable alias; resolve at call time.
+
+
+def _default_user_id(user_id: str | None = None) -> str:
+    return user_id or current_user_id()
 
 # ── trivial-input skip ────────────────────────────────────────────────────────
 # Words that carry no retrievable intent on their own. Built dynamically so
@@ -1017,8 +1021,9 @@ class _MemoryBackend:
         """
         return list(self.iter_all(user_id=user_id))
 
-    def get_since(self, since: datetime, user_id: str = USER_ID) -> list[dict]:
+    def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created on or after `since`, newest first."""
+        user_id = _default_user_id(user_id)
         rows = self._conn.execute(
             """
             SELECT * FROM memories
@@ -1029,8 +1034,9 @@ class _MemoryBackend:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_between(self, start: datetime, end: datetime, user_id: str = USER_ID) -> list[dict]:
+    def get_between(self, start: datetime, end: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created in [start, end), oldest first."""
+        user_id = _default_user_id(user_id)
         rows = self._conn.execute(
             """
             SELECT * FROM memories
@@ -1118,12 +1124,13 @@ class AikoMemorize:
 
     # ── write ─────────────────────────────────────────────────────────────────
 
-    def add(self, messages: list[dict], user_id: str = USER_ID) -> bool:
+    def add(self, messages: list[dict], user_id: str | None = None) -> bool:
         """
         Store a conversation turn into long-term memory.
         Returns True on success, False on failure.
         """
         try:
+            user_id = _default_user_id(user_id)
             t       = time.perf_counter()
             ids     = self._mem.add(messages, user_id=user_id)
             elapsed = time.perf_counter() - t
@@ -1137,13 +1144,14 @@ class AikoMemorize:
             log.error(f"Save failed: {e}")
             return False
 
-    def pin(self, messages: list[dict], user_id: str = USER_ID) -> bool:
+    def pin(self, messages: list[dict], user_id: str | None = None) -> bool:
         """
         Store messages and immediately mark all resulting memories as pinned.
         Pinned memories are immune to cleanup, dream pruning, and merge losses.
         Returns True on success, False on any failure.
         """
         try:
+            user_id = _default_user_id(user_id)
             ids = self._mem.add(messages, user_id=user_id)
 
             if not ids:
@@ -1174,7 +1182,7 @@ class AikoMemorize:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, user_id: str = USER_ID, limit: int = 5) -> list[dict]:
+    def search(self, query: str, user_id: str | None = None, limit: int = 5) -> list[dict]:
         """
         Retrieve top-k memories relevant to the current query.
         Side-effect: increments access_count and updates last_accessed_at
@@ -1187,6 +1195,7 @@ class AikoMemorize:
         through, so the skip applies everywhere without duplication. Any
         message with real content attached always searches normally.
         """
+        user_id = _default_user_id(user_id)
         if _is_trivial_input(query or ""):
             log.debug(f"Skipping search for trivial input: {query!r}")
             return []
@@ -1336,7 +1345,7 @@ class AikoMemorize:
 
     def dream(
         self,
-        user_id:   str   = USER_ID,
+        user_id:   str | None = None,
         dry_run:   bool  = False,
         threshold: float = DREAM_MERGE_THRESHOLD,
     ) -> dict:
@@ -1353,6 +1362,7 @@ class AikoMemorize:
 
         Returns dict: {boosted, merged, pruned, duration_s}
         """
+        user_id = _default_user_id(user_id)
         t_start = time.perf_counter()
         log.info(f"{'(dry-run) ' if dry_run else ''}Starting consolidation pass...")
 
@@ -1561,7 +1571,7 @@ class AikoMemorize:
 
     def cleanup(
         self,
-        user_id:   str   = USER_ID,
+        user_id:   str | None = None,
         threshold: float = CLEANUP_THRESHOLD,
         dry_run:   bool  = False,
         _all_mems: Optional[list[dict]] = None,
@@ -1577,6 +1587,7 @@ class AikoMemorize:
 
         Returns dict: {deleted, kept, failed, candidates (dry_run only)}.
         """
+        user_id = _default_user_id(user_id)
         source = [_all_mems] if _all_mems is not None else self._iter_memory_batches(user_id)
 
         kept = 0
@@ -1678,25 +1689,29 @@ class AikoMemorize:
 
     # ── debug ─────────────────────────────────────────────────────────────────
 
-    def get_all(self, user_id: str = USER_ID) -> list[dict]:
+    def get_all(self, user_id: str | None = None) -> list[dict]:
         """Return all stored memories for a user."""
+        user_id = _default_user_id(user_id)
         return self._mem.get_all(user_id=user_id)
 
-    def add_raw(self, memory: str, user_id: str = USER_ID, *, pinned: bool = False, metadata: Optional[dict] = None) -> str | None:
+    def add_raw(self, memory: str, user_id: str | None = None, *, pinned: bool = False, metadata: Optional[dict] = None) -> str | None:
         """Persist one already-curated memory string without LLM extraction."""
         # metadata is accepted for call-site clarity; the current schema stores
         # only the curated text plus pinned flag.
+        user_id = _default_user_id(user_id)
         mem_id = self._mem.add_raw(memory, user_id=user_id, pinned=pinned)
         if mem_id:
             self._clear_search_cache()
         return mem_id
 
-    def get_since(self, since: datetime, user_id: str = USER_ID) -> list[dict]:
+    def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created on or after `since`, newest first."""
+        user_id = _default_user_id(user_id)
         return self._mem.get_since(since, user_id=user_id)
 
-    def get_between(self, start: datetime, end: datetime, user_id: str = USER_ID) -> list[dict]:
+    def get_between(self, start: datetime, end: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created in [start, end), oldest first."""
+        user_id = _default_user_id(user_id)
         return self._mem.get_between(start, end, user_id=user_id)
 
     def delete(self, memory_id: str) -> None:
@@ -1704,8 +1719,9 @@ class AikoMemorize:
         self._mem.delete(memory_id)
         self._clear_search_cache()
 
-    def clear(self, user_id: str = USER_ID) -> None:
+    def clear(self, user_id: str | None = None) -> None:
         """Wipe all memories for a user. Use carefully."""
+        user_id = _default_user_id(user_id)
         self._mem.delete_all(user_id=user_id)
         self._clear_search_cache()
         log.info(f"Cleared all memories for user '{user_id}'.")
