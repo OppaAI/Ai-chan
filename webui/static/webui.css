@@ -655,12 +655,6 @@ body {
   transition: all .2s;
 }
 
-.auth-btn.huggingface:hover {
-  background: #c2660a;
-  border-color: #c2660a;
-  box-shadow: 0 0 8px rgba(179, 95, 0, .35);
-}
-
 /* Each provider button is filled with its official brand color so it
    reads as that provider's actual login button, with a matching
    foreground color for contrast. The <img> icon is pre-tinted to the
@@ -684,9 +678,9 @@ body {
 }
 
 .auth-btn.huggingface:hover {
-  background: #ffda4d;
-  border-color: #ffda4d;
-  box-shadow: 0 0 10px rgba(255, 210, 30, .35);
+  background: #d17e1f;
+  border-color: #d17e1f;
+  box-shadow: 0 0 6px rgba(179, 95, 0, .3);
 }
 
 .auth-btn.simplelogin {

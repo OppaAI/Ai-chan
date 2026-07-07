@@ -548,7 +548,7 @@ async function checkAuth() {
       hideAuthOverlay();
       return true;
     }
-  } catch (_) {}
+  } catch (_) { }
   return false;
 }
 
@@ -581,13 +581,27 @@ function loginHuggingFace() {
     return;
   }
   setAuthStatus('Redirecting to Hugging Face…');
-  const redirectUri = `${window.location.origin}/auth/huggingface/callback`;
-  window.location.href = `https://huggingface.co/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code`;
+  const redirectUri = encodeURIComponent(`${window.location.origin}/auth/huggingface/callback`);
+  const scope = encodeURIComponent('openid profile email');
+
+  // HF requires a `state` (or PKCE code_challenge) on the authorize request.
+  const state = crypto.randomUUID();
+  document.cookie = `hf_oauth_state=${state}; path=/; max-age=600; samesite=lax`;
+
+  window.location.href = `https://huggingface.co/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${state}`;
 }
 
-function loginProton() {
-  setAuthStatus('Proton OAuth not available yet — placeholder for future support');
-  setTimeout(() => setAuthStatus(''), 3000);
+function loginSimpleLogin() {
+  const clientId = window.OAUTH_CONFIG?.simplelogin_id;
+  if (!clientId || clientId === "your_simplelogin_client_id_here") {
+    setAuthStatus('SimpleLogin OAuth not configured — please add SIMPLELOGIN_CLIENT_ID to .env');
+    setTimeout(() => setAuthStatus(''), 3000);
+    return;
+  }
+  setAuthStatus('Redirecting to SimpleLogin…');
+  const redirectUri = encodeURIComponent(`${window.location.origin}/auth/simplelogin/callback`);
+  const scope = encodeURIComponent('openid email');
+  window.location.href = `https://app.simplelogin.io/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}`;
 }
 
 function loginDiscord() {
