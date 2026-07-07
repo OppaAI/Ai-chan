@@ -17,27 +17,47 @@
       <div class="auth-subtitle">Neural Interface Access</div>
 
       <div class="auth-buttons">
+        <div class="auth-group-label" style="font-size: 0.8em; opacity: 0.7; margin-bottom: 4px;">For paid members:</div>
+        <button class="auth-btn patreon" onclick="loginPatreon()">
+          <img class="icon" src="https://cdn.simpleicons.org/patreon/ffffff" alt="" width="16" height="16">
+          Sign in with Patreon
+        </button>
+
+        <div class="auth-group-label" style="font-size: 0.8em; opacity: 0.7; margin: 10px 0 4px;">For contributors:</div>
         <button class="auth-btn github" onclick="loginGitHub()">
           <img class="icon" src="https://cdn.simpleicons.org/github/ffffff" alt="" width="16" height="16">
           Sign in with GitHub
-        </button>
-        <button class="auth-btn huggingface" onclick="loginHuggingFace()">
-          <img class="icon" src="https://cdn.simpleicons.org/huggingface/ffd21e" alt="" width="16" height="16">
-          Sign in with HuggingFace
-        </button>
-        <button class="auth-btn simplelogin" onclick="loginSimpleLogin()">
-          <img class="icon" src="https://cdn.simpleicons.org/simplelogin/ffffff" alt="" width="16" height="16">
-          Sign in with SimpleLogin
-        </button>
-        <button class="auth-btn discord" onclick="loginDiscord()">
-          <img class="icon" src="https://cdn.simpleicons.org/discord/ffffff" alt="" width="16" height="16">
-          Sign in with Discord
         </button>
       </div>
 
       <div class="auth-footer">
         <span class="auth-status" id="auth-status"></span>
       </div>
+    </div>
+  </div>
+
+  <!-- ── Guidelines / Terms Modal ─────────────────────────────────────────────
+       Shown after a successful OAuth login when /api/auth/me reports
+       accepted_terms: false (or terms_version_required doesn't match what
+       the user previously accepted). Hidden the rest of the time. -->
+  <div id="terms-overlay" class="auth-overlay">
+    <div class="auth-panel">
+      <div class="auth-title">Before you talk to Aiko</div>
+      <div class="terms-text" id="terms-text" style="max-height: 240px; overflow-y: auto;">
+        <p>By using Aiko-chan, you agree to:</p>
+        <ul>
+          <li>Not use this system for illegal content or activity</li>
+          <li>Not attempt to jailbreak, exploit, or abuse the pipeline</li>
+          <li>Understand that conversations may be logged and used for memory</li>
+          <li>Accept that uptime and accuracy are not guaranteed — this runs on a Jetson, not a datacenter</li>
+          <li>Understand access can be revoked at the operator's discretion</li>
+        </ul>
+      </div>
+      <label>
+        <input type="checkbox" id="terms-checkbox">
+        I have read and agree to the guidelines above
+      </label>
+      <button id="terms-continue" disabled>Continue</button>
     </div>
   </div>
 
