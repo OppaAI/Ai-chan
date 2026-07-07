@@ -451,9 +451,14 @@ function websocketURL() {
     return wsProto + "//" + wsHost + "/ws";
   }
 
-  // Local/LAN access: keep port-based connection
-  const wsPort = parseInt(wsPortParam || "8765");
-  return wsProto + "//" + wsHost + ":" + wsPort + "/";
+  // If custom ws port is specified explicitly, connect there
+  if (wsPortParam) {
+    return wsProto + "//" + wsHost + ":" + wsPortParam + "/";
+  }
+
+  // Default to path-based routing on same port as page
+  const portPart = location.port ? ":" + location.port : "";
+  return wsProto + "//" + wsHost + portPart + "/ws";
 }
 
 function connectWS() {
@@ -599,21 +604,25 @@ function loginDiscord() {
 
 // Load config and check auth
 fetch('/api/auth/config')
-  .then(r => r.json())
+  .then(r => {
+    if (!r.ok) throw new Error('Failed to load auth config');
+    return r.json();
+  })
   .then(cfg => {
     window.OAUTH_CONFIG = cfg;
     return checkAuth();
   })
-  .catch(() => {
-    authOverlay.style.display = 'none';
-    connectWS();
-  })
   .then(authenticated => {
     if (!authenticated) {
       authOverlay.classList.remove('hidden');
+      setAuthStatus('Authentication required. Please log in.');
     } else {
+      hideAuthOverlay();
       connectWS();
     }
+  })
+  .catch(err => {
+    console.error('[auth] initialization error:', err);
+    authOverlay.classList.remove('hidden');
+    setAuthStatus('Failed to load authentication system.');
   });
-
-connectWS();

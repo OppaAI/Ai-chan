@@ -3,7 +3,7 @@ import time
 import secrets
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 import httpx
 from dotenv import load_dotenv
@@ -284,3 +284,15 @@ async def logout(request: Request):
     response = RedirectResponse(url="/")
     response.delete_cookie("session_id")
     return response
+
+
+# ── websocket bridge ──────────────────────────────────────────────────────────
+
+aiko_web_instance = None
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    if aiko_web_instance is not None:
+        await aiko_web_instance._ws_handler(websocket)
+    else:
+        await websocket.close(code=1011)

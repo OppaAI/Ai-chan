@@ -167,6 +167,10 @@ class AikoWeb:
         self._loop_ready = threading.Event()
         self._ssl_context: ssl.SSLContext | None = None
 
+        # Register instance for WebSocket routing
+        import webui.auth
+        webui.auth.aiko_web_instance = self
+
         self._start_servers()
 
     # ------------------------------------------------------------------
@@ -174,17 +178,27 @@ class AikoWeb:
     # ------------------------------------------------------------------
 
     def _start_servers(self) -> None:
-        """Spin up the HTTP file server and WebSocket server in daemon threads."""
+        """Spin up the HTTP / WebSocket server using FastAPI & uvicorn."""
         import socket
         hostname = socket.gethostname()
         host_ip = socket.gethostbyname(hostname)
         self._ssl_context = _make_ssl_context(hostname, host_ip)
         scheme = "https" if self._ssl_context else "http"
+
+        # Mount static files to auth app dynamically
+        from webui.auth import app as auth_app
+        from fastapi.staticfiles import StaticFiles
+
+        has_static = False
+        for route in auth_app.routes:
+            if hasattr(route, "name") and route.name == "static":
+                has_static = True
+                break
+        if not has_static:
+            auth_app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+
         http_t = threading.Thread(target=self._run_http, daemon=True, name="aiko-http")
         http_t.start()
-
-        ws_t = threading.Thread(target=self._run_ws_loop, daemon=True, name="aiko-ws")
-        ws_t.start()
 
         self._loop_ready.wait(timeout=5)
 
@@ -192,66 +206,96 @@ class AikoWeb:
             threading.Timer(0.6, lambda: webbrowser.open(f"{scheme}://{host_ip}:{HTTP_PORT}/")).start()
 
     def _run_http(self) -> None:
-        """Serve webui/static/ over HTTP or HTTPS."""
-        handler = _make_static_handler(STATIC_DIR)
-        with http.server.HTTPServer(("0.0.0.0", HTTP_PORT), handler) as srv:
-            if self._ssl_context is not None:
-                srv.socket = self._ssl_context.wrap_socket(srv.socket, server_side=True)
-            srv.serve_forever()
+        """Serve the FastAPI app over HTTP or HTTPS via uvicorn."""
+        import asyncio
+        import uvicorn
+        from webui.auth import app as auth_app
 
-    def _run_ws_loop(self) -> None:
-        """Run the asyncio event loop (and WebSocket server) in this thread."""
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._ws_main())
 
-    async def _ws_main(self) -> None:
-        """Async entry point: start the WS server then signal ready."""
-        async with ws_serve(self._ws_handler, "0.0.0.0", WS_PORT, ssl=self._ssl_context):
-            self._loop_ready.set()
-            await asyncio.Future()          # run forever
+        cert_path = Path(SSL_CERT) if SSL_CERT else Path(__file__).parent / ".cert" / "webui.crt"
+        key_path = Path(SSL_KEY) if SSL_KEY else Path(__file__).parent / ".cert" / "webui.key"
+
+        config = uvicorn.Config(
+            auth_app,
+            host="0.0.0.0",
+            port=HTTP_PORT,
+            ssl_keyfile=str(key_path) if self._ssl_context else None,
+            ssl_certfile=str(cert_path) if self._ssl_context else None,
+            log_level="warning",
+            loop="asyncio"
+        )
+        server = uvicorn.Server(config)
+        self._loop_ready.set()
+        self._loop.run_until_complete(server.serve())
 
     async def _ws_handler(self, ws) -> None:
-        """Handle one browser WebSocket connection."""
+        """Handle one browser WebSocket connection via FastAPI WebSocket."""
+        # 1. Enforce session authentication (Auth is mandatory)
+        from webui.auth import sessions
+        from datetime import datetime, timedelta
+
+        session_id = ws.cookies.get("session_id")
+        if not session_id or session_id not in sessions:
+            log.warning("[aiko-web] unauthenticated WebSocket connection attempt")
+            await ws.close(code=1008)
+            return
+
+        session = sessions[session_id]
+        if datetime.now() - session["created_at"] > timedelta(days=30):
+            log.warning("[aiko-web] expired WebSocket session")
+            await ws.close(code=1008)
+            return
+
+        await ws.accept()
+
         with self._clients_lock:
             self._clients.add(ws)
         log.info("[aiko-web] browser connected  (total=%d)", len(self._clients))
         try:
-            async for raw in ws:
-                if isinstance(raw, bytes):
+            while True:
+                message = await ws.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                raw_bytes = message.get("bytes")
+                if raw_bytes is not None:
                     # browser mic PCM frame — only buffer during an active voice turn
                     # so stale/late frames from a previous turn don't pollute the next
                     if self._mic_active.is_set():
-                        self._audio_q.put(raw)
-                    continue
-                try:
-                    msg = json.loads(raw)
-                except json.JSONDecodeError:
+                        self._audio_q.put(raw_bytes)
                     continue
 
-                mtype = msg.get("type")
+                raw_text = message.get("text")
+                if raw_text is not None:
+                    try:
+                        msg = json.loads(raw_text)
+                    except json.JSONDecodeError:
+                        continue
 
-                if mtype == "user_input":
-                    text = (msg.get("text") or "").strip()
-                    if text:
-                        self._input_q.put(text)
+                    mtype = msg.get("type")
 
-                elif mtype == "vad":
-                    # browser Silero VAD sentinels — update voice status display
-                    # and inject end-of-utterance sentinel into the audio queue
-                    event = msg.get("event")
-                    if event == "start":
-                        # speech onset — update UI; listen.py will see audio frames arriving
-                        self._broadcast({"type": "voice", "status": "listening"})
-                    elif event == "end":
-                        # speech ended — push empty-bytes sentinel so _chunk_source
-                        # returns None cleanly, ending the recording loop in listen.py
-                        self._broadcast({"type": "voice", "status": "transcribing"})
-                        if WEBUI_BROWSER_VAD_GATE and self._mic_active.is_set():
-                            self._audio_q.put(b"")  # end-of-utterance sentinel
+                    if mtype == "user_input":
+                        text = (msg.get("text") or "").strip()
+                        if text:
+                            self._input_q.put(text)
 
-        except websockets.exceptions.ConnectionClosed:
-            pass
+                    elif mtype == "vad":
+                        # browser Silero VAD sentinels — update voice status display
+                        # and inject end-of-utterance sentinel into the audio queue
+                        event = msg.get("event")
+                        if event == "start":
+                            # speech onset — update UI; listen.py will see audio frames arriving
+                            self._broadcast({"type": "voice", "status": "listening"})
+                        elif event == "end":
+                            # speech ended — push empty-bytes sentinel so _chunk_source
+                            # returns None cleanly, ending the recording loop in listen.py
+                            self._broadcast({"type": "voice", "status": "transcribing"})
+                            if WEBUI_BROWSER_VAD_GATE and self._mic_active.is_set():
+                                self._audio_q.put(b"")  # end-of-utterance sentinel
+
+        except Exception as e:
+            log.exception("[aiko-web] error in WebSocket loop")
         finally:
             with self._clients_lock:
                 self._clients.discard(ws)
@@ -310,7 +354,10 @@ class AikoWeb:
     @staticmethod
     async def _safe_send(ws, raw) -> None:
         try:
-            await ws.send(raw)
+            if isinstance(raw, bytes):
+                await ws.send_bytes(raw)
+            else:
+                await ws.send_text(raw)
         except Exception:
             pass
 
@@ -592,29 +639,4 @@ class AikoWeb:
         self._push_vitals()
 
 
-# ── HTTP static file handler ──────────────────────────────────────────────────
-
-def _make_static_handler(root: Path):
-    """
-    Return an HTTPRequestHandler class that serves files from `root`.
-    index.html is served at /. All other paths resolve relative to root.
-    """
-    class _Handler(http.server.SimpleHTTPRequestHandler):
-        extensions_map = {
-            **http.server.SimpleHTTPRequestHandler.extensions_map,
-            ".mjs": "text/javascript",
-            ".js": "text/javascript",
-            ".wasm": "application/wasm",
-            ".onnx": "application/octet-stream",
-        }
-
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(root), **kwargs)
-
-        def log_message(self, fmt, *args):  # suppress access log spam
-            pass
-
-        def translate_path(self, path):
-            return super().translate_path(path)
-
-    return _Handler
+# HTTP static file handler removed. Serving is done via FastAPI StaticFiles.
