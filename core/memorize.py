@@ -1096,7 +1096,7 @@ class AikoMemorize:
     def __init__(self, silent: bool = False) -> None:
         db_path = os.getenv(
             "SQLITE_MEMORY_PATH",
-            str(Path.home() / ".aiko" / "memory.db"),
+            str(Path.home() / ".aiko" / "memory" / f"{USER_ID}.db"),
         )
 
         if not silent:
