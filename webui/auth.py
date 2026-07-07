@@ -282,13 +282,13 @@ SIMPLELOGIN_USERINFO_URL = "https://app.simplelogin.io/oauth2/userinfo"
 @app.get("/auth/simplelogin/login")
 async def simplelogin_login():
     state = _new_state()
-    url = _authorize_url(
-        SIMPLELOGIN_AUTHORIZE_URL,
-        client_id=SIMPLELOGIN_CLIENT_ID,
-        redirect_uri=_callback_url("simplelogin"),
-        response_type="code",
-        scope="profile",
-        state=state,
+    url = (
+        f"{SIMPLELOGIN_AUTHORIZE_URL}"
+        f"?client_id={SIMPLELOGIN_CLIENT_ID}"
+        f"&redirect_uri={REDIRECT_BASE}/auth/simplelogin/callback"
+        f"&response_type=code"
+        f"&scope=openid%20email"
+        f"&state={state}"
     )
     return RedirectResponse(url)
 
@@ -301,11 +301,11 @@ async def simplelogin_callback(code: str, state: str | None = None):
         token_res = await client.post(
             SIMPLELOGIN_TOKEN_URL,
             data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": _callback_url("simplelogin"),
                 "client_id": SIMPLELOGIN_CLIENT_ID,
                 "client_secret": SIMPLELOGIN_CLIENT_SECRET,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": f"{REDIRECT_BASE}/auth/simplelogin/callback",
             },
         )
         token_data = token_res.json()
@@ -323,7 +323,59 @@ async def simplelogin_callback(code: str, state: str | None = None):
     if not email or email not in ALLOWED_SIMPLELOGIN_EMAILS:
         raise HTTPException(status_code=403, detail="Not authorized")
 
-    session_id = _create_session(email, user.get("name", email), email, "simplelogin")
+    session_id = _create_session(user.get("id", email), email, email, "simplelogin")
+    response = RedirectResponse(url="/")
+    _set_session_cookie(response, session_id)
+    return response
+
+
+# ── SimpleLogin ───────────────────────────────────────────────────────────────
+
+@app.get("/auth/simplelogin/login")
+async def simplelogin_login():
+    state = _new_state()
+    url = (
+        "https://app.simplelogin.io/oauth2/authorize"
+        f"?client_id={SIMPLELOGIN_CLIENT_ID}"
+        f"&redirect_uri={REDIRECT_BASE}/auth/simplelogin/callback"
+        f"&response_type=code"
+        f"&scope=openid%20email"
+        f"&state={state}"
+    )
+    return RedirectResponse(url)
+
+
+@app.get("/auth/simplelogin/callback")
+async def simplelogin_callback(code: str, state: str | None = None):
+    _consume_state(state)
+
+    async with httpx.AsyncClient() as client:
+        token_res = await client.post(
+            "https://app.simplelogin.io/oauth2/token",
+            data={
+                "client_id": SIMPLELOGIN_CLIENT_ID,
+                "client_secret": SIMPLELOGIN_CLIENT_SECRET,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": f"{REDIRECT_BASE}/auth/simplelogin/callback",
+            },
+        )
+        token_data = token_res.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=401, detail="SimpleLogin token exchange failed")
+
+        user_res = await client.get(
+            "https://app.simplelogin.io/oauth2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        user = user_res.json()
+
+    email = user.get("email")
+    if not email or email not in ALLOWED_SIMPLELOGIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    session_id = _create_session(user.get("id", email), email, email, "simplelogin")
     response = RedirectResponse(url="/")
     _set_session_cookie(response, session_id)
     return response

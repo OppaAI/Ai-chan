@@ -562,62 +562,19 @@ function setAuthStatus(msg) {
 }
 
 function loginGitHub() {
-  const clientId = window.OAUTH_CONFIG?.github_id;
-  if (!clientId || clientId === "your_github_client_id_here") {
-    setAuthStatus('GitHub OAuth not configured — please add GITHUB_CLIENT_ID to .env');
-    setTimeout(() => setAuthStatus(''), 3000);
-    return;
-  }
-  setAuthStatus('Redirecting to GitHub…');
-  const redirectUri = `${window.location.origin}/auth/github/callback`;
-  window.location.href = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email`;
+  window.location.href = '/auth/github/login';
 }
 
 function loginHuggingFace() {
-  const clientId = window.OAUTH_CONFIG?.hf_id;
-  if (!clientId || clientId === "your_hf_client_id_here") {
-    setAuthStatus('Hugging Face OAuth not configured — please add HUGGINGFACE_CLIENT_ID to .env');
-    setTimeout(() => setAuthStatus(''), 3000);
-    return;
-  }
-  setAuthStatus('Redirecting to Hugging Face…');
-  const redirectUri = encodeURIComponent(`${window.location.origin}/auth/huggingface/callback`);
-  const scope = encodeURIComponent('openid profile email');
-
-  // HF requires a `state` (or PKCE code_challenge) on the authorize request.
-  const state = crypto.randomUUID();
-  document.cookie = `hf_oauth_state=${state}; path=/; max-age=600; samesite=lax`;
-
-  window.location.href = `https://huggingface.co/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${state}`;
+  window.location.href = '/auth/huggingface/login';
 }
 
 function loginSimpleLogin() {
-  const clientId = window.OAUTH_CONFIG?.simplelogin_id;
-  if (!clientId || clientId === "your_simplelogin_client_id_here") {
-    setAuthStatus('SimpleLogin OAuth not configured — please add SIMPLELOGIN_CLIENT_ID to .env');
-    setTimeout(() => setAuthStatus(''), 3000);
-    return;
-  }
-  setAuthStatus('Redirecting to SimpleLogin…');
-  const redirectUri = encodeURIComponent(`${window.location.origin}/auth/simplelogin/callback`);
-  const scope = encodeURIComponent('openid email');
-
-  const state = crypto.randomUUID();
-  document.cookie = `sl_oauth_state=${state}; path=/; max-age=600; samesite=lax`;
-
-  window.location.href = `https://app.simplelogin.io/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}&state=${state}`;
+  window.location.href = '/auth/simplelogin/login';
 }
 
 function loginDiscord() {
-  const clientId = window.OAUTH_CONFIG?.discord_id;
-  if (!clientId || clientId === "your_discord_client_id_here") {
-    setAuthStatus('Discord OAuth not configured — please add DISCORD_CLIENT_ID to .env');
-    setTimeout(() => setAuthStatus(''), 3000);
-    return;
-  }
-  setAuthStatus('Redirecting to Discord…');
-  const redirectUri = `${window.location.origin}/auth/discord/callback`;
-  window.location.href = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${encodeURIComponent('identify email')}`;
+  window.location.href = '/auth/discord/login';
 }
 
 // Load config and check auth
