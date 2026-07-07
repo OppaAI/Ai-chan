@@ -1,10 +1,12 @@
 import os
+import json
 import time
 import secrets
+from pathlib import Path
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
-from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket
 from fastapi.responses import RedirectResponse
 import httpx
 from dotenv import load_dotenv
@@ -31,24 +33,25 @@ if not SECRET_KEY:
 signer = URLSafeTimedSerializer(SECRET_KEY, salt="aiko-session-cookie")
 SESSION_MAX_AGE_SECONDS = 86400 * 30  # 30 days, matches cookie/session TTL below
 
-# ── OAuth client credentials ─────────────────────────────────────────────────
+# ── OAuth client credentials — GitHub (owner/contributors) + Patreon (paid) ──
 
 GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
 GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
-HF_CLIENT_ID = os.getenv("HUGGINGFACE_CLIENT_ID")
-HF_CLIENT_SECRET = os.getenv("HUGGINGFACE_CLIENT_SECRET")
-SIMPLELOGIN_CLIENT_ID = os.getenv("SIMPLELOGIN_CLIENT_ID")
-SIMPLELOGIN_CLIENT_SECRET = os.getenv("SIMPLELOGIN_CLIENT_SECRET")
-DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID")
-DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
+
+PATREON_CLIENT_ID = os.getenv("PATREON_CLIENT_ID")
+PATREON_CLIENT_SECRET = os.getenv("PATREON_CLIENT_SECRET")
+# Creator access token — needed to look up campaign membership tiers.
+# Generate at https://www.patreon.com/portal/registration/register-clients
+PATREON_CREATOR_ACCESS_TOKEN = os.getenv("PATREON_CREATOR_ACCESS_TOKEN")
+PATREON_CAMPAIGN_ID = os.getenv("PATREON_CAMPAIGN_ID")
 
 # IMPORTANT: this must be the EXACT origin registered with every provider.
 # Since AuRoRA now runs behind Tailscale Funnel, this should be:
-#   REDIRECT_BASE=https://aurora.ide-chroma.ts.net
+#   REDIRECT_BASE=https://aiko.ide-chroma.ts.net
 # (no trailing slash). For local dev, keep the localhost fallback.
 REDIRECT_BASE = os.getenv("REDIRECT_BASE", "http://localhost:8787")
 
-# ── allowlist — only these identities may ever get a session ────────────────
+# ── owner / contributor allowlist (GitHub) ───────────────────────────────────
 # Comma-separated in .env, e.g. ALLOWED_GITHUB_USERS=OppaAI,someOtherHandle
 
 def _parse_allowlist(name: str) -> set[str]:
@@ -56,14 +59,46 @@ def _parse_allowlist(name: str) -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 ALLOWED_GITHUB_USERS = _parse_allowlist("ALLOWED_GITHUB_USERS")
-ALLOWED_HF_USERS = _parse_allowlist("ALLOWED_HF_USERS")
-ALLOWED_DISCORD_IDS = _parse_allowlist("ALLOWED_DISCORD_IDS")
-# SimpleLogin's userinfo endpoint returns email (and optionally a client-scoped
-# alias), so gate on email/alias rather than a numeric id.
-ALLOWED_SIMPLELOGIN_EMAILS = _parse_allowlist("ALLOWED_SIMPLELOGIN_EMAILS")
+
+# Flip to true later when you're ready to accept PRs from anyone with commits
+# on the repo. Until then, GitHub login only works for the owner allowlist.
+CONTRIBUTORS_ENABLED = os.getenv("CONTRIBUTORS_ENABLED", "false").lower() == "true"
+GITHUB_REPO = os.getenv("GITHUB_REPO", "OppaAI/Aiko-chan")
+
+# ── terms/guidelines gate ────────────────────────────────────────────────────
+# Bump TERMS_VERSION whenever you materially change the guidelines — anyone
+# who accepted an older version gets re-prompted next login.
+TERMS_VERSION = "2026-07-07"
+TERMS_STORE_PATH = Path(os.getenv("TERMS_STORE_PATH", "terms_acceptance.json"))
+
+
+def _load_terms_store() -> dict:
+    if TERMS_STORE_PATH.exists():
+        return json.loads(TERMS_STORE_PATH.read_text())
+    return {}
+
+
+def _save_terms_store(store: dict) -> None:
+    TERMS_STORE_PATH.write_text(json.dumps(store))
+
+
+def _has_accepted_terms(provider: str, user_id) -> bool:
+    store = _load_terms_store()
+    entry = store.get(f"{provider}:{user_id}")
+    return bool(entry and entry.get("version") == TERMS_VERSION)
+
+
+def _record_terms_acceptance(provider: str, user_id) -> None:
+    store = _load_terms_store()
+    store[f"{provider}:{user_id}"] = {
+        "version": TERMS_VERSION,
+        "accepted_at": datetime.now().isoformat(),
+    }
+    _save_terms_store(store)
+
 
 # ── in-memory state ──────────────────────────────────────────────────────────
-# Use redis or a DB in production; fine for solo/single-user use for now.
+# Use redis or a DB in production; fine for solo/small-community use for now.
 
 sessions: dict[str, dict] = {}
 
@@ -97,6 +132,9 @@ def _create_session(user_id, username: str, email: str | None, provider: str) ->
         "email": email,
         "provider": provider,
         "created_at": datetime.now(),
+        # gate stays closed until they check the box, unless they've already
+        # accepted this exact terms version in a previous session
+        "accepted_terms": _has_accepted_terms(provider, user_id),
     }
     return session_id
 
@@ -109,26 +147,22 @@ def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=True,  # requires HTTPS — matches your mkcert/WEBUI_HTTPS setup
+        secure=True,  # requires HTTPS — matches your Tailscale Funnel / Cloudflare setup
     )
 
 
 def _callback_url(provider: str) -> str:
-    """Single source of truth for building a callback URL. Keeping this in
-    one place means every /login and /callback pair always agrees, and it
-    must exactly match what's registered in that provider's app settings."""
+    """Single source of truth for building a callback URL. Must exactly match
+    what's registered in that provider's app settings."""
     return f"{REDIRECT_BASE}/auth/{provider}/callback"
 
 
 def _authorize_url(base: str, **params: str) -> str:
-    """Properly URL-encode query params instead of raw f-string interpolation
-    (this was the source of the broken redirect_uri — anything with special
-    characters, or a REDIRECT_BASE with a trailing slash mismatch, could
-    silently corrupt the query string)."""
+    """Properly URL-encode query params instead of raw f-string interpolation."""
     return f"{base}?{urlencode(params)}"
 
 
-# ── dependency for gating protected routes later ─────────────────────────────
+# ── dependencies for gating protected routes ─────────────────────────────────
 
 async def require_session(request: Request) -> dict:
     cookie_value = request.cookies.get("session_id")
@@ -154,20 +188,26 @@ async def require_session(request: Request) -> dict:
     return session
 
 
-# ── public config ────────────────────────────────────────────────────────────
+# Stricter dependency for anything that should actually talk to Aiko —
+# logged in is not enough, they also need to have accepted the current terms.
+async def require_accepted_session(session: dict = Depends(require_session)) -> dict:
+    if not session.get("accepted_terms"):
+        raise HTTPException(status_code=403, detail="Guidelines not yet accepted")
+    return session
+
+
+# ── public config ─────────────────────────────────────────────────────────────
 
 @app.get("/api/auth/config")
 async def get_auth_config():
-    """Return public OAuth client IDs to frontend"""
+    """Return public OAuth client IDs to frontend."""
     return {
         "github_id": GITHUB_CLIENT_ID,
-        "hf_id": HF_CLIENT_ID,
-        "simplelogin_id": SIMPLELOGIN_CLIENT_ID,
-        "discord_id": DISCORD_CLIENT_ID,
+        "patreon_id": PATREON_CLIENT_ID,
     }
 
 
-# ── GitHub ────────────────────────────────────────────────────────────────────
+# ── GitHub (owner + future contributors) ─────────────────────────────────────
 
 @app.get("/auth/github/login")
 async def github_login():
@@ -180,6 +220,17 @@ async def github_login():
         state=state,
     )
     return RedirectResponse(url)
+
+
+async def _is_contributor(username: str, access_token: str) -> bool:
+    async with httpx.AsyncClient() as client:
+        res = await client.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/contributors",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if res.status_code != 200:
+            return False
+        return any(c.get("login") == username for c in res.json())
 
 
 @app.get("/auth/github/callback")
@@ -209,7 +260,10 @@ async def github_callback(code: str, state: str | None = None):
         user = user_res.json()
 
     username = user.get("login")
-    if not username or username not in ALLOWED_GITHUB_USERS:
+    is_owner = username in ALLOWED_GITHUB_USERS
+    is_contrib = CONTRIBUTORS_ENABLED and await _is_contributor(username, access_token)
+
+    if not username or not (is_owner or is_contrib):
         raise HTTPException(status_code=403, detail="Not authorized")
 
     session_id = _create_session(user["id"], username, user.get("email"), "github")
@@ -218,226 +272,96 @@ async def github_callback(code: str, state: str | None = None):
     return response
 
 
-# ── Hugging Face ──────────────────────────────────────────────────────────────
+# ── Patreon (paid members) ────────────────────────────────────────────────────
+# Docs: https://docs.patreon.com/ — verify scopes/endpoints against current
+# docs before wiring this up, Patreon's API has changed shape more than once.
 
-@app.get("/auth/huggingface/login")
-async def huggingface_login():
+PATREON_AUTHORIZE_URL = "https://www.patreon.com/oauth2/authorize"
+PATREON_TOKEN_URL = "https://www.patreon.com/api/oauth2/token"
+PATREON_IDENTITY_URL = "https://www.patreon.com/api/oauth2/v2/identity"
+
+
+@app.get("/auth/patreon/login")
+async def patreon_login():
     state = _new_state()
     url = _authorize_url(
-        "https://huggingface.co/oauth/authorize",
-        client_id=HF_CLIENT_ID,
-        redirect_uri=_callback_url("huggingface"),
-        scope="openid profile",
+        PATREON_AUTHORIZE_URL,
+        client_id=PATREON_CLIENT_ID,
+        redirect_uri=_callback_url("patreon"),
         response_type="code",
+        scope="identity identity.memberships",
         state=state,
     )
     return RedirectResponse(url)
 
 
-@app.get("/auth/huggingface/callback")
-async def huggingface_callback(code: str, state: str | None = None):
+@app.get("/auth/patreon/callback")
+async def patreon_callback(code: str, state: str | None = None):
     _consume_state(state)
 
     async with httpx.AsyncClient() as client:
         token_res = await client.post(
-            "https://huggingface.co/oauth/token",
+            PATREON_TOKEN_URL,
             data={
-                "client_id": HF_CLIENT_ID,
-                "client_secret": HF_CLIENT_SECRET,
                 "code": code,
                 "grant_type": "authorization_code",
-                "redirect_uri": _callback_url("huggingface"),
+                "client_id": PATREON_CLIENT_ID,
+                "client_secret": PATREON_CLIENT_SECRET,
+                "redirect_uri": _callback_url("patreon"),
             },
         )
         token_data = token_res.json()
         access_token = token_data.get("access_token")
         if not access_token:
-            raise HTTPException(status_code=401, detail="Hugging Face token exchange failed")
+            raise HTTPException(status_code=401, detail="Patreon token exchange failed")
 
-        user_res = await client.get(
-            "https://huggingface.co/api/user",
+        identity_res = await client.get(
+            PATREON_IDENTITY_URL,
             headers={"Authorization": f"Bearer {access_token}"},
+            params={
+                "include": "memberships",
+                "fields[member]": "patron_status,currently_entitled_amount_cents",
+            },
         )
-        user = user_res.json()
+        identity = identity_res.json()
 
-    username = user.get("username")
-    if not username or username not in ALLOWED_HF_USERS:
-        raise HTTPException(status_code=403, detail="Not authorized")
+    user_id = identity.get("data", {}).get("id")
+    username = identity.get("data", {}).get("attributes", {}).get("full_name", user_id)
+    memberships = identity.get("included", [])
 
-    session_id = _create_session(user.get("id", username), username, user.get("email"), "huggingface")
-    response = RedirectResponse(url="/")
-    _set_session_cookie(response, session_id)
-    return response
-
-
-# ── SimpleLogin ───────────────────────────────────────────────────────────────
-# Docs: https://simplelogin.io/docs/siwsl/code-flow/
-# Register your app + this exact callback URL at: https://app.simplelogin.io/developer
-
-SIMPLELOGIN_AUTHORIZE_URL = "https://app.simplelogin.io/oauth2/authorize"
-SIMPLELOGIN_TOKEN_URL = "https://app.simplelogin.io/oauth2/token"
-SIMPLELOGIN_USERINFO_URL = "https://app.simplelogin.io/oauth2/userinfo"
-
-
-@app.get("/auth/simplelogin/login")
-async def simplelogin_login():
-    state = _new_state()
-    url = (
-        f"{SIMPLELOGIN_AUTHORIZE_URL}"
-        f"?client_id={SIMPLELOGIN_CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_BASE}/auth/simplelogin/callback"
-        f"&response_type=code"
-        f"&scope=openid%20email"
-        f"&state={state}"
+    active = any(
+        m.get("attributes", {}).get("patron_status") == "active_patron"
+        for m in memberships
+        if m.get("type") == "member"
     )
-    return RedirectResponse(url)
 
+    if not user_id or not active:
+        raise HTTPException(status_code=403, detail="Active Patreon membership required")
 
-@app.get("/auth/simplelogin/callback")
-async def simplelogin_callback(code: str, state: str | None = None):
-    _consume_state(state)
-
-    async with httpx.AsyncClient() as client:
-        token_res = await client.post(
-            SIMPLELOGIN_TOKEN_URL,
-            data={
-                "client_id": SIMPLELOGIN_CLIENT_ID,
-                "client_secret": SIMPLELOGIN_CLIENT_SECRET,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": f"{REDIRECT_BASE}/auth/simplelogin/callback",
-            },
-        )
-        token_data = token_res.json()
-        access_token = token_data.get("access_token")
-        if not access_token:
-            raise HTTPException(status_code=401, detail="SimpleLogin token exchange failed")
-
-        user_res = await client.get(
-            SIMPLELOGIN_USERINFO_URL,
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        user = user_res.json()
-
-    email = user.get("email")
-    if not email or email not in ALLOWED_SIMPLELOGIN_EMAILS:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    session_id = _create_session(user.get("id", email), email, email, "simplelogin")
+    session_id = _create_session(user_id, username, None, "patreon")
     response = RedirectResponse(url="/")
     _set_session_cookie(response, session_id)
     return response
 
 
-# ── SimpleLogin ───────────────────────────────────────────────────────────────
-
-@app.get("/auth/simplelogin/login")
-async def simplelogin_login():
-    state = _new_state()
-    url = (
-        "https://app.simplelogin.io/oauth2/authorize"
-        f"?client_id={SIMPLELOGIN_CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_BASE}/auth/simplelogin/callback"
-        f"&response_type=code"
-        f"&scope=openid%20email"
-        f"&state={state}"
-    )
-    return RedirectResponse(url)
-
-
-@app.get("/auth/simplelogin/callback")
-async def simplelogin_callback(code: str, state: str | None = None):
-    _consume_state(state)
-
-    async with httpx.AsyncClient() as client:
-        token_res = await client.post(
-            "https://app.simplelogin.io/oauth2/token",
-            data={
-                "client_id": SIMPLELOGIN_CLIENT_ID,
-                "client_secret": SIMPLELOGIN_CLIENT_SECRET,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": f"{REDIRECT_BASE}/auth/simplelogin/callback",
-            },
-        )
-        token_data = token_res.json()
-        access_token = token_data.get("access_token")
-        if not access_token:
-            raise HTTPException(status_code=401, detail="SimpleLogin token exchange failed")
-
-        user_res = await client.get(
-            "https://app.simplelogin.io/oauth2/userinfo",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        user = user_res.json()
-
-    email = user.get("email")
-    if not email or email not in ALLOWED_SIMPLELOGIN_EMAILS:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    session_id = _create_session(user.get("id", email), email, email, "simplelogin")
-    response = RedirectResponse(url="/")
-    _set_session_cookie(response, session_id)
-    return response
-
-
-# ── Discord ───────────────────────────────────────────────────────────────────
-
-@app.get("/auth/discord/login")
-async def discord_login():
-    state = _new_state()
-    url = _authorize_url(
-        "https://discord.com/api/oauth2/authorize",
-        client_id=DISCORD_CLIENT_ID,
-        redirect_uri=_callback_url("discord"),
-        response_type="code",
-        scope="identify",
-        state=state,
-    )
-    return RedirectResponse(url)
-
-
-@app.get("/auth/discord/callback")
-async def discord_callback(code: str, state: str | None = None):
-    _consume_state(state)
-
-    async with httpx.AsyncClient() as client:
-        token_res = await client.post(
-            "https://discord.com/api/oauth2/token",
-            data={
-                "client_id": DISCORD_CLIENT_ID,
-                "client_secret": DISCORD_CLIENT_SECRET,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": _callback_url("discord"),
-            },
-        )
-        token_data = token_res.json()
-        access_token = token_data.get("access_token")
-        if not access_token:
-            raise HTTPException(status_code=401, detail="Discord token exchange failed")
-
-        user_res = await client.get(
-            "https://discord.com/api/users/@me",
-            headers={"Authorization": f"Bearer {access_token}"},
-        )
-        user = user_res.json()
-
-    discord_id = user.get("id")
-    if not discord_id or discord_id not in ALLOWED_DISCORD_IDS:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    session_id = _create_session(discord_id, user.get("username", discord_id), user.get("email"), "discord")
-    response = RedirectResponse(url="/")
-    _set_session_cookie(response, session_id)
-    return response
-
-
-# ── session endpoints ─────────────────────────────────────────────────────────
+# ── terms acceptance ─────────────────────────────────────────────────────────
 
 @app.get("/api/auth/me")
 async def get_me(session: dict = Depends(require_session)):
-    return session
+    return {**session, "terms_version_required": TERMS_VERSION}
+
+
+@app.post("/api/auth/accept-terms")
+async def accept_terms(request: Request, session: dict = Depends(require_session)):
+    body = await request.json()
+    if body.get("accepted") is not True:
+        raise HTTPException(status_code=400, detail="Must explicitly accept")
+
+    cookie_value = request.cookies.get("session_id")
+    session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
+    sessions[session_id]["accepted_terms"] = True
+    _record_terms_acceptance(session["provider"], session["user_id"])
+    return {"accepted": True}
 
 
 @app.post("/api/auth/logout")
@@ -454,12 +378,24 @@ async def logout(request: Request):
     return response
 
 
-# ── websocket bridge ──────────────────────────────────────────────────────────
+# ── websocket bridge — gated on accepted terms, not just login ──────────────
 
 aiko_web_instance = None
 
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    cookie_value = websocket.cookies.get("session_id")
+    try:
+        session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
+        session = sessions.get(session_id)
+        if not session or not session.get("accepted_terms"):
+            await websocket.close(code=4403)  # custom: terms not accepted
+            return
+    except (BadSignature, SignatureExpired, TypeError):
+        await websocket.close(code=4401)
+        return
+
     if aiko_web_instance is not None:
         await aiko_web_instance._ws_handler(websocket)
     else:
