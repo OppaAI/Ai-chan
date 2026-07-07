@@ -557,29 +557,42 @@ function setAuthStatus(msg) {
 }
 
 function loginGitHub() {
-  setAuthStatus('Redirecting to GitHub…');
   const clientId = window.OAUTH_CONFIG?.github_id;
+  if (!clientId || clientId === "your_github_client_id_here") {
+    setAuthStatus('GitHub OAuth not configured — please add GITHUB_CLIENT_ID to .env');
+    setTimeout(() => setAuthStatus(''), 3000);
+    return;
+  }
+  setAuthStatus('Redirecting to GitHub…');
   const redirectUri = `${window.location.origin}/auth/github/callback`;
   window.location.href = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=user:email`;
 }
 
 function loginHuggingFace() {
-  setAuthStatus('Redirecting to Hugging Face…');
   const clientId = window.OAUTH_CONFIG?.hf_id;
+  if (!clientId || clientId === "your_hf_client_id_here") {
+    setAuthStatus('Hugging Face OAuth not configured — please add HUGGINGFACE_CLIENT_ID to .env');
+    setTimeout(() => setAuthStatus(''), 3000);
+    return;
+  }
+  setAuthStatus('Redirecting to Hugging Face…');
   const redirectUri = `${window.location.origin}/auth/huggingface/callback`;
   window.location.href = `https://huggingface.co/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code`;
 }
 
 function loginProton() {
-  setAuthStatus('Redirecting to Proton…');
-  const clientId = window.OAUTH_CONFIG?.proton_id;
-  const redirectUri = `${window.location.origin}/auth/proton/callback`;
-  window.location.href = `https://account.proton.me/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=openid%20profile%20email`;
+  setAuthStatus('Proton OAuth not available yet — placeholder for future support');
+  setTimeout(() => setAuthStatus(''), 3000);
 }
 
 function loginDiscord() {
-  setAuthStatus('Redirecting to Discord…');
   const clientId = window.OAUTH_CONFIG?.discord_id;
+  if (!clientId || clientId === "your_discord_client_id_here") {
+    setAuthStatus('Discord OAuth not configured — please add DISCORD_CLIENT_ID to .env');
+    setTimeout(() => setAuthStatus(''), 3000);
+    return;
+  }
+  setAuthStatus('Redirecting to Discord…');
   const redirectUri = `${window.location.origin}/auth/discord/callback`;
   window.location.href = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${encodeURIComponent('identify email')}`;
 }
