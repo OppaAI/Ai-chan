@@ -34,12 +34,8 @@
      buttons so each one reads as its provider's actual login button. */
   --brand-github: #24292e;
   --brand-github-fg: #ffffff;
-  --brand-huggingface: #cc6f00;
-  --brand-huggingface-fg: #ffffff;
-  --brand-simplelogin: #c651a8;
-  --brand-simplelogin-fg: #ffffff;
-  --brand-discord: #5865f2;
-  --brand-discord-fg: #ffffff;
+  --brand-patreon: #ff424d;
+  --brand-patreon-fg: #ffffff;
 }
 
 body {
@@ -671,40 +667,16 @@ body {
   box-shadow: 0 0 10px rgba(255, 255, 255, .15);
 }
 
-.auth-btn.huggingface {
-  background: var(--brand-huggingface);
-  border-color: var(--brand-huggingface);
-  color: var(--brand-huggingface-fg);
+.auth-btn.patreon {
+  background: var(--brand-patreon);
+  border-color: var(--brand-patreon);
+  color: var(--brand-patreon-fg);
 }
 
-.auth-btn.huggingface:hover {
-  background: #d17e1f;
-  border-color: #d17e1f;
-  box-shadow: 0 0 6px rgba(179, 95, 0, .3);
-}
-
-.auth-btn.simplelogin {
-  background: var(--brand-simplelogin);
-  border-color: var(--brand-simplelogin);
-  color: var(--brand-simplelogin-fg);
-}
-
-.auth-btn.simplelogin:hover {
-  background: #d671bc;
-  border-color: #d671bc;
-  box-shadow: 0 0 10px rgba(198, 81, 168, .4);
-}
-
-.auth-btn.discord {
-  background: var(--brand-discord);
-  border-color: var(--brand-discord);
-  color: var(--brand-discord-fg);
-}
-
-.auth-btn.discord:hover {
-  background: #707bf4;
-  border-color: #707bf4;
-  box-shadow: 0 0 10px rgba(88, 101, 242, .4);
+.auth-btn.patreon:hover {
+  background: #ff5c66;
+  border-color: #ff5c66;
+  box-shadow: 0 0 10px rgba(255, 66, 77, .4);
 }
 
 .auth-btn .icon {
