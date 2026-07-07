@@ -34,9 +34,9 @@
      buttons so each one reads as its provider's actual login button. */
   --brand-github: #24292e;
   --brand-github-fg: #ffffff;
-  --brand-huggingface: #ff9d00;
-  --brand-huggingface-fg: #000000;
-  --brand-simplelogin: #4c4b96;
+  --brand-huggingface: #cc6f00;
+  --brand-huggingface-fg: #ffffff;
+  --brand-simplelogin: #c651a8;
   --brand-simplelogin-fg: #ffffff;
   --brand-discord: #5865f2;
   --brand-discord-fg: #ffffff;
@@ -655,10 +655,10 @@ body {
   transition: all .2s;
 }
 
-.auth-btn:hover {
-  border-color: var(--purple);
-  color: var(--purple);
-  box-shadow: 0 0 8px rgba(155, 127, 212, .2);
+.auth-btn.huggingface:hover {
+  background: #cc6f00;
+  border-color: #cc6f00;
+  box-shadow: 0 0 10px rgba(179, 95, 0, .4);
 }
 
 /* Each provider button is filled with its official brand color so it
@@ -696,9 +696,9 @@ body {
 }
 
 .auth-btn.simplelogin:hover {
-  background: #5f5eb0;
-  border-color: #5f5eb0;
-  box-shadow: 0 0 10px rgba(76, 75, 150, .4);
+  background: #d671bc;
+  border-color: #d671bc;
+  box-shadow: 0 0 10px rgba(198, 81, 168, .4);
 }
 
 .auth-btn.discord {
