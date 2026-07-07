@@ -8,10 +8,28 @@ from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket, WebSock
 from fastapi.responses import RedirectResponse
 import httpx
 from dotenv import load_dotenv
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 load_dotenv()
 
 app = FastAPI()
+
+# ── cookie signing ────────────────────────────────────────────────────────────
+# SECRET_KEY signs the session cookie so it can't be forged or edited client-side.
+# Generate one with: python -c "import secrets; print(secrets.token_hex(32))"
+# Keep it out of git, and rotating it invalidates every existing session (that's
+# expected — treat it like a kill switch if a cookie ever leaks).
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY is not set. Generate one with "
+        "`python -c \"import secrets; print(secrets.token_hex(32))\"` "
+        "and add it to your .env."
+    )
+
+signer = URLSafeTimedSerializer(SECRET_KEY, salt="aiko-session-cookie")
+SESSION_MAX_AGE_SECONDS = 86400 * 30  # 30 days, matches cookie/session TTL below
 
 # ── OAuth client credentials ─────────────────────────────────────────────────
 
@@ -84,10 +102,11 @@ def _create_session(user_id, username: str, email: str | None, provider: str) ->
 
 
 def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
+    signed_value = signer.dumps(session_id)
     response.set_cookie(
         "session_id",
-        session_id,
-        max_age=86400 * 30,
+        signed_value,
+        max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
         secure=True,  # requires HTTPS — matches your mkcert/WEBUI_HTTPS setup
@@ -112,8 +131,19 @@ def _authorize_url(base: str, **params: str) -> str:
 # ── dependency for gating protected routes later ─────────────────────────────
 
 async def require_session(request: Request) -> dict:
-    session_id = request.cookies.get("session_id")
-    if not session_id or session_id not in sessions:
+    cookie_value = request.cookies.get("session_id")
+    if not cookie_value:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
+    except SignatureExpired:
+        raise HTTPException(status_code=401, detail="Session expired")
+    except BadSignature:
+        # Cookie was tampered with or signed under a different/old SECRET_KEY
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    if session_id not in sessions:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     session = sessions[session_id]
@@ -360,9 +390,13 @@ async def get_me(session: dict = Depends(require_session)):
 
 @app.post("/api/auth/logout")
 async def logout(request: Request):
-    session_id = request.cookies.get("session_id")
-    if session_id:
-        sessions.pop(session_id, None)
+    cookie_value = request.cookies.get("session_id")
+    if cookie_value:
+        try:
+            session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
+            sessions.pop(session_id, None)
+        except (BadSignature, SignatureExpired):
+            pass  # already invalid/expired, nothing to clean up
     response = RedirectResponse(url="/")
     response.delete_cookie("session_id")
     return response

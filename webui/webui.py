@@ -233,11 +233,24 @@ class AikoWeb:
     async def _ws_handler(self, ws) -> None:
         """Handle one browser WebSocket connection via FastAPI WebSocket."""
         # 1. Enforce session authentication (Auth is mandatory)
-        from webui.auth import sessions
+        from webui.auth import sessions, signer, SESSION_MAX_AGE_SECONDS
+        from itsdangerous import BadSignature, SignatureExpired
         from datetime import datetime, timedelta
 
-        session_id = ws.cookies.get("session_id")
-        if not session_id or session_id not in sessions:
+        cookie_value = ws.cookies.get("session_id")
+        if not cookie_value:
+            log.warning("[aiko-web] unauthenticated WebSocket connection attempt")
+            await ws.close(code=1008)
+            return
+
+        try:
+            session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
+        except (BadSignature, SignatureExpired):
+            log.warning("[aiko-web] WebSocket connection with invalid/expired session cookie")
+            await ws.close(code=1008)
+            return
+
+        if session_id not in sessions:
             log.warning("[aiko-web] unauthenticated WebSocket connection attempt")
             await ws.close(code=1008)
             return
