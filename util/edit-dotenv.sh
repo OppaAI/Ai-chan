@@ -3,16 +3,17 @@
 # shreds the plaintext copy no matter how the script exits.
 #
 # Usage:
-#   ./edit-dotenv.sh                       # uses /etc/aiko/.env.age + /etc/aiko/age-key.txt
-#   ./edit-dotenv.sh /path/to/.env.age     # override the encrypted file
+#   ./edit-dotenv.sh                       # uses $ENV_AGE_PATH, or /etc/aiko/.env.age
+#   ./edit-dotenv.sh /path/to/.env.age     # overrides both of the above
 #
 # Env overrides:
 #   AGE_KEY       path to the age identity (private key)   default: /etc/aiko/age-key.txt
 #   AGE_KEY_PUB   path to the age recipient (public key)   default: ${AGE_KEY}.pub
+#   ENV_AGE_PATH  path to the encrypted secrets file        default: /etc/aiko/.env.age
 
 set -euo pipefail
 
-ENC="${1:-/etc/aiko/.env.age}"
+ENC="${1:-${ENV_AGE_PATH:-/etc/aiko/.env.age}}"
 KEY="${AGE_KEY:-/etc/aiko/age-key.txt}"
 PUB="${AGE_KEY_PUB:-${KEY}.pub}"
 
