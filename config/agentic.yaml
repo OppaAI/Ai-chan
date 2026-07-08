@@ -19,8 +19,11 @@ AGENT_VERIFY_LLM: "1"  # Use an LLM call for final verification; options: 1/0, t
 AGENT_MAX_FINAL_REPAIRS: "1"  # Max attempts to repair a final answer that fails verification.
 AGENT_VERIFY_MIN_SCORE: "0.70"  # Minimum verifier score when LLM verification is enabled; range 0.0-1.0.
 AGENT_TOOL_RETRY_BACKOFF: "0.2"  # Seconds to wait before retrying a failed tool call.
-AGENT_WEB_TOOL_ATTEMPTS: "2"  # Retry attempts for web-backed tools.
-AGENT_LOCAL_TOOL_ATTEMPTS: "1"  # Retry attempts for local filesystem/workspace tools.
+
+# -- agent tool retry policy --
+AGENT_WEB_TOOL_ATTEMPTS: "2"  # Retry attempts for web_search/deep_search/web_fetch on transient failure.
+AGENT_LOCAL_TOOL_ATTEMPTS: "1"  # Retry attempts for save_note/schedule_job/schedule_reminder.
+AGENT_DEEP_RESEARCH_ATTEMPTS: "1"  # Retry attempts for deep_research specifically. Keep at 1 unless you can afford doubling a multi-round research call's cost (search+fetch×rounds + decision/synthesis LLM calls) on a retry.
 
 # -- Workspace tool limits --
 MAX_WRITE_CHARS: "20000"  # Max characters allowed when agent saves a note/draft.
