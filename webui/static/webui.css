@@ -224,7 +224,7 @@ body {
 /* ── right panel ────────────────────────────────────────────────── */
 #panel {
   display: grid;
-  grid-template-rows: auto 1fr auto auto;
+  grid-template-rows: auto 1fr auto auto auto auto;
   height: var(--app-height, 100dvh);
   overflow: hidden;
 }
