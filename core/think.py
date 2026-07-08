@@ -161,7 +161,6 @@ _AGENTIC_ROUTE_RE = re.compile(
 )
 
 
-
 def _extract_search_results_block(system_prompt: str) -> str:
     match = re.search(r"<search_results\b[^>]*>.*?</search_results>", system_prompt or "", re.DOTALL)
     return match.group(0) if match else ""
