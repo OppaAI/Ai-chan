@@ -529,7 +529,7 @@ def _max_attempts_for(name: str) -> int:
         # A failed multi-round adaptive research call is expensive (several
         # search+fetch rounds plus 2 extra LLM calls per round). Retry once,
         # not with the same budget as a cheap single web_search/web_fetch.
-        return 1
+        return max(1, int(os.getenv("AGENT_DEEP_RESEARCH_ATTEMPTS", 1)))
     if name in {"web_search", "deep_search", "web_fetch"}:
         return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
     if name in {"save_note", "schedule_job", "schedule_reminder"}:
