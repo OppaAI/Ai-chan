@@ -47,18 +47,20 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.log import get_logger
-from core.user_context import user_state_path, user_workspace_root
+from core.user_context import current_user_id, user_state_path, user_workspace_root
 
 log = get_logger(__name__)
 
 def workspace_root() -> Path:
     """Resolve the active user workspace root lazily."""
-    return Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
+    override = os.getenv("WORKSPACE_ROOT")
+    return (Path(override).expanduser() if override else user_workspace_root()).resolve()
 
 
 def schedule_path() -> Path:
     """Resolve the active user schedule path lazily."""
-    return Path(os.getenv("SCHEDULE_PATH") or user_state_path("schedule.json")).resolve()
+    override = os.getenv("SCHEDULE_PATH")
+    return (Path(override).expanduser() if override else user_state_path("schedule.json")).resolve()
 
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
 
@@ -473,11 +475,13 @@ class ScheduleRunner:
         memorize=None,
         generate_and_post_fn: Callable | None = None,
         consolidate_fn: Callable | None = None,
+        user_id: str | None = None,
     ) -> None:
         self._on_due               = on_due
         self._memorize             = memorize
         self._generate_and_post_fn = generate_and_post_fn
         self._consolidate_fn       = consolidate_fn
+        self._user_id              = user_id or getattr(memorize, "_user_id", None) or current_user_id()
         self._wakeup               = threading.Event()
         self._stop                 = threading.Event()
         self._thread: threading.Thread | None = None
@@ -636,7 +640,7 @@ class ScheduleRunner:
 
         try:
             log.info("monthly_consolidate: starting.")
-            result = self._consolidate_fn(self._memorize, now=datetime.now(_timezone()))
+            result = self._consolidate_fn(self._memorize, now=datetime.now(_timezone()), user_id=self._user_id)
             log.info("monthly_consolidate: done — %s", result)
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)

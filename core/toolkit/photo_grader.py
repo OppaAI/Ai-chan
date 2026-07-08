@@ -27,6 +27,7 @@ def scan_photo_workspace(inbox: str = DEFAULT_PHOTO_INBOX, limit: int = 100) -> 
     """Scan a workspace photo inbox for image files Aiko can ingest."""
     try:
         root = safe_path(inbox)
+        ws_root = workspace_root()
         files = _image_files(root, max(1, min(limit, 1000)))
         by_ext = Counter(p.suffix.lower() for p in files)
         return json_block("photo workspace scan", {
@@ -34,7 +35,7 @@ def scan_photo_workspace(inbox: str = DEFAULT_PHOTO_INBOX, limit: int = 100) -> 
             "exists": root.exists(),
             "image_count": len(files),
             "by_extension": dict(sorted(by_ext.items())),
-            "files": [str(p.relative_to(workspace_root())) for p in files[:50]],
+            "files": [str(p.relative_to(ws_root)) for p in files[:50]],
             "note": "Use propose_photo_ingestion to create a dry-run plan before moving or editing metadata.",
         })
     except Exception as e:
@@ -45,10 +46,11 @@ def propose_photo_ingestion(inbox: str = DEFAULT_PHOTO_INBOX, library_root: str 
     """Create a safe dry-run ingestion plan for untracked photos."""
     try:
         root = safe_path(inbox)
+        ws_root = workspace_root()
         files = _image_files(root, 100)
         planned = []
         for path in files:
-            rel = path.relative_to(workspace_root())
+            rel = path.relative_to(ws_root)
             stem_slug = slugify(path.stem, fallback="photo")
             planned.append({
                 "source": str(rel),

@@ -45,12 +45,14 @@ log = get_logger(__name__)
 
 def workspace_root() -> Path:
     """Resolve the active user workspace root lazily."""
-    return Path(os.getenv("WORKSPACE_ROOT") or user_workspace_root()).resolve()
+    override = os.getenv("WORKSPACE_ROOT")
+    return (Path(override).expanduser() if override else user_workspace_root()).resolve()
 
 
 def weekly_social_root() -> Path:
     """Resolve the active user weekly social output root lazily."""
-    return Path(os.getenv("SOCIAL_ROOT") or workspace_root() / "social" / "weekly").resolve()
+    override = os.getenv("SOCIAL_ROOT")
+    return (Path(override).expanduser() if override else workspace_root() / "social" / "weekly").resolve()
 TIMEZONE_NAME = os.getenv("TIMEZONE", "UTC")
 
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
