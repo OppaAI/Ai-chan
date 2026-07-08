@@ -75,7 +75,6 @@ _ROUTE_INSTRUCT_BINARY = "Does this message ask someone to perform a task or act
 _ROUTE_INSTRUCT_TOOL   = "This is an autonomous task request. Which work steps are likely needed?"
 _ROUTE_INSTRUCT_SEARCH = "Does answering this require looking up current or external data?"
 
-_SEMANTIC_ROUTE_THRESHOLD = float(os.getenv("ROUTE_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_SEARCH_THRESHOLD = float(os.getenv("SEARCH_SEMANTIC_THRESHOLD", "0.65"))
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_TOOL_MIN_GAP = float(os.getenv("ROUTE_TOOL_MIN_GAP", "0.015"))
