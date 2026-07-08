@@ -415,7 +415,7 @@ class AikoThink:
         if token_callback:
             token_callback(f"__SEARCHING__:{search_query}\n")
         
-        context = web_search_context(search_query, max_results=int(os.getenv("WEBCHAT_SNIPPET_RESULTS", 3)))
+        context = web_search_context(search_query, max_results=int(os.getenv("SEARXNG_MAX_RESULTS", 3)))
         
         # Fallback: retry with better query or webfetch
         if not context or context.startswith("[search failed") or "no results" in context.lower():
