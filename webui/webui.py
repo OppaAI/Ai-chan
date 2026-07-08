@@ -38,7 +38,7 @@ from pathlib import Path
 import websockets
 
 from core.config import load_config
-from core.user_context import reset_current_user_id, set_current_user_id
+from core.userspace import reset_current_user_id, set_current_user_id
 load_config()
 from websockets.server import serve as ws_serve
 

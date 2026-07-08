@@ -54,7 +54,7 @@ from pathlib import Path
 from openai import OpenAI
 
 from core.log import get_logger
-from core.user_context import current_user_id, user_state_path
+from core.userspace import current_user_id, user_state_path
 from core.reflect import _extract_json_arrays, _salvage_truncated_facts, _DAY_RECORD_PREFIX_TMPL
 
 log = get_logger(__name__)
@@ -69,7 +69,7 @@ def consolidation_state_path(user_id: str | None = None) -> Path:
     override = os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
     if override:
         return Path(override).expanduser()
-    return user_state_path("monthly_consolidation_state.jsonl", user_id or current_user_id())
+    return user_state_path("memory/monthly_consolidation_state.jsonl", user_id or current_user_id())
 
 
 

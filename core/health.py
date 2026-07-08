@@ -13,7 +13,7 @@ import json
 import os
 from pathlib import Path
 
-from core.user_context import current_user_id, user_state_path
+from core.userspace import current_user_id, user_state_path
 import platform
 import re
 import subprocess

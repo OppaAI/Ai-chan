@@ -12,7 +12,7 @@ import httpx
 from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-from core.user_context import normalize_user_id
+from core.userspace import normalize_user_id
 
 load_dotenv()
 

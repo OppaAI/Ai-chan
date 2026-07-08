@@ -62,7 +62,12 @@ def user_workspace_root(user_id: str | None = None) -> Path:
 
 
 def user_profile_path(user_id: str | None = None) -> Path:
-    """Per-user editable profile/bio markdown path."""
+    """Per-user editable profile/bio markdown path.
+
+    Defaults to ~/.aiko/<user_id>/profile/user.md. The profile stores
+    user-provided biographical information, preferences, and identity
+    details that Aiko can use to personalize responses.
+    """
     if os.getenv("USER_PROFILE_PATH"):
         return Path(os.environ["USER_PROFILE_PATH"]).expanduser().resolve()
-    return user_state_path("user.md", user_id).resolve()
+    return user_state_path("profile/user.md", user_id).resolve()

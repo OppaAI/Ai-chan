@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.user_context import user_workspace_root
+from core.userspace import user_workspace_root
 
 MAX_WRITE_CHARS = int(os.getenv("MAX_WRITE_CHARS", 20_000))
 MAX_READ_CHARS = int(os.getenv("MAX_READ_CHARS", 12_000))

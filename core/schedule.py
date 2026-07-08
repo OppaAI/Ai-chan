@@ -47,7 +47,7 @@ from typing import Any, Callable
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.log import get_logger
-from core.user_context import current_user_id, user_state_path, user_workspace_root
+from core.userspace import current_user_id, user_state_path, user_workspace_root
 
 log = get_logger(__name__)
 
@@ -61,6 +61,16 @@ def schedule_path() -> Path:
     """Resolve the active user schedule path lazily."""
     override = os.getenv("SCHEDULE_PATH")
     return (Path(override).expanduser() if override else user_state_path("schedule.json")).resolve()
+
+
+def daily_experience_path(user_id: str | None = None) -> Path:
+    """Resolve the active user daily experience journal path."""
+    return user_state_path("memory/daily_experience.jsonl", user_id).resolve()
+
+
+def dream_state_path(user_id: str | None = None) -> Path:
+    """Resolve the active user dream state path."""
+    return user_state_path("memory/dream_state.json", user_id).resolve()
 
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
 

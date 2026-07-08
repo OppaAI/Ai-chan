@@ -1,4 +1,22 @@
-"""Optional at-rest encryption helpers for user-private Aiko state."""
+"""
+core/secure.py
+
+Optional at-rest encryption helpers for user-private Aiko state.
+
+SQLite encryption using SQLCipher is optional and off by default. When
+enabled via SQLITE_ENCRYPTION=1, user databases are encrypted at rest with
+per-user keys derived from a server-secret. The key derivation uses HMAC-SHA256
+with a per-user context salt, so the same user always gets the same key without
+storing anything plaintext on disk.
+
+The legacy SQLCipher passphrase mode is supported for backward compatibility.
+Databases created with the old KDF will be transparently migrated to the raw
+hex key format on first access.
+
+Called by core/memorize.py (via connect_sqlite) and any other module that
+needs an encrypted SQLite connection for a specific user. The encryption
+setting is global (SQLITE_ENCRYPTION), but each user gets a unique key.
+"""
 
 from __future__ import annotations
 

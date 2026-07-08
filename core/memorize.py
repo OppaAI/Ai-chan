@@ -129,7 +129,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.secure import connect_sqlite
-from core.user_context import current_user_id, user_state_path
+from core.userspace import current_user_id, user_state_path
 
 import sqlite_vec
 from openai import OpenAI
@@ -1104,7 +1104,7 @@ class AikoMemorize:
     """
 
     def __init__(self, silent: bool = False) -> None:
-        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory.db", current_user_id()))
+        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory/memory.db", current_user_id()))
 
         if not silent:
             log.info("Opening sqlite-vec memory store...")
