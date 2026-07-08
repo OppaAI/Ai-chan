@@ -20,8 +20,9 @@ from core.log import get_logger
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from core.knowledge import knowledge_context_for, wiki_context_for
 from core.tools import (
-    fetch_and_extract,
+    web_fetch,
     deep_search,
+    deep_research,
     web_search,
     make_plan,
     create_checklist,
@@ -97,7 +98,8 @@ _DISCLOSURE_RE = re.compile(
 )
 _EXTERNAL_ACTION_RE = re.compile(r"\b(send|sent|email|post|posted|buy|bought|book|booked|order|ordered|delete|deleted)\b", re.IGNORECASE)
 _LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|draft|note|workspace)\b", re.IGNORECASE)
-_RESEARCH_CONTEXT_TOOLS = {"deep_search", "fetch_page"}
+_RESEARCH_CONTEXT_TOOLS = {"deep_search", "deep_research", "web_fetch"}
+_RESEARCH_TOOLS = {"deep_search", "deep_research"}
 
 
 def _tool(schema: dict):
@@ -204,12 +206,18 @@ _TOOL_SCHEMAS = [
                 "required": ["query"]}}},
         {"type": "function", "function": {
             "name": "deep_search",
-            "description": "Agentic research fetch: search once, fetch the top pages, and return a compact evidence bundle. Use at most once per workflow, then plan/summarize/save from that evidence instead of calling more web tools.",
+            "description": "One search + fetch the top pages in a single call. Use for a single, well-scoped question that one search angle can answer. At most once per workflow — use deep_research instead if the topic needs more than one search angle.",
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The focused research query to search and fetch."}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
-            "name": "fetch_page", "description": "Fetch one explicitly supplied URL when the user provides it or a prior snippet result must be verified. Prefer deep_search for research workflows; do not use fetch_page to bulk-fetch search results.",
+            "name": "deep_research",
+            "description": "Multi-round research: searches, reads, and — when the evidence is incomplete — automatically refines the query and searches again across several rounds, then returns a synthesized answer. Use for broad, multi-angle, or ambiguous questions that a single search+fetch pass won't cover. At most once per workflow, and not combined with deep_search in the same workflow.",
+            "parameters": {"type": "object", "properties": {
+                "query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool will refine it internally."}},
+                "required": ["query"]}}},
+        {"type": "function", "function": {
+            "name": "web_fetch", "description": "Fetch one explicitly supplied URL when the user provides it or a prior snippet result must be verified. Prefer deep_search/deep_research for research workflows; do not use web_fetch to bulk-fetch search results.",
             "parameters": {"type": "object", "properties": {
                 "url": {"type": "string", "description": "The URL to fetch."}},
                 "required": ["url"]}}},
@@ -357,7 +365,7 @@ def _register_tools() -> None:
     handlers = {
         "web_search": lambda args: web_search(args.get("query", "")),
         "deep_search": lambda args: deep_search(args.get("query", "")),
-        "fetch_page": lambda args: fetch_and_extract(args.get("url", "")),
+        "web_fetch": lambda args: web_fetch(args.get("url", "")),
         "make_plan": lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
         "create_checklist": lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
         "save_note": lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
@@ -388,6 +396,10 @@ def _register_tools() -> None:
             ),
             ensure_ascii=False,
         ),
+        # deep_research is intentionally excluded here: it needs the owning
+        # AikoThink instance's LLM client/model to run its adaptive loop, and
+        # this registry is built with no owner in scope. It is special-cased
+        # in dispatch_tool() below instead.
     }
     for schema in _TOOL_SCHEMAS:
         name = schema["function"]["name"]
@@ -438,7 +450,13 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content="Missing required argument: query must be a non-empty string. Reissue with a focused research query.",
             error_type="missing_args", retryable=True,
         )
-    if name == "fetch_page" and not (args.get("url") or "").strip():
+    if name == "deep_research" and not (args.get("query") or "").strip():
+        return ToolResult(
+            ok=False, tool=name, args=args,
+            content="Missing required argument: query must be a non-empty string. Reissue with a research question.",
+            error_type="missing_args", retryable=True,
+        )
+    if name == "web_fetch" and not (args.get("url") or "").strip():
         return ToolResult(
             ok=False, tool=name, args=args,
             content="Missing required argument: url must be a non-empty string.",
@@ -468,8 +486,20 @@ def _classify_result(name: str, args: dict, content: str, attempts: int = 1) -> 
     return ToolResult(ok=True, tool=name, args=args, content=text, attempts=attempts)
 
 
-def dispatch_tool(name: str, args: dict) -> str:
-    """Run one named tool with already-decoded JSON args."""
+def dispatch_tool(name: str, args: dict, owner=None) -> str:
+    """Run one named tool with already-decoded JSON args.
+
+    ``owner`` is the AikoThink instance driving this agentic turn. Only
+    deep_research currently needs it (to reuse the already-loaded local LLM
+    client/model for its adaptive continue/refine and synthesis steps); every
+    other tool is a pure function of its args and ignores it.
+    """
+    if name == "deep_research":
+        return deep_research(
+            args.get("query", ""),
+            client=getattr(owner, "_client", None),
+            model=getattr(owner, "_llm_model", None),
+        )
     entry = _TOOLS.get(name)
     if not entry:
         return f"[unknown tool: {name}]"
@@ -479,10 +509,10 @@ def dispatch_tool(name: str, args: dict) -> str:
     return entry[1](args)
 
 
-def dispatch_tool_checked(name: str, args: dict) -> ToolResult:
+def dispatch_tool_checked(name: str, args: dict, owner=None) -> ToolResult:
     """Run a tool and return a structured result, catching unexpected exceptions."""
     try:
-        content = dispatch_tool(name, args)
+        content = dispatch_tool(name, args, owner=owner)
     except Exception as e:
         log.exception("Tool %s raised unexpectedly", name)
         return ToolResult(
@@ -495,14 +525,19 @@ def dispatch_tool_checked(name: str, args: dict) -> ToolResult:
 
 
 def _max_attempts_for(name: str) -> int:
-    if name in {"web_search", "deep_search", "fetch_page"}:
+    if name == "deep_research":
+        # A failed multi-round adaptive research call is expensive (several
+        # search+fetch rounds plus 2 extra LLM calls per round). Retry once,
+        # not with the same budget as a cheap single web_search/web_fetch.
+        return 1
+    if name in {"web_search", "deep_search", "web_fetch"}:
         return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
     if name in {"save_note", "schedule_job", "schedule_reminder"}:
         return max(1, int(os.getenv("AGENT_LOCAL_TOOL_ATTEMPTS", 1)))
     return 1
 
 
-def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolResult:
+def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None) -> ToolResult:
     """Validate, run, retry, and ledger one tool call."""
     validation = _validate_args(name, args)
     if validation is not None:
@@ -511,7 +546,7 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolRes
 
     last = ToolResult(ok=False, tool=name, args=args, content="[tool did not run]", error_type="not_run")
     for attempt in range(1, _max_attempts_for(name) + 1):
-        last = dispatch_tool_checked(name, dict(args))
+        last = dispatch_tool_checked(name, dict(args), owner=owner)
         last.attempts = attempt
         if last.ok or not last.retryable:
             break
@@ -525,6 +560,16 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState) -> ToolRes
 def _has_successful_tool_call(state: TaskState, tool_name: str) -> bool:
     """Return True only when a prior call to a tool completed successfully."""
     return any(step["tool"] == tool_name and step["ok"] for step in state.steps)
+
+
+def _has_used_research_tool(state: TaskState) -> bool:
+    """True once either deep_search or deep_research has succeeded.
+
+    The two tools overlap in purpose (both do search+fetch), so they share
+    one once-per-workflow budget instead of two independent caps — otherwise
+    a model could call both in the same workflow and double up on fetching.
+    """
+    return any(_has_successful_tool_call(state, name) for name in _RESEARCH_TOOLS)
 
 
 def _compact_processed_research_context(messages: list[dict]) -> None:
@@ -776,7 +821,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         f"{knowledge_context}\n\n"
         "[TASK MODE] You MUST use tools to complete tasks. Treat agentic work as "
         "a sequence of steps, not one category: plan/decide when useful, research "
-        "with web_search for snippet-only discovery and deep_search for fetched-page evidence when current or external facts are needed, "
+        "with web_search for snippet-only discovery, deep_search for a single "
+        "search+fetch pass, or deep_research for a multi-round adaptive research "
+        "pass when the topic needs more than one search angle, "
         "inspect repository files for coding or architecture work, schedule with "
         "schedule_job or schedule_reminder when requested, and write or save the "
         "result when the user asks for an artifact. Research tasks should normally "
@@ -790,7 +837,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "Tool observations are structured JSON. If ok=false, do not pretend the "
         "action succeeded: retry with corrected arguments, choose another tool or "
         "query, or clearly disclose the limitation in the final answer. "
-        "Use deep_search at most once per agentic workflow. After deep_search returns, read its evidence and continue with the next productive step (plan, summarize, save, or answer) instead of searching again. Use web_search only for lightweight snippet discovery; snippets alone are not enough for verified detailed notes. "
+        "Use deep_search or deep_research at most once per agentic workflow, and only one "
+        "of the two, not both. After it returns, read its evidence and continue with the "
+        "next productive step (plan, summarize, save, or answer) instead of searching again. "
+        "Use web_search only for lightweight snippet discovery; snippets alone are not "
+        "enough for verified detailed notes. "
         "When writing notes after research: cross-check any hardware specs, "
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
@@ -906,16 +957,15 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 continue
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
-            if name == "deep_search" and _has_successful_tool_call(state, "deep_search"):
+            if name in _RESEARCH_TOOLS and _has_used_research_tool(state):
                 result = ToolResult(
                     ok=False, tool=name, args=args,
                     content=(
-                        "deep_search was already used in this agentic workflow. "
-                        "Do not search again; use the fetched evidence already "
-                        "processed in the prior step to plan, summarize, save, "
-                        "or answer."
+                        "A deep_search/deep_research call was already used in this "
+                        "agentic workflow. Do not search again; use the evidence "
+                        "already gathered to plan, summarize, save, or answer."
                     ),
-                    error_type="deep_search_limit_reached",
+                    error_type="research_limit_reached",
                     retryable=False,
                 )
                 state.record(result)
@@ -972,7 +1022,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 })
                 break
 
-            result = execute_tool_with_policy(name, args, state)
+            result = execute_tool_with_policy(name, args, state, owner=owner)
             messages.append({
                 "role": "tool", "tool_call_id": call.id,
                 "name": name, "content": result.observation(),
