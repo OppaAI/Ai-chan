@@ -144,15 +144,14 @@ def _play_beep() -> None:
 # load route examples
 _EXAMPLES_PATH = Path(__file__).resolve().parent.parent / "persona" / "router_prompts.json"
 
-def _load_route_examples() -> tuple[dict, dict, dict]:
+def _load_route_examples() -> tuple[dict, dict]:
     with open(_EXAMPLES_PATH, encoding="utf-8") as f:
         data = json.load(f)
-    binary = {k: tuple(v) for k, v in data["binary"].items()}
-    tools  = {k: tuple(v) for k, v in data["tools"].items()}
-    search = {k: tuple(v) for k, v in data["search"].items()}
-    return binary, tools, search
+    ternary = {k: tuple(v) for k, v in data["ternary"].items()}  # 3 labels
+    tools   = {k: tuple(v) for k, v in data["tools"].items()}
+    return ternary, tools
 
-_ROUTE_BINARY_EXAMPLES, _ROUTE_TOOL_EXAMPLES, _ROUTE_SEARCH_EXAMPLES = _load_route_examples()
+_ROUTE_TERNARY_EXAMPLES, _ROUTE_TOOL_EXAMPLES = _load_route_examples()
 
 _AGENTIC_ROUTE_RE = re.compile(
     r"\b("
@@ -222,46 +221,50 @@ class AikoThink:
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
-        """Main entry point. Uses semantic intent routing."""
+        """Main entry point. Ternary routing."""
         with self._turn_lock:
             self._last_chat_time = time.time()
             self._active_turn.set()
             try:
                 intent = self._route_intent(user_input)
-                if intent != "chat":
-                    log.info("[route] Agent intent=%s for: %r", intent, user_input)
+                log.info("[route] intent=%s", intent)
+                
+                if intent == "agentic":
                     return self.agentic_chat(user_input, token_callback=token_callback)
-                return self.chat(user_input, token_callback=token_callback)
+                elif intent == "webchat":
+                    return self.webchat(user_input, token_callback=token_callback)
+                else:  # localchat
+                    return self.chat(user_input, token_callback=token_callback, _skip_search=True)
             finally:
                 self._last_chat_time = time.time()
                 self._active_turn.clear()
 
     def _route_intent(self, user_input: str) -> str:
-        self._pending_search_query = None  # ← reset first, always
-
-        if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "chat", "disabled"}:
-            return "chat"
-
-        if _ROUTE_MODE in {"llm", "llm_only"}:
-            label = self._classify_agent_intent(user_input, skip_regex=_ROUTE_MODE == "llm_only")
-            if label != "chat":
-                return label
-            self._pending_search_query = user_input if self._needs_websearch(user_input) else None
-            return "chat"
-
-        # Stage 1 — semantic
-        if self._is_agentic(user_input):
-            # Stage 2a happens inside agentic.py as a sequence of tool calls.
-            # The router only decides whether to enter task mode.
+        """Ternary routing: single embedding, three-way decision."""
+        self._pending_search_query = None  # reset
+        
+        if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "disabled"}:
+            return "localchat"
+        
+        # Single embedding pass with three labels
+        instruct = "What kind of task or question is this?"
+        scores = self._semantic_all_scores(user_input, _ROUTE_TERNARY_EXAMPLES, instruct)
+        
+        agentic_score = scores.get("agentic", 0.0)
+        webchat_score = scores.get("webchat", 0.0)
+        
+        log.debug(
+            "[route] ternary scores: agentic=%.3f webchat=%.3f for: %r",
+            agentic_score, webchat_score, user_input
+        )
+        
+        # Python priority logic (no model, <1ms)
+        if agentic_score >= float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65")):
             return "agentic"
-
-        # Stage 2b
-        self._pending_search_query = user_input if self._needs_websearch(user_input) else None
-        if _ROUTE_MODE != "semantic_only" and self._semantic_binary_is_ambiguous(user_input):
-            llm_label = self._classify_agent_intent(user_input)
-            if llm_label != "chat":
-                return llm_label
-        return "chat"
+        elif webchat_score >= float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60")):
+            return "webchat"
+        else:
+            return "localchat"
 
     @staticmethod
     def _normalized_vector(vector: list[float]) -> np.ndarray:
@@ -280,59 +283,6 @@ class AikoThink:
             return matrix.reshape(0, 0)
         norms = np.linalg.norm(matrix, axis=1, keepdims=True)
         return matrix / np.clip(norms, 1e-12, None)
-
-    def _is_agentic(self, user_input: str) -> bool:
-        """Stage 1: binary chat vs agentic."""
-        try:
-            best_label, best_score, gap = self._semantic_best_label(
-                user_input, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY
-            )
-            log.debug("[route/binary] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
-            return best_label == "agentic" and best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap >= _SEMANTIC_ROUTE_MIN_GAP
-        except Exception as e:
-            log.warning("Binary intent routing failed: %s", e)
-            return False
-
-    def _semantic_binary_is_ambiguous(self, user_input: str) -> bool:
-        """Return True when chat and agentic are too close for semantic-only routing."""
-        try:
-            _best_label, best_score, gap = self._semantic_best_label(user_input, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
-            return best_score >= _SEMANTIC_ROUTE_THRESHOLD and gap < _SEMANTIC_ROUTE_MIN_GAP
-        except Exception as e:
-            log.warning("Binary ambiguity check failed: %s", e)
-            return False
-
-    def _classify_agentic_steps(self, user_input: str) -> list[tuple[str, float]]:
-        """Stage 2a trace aid: likely task steps, not a routing destination."""
-        try:
-            scores = self._semantic_all_scores(user_input, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
-            ranked = [
-                (label, score)
-                for label, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
-                if score >= _SEMANTIC_ROUTE_THRESHOLD
-            ]
-            log.debug("[route/steps] ranked=%s for: %r", ranked[:4], user_input)
-            return ranked
-        except Exception as e:
-            log.warning("Agentic step hinting failed: %s", e)
-            return []
-
-    def _classify_agentic_tool(self, user_input: str) -> str:
-        """Backward-compatible shim: confirmed agentic requests enter the task loop."""
-        self._classify_agentic_steps(user_input)
-        return "agentic"
-
-    def _needs_websearch(self, user_input: str) -> bool:
-        """Stage 2b: does this chat turn need a websearch, called only when chat is confirmed."""
-        try:
-            best_label, best_score, gap = self._semantic_best_label(
-                user_input, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH
-            )
-            log.debug("[route/search] best=%s score=%.3f gap=%.3f for: %r", best_label, best_score, gap, user_input)
-            return best_label == "data" and best_score >= _SEMANTIC_SEARCH_THRESHOLD and gap >= _SEMANTIC_SEARCH_MIN_GAP
-        except Exception as e:
-            log.warning("Search intent routing failed: %s", e)
-            return False
 
     def _semantic_all_scores(self, user_input: str, examples_by_label: dict, instruct: str) -> dict[str, float]:
         """Return top-k mean cosine score per label for stable close-vector routing."""
@@ -448,7 +398,87 @@ class AikoThink:
             finally:
                 self._last_chat_time = time.time()
                 self._active_turn.clear()
-
+              
+    def webchat(self, user_input: str, token_callback=None) -> str:
+        """Web-aware chat: web_search + optional webfetch fallback."""
+        if self._speak and self._speak.is_playing():
+            self._speak.stop()
+        
+        # Build base system (persona + memory)
+        system = self._persona
+        memories = self._memorize.search(user_input, limit=3)
+        memory_block = self._memorize.format_for_context(memories)
+        if memory_block:
+            system = f"{system}\n\n{memory_block}"
+        
+        # Try web_search first (fast)
+        search_query = self._resolve_search_query(user_input)
+        if token_callback:
+            token_callback(f"__SEARCHING__:{search_query}\n")
+        
+        context = web_search_context(search_query, max_results=int(os.getenv("WEBCHAT_SNIPPET_RESULTS", 3)))
+        
+        # Fallback: retry with better query or webfetch
+        if not context or context.startswith("[search failed") or "no results" in context.lower():
+            log.info("[webchat] Snippets failed, retrying with better query...")
+            if token_callback:
+                token_callback("__RETRYING__\n")
+            
+            try:
+                better_query = self._llm_resolve_search_query(user_input)
+                context = web_search_context(better_query, max_results=1)
+            except Exception as e:
+                log.warning("[webchat] Retry failed: %s", e)
+                context = None
+        
+        # Inject web context if available
+        if context and not context.startswith("["):
+            system = (
+                f"{system}\n\n"
+                f"<search_results query='{search_query}'>\n"
+                f"Answer ONLY using these search results:\n\n"
+                f"{context}\n"
+                f"</search_results>"
+            )
+        else:
+            if token_callback:
+                token_callback("[No web results available; using local knowledge]\n")
+        
+        # Build message history (same as chat())
+        llm_prompt = user_input
+        if self._reasoning:
+            llm_prompt = f"{user_input}\n\nThink through this carefully."
+        
+        with self._history_lock:
+            self._history.append({"role": "user", "content": user_input})
+            if len(self._history) > CONTEXT_WINDOW_TURNS * 10:
+                self._history = self._history[-(CONTEXT_WINDOW_TURNS * 10):]
+            trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
+        
+        trimmed = self._sanitize_history(trimmed)
+        if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != user_input:
+            trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
+        
+        # Log debug info
+        self.last_prompt_debug = {
+            "mode": "webchat",
+            "system_prompt": system,
+            "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
+            "web_prompt": _extract_search_results_block(system),
+            "previous_chat_messages": [dict(m) for m in trimmed],
+        }
+        
+        # Stream response
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
+        
+        # Store in history
+        with self._history_lock:
+            self._history.append({"role": "assistant", "content": raw_response})
+        
+        self._store_async(user_input, raw_response)
+        self._reasoning = False
+        return raw_response
+  
     def proactive_checkin(self, prompt_hint: str) -> str:
         """Generate one short proactive check-in without storing it as a user turn."""
         with self._turn_lock:
@@ -472,92 +502,64 @@ class AikoThink:
             finally:
                 self._active_turn.clear()
 
-    def chat(
-        self,
-        user_input: str,
-        token_callback=None,
-        _skip_search: bool = False,
-        _history_label: str | None = None,
-    ) -> str:
-        """Standard single-shot conversational turn."""
+    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None) -> str:
+        """Standard chat: local knowledge only (persona + memory)."""
         if self._speak and self._speak.is_playing():
             self._speak.stop()
-
-        memories     = self._memorize.search(user_input, limit=int(os.getenv("MEMORY_RECALL_LIMIT", 3)))
+        
+        # Memory + persona (no web)
+        memories = self._memorize.search(user_input, limit=3)
         memory_block = self._memorize.format_for_context(memories)
-
+        
         system = self._persona
         if memory_block:
             system = f"{system}\n\n{memory_block}"
         else:
             system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
-
+        
+        # Local knowledge context (if user asks about Aiko)
         if _should_use_local_knowledge(user_input):
             try:
                 local_context = knowledge_context_for(
                     user_input, limit=3, max_chars=4500,
                     embedder=self._memorize._mem._embedder,
                 )
-                system = (
-                    f"{system}\n\n{local_context}\n"
-                    "Use <knowledge_context> for local Aiko/self-knowledge questions. "
-                    "If it does not match the question, ignore it and answer normally."
-                )
+                system = f"{system}\n\n{local_context}"
             except Exception as e:
                 log.error("Local knowledge lookup failed: %s", e)
-
-        if not _skip_search and self._is_data_intent(user_input):
-            try:
-                search_query = self._resolve_search_query(user_input)
-                if token_callback: token_callback(f"__SEARCHING__:{search_query}")
-                
-                context = web_search_context(search_query)
-                if context and not context.startswith("[search failed"):
-                    system = (
-                        f"{system}\n\n"
-                        f"<search_results query='{search_query}'>\n"
-                        f"Answer using ONLY the information in these search results.\n\n"
-                        f"{context}\n"
-                        f"</search_results>"
-                    )
-            except Exception as e:
-                log.error(f"Web search step failed: {e}")
-
+        
+        # Build messages
         llm_prompt = user_input
         if self._reasoning:
-            llm_prompt = f"{user_input}\n\nThink through this carefully. Show reasoning in <think> tags, then answer."
-
-        history_entry = _history_label if _history_label is not None else user_input
-        _HISTORY_HARD_CAP = CONTEXT_WINDOW_TURNS * 10
-
+            llm_prompt = f"{user_input}\n\nThink through this carefully."
+        
         with self._history_lock:
-            self._history.append({"role": "user", "content": history_entry})
-            if len(self._history) > _HISTORY_HARD_CAP:
-                self._history = self._history[-_HISTORY_HARD_CAP:]
+            self._history.append({"role": "user", "content": user_input})
+            if len(self._history) > CONTEXT_WINDOW_TURNS * 10:
+                self._history = self._history[-(CONTEXT_WINDOW_TURNS * 10):]
             trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
-
+        
         trimmed = self._sanitize_history(trimmed)
-        if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != history_entry:
+        if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != user_input:
             trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
-
-        previous_chat_messages = [dict(m) for m in trimmed]
+        
+        # Log debug
         self.last_prompt_debug = {
-            "mode": "chat",
+            "mode": "localchat",
             "system_prompt": system,
-            "memory_prompt": memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>",
-            "web_prompt": _extract_search_results_block(system),
-            "agentic_prompts": [],
-            "previous_chat_messages": previous_chat_messages,
+            "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
+            "web_prompt": "",
+            "previous_chat_messages": [dict(m) for m in trimmed],
         }
-
+        
+        # Stream response
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
-
+        
+        # Store
         with self._history_lock:
             self._history.append({"role": "assistant", "content": raw_response})
-            if len(self._history) > _HISTORY_HARD_CAP:
-                self._history = self._history[-_HISTORY_HARD_CAP:]
-
-        self._store_async(history_entry, raw_response)
+        
+        self._store_async(user_input, raw_response)
         self._reasoning = False
         return raw_response
 
