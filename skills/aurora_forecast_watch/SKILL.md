@@ -3,7 +3,7 @@ id: aurora_forecast_watch
 name: Aurora Forecast Watch
 summary: Monitor source-backed aurora/Kp forecasts on a schedule and alert Oppa when the configured threshold is met.
 triggers: aurora forecast, northern lights, Kp index, KP > 4, KP > 5, geomagnetic storm, space weather, NOAA SWPC, aurora alert, aurora watch
-tools: web_search, fetch_page, schedule_job, save_note
+tools: web_search, web_fetch, schedule_job, save_note
 ---
 # Aurora Forecast Watch
 
