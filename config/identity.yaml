@@ -4,7 +4,26 @@
 # Edit these when changing the assistant display name or the primary user profile.
 
 # -- Identity --
-AI_NAME: "Aiko"  # Assistant display name used in prompts and UI; usually Aiko.
+# Assistant display name used in prompts and UI; usually Aiko.
+#
+AI_NAME: "Aiko"
 
 # -- User State Root --
-USER_STATE_ROOT: "~/.aiko"  # Root directory for user state. User-specific data stored under ~/.aiko/<user_id>/
+# Root directory for user state. Per-client data lives under
+# ~/.aiko/<user_id>/ (github username, patreon tier, chat history, etc).
+# AGE_KEY and ENV_AGE_PATH below are resolved relative to this root too,
+# since they're plain filenames, not absolute paths.
+#
+USER_STATE_ROOT: "~/.aiko"
+
+# -- Secrets Key --
+# These are SERVICE-level secrets (one shared LLM/OAuth config for all
+# clients), not per-user data — they just happen to live under the same
+# root for convenience. Kept as bare filenames so they resolve to
+# ~/.aiko/age-key.txt and ~/.aiko/.env.age. Set an absolute path here (or
+# via the AGE_KEY / ENV_AGE_PATH env vars) to opt out of that and pin an
+# exact location instead — e.g. if you'd rather keep them out of the same
+# directory as per-user subfolders.
+#
+AGE_KEY: "age-key.txt"
+ENV_AGE_PATH: ".env.age"
