@@ -61,6 +61,7 @@ def _parse_allowlist(name: str) -> set[str]:
     return {item.strip() for item in raw.split(",") if item.strip()}
 
 ALLOWED_GITHUB_USERS = _parse_allowlist("ALLOWED_GITHUB_USERS")
+ALLOWED_PATREON_USERS = _parse_allowlist("ALLOWED_PATREON_USERS")
 
 # Flip to true later when you're ready to accept PRs from anyone with commits
 # on the repo. Until then, GitHub login only works for the owner allowlist.
@@ -342,7 +343,9 @@ async def patreon_callback(code: str, state: str | None = None):
         if m.get("type") == "member"
     )
 
-    if not user_id or not active:
+    is_owner = str(user_id) in ALLOWED_PATREON_USERS
+
+    if not user_id or not (is_owner or active):
         raise HTTPException(status_code=403, detail="Active Patreon membership required")
 
     session_id = _create_session(user_id, username, None, "patreon")
