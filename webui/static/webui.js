@@ -169,7 +169,7 @@ function addMessage(sender, text) {
   const div = document.createElement('div');
   if (sender === 'you') {
     div.className = 'msg msg-you';
-    div.innerHTML = `<span class="msg-prefix">you: </span>${esc(text)}`;
+    div.innerHTML = `<span class="msg-prefix">${esc(window.currentUsername || 'You')}: </span>${esc(text)}`;
   } else if (sender === 'aiko') {
     div.className = 'msg msg-aiko';
     div.innerHTML = `<span class="msg-prefix">Aiko: </span>${esc(text)}`;
@@ -547,6 +547,8 @@ async function checkAuth() {
     if (res.ok) {
       let data = {};
       try { data = await res.json(); } catch (_) { /* no body / non-JSON */ }
+      // Displayed chat-label username (falls back to 'you' if session has none).
+      window.currentUsername = data.username || 'You';
       hideAuthOverlay();
       // If the backend reports the user hasn't accepted the current terms
       // version, gate on the terms modal before opening the WebSocket.
