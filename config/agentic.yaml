@@ -32,3 +32,4 @@ ROUTE_MODE: "semantic"  # Routing strategy; options: semantic, semantic_only, ll
 ROUTE_AGENTIC_THRESHOLD: "0.65"   # Route to agentic if score > this
 ROUTE_WEBCHAT_THRESHOLD: "0.60"   # Route to webchat if score > this (else localchat)
 ROUTE_LABEL_TOP_K: "3"  # Average each label strongest N examples; higher is smoother but less sharp.
+ROUTE_MIN_GAP: "0.025"  # Required score gap between best and second route labels.
