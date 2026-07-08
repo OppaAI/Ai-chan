@@ -113,6 +113,15 @@ def _tool(schema: dict):
 _TOOLS: dict[str, tuple[dict, object]] = {}
 
 
+def _owner_embedder(owner):
+    """Reuse the already-warm HarrierEmbedder — same instance think.py uses
+    for memory search and intent routing — so condense_evidence() in
+    core/tools.py gets relevance scoring with zero extra model load. Returns
+    None if unavailable; condense_evidence() then falls back to keyword
+    overlap scoring instead of failing."""
+    return getattr(getattr(getattr(owner, "_memorize", None), "_mem", None), "_embedder", None)
+
+
 @dataclass
 class ToolResult:
     """Structured outcome for one tool call attempt."""
@@ -206,7 +215,7 @@ _TOOL_SCHEMAS = [
                 "required": ["query"]}}},
         {"type": "function", "function": {
             "name": "deep_search",
-            "description": "One search + fetch the top pages in a single call. Use for a single, well-scoped question that one search angle can answer. At most once per workflow — use deep_research instead if the topic needs more than one search angle.",
+            "description": "Search + fetch top pages in one call, with results condensed to only the query-relevant excerpts (embedding-scored; irrelevant fetched content is filtered out, not just truncated). Can span multiple concurrent search-result pages depending on server config for wider coverage of one query. Use for a single, well-scoped question. At most once per workflow — use deep_research instead if the topic needs more than one search angle.",
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The focused research query to search and fetch."}},
                 "required": ["query"]}}},
@@ -364,7 +373,6 @@ _TOOL_SCHEMAS = [
 def _register_tools() -> None:
     handlers = {
         "web_search": lambda args: web_search(args.get("query", "")),
-        "deep_search": lambda args: deep_search(args.get("query", "")),
         "web_fetch": lambda args: web_fetch(args.get("url", "")),
         "make_plan": lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
         "create_checklist": lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
@@ -396,9 +404,11 @@ def _register_tools() -> None:
             ),
             ensure_ascii=False,
         ),
-        # deep_research is intentionally excluded here: it needs the owning
-        # AikoThink instance's LLM client/model to run its adaptive loop, and
-        # this registry is built with no owner in scope. It is special-cased
+        # deep_search and deep_research are intentionally excluded here: both
+        # now use the owning AikoThink instance's embedder for relevance-
+        # condensed evidence (deep_research also needs the LLM client/model
+        # for its adaptive continue/refine and synthesis steps), and this
+        # registry is built with no owner in scope. Both are special-cased
         # in dispatch_tool() below instead.
     }
     for schema in _TOOL_SCHEMAS:
@@ -489,16 +499,24 @@ def _classify_result(name: str, args: dict, content: str, attempts: int = 1) -> 
 def dispatch_tool(name: str, args: dict, owner=None) -> str:
     """Run one named tool with already-decoded JSON args.
 
-    ``owner`` is the AikoThink instance driving this agentic turn. Only
-    deep_research currently needs it (to reuse the already-loaded local LLM
-    client/model for its adaptive continue/refine and synthesis steps); every
-    other tool is a pure function of its args and ignores it.
+    ``owner`` is the AikoThink instance driving this agentic turn.
+    deep_search and deep_research both need it for the shared embedder
+    (relevance-condensed evidence, in-memory only, no disk writes);
+    deep_research additionally needs the already-loaded local LLM
+    client/model for its adaptive continue/refine and synthesis steps.
+    Every other tool is a pure function of its args and ignores it.
     """
     if name == "deep_research":
         return deep_research(
             args.get("query", ""),
             client=getattr(owner, "_client", None),
             model=getattr(owner, "_llm_model", None),
+            embedder=_owner_embedder(owner),
+        )
+    if name == "deep_search":
+        return deep_search(
+            args.get("query", ""),
+            embedder=_owner_embedder(owner),
         )
     entry = _TOOLS.get(name)
     if not entry:
@@ -572,13 +590,18 @@ def _has_used_research_tool(state: TaskState) -> bool:
     return any(_has_successful_tool_call(state, name) for name in _RESEARCH_TOOLS)
 
 
-def _compact_processed_research_context(messages: list[dict]) -> None:
-    """Replace already-consumed fetched-page observations with tiny placeholders.
+def _compact_processed_research_context(messages: list[dict], preview_chars: int = 1500) -> None:
+    """Shrink already-consumed research tool observations instead of wiping
+    them to a content-free placeholder.
 
-    The model has processed tool observations once a later assistant message has
-    arrived. Keeping full fetched pages in every subsequent request bloats small
-    context windows, so task mode preserves only the fact that research evidence
-    was consumed. The durable ledger keeps a short evidence preview separately.
+    deep_search/deep_research now return embedding-condensed,
+    relevance-filtered bundles rather than raw fetched pages — what lands
+    here is already dense. So instead of discarding it outright once a later
+    assistant message has arrived (which previously lost the content
+    entirely, leaving later steps unable to reference specifics), keep a
+    bounded preview so a subsequent plan/checklist/note write in the same
+    workflow can still pull details without re-reading the full observation
+    on every later turn.
     """
     for message in messages:
         if message.get("role") != "tool" or message.get("name") not in _RESEARCH_CONTEXT_TOOLS:
@@ -588,21 +611,21 @@ def _compact_processed_research_context(messages: list[dict]) -> None:
             continue
         if len(content) < 800:
             continue
+        try:
+            parsed = json.loads(content)
+            original_content = str(parsed.get("content", content))
+        except (json.JSONDecodeError, AttributeError):
+            original_content = content
         message["content"] = json.dumps(
             {
                 "ok": True,
                 "tool": message.get("name"),
                 "research_context_compacted": True,
-                "content": (
-                    "Fetched research evidence was provided to and consumed by "
-                    "the previous reasoning step; use the derived plan/summary/"
-                    "artifact from subsequent context instead of re-reading raw pages."
-                ),
+                "evidence_preview": original_content[:preview_chars],
             },
             ensure_ascii=False,
             indent=2,
         )
-
 
 
 def _sanitize_user_facing_tool_detail(detail: str, max_chars: int = 300) -> str:
@@ -800,7 +823,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     # object) — no extra model load, just one more embed_query() call per
     # context type. Falls back to keyword scoring automatically if this
     # embedder is missing or an embed call fails (see knowledge.py/skills.py).
-    _embedder = getattr(getattr(owner._memorize, "_mem", None), "_embedder", None)
+    _embedder = _owner_embedder(owner)
     wiki_context = wiki_context_for(user_input, limit=1, max_chars=1500, embedder=_embedder)
     skill_context = skill_context_for(user_input, limit=2, max_chars=3000, embedder=_embedder)
     knowledge_context = knowledge_context_for(user_input, limit=2, max_chars=2500, embedder=_embedder)
@@ -846,6 +869,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
         "confirmed from fetched content, omit it or flag it as unverified. "
+        "If a research tool result explicitly says no relevant content was "
+        "found, disclose that gap plainly in the final answer instead of "
+        "guessing or filling it in from memory. "
         "Use <skill_context> and <knowledge_context> when they match the task. For repeatable workflows, "
         "prefer the predefined skill's workflow and local knowledge and operating cards over inventing a new process. "
         "If no matching skill exists, continue with generic tools. "
