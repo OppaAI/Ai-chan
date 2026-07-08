@@ -3,7 +3,7 @@ id: aiko_architect
 name: Aiko Architecture Research and Improvement
 summary: Help research, inspect, plan, and safely improve Aiko's own codebase and architecture with repo-reading tools, web research, notes, and explicit review gates.
 triggers: improve Aiko, architecture, refactor, optimize, debug Aiko, implement feature, codebase, tools, skills, memory, agentic
-tools: repo_file_tree, repo_search_text, repo_read_file, web_search, web_fetch, make_plan, create_checklist, save_note, summarize_task_state
+tools: repo_file_tree, repo_search_text, repo_read_file, deep_search, deep_research, make_plan, create_checklist, save_note, summarize_task_state
 ---
 # Aiko Architecture Research and Improvement
 
@@ -22,7 +22,7 @@ Use this skill when Oppa asks Aiko to research, inspect, design, optimize, refac
    - use `repo_file_tree` to locate likely files;
    - use `repo_search_text` for symbols/concepts;
    - use `repo_read_file` for relevant files.
-3. If current external facts are needed, use `web_search`/`web_fetch`; prefer official docs or primary sources.
+3. If current external facts are needed, use `deep_search` for a single well-scoped question (e.g. "does onnxruntime 1.24 support X on Jetson Orin"). If the research spans multiple unclear angles (e.g. "what's the best architecture pattern for X, comparing several approaches"), use `deep_research` instead. Prefer official docs or primary sources either way.
 4. Produce a concise implementation plan before any risky action.
 5. Use notes/checklists/task-state tools to preserve research and decisions under the workspace.
 6. Clearly distinguish:
