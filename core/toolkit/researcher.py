@@ -16,7 +16,7 @@ import importlib
 import importlib.util
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
-MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
+MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", 5))
 
 # -- deep_search (search + fetch pass, now tunable for extra breadth) --
 DEEP_SEARCH_MAX_RESULTS = int(os.getenv("DEEP_SEARCH_MAX_RESULTS", 3))
