@@ -29,7 +29,8 @@ MAX_READ_CHARS: "12000"  # Max characters returned when agent reads a workspace 
 # -- Routing --
 ROUTE_ENABLED: "1"  # Automatic chat-vs-agent routing toggle; options: 1/0, true/false, yes/no, on/off.
 ROUTE_MODE: "semantic"  # Routing strategy; options: semantic, semantic_only, llm, llm_only, chat/off/disabled.
-ROUTE_SEMANTIC_THRESHOLD: "0.70"  # Semantic score needed to classify a task as agentic; higher means fewer task triggers.
+ROUTE_AGENTIC_THRESHOLD: "0.65"   # Route to agentic if score > this
+ROUTE_WEBCHAT_THRESHOLD: "0.60"   # Route to webchat if score > this (else localchat)
 ROUTE_MIN_GAP: "0.025"  # Required score gap between best and second route labels.
 ROUTE_TOOL_MIN_GAP: "0.015"  # Required score gap when choosing likely tool workflow after task detection.
 ROUTE_SEARCH_MIN_GAP: "0.010"  # Required score gap for web-search intent after chat detection.
