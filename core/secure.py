@@ -76,22 +76,16 @@ def _validate_sqlcipher_connection(conn: Any) -> None:
 
 
 def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
-    """Connect to SQLite, using SQLCipher when SQLITE_ENCRYPTION=1.
-
-    The default path uses the stdlib sqlite3 module exactly as before. When
-    encryption is enabled, pysqlcipher3 must be installed in the runtime image.
-    """
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     if not sqlite_encryption_enabled():
-        return sqlite3.connect(path, check_same_thread=False)
+        conn = sqlite3.connect(path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
 
     try:
         from pysqlcipher3 import dbapi2 as sqlcipher  # type: ignore
     except ImportError as exc:
-        raise RuntimeError(
-            "SQLITE_ENCRYPTION=1 requires pysqlcipher3/SQLCipher in the runtime image. "
-            "Install a SQLCipher-capable Python driver or disable SQLITE_ENCRYPTION."
-        ) from exc
+        raise RuntimeError(...) from exc
 
     raw_key = derive_user_sqlite_key(user_id)
     conn = sqlcipher.connect(str(path), check_same_thread=False)
@@ -99,13 +93,10 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
         conn.execute(f"PRAGMA key = \"x'{raw_key}'\"")
         conn.execute("PRAGMA cipher_page_size = 4096")
         _validate_sqlcipher_connection(conn)
+        conn.row_factory = sqlcipher.Row
         return conn
     except Exception as raw_exc:
         conn.close()
-
-        # Databases created by the first SQLCipher integration used the derived
-        # value as a SQLCipher passphrase, letting SQLCipher run its KDF. Keep
-        # those databases readable and migrate them in place to the raw key.
         legacy_key = _derive_legacy_user_sqlite_key(user_id)
         legacy_conn = sqlcipher.connect(str(path), check_same_thread=False)
         try:
@@ -114,6 +105,7 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
             _validate_sqlcipher_connection(legacy_conn)
             legacy_conn.execute(f"PRAGMA rekey = \"x'{raw_key}'\"")
             _validate_sqlcipher_connection(legacy_conn)
+            legacy_conn.row_factory = sqlcipher.Row
             return legacy_conn
         except Exception:
             legacy_conn.close()

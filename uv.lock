@@ -26,6 +26,7 @@ dependencies = [
     { name = "packaging" },
     { name = "protobuf" },
     { name = "psutil" },
+    { name = "pysqlcipher3" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -62,6 +63,7 @@ requires-dist = [
     { name = "packaging", specifier = ">=26.2" },
     { name = "protobuf", specifier = ">=6.33.6" },
     { name = "psutil", specifier = ">=7.2.2" },
+    { name = "pysqlcipher3", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.34.2" },
@@ -1012,6 +1014,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/b6/6d/f94028646d7bbe6d9
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f7/5e/35c856e186b74678c24927847ad9895a51f1bc02a0c6126477a6c6040064/pyreadline3-3.5.6-py3-none-any.whl", hash = "sha256:8449b734232e42a5dcd74048e39b60db2839a4c38cf3ae2bf7707d58b5389c0d", size = 85243, upload-time = "2026-05-14T17:55:03.262Z" },
 ]
+
+[[package]]
+name = "pysqlcipher3"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple/" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/eb/abc035ae8dda359dff865168dffe39d9a61f115cc6100f53276e6d4554c2/pysqlcipher3-1.2.0.tar.gz", hash = "sha256:3c8033812655947ebf29a809ac5106b2bc69be0274eaccef6b58f4580c8d06c5", size = 102845, upload-time = "2023-01-29T23:14:22.304Z" }
 
 [[package]]
 name = "python-dateutil"

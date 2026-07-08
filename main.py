@@ -1171,6 +1171,9 @@ def _run_session(ui, args):
     speak    = result.speak
     listen   = result.listen
 
+    if memorize is None:
+        ui.add_message('sys', '⚠️ Memory backend failed to load — check logs. Running without persistent memory this session.')
+
     if speak and hasattr(ui, "broadcast_audio_bytes"):
         speak.set_audio_sink(ui.broadcast_audio_bytes)
         if hasattr(ui, "set_viseme"):
@@ -1428,7 +1431,10 @@ def _run_session(ui, args):
                 ui.add_message('sys', 'Short-term context cleared.')
 
             elif cmd == '/memory':
-                all_mem = memorize.get_all()
+                if memorize is None:
+                    ui.add_message('sys', 'Memory backend unavailable.')
+                else:
+                    all_mem = memorize.get_all()
                 if not all_mem:
                     ui.add_message('sys', 'No memories stored yet.')
                 else:
@@ -1438,12 +1444,14 @@ def _run_session(ui, args):
                             f'  {i:02d}. {m.get("memory") or m.get("text") or m}')
 
             elif cmd == '/clear':
-                memorize.clear()
-                ui.add_message('sys', 'All persistent memories cleared.')
+                if memorize is None:
+                    ui.add_message('sys', 'Memory backend unavailable.')
+                else:
+                    memorize.clear()
+                    ui.add_message('sys', 'All persistent memories cleared.')
 
             elif cmd == '/remember':
                 # pin the last user + assistant exchange permanently
-                turn = think.last_turn()
                 if not turn:
                     ui.add_message('sys', 'Nothing to remember yet — send a message first.')
                 else:
@@ -1613,17 +1621,18 @@ def _run_session(ui, args):
                 current_latency["system_prompt_tokens"] = 0
 
             # ── memory retrieval (lavender, boxed) ──────────────────────
-            hits = memorize.search(user_input)
-            if hits:
-                ui.add_message('sys', f'{len(hits)} memories retrieved:')
-                mem_texts = [m.get("memory") or m.get("text") or str(m) for m in hits]
-                for text in mem_texts:
-                    ui.add_message('sys', _box_text(text, _LAVENDER))
-                current_latency["memory_entry_tokens"] = [_count_tokens(t) for t in mem_texts]
-                current_latency["memory_entry_count"] = len(mem_texts)
-            else:
-                current_latency["memory_entry_tokens"] = []
-                current_latency["memory_entry_count"] = 0
+            if memorize is not None:
+                hits = memorize.search(user_input)
+                if hits:
+                    ui.add_message('sys', f'{len(hits)} memories retrieved:')
+                    mem_texts = [m.get("memory") or m.get("text") or str(m) for m in hits]
+                    for text in mem_texts:
+                        ui.add_message('sys', _box_text(text, _LAVENDER))
+                    current_latency["memory_entry_tokens"] = [_count_tokens(t) for t in mem_texts]
+                    current_latency["memory_entry_count"] = len(mem_texts)
+                else:
+                    current_latency["memory_entry_tokens"] = []
+                    current_latency["memory_entry_count"] = 0
 
         ui.add_message('you', user_input)
         ui.turn_start()
@@ -1736,7 +1745,8 @@ def main():
     args = parse_args()
     if args.clear_mem:
         log.info("Clearing all memories...")
-        AikoMemorize().clear()
+        m = AikoMemorize()
+        m.clear()
         sys.exit(0)
     if args.cli:
         _run_cli(args)

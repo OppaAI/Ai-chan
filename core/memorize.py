@@ -406,7 +406,6 @@ END;
 
 def _sqlite_get_payload(conn: sqlite3.Connection, mem_id: str) -> dict:
     """Fetch the full memories row for a single id. Returns {} if not found."""
-    conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT * FROM memories WHERE id = ?", (mem_id,)
     ).fetchone()
@@ -568,8 +567,7 @@ class _MemoryBackend:
 
     def _connect(self) -> sqlite3.Connection:
         conn = connect_sqlite(self._db_path, user_id=self._user_id)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout = 5000")  # wait up to 5s on lock contention
+        conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA journal_mode = WAL")
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)

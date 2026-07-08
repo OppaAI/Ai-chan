@@ -155,10 +155,10 @@ class AikoWakeup:
                 on_done('mem_cleanup')
                 on_loading('mem_ready')
                 on_done('mem_ready')
-            except Exception as e:
-                log.error("Memory boot failed: %s", e)
+            except Exception:
+                log.exception("Memory boot failed — Aiko will run without persistent memory.")
             finally:
-                mem_ready.set()  # always unblock init_think, even on failure
+                mem_ready.set()
 
         t1 = threading.Thread(target=init_think,    daemon=True)
         t2 = threading.Thread(target=init_memorize, daemon=True)
