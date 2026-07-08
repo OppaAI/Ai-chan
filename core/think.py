@@ -75,6 +75,7 @@ _ROUTE_INSTRUCT_BINARY = "Does this message ask someone to perform a task or act
 _ROUTE_INSTRUCT_TOOL   = "This is an autonomous task request. Which work steps are likely needed?"
 _ROUTE_INSTRUCT_SEARCH = "Does answering this require looking up current or external data?"
 
+_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
@@ -235,31 +236,48 @@ class AikoThink:
                 self._active_turn.clear()
 
     def _route_intent(self, user_input: str) -> str:
-        """Ternary routing: single embedding, three-way decision."""
+        """Ternary routing: single embedding, three-way decision with a
+        high-confidence margin so a close call doesn't get committed to agentic
+        just because it happened to be checked first."""
         self._pending_search_query = None  # reset
-        
+    
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "disabled"}:
             return "localchat"
-        
-        # Single embedding pass with three labels
+    
         instruct = "What kind of task or question is this?"
         scores = self._semantic_all_scores(user_input, _ROUTE_TERNARY_EXAMPLES, instruct)
-        
-        agentic_score = scores.get("agentic", 0.0)
-        webchat_score = scores.get("webchat", 0.0)
-        
+    
+        agentic_score  = scores.get("agentic", 0.0)
+        webchat_score  = scores.get("webchat", 0.0)
+    
+        ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+        best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
+        gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
+    
+        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
+        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+    
         log.debug(
-            "[route] ternary scores: agentic=%.3f webchat=%.3f for: %r",
-            agentic_score, webchat_score, user_input
+            "[route] ternary scores: agentic=%.3f webchat=%.3f best=%s gap=%.3f for: %r",
+            agentic_score, webchat_score, best_label, gap, user_input
         )
-        
-        # Python priority logic (no model, <1ms)
-        if agentic_score >= float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65")):
+    
+        # Only commit to agentic/webchat when that label is both above its own
+        # threshold AND clearly ahead of the runner-up. Otherwise fall back to
+        # the LLM classifier to break the tie instead of defaulting to agentic.
+        if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "agentic"
-        elif webchat_score >= float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60")):
+        if best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "webchat"
-        else:
+    
+        # Close call above threshold — don't default to agentic silently.
+        if (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold) and gap < _SEMANTIC_ROUTE_MIN_GAP:
+            llm_label = self._classify_agent_intent(user_input)
+            if llm_label == "agentic":
+                return "agentic"
             return "localchat"
+    
+        return "localchat"
 
     @staticmethod
     def _normalized_vector(vector: list[float]) -> np.ndarray:
@@ -299,16 +317,6 @@ class AikoThink:
             strongest = sorted(values, reverse=True)[:top_k]
             scores[label] = sum(strongest) / len(strongest)
         return scores
-
-    def _semantic_best_label(self, user_input: str, examples_by_label: dict, instruct: str) -> tuple[str, float, float]:
-        """Return the best semantic label, its score, and the gap to second best."""
-        scores = self._semantic_all_scores(user_input, examples_by_label, instruct)
-        if not scores:
-            return "chat", 0.0, 0.0
-        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-        best_label, best_score = ranked[0]
-        gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
-        return best_label, best_score, gap
 
     def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], np.ndarray]:
         """Return cached embeddings for a static semantic example corpus."""
