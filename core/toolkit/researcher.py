@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
+import re
 import socket
 from urllib.parse import urlparse
 
@@ -12,6 +14,8 @@ import importlib.util
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
+DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 3))
+DEEP_RESEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_RESEARCH_MAX_CHARS_PER_PAGE", 1500))
 
 
 def web_search(query: str, max_results: int = MAX_RESULTS) -> str:
@@ -64,8 +68,14 @@ def _is_private_or_local_host(hostname: str) -> bool:
         return True
 
 
-def fetch_and_extract(url: str, max_chars: int = 4000) -> str:
-    """Fetch a URL and extract its main article/body text with trafilatura."""
+def web_fetch(url: str, max_chars: int = 4000) -> str:
+    """Fetch a single URL and extract its main article/body text with trafilatura.
+
+    This is the one-and-only "fetch a page" primitive in the toolkit. Both
+    the model's direct fetch_page-style calls and deep_search/deep_research's
+    internal page reads route through this function, so there is exactly one
+    implementation to reason about.
+    """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return f"[fetch failed: unsupported URL scheme: {parsed.scheme or 'none'}]"
@@ -84,8 +94,22 @@ def fetch_and_extract(url: str, max_chars: int = 4000) -> str:
         return f"[fetch failed: {e}]"
 
 
+def _extract_urls(raw_results: str, limit: int) -> list[str]:
+    result_blocks = raw_results.split("\n\n")[1:]
+    urls = []
+    for block in result_blocks[:limit]:
+        url = next((line.strip() for line in block.splitlines() if line.strip().startswith("http")), None)
+        if url:
+            urls.append(url)
+    return urls
+
+
 def deep_search(query: str, max_results: int = 3, fetch_top: int = 2) -> str:
-    """Search, fetch the top pages, and return one compact research bundle."""
+    """Search, fetch the top pages, and return one compact research bundle.
+
+    Single search + single fetch pass — the "search + fetch" tier, not a
+    multi-round research loop. See deep_research for that.
+    """
     if not query or not query.strip():
         return "[search failed: empty query]"
     raw_results = web_search(query, max_results)
@@ -93,17 +117,130 @@ def deep_search(query: str, max_results: int = 3, fetch_top: int = 2) -> str:
         return raw_results
 
     bundle = [raw_results]
-    result_blocks = raw_results.split("\n\n")[1:]
-
-    for i, result in enumerate(result_blocks[:fetch_top], 1):
-        url = next((line.strip() for line in result.splitlines() if line.strip().startswith("http")), None)
-        if not url:
-            continue
-        page = fetch_and_extract(url)
+    for i, url in enumerate(_extract_urls(raw_results, fetch_top), 1):
+        page = web_fetch(url)
         if not page.startswith("[fetch failed"):
             bundle.append(f"\n[Full page {i}: {url}]\n{page[:2000]}")
 
     return "\n\n".join(bundle)
+
+
+def _ask_llm_json(client, model: str, prompt: str, max_tokens: int = 200) -> dict | None:
+    """Best-effort structured call for the adaptive research loop.
+
+    Returns None on any failure so callers can fall back to a fixed,
+    non-adaptive round count instead of crashing the whole research call.
+    """
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        return json.loads(match.group(0) if match else raw)
+    except Exception:
+        return None
+
+
+def deep_research(
+    query: str,
+    client=None,
+    model: str | None = None,
+    max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS,
+    fetch_top: int = 2,
+) -> str:
+    """Multi-round adaptive research: search, read, decide whether to refine
+    the query and search again, repeat, then return a synthesized bundle.
+
+    This is the genuine "deep research" tier — an iterative loop across
+    several search+fetch rounds — as distinct from deep_search's single
+    search+fetch pass. When client/model are supplied (a small local LLM),
+    the loop is adaptive: after each round the model is asked whether the
+    gathered evidence answers the original query, and if not, what the next
+    query should be. Without client/model it degrades gracefully to a fixed
+    two-round pass so the tool never hard-fails just because no model was
+    wired in.
+    """
+    if not query or not query.strip():
+        return "[search failed: empty query]"
+
+    rounds: list[str] = []
+    queries_used: list[str] = [query.strip()]
+    current_query = query.strip()
+    adaptive = client is not None and model
+
+    for round_num in range(1, max_rounds + 1):
+        bundle = deep_search(current_query, max_results=3, fetch_top=fetch_top)
+        if bundle.startswith("[search failed"):
+            if round_num == 1:
+                return bundle
+            break
+        if bundle.startswith("[no results"):
+            break
+        rounds.append(f"[Round {round_num} — query: {current_query}]\n{bundle}")
+
+        if not adaptive or round_num == max_rounds:
+            break
+
+        evidence_so_far = "\n\n".join(rounds)[-6000:]
+        decision_prompt = (
+            "You are directing a multi-round web research process. Given the "
+            "original question and the evidence gathered so far, decide whether "
+            "another search round is needed.\n"
+            "Return ONLY compact JSON: {\"continue\": bool, \"next_query\": string, \"reason\": string}.\n"
+            "Set continue=false once the evidence is sufficient to answer the "
+            "original question, or if further searching is unlikely to add "
+            "anything new. next_query should be empty when continue=false.\n\n"
+            f"Original question: {query}\n\n"
+            f"Prior queries used: {queries_used}\n\n"
+            f"Evidence gathered so far:\n{evidence_so_far}"
+        )
+        decision = _ask_llm_json(client, model, decision_prompt)
+        if not decision or not decision.get("continue"):
+            break
+        next_query = str(decision.get("next_query") or "").strip()
+        if not next_query or next_query in queries_used:
+            break
+        current_query = next_query
+        queries_used.append(next_query)
+
+    if not rounds:
+        return f"[no results found for: {query}]"
+
+    header = f"[Deep research: {len(rounds)} round(s) for: {query}]"
+    if len(queries_used) > 1:
+        header += f"\n[Query refinements: {' -> '.join(queries_used)}]"
+
+    combined = "\n\n".join(rounds)
+
+    if adaptive:
+        synthesis_prompt = (
+            "Synthesize the following multi-round research evidence into a "
+            "concise, well-organized answer to the original question. Note any "
+            "unresolved gaps or conflicting information. Do not invent facts "
+            "not present in the evidence.\n\n"
+            f"Original question: {query}\n\n"
+            f"Evidence:\n{combined[:8000]}"
+        )
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": synthesis_prompt}],
+                stream=False,
+                max_tokens=600,
+                temperature=0.2,
+            )
+            synthesis = (resp.choices[0].message.content or "").strip()
+            if synthesis:
+                return f"{header}\n\n[Synthesis]\n{synthesis}\n\n[Raw evidence]\n{combined}"
+        except Exception:
+            pass  # fall through to raw bundle below
+
+    return f"{header}\n\n{combined}"
 
 
 def web_search_context(query: str, max_results: int = MAX_RESULTS) -> str | None:
