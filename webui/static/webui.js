@@ -545,7 +545,16 @@ async function checkAuth() {
   try {
     const res = await fetch('/api/auth/me', { credentials: 'include' });
     if (res.ok) {
+      let data = {};
+      try { data = await res.json(); } catch (_) { /* no body / non-JSON */ }
       hideAuthOverlay();
+      // If the backend reports the user hasn't accepted the current terms
+      // version, gate on the terms modal before opening the WebSocket.
+      if (data.accepted_terms === false) {
+        showTermsOverlay();
+      } else {
+        connectWS();
+      }
       return true;
     }
   } catch (_) { }
@@ -565,17 +574,42 @@ function loginGitHub() {
   window.location.href = '/auth/github/login';
 }
 
-function loginHuggingFace() {
-  window.location.href = '/auth/huggingface/login';
+function loginPatreon() {
+  window.location.href = '/auth/patreon/login';
 }
 
-function loginSimpleLogin() {
-  window.location.href = '/auth/simplelogin/login';
+// ── Terms / guidelines modal ───────────────────────────────────────────────
+// FIX: previously nothing in this file referenced these elements at all, so
+// the checkbox never enabled the Continue button and clicking it did nothing.
+const termsOverlay = document.getElementById('terms-overlay');
+const termsCheckbox = document.getElementById('terms-checkbox');
+const termsContinueBtn = document.getElementById('terms-continue');
+
+function showTermsOverlay() {
+  termsOverlay.style.display = 'flex';
+  termsOverlay.classList.remove('hidden');
 }
 
-function loginDiscord() {
-  window.location.href = '/auth/discord/login';
+function hideTermsOverlay() {
+  termsOverlay.classList.add('hidden');
+  setTimeout(() => termsOverlay.style.display = 'none', 600);
 }
+
+termsCheckbox.addEventListener('change', () => {
+  termsContinueBtn.disabled = !termsCheckbox.checked;
+});
+
+termsContinueBtn.addEventListener('click', async () => {
+  if (!termsCheckbox.checked) return;
+  termsContinueBtn.disabled = true;
+  try {
+    await fetch('/api/auth/accept-terms', { method: 'POST', credentials: 'include' });
+  } catch (err) {
+    console.error('[terms] failed to record acceptance:', err);
+  }
+  hideTermsOverlay();
+  connectWS();
+});
 
 // Load config and check auth
 fetch('/api/auth/config')
@@ -588,12 +622,12 @@ fetch('/api/auth/config')
     return checkAuth();
   })
   .then(authenticated => {
+    // checkAuth() already hides the login overlay and either opens the
+    // terms modal or connects the WebSocket when authenticated — only the
+    // "not authenticated" branch needs handling here.
     if (!authenticated) {
       authOverlay.classList.remove('hidden');
       setAuthStatus('Authentication required. Please log in.');
-    } else {
-      hideAuthOverlay();
-      connectWS();
     }
   })
   .catch(err => {

@@ -30,6 +30,11 @@
   --input-fg: #c8b8e8;
   --scrollbar: #1e1428;
 
+  /* FIX: this variable was referenced by body{} and .terms-text but never
+     defined, so text without an explicit color fell back to the browser
+     default (near-black) and was nearly invisible on the dark background. */
+  --text: #cdbfe6;
+
   /* Official brand colors, used as solid backgrounds on the OAuth login
      buttons so each one reads as its provider's actual login button. */
   --brand-github: #24292e;
@@ -697,4 +702,78 @@ body {
 .auth-status {
   display: block;
   height: 16px;
+}
+
+/* ── Terms / guidelines modal ─────────────────────────────────────────────
+   FIX: this content previously had no rules at all (just inherited body's
+   broken --text color), and the checkbox/button had no styling to signal
+   disabled vs enabled state. */
+.terms-text {
+  text-align: left;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text);
+  width: 100%;
+}
+
+.terms-text p {
+  margin-bottom: 8px;
+}
+
+.terms-text ul {
+  margin: 4px 0 8px 18px;
+}
+
+.terms-text li {
+  margin-bottom: 4px;
+}
+
+.terms-text a {
+  color: var(--mauve);
+}
+
+.auth-panel label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text);
+  text-align: left;
+  width: 100%;
+  cursor: pointer;
+}
+
+.auth-panel input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--purple);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+#terms-continue {
+  width: 100%;
+  padding: 10px 16px;
+  border: 1px solid var(--purple);
+  background: transparent;
+  color: var(--purple);
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  letter-spacing: .15em;
+  text-transform: uppercase;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all .2s;
+}
+
+#terms-continue:hover:not(:disabled) {
+  background: var(--purple);
+  color: var(--bg);
+  box-shadow: 0 0 10px rgba(155, 127, 212, .4);
+}
+
+#terms-continue:disabled {
+  border-color: var(--dimmer);
+  color: var(--dim);
+  cursor: not-allowed;
 }
