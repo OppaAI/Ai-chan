@@ -237,8 +237,8 @@ class AikoThink:
 
     def _route_intent(self, user_input: str) -> str:
         """Ternary routing: single embedding, three-way decision with a
-        high-confidence margin so a close call doesn't get committed to agentic
-        just because it happened to be checked first."""
+        high-confidence margin so a close call doesn't get committed to
+        agentic (or webchat) just because it happened to be checked first."""
         self._pending_search_query = None  # reset
     
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "disabled"}:
@@ -247,8 +247,8 @@ class AikoThink:
         instruct = "What kind of task or question is this?"
         scores = self._semantic_all_scores(user_input, _ROUTE_TERNARY_EXAMPLES, instruct)
     
-        agentic_score  = scores.get("agentic", 0.0)
-        webchat_score  = scores.get("webchat", 0.0)
+        agentic_score = scores.get("agentic", 0.0)
+        webchat_score = scores.get("webchat", 0.0)
     
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
@@ -262,20 +262,17 @@ class AikoThink:
             agentic_score, webchat_score, best_label, gap, user_input
         )
     
-        # Only commit to agentic/webchat when that label is both above its own
-        # threshold AND clearly ahead of the runner-up. Otherwise fall back to
-        # the LLM classifier to break the tie instead of defaulting to agentic.
         if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "agentic"
         if best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "webchat"
     
-        # Close call above threshold — don't default to agentic silently.
+        # Above threshold but too close to call cleanly — don't silently
+        # default into agentic. Ask the LLM to break the tie; anything
+        # that isn't clearly agentic falls back to local chat.
         if (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold) and gap < _SEMANTIC_ROUTE_MIN_GAP:
             llm_label = self._classify_agent_intent(user_input)
-            if llm_label == "agentic":
-                return "agentic"
-            return "localchat"
+            return "agentic" if llm_label == "agentic" else "localchat"
     
         return "localchat"
 
