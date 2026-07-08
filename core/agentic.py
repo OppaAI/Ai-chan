@@ -994,6 +994,5 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         owner._history.append({"role": "user", "content": user_input})
         owner._history.append({"role": "assistant", "content": final_text})
 
-    owner._record_experience(user_input, final_text)
     owner._store_async(user_input, final_text)
     return final_text
