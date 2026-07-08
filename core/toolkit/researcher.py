@@ -14,8 +14,20 @@ import importlib.util
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
+
+# -- deep_search (single search + fetch pass) --
+DEEP_SEARCH_MAX_RESULTS = int(os.getenv("DEEP_SEARCH_MAX_RESULTS", 3))
+DEEP_SEARCH_FETCH_TOP = int(os.getenv("DEEP_SEARCH_FETCH_TOP", 2))
+DEEP_SEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_SEARCH_MAX_CHARS_PER_PAGE", 2000))
+
+# -- deep_research (multi-round adaptive research) --
 DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 3))
+DEEP_RESEARCH_FETCH_TOP = int(os.getenv("DEEP_RESEARCH_FETCH_TOP", 2))
 DEEP_RESEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_RESEARCH_MAX_CHARS_PER_PAGE", 1500))
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION", 6000))
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS", 8000))
+DEEP_RESEARCH_DECISION_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_DECISION_MAX_TOKENS", 200))
+DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS", 600))
 
 
 def web_search(query: str, max_results: int = MAX_RESULTS) -> str:
@@ -104,7 +116,12 @@ def _extract_urls(raw_results: str, limit: int) -> list[str]:
     return urls
 
 
-def deep_search(query: str, max_results: int = 3, fetch_top: int = 2) -> str:
+def deep_search(
+    query: str,
+    max_results: int = DEEP_SEARCH_MAX_RESULTS,
+    fetch_top: int = DEEP_SEARCH_FETCH_TOP,
+    max_chars_per_page: int = DEEP_SEARCH_MAX_CHARS_PER_PAGE,
+) -> str:
     """Search, fetch the top pages, and return one compact research bundle.
 
     Single search + single fetch pass — the "search + fetch" tier, not a
@@ -120,12 +137,12 @@ def deep_search(query: str, max_results: int = 3, fetch_top: int = 2) -> str:
     for i, url in enumerate(_extract_urls(raw_results, fetch_top), 1):
         page = web_fetch(url)
         if not page.startswith("[fetch failed"):
-            bundle.append(f"\n[Full page {i}: {url}]\n{page[:2000]}")
+            bundle.append(f"\n[Full page {i}: {url}]\n{page[:max_chars_per_page]}")
 
     return "\n\n".join(bundle)
 
 
-def _ask_llm_json(client, model: str, prompt: str, max_tokens: int = 200) -> dict | None:
+def _ask_llm_json(client, model: str, prompt: str, max_tokens: int) -> dict | None:
     """Best-effort structured call for the adaptive research loop.
 
     Returns None on any failure so callers can fall back to a fixed,
@@ -151,7 +168,8 @@ def deep_research(
     client=None,
     model: str | None = None,
     max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS,
-    fetch_top: int = 2,
+    fetch_top: int = DEEP_RESEARCH_FETCH_TOP,
+    max_chars_per_page: int = DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
 ) -> str:
     """Multi-round adaptive research: search, read, decide whether to refine
     the query and search again, repeat, then return a synthesized bundle.
@@ -174,7 +192,12 @@ def deep_research(
     adaptive = client is not None and model
 
     for round_num in range(1, max_rounds + 1):
-        bundle = deep_search(current_query, max_results=3, fetch_top=fetch_top)
+        bundle = deep_search(
+            current_query,
+            max_results=DEEP_SEARCH_MAX_RESULTS,
+            fetch_top=fetch_top,
+            max_chars_per_page=max_chars_per_page,
+        )
         if bundle.startswith("[search failed"):
             if round_num == 1:
                 return bundle
@@ -186,7 +209,7 @@ def deep_research(
         if not adaptive or round_num == max_rounds:
             break
 
-        evidence_so_far = "\n\n".join(rounds)[-6000:]
+        evidence_so_far = "\n\n".join(rounds)[-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION:]
         decision_prompt = (
             "You are directing a multi-round web research process. Given the "
             "original question and the evidence gathered so far, decide whether "
@@ -199,7 +222,7 @@ def deep_research(
             f"Prior queries used: {queries_used}\n\n"
             f"Evidence gathered so far:\n{evidence_so_far}"
         )
-        decision = _ask_llm_json(client, model, decision_prompt)
+        decision = _ask_llm_json(client, model, decision_prompt, DEEP_RESEARCH_DECISION_MAX_TOKENS)
         if not decision or not decision.get("continue"):
             break
         next_query = str(decision.get("next_query") or "").strip()
@@ -224,14 +247,14 @@ def deep_research(
             "unresolved gaps or conflicting information. Do not invent facts "
             "not present in the evidence.\n\n"
             f"Original question: {query}\n\n"
-            f"Evidence:\n{combined[:8000]}"
+            f"Evidence:\n{combined[:DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS]}"
         )
         try:
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": synthesis_prompt}],
                 stream=False,
-                max_tokens=600,
+                max_tokens=DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS,
                 temperature=0.2,
             )
             synthesis = (resp.choices[0].message.content or "").strip()
