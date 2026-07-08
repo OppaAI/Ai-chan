@@ -126,10 +126,17 @@ def load_config(*, override: bool = False) -> None:
                     os.environ[key] = _stringify(value)
 
     # --- Secrets: encrypted .env.age (preferred) with plaintext .env fallback ---
-    identity_path = Path(
-        os.environ.get("AGE_KEY", "/etc/aiko/age-key.txt")
-    ).expanduser()
-    enc_path = Path(os.environ.get("ENV_AGE_PATH", "/etc/aiko/.env.age"))
+    # AGE_KEY / ENV_AGE_PATH may be bare filenames (e.g. from identity.yaml);
+    # resolve them under USER_STATE_ROOT unless they're already absolute,
+    # so an explicit absolute override (env var or YAML) still wins outright.
+    state_root = Path(os.environ.get("USER_STATE_ROOT", "~/.aiko")).expanduser()
+
+    def _resolve_under(base: Path, value: str) -> Path:
+        candidate = Path(value).expanduser()
+        return candidate if candidate.is_absolute() else base / candidate
+
+    identity_path = _resolve_under(state_root, os.environ.get("AGE_KEY", "age-key.txt"))
+    enc_path = _resolve_under(state_root, os.environ.get("ENV_AGE_PATH", ".env.age"))
 
     if enc_path.exists():
         for key, value in _decrypt_env(enc_path, identity_path).items():
