@@ -93,6 +93,7 @@ def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
 
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    ctx.set_alpn_protocols(["http/1.1"])
     return ctx
 
 # ── message types (server → browser) ─────────────────────────────────────────

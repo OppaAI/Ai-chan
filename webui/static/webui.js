@@ -603,8 +603,13 @@ termsContinueBtn.addEventListener('click', async () => {
   if (!termsCheckbox.checked) return;
   termsContinueBtn.disabled = true;
   try {
-    await fetch('/api/auth/accept-terms', { method: 'POST', credentials: 'include' });
-  } catch (err) {
+    await fetch('/api/auth/accept-terms', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accepted: true }),
+    });  }
+    catch (err) {
     console.error('[terms] failed to record acceptance:', err);
   }
   hideTermsOverlay();
