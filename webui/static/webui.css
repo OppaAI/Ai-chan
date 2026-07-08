@@ -751,26 +751,63 @@ body {
   }
 }
 
+/* Solid brand-color fills, restored: each provider button reads as
+   that provider's actual login button (dark grey GitHub, red Patreon)
+   rather than an outlined/bracket frame. */
 .auth-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
   padding: 14px 20px;
-  color: var(--mauve);
+  border: 1px solid transparent;
   font-family: var(--font-main);
   font-size: 13px;
   letter-spacing: .15em;
   text-transform: none;
   cursor: pointer;
+  border-radius: 4px;
   transition: all .2s;
+}
+
+.auth-btn.github {
+  background: var(--brand-github);
+  border-color: var(--brand-github);
+  color: var(--brand-github-fg);
+}
+
+.auth-btn.github:hover {
+  background: #32383e;
+  border-color: #32383e;
+  box-shadow: 0 0 10px rgba(255, 255, 255, .15);
+}
+
+.auth-btn.patreon {
+  background: var(--brand-patreon);
+  border-color: var(--brand-patreon);
+  color: var(--brand-patreon-fg);
+}
+
+.auth-btn.patreon:hover {
+  background: #ff5c66;
+  border-color: #ff5c66;
+  box-shadow: 0 0 10px rgba(255, 66, 77, .4);
+}
+
+.auth-btn .icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  /* icons ship pre-tinted to match each button's foreground color via
+     the Simple Icons CDN color param in webui.html */
 }
 
 /* "Bracket frame" style: a full-width hairline along the top and bottom
    only (no left/right sides), with a short vertical tick at each of the
    four corners — a CSS-only recreation of a terminal/HUD button frame,
    built entirely from stacked background gradients so it needs no
-   extra markup. Reused by #terms-continue below. */
+   extra markup. Kept for #terms-continue below; no longer applied to
+   the auth provider buttons, which now use solid brand fills above. */
 .bracket,
 #terms-continue.bracket {
   position: relative;
@@ -798,29 +835,6 @@ body {
 .bracket:hover,
 #terms-continue.bracket:hover:not(:disabled) {
   box-shadow: 0 0 14px rgba(168, 136, 232, .35);
-}
-
-/* Each provider button keeps its official brand color, but as a text/
-   icon tint against the bracket frame rather than a solid fill, so the
-   provider stays recognizable without breaking the terminal look. */
-.auth-btn.patreon {
-  color: #ff8a91;
-}
-
-.auth-btn.patreon:hover {
-  color: #ffb0b5;
-}
-
-.auth-btn.github:hover {
-  color: #ffffff;
-}
-
-.auth-btn .icon {
-  width: 18px;
-  height: 18px;
-  flex-shrink: 0;
-  /* icons ship pre-tinted to match each button's foreground color via
-     the Simple Icons CDN color param in webui.html */
 }
 
 .auth-divider {
