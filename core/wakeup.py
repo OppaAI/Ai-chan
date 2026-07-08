@@ -31,6 +31,16 @@ Usage:
 import threading
 from dataclasses import dataclass
 from typing import Callable
+
+# Must run before the core.* imports below: those modules may read secrets
+# from os.environ at their own module level, and load_config() is what
+# decrypts .env.age into os.environ. load_config() is idempotent (guarded
+# by _LOADED), so this is a no-op if main.py already called it first —
+# this is just a safety net for any other entrypoint that imports this
+# module directly.
+from config import load_config
+load_config()
+
 from core.log import get_logger
 log = get_logger(__name__)
 
