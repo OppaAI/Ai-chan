@@ -19,8 +19,8 @@
   --bg2: #0e0e17;
   --border: #1e1428;
   --pink: #c651a8;
-  --purple: #9b7fd4;
-  --mauve: #c8a8f0;
+  --purple: #a888e8;
+  --mauve: #d8bcff;
   --cyan: #51d4c8;
   --dim: #4a3a6a;
   --dimmer: #2a1a4a;
@@ -35,17 +35,30 @@
      default (near-black) and was nearly invisible on the dark background. */
   --text: #cdbfe6;
 
+  /* Global typeface stack. Anthropic's actual serif reading font (Tiempos)
+     is licensed and not available on the open web, so this leans on the
+     closest system/web-safe serif equivalents: modern text serifs with
+     a similar restrained, slightly literary feel, falling back to Georgia
+     and then any serif before ever touching sans-serif. */
+  --font-main: ui-serif, "Iowan Old Style", "Source Serif Pro", "Charter",
+    Georgia, "Times New Roman", serif;
+
   /* Official brand colors, used as solid backgrounds on the OAuth login
      buttons so each one reads as its provider's actual login button. */
   --brand-github: #24292e;
   --brand-github-fg: #ffffff;
   --brand-patreon: #ff424d;
   --brand-patreon-fg: #ffffff;
+
+  /* Glass panel tokens, shared by the auth + terms overlays */
+  --glass-bg: rgba(24, 16, 36, 0.5);
+  --glass-border: rgba(200, 168, 240, 0.16);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
 }
 
 body {
   background: var(--bg);
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-main);
   color: var(--text);
   height: 100dvh;
   overflow: hidden;
@@ -463,7 +476,7 @@ body {
   background: transparent;
   border: none;
   outline: none;
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-main);
   font-size: 12px;
   color: var(--input-fg);
   caret-color: var(--mauve);
@@ -473,7 +486,7 @@ body {
   background: none;
   border: 1px solid var(--dimmer);
   color: var(--dim);
-  font-family: 'Courier New', monospace;
+  font-family: var(--font-main);
   font-size: 10px;
   letter-spacing: .15em;
   padding: 4px 10px;
@@ -593,7 +606,11 @@ body {
 .auth-overlay {
   position: fixed;
   inset: 0;
-  background: var(--bg);
+  /* Glass over the app rather than a solid block, so the VRM/chat behind
+     it stays faintly visible through the blur. */
+  background: rgba(10, 10, 15, 0.7);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -610,32 +627,128 @@ body {
 .auth-panel {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 26px;
   align-items: center;
-  padding: 40px;
-  max-width: 360px;
+  padding: 52px 48px;
+  width: 100%;
+  max-width: 440px;
+  min-height: 480px;
+  justify-content: center;
   text-align: center;
+  position: relative;
+
+  /* Glassmorphic card: translucent tinted fill, heavy blur, a hairline
+     border to catch light, soft outer shadow to lift it off the page,
+     an inset highlight for a subtle top-edge sheen, and a soft purple
+     glow ring around the whole card. The glow itself breathes via
+     panelGlow, and the card animates in on first paint via authPanelIn. */
+  background: var(--glass-bg);
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  border: 1px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, .45),
+    inset 0 1px 0 var(--glass-highlight),
+    0 0 22px rgba(168, 136, 232, .22);
+  animation: authPanelIn .55s cubic-bezier(.2, .8, .3, 1) both,
+    panelGlow 3.6s ease-in-out .55s infinite alternate;
+}
+
+@keyframes authPanelIn {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes panelGlow {
+  from {
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, .45),
+      inset 0 1px 0 var(--glass-highlight),
+      0 0 18px rgba(168, 136, 232, .18);
+  }
+
+  to {
+    box-shadow:
+      0 8px 32px rgba(0, 0, 0, .45),
+      inset 0 1px 0 var(--glass-highlight),
+      0 0 38px rgba(168, 136, 232, .42);
+  }
 }
 
 .auth-title {
-  font-size: 28px;
+  font-size: 30px;
   letter-spacing: .3em;
   color: var(--purple);
   text-transform: uppercase;
 }
 
 .auth-subtitle {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: .2em;
-  color: var(--dim);
+  color: var(--mauve);
   text-transform: uppercase;
+  opacity: .8;
+}
+
+.auth-greeting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: -6px 0 2px;
+}
+
+.auth-greeting-title {
+  font-size: 15px;
+  color: var(--text);
+}
+
+.auth-greeting-sub {
+  font-size: 13px;
+  color: var(--dim);
+  line-height: 1.5;
 }
 
 .auth-buttons {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   width: 100%;
+}
+
+.auth-buttons>* {
+  animation: authItemIn .5s cubic-bezier(.2, .8, .3, 1) both;
+}
+
+.auth-buttons>*:nth-child(1) {
+  animation-delay: .12s;
+}
+
+.auth-buttons>*:nth-child(2) {
+  animation-delay: .2s;
+}
+
+.auth-buttons>*:nth-child(3) {
+  animation-delay: .28s;
+}
+
+@keyframes authItemIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .auth-btn {
@@ -643,58 +756,95 @@ body {
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 12px 16px;
-  border: 1px solid var(--dimmer);
-  background: transparent;
-  color: var(--dim);
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
+  padding: 14px 20px;
+  color: var(--mauve);
+  font-family: var(--font-main);
+  font-size: 13px;
   letter-spacing: .15em;
   text-transform: none;
   cursor: pointer;
-  border-radius: 2px;
   transition: all .2s;
 }
 
-/* Each provider button is filled with its official brand color so it
-   reads as that provider's actual login button, with a matching
-   foreground color for contrast. The <img> icon is pre-tinted to the
-   same foreground color via the Simple Icons CDN param in webui.html. */
-.auth-btn.github {
-  background: var(--brand-github);
-  border-color: var(--brand-github);
-  color: var(--brand-github-fg);
+/* "Bracket frame" style: a full-width hairline along the top and bottom
+   only (no left/right sides), with a short vertical tick at each of the
+   four corners — a CSS-only recreation of a terminal/HUD button frame,
+   built entirely from stacked background gradients so it needs no
+   extra markup. Reused by #terms-continue below. */
+.bracket,
+#terms-continue.bracket {
+  position: relative;
+  background-color: transparent;
+  border: none;
+  border-radius: 3px;
+  background-image:
+    linear-gradient(var(--purple), var(--purple)),
+    linear-gradient(var(--purple), var(--purple)),
+    linear-gradient(var(--purple), var(--purple)),
+    linear-gradient(var(--purple), var(--purple)),
+    linear-gradient(var(--purple), var(--purple)),
+    linear-gradient(var(--purple), var(--purple));
+  background-repeat: no-repeat;
+  background-size:
+    100% 1px, 100% 1px,
+    1px 9px, 1px 9px,
+    1px 9px, 1px 9px;
+  background-position:
+    top left, bottom left,
+    top left, top right,
+    bottom left, bottom right;
 }
 
-.auth-btn.github:hover {
-  background: #32383e;
-  border-color: #32383e;
-  box-shadow: 0 0 10px rgba(255, 255, 255, .15);
+.bracket:hover,
+#terms-continue.bracket:hover:not(:disabled) {
+  box-shadow: 0 0 14px rgba(168, 136, 232, .35);
 }
 
+/* Each provider button keeps its official brand color, but as a text/
+   icon tint against the bracket frame rather than a solid fill, so the
+   provider stays recognizable without breaking the terminal look. */
 .auth-btn.patreon {
-  background: var(--brand-patreon);
-  border-color: var(--brand-patreon);
-  color: var(--brand-patreon-fg);
+  color: #ff8a91;
 }
 
 .auth-btn.patreon:hover {
-  background: #ff5c66;
-  border-color: #ff5c66;
-  box-shadow: 0 0 10px rgba(255, 66, 77, .4);
+  color: #ffb0b5;
+}
+
+.auth-btn.github:hover {
+  color: #ffffff;
 }
 
 .auth-btn .icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
   /* icons ship pre-tinted to match each button's foreground color via
      the Simple Icons CDN color param in webui.html */
 }
 
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: .25em;
+  text-transform: uppercase;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--dimmer);
+}
+
 .auth-footer {
   margin-top: 12px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--dim);
   letter-spacing: .1em;
 }
@@ -704,16 +854,58 @@ body {
   height: 16px;
 }
 
+/* Legal links: previously rendered at low opacity with the same dim
+   color as disabled UI chrome, which made them hard to read against the
+   glass panel. Brightened and given a hover state instead. */
+.auth-legal-links,
+#panel-footer-legal {
+  font-size: 11px;
+  letter-spacing: .02em;
+}
+
+.auth-legal-links a,
+#panel-footer-legal a {
+  color: var(--mauve);
+  opacity: .85;
+  text-decoration: none;
+  transition: opacity .15s;
+}
+
+.auth-legal-links a:hover,
+#panel-footer-legal a:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+#panel-footer-legal {
+  text-align: center;
+  padding: 5px 0;
+}
+
 /* ── Terms / guidelines modal ─────────────────────────────────────────────
    FIX: this content previously had no rules at all (just inherited body's
    broken --text color), and the checkbox/button had no styling to signal
-   disabled vs enabled state. */
+   disabled vs enabled state. Shares the glass treatment above via
+   .auth-panel, which #terms-overlay reuses. */
 .terms-text {
   text-align: left;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.6;
   color: var(--text);
   width: 100%;
+  font-family: var(--font-main);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.terms-text a {
+  color: var(--mauve);
+  opacity: .9;
+}
+
+.terms-text a:hover {
+  opacity: 1;
+  text-decoration: underline;
 }
 
 .terms-text p {
@@ -728,24 +920,21 @@ body {
   margin-bottom: 4px;
 }
 
-.terms-text a {
-  color: var(--mauve);
-}
-
 .auth-panel label {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text);
   text-align: left;
   width: 100%;
   cursor: pointer;
+  font-family: var(--font-main);
 }
 
 .auth-panel input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   accent-color: var(--purple);
   cursor: pointer;
   flex-shrink: 0;
@@ -753,27 +942,22 @@ body {
 
 #terms-continue {
   width: 100%;
-  padding: 10px 16px;
-  border: 1px solid var(--purple);
-  background: transparent;
+  padding: 12px 16px;
   color: var(--purple);
-  font-family: 'Courier New', monospace;
-  font-size: 12px;
+  font-family: var(--font-main);
+  font-size: 13px;
   letter-spacing: .15em;
   text-transform: uppercase;
   cursor: pointer;
-  border-radius: 2px;
   transition: all .2s;
 }
 
 #terms-continue:hover:not(:disabled) {
-  background: var(--purple);
-  color: var(--bg);
-  box-shadow: 0 0 10px rgba(155, 127, 212, .4);
+  color: var(--mauve);
 }
 
 #terms-continue:disabled {
-  border-color: var(--dimmer);
   color: var(--dim);
   cursor: not-allowed;
+  opacity: .6;
 }

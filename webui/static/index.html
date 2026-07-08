@@ -14,25 +14,32 @@
   <div id="auth-overlay" class="auth-overlay show">
     <div class="auth-panel">
       <div class="auth-title">Aiko-chan</div>
-      <div class="auth-subtitle">Neural Interface Access</div>
+      <div class="auth-subtitle">Your AI Companion</div>
+
+      <div class="auth-greeting">
+        <div class="auth-greeting-title">Welcome back.</div>
+        <div class="auth-greeting-sub">Let's continue where we left off.</div>
+      </div>
 
       <div class="auth-buttons">
-        <div class="auth-group-label" style="font-size: 0.8em; opacity: 0.7; margin-bottom: 4px;">For paid members:</div>
-        <button class="auth-btn patreon" onclick="loginPatreon()">
-          <img class="icon" src="https://cdn.simpleicons.org/patreon/ffffff" alt="" width="16" height="16">
-          Sign in with Patreon
+        <button class="auth-btn bracket patreon" onclick="loginPatreon()">
+          <img class="icon" src="https://cdn.simpleicons.org/patreon/ffffff" alt="" width="18" height="18">
+          Continue with Patreon
         </button>
 
-        <div class="auth-group-label" style="font-size: 0.8em; opacity: 0.7; margin: 10px 0 4px;">For contributors:</div>
-        <button class="auth-btn github" onclick="loginGitHub()">
-          <img class="icon" src="https://cdn.simpleicons.org/github/ffffff" alt="" width="16" height="16">
-          Sign in with GitHub
+        <div class="auth-divider"><span>OR</span></div>
+
+        <button class="auth-btn bracket github" onclick="loginGitHub()">
+          <img class="icon" src="https://cdn.simpleicons.org/github/ffffff" alt="" width="18" height="18">
+          Continue with GitHub
         </button>
       </div>
 
       <div class="auth-footer">
         <span class="auth-status" id="auth-status"></span>
-        <div class="auth-legal-links" style="margin-top: 10px; font-size: 0.75em; opacity: 0.6;">
+        <div class="auth-legal-links">
+          <a href="https://github.com/OppaAI/Aiko-chan/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+          &nbsp;·&nbsp;
           <a href="./legal/privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a>
           &nbsp;·&nbsp;
           <a href="./legal/terms-of-service.html" target="_blank" rel="noopener">Terms of Service</a>
@@ -45,10 +52,10 @@
        Shown after a successful OAuth login when /api/auth/me reports
        accepted_terms: false (or terms_version_required doesn't match what
        the user previously accepted). Hidden the rest of the time. -->
-  <div id="terms-overlay" class="auth-overlay">
+  <div id="terms-overlay" class="auth-overlay hidden" style="display:none;">
     <div class="auth-panel">
       <div class="auth-title">Before you talk to Aiko</div>
-      <div class="terms-text" id="terms-text" style="max-height: 240px; overflow-y: auto;">
+      <div class="terms-text" id="terms-text">
         <p>By using Aiko-chan, you agree to:</p>
         <ul>
           <li>Not use this system for illegal content or activity</li>
@@ -58,7 +65,10 @@
           <li>Understand access can be revoked at the operator's discretion</li>
         </ul>
         <p style="margin-top: 8px;">
-          Full details: <a href="./legal/privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a>
+          Full details:
+          <a href="https://github.com/OppaAI/Aiko-chan/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+          &nbsp;·&nbsp;
+          <a href="./legal/privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a>
           &nbsp;·&nbsp;
           <a href="./legal/terms-of-service.html" target="_blank" rel="noopener">Terms of Service</a>
         </p>
@@ -67,7 +77,7 @@
         <input type="checkbox" id="terms-checkbox">
         I have read and agree to the guidelines above
       </label>
-      <button id="terms-continue" disabled>Continue</button>
+      <button id="terms-continue" class="bracket" disabled>Continue</button>
     </div>
   </div>
 
@@ -141,7 +151,7 @@
       <button id="send-btn" class="input-btn">send</button>
     </div>
 
-    <div id="panel-footer-legal" style="text-align:center; font-size: 0.7em; opacity: 0.5; padding: 4px 0;">
+    <div id="panel-footer-legal">
       <a href="./legal/privacy-policy.html" target="_blank" rel="noopener">Privacy Policy</a>
       &nbsp;·&nbsp;
       <a href="./legal/terms-of-service.html" target="_blank" rel="noopener">Terms of Service</a>
