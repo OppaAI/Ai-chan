@@ -129,7 +129,7 @@ def load_config(*, override: bool = False) -> None:
     identity_path = Path(
         os.environ.get("AGE_KEY", "/etc/aiko/age-key.txt")
     ).expanduser()
-    enc_path = Path(os.environ.get("ENV_AGE_PATH", root / ".env.age"))
+    enc_path = Path(os.environ.get("ENV_AGE_PATH", "/etc/aiko/.env.age"))
 
     if enc_path.exists():
         for key, value in _decrypt_env(enc_path, identity_path).items():
