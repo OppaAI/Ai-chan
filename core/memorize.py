@@ -436,7 +436,6 @@ def _sqlite_batch_get_payloads(
     """
     if not mem_ids:
         return {}
-    conn.row_factory = sqlite3.Row
     placeholders = ",".join("?" * len(mem_ids))
     rows = conn.execute(
         f"SELECT id, access_count, last_accessed_at FROM memories WHERE id IN ({placeholders})",
