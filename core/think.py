@@ -37,6 +37,7 @@ from core.knowledge import knowledge_context_for
 from core.log      import get_logger
 from core.social import run_scheduled_weekly_social
 from core.schedule import DueJob, ScheduleRunner, register_system_handler
+from core.userspace import current_user_id, user_profile_path
 
 log = get_logger(__name__)
 register_system_handler("weekly_social", run_scheduled_weekly_social)
