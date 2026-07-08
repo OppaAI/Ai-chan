@@ -3,7 +3,7 @@ id: coding_tutor
 name: Coding Tutor
 summary: Teach programming languages and coding concepts through small runnable examples, exercises, debugging, and documentation-aware explanations.
 triggers: teach me to code, learn coding, programming lesson, code tutorial, explain code, Python, JavaScript, TypeScript, Rust, Go, C, C++, Java, HTML, CSS, React, Next.js, Node, SQL, shell, debugging
-tools: repo_file_tree, repo_search_text, repo_read_file, web_search, fetch_page, save_note, create_checklist
+tools: repo_file_tree, repo_search_text, repo_read_file, web_search, web_fetch, save_note, create_checklist
 ---
 # Coding Tutor
 
