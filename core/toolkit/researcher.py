@@ -171,7 +171,7 @@ def deep_research(
     fetch_top: int = DEEP_RESEARCH_FETCH_TOP,
     max_chars_per_page: int = DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
 ) -> str:
-    """Multi-round adaptive research: search, read, decide whether to refine
+    """Single-round adaptive research: search, read, decide whether to refine
     the query and search again, repeat, then return a synthesized bundle.
 
     This is the genuine "deep research" tier — an iterative loop across
@@ -179,9 +179,9 @@ def deep_research(
     search+fetch pass. When client/model are supplied (a small local LLM),
     the loop is adaptive: after each round the model is asked whether the
     gathered evidence answers the original query, and if not, what the next
-    query should be. Without client/model it degrades gracefully to a fixed
-    two-round pass so the tool never hard-fails just because no model was
-    wired in.
+    query should be. Without client/model it degrades gracefully to a single 
+    search+fetch round (same as deep_search) so the tool never hard-fails just
+    because no model was wired in.
     """
     if not query or not query.strip():
         return "[search failed: empty query]"
