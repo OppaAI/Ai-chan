@@ -38,7 +38,7 @@ from typing import Callable
 # by _LOADED), so this is a no-op if main.py already called it first —
 # this is just a safety net for any other entrypoint that imports this
 # module directly.
-from config import load_config
+from core.config import load_config
 load_config()
 
 from core.log import get_logger
