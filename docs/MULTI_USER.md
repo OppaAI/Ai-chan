@@ -16,6 +16,7 @@ This is the simple `$5 Patreon tester` isolation model for Aiko. OAuth is the so
   - `SQLITE_MEMORY_PATH`
   - `USER_PROFILE_PATH`
   - `MONTHLY_CONSOLIDATION_STATE_PATH`
+  - `SCHEDULE_PATH`
   - `WORKSPACE_ROOT`
   - `AIKO_USER_STATE_ROOT`
 

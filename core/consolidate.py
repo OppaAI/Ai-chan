@@ -117,15 +117,15 @@ def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
 
 # ── state ────────────────────────────────────────────────────────────────────
 
-def _load_state() -> dict:
+def _load_state(user_id: str | None = None) -> dict:
     try:
-        return json.loads(consolidation_state_path().read_text(encoding="utf-8"))
+        return json.loads(consolidation_state_path(user_id).read_text(encoding="utf-8"))
     except Exception:
         return {}
 
 
-def _save_state(state: dict) -> None:
-    path = consolidation_state_path()
+def _save_state(state: dict, user_id: str | None = None) -> None:
+    path = consolidation_state_path(user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
@@ -283,7 +283,7 @@ def _merge_monthly_facts(month_key: str, chunk_facts: list[list[str]]) -> list[s
 
 # ── main entrypoint ───────────────────────────────────────────────────────────
 
-def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
+def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str | None = None) -> dict:
     """
     Run monthly consolidation if enabled and the target month is not already
     consolidated.
@@ -311,9 +311,10 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
         return {"ran": False, "reason": "disabled"}
 
     now = now or datetime.now()
+    user_id = user_id or getattr(memorize, "_user_id", None) or current_user_id()
 
     start, end, month_key = target_month_for(now)
-    state = _load_state()
+    state = _load_state(user_id)
     if state.get("last_consolidated_month") == month_key:
         return {"ran": False, "reason": "already_done", "month": month_key}
 
@@ -336,7 +337,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
 
     if len(daily_rows) < CONSOLIDATION_MIN_MEMS:
         state["last_consolidated_month"] = month_key
-        _save_state(state)
+        _save_state(state, user_id)
         return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(daily_rows)}
 
     source_facts = [(m.get("memory") or "").strip() for m in daily_rows if (m.get("memory") or "").strip()]
@@ -388,7 +389,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None) -> dict:
 
     state["last_consolidated_month"] = month_key
     state["last_summary_ids"]        = written_ids
-    _save_state(state)
+    _save_state(state, user_id)
 
     log.info(
         "monthly_consolidate complete: month=%s source_count=%s facts_written=%s daily_deleted=%s",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import base64
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,22 @@ def derive_user_sqlite_key(user_id: str) -> str:
     return digest.hex()
 
 
+def _derive_legacy_user_sqlite_key(user_id: str) -> str:
+    """Return the legacy SQLCipher passphrase used before raw hex keys."""
+    digest = hmac.new(_data_secret(), f"aiko-sqlite:{user_id}".encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii")
+
+
+def _quote_sqlcipher_key(key: str) -> str:
+    return "'" + key.replace("'", "''") + "'"
+
+
+def _validate_sqlcipher_connection(conn: Any) -> None:
+    # Force key validation immediately, so a wrong key fails at boot instead of
+    # later after partial initialization.
+    conn.execute("SELECT count(*) FROM sqlite_master")
+
+
 def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
     """Connect to SQLite, using SQLCipher when AIKO_SQLITE_ENCRYPTION=1.
 
@@ -58,15 +75,28 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
             "Install a SQLCipher-capable Python driver or disable AIKO_SQLITE_ENCRYPTION."
         ) from exc
 
+    raw_key = derive_user_sqlite_key(user_id)
     conn = sqlcipher.connect(str(path), check_same_thread=False)
     try:
-        key = derive_user_sqlite_key(user_id)
-        conn.execute(f"PRAGMA key = \"x'{key}'\"")
+        conn.execute(f"PRAGMA key = \"x'{raw_key}'\"")
         conn.execute("PRAGMA cipher_page_size = 4096")
-        # Force key validation immediately, so a wrong key fails at boot instead of
-        # later after partial initialization.
-        conn.execute("SELECT count(*) FROM sqlite_master")
+        _validate_sqlcipher_connection(conn)
         return conn
-    except Exception:
+    except Exception as raw_exc:
         conn.close()
-        raise
+
+        # Databases created by the first SQLCipher integration used the derived
+        # value as a SQLCipher passphrase, letting SQLCipher run its KDF. Keep
+        # those databases readable and migrate them in place to the raw key.
+        legacy_key = _derive_legacy_user_sqlite_key(user_id)
+        legacy_conn = sqlcipher.connect(str(path), check_same_thread=False)
+        try:
+            legacy_conn.execute(f"PRAGMA key = {_quote_sqlcipher_key(legacy_key)}")
+            legacy_conn.execute("PRAGMA cipher_page_size = 4096")
+            _validate_sqlcipher_connection(legacy_conn)
+            legacy_conn.execute(f"PRAGMA rekey = \"x'{raw_key}'\"")
+            _validate_sqlcipher_connection(legacy_conn)
+            return legacy_conn
+        except Exception:
+            legacy_conn.close()
+            raise raw_exc

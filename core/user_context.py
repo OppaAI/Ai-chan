@@ -35,11 +35,19 @@ def normalize_user_id(provider: str | None, user_id: object) -> str:
 
 
 def user_state_dir(user_id: str | None = None) -> Path:
-    """Root directory for user-private mutable state."""
+    """Root directory for user-private mutable state.
+
+    Defaults to ~/.aiko/<user_id>, but keeps existing installs on the legacy
+    ~/.aiko/users/<user_id> layout when that directory already exists.
+    """
     root_value = os.getenv("AIKO_USER_STATE_ROOT") or str(Path.home() / ".aiko")
     root = Path(root_value).expanduser()
     uid = _SAFE_RE.sub("_", user_id or current_user_id()).strip("._-") or _DEFAULT_USER_ID
-    return root / uid
+    state_dir = root / uid
+    legacy_dir = root / "users" / uid
+    if not os.getenv("AIKO_USER_STATE_ROOT") and legacy_dir.exists() and not state_dir.exists():
+        return legacy_dir
+    return state_dir
 
 
 def user_state_path(filename: str, user_id: str | None = None) -> Path:

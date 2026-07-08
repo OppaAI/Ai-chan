@@ -263,7 +263,6 @@ class AikoWeb:
             return
 
         user_context_token = set_current_user_id(str(session["user_id"]))
-        os.environ["AIKO_USER_ID"] = str(session["user_id"])
         await ws.accept()
 
         with self._clients_lock:
@@ -295,7 +294,6 @@ class AikoWeb:
                         text = (msg.get("text") or "").strip()
                         if text:
                             set_current_user_id(str(session["user_id"]))
-                            os.environ["AIKO_USER_ID"] = str(session["user_id"])
                             self._input_q.put(text)
 
                     elif mtype == "vad":
