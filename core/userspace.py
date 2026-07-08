@@ -4,7 +4,7 @@ core/userspace.py
 Helpers for per-user runtime paths and identifiers.
 
 This module provides utilities for managing per-user state in a multi-user
-environment. All user-specific data is stored under ~/.aiko/<user_id>/ with
+environment. All user-specific data is stored under <USER_STATE_ROOT>/<user_id>/ with
 subdirectories:
 
   memory/         — SQLite memory DB, embeddings, consolidation state
@@ -15,7 +15,7 @@ subdirectories:
 
 Key functions:
   - current_user_id()     — get the active user ID from session or env
-  - user_state_dir()      — resolve ~/.aiko/<user_id> for a user
+  - user_state_dir()      — resolve <USER_STATE_ROOT>/<user_id> for a user
   - user_state_path()     — resolve a file path under user state
   - user_workspace_root() — resolve workspace root for a user
   - user_profile_path()   — resolve profile path (defaults to profile/user.md)
@@ -63,17 +63,12 @@ def normalize_user_id(provider: str | None, user_id: object) -> str:
 def user_state_dir(user_id: str | None = None) -> Path:
     """Root directory for user-private mutable state.
 
-    Defaults to ~/.aiko/<user_id>, but keeps existing installs on the legacy
-    ~/.aiko/users/<user_id> layout when that directory already exists.
+    Resolves to <USER_STATE_ROOT>/<user_id>.
     """
     root_value = os.getenv("USER_STATE_ROOT") or str(Path.home() / ".aiko")
     root = Path(root_value).expanduser()
     uid = _SAFE_RE.sub("_", user_id or current_user_id()).strip("._-") or _DEFAULT_USER_ID
-    state_dir = root / uid
-    legacy_dir = root / "users" / uid
-    if not os.getenv("USER_STATE_ROOT") and legacy_dir.exists() and not state_dir.exists():
-        return legacy_dir
-    return state_dir
+    return root / uid
 
 
 def user_state_path(filename: str, user_id: str | None = None) -> Path:
@@ -90,7 +85,7 @@ def user_workspace_root(user_id: str | None = None) -> Path:
 def user_profile_path(user_id: str | None = None) -> Path:
     """Per-user editable profile/bio markdown path.
 
-    Defaults to ~/.aiko/<user_id>/profile/user.md. The profile stores
+    Defaults to <USER_STATE_ROOT>/<user_id>/profile/user.md. The profile stores
     user-provided biographical information, preferences, and identity
     details that Aiko can use to personalize responses.
     """

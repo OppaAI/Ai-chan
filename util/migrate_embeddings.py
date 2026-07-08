@@ -19,7 +19,7 @@ Usage:
     python3 migrate_embeddings.py [--db PATH] [--model MODEL_ID] [--dims N] [--dry-run]
 
 Defaults pulled from environment (.env if python-dotenv is installed):
-    DB:    $SQLITE_MEMORY_PATH  (~/.aiko/<user_id>/memory/memory.db)
+    DB:    $SQLITE_MEMORY_PATH  (<USER_STATE_ROOT>/<user_id>/memory/memory.db)
     MODEL: $EMBED_MODEL         (ferrisS/harrier-oss-v1-270m-fastembed in .env.example)
     DIMS:  $EMBED_DIMS          (640 for harrier-oss-v1-270m)
 """

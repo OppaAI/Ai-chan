@@ -46,7 +46,7 @@ log = get_logger(__name__)
 def weekly_social_root() -> Path:
     """Resolve the active user weekly social output root lazily.
 
-    Defaults to ~/.aiko/<user_id>/workspace/social/weekly. The weekly social
+    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/weekly. The weekly social
     module creates draft bundles for weekly social-media postcards,
     including selected memories, draft posts, and generated images.
     """

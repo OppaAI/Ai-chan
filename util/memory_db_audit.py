@@ -16,7 +16,7 @@ Checks:
 Usage:
   python check_memory_integrity.py [--db PATH] [--fix]
 
-  --db    Path to memory.db  (default: ~/.aiko/<user_id>/memory/memory.db)
+  --db    Path to memory.db  (default: <USER_STATE_ROOT>/<user_id>/memory/memory.db)
   --fix   Auto-delete confirmed orphans (backs up db first)
 ""
 
@@ -316,7 +316,7 @@ def fix_orphans(conn, db_path: str, orphan_mem_ids: list, orphan_vec_ids: list):
 def main():
     parser = argparse.ArgumentParser(description="Aiko memory.db integrity checker")
     parser.add_argument("--db", default=None,
-                        help="Path to memory.db (default: ~/.aiko/<user_id>/memory/memory.db)")
+                        help="Path to memory.db (default: <USER_STATE_ROOT>/<user_id>/memory/memory.db)")
     parser.add_argument("--fix", action="store_true",
                         help="Auto-delete orphans after backing up the db")
     args = parser.parse_args()
