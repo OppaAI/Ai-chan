@@ -60,11 +60,11 @@ body {
   background: var(--bg);
   font-family: var(--font-main);
   color: var(--text);
-  height: 100dvh;
+  height: var(--app-height, 100dvh);
   overflow: hidden;
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
-  grid-template-rows: 100dvh;
+  grid-template-rows: var(--app-height, 100dvh);
 }
 
 /* ── Portrait phones / narrow viewports ───────────────────────────
@@ -225,7 +225,7 @@ body {
 #panel {
   display: grid;
   grid-template-rows: auto 1fr auto auto;
-  height: 100dvh;
+  height: var(--app-height, 100dvh);
   overflow: hidden;
 }
 
