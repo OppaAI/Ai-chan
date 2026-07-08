@@ -19,7 +19,7 @@ Usage:
     python3 migrate_embeddings.py [--db PATH] [--model MODEL_ID] [--dims N] [--dry-run]
 
 Defaults pulled from environment (.env if python-dotenv is installed):
-    DB:    $SQLITE_MEMORY_PATH  (~/.aiko/memory.db)
+    DB:    $SQLITE_MEMORY_PATH  (~/.aiko/<user_id>/memory/memory.db)
     MODEL: $EMBED_MODEL         (ferrisS/harrier-oss-v1-270m-fastembed in .env.example)
     DIMS:  $EMBED_DIMS          (640 for harrier-oss-v1-270m)
 """
@@ -55,7 +55,11 @@ except ImportError:
         return it
 
 # ── defaults ──────────────────────────────────────────────────────────────────
-DEFAULT_DB    = os.getenv("SQLITE_MEMORY_PATH", str(Path.home() / ".aiko" / "memory.db"))
+DEFAULT_DB    = os.getenv("SQLITE_MEMORY_PATH", None)
+if DEFAULT_DB is None:
+    from pathlib import Path
+    user_state_root = Path(os.getenv("USER_STATE_ROOT", str(Path.home() / ".aiko"))).expanduser()
+    DEFAULT_DB = str(user_state_root / "memory" / "memory.db")
 DEFAULT_MODEL = os.getenv("EMBED_MODEL", "ferrisS/harrier-oss-v1-270m-fastembed")
 DEFAULT_DIMS  = int(os.getenv("EMBED_DIMS", "640"))
 BATCH_SIZE    = int(os.getenv("EMBED_BATCH_SIZE", "64"))   # memories per embedding batch — tune down if OOM on Jetson

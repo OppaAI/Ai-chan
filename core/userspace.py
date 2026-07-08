@@ -66,12 +66,12 @@ def user_state_dir(user_id: str | None = None) -> Path:
     Defaults to ~/.aiko/<user_id>, but keeps existing installs on the legacy
     ~/.aiko/users/<user_id> layout when that directory already exists.
     """
-    root_value = os.getenv("AIKO_USER_STATE_ROOT") or str(Path.home() / ".aiko")
+    root_value = os.getenv("USER_STATE_ROOT") or str(Path.home() / ".aiko")
     root = Path(root_value).expanduser()
     uid = _SAFE_RE.sub("_", user_id or current_user_id()).strip("._-") or _DEFAULT_USER_ID
     state_dir = root / uid
     legacy_dir = root / "users" / uid
-    if not os.getenv("AIKO_USER_STATE_ROOT") and legacy_dir.exists() and not state_dir.exists():
+    if not os.getenv("USER_STATE_ROOT") and legacy_dir.exists() and not state_dir.exists():
         return legacy_dir
     return state_dir
 

@@ -23,6 +23,7 @@ Optional:
   REFERENCE_IMAGE — path to Aiko reference PNG (default ~/Aiko-chan/assets/Aiko-chan.png)
   USER_REFERENCE_IMAGE — path to user reference PNG (default ~/Aiko-chan/assets/OppaAI.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
+  USER_STATE_ROOT — root directory for user state (default: ~/.aiko)
 
 Idempotency:
   generate_and_post() pins two kinds of permanent memory per date: a

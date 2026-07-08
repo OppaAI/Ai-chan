@@ -38,28 +38,22 @@ from openai import OpenAI
 
 from core.log import get_logger
 from core.memorize import AikoMemorize
-from core.userspace import user_state_dir, user_workspace_root
+from core.userspace import user_workspace_root
 from core.reflect import _generate_image, _load_soul
 
 log = get_logger(__name__)
 
-def workspace_root() -> Path:
-    """Resolve the active user workspace root lazily."""
-    override = os.getenv("WORKSPACE_ROOT")
-    return (Path(override).expanduser() if override else user_workspace_root()).resolve()
-
-
 def weekly_social_root() -> Path:
     """Resolve the active user weekly social output root lazily.
 
-    Defaults to ~/.aiko/<user_id>/memory/social/weekly. The weekly social
+    Defaults to ~/.aiko/<user_id>/workspace/social/weekly. The weekly social
     module creates draft bundles for weekly social-media postcards,
     including selected memories, draft posts, and generated images.
     """
     override = os.getenv("SOCIAL_ROOT")
     if override:
         return Path(override).expanduser().resolve()
-    return (user_state_dir() / "memory" / "social" / "weekly").resolve()
+    return (user_workspace_root() / "social" / "weekly").resolve()
 TIMEZONE_NAME = os.getenv("TIMEZONE", "UTC")
 
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}

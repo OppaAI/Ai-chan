@@ -5,4 +5,6 @@
 
 # -- Identity --
 AI_NAME: "Aiko"  # Assistant display name used in prompts and UI; usually Aiko.
-USER_ID: "OppaAI"  # Primary user/profile id stored with memories and speaker enrollment; use a stable short id.
+
+# -- User State Root --
+USER_STATE_ROOT: "~/.aiko"  # Root directory for user state. User-specific data stored under ~/.aiko/<user_id>/

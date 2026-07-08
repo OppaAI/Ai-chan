@@ -57,10 +57,18 @@ def workspace_root() -> Path:
     return (Path(override).expanduser() if override else user_workspace_root()).resolve()
 
 
+def user_state_root() -> Path:
+    """Resolve the active user state root lazily."""
+    override = os.getenv("USER_STATE_ROOT")
+    return (Path(override).expanduser() if override else Path.home() / ".aiko").resolve()
+
+
 def schedule_path() -> Path:
     """Resolve the active user schedule path lazily."""
     override = os.getenv("SCHEDULE_PATH")
-    return (Path(override).expanduser() if override else user_state_path("schedule.json")).resolve()
+    if override:
+        return Path(override).expanduser().resolve()
+    return (user_state_root() / "tasks" / "schedule.json").resolve()
 
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
 

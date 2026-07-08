@@ -16,9 +16,9 @@ Checks:
 Usage:
   python check_memory_integrity.py [--db PATH] [--fix]
 
-  --db    Path to memory.db  (default: ~/.aiko/memory.db)
+  --db    Path to memory.db  (default: ~/.aiko/<user_id>/memory/memory.db)
   --fix   Auto-delete confirmed orphans (backs up db first)
-"""
+""
 
 import argparse
 import shutil
@@ -315,13 +315,19 @@ def fix_orphans(conn, db_path: str, orphan_mem_ids: list, orphan_vec_ids: list):
 
 def main():
     parser = argparse.ArgumentParser(description="Aiko memory.db integrity checker")
-    parser.add_argument("--db", default=str(Path.home() / ".aiko" / "memory.db"),
-                        help="Path to memory.db")
+    parser.add_argument("--db", default=None,
+                        help="Path to memory.db (default: ~/.aiko/<user_id>/memory/memory.db)")
     parser.add_argument("--fix", action="store_true",
                         help="Auto-delete orphans after backing up the db")
     args = parser.parse_args()
 
     db_path = args.db
+    if db_path is None:
+        # Build path from USER_STATE_ROOT
+        from pathlib import Path
+        import os
+        user_state_root = Path(os.getenv("USER_STATE_ROOT", str(Path.home() / ".aiko"))).expanduser()
+        db_path = str(user_state_root / "memory" / "memory.db")
     if not Path(db_path).exists():
         print(f"{RED}Error:{RESET} Database not found at: {db_path}")
         print("Use --db to specify the correct path.")
