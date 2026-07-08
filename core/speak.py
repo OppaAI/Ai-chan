@@ -47,6 +47,15 @@ MIOTTS_API_URL = os.getenv("MIOTTS_API_URL",  "http://localhost:8001")
 MIOTTS_PRESET  = os.getenv("MIOTTS_PRESET",   "jp_female")
 MIOTTS_DEVICE  = int(os.getenv("MIOTTS_DEVICE", "-1"))
 
+MIOTTS_MAX_TOKENS         = int(os.getenv("MIOTTS_MAX_TOKENS", "300"))
+MIOTTS_TEMPERATURE        = float(os.getenv("MIOTTS_TEMPERATURE", "0.8"))
+MIOTTS_TOP_P              = float(os.getenv("MIOTTS_TOP_P", "1.0"))
+MIOTTS_REPETITION_PENALTY = float(os.getenv("MIOTTS_REPETITION_PENALTY", "1.15"))
+MIOTTS_PRESENCE_PENALTY   = float(os.getenv("MIOTTS_PRESENCE_PENALTY", "0.0"))
+MIOTTS_FREQUENCY_PENALTY  = float(os.getenv("MIOTTS_FREQUENCY_PENALTY", "0.0"))
+MIOTTS_BEST_OF_N_ENABLED  = os.getenv("MIOTTS_BEST_OF_N_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
+MIOTTS_BEST_OF_N          = int(os.getenv("MIOTTS_BEST_OF_N", "2"))
+
 # ── text sanitization ─────────────────────────────────────────────────────────
 
 _REPLACEMENTS = [
@@ -341,7 +350,19 @@ class AikoSpeak:
         payload = json.dumps({
             "text": text,
             "reference": {"type": "preset", "preset_id": MIOTTS_PRESET},
-            "output":    {"format": "base64"},
+            "llm": {
+                "temperature": MIOTTS_TEMPERATURE,
+                "top_p": MIOTTS_TOP_P,
+                "max_tokens": MIOTTS_MAX_TOKENS,
+                "repetition_penalty": MIOTTS_REPETITION_PENALTY,
+                "presence_penalty": MIOTTS_PRESENCE_PENALTY,
+                "frequency_penalty": MIOTTS_FREQUENCY_PENALTY,
+            },
+            "best_of_n": {
+                "enabled": MIOTTS_BEST_OF_N_ENABLED,
+                "n": MIOTTS_BEST_OF_N,
+            },
+            "output": {"format": "base64"},
         }).encode()
         req = urllib.request.Request(
             f"{MIOTTS_API_URL}/v1/tts",
