@@ -62,16 +62,6 @@ def schedule_path() -> Path:
     override = os.getenv("SCHEDULE_PATH")
     return (Path(override).expanduser() if override else user_state_path("schedule.json")).resolve()
 
-
-def daily_experience_path(user_id: str | None = None) -> Path:
-    """Resolve the active user daily experience journal path."""
-    return user_state_path("memory/daily_experience.jsonl", user_id).resolve()
-
-
-def dream_state_path(user_id: str | None = None) -> Path:
-    """Resolve the active user dream state path."""
-    return user_state_path("memory/dream_state.json", user_id).resolve()
-
 DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
 
 # System job timing — env overridable, not user-modifiable via schedule.json

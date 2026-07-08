@@ -1,4 +1,30 @@
-"""Helpers for per-user runtime paths and identifiers."""
+"""
+core/userspace.py
+
+Helpers for per-user runtime paths and identifiers.
+
+This module provides utilities for managing per-user state in a multi-user
+environment. All user-specific data is stored under ~/.aiko/<user_id>/ with
+subdirectories:
+
+  memory/         — SQLite memory DB, embeddings, consolidation state
+  profile/        — user.md profile/bio markdown  
+  workspace/      — user workspace (code, projects)
+  social/weekly/  — weekly social draft bundles (images, posts)
+  logs/           — per-user log files
+
+Key functions:
+  - current_user_id()     — get the active user ID from session or env
+  - user_state_dir()      — resolve ~/.aiko/<user_id> for a user
+  - user_state_path()     — resolve a file path under user state
+  - user_workspace_root() — resolve workspace root for a user
+  - user_profile_path()   — resolve profile path (defaults to profile/user.md)
+  - set_current_user_id() / reset_current_user_id() — per-request user context
+
+The multi-user design allows running multiple Aiko instances (e.g., for
+different team members) on the same machine, each with their own isolated
+state, memories, and configurations.
+"""
 
 from __future__ import annotations
 

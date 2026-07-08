@@ -1,4 +1,19 @@
-"""Shared helpers for Aiko tool modules."""
+"""
+core/toolkit/common.py
+
+Shared helpers for Aiko tool modules.
+
+This module provides utilities used across multiple toolkit modules:
+
+  - workspace_root()  — user-specific workspace directory
+  - notes_dir()       — user notes subdirectory
+  - now_stamp()       — UTC timestamp for generated files
+  - slugify()         — stable file slug generation from text
+  - safe_path()       — path resolution with traversal prevention
+  - json_block()      — formatted JSON output for tool results
+
+All functions respect the per-user isolation provided by core/userspace.py.
+"""
 
 from __future__ import annotations
 
