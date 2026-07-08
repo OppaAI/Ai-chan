@@ -16,17 +16,12 @@ import importlib
 import importlib.util
 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
-MAX_RESULTS = int(os.getenv("WEB_SEARCH_MAX_RESULTS", 5))
+MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 
-# -- deep_search (search + fetch pass, now tunable for extra breadth) --
+# -- deep_search (search + fetch pass, tunable for extra breadth) --
 DEEP_SEARCH_MAX_RESULTS = int(os.getenv("DEEP_SEARCH_MAX_RESULTS", 3))
 DEEP_SEARCH_FETCH_TOP = int(os.getenv("DEEP_SEARCH_FETCH_TOP", 2))
 DEEP_SEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_SEARCH_MAX_CHARS_PER_PAGE", 2000))
-# How many SearXNG result pages to pull *concurrently* and merge/dedup for
-# the SAME query before picking fetch_top URLs. This is what makes
-# deep_search "more than one search" without turning it into the adaptive
-# deep_research tier — no LLM query rewriting, just wider coverage. Set to
-# 3 to approximate "3 search + 2 fetch".
 DEEP_SEARCH_SEARCH_PAGES = int(os.getenv("DEEP_SEARCH_SEARCH_PAGES", 1))
 DEEP_SEARCH_MAX_WORKERS = int(os.getenv("DEEP_SEARCH_MAX_WORKERS", 4))
 
@@ -41,13 +36,18 @@ DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_SYNTHESIS_MAX_
 
 # -- in-memory evidence condensation (embedding-based relevance filtering) --
 # Everything here is plain Python lists/tuples in process memory — nothing
-# is written to disk. Fetched pages are no longer bound to a fixed char
-# count truncated blindly from the front; instead, arbitrarily many chunks
-# get scored for relevance and only the ones that clear the bar survive.
+# is written to disk. Condensing is a FILTER, not a rewrite: chunks are
+# scored for relevance and either kept verbatim or dropped entirely. No text
+# is summarized or altered by this step; that only happens later, in
+# deep_research's separate LLM synthesis call.
 CONDENSE_CHUNK_CHARS = int(os.getenv("CONDENSE_CHUNK_CHARS", 500))
 CONDENSE_TOP_K = int(os.getenv("CONDENSE_TOP_K", 8))
 CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
-# Caps embedding latency regardless of how many pages/rounds were fetched.
+# Caps embedding calls PER fetch pipeline invocation (i.e. per deep_search
+# call, or per round inside deep_research) — not a lifetime cap. Since each
+# page's chunks are now only ever embedded once (see _fetch_and_score_pipeline
+# below), this bound is what actually determines worst-case embedding
+# latency for a single round/call.
 CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("CONDENSE_MAX_CHUNKS_TO_SCORE", 60))
 
 
@@ -115,8 +115,8 @@ def web_fetch(url: str, max_chars: int = 4000) -> str:
 
     This is the one-and-only "fetch a page" primitive in the toolkit. Both
     the model's direct fetch_page-style calls and deep_search/deep_research's
-    internal (now concurrent) page reads route through this function, so
-    there is exactly one implementation to reason about.
+    internal pipelined page reads route through this function, so there is
+    exactly one implementation to reason about.
     """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -136,32 +136,9 @@ def web_fetch(url: str, max_chars: int = 4000) -> str:
         return f"[fetch failed: {e}]"
 
 
-def _fetch_urls_concurrent(urls: list[str], max_chars: int, max_workers: int = 4) -> list[tuple[str, str]]:
-    """Fetch multiple URLs at once — real concurrency since fetching is
-    I/O-bound and releases the GIL. Returns only (url, text) pairs that
-    succeeded; failures are dropped here, not retried (retry policy lives
-    in agentic.py's execute_tool_with_policy). Nothing here touches disk —
-    results are plain in-memory tuples for the caller to condense."""
-    if not urls:
-        return []
-    results: list[tuple[str, str]] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(urls)))) as pool:
-        future_to_url = {pool.submit(web_fetch, url, max_chars): url for url in urls}
-        for future in concurrent.futures.as_completed(future_to_url):
-            url = future_to_url[future]
-            try:
-                text = future.result()
-            except Exception:
-                continue
-            if not text.startswith("[fetch failed"):
-                results.append((url, text))
-    return results
-
-
 def _extract_urls(raw_results: str, limit: int) -> list[str]:
     """Retained for any external caller still parsing web_search()'s
-    formatted text; deep_search/deep_research use _web_search_raw directly
-    now and no longer go through this."""
+    formatted text; deep_search/deep_research use _web_search_raw directly."""
     result_blocks = raw_results.split("\n\n")[1:]
     urls = []
     for block in result_blocks[:limit]:
@@ -201,60 +178,105 @@ def _chunk_text(url: str, text: str, chunk_chars: int) -> list[tuple[str, str]]:
     return chunks
 
 
-def condense_evidence(
-    pages: list[tuple[str, str]],
+def _score_chunk(chunk: str, query: str, embedder, query_vec) -> float:
+    """Score one chunk against the query. Caller supplies a precomputed
+    query_vec (embedded once per pipeline call, not once per chunk)."""
+    if embedder is not None and query_vec is not None:
+        try:
+            chunk_vec = embedder.embed_query(chunk)
+            return _cosine(query_vec, chunk_vec)
+        except Exception:
+            pass
+    return _keyword_overlap_score(query, chunk)
+
+
+def _fetch_and_score_pipeline(
+    urls: list[str],
     query: str,
-    embedder=None,
-    top_k: int = CONDENSE_TOP_K,
+    embedder,
+    max_chars_per_page: int,
     chunk_chars: int = CONDENSE_CHUNK_CHARS,
-    min_score: float = CONDENSE_MIN_SCORE,
+    max_workers: int = DEEP_SEARCH_MAX_WORKERS,
     max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
-) -> str:
-    """Stitch fetched pages into a compact, query-relevant bundle.
+) -> tuple[list[tuple[float, str, str]], list[tuple[str, str]]]:
+    """Fetch multiple URLs concurrently, and score each page's chunks for
+    relevance THE MOMENT that page finishes downloading — not after every
+    URL has finished fetching.
 
-    Everything is in-memory only (plain lists/tuples passed in, nothing
-    written to disk). Not bound to a fixed page/char count: arbitrarily many
-    (url, text) pages can be passed in, every chunk gets scored for
-    relevance, and only chunks clearing `min_score` survive. This is what
-    lets deep_search/deep_research scale fetch_top/rounds/search_pages up
-    without a matching blowup in what actually reaches the LLM's context.
+    Fetching is I/O-bound (network wait, releases the GIL); embedding is
+    compute-bound. Because this loop scores page A's chunks inside the
+    `as_completed` iteration, that scoring work runs on the main thread
+    while pages B/C/D are still downloading on other threads — real overlap,
+    not sequential fetch-then-embed. A slow site no longer blocks embedding
+    of pages that already landed.
 
-    If nothing clears the relevance threshold, this returns an explicit
-    sentinel string — not an empty string, not the raw pages — so the
-    calling LLM is told plainly that fetched sources didn't match the
-    query, instead of silently being handed irrelevant text it might
-    paraphrase into a false-confidence answer.
+    Returns (scored_chunks, pages) — scored_chunks is a flat list of
+    (score, url, chunk_text) tuples ready for dedup/filter/sort;
+    pages is the raw (url, full_text) list, kept in case a caller needs it
+    (e.g. for a raw-evidence log). Both are in-memory only — nothing here
+    touches disk.
     """
-    all_chunks: list[tuple[str, str]] = []
-    for url, text in pages:
-        all_chunks.extend(_chunk_text(url, text, chunk_chars))
-
-    if not all_chunks:
-        return "[no fetched content available to condense]"
-
-    all_chunks = all_chunks[:max_chunks_to_score]
+    if not urls:
+        return [], []
 
     use_embedder = embedder is not None and hasattr(embedder, "embed_query")
-    scored: list[tuple[float, str, str]] = []  # (score, url, chunk)
-
+    query_vec = None
     if use_embedder:
         try:
             query_vec = embedder.embed_query(query)
-            for url, chunk in all_chunks:
-                chunk_vec = embedder.embed_query(chunk)
-                scored.append((_cosine(query_vec, chunk_vec), url, chunk))
         except Exception:
             use_embedder = False
-            scored = []
 
-    if not use_embedder:
-        scored = [(_keyword_overlap_score(query, chunk), url, chunk) for url, chunk in all_chunks]
+    scored: list[tuple[float, str, str]] = []
+    pages: list[tuple[str, str]] = []
+    chunks_scored = 0
 
-    # Dedup near-identical chunks — common when multiple search-result pages
-    # or refined-query rounds re-surface the same boilerplate/nav text.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(urls)))) as pool:
+        future_to_url = {pool.submit(web_fetch, url, max_chars_per_page): url for url in urls}
+        for future in concurrent.futures.as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                text = future.result()
+            except Exception:
+                continue
+            if text.startswith("[fetch failed"):
+                continue
+            pages.append((url, text))
+
+            # Score this page's chunks now, while other fetches are still
+            # in flight — this is the "embed while still fetching" overlap.
+            for _, chunk in _chunk_text(url, text, chunk_chars):
+                if chunks_scored >= max_chunks_to_score:
+                    break
+                score = _score_chunk(chunk, query, embedder if use_embedder else None, query_vec)
+                scored.append((score, url, chunk))
+                chunks_scored += 1
+
+    return scored, pages
+
+
+def _finalize_condensed(
+    scored_chunks: list[tuple[float, str, str]],
+    query: str,
+    top_k: int = CONDENSE_TOP_K,
+    min_score: float = CONDENSE_MIN_SCORE,
+) -> str:
+    """Dedup, filter, rank, and format already-scored chunks into the final
+    bundle. No embedding happens here — this is pure filtering/sorting over
+    scores computed earlier by _fetch_and_score_pipeline, which is what lets
+    deep_research call this once per round without re-embedding prior
+    rounds' chunks every time.
+
+    Filtering is literal: chunks below min_score are dropped, not truncated
+    or reworded. If nothing clears the bar, returns an explicit sentinel
+    instead of silently handing back irrelevant text.
+    """
+    if not scored_chunks:
+        return "[no fetched content available to condense]"
+
     seen_hashes: set[str] = set()
     deduped: list[tuple[float, str, str]] = []
-    for score, url, chunk in scored:
+    for score, url, chunk in scored_chunks:
         h = hashlib.sha1(chunk.strip().lower().encode("utf-8", "ignore")).hexdigest()
         if h in seen_hashes:
             continue
@@ -280,6 +302,41 @@ def condense_evidence(
     return "\n\n".join(lines)
 
 
+def condense_evidence(
+    pages: list[tuple[str, str]],
+    query: str,
+    embedder=None,
+    top_k: int = CONDENSE_TOP_K,
+    chunk_chars: int = CONDENSE_CHUNK_CHARS,
+    min_score: float = CONDENSE_MIN_SCORE,
+    max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
+) -> str:
+    """Convenience wrapper for callers that already have raw (url, text)
+    pages in hand (no fetching to overlap with) and just want them chunked,
+    scored, and condensed in one call. deep_search/deep_research no longer
+    use this internally — they use _fetch_and_score_pipeline so embedding
+    overlaps with fetching — but this is kept for any other caller that
+    wants condensing without a pipeline."""
+    all_chunks: list[tuple[str, str]] = []
+    for url, text in pages:
+        all_chunks.extend(_chunk_text(url, text, chunk_chars))
+    all_chunks = all_chunks[:max_chunks_to_score]
+
+    use_embedder = embedder is not None and hasattr(embedder, "embed_query")
+    query_vec = None
+    if use_embedder:
+        try:
+            query_vec = embedder.embed_query(query)
+        except Exception:
+            use_embedder = False
+
+    scored = [
+        (_score_chunk(chunk, query, embedder if use_embedder else None, query_vec), url, chunk)
+        for url, chunk in all_chunks
+    ]
+    return _finalize_condensed(scored, query, top_k=top_k, min_score=min_score)
+
+
 def deep_search(
     query: str,
     max_results: int = DEEP_SEARCH_MAX_RESULTS,
@@ -289,14 +346,14 @@ def deep_search(
     embedder=None,
 ) -> str:
     """Search (optionally across multiple SearXNG result pages, pulled
-    concurrently), fetch the top pages (also concurrently), and return one
-    compact, relevance-condensed bundle.
+    concurrently), then fetch the top pages while scoring each one for
+    relevance as it lands (see _fetch_and_score_pipeline) — not after every
+    page has finished downloading.
 
-    search_pages > 1 is what makes this "more than one search": it pulls
-    several result pages for the SAME query concurrently and merges/dedups
-    them by URL, widening coverage without an LLM rewriting the query (that
-    adaptive query rewriting is deep_research's job, not this tool's). Tune
-    DEEP_SEARCH_SEARCH_PAGES up (e.g. 3) if a single page is too shallow.
+    search_pages > 1 pulls several result pages for the SAME query
+    concurrently and merges/dedups them by URL, widening coverage without
+    an LLM rewriting the query (that's deep_research's job). Tune
+    DEEP_SEARCH_SEARCH_PAGES up (e.g. 3) for "3 search + 2 fetch" breadth.
     """
     if not query or not query.strip():
         return "[search failed: empty query]"
@@ -339,12 +396,14 @@ def deep_search(
     snippet_bundle = "\n\n".join(snippet_lines)
 
     fetch_urls = [r["url"].strip() for r in deduped_results[:fetch_top] if r.get("url")]
-    fetched_pages = _fetch_urls_concurrent(fetch_urls, max_chars_per_page, max_workers=DEEP_SEARCH_MAX_WORKERS)
+    scored_chunks, fetched_pages = _fetch_and_score_pipeline(
+        fetch_urls, query, embedder, max_chars_per_page, max_workers=DEEP_SEARCH_MAX_WORKERS,
+    )
 
     if not fetched_pages:
         return snippet_bundle
 
-    condensed = condense_evidence(fetched_pages, query, embedder=embedder)
+    condensed = _finalize_condensed(scored_chunks, query)
     return f"{snippet_bundle}\n\n{condensed}"
 
 
@@ -378,24 +437,30 @@ def deep_research(
     fetch_top: int = DEEP_RESEARCH_FETCH_TOP,
     max_chars_per_page: int = DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
 ) -> str:
-    """Multi-round adaptive research: search, fetch (concurrently), condense
-    with embedding-based relevance filtering, decide whether to refine the
-    query and search again, repeat, then return a synthesized bundle.
+    """Multi-round adaptive research: search, fetch+score concurrently
+    (embedding overlaps with in-flight fetches, see
+    _fetch_and_score_pipeline), decide whether to refine the query and
+    search again, repeat, then return a synthesized bundle.
+
+    Scored chunks are ACCUMULATED across rounds rather than recomputed —
+    each page's chunks are embedded exactly once, the first time they're
+    fetched. Earlier rounds' evidence is reused via _finalize_condensed
+    (pure sort/filter, no re-embedding) on every subsequent decision call.
+    Previously this recomputed condense_evidence() over the full page list
+    every round, silently re-embedding already-scored earlier rounds' pages
+    each time — that redundant cost is what this version removes.
 
     Without client/model this returns a single search+fetch+condense round,
     equivalent to deep_search — there is no model available to pick a
     DIFFERENT follow-up query, so a second identical-query round would just
-    re-fetch the same evidence for no gain. Pass client/model (as
-    agentic.py's dispatch_tool does) to get true multi-round adaptive
-    behavior. (Previously this docstring claimed a fixed 2-round fallback
-    without a model; that never matched the code, which broke after round 1
-    — this description now matches actual behavior.)
+    re-fetch the same evidence for no gain.
     """
     if not query or not query.strip():
         return "[search failed: empty query]"
 
     rounds: list[str] = []
-    all_pages: list[tuple[str, str]] = []  # in-memory only, accumulates across all rounds
+    all_scored_chunks: list[tuple[float, str, str]] = []  # accumulated, never re-embedded
+    fetched_page_count = 0
     queries_used: list[str] = [query.strip()]
     seen_urls: set[str] = set()
     current_query = query.strip()
@@ -415,11 +480,15 @@ def deep_research(
             if r.get("url") and r["url"].strip() not in seen_urls
         ][:fetch_top]
         seen_urls.update(new_urls)
-        fetched = _fetch_urls_concurrent(new_urls, max_chars_per_page, max_workers=DEEP_SEARCH_MAX_WORKERS)
 
-        if fetched:
-            all_pages.extend(fetched)
-            rounds.append(f"[Round {round_num} — query: {current_query} — fetched {len(fetched)} page(s)]")
+        round_scored, round_pages = _fetch_and_score_pipeline(
+            new_urls, current_query, embedder, max_chars_per_page, max_workers=DEEP_SEARCH_MAX_WORKERS,
+        )
+
+        if round_pages:
+            all_scored_chunks.extend(round_scored)
+            fetched_page_count += len(round_pages)
+            rounds.append(f"[Round {round_num} — query: {current_query} — fetched {len(round_pages)} page(s)]")
         elif round_num == 1:
             snippet_lines = [f"[Round {round_num} — query: {current_query} — snippets only, no pages fetched]"]
             for r in results[:DEEP_SEARCH_MAX_RESULTS]:
@@ -429,10 +498,9 @@ def deep_research(
         if not adaptive or round_num == max_rounds:
             break
 
-        # Condensed, not raw — keeps the decision prompt small regardless
-        # of how many pages have piled up across rounds.
-        evidence_so_far = condense_evidence(
-            all_pages, query, embedder=embedder, top_k=12
+        # Cheap: sort/filter over chunks already scored, no new embedding calls.
+        evidence_so_far = _finalize_condensed(
+            all_scored_chunks, query, top_k=12
         )[:DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION]
         decision_prompt = (
             "You are directing a multi-round web research process. Given the "
@@ -465,12 +533,12 @@ def deep_research(
         header += f"\n[Query refinements: {' -> '.join(queries_used)}]"
 
     condensed_evidence = (
-        condense_evidence(all_pages, query, embedder=embedder) if all_pages
+        _finalize_condensed(all_scored_chunks, query) if fetched_page_count
         else "[no pages were successfully fetched across any round; snippets only]"
     )
     rounds_log = "\n\n".join(rounds)
 
-    if adaptive and all_pages:
+    if adaptive and fetched_page_count:
         synthesis_prompt = (
             "Synthesize the following research evidence into a concise, "
             "well-organized answer to the original question. Note any "
