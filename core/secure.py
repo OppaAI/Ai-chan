@@ -17,15 +17,15 @@ def _truthy(value: str | None) -> bool:
 
 def sqlite_encryption_enabled() -> bool:
     """Return True when SQLCipher-backed SQLite encryption is requested."""
-    return _truthy(os.getenv("AIKO_SQLITE_ENCRYPTION"))
+    return _truthy(os.getenv("SQLITE_ENCRYPTION"))
 
 
 def _data_secret() -> bytes:
     """Return the server-side secret used to derive per-user data keys."""
-    secret = os.getenv("AIKO_DATA_KEY_SECRET") or os.getenv("SECRET_KEY")
+    secret = os.getenv("DATA_KEY_SECRET") or os.getenv("SECRET_KEY")
     if not secret:
-        raise RuntimeError(
-            "AIKO_SQLITE_ENCRYPTION is enabled but neither AIKO_DATA_KEY_SECRET "
+        raise ValueError(
+            "SQLITE_ENCRYPTION is enabled but neither DATA_KEY_SECRET "
             "nor SECRET_KEY is set. Set a high-entropy server secret first."
         )
     return secret.encode("utf-8")
@@ -35,7 +35,7 @@ def derive_user_sqlite_key(user_id: str) -> str:
     """Derive a stable per-user 256-bit SQLCipher raw key.
 
     OAuth user ids are public identifiers, so they are context/salt only. The
-    secrecy comes from AIKO_DATA_KEY_SECRET (preferred) or SECRET_KEY.
+    secrecy comes from DATA_KEY_SECRET (preferred) or SECRET_KEY.
     """
     digest = hmac.new(_data_secret(), f"aiko-sqlite:{user_id}".encode("utf-8"), hashlib.sha256).digest()
     return digest.hex()
@@ -58,7 +58,7 @@ def _validate_sqlcipher_connection(conn: Any) -> None:
 
 
 def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
-    """Connect to SQLite, using SQLCipher when AIKO_SQLITE_ENCRYPTION=1.
+    """Connect to SQLite, using SQLCipher when SQLITE_ENCRYPTION=1.
 
     The default path uses the stdlib sqlite3 module exactly as before. When
     encryption is enabled, pysqlcipher3 must be installed in the runtime image.
@@ -71,8 +71,8 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
         from pysqlcipher3 import dbapi2 as sqlcipher  # type: ignore
     except ImportError as exc:
         raise RuntimeError(
-            "AIKO_SQLITE_ENCRYPTION=1 requires pysqlcipher3/SQLCipher in the runtime image. "
-            "Install a SQLCipher-capable Python driver or disable AIKO_SQLITE_ENCRYPTION."
+            "SQLITE_ENCRYPTION=1 requires pysqlcipher3/SQLCipher in the runtime image. "
+            "Install a SQLCipher-capable Python driver or disable SQLITE_ENCRYPTION."
         ) from exc
 
     raw_key = derive_user_sqlite_key(user_id)

@@ -1,1 +1,0 @@
-Ready to write notes in workspace/notes while Oppa is away. Use the folder for any saved drafts, reminders, or task artifacts.
