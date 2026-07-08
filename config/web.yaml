@@ -2,22 +2,36 @@
 #
 # Settings for core/toolkit/researcher.py and semantic web-search triggering.
 # Controls local SearXNG endpoint and how many search results the agent consumes.
-
 # -- SearXNG --
 SEARXNG_URL: "http://localhost:8888"  # Base URL for self-hosted SearXNG instance.
 SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from chat; higher means fewer searches.
-SEARXNG_MAX_RESULTS: "3"  # Maximum search results returned per query to agent tools.
 
-# -- deep_search (single search + fetch pass) --
-DEEP_SEARCH_MAX_RESULTS: "3"  # Search results to request per deep_search call.
-DEEP_SEARCH_FETCH_TOP: "2"  # How many of those results to actually fetch full page text for.
-DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before bundling.
+# -- web_search (light weight web search for chat that needs updated information) --
+WEB_SEARCH_MAX_RESULTS: "3"  # Maximum search results returned per query to the plain web_search tool (snippet-only discovery). Independent of DEEP_SEARCH_MAX_RESULTS below — different tool.
+
+# -- deep_search (search + fetch pass, now tunable for extra breadth) --
+DEEP_SEARCH_MAX_RESULTS: "3"  # Search results to request per SearXNG page within a deep_search call.
+DEEP_SEARCH_FETCH_TOP: "2"  # How many (deduped) results to actually fetch full page text for.
+DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before condensing.
+DEEP_SEARCH_SEARCH_PAGES: "1"  # How many SearXNG result pages to pull CONCURRENTLY for the SAME query and merge/dedup by URL, widening one-pass coverage without an LLM rewriting the query. Set to 3 for "3 search + 2 fetch" breadth. This is the tunable for "deep_search only does 1 search."
+DEEP_SEARCH_MAX_WORKERS: "4"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on AuRoRA (Jetson, limited cores) vs AIVA if contention shows up.
 
 # -- deep_research (multi-round adaptive research) --
 DEEP_RESEARCH_MAX_ROUNDS: "3"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness.
-DEEP_RESEARCH_FETCH_TOP: "2"  # Pages fetched per round.
+DEEP_RESEARCH_FETCH_TOP: "2"  # Pages fetched per round (now fetched concurrently, not sequentially).
 DEEP_RESEARCH_MAX_CHARS_PER_PAGE: "1500"  # Per-page fetched text cap per round (smaller than deep_search's since rounds accumulate).
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "6000"  # How much accumulated evidence the continue/refine decision call sees.
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "8000"  # How much accumulated evidence the final synthesis call sees.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "6000"  # How much CONDENSED (not raw) accumulated evidence the continue/refine decision call sees.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "8000"  # How much condensed accumulated evidence the final synthesis call sees.
 DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for the continue/refine decision call.
 DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "600"  # Token budget for the final synthesis call.
+
+# -- in-memory evidence condensation (embedding-based relevance filtering) --
+# Shared by deep_search and deep_research. Everything here stays in process
+# memory (plain lists/tuples) — nothing is written to disk. Fetched text is
+# no longer truncated blindly by char count; instead every chunk is scored
+# for relevance to the query and only chunks clearing CONDENSE_MIN_SCORE
+# survive into what the agent/LLM actually sees.
+CONDENSE_CHUNK_CHARS: "500"  # Chunk size (chars) fetched pages are split into before scoring.
+CONDENSE_TOP_K: "8"  # Max relevant chunks kept in the final condensed bundle, regardless of how many pages/rounds were fetched.
+CONDENSE_MIN_SCORE: "0.15"  # Minimum relevance score (cosine similarity, or keyword-overlap fallback) to keep a chunk. Below this, content is dropped, not truncated-and-kept.
+CONDENSE_MAX_CHUNKS_TO_SCORE: "60"  # Caps embedding latency regardless of total fetched volume. Lower on AuRoRA (Jetson) if embedding calls stack up (~200ms each per your harrier embedder benchmarks — 60 chunks ≈ 12s worst case).
