@@ -7,3 +7,17 @@
 SEARXNG_URL: "http://localhost:8888"  # Base URL for self-hosted SearXNG instance.
 SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from chat; higher means fewer searches.
 SEARXNG_MAX_RESULTS: "3"  # Maximum search results returned per query to agent tools.
+
+# -- deep_search (single search + fetch pass) --
+DEEP_SEARCH_MAX_RESULTS: "3"  # Search results to request per deep_search call.
+DEEP_SEARCH_FETCH_TOP: "2"  # How many of those results to actually fetch full page text for.
+DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before bundling.
+
+# -- deep_research (multi-round adaptive research) --
+DEEP_RESEARCH_MAX_ROUNDS: "3"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness.
+DEEP_RESEARCH_FETCH_TOP: "2"  # Pages fetched per round.
+DEEP_RESEARCH_MAX_CHARS_PER_PAGE: "1500"  # Per-page fetched text cap per round (smaller than deep_search's since rounds accumulate).
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "6000"  # How much accumulated evidence the continue/refine decision call sees.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "8000"  # How much accumulated evidence the final synthesis call sees.
+DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for the continue/refine decision call.
+DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "600"  # Token budget for the final synthesis call.
