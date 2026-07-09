@@ -25,7 +25,7 @@ DEEP_IDLE_LEARN_SECONDS: "7200"  # Long-idle threshold. Once chat has been quiet
 # LEARN_TOPIC_RESUME_ENABLED: "true"  # Whether quick_studying should resume a partial topic rather than always taking the latest chat message. TODO.
 
 # -- quick_studying (thin alias over deep_research; interactive-scale) --
-QUICK_STUDY_MAX_ROUNDS: "5"  # Search+fetch rounds for a quick study pass (was hardcoded to 3 in learn.py's quick_studying() default — pull this out to an env-backed constant to make it configurable). Each round = 1 deep_search() call; inherits DEEP_SEARCH_NUM_FETCHES / DEEP_SEARCH_MAX_CHARS_PER_PAGE from web.yaml. Raised from 3 to 5 per your request — more coverage per short idle gap, still cheap enough to not block a "quick" pass.
+QUICK_STUDY_MAX_ROUNDS: "5"  # Fetched-source research rounds for a quick study pass (was hardcoded to 3 in learn.py's quick_studying() default — pull this out to an env-backed constant to make it configurable). Each round uses deep_research fetched-source settings in web.yaml (DEEP_RESEARCH_NUM_FETCHES / DEEP_RESEARCH_MAX_CHARS_PER_PAGE). Raised from 3 to 5 per your request — more coverage per short idle gap, still cheap enough to not block a "quick" pass.
 
 # -- deep_studying (autonomous, long-running; genuine idle/overnight) --
 DEEP_STUDY_MAX_ITERATIONS: "10"  # Hard ceiling on search+fetch iterations for one deep_studying() call. Starting point per your request — was 60. Raise once you've seen how long 10 iterations actually takes on the Jetson's Ministral-3B and how it feels alongside RAM headroom; 60 is likely too many for AuRoRA's 8GB unified memory to sustain unattended.

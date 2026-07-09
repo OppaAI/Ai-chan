@@ -6,7 +6,9 @@ configs:
 - identity.yaml  # assistant/user names
 - think.yaml  # chat LLM and sampling
 - agentic.yaml  # agent loop and routing
-- knowledge.yaml  # knowledge base / RAG sources
+- wiki.yaml  # human-authored wiki/persona/config/docs RAG sources
+- knowledge.yaml  # learned knowledge vector RAG store
+- experience.yaml  # task experience vector RAG store
 - memorize.yaml  # memory, embeddings, decay, consolidation
 - skills.yaml  # skill registry / capabilities
 - learn.yaml  # quick/deep studying + idle learner tunables

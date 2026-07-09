@@ -3,7 +3,7 @@ id: aurora_forecast_watch
 name: Aurora Forecast Watch
 summary: Monitor source-backed aurora/Kp forecasts on a schedule and alert Oppa when the configured threshold is met.
 triggers: aurora forecast, northern lights, Kp index, KP > 4, KP > 5, geomagnetic storm, space weather, NOAA SWPC, aurora alert, aurora watch
-tools: web_search, web_fetch, schedule_job, save_note
+tools: deep_search, deep_research, schedule_job, save_note
 ---
 # Aurora Forecast Watch
 
@@ -27,7 +27,7 @@ Use this skill when Oppa asks Aiko to watch aurora conditions, Kp forecasts, geo
    - `draft_email`: draft/stage email text locally only;
    - `email`: only if a real email-sending tool/account is configured.
 3. Schedule an hourly `agentic` job with `schedule_job` when Oppa asks Aiko to keep checking.
-4. In each check, fetch current/forecast Kp from NOAA/SWPC or another verified source.
+4. In each check, use `deep_research` to fetch current/forecast Kp from NOAA/SWPC or another verified source; use `deep_search` only for quick source discovery/snippets.
 5. If current or forecast Kp meets/exceeds the threshold, produce a concise alert with:
    - current or forecast Kp value;
    - forecast time/window and timezone;

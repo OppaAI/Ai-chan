@@ -26,17 +26,22 @@ log = get_logger(__name__)
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 
-# -- deep_search (fixed, non-adaptive search+fetch pass) --
-# Only two tunables control cost: how many search calls, how many fetches.
-# MAX_WORKERS is concurrency, a separate concern from "how many total."
+# -- deep_search (fixed, non-adaptive snippet search pass) --
+# Task-mode deep_search is intentionally snippet-only. It uses the same raw
+# SearXNG primitive as web_search, but is exposed to agentic workflows while
+# web_search/web_fetch remain chat-mode primitives.
 DEEP_SEARCH_NUM_SEARCHES = int(os.getenv("DEEP_SEARCH_NUM_SEARCHES", 1))
-DEEP_SEARCH_NUM_FETCHES = int(os.getenv("DEEP_SEARCH_NUM_FETCHES", 2))
+DEEP_SEARCH_NUM_FETCHES = int(os.getenv("DEEP_SEARCH_NUM_FETCHES", 0))  # legacy override; keep 0 for snippet-only deep_search
 DEEP_SEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_SEARCH_MAX_CHARS_PER_PAGE", 2000))
 DEEP_SEARCH_MAX_WORKERS = int(os.getenv("DEEP_SEARCH_MAX_WORKERS", 4))
 
-# -- deep_research (adaptive ONLY in round count; each round is literally
-# one deep_search() call, so it inherits deep_search's own num_searches/
-# num_fetches tunables above rather than duplicating fetch-count knobs) --
+# -- deep_research (adaptive fetched-source research) --
+# Deep research uses search only to discover URLs, then fetches pages and
+# condenses/synthesizes evidence. It has its own fetch knobs so deep_search can
+# stay snippet-only.
+DEEP_RESEARCH_NUM_SEARCHES = int(os.getenv("DEEP_RESEARCH_NUM_SEARCHES", os.getenv("DEEP_SEARCH_NUM_SEARCHES", 1)))
+DEEP_RESEARCH_NUM_FETCHES = int(os.getenv("DEEP_RESEARCH_NUM_FETCHES", 2))
+DEEP_RESEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_RESEARCH_MAX_CHARS_PER_PAGE", os.getenv("DEEP_SEARCH_MAX_CHARS_PER_PAGE", 2000)))
 DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 3))
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION", 6000))
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS", 8000))
@@ -402,9 +407,11 @@ def _deep_search_impl(
     embedder,
     exclude_urls: set[str] | None,
 ) -> tuple[str, set[str]]:
-    """Fixed, non-adaptive search+fetch pass. Always issues exactly
-    num_searches search calls and fetches exactly min(num_fetches, unique
-    results after excluding exclude_urls), then condenses.
+    """Fixed, non-adaptive search pass with optional fetch/condense.
+
+    With num_fetches=0 this returns snippets/URLs only, which is now the
+    default public deep_search behavior. Deep_research calls this helper with
+    its own positive fetch count to do fetched-source work.
 
     Returns (formatted_bundle, urls_actually_fetched) — the URL set lets
     deep_research exclude already-seen URLs across rounds without a
@@ -414,6 +421,7 @@ def _deep_search_impl(
         return "[search failed: empty query]", set()
 
     num_searches = max(1, num_searches)
+    num_fetches = max(0, num_fetches)
     all_results: list[dict] = []
     errors: list[str] = []
 
@@ -454,6 +462,8 @@ def _deep_search_impl(
     snippet_bundle = "\n\n".join(snippet_lines)
 
     fetch_urls = [r["url"].strip() for r in deduped_results[:num_fetches] if r.get("url")]
+    if num_fetches <= 0:
+        return snippet_bundle, set()
     scored_chunks, fetched_pages, url_outcomes = _fetch_and_score_pipeline(
         fetch_urls, query, embedder, max_chars_per_page, max_workers=max_workers,
     )
@@ -475,9 +485,11 @@ def deep_search(
     max_workers: int = DEEP_SEARCH_MAX_WORKERS,
     embedder=None,
 ) -> str:
-    """Search + fetch top pages in one fixed, non-adaptive pass, condensed
-    to query-relevant excerpts only. Always num_searches search calls and
-    min(num_fetches, unique results) fetches — never more, never fewer."""
+    """Agentic snippet-only search.
+
+    By default num_fetches is 0, so this returns SearXNG result snippets/URLs
+    only and never reads full pages. The num_fetches argument is retained as a
+    backwards-compatible escape hatch; keep it 0 for the intended behavior."""
     text, _urls = _deep_search_impl(
         query, num_searches, num_fetches, max_chars_per_page, max_workers, embedder, None,
     )
@@ -509,13 +521,12 @@ def deep_research(
     embedder=None,
     max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS,
 ) -> str:
-    """Multi-round adaptive research. Deep_research is just deep_search
-    called repeatedly: each round IS one deep_search() call (inheriting its
-    num_searches/num_fetches/condensation behavior unchanged), with an LLM
-    decision step after each round choosing whether to continue and, if so,
-    with what refined query. Only the round count is adaptive — bounded
-    above by max_rounds. Already-fetched URLs are excluded from later
-    rounds so rounds don't refetch the same pages.
+    """Multi-round adaptive fetched-source research.
+
+    Uses search only to discover candidate URLs, then fetches full pages,
+    condenses evidence, and optionally asks the LLM whether another fetched
+    round/refined query is needed. This is the heavy research/self-learning
+    tool; deep_search remains snippet-only.
     """
     if not query or not query.strip():
         return "[search failed: empty query]"
@@ -530,9 +541,9 @@ def deep_research(
         log.info("[deep_research] round %d searching: %s", round_num, current_query)
         round_text, round_urls = _deep_search_impl(
             current_query,
-            DEEP_SEARCH_NUM_SEARCHES,
-            DEEP_SEARCH_NUM_FETCHES,
-            DEEP_SEARCH_MAX_CHARS_PER_PAGE,
+            DEEP_RESEARCH_NUM_SEARCHES,
+            DEEP_RESEARCH_NUM_FETCHES,
+            DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
             DEEP_SEARCH_MAX_WORKERS,
             embedder,
             seen_urls,
