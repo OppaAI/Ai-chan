@@ -612,7 +612,10 @@ class TypewriterSync:
                     self._ui.stream_token(w + " ")
             while not self._q.empty():
                 try:
-                    word, _ = self._q.get_nowait()
+                    item = self._q.get_nowait()
+                    if item is None:
+                        continue
+                    word, _ = item
                 except queue.Empty:
                     break
                 self._ui.stream_token(word + " ")
