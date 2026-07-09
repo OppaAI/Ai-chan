@@ -148,10 +148,14 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
             "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
             (row_id, uid, _sanitize(goal, 700), record_text, json.dumps([s.__dict__ for s in exp_steps], ensure_ascii=False), outcome, float(score), _sanitize(final_answer, 500), _now()),
         )
-        if embedder is not None:
-            vec = embedder.embed_query(record_text, instruct=EXPERIENCE_QUERY_INSTRUCT)
-            conn.execute("INSERT INTO experiences_vec(id, embedding) VALUES(?, ?)", (row_id, sqlite_vec.serialize_float32(vec)))
         conn.commit()
+        if embedder is not None:
+            try:
+                vec = embedder.embed_query(record_text, instruct=EXPERIENCE_QUERY_INSTRUCT)
+                conn.execute("INSERT INTO experiences_vec(id, embedding) VALUES(?, ?)", (row_id, sqlite_vec.serialize_float32(vec)))
+                conn.commit()
+            except Exception as embed_exc:
+                log.warning("experience embedding failed (record kept, FTS-only): %s", embed_exc)
         _prune(conn, uid)
         return row_id
     except Exception as exc:
