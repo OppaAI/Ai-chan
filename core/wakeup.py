@@ -173,6 +173,22 @@ class AikoWakeup:
         t1.start(); t2.start()
         t1.join();  t2.join()
 
+        # ── wire deep_studying into the scheduler's weekday/weekend window ────
+        # Must happen before the ScheduleRunner below starts (or at least
+        # before its first tick) so the "deep_study_start"/"deep_study_stop"
+        # jobs seeded into schedule.json (core.schedule.ensure_deep_study_window_jobs)
+        # have a registered handler to call into — otherwise they log
+        # "unregistered handler" and silently never fire. Needs AikoThink's
+        # LLM client/model, so it can only happen here, after think boots.
+        if think_ref[0] is not None:
+            from core import learn
+            learn.register_deep_study_handlers(
+                client=think_ref[0]._client,
+                model=think_ref[0]._llm_model,
+            )
+        else:
+            log.error("AikoThink failed to boot — deep-study window handlers not registered.")
+
         from core.schedule import ScheduleRunner, register_scheduler
         from core.reflect import generate_and_post
         from core.consolidate import maybe_run_consolidation
@@ -180,6 +196,14 @@ class AikoWakeup:
         if memorize[0] is None:
             log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
 
+        # NOTE: this is the ONE ScheduleRunner for the whole app. AikoThink
+        # used to also construct its own ScheduleRunner in __init__, which
+        # meant two independent daemon threads were both reading and firing
+        # the same schedule.json — every due job (reminders, weekly_social,
+        # and now the deep_study_start/stop window jobs) would fire twice.
+        # That duplicate construction has been removed from core/think.py;
+        # this is now the only instance, and it's the one registered via
+        # register_scheduler() so tools can notify it of newly added jobs.
         _scheduler = ScheduleRunner(
             on_due=think_ref[0].handle_scheduled_job if think_ref[0] else None,
             memorize=memorize[0],
