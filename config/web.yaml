@@ -2,6 +2,7 @@
 #
 # Settings for core/toolkit/researcher.py and semantic web-search triggering.
 # Controls local SearXNG endpoint and how many search results the agent consumes.
+
 # -- SearXNG --
 SEARXNG_URL: "http://localhost:8888"  # Base URL for self-hosted SearXNG instance.
 SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from chat; higher means fewer searches.
