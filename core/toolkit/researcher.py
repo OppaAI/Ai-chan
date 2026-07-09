@@ -10,6 +10,8 @@ import math
 import os
 import re
 import socket
+import time
+import threading
 from urllib.parse import urlparse
 
 import importlib
@@ -50,12 +52,77 @@ CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
 # latency for a single round/call.
 CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("CONDENSE_MAX_CHUNKS_TO_SCORE", 60))
 
+# -- web_fetch download guard --
+# Caps the raw response body size read off the wire, BEFORE trafilatura ever
+# runs extraction. Without this, a single oversized page (a data dump, a
+# giant PDF served as HTML, a page with megabytes of inline JSON) gets fully
+# downloaded into memory before max_chars truncation ever kicks in. On a
+# Jetson-class device with a shared memory pool and an ONNX runtime session
+# already resident, a handful of concurrent oversized fetches (multiplied by
+# DEEP_SEARCH_MAX_WORKERS) can spike memory hard. This bound stops the
+# download mid-stream instead of after the fact.
+WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
+WEB_FETCH_TIMEOUT_SECONDS = int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", 8))
+WEB_FETCH_USER_AGENT = os.getenv(
+    "WEB_FETCH_USER_AGENT",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0 Safari/537.36",
+)
+
+# -- short-lived in-process query cache --
+# Same idea as OpenClaw's default 15-minute web_search cache: cheap insurance
+# against a single research round (or an agent loop retrying) re-issuing an
+# identical query/URL within seconds of the last call. This is NOT a
+# persisted index — it's a small in-memory dict with a TTL, gone the moment
+# the process restarts. It doesn't change the JIT/ephemeral nature of the
+# architecture; it just avoids paying the full fetch+embed cost twice for
+# the exact same input inside one short window.
+CACHE_TTL_SECONDS = int(os.getenv("TOOLS_CACHE_TTL_SECONDS", 900))  # 15 min
+CACHE_MAX_ENTRIES = int(os.getenv("TOOLS_CACHE_MAX_ENTRIES", 256))
+
+_cache_lock = threading.Lock()
+_search_cache: dict[str, tuple[float, list[dict]]] = {}
+_fetch_cache: dict[str, tuple[float, str]] = {}
+
+
+def _cache_get(cache: dict, key: str):
+    with _cache_lock:
+        entry = cache.get(key)
+        if entry is None:
+            return None
+        ts, value = entry
+        if time.monotonic() - ts > CACHE_TTL_SECONDS:
+            cache.pop(key, None)
+            return None
+        return value
+
+
+def _cache_set(cache: dict, key: str, value) -> None:
+    with _cache_lock:
+        if len(cache) >= CACHE_MAX_ENTRIES:
+            # Evict the oldest entry rather than growing unbounded. Not a
+            # true LRU — good enough for a short-TTL convenience cache.
+            oldest_key = min(cache, key=lambda k: cache[k][0], default=None)
+            if oldest_key is not None:
+                cache.pop(oldest_key, None)
+        cache[key] = (time.monotonic(), value)
+
 
 def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list[dict] | None, str | None]:
     """Low-level SearXNG call returning (results, error). Kept separate from
     web_search() so callers merging multiple pages (deep_search's
     search_pages, deep_research's rounds) don't have to re-parse formatted
-    text output — they get structured dicts directly."""
+    text output — they get structured dicts directly.
+
+    Cached in-process for CACHE_TTL_SECONDS keyed on (query, max_results,
+    pageno) — repeat calls within the TTL skip the network round-trip
+    entirely.
+    """
+    cache_key = f"{query}|{max_results}|{pageno}"
+    cached = _cache_get(_search_cache, cache_key)
+    if cached is not None:
+        return cached, None
+
     if importlib.util.find_spec("requests") is None:
         return None, "[search failed: requests is not installed]"
     requests = importlib.import_module("requests")
@@ -71,7 +138,10 @@ def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list
         return None, f"[search failed: {e}]"
     except ValueError:
         return None, "[search failed: invalid JSON response]"
-    return data.get("results", [])[:max_results], None
+
+    results = data.get("results", [])[:max_results]
+    _cache_set(_search_cache, cache_key, results)
+    return results, None
 
 
 def web_search(query: str, max_results: int = MAX_RESULTS) -> str:
@@ -110,30 +180,92 @@ def _is_private_or_local_host(hostname: str) -> bool:
         return True
 
 
-def web_fetch(url: str, max_chars: int = 4000) -> str:
+def web_fetch(
+    url: str,
+    max_chars: int = 4000,
+    max_download_bytes: int = WEB_FETCH_MAX_DOWNLOAD_BYTES,
+    use_cache: bool = True,
+) -> str:
     """Fetch a single URL and extract its main article/body text with trafilatura.
 
     This is the one-and-only "fetch a page" primitive in the toolkit. Both
     the model's direct fetch_page-style calls and deep_search/deep_research's
     internal pipelined page reads route through this function, so there is
     exactly one implementation to reason about.
+
+    Downloads are streamed and capped at max_download_bytes — the download is
+    aborted mid-stream the moment it exceeds the cap, BEFORE trafilatura ever
+    runs extraction and BEFORE max_chars truncation. This is what actually
+    bounds worst-case memory for a single fetch; max_chars alone only bounds
+    the text kept *after* the full page was already downloaded.
+
+    Successful fetches are cached in-process for CACHE_TTL_SECONDS keyed on
+    (url, max_chars) — set use_cache=False to force a fresh fetch (e.g. for
+    pages known to change quickly, like live scoreboards or breaking news).
+    Failed fetches are never cached, so a transient network error doesn't
+    poison the cache for the TTL window.
     """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return f"[fetch failed: unsupported URL scheme: {parsed.scheme or 'none'}]"
     if _is_private_or_local_host(parsed.hostname):
         return "[fetch failed: URL host is not allowed]"
+
+    cache_key = f"{url}|{max_chars}"
+    if use_cache:
+        cached = _cache_get(_fetch_cache, cache_key)
+        if cached is not None:
+            return cached
+
+    if importlib.util.find_spec("requests") is None:
+        return "[fetch failed: requests is not installed]"
     if importlib.util.find_spec("trafilatura") is None:
         return "[fetch failed: trafilatura is not installed]"
+    requests = importlib.import_module("requests")
     trafilatura = importlib.import_module("trafilatura")
+
     try:
-        downloaded = trafilatura.fetch_url(url)
-        if not downloaded:
-            return "[fetch failed: empty response]"
+        with requests.get(
+            url,
+            stream=True,
+            timeout=WEB_FETCH_TIMEOUT_SECONDS,
+            headers={"User-Agent": WEB_FETCH_USER_AGENT},
+        ) as resp:
+            resp.raise_for_status()
+
+            content_length = resp.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > max_download_bytes:
+                        return "[fetch failed: page too large]"
+                except ValueError:
+                    pass  # malformed header — fall through to the streamed cap below
+
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in resp.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_download_bytes:
+                    return "[fetch failed: page exceeded size limit during download]"
+                chunks.append(chunk)
+            downloaded = b"".join(chunks)
+    except requests.exceptions.RequestException as e:
+        return f"[fetch failed: {e}]"
+
+    if not downloaded:
+        return "[fetch failed: empty response]"
+
+    try:
         text = trafilatura.extract(downloaded, include_links=False, include_tables=False) or ""
-        return text[:max_chars] if text else "[fetch failed: no extractable text]"
     except Exception as e:
         return f"[fetch failed: {e}]"
+
+    result = text[:max_chars] if text else "[fetch failed: no extractable text]"
+    if use_cache and text:
+        _cache_set(_fetch_cache, cache_key, result)
+    return result
 
 
 def _extract_urls(raw_results: str, limit: int) -> list[str]:
@@ -178,6 +310,32 @@ def _chunk_text(url: str, text: str, chunk_chars: int) -> list[tuple[str, str]]:
     return chunks
 
 
+def _embed_batch(embedder, texts: list[str]) -> list[list[float]] | None:
+    """Best-effort batched embedding. Tries common batch-method names on the
+    embedder in order, returns None if none are available so the caller can
+    fall back to one-at-a-time embed_query calls.
+
+    This is opt-in and speculative on purpose: HarrierEmbedder's actual
+    interface isn't something this file has visibility into, so rather than
+    assume a method name, we probe for the conventional ones
+    (embed_documents is the LangChain-style convention; embed_batch and
+    embed are plausible custom names) and gracefully do nothing if none
+    exist. Batching only helps if the underlying onnxruntime session
+    actually does one forward pass for the batch rather than looping
+    internally — confirm that before relying on this for a speedup.
+    """
+    for method_name in ("embed_documents", "embed_batch", "embed"):
+        method = getattr(embedder, method_name, None)
+        if callable(method):
+            try:
+                result = method(texts)
+                if result is not None and len(result) == len(texts):
+                    return list(result)
+            except Exception:
+                continue
+    return None
+
+
 def _score_chunk(chunk: str, query: str, embedder, query_vec) -> float:
     """Score one chunk against the query. Caller supplies a precomputed
     query_vec (embedded once per pipeline call, not once per chunk)."""
@@ -188,6 +346,47 @@ def _score_chunk(chunk: str, query: str, embedder, query_vec) -> float:
         except Exception:
             pass
     return _keyword_overlap_score(query, chunk)
+
+
+def _score_chunks_for_page(
+    url: str,
+    text: str,
+    query: str,
+    embedder,
+    query_vec,
+    use_embedder: bool,
+    chunk_chars: int,
+    remaining_budget: int,
+) -> list[tuple[float, str, str]]:
+    """Chunk one page's text and score every chunk, batching the embedding
+    call for the whole page when the embedder supports it. Falls back to
+    per-chunk _score_chunk calls (and further to keyword overlap) otherwise.
+    remaining_budget caps how many chunks from THIS page get scored, so the
+    global CONDENSE_MAX_CHUNKS_TO_SCORE bound is respected across pages.
+    """
+    page_chunks = _chunk_text(url, text, chunk_chars)[:remaining_budget]
+    if not page_chunks:
+        return []
+
+    scored: list[tuple[float, str, str]] = []
+
+    if use_embedder and query_vec is not None:
+        chunk_texts = [c for _, c in page_chunks]
+        batch_vecs = _embed_batch(embedder, chunk_texts)
+        if batch_vecs is not None:
+            for (_, chunk), vec in zip(page_chunks, batch_vecs):
+                try:
+                    score = _cosine(query_vec, vec)
+                except Exception:
+                    score = _keyword_overlap_score(query, chunk)
+                scored.append((score, url, chunk))
+            return scored
+
+    # No batch method available (or it failed) — per-chunk fallback.
+    for _, chunk in page_chunks:
+        score = _score_chunk(chunk, query, embedder if use_embedder else None, query_vec)
+        scored.append((score, url, chunk))
+    return scored
 
 
 def _fetch_and_score_pipeline(
@@ -209,6 +408,11 @@ def _fetch_and_score_pipeline(
     while pages B/C/D are still downloading on other threads — real overlap,
     not sequential fetch-then-embed. A slow site no longer blocks embedding
     of pages that already landed.
+
+    Each page's chunks are embedded in one batched call when the embedder
+    supports it (see _embed_batch), rather than one onnxruntime call per
+    chunk — this cuts inference call overhead on top of the fetch/score
+    overlap above.
 
     Returns (scored_chunks, pages) — scored_chunks is a flat list of
     (score, url, chunk_text) tuples ready for dedup/filter/sort;
@@ -243,14 +447,16 @@ def _fetch_and_score_pipeline(
                 continue
             pages.append((url, text))
 
-            # Score this page's chunks now, while other fetches are still
-            # in flight — this is the "embed while still fetching" overlap.
-            for _, chunk in _chunk_text(url, text, chunk_chars):
-                if chunks_scored >= max_chunks_to_score:
-                    break
-                score = _score_chunk(chunk, query, embedder if use_embedder else None, query_vec)
-                scored.append((score, url, chunk))
-                chunks_scored += 1
+            remaining_budget = max_chunks_to_score - chunks_scored
+            if remaining_budget <= 0:
+                continue
+
+            page_scored = _score_chunks_for_page(
+                url, text, query, embedder if use_embedder else None, query_vec,
+                use_embedder, chunk_chars, remaining_budget,
+            )
+            scored.extend(page_scored)
+            chunks_scored += len(page_scored)
 
     return scored, pages
 
@@ -317,11 +523,6 @@ def condense_evidence(
     use this internally — they use _fetch_and_score_pipeline so embedding
     overlaps with fetching — but this is kept for any other caller that
     wants condensing without a pipeline."""
-    all_chunks: list[tuple[str, str]] = []
-    for url, text in pages:
-        all_chunks.extend(_chunk_text(url, text, chunk_chars))
-    all_chunks = all_chunks[:max_chunks_to_score]
-
     use_embedder = embedder is not None and hasattr(embedder, "embed_query")
     query_vec = None
     if use_embedder:
@@ -330,10 +531,19 @@ def condense_evidence(
         except Exception:
             use_embedder = False
 
-    scored = [
-        (_score_chunk(chunk, query, embedder if use_embedder else None, query_vec), url, chunk)
-        for url, chunk in all_chunks
-    ]
+    scored: list[tuple[float, str, str]] = []
+    chunks_scored = 0
+    for url, text in pages:
+        remaining_budget = max_chunks_to_score - chunks_scored
+        if remaining_budget <= 0:
+            break
+        page_scored = _score_chunks_for_page(
+            url, text, query, embedder if use_embedder else None, query_vec,
+            use_embedder, chunk_chars, remaining_budget,
+        )
+        scored.extend(page_scored)
+        chunks_scored += len(page_scored)
+
     return _finalize_condensed(scored, query, top_k=top_k, min_score=min_score)
 
 
