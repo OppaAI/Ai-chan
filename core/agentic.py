@@ -302,27 +302,54 @@ def tool_schemas() -> list[dict]:
 _TOOL_SCHEMAS = [
         {"type": "function", "function": {
             "name": "web_search",
-            "description": "Snippet-only web search for discovering candidate sources. Does not fetch page text.",
+            "description": (
+                "Quick snippet-only web lookup for a single fact in normal conversation "
+                "(not agentic task mode). Use first when the user asks something that may "
+                "have changed since training or needs current info. If snippets don't answer "
+                "it, follow up with web_fetch on the most relevant result URL."
+            ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The search query."}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
+            "name": "web_fetch",
+            "description": (
+                "Fetch one specific URL — either one the user gave you, or the top result "
+                "from a prior web_search whose snippet wasn't enough. Not for agentic "
+                "multi-source research; use deep_search/deep_research for that."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "url": {"type": "string", "description": "The URL to fetch."}},
+                "required": ["url"]}}},
+        {"type": "function", "function": {
             "name": "deep_search",
-            "description": "Search + fetch top pages in one fixed, non-adaptive call, condensed to only the query-relevant excerpts (embedding-scored; irrelevant fetched content is filtered out, not just truncated). Use for a single, well-scoped question. Use deep_research instead if the topic needs multiple search rounds.",
+            "description": (
+                "In agentic task mode: gather information from the web as ONE step feeding "
+                "into a larger task, where the research itself is not the deliverable. "
+                "Use when the task needs facts/records/data to act on afterward — e.g. "
+                "'check these 8 teams' past records and predict who wins the cup': the "
+                "search supports the analysis, it isn't the analysis. One fixed search+fetch "
+                "pass, condensed to relevant excerpts. Prefer this over deep_research when "
+                "you already know roughly what you're looking for."
+            ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The focused research query to search and fetch."}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
             "name": "deep_research",
-            "description": "Adaptive multi-round research: repeatedly runs a deep_search-style pass, and after each round an LLM decides whether the evidence is sufficient or another round with a refined query is needed, up to a configured max. Then returns a synthesized answer. Use for broad, multi-angle, or ambiguous questions.",
+            "description": (
+                "In agentic task mode: use when the RESEARCH ITSELF is the deliverable the "
+                "user wants — a topic that needs several different angles/questions explored "
+                "and synthesized into one answer, not a single lookup. E.g. 'research what "
+                "Harness Engineering is and how it applies to my own architecture.' Also the "
+                "right tool for self-directed learning during idle time. Runs multiple "
+                "adaptive search rounds, deciding after each whether more angles are needed, "
+                "then synthesizes. Costs more than deep_search — don't use it for a task "
+                "that just needs supporting facts."
+            ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool refines it internally."}},
                 "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "web_fetch", "description": "Fetch one explicitly supplied URL when the user provides it or a prior snippet result must be verified. Prefer deep_search/deep_research for research workflows; do not use web_fetch to bulk-fetch search results.",
-            "parameters": {"type": "object", "properties": {
-                "url": {"type": "string", "description": "The URL to fetch."}},
-                "required": ["url"]}}},
         {"type": "function", "function": {
             "name": "make_plan", "description": "Make plan.",
             "parameters": {"type": "object", "properties": {
