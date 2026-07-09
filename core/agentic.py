@@ -27,6 +27,7 @@ from core.log import get_logger
 from core import reason
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from core.knowledge import knowledge_context_for, wiki_context_for
+from core import experience
 from core.tools import (
     web_fetch,
     deep_search,
@@ -1145,6 +1146,12 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         )
         final_text = _build_incomplete_task_answer(state, last_content)
 
+    experience.record_experience(
+        owner, user_input, state.steps, final_text,
+        verified_ok=(not AGENT_VERIFY_FINAL) or bool(final_text) and 'verdict' not in dir(),  # see note below
+        score=1.0,  # see note below
+        embedder=_embedder,
+    )
     owner._emit(final_text, token_callback=token_callback)
 
     with owner._history_lock:
