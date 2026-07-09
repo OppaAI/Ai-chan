@@ -19,7 +19,7 @@ import importlib.util
 import numpy as np
 
 from core.log import get_logger
-from core import semantic_utils
+from core import reason
 
 log = get_logger(__name__)
 
@@ -38,7 +38,10 @@ DEEP_SEARCH_MAX_WORKERS = int(os.getenv("DEEP_SEARCH_MAX_WORKERS", 4))
 # -- deep_research (adaptive fetched-source research) --
 # Deep research uses search only to discover URLs, then fetches pages and
 # condenses/synthesizes evidence. It has its own fetch knobs so deep_search can
-# stay snippet-only.
+# stay snippet-only. These are read once as module-level DEFAULTS; deep_research()
+# itself now accepts num_searches/num_fetches/max_chars_per_page as real
+# function args (see below) so a caller — e.g. core.learn.quick_studying —
+# can override per-call instead of only ever getting these env defaults.
 DEEP_RESEARCH_NUM_SEARCHES = int(os.getenv("DEEP_RESEARCH_NUM_SEARCHES", os.getenv("DEEP_SEARCH_NUM_SEARCHES", 1)))
 DEEP_RESEARCH_NUM_FETCHES = int(os.getenv("DEEP_RESEARCH_NUM_FETCHES", 2))
 DEEP_RESEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_RESEARCH_MAX_CHARS_PER_PAGE", os.getenv("DEEP_SEARCH_MAX_CHARS_PER_PAGE", 2000)))
@@ -249,7 +252,7 @@ def _score_url_chunks(
     url_chunks: list[tuple[str, str]], query: str, embedder, max_chunks_to_score: int,
 ) -> list[tuple[float, str, str]]:
     """Score (url, chunk) pairs in one batched numpy pass via
-    semantic_utils instead of a per-chunk Python loop. Falls back to
+    reason instead of a per-chunk Python loop. Falls back to
     keyword overlap per chunk if no embedder is available or embedding
     fails."""
     url_chunks = url_chunks[:max_chunks_to_score]
@@ -259,13 +262,13 @@ def _score_url_chunks(
     if embedder is not None and hasattr(embedder, "embed_query"):
         try:
             query_vec = np.asarray(embedder.embed_query(query), dtype=np.float32)
-            chunk_vecs = semantic_utils.embed_batch_or_none(embedder, texts)
+            chunk_vecs = reason.embed_batch_or_none(embedder, texts)
             if chunk_vecs is not None and chunk_vecs.shape[0] == len(texts):
-                scores = semantic_utils.batch_cosine_scores(query_vec, chunk_vecs)
+                scores = reason.batch_cosine_scores(query_vec, chunk_vecs)
                 return [(float(scores[i]), url_chunks[i][0], url_chunks[i][1]) for i in range(len(url_chunks))]
         except Exception:
             pass  # fall through to keyword scoring below
-    return [(semantic_utils.keyword_overlap_score(query, c), u, c) for u, c in url_chunks]
+    return [(reason.keyword_overlap_score(query, c), u, c) for u, c in url_chunks]
 
 
 def _fetch_and_score_pipeline(
@@ -317,7 +320,7 @@ def _fetch_and_score_pipeline(
             if remaining_budget <= 0:
                 continue
 
-            page_chunks = [(url, c) for c in semantic_utils.chunk_text(text, chunk_chars)][:remaining_budget]
+            page_chunks = [(url, c) for c in reason.chunk_text(text, chunk_chars)][:remaining_budget]
             page_scored = _score_url_chunks(page_chunks, query, embedder, remaining_budget)
             scored.extend(page_scored)
             chunks_scored += len(page_scored)
@@ -391,7 +394,7 @@ def condense_evidence(
     pages in hand and just want them chunked, scored, and condensed."""
     url_chunks: list[tuple[str, str]] = []
     for url, text in pages:
-        url_chunks.extend((url, c) for c in semantic_utils.chunk_text(text, chunk_chars))
+        url_chunks.extend((url, c) for c in reason.chunk_text(text, chunk_chars))
         if len(url_chunks) >= max_chunks_to_score:
             break
     scored = _score_url_chunks(url_chunks, query, embedder, max_chunks_to_score)
@@ -520,6 +523,9 @@ def deep_research(
     model: str | None = None,
     embedder=None,
     max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS,
+    num_searches: int = DEEP_RESEARCH_NUM_SEARCHES,
+    num_fetches: int = DEEP_RESEARCH_NUM_FETCHES,
+    max_chars_per_page: int = DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
 ) -> str:
     """Multi-round adaptive fetched-source research.
 
@@ -527,6 +533,14 @@ def deep_research(
     condenses evidence, and optionally asks the LLM whether another fetched
     round/refined query is needed. This is the heavy research/self-learning
     tool; deep_search remains snippet-only.
+
+    num_searches/num_fetches/max_chars_per_page default to this module's
+    DEEP_RESEARCH_* env-backed constants but are now real function
+    arguments — every round's underlying _deep_search_impl() call uses
+    whatever was passed in here, not the module constants directly. This
+    is what lets a caller (e.g. core.learn.quick_studying, or a
+    deep_research(..., num_searches=3, num_fetches=1) call site) override
+    per-call instead of only ever getting the env-var defaults.
     """
     if not query or not query.strip():
         return "[search failed: empty query]"
@@ -541,9 +555,9 @@ def deep_research(
         log.info("[deep_research] round %d searching: %s", round_num, current_query)
         round_text, round_urls = _deep_search_impl(
             current_query,
-            DEEP_RESEARCH_NUM_SEARCHES,
-            DEEP_RESEARCH_NUM_FETCHES,
-            DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
+            num_searches,
+            num_fetches,
+            max_chars_per_page,
             DEEP_SEARCH_MAX_WORKERS,
             embedder,
             seen_urls,
