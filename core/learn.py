@@ -6,9 +6,9 @@ learner loop, or the scheduled deep-study window) hand her — neither depth
 picks its own topic on its own.
 
   - quick_studying: a single interactive-scale research pass. Thin alias
-    over core.tools.deep_research — same TTL-cached, in-memory, ephemeral
-    behavior you already have. Use this for "look this up for me now" and
-    for the idle learner's short-idle-gap top-ups.
+    over core.toolkit.researcher.deep_research — same TTL-cached, in-memory,
+    ephemeral behavior you already have. Use this for "look this up for me
+    now" and for the idle learner's short-idle-gap top-ups.
 
   - deep_studying: an autonomous, potentially long-running research pass
     meant for genuine idle/overnight time. Runs many iterations against a
@@ -44,14 +44,20 @@ Also owns:
     window's edge.
 
 Config note: this module's tunables (IDLE_LEARN_SECONDS,
-DEEP_STUDY_MAX_ITERATIONS, etc.) are read from os.environ at import time via
-os.getenv(...). Those values are populated from config/learn.yaml by
-core.config.load_config(). We call load_config() explicitly at the top of
-this module (it's idempotent — see core/config.py's _LOADED guard) so
-learn.yaml's values are honored regardless of what else has or hasn't
-imported core.config yet. Without this, module-level os.getenv() calls
-would silently fall back to hardcoded defaults if learn.py happened to be
-imported before whatever else in the app calls load_config().
+QUICK_STUDY_MAX_ROUNDS, DEEP_STUDY_MAX_ITERATIONS, etc.) are read from
+os.environ at import time via os.getenv(...). Those values are populated
+from config/learn.yaml by core.config.load_config(). We call load_config()
+explicitly at the top of this module (it's idempotent — see core/config.py's
+_LOADED guard) so learn.yaml's values are honored regardless of what else
+has or hasn't imported core.config yet. Without this, module-level
+os.getenv() calls would silently fall back to hardcoded defaults if learn.py
+happened to be imported before whatever else in the app calls load_config().
+
+This module reads its own tunables directly from os.environ rather than
+importing constants from core.toolkit.researcher — it owns its own view of
+shared knobs like CONDENSE_CHUNK_CHARS/CONDENSE_MIN_SCORE/search-result-count
+instead of reaching into another module's constants (which would also
+silently go stale if that module's env var name ever changed).
 """
 
 from __future__ import annotations
@@ -73,30 +79,36 @@ from core.config import load_config
 
 load_config()
 
-from core import semantic_utils
-from core.tools import (
+from core import reason
+from core.toolkit.researcher import (
     _ask_llm_json,
     _is_private_or_local_host,
     _web_search_raw,
     deep_research,
+    deep_search,
     web_fetch,
-    CONDENSE_CHUNK_CHARS,
-    CONDENSE_MIN_SCORE,
-    MAX_RESULTS as DEEP_SEARCH_MAX_RESULTS,
+    web_search,
+    web_search_context,
 )
 
 from core.log import get_logger
 
 log = get_logger(__name__)
 
+# Tunables this module owns its own env-backed view of (see module
+# docstring) rather than importing from core.toolkit.researcher.
+CONDENSE_CHUNK_CHARS = int(os.getenv("CONDENSE_CHUNK_CHARS", 500))
+CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
+DEEP_SEARCH_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
+
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    """Plain single-pair cosine similarity. tools.py's cosine helper
-    (semantic_utils.batch_cosine_scores) is batched/numpy-oriented for
-    scoring many chunks against one query vector at once; deep_studying's
-    distillation step scores one (topic_vec, chunk_embedding) pair at a
-    time against arbitrary accumulated chunks, so a tiny pure-python
-    version avoids forcing a numpy import/allocation per chunk here."""
+    """Plain single-pair cosine similarity. core.reason's batched cosine
+    helper (reason.batch_cosine_scores) is numpy-oriented for scoring many
+    chunks against one query vector at once; deep_studying's distillation
+    step scores one (topic_vec, chunk_embedding) pair at a time against
+    arbitrary accumulated chunks, so a tiny pure-python version avoids
+    forcing a numpy import/allocation per chunk here."""
     if not a or not b or len(a) != len(b):
         return 0.0
     dot = sum(x * y for x, y in zip(a, b))
@@ -109,20 +121,43 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 # ── quick_studying ────────────────────────────────────────────────────────────
 
+QUICK_STUDY_MAX_ROUNDS = int(os.getenv("QUICK_STUDY_MAX_ROUNDS", 3))
+
+
 def quick_studying(
     topic: str,
     client=None,
     model: str | None = None,
     embedder=None,
-    max_rounds: int = 3,
+    max_rounds: int = QUICK_STUDY_MAX_ROUNDS,
+    num_searches: int | None = None,
+    num_fetches: int | None = None,
 ) -> str:
     """Interactive-depth research on a topic. This is exactly deep_research —
     same TTL cache, same in-memory ephemeral scoring, same single-call cost
     model. Named separately so call sites (the idle learner's short-gap
     path, or a direct /research command) read as "which depth am I asking
-    for" rather than exposing tools.py internals at every call site.
+    for" rather than exposing core.toolkit.researcher internals at every
+    call site.
+
+    max_rounds defaults to QUICK_STUDY_MAX_ROUNDS (config/learn.yaml),
+    actually wired through now — previously this default was hardcoded to
+    3 regardless of what QUICK_STUDY_MAX_ROUNDS was set to.
+
+    num_searches/num_fetches are optional pass-throughs to deep_research's
+    own per-call overrides (see core.toolkit.researcher.deep_research).
+    Leave them None to use deep_research's own DEEP_RESEARCH_NUM_SEARCHES/
+    DEEP_RESEARCH_NUM_FETCHES env defaults.
     """
-    return deep_research(topic, client=client, model=model, embedder=embedder, max_rounds=max_rounds)
+    overrides: dict = {}
+    if num_searches is not None:
+        overrides["num_searches"] = num_searches
+    if num_fetches is not None:
+        overrides["num_fetches"] = num_fetches
+    return deep_research(
+        topic, client=client, model=model, embedder=embedder,
+        max_rounds=max_rounds, **overrides,
+    )
 
 
 # ── idle learner loop ─────────────────────────────────────────────────────────
@@ -164,11 +199,11 @@ def idle_learner_loop(owner, check_interval: float = IDLE_LEARNER_CHECK_INTERVAL
     This loop looks for that signal on `owner` in this order:
       1. owner.is_proactive_resting() — a callable, if present.
       2. owner._proactive_resting — a plain bool attribute, if present.
-    ADAPT THIS: point one of these at whatever your actual proactive
-    system (think.py / proactive.py) exposes once it fires
-    PROACTIVE_REST_MESSAGE and goes quiet. If owner exposes neither, this
-    loop falls back to IDLE_LEARN_SECONDS alone so it still degrades to
-    the old timer-only behavior rather than never firing.
+    AikoThink (core/think.py) now implements is_proactive_resting() as part
+    of its own proactive-checkin state machine, driven by
+    config/proactive.yaml. If owner exposes neither, this loop falls back
+    to IDLE_LEARN_SECONDS alone so it still degrades to the old
+    timer-only behavior rather than never firing.
 
     Every check_interval: check idle/resting conditions, and if met, pick
     the most recent substantial user message as a topic, skip it if
@@ -300,7 +335,7 @@ class _ScratchStore:
     Plain sqlite3, not sqlite-vec — deliberately. At the scale this runs at
     (bounded by DEEP_STUDY_MAX_ITERATIONS * a per-iteration chunk cap), the
     total chunk count stays in the thousands, not millions. A linear scan
-    with pure-Python cosine (same primitive tools.py already uses) is fast
+    with pure-Python cosine (same primitive already used elsewhere) is fast
     enough at that scale and avoids taking on a sqlite-vec dependency for a
     file that gets deleted at the end of the call anyway. If deep_studying's
     scope grows to genuinely large corpora later, THAT would be the point to
@@ -479,11 +514,11 @@ def _score_and_store_page(
     use_embedder: bool,
     store: _ScratchStore,
 ) -> None:
-    for chunk in semantic_utils.chunk_text(text, DEEP_STUDY_CHUNK_CHARS):
+    for chunk in reason.chunk_text(text, DEEP_STUDY_CHUNK_CHARS):
         chunk_hash = _hash_chunk(chunk)
         embedding = None
         if use_embedder:
-            batch = semantic_utils.embed_batch_or_none(embedder, [chunk])
+            batch = reason.embed_batch_or_none(embedder, [chunk])
             if batch is not None and len(batch) > 0:
                 embedding = list(batch[0])
             else:
@@ -528,9 +563,9 @@ def _distill(
             try:
                 score = _cosine(topic_vec, embedding)
             except Exception:
-                score = semantic_utils.keyword_overlap_score(topic, chunk)
+                score = reason.keyword_overlap_score(topic, chunk)
         else:
-            score = semantic_utils.keyword_overlap_score(topic, chunk)
+            score = reason.keyword_overlap_score(topic, chunk)
         scored.append((score, url, chunk))
 
     ranked = sorted(
@@ -857,6 +892,10 @@ def register_deep_study_handlers(client=None, model=None, timezone: str | None =
         # at startup, after core.schedule's ScheduleRunner exists:
         from core import learn
         learn.register_deep_study_handlers(client=llm_client, model=llm_model)
+
+    This is now called automatically from core.wakeup.AikoWakeup.boot() —
+    see core/wakeup.py — once AikoThink (and therefore its LLM client/model)
+    exists, so app authors normally don't need to call this by hand.
     """
     from core import schedule as _schedule
 
