@@ -3,6 +3,11 @@
 This module indexes durable, human-maintained project knowledge: wiki cards,
 skill docs/defaults, persona docs, selected config, and docs. It deliberately
 skips secrets and mutable workspace artifacts.
+
+Injected context is RAG-style, not whole-file: search_knowledge ranks whole
+items, then knowledge_context_for/wiki_context_for chunk each selected
+item's body and inject only the query-relevant excerpts via
+reason.select_relevant_chunks, instead of dumping full file text.
 """
 
 from __future__ import annotations
@@ -17,6 +22,8 @@ from pathlib import Path
 from typing import Iterable, Protocol
 
 import numpy as np
+
+from core import reason
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -37,39 +44,21 @@ _WORD_RE = re.compile(r"[a-z0-9_./-]+", re.IGNORECASE)
 _HEADING_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 _FRONT_MATTER_RE = re.compile(r"^---\n(?P<meta>.*?)\n---\n", re.DOTALL)
 
-# Common words that appear in nearly every document regardless of topic.
-# Without filtering these, a long unrelated doc (e.g. an install guide) can
-# rack up incidental +1 "text" hits on words like "how"/"make"/"we" and
-# qualify for injection even though it has nothing to do with the query.
-_STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "do", "does", "did", "how", "what", "who", "when", "where", "why",
-    "we", "you", "i", "he", "she", "they", "this", "that", "these",
-    "those", "some", "any", "all", "each", "can", "could", "will",
-    "would", "should", "shall", "may", "might", "must", "to", "of", "in",
-    "on", "at", "for", "with", "and", "or", "not", "no", "yes", "make",
-    "made", "get", "got", "go", "going", "let", "lets", "want", "wants",
-    "just", "so", "up", "down", "out", "about", "if", "then", "than",
-})
+_STOPWORDS = reason.STOPWORDS
 
-# Minimum score a knowledge item must reach before it's considered a genuine
-# match under the keyword fallback path. Without this floor, search_knowledge
-# includes anything with score > 0, which one stray substring hit satisfies.
+# Minimum score for the keyword-fallback item ranking (whole-item, not
+# chunk-level — chunk-level thresholds are separate, below).
 _MIN_RELEVANCE_SCORE = 3
 
-# ── semantic retrieval (Harrier embeddings) ─────────────────────────────────
-#
-# knowledge.py has no owner/session object of its own, so it can't reach
-# think.py's HarrierEmbedder directly. Callers pass one in explicitly (duck
-# typed to embed_query/embed_queries, matching think.py's usage) via the
-# `embedder` parameter on search_knowledge/knowledge_context_for/
-# wiki_context_for. When no embedder is given, or embedding fails for any
-# reason, everything falls back to the keyword scoring above — semantic
-# retrieval is strictly additive, never a hard dependency.
-
+# ── item-level semantic ranking (which items are candidates at all) ────────
 _KNOWLEDGE_INSTRUCT = "Which document is most relevant to this request or question?"
 _KNOWLEDGE_SEMANTIC_THRESHOLD = float(os.getenv("KNOWLEDGE_SEMANTIC_THRESHOLD", "0.35"))
 _EMBED_TEXT_CHARS = 800  # condensed per-item representation, not the full doc
+
+# ── chunk-level RAG selection (which PART of a selected item gets injected) ─
+_KNOWLEDGE_CHUNK_CHARS = int(os.getenv("KNOWLEDGE_CHUNK_CHARS", "600"))
+_KNOWLEDGE_CHUNKS_PER_ITEM = int(os.getenv("KNOWLEDGE_CHUNKS_PER_ITEM", "3"))
+_KNOWLEDGE_CHUNK_MIN_SCORE = float(os.getenv("KNOWLEDGE_CHUNK_MIN_SCORE", "0.30"))
 
 
 class Embedder(Protocol):
@@ -81,17 +70,9 @@ _item_embed_cache: dict[tuple[str, str], np.ndarray] = {}
 _item_embed_cache_lock = threading.RLock()
 
 
-def _normalize(vector: np.ndarray) -> np.ndarray:
-    arr = np.asarray(vector, dtype=np.float32)
-    norm = float(np.linalg.norm(arr))
-    return arr / norm if norm > 1e-12 else arr
-
-
 def _embed_source_text(item: "KnowledgeItem") -> str:
     """Condensed text to embed per item — title + tags + a text excerpt,
-    not the full document (keeps embedding calls cheap and keeps the
-    vector focused on what the item is about rather than diluted by
-    boilerplate deep in a long file)."""
+    not the full document."""
     body = _FRONT_MATTER_RE.sub("", item.text, count=1).strip()
     return f"{item.title}\n{' '.join(item.tags)}\n{body[:_EMBED_TEXT_CHARS]}"
 
@@ -104,7 +85,7 @@ def _get_item_embedding(item: "KnowledgeItem", embedder: Embedder) -> np.ndarray
         cached = _item_embed_cache.get(cache_key)
         if cached is not None:
             return cached
-    vector = _normalize(np.asarray(embedder.embed_query(_embed_source_text(item)), dtype=np.float32))
+    vector = reason.normalize_vec(np.asarray(embedder.embed_query(_embed_source_text(item)), dtype=np.float32))
     with _item_embed_cache_lock:
         _item_embed_cache[cache_key] = vector
     return vector
@@ -113,21 +94,17 @@ def _get_item_embedding(item: "KnowledgeItem", embedder: Embedder) -> np.ndarray
 def _semantic_rank(
     query: str, items: list["KnowledgeItem"], embedder: Embedder, threshold: float,
 ) -> list["KnowledgeItem"] | None:
-    """Return items ranked by cosine similarity to the query, filtered by
-    `threshold`, or None if embedding fails (caller falls back to keyword
-    scoring in that case)."""
+    """Rank items by cosine similarity in one batched numpy matmul instead
+    of a per-item Python loop. Returns None if embedding fails (caller
+    falls back to keyword scoring)."""
     if not items:
         return []
     try:
-        query_vector = _normalize(np.asarray(embedder.embed_query(query, instruct=_KNOWLEDGE_INSTRUCT), dtype=np.float32))
-        scored: list[tuple[float, "KnowledgeItem"]] = []
-        for item in items:
-            item_vector = _get_item_embedding(item, embedder)
-            score = float(np.dot(query_vector, item_vector))
-            if score >= threshold:
-                scored.append((score, item))
-        scored.sort(key=lambda pair: -pair[0])
-        return [item for _score, item in scored]
+        query_vec = np.asarray(embedder.embed_query(query, instruct=_KNOWLEDGE_INSTRUCT), dtype=np.float32)
+        item_vecs = np.stack([_get_item_embedding(item, embedder) for item in items])
+        scores = reason.batch_cosine_scores(query_vec, item_vecs)
+        order = np.argsort(-scores)
+        return [items[i] for i in order if scores[i] >= threshold]
     except Exception:
         return None
 
@@ -266,13 +243,9 @@ def search_knowledge(
         ranked = _semantic_rank(query, items, embedder, _KNOWLEDGE_SEMANTIC_THRESHOLD)
         if ranked is not None:
             return ranked[:limit]
-        # embedding failed for some reason — fall through to keyword scoring
 
     query_terms = _terms(query)
     if not query_terms:
-        # Query had content but it was entirely stopwords (e.g. "how do we
-        # do this") — that's not a real topical query, so match nothing
-        # rather than silently returning arbitrary items.
         return []
 
     scored = [
@@ -288,6 +261,23 @@ def _attr(value: object) -> str:
     return escape(str(value), quote=True)
 
 
+def _relevant_excerpt(item: "KnowledgeItem", query: str, embedder: Embedder | None, remaining: int) -> str:
+    """Chunk one item's body and return only the query-relevant excerpts,
+    bounded by remaining chars. This is the RAG step: previously the whole
+    item.text (up to remaining) was injected regardless of which part of a
+    long doc actually mattered."""
+    body = _FRONT_MATTER_RE.sub("", item.text, count=1).strip()
+    pieces = reason.chunk_text(body, _KNOWLEDGE_CHUNK_CHARS)
+    if not pieces:
+        return ""
+    relevant = reason.select_relevant_chunks(
+        query, pieces, embedder, top_k=_KNOWLEDGE_CHUNKS_PER_ITEM,
+        min_score=_KNOWLEDGE_CHUNK_MIN_SCORE, instruct=_KNOWLEDGE_INSTRUCT,
+    )
+    excerpt = "\n...\n".join(c for _score, c in relevant) if relevant else pieces[0]
+    return excerpt[:remaining]
+
+
 def knowledge_context_for(
     query: str, limit: int = 5, max_chars: int = 9000, embedder: Embedder | None = None,
 ) -> str:
@@ -300,7 +290,9 @@ def knowledge_context_for(
     for item in selected:
         if remaining <= 0:
             break
-        text = item.text.strip()[:remaining]
+        excerpt = _relevant_excerpt(item, query, embedder, remaining)
+        if not excerpt:
+            continue
         meta = item.as_dict()
         attrs = (
             f'id="{_attr(meta["id"])}" '
@@ -311,9 +303,12 @@ def knowledge_context_for(
         )
         chunks.append(
             f"<knowledge_item {attrs}>\n"
-            f"tags: {', '.join(meta['tags'])}\n\n{text}\n</knowledge_item>"
+            f"tags: {', '.join(meta['tags'])}\n\n{excerpt}\n</knowledge_item>"
         )
-        remaining -= len(text)
+        remaining -= len(excerpt)
+
+    if not chunks:
+        return "<knowledge_context>\nNo matching local knowledge found.\n</knowledge_context>"
     return "<knowledge_context>\n" + "\n\n".join(chunks) + "\n</knowledge_context>"
 
 
@@ -329,7 +324,12 @@ def wiki_context_for(
     for item in selected:
         if remaining <= 0:
             break
-        text = item.text.strip()[:remaining]
-        chunks.append(f"<wiki_page id=\"{_attr(item.path.stem)}\">\n{text}\n</wiki_page>")
-        remaining -= len(text)
+        excerpt = _relevant_excerpt(item, query, embedder, remaining)
+        if not excerpt:
+            continue
+        chunks.append(f"<wiki_page id=\"{_attr(item.path.stem)}\">\n{excerpt}\n</wiki_page>")
+        remaining -= len(excerpt)
+
+    if not chunks:
+        return "<wiki_context>\nNo operational wiki pages found.\n</wiki_context>"
     return "<wiki_context>\n" + "\n\n".join(chunks) + "\n</wiki_context>"
