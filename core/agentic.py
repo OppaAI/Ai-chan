@@ -4,6 +4,11 @@ core/agentic.py
 Aiko's task-mode loop: tool schemas, ReAct-style dispatch, and final response
 handling. Pure tool implementations stay in core/tools.py; chat facade, TTS,
 history, and memory queue ownership stay in core/think.py.
+
+Also owns webchat's search-query condensation (resolve_search_query /
+llm_resolve_search_query) — both take `owner` (the AikoThink instance) for
+LLM client/model access, the same pattern dispatch_tool already uses for
+deep_search/deep_research.
 """
 
 from __future__ import annotations
@@ -52,6 +57,7 @@ log = get_logger(__name__)
 MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 512)))
 LLM_CTX_SIZE = int(os.getenv("LLM_CTX_SIZE", 12288))
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", 120))
 AGENT_CONTEXT_BUDGET_RATIO = float(os.getenv("AGENT_CONTEXT_BUDGET_RATIO", 0.65))
 AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("AGENT_MEMORY_DRAIN_TIMEOUT", os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25)))
 AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
@@ -116,6 +122,60 @@ def _agentic_policy_context(user_input: str, embedder=None) -> str:
     if not blocks:
         return "<agentic_policy_context>\nNo matching task policy found for this request.\n</agentic_policy_context>"
     return "<agentic_policy_context>\n" + "\n\n".join(blocks) + "\n</agentic_policy_context>"
+
+
+# ── webchat search-query condensation ────────────────────────────────────────
+# Used by think.py's webchat() to turn a conversational user message into a
+# clean search-engine query before calling web_search_context. Lives here
+# (not tools.py) so it can take `owner` the same way dispatch_tool does for
+# deep_search/deep_research — both need the caller's already-loaded LLM
+# client/model rather than constructing a second one.
+
+def resolve_search_query(owner, user_input: str) -> str:
+    """Condense a user message into a clean search query. Strips
+    conversational framing first; falls back to llm_resolve_search_query
+    only if the result still looks like a full sentence."""
+    noise = re.compile(
+        r"^(go\s+)?(can\s+you\s+)?(please\s+)?"
+        r"(pull\s+up|find\s+out|check|look\s+up|search\s+for|tell\s+me)[\s,]*",
+        re.IGNORECASE,
+    )
+    resolved = noise.sub("", user_input).strip()
+
+    # if still looks like a full sentence (long + has verb framing), ask LLM to condense
+    if len(resolved.split()) > 8 or resolved.lower().startswith(("what", "who", "when", "where", "is ", "has ", "did ")):
+        return llm_resolve_search_query(owner, resolved)
+
+    return resolved or user_input
+
+
+def llm_resolve_search_query(owner, user_input: str) -> str:
+    """LLM fallback: condense a verbose query into 3-5 search keywords,
+    using the owning AikoThink instance's already-loaded router model."""
+    try:
+        resp = owner._client.chat.completions.create(
+            model=owner._router_model,
+            messages=[{"role": "user", "content": (
+                f"Message: {user_input!r}\n\n"
+                "Output only a 3-5 word search query. No explanation.\n\n"
+                "Message: 'what's the latest llama.cpp version'\n"
+                "Query: llama.cpp latest stable release\n\n"
+                "Message: 'has NVIDIA released any new Jetson hardware this year'\n"
+                "Query: NVIDIA Jetson new hardware 2025\n\n"
+                "Message: 'what's the Canucks score from last night'\n"
+                "Query: Canucks score last night\n\n"
+                "Message: 'did llama.cpp merge the Vulkan backend yet'\n"
+                "Query: llama.cpp Vulkan backend merged\n\n"
+                "Query:"
+            )}],
+            stream=False, max_tokens=20, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
+        )
+        resolved = (resp.choices[0].message.content or "").strip().split('\n')[0]
+        resolved = resolved.strip('*_`()').strip()[:100]
+        return resolved or user_input
+    except Exception as e:
+        log.warning("LLM search query resolution failed: %s", e)
+        return user_input
 
 
 _ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^\]:]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)
