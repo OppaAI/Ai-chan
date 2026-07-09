@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from core.log import get_logger
+from core import bioclock
 from core import reason
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from core.wiki import wiki_context_for, wiki_knowledge_context_for
@@ -945,6 +946,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
 
     agent_system = (
         f"{owner._persona}\n\n"
+        f"{bioclock.current_datetime_block()}\n\n"
         f"{agentic_policy_context}\n\n"
         f"{wiki_context}\n\n"
         "[TASK MODE OVERRIDE] The speech style limits in the persona do NOT apply "
