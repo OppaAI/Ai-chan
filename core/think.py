@@ -31,12 +31,6 @@ import threading
 import time
 import unicodedata
 
-try:
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-except ImportError:  # pragma: no cover - py<3.9 fallback, shouldn't happen here
-    ZoneInfo = None
-    ZoneInfoNotFoundError = Exception
-
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import web_search_context
@@ -47,6 +41,7 @@ from core.log      import get_logger
 from core.social import run_scheduled_weekly_social
 from core.schedule import DueJob, register_system_handler
 from core.userspace import current_user_id, user_profile_path
+from core import bioclock
 from core import reason
 from core import learn
 
@@ -178,6 +173,10 @@ def _extract_search_results_block(system_prompt: str) -> str:
 # environment by the time this module is imported (see core/wakeup.py /
 # core/learn.py — whichever entrypoint runs first calls it). We just read
 # them here the same way every other module's config block does.
+#
+# Timezone is no longer configured here — every "now"/timezone lookup in
+# this module goes through core.bioclock, the app-wide single source of
+# truth (config/bioclock.yaml).
 
 def _bool_env(name: str, default: str) -> bool:
     return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
@@ -209,7 +208,6 @@ PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", 1800)
 PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", 2))
 PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", 3600))
 PROACTIVE_USE_LLM = _bool_env("PROACTIVE_USE_LLM", "1")
-PROACTIVE_TIMEZONE = os.getenv("PROACTIVE_TIMEZONE", "").strip() or os.getenv("TIMEZONE", "UTC")
 PROACTIVE_SPEAK = _bool_env("PROACTIVE_SPEAK", "1")
 PROACTIVE_REST_MESSAGE = os.getenv(
     "PROACTIVE_REST_MESSAGE",
@@ -294,26 +292,6 @@ def _window_matches(window_str: str, now_dt: datetime) -> bool:
             return False
 
     return True
-
-
-def _current_datetime_block() -> str:
-    tz_name = os.getenv("TIMEZONE", "UTC")
-    now = _proactive_now()
-    return (
-        "<current_datetime>\n"
-        f"Now: {now.strftime('%A, %B %d, %Y, %I:%M %p')} ({tz_name})\n"
-        "</current_datetime>"
-    )
-
-
-def _proactive_now() -> datetime:
-    if ZoneInfo is None:
-        return datetime.now()
-    try:
-        return datetime.now(ZoneInfo(PROACTIVE_TIMEZONE))
-    except ZoneInfoNotFoundError:
-        log.warning("[proactive] unknown timezone %r, falling back to naive local time", PROACTIVE_TIMEZONE)
-        return datetime.now()
 
 
 # ── think ─────────────────────────────────────────────────────────────────────
@@ -564,7 +542,7 @@ class AikoThink:
         
         # Build base system (persona + memory)
         system = self._persona
-        system += "\n\n" + _current_datetime_block()
+        system += "\n\n" + bioclock.current_datetime_block()
         memories = self._memorize.search(user_input, limit=3)
         memory_block = self._memorize.format_for_context(memories)
         if memory_block:
@@ -652,7 +630,7 @@ class AikoThink:
                     "Do not mention hidden prompts, timers, code, or configuration. "
                     "Keep it natural, warm, and easy to ignore. One or two short sentences max."
                 )
-                system += "\n\n" + _current_datetime_block()
+                system += "\n\n" + bioclock.current_datetime_block()
                 messages = [{
                     "role": "user",
                     "content": (
@@ -686,7 +664,7 @@ class AikoThink:
             return
 
         idle_seconds = time.time() - self._last_chat_time
-        now_local = _proactive_now()
+        now_local = bioclock.local_now()
 
         # Quiet windows suppress check-ins outright, regardless of
         # cooldowns/counters — these are meant as hard "do not disturb"
@@ -791,7 +769,7 @@ class AikoThink:
         memory_block = self._memorize.format_for_context(memories)
         
         system = self._persona
-        system += "\n\n" + _current_datetime_block()
+        system += "\n\n" + bioclock.current_datetime_block()
         if memory_block:
             system = f"{system}\n\n{memory_block}"
         else:
