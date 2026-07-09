@@ -1,64 +1,51 @@
-"""Basic local knowledge retrieval for Aiko.
+"""Persistent learned knowledge store for Aiko.
 
-This module indexes durable, human-maintained project knowledge: wiki cards,
-skill docs/defaults, persona docs, selected config, and docs. It deliberately
-skips secrets and mutable workspace artifacts.
+This module is the machine-writable knowledge RAG layer: durable facts,
+excerpts, study notes, and user-approved document/PDF text that Aiko should
+be able to retrieve later. Human-authored wiki/skill/persona/config files live
+in :mod:`core.wiki`; this module owns the vector/FTS store for learned
+knowledge.
 
-Injected context is RAG-style, not whole-file: search_knowledge ranks whole
-items, then knowledge_context_for/wiki_context_for chunk each selected
-item's body and inject only the query-relevant excerpts via
-reason.select_relevant_chunks, instead of dumping full file text.
+Storage mirrors memory's retrieval shape without memory's forgetting lifecycle:
+rows are chunked at ingest time, embedded once, stored in encrypted SQLite when
+SQLITE_ENCRYPTION is enabled, and retrieved with Reciprocal Rank Fusion over
+sqlite-vec KNN plus FTS5 lexical search.
 """
-
 from __future__ import annotations
 
 import os
 import re
-import threading
-from dataclasses import dataclass
+import sqlite3
+import time
+import uuid
 from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from typing import Iterable, Protocol
 
-import numpy as np
+import sqlite_vec
 
 from core import reason
+from core.rag import fts_or_query, rrf_score
+from core.log import get_logger
+from core.secure import connect_sqlite
+from core.userspace import current_user_id, user_state_path, user_workspace_root
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+log = get_logger(__name__)
 
-_SOURCE_GLOBS: tuple[tuple[str, str], ...] = (
-    ("wiki", "wiki/*.md"),
-    ("skill", "skills/*/SKILL.md"),
-    ("skill_config", "skills/*/*.json"),
-    ("persona", "persona/*.md"),
-    ("persona_config", "persona/*.json"),
-    ("config", "config/*.yaml"),
-    ("config", "config/*.json"),
-    ("config", "config/*.toml"),
-    ("docs", "*.md"),
-    ("docs", "docs/*.md"),
-)
+EMBED_DIMS = int(os.getenv("EMBED_DIMS", "640"))
+KNOWLEDGE_DB_PATH = os.getenv("KNOWLEDGE_DB_PATH", "knowledge/knowledge.db")
+KNOWLEDGE_RRF_K = int(os.getenv("KNOWLEDGE_RRF_K", "60"))
+KNOWLEDGE_KNN_LIMIT = int(os.getenv("KNOWLEDGE_KNN_LIMIT", "20"))
+KNOWLEDGE_FTS_LIMIT = int(os.getenv("KNOWLEDGE_FTS_LIMIT", "20"))
+KNOWLEDGE_RECALL_SCORE_THRESHOLD = float(os.getenv("KNOWLEDGE_RECALL_SCORE_THRESHOLD", "0.012"))
+KNOWLEDGE_CHUNK_CHARS = int(os.getenv("KNOWLEDGE_STORE_CHUNK_CHARS", os.getenv("KNOWLEDGE_CHUNK_CHARS", "900")))
+KNOWLEDGE_CONTEXT_CHARS = int(os.getenv("KNOWLEDGE_CONTEXT_CHARS", "3500"))
+KNOWLEDGE_QUERY_INSTRUCT = os.getenv(
+    "KNOWLEDGE_QUERY_INSTRUCT",
+    "Retrieve durable learned knowledge relevant to the request",
+).strip()
 
-_WORD_RE = re.compile(r"[a-z0-9_./-]+", re.IGNORECASE)
-_HEADING_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
-_FRONT_MATTER_RE = re.compile(r"^---\n(?P<meta>.*?)\n---\n", re.DOTALL)
-
-_STOPWORDS = reason.STOPWORDS
-
-# Minimum score for the keyword-fallback item ranking (whole-item, not
-# chunk-level — chunk-level thresholds are separate, below).
-_MIN_RELEVANCE_SCORE = 3
-
-# ── item-level semantic ranking (which items are candidates at all) ────────
-_KNOWLEDGE_INSTRUCT = "Which document is most relevant to this request or question?"
-_KNOWLEDGE_SEMANTIC_THRESHOLD = float(os.getenv("KNOWLEDGE_SEMANTIC_THRESHOLD", "0.35"))
-_EMBED_TEXT_CHARS = 800  # condensed per-item representation, not the full doc
-
-# ── chunk-level RAG selection (which PART of a selected item gets injected) ─
-_KNOWLEDGE_CHUNK_CHARS = int(os.getenv("KNOWLEDGE_CHUNK_CHARS", "600"))
-_KNOWLEDGE_CHUNKS_PER_ITEM = int(os.getenv("KNOWLEDGE_CHUNKS_PER_ITEM", "3"))
-_KNOWLEDGE_CHUNK_MIN_SCORE = float(os.getenv("KNOWLEDGE_CHUNK_MIN_SCORE", "0.30"))
 
 
 class Embedder(Protocol):
@@ -66,270 +53,298 @@ class Embedder(Protocol):
     def embed_queries(self, texts: list[str], instruct: str = "") -> object: ...
 
 
-_item_embed_cache: dict[tuple[str, str], np.ndarray] = {}
-_item_embed_cache_lock = threading.RLock()
+_DDL = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS learned_docs (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL DEFAULT 'ingested',
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS learned_chunks (
+    id          TEXT PRIMARY KEY,
+    doc_id      TEXT NOT NULL REFERENCES learned_docs(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_learned_docs_user ON learned_docs(user_id);
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_doc ON learned_chunks(doc_id);
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_user ON learned_chunks(user_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_fts USING fts5(
+    text,
+    id UNINDEXED,
+    content='learned_chunks',
+    content_rowid='rowid'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_vec USING vec0(
+    id TEXT PRIMARY KEY,
+    embedding FLOAT[{dims}]
+);
+
+CREATE TRIGGER IF NOT EXISTS learned_chunks_ai AFTER INSERT ON learned_chunks BEGIN
+    INSERT INTO learned_chunks_fts(rowid, text, id) VALUES (new.rowid, new.text, new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS learned_chunks_ad AFTER DELETE ON learned_chunks BEGIN
+    INSERT INTO learned_chunks_fts(learned_chunks_fts, rowid, text, id)
+    VALUES ('delete', old.rowid, old.text, old.id);
+    DELETE FROM learned_chunks_vec WHERE id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS learned_chunks_au AFTER UPDATE OF text ON learned_chunks BEGIN
+    INSERT INTO learned_chunks_fts(learned_chunks_fts, rowid, text, id)
+    VALUES ('delete', old.rowid, old.text, old.id);
+    INSERT INTO learned_chunks_fts(rowid, text, id) VALUES (new.rowid, new.text, new.id);
+END;
+""".format(dims=EMBED_DIMS)
 
 
-def _embed_source_text(item: "KnowledgeItem") -> str:
-    """Condensed text to embed per item — title + tags + a text excerpt,
-    not the full document."""
-    body = _FRONT_MATTER_RE.sub("", item.text, count=1).strip()
-    return f"{item.title}\n{' '.join(item.tags)}\n{body[:_EMBED_TEXT_CHARS]}"
+def _db_path(user_id: str | None = None) -> Path:
+    path = Path(KNOWLEDGE_DB_PATH).expanduser()
+    if path.is_absolute():
+        return path
+    return user_state_path(str(path), user_id)
 
 
-def _get_item_embedding(item: "KnowledgeItem", embedder: Embedder) -> np.ndarray:
-    """Cached per (item_id, updated_at) — unchanged files never get
-    re-embedded, only new/edited ones."""
-    cache_key = (item.item_id, item.updated_at)
-    with _item_embed_cache_lock:
-        cached = _item_embed_cache.get(cache_key)
-        if cached is not None:
-            return cached
-    vector = reason.normalize_vec(np.asarray(embedder.embed_query(_embed_source_text(item)), dtype=np.float32))
-    with _item_embed_cache_lock:
-        _item_embed_cache[cache_key] = vector
-    return vector
+def _connect(user_id: str | None = None) -> sqlite3.Connection:
+    uid = user_id or current_user_id()
+    conn = connect_sqlite(_db_path(uid), user_id=uid)
+    sqlite_vec.load(conn)
+    conn.executescript(_DDL)
+    conn.commit()
+    return conn
 
 
-def _semantic_rank(
-    query: str, items: list["KnowledgeItem"], embedder: Embedder, threshold: float,
-) -> list["KnowledgeItem"] | None:
-    """Rank items by cosine similarity in one batched numpy matmul instead
-    of a per-item Python loop. Returns None if embedding fails (caller
-    falls back to keyword scoring)."""
-    if not items:
-        return []
-    try:
-        query_vec = np.asarray(embedder.embed_query(query, instruct=_KNOWLEDGE_INSTRUCT), dtype=np.float32)
-        item_vecs = np.stack([_get_item_embedding(item, embedder) for item in items])
-        scores = reason.batch_cosine_scores(query_vec, item_vecs)
-        order = np.argsort(-scores)
-        return [items[i] for i in order if scores[i] >= threshold]
-    except Exception:
-        return None
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-@dataclass(frozen=True)
-class KnowledgeItem:
-    item_id: str
-    kind: str
-    path: Path
-    title: str
-    text: str
-    tags: tuple[str, ...]
-    updated_at: str
-
-    def relative_path(self) -> str:
-        try:
-            return str(self.path.resolve().relative_to(REPO_ROOT.resolve()))
-        except ValueError:
-            return str(self.path)
-
-    def as_dict(self) -> dict:
-        return {
-            "id": self.item_id,
-            "kind": self.kind,
-            "path": self.relative_path(),
-            "title": self.title,
-            "tags": list(self.tags),
-            "updated_at": self.updated_at,
-        }
+def _sanitize_text(text: str, max_chars: int = 200_000) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())[:max_chars]
 
 
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _title_from_text(path: Path, text: str) -> str:
-    front = _FRONT_MATTER_RE.search(text)
-    if front:
-        for line in front.group("meta").splitlines():
-            key, found, value = line.partition(":")
-            if found and key.strip() in {"name", "title"}:
-                return value.strip().strip("'\"")
-    heading = _HEADING_RE.search(text)
-    if heading:
-        return heading.group(1).strip()
-    return path.stem.replace("_", " ").title()
+
+def _safe_workspace_path(relative_path: str, user_id: str | None = None) -> Path:
+    root = user_workspace_root(user_id).resolve()
+    target = (root / relative_path).expanduser().resolve()
+    if root not in target.parents and target != root:
+        raise ValueError("path must stay inside the user workspace")
+    return target
 
 
-def _tags_for(kind: str, path: Path, text: str) -> tuple[str, ...]:
-    tags = {kind, path.stem}
-    try:
-        rel_parts = path.relative_to(REPO_ROOT).parts
-    except ValueError:
-        rel_parts = path.parts
-    tags.update(part for part in rel_parts[:-1] if part not in {".", ""})
-    front = _FRONT_MATTER_RE.search(text)
-    if front:
-        for line in front.group("meta").splitlines():
-            key, found, value = line.partition(":")
-            if found and key.strip() in {"id", "status", "owner", "related", "triggers", "tools"}:
-                tags.update(part.strip() for part in value.split(",") if part.strip())
-    return tuple(sorted(tags))
+def extract_text_from_file(relative_path: str, *, user_id: str | None = None, max_chars: int = 200_000) -> tuple[str, str]:
+    """Extract text from a workspace document for learned-knowledge ingest.
 
-
-def _updated_at(path: Path) -> str:
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        return ""
-    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-
-
-def discover_knowledge_items(root: str | Path = REPO_ROOT) -> list[KnowledgeItem]:
-    base = Path(root)
-    items: list[KnowledgeItem] = []
-    for kind, pattern in _SOURCE_GLOBS:
-        for path in sorted(base.glob(pattern)):
-            if not path.is_file():
-                continue
+    Supports plain text/Markdown/config files directly, HTML via trafilatura
+    when installed, and PDF via pypdf/PyPDF2 when installed. Returns
+    (text, source_path). Raises ValueError with a user-facing reason when the
+    file cannot be read/extracted.
+    """
+    path = _safe_workspace_path(relative_path, user_id)
+    if not path.is_file():
+        raise ValueError(f"workspace file not found: {relative_path}")
+    suffix = path.suffix.casefold()
+    if suffix in {".txt", ".md", ".rst", ".json", ".yaml", ".yml", ".toml", ".csv", ".log", ".py", ".js", ".ts", ".html", ".htm"}:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        if suffix in {".html", ".htm"}:
             try:
-                text = _read_text(path)
-            except OSError:
-                continue
-            rel = path.relative_to(base)
-            item_id = str(rel.with_suffix("")).replace("/", ".")
-            items.append(KnowledgeItem(
-                item_id=item_id,
-                kind=kind,
-                path=path,
-                title=_title_from_text(path, text),
-                text=text,
-                tags=_tags_for(kind, path, text),
-                updated_at=_updated_at(path),
-            ))
-    return items
+                import trafilatura  # type: ignore
+                raw = trafilatura.extract(raw, include_links=False, include_tables=False) or raw
+            except Exception:
+                pass
+        return _sanitize_text(raw, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".pdf":
+        reader_cls = None
+        try:
+            from pypdf import PdfReader  # type: ignore
+            reader_cls = PdfReader
+        except Exception:
+            try:
+                from PyPDF2 import PdfReader  # type: ignore
+                reader_cls = PdfReader
+            except Exception as exc:
+                raise ValueError("PDF ingest needs pypdf or PyPDF2 installed") from exc
+        reader = reader_cls(str(path))
+        pages = []
+        for page in reader.pages:
+            pages.append(page.extract_text() or "")
+            if sum(len(p) for p in pages) >= max_chars:
+                break
+        return _sanitize_text("\n\n".join(pages), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    raise ValueError(f"unsupported knowledge file type: {suffix or 'no extension'}")
 
 
-def _terms(text: str) -> list[str]:
-    return [
-        match.group(0).casefold()
-        for match in _WORD_RE.finditer(text)
-        if match.group(0).strip() and match.group(0).casefold() not in _STOPWORDS
-    ]
+def ingest_file(
+    relative_path: str,
+    *,
+    title: str | None = None,
+    kind: str = "ingested",
+    embedder: Embedder | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    """Extract a workspace file and store it in learned knowledge RAG."""
+    text, source = extract_text_from_file(relative_path, user_id=user_id)
+    return ingest_text(title or Path(relative_path).stem.replace("_", " ").title(), text, source=source, kind=kind, embedder=embedder, user_id=user_id)
+
+def ingest_text(
+    title: str,
+    text: str,
+    *,
+    source: str = "",
+    kind: str = "ingested",
+    embedder: Embedder | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    """Chunk, embed, and persist durable learned knowledge."""
+    clean = _sanitize_text(text)
+    if not clean:
+        return None
+    uid = user_id or current_user_id()
+    doc_id = str(uuid.uuid4())
+    created_at = _now()
+    chunks = reason.chunk_text(clean, KNOWLEDGE_CHUNK_CHARS) or [clean]
+    conn = _connect(uid)
+    try:
+        conn.execute(
+            "INSERT INTO learned_docs(id,user_id,title,source,kind,created_at) VALUES(?,?,?,?,?,?)",
+            (doc_id, uid, (title or "Untitled knowledge")[:200], source[:500], kind[:50], created_at),
+        )
+        vectors = []
+        if embedder is not None:
+            batch = reason.embed_batch_or_none(embedder, chunks)
+            vectors = list(batch) if batch is not None and len(batch) == len(chunks) else []
+        for index, chunk in enumerate(chunks):
+            chunk_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at) VALUES(?,?,?,?,?,?)",
+                (chunk_id, doc_id, uid, index, chunk, created_at),
+            )
+            if vectors:
+                conn.execute(
+                    "INSERT INTO learned_chunks_vec(id, embedding) VALUES(?, ?)",
+                    (chunk_id, sqlite_vec.serialize_float32(vectors[index])),
+                )
+        conn.commit()
+        return doc_id
+    except Exception as exc:
+        conn.rollback()
+        log.warning("Failed to ingest knowledge: %s", exc)
+        return None
+    finally:
+        conn.close()
 
 
-def _score_item(item: KnowledgeItem, terms: Iterable[str]) -> int:
-    title = item.title.casefold()
-    item_id = item.item_id.casefold()
-    tags = " ".join(item.tags).casefold()
-    text = item.text.casefold()
-    score = 0
-    for term in terms:
-        if term in item_id:
-            score += 5
-        if term in title:
-            score += 4
-        if term in tags:
-            score += 3
-        if term in text:
-            score += 1
-    return score
+def _knn(conn: sqlite3.Connection, query: str, embedder: Embedder | None, uid: str, limit: int) -> list[sqlite3.Row]:
+    if embedder is None:
+        return []
+    vector = embedder.embed_query(query, instruct=KNOWLEDGE_QUERY_INSTRUCT)
+    blob = sqlite_vec.serialize_float32(vector)
+    return conn.execute(
+        """
+        SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
+        FROM learned_chunks_vec v
+        JOIN learned_chunks c ON c.id = v.id
+        WHERE c.user_id = ?
+        ORDER BY dist ASC
+        LIMIT ?
+        """,
+        (blob, uid, limit),
+    ).fetchall()
+
+
+def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sqlite3.Row]:
+    fts = fts_or_query(query)
+    if not fts:
+        return []
+    return conn.execute(
+        """
+        SELECT f.id
+        FROM learned_chunks_fts f
+        JOIN learned_chunks c ON c.id = f.id
+        WHERE learned_chunks_fts MATCH ? AND c.user_id = ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (fts, uid, limit),
+    ).fetchall()
 
 
 def search_knowledge(
     query: str,
-    limit: int = 6,
-    kinds: Iterable[str] | None = None,
+    limit: int = 5,
+    *,
     embedder: Embedder | None = None,
-) -> list[KnowledgeItem]:
-    wanted = {kind for kind in kinds} if kinds is not None else None
-    items = [item for item in discover_knowledge_items() if wanted is None or item.kind in wanted]
-    if not query.strip():
-        return items[:limit]
-
-    if embedder is not None:
-        ranked = _semantic_rank(query, items, embedder, _KNOWLEDGE_SEMANTIC_THRESHOLD)
-        if ranked is not None:
-            return ranked[:limit]
-
-    query_terms = _terms(query)
-    if not query_terms:
+    user_id: str | None = None,
+) -> list[dict]:
+    uid = user_id or current_user_id()
+    conn = _connect(uid)
+    try:
+        rank_knn = {row["id"]: i + 1 for i, row in enumerate(_knn(conn, query, embedder, uid, KNOWLEDGE_KNN_LIMIT))}
+        rank_fts = {row["id"]: i + 1 for i, row in enumerate(_fts(conn, query, uid, KNOWLEDGE_FTS_LIMIT))}
+        ids = set(rank_knn) | set(rank_fts)
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"""
+            SELECT c.id, c.text, c.chunk_index, c.created_at,
+                   d.title, d.source, d.kind, d.id AS doc_id
+            FROM learned_chunks c
+            JOIN learned_docs d ON d.id = c.doc_id
+            WHERE c.id IN ({placeholders})
+            """,
+            list(ids),
+        ).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        scored: list[tuple[float, str]] = []
+        for cid in ids:
+            score = rrf_score(cid, rank_knn, rank_fts, k=KNOWLEDGE_RRF_K)
+            if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD and cid in by_id:
+                scored.append((score, cid))
+        scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
+        return [dict(by_id[cid]) | {"score": score} for score, cid in scored[:limit]]
+    except Exception as exc:
+        log.warning("Knowledge search failed: %s", exc)
         return []
-
-    scored = [
-        (score, item)
-        for item in items
-        if (score := _score_item(item, query_terms)) >= _MIN_RELEVANCE_SCORE
-    ]
-    scored.sort(key=lambda pair: (-pair[0], pair[1].kind, pair[1].item_id))
-    return [item for _score, item in scored[:limit]]
+    finally:
+        conn.close()
 
 
 def _attr(value: object) -> str:
-    return escape(str(value), quote=True)
-
-
-def _relevant_excerpt(item: "KnowledgeItem", query: str, embedder: Embedder | None, remaining: int) -> str:
-    """Chunk one item's body and return only the query-relevant excerpts,
-    bounded by remaining chars. This is the RAG step: previously the whole
-    item.text (up to remaining) was injected regardless of which part of a
-    long doc actually mattered."""
-    body = _FRONT_MATTER_RE.sub("", item.text, count=1).strip()
-    pieces = reason.chunk_text(body, _KNOWLEDGE_CHUNK_CHARS)
-    if not pieces:
-        return ""
-    relevant = reason.select_relevant_chunks(
-        query, pieces, embedder, top_k=_KNOWLEDGE_CHUNKS_PER_ITEM,
-        min_score=_KNOWLEDGE_CHUNK_MIN_SCORE, instruct=_KNOWLEDGE_INSTRUCT,
-    )
-    excerpt = "\n...\n".join(c for _score, c in relevant) if relevant else pieces[0]
-    return excerpt[:remaining]
+    return escape(str(value or ""), quote=True)
 
 
 def knowledge_context_for(
-    query: str, limit: int = 5, max_chars: int = 9000, embedder: Embedder | None = None,
+    query: str,
+    limit: int = 5,
+    max_chars: int | None = None,
+    embedder: Embedder | None = None,
 ) -> str:
-    selected = search_knowledge(query, limit=limit, embedder=embedder)
-    if not selected:
-        return "<knowledge_context>\nNo matching local knowledge found.\n</knowledge_context>"
-
-    chunks: list[str] = []
-    remaining = max_chars
-    for item in selected:
+    hits = search_knowledge(query, limit=limit, embedder=embedder)
+    if not hits:
+        return "<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"
+    remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
+    blocks: list[str] = []
+    for hit in hits:
         if remaining <= 0:
             break
-        excerpt = _relevant_excerpt(item, query, embedder, remaining)
-        if not excerpt:
-            continue
-        meta = item.as_dict()
-        attrs = (
-            f'id="{_attr(meta["id"])}" '
-            f'kind="{_attr(meta["kind"])}" '
-            f'path="{_attr(meta["path"])}" '
-            f'title="{_attr(meta["title"])}" '
-            f'updated_at="{_attr(meta["updated_at"])}"'
+        text = str(hit["text"])[:remaining]
+        blocks.append(
+            f'<knowledge_chunk doc_id="{_attr(hit["doc_id"])}" title="{_attr(hit["title"])}" '
+            f'kind="{_attr(hit["kind"])}" source="{_attr(hit["source"])}" score="{hit["score"]:.4f}">\n'
+            f'{text}\n</knowledge_chunk>'
         )
-        chunks.append(
-            f"<knowledge_item {attrs}>\n"
-            f"tags: {', '.join(meta['tags'])}\n\n{excerpt}\n</knowledge_item>"
-        )
-        remaining -= len(excerpt)
-
-    if not chunks:
-        return "<knowledge_context>\nNo matching local knowledge found.\n</knowledge_context>"
-    return "<knowledge_context>\n" + "\n\n".join(chunks) + "\n</knowledge_context>"
-
-
-def wiki_context_for(
-    query: str, limit: int = 2, max_chars: int = 5000, embedder: Embedder | None = None,
-) -> str:
-    selected = search_knowledge(query, limit=limit, kinds=("wiki",), embedder=embedder)
-    if not selected:
-        return "<wiki_context>\nNo operational wiki pages found.\n</wiki_context>"
-
-    chunks: list[str] = []
-    remaining = max_chars
-    for item in selected:
-        if remaining <= 0:
-            break
-        excerpt = _relevant_excerpt(item, query, embedder, remaining)
-        if not excerpt:
-            continue
-        chunks.append(f"<wiki_page id=\"{_attr(item.path.stem)}\">\n{excerpt}\n</wiki_page>")
-        remaining -= len(excerpt)
-
-    if not chunks:
-        return "<wiki_context>\nNo operational wiki pages found.\n</wiki_context>"
-    return "<wiki_context>\n" + "\n\n".join(chunks) + "\n</wiki_context>"
+        remaining -= len(text)
+    return "<knowledge_context>\n" + "\n\n".join(blocks) + "\n</knowledge_context>"

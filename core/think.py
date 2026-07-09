@@ -30,6 +30,7 @@ from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import web_search_context
 from core.agentic  import run_agentic_chat, resolve_search_query, llm_resolve_search_query
+from core.wiki import wiki_knowledge_context_for
 from core.knowledge import knowledge_context_for
 from core.log      import get_logger
 from core.social import run_scheduled_weekly_social
@@ -479,11 +480,15 @@ class AikoThink:
         # Local knowledge context (if user asks about Aiko)
         if _should_use_local_knowledge(user_input):
             try:
-                local_context = knowledge_context_for(
-                    user_input, limit=3, max_chars=4500,
+                wiki_context = wiki_knowledge_context_for(
+                    user_input, limit=3, max_chars=3000,
                     embedder=self._memorize._mem._embedder,
                 )
-                system = f"{system}\n\n{local_context}"
+                learned_context = knowledge_context_for(
+                    user_input, limit=3, max_chars=2000,
+                    embedder=self._memorize._mem._embedder,
+                )
+                system = f"{system}\n\n{wiki_context}\n\n{learned_context}"
             except Exception as e:
                 log.error("Local knowledge lookup failed: %s", e)
         

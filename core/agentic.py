@@ -26,13 +26,12 @@ import numpy as np
 from core.log import get_logger
 from core import reason
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
-from core.knowledge import knowledge_context_for, wiki_context_for
+from core.wiki import wiki_context_for, wiki_knowledge_context_for
+from core.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from core import experience
 from core.tools import (
-    web_fetch,
     deep_search,
     deep_research,
-    web_search,
     make_plan,
     create_checklist,
     save_note,
@@ -72,9 +71,8 @@ AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
 
 # Max number of times deep_search/deep_research together can be invoked in
 # ONE agentic workflow. Previously hardcoded to exactly once; now tunable.
-# The two tools still share one budget since deep_research is itself just
-# repeated deep_search calls under the hood — letting them run independently
-# would double-count the same underlying cost.
+# The two tools share one budget so a single agentic workflow cannot keep
+# spending web/research calls after enough evidence or snippets were gathered.
 AGENT_RESEARCH_MAX_CALLS = int(os.getenv("AGENT_RESEARCH_MAX_CALLS", 1))
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -301,36 +299,13 @@ def tool_schemas() -> list[dict]:
 
 _TOOL_SCHEMAS = [
         {"type": "function", "function": {
-            "name": "web_search",
-            "description": (
-                "Quick snippet-only web lookup for a single fact in normal conversation "
-                "(not agentic task mode). Use first when the user asks something that may "
-                "have changed since training or needs current info. If snippets don't answer "
-                "it, follow up with web_fetch on the most relevant result URL."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "The search query."}},
-                "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "web_fetch",
-            "description": (
-                "Fetch one specific URL — either one the user gave you, or the top result "
-                "from a prior web_search whose snippet wasn't enough. Not for agentic "
-                "multi-source research; use deep_search/deep_research for that."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "url": {"type": "string", "description": "The URL to fetch."}},
-                "required": ["url"]}}},
-        {"type": "function", "function": {
             "name": "deep_search",
             "description": (
-                "In agentic task mode: gather information from the web as ONE step feeding "
-                "into a larger task, where the research itself is not the deliverable. "
-                "Use when the task needs facts/records/data to act on afterward — e.g. "
-                "'check these 8 teams' past records and predict who wins the cup': the "
-                "search supports the analysis, it isn't the analysis. One fixed search+fetch "
-                "pass, condensed to relevant excerpts. Prefer this over deep_research when "
-                "you already know roughly what you're looking for."
+                "In agentic task mode: snippet-only web search as ONE support step inside "
+                "a larger workflow, where research itself is not the deliverable. Use this "
+                "when the task needs current web result snippets/URLs to decide the next "
+                "step. It does not fetch full pages; use deep_research for heavy source "
+                "reading, synthesis, or self-learning."
             ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The focused research query to search and fetch."}},
@@ -338,14 +313,11 @@ _TOOL_SCHEMAS = [
         {"type": "function", "function": {
             "name": "deep_research",
             "description": (
-                "In agentic task mode: use when the RESEARCH ITSELF is the deliverable the "
-                "user wants — a topic that needs several different angles/questions explored "
-                "and synthesized into one answer, not a single lookup. E.g. 'research what "
-                "Harness Engineering is and how it applies to my own architecture.' Also the "
-                "right tool for self-directed learning during idle time. Runs multiple "
-                "adaptive search rounds, deciding after each whether more angles are needed, "
-                "then synthesizes. Costs more than deep_search — don't use it for a task "
-                "that just needs supporting facts."
+                "In agentic task mode: heavy research/source-reading tool for when the "
+                "research itself is the deliverable or for deliberate self-learning. It "
+                "uses search only to discover candidate URLs, then fetches full pages, "
+                "condenses evidence, optionally iterates/refines, and synthesizes. Costs "
+                "more than deep_search; do not use for simple snippet lookup."
             ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool refines it internally."}},
@@ -474,6 +446,22 @@ _TOOL_SCHEMAS = [
                 "limit": {"type": "integer"}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
+            "name": "learn_knowledge",
+            "description": (
+                "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). "
+                "Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted "
+                "document text, or after explicit self-learning/research should be retained. "
+                "Do not use for private personal preferences; those belong in memory. Do not use "
+                "for merely saving a human-readable note; use save_note for that."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "Short title for the learned document or fact set."},
+                "text": {"type": "string", "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."},
+                "relative_path": {"type": "string", "description": "Optional workspace-relative document path to ingest instead of text."},
+                "source": {"type": "string", "description": "Optional source URL/path/context for pasted text."},
+                "kind": {"type": "string", "enum": ["ingested", "self_learned", "study_note"], "description": "Where this knowledge came from."}},
+                "required": ["title"]}}},
+        {"type": "function", "function": {
             "name": "search_jobs", "description": "Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string"},
@@ -497,8 +485,6 @@ _TOOL_SCHEMA_TOKENS_ESTIMATE = max(1, len(json.dumps(_TOOL_SCHEMAS)) // 4)
 
 def _register_tools() -> None:
     handlers = {
-        "web_search": lambda args: web_search(args.get("query", "")),
-        "web_fetch": lambda args: web_fetch(args.get("url", "")),
         "make_plan": lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
         "create_checklist": lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
         "save_note": lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
@@ -572,12 +558,6 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             error_type="missing_args", retryable=True,
         )
 
-    if name == "web_search" and not (args.get("query") or "").strip():
-        return ToolResult(
-            ok=False, tool=name, args=args,
-            content="Missing required argument: query must be a non-empty string. Reissue with a specific search query.",
-            error_type="missing_args", retryable=True,
-        )
     if name == "deep_search" and not (args.get("query") or "").strip():
         return ToolResult(
             ok=False, tool=name, args=args,
@@ -590,10 +570,10 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content="Missing required argument: query must be a non-empty string. Reissue with a research question.",
             error_type="missing_args", retryable=True,
         )
-    if name == "web_fetch" and not (args.get("url") or "").strip():
+    if name == "learn_knowledge" and not (args.get("text") or args.get("relative_path") or "").strip():
         return ToolResult(
             ok=False, tool=name, args=args,
-            content="Missing required argument: url must be a non-empty string.",
+            content="Missing required argument: provide text or relative_path with knowledge to store.",
             error_type="missing_args", retryable=True,
         )
 
@@ -641,6 +621,23 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("query", ""),
             embedder=_owner_embedder(owner),
         )
+    if name == "learn_knowledge":
+        if (args.get("relative_path") or "").strip():
+            doc_id = ingest_knowledge_file(
+                args.get("relative_path", ""),
+                title=args.get("title") or None,
+                kind=args.get("kind", "ingested"),
+                embedder=_owner_embedder(owner),
+            )
+        else:
+            doc_id = ingest_knowledge_text(
+                args.get("title", "Learned knowledge"),
+                args.get("text", ""),
+                source=args.get("source", ""),
+                kind=args.get("kind", "ingested"),
+                embedder=_owner_embedder(owner),
+            )
+        return json.dumps({"ok": bool(doc_id), "doc_id": doc_id}, ensure_ascii=False)
     entry = _TOOLS.get(name)
     if not entry:
         return f"[unknown tool: {name}]"
@@ -668,7 +665,7 @@ def dispatch_tool_checked(name: str, args: dict, owner=None) -> ToolResult:
 def _max_attempts_for(name: str) -> int:
     if name == "deep_research":
         return max(1, int(os.getenv("AGENT_DEEP_RESEARCH_ATTEMPTS", 1)))
-    if name in {"web_search", "deep_search", "web_fetch"}:
+    if name == "deep_search":
         return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
     if name in {"save_note", "schedule_job", "schedule_reminder"}:
         return max(1, int(os.getenv("AGENT_LOCAL_TOOL_ATTEMPTS", 1)))
@@ -697,9 +694,8 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
 
 def _research_call_count(state: TaskState) -> int:
     """How many times deep_search/deep_research have already SUCCEEDED in
-    this workflow. The two tools share one counted budget — deep_research
-    is itself repeated deep_search calls internally, so letting both run
-    independently would double the effective research budget."""
+    this workflow. The two tools share one counted budget so one task cannot
+    keep spending web/research calls indefinitely."""
     return sum(1 for step in state.steps if step["tool"] in _RESEARCH_TOOLS and step["ok"])
 
 
@@ -710,7 +706,7 @@ def _compact_processed_tool_context(messages: list[dict], preview_chars: int = 1
 
     Generalized from a research-tool-only rule: any tool's output can
     accumulate across iterations (repo_read_file, search_jobs, etc.), not
-    just deep_search/deep_research/web_fetch, so this now applies uniformly
+    just deep_search/deep_research, so this now applies uniformly
     to any tool-role message over _COMPACTABLE_MIN_CHARS.
     """
     for message in messages:
@@ -874,7 +870,8 @@ def _enforce_agentic_context_budget(
     wiki_context: str,
     skill_context: str,
     knowledge_context: str,
-) -> tuple[str, str, str, str]:
+    experience_context: str,
+) -> tuple[str, str, str, str, str]:
     """Drop context blocks, lowest priority first, if the assembled prompt
     would still exceed the ctx budget. Fixed cost now includes an estimate
     of the tool-schema tokens sent with every call (previously ignored),
@@ -883,22 +880,23 @@ def _enforce_agentic_context_budget(
     skills.md/schedule.md should still be trimmable under real pressure
     instead of silently contributing to overflow.
 
-    Returns (wiki, skill, knowledge, agentic_policy) in that order.
+    Returns (wiki, skill, knowledge, agentic_policy, experience) in that order.
     """
     budget = int(LLM_CTX_SIZE * AGENT_CONTEXT_BUDGET_RATIO)
     fixed = persona + memory_context + user_input
     fixed_tokens = _estimate_tokens(fixed) + _TOOL_SCHEMA_TOKENS_ESTIMATE
 
-    # Priority order to drop, weakest first: wiki > knowledge > agentic_policy > skill.
+    # Priority order to drop, weakest first: experience > wiki > knowledge > agentic_policy > skill.
     # Skill workflows are kept longest since they carry concrete tool
     # instructions the agent loop needs to act correctly.
     blocks = {
         "wiki": wiki_context,
         "knowledge": knowledge_context,
+        "experience": experience_context,
         "agentic_policy": agentic_policy_context,
         "skill": skill_context,
     }
-    drop_order = ["wiki", "knowledge", "agentic_policy", "skill"]
+    drop_order = ["experience", "wiki", "knowledge", "agentic_policy", "skill"]
 
     for name in drop_order:
         total_tokens = fixed_tokens + sum(_estimate_tokens(v) for v in blocks.values())
@@ -913,7 +911,7 @@ def _enforce_agentic_context_budget(
         else:
             blocks[name] = f"<{name}_context>\nOmitted this turn — context budget exceeded.\n</{name}_context>"
 
-    return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"]
+    return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"]
 
 
 def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
@@ -934,10 +932,13 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     agentic_policy_context = _agentic_policy_context(user_input, embedder=_embedder)
     wiki_context = wiki_context_for(user_input, limit=1, max_chars=1500, embedder=_embedder)
     skill_context = skill_context_for(user_input, limit=2, max_chars=3000, embedder=_embedder)
-    knowledge_context = knowledge_context_for(user_input, limit=2, max_chars=2500, embedder=_embedder)
-    wiki_context, skill_context, knowledge_context, agentic_policy_context = _enforce_agentic_context_budget(
+    wiki_knowledge_context = wiki_knowledge_context_for(user_input, limit=2, max_chars=2500, embedder=_embedder)
+    knowledge_context = knowledge_context_for(user_input, limit=3, max_chars=2500, embedder=_embedder)
+    experience_context = experience.experience_context_for(user_input, limit=3, embedder=_embedder)
+    knowledge_context = f"{wiki_knowledge_context}\n\n{knowledge_context}"
+    wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,
-        wiki_context, skill_context, knowledge_context,
+        wiki_context, skill_context, knowledge_context, experience_context,
     )
 
     agent_system = (
@@ -950,11 +951,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         f"{memory_context}\n\n"
         f"{skill_context}\n\n"
         f"{knowledge_context}\n\n"
+        f"{experience_context}\n\n"
         "[TASK MODE] You MUST use tools to complete tasks. Treat agentic work as "
         "a sequence of steps, not one category: plan/decide when useful, research "
-        "with web_search for snippet-only discovery, deep_search for a single "
-        "fixed search+fetch pass, or deep_research for adaptive multi-round "
-        "research when the topic needs more than one search angle, "
+        "with deep_search for snippet-only discovery/support inside a workflow, "
+        "or deep_research for fetched source reading, synthesis, and self-learning, "
         "inspect repository files for coding or architecture work, schedule with "
         "schedule_job or schedule_reminder when requested, and write or save the "
         "result when the user asks for an artifact. Research tasks should normally "
@@ -971,8 +972,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         f"deep_search/deep_research together may be used at most {AGENT_RESEARCH_MAX_CALLS} "
         "time(s) per agentic workflow. After research returns, read its evidence and "
         "continue with the next productive step (plan, summarize, save, or answer) "
-        "instead of searching again. Use web_search only for lightweight snippet "
-        "discovery; snippets alone are not enough for verified detailed notes. "
+        "instead of searching again. In task mode, do not use web_search/web_fetch directly; "
+        "deep_search is snippet-only and deep_research is for fetched evidence. "
         "When writing notes after research: cross-check any hardware specs, "
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
@@ -980,8 +981,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "If a research tool result explicitly says no relevant content was "
         "found, disclose that gap plainly in the final answer instead of "
         "guessing or filling it in from memory. "
-        "Use <skill_context> and <knowledge_context> when they match the task. For repeatable workflows, "
-        "prefer the predefined skill's workflow and local knowledge and operating cards over inventing a new process. "
+        "Use <skill_context>, <knowledge_context>, and <experience_context> when they match the task. "
+        "For repeatable workflows, prefer predefined skill workflow, learned knowledge, wiki operating cards, and successful similar past experience over inventing a new process. "
         "If no matching skill exists, continue with generic tools. "
         "CRITICAL: When asked to save a file, call save_note BEFORE writing "
         "any content in chat. Do not describe what you will save — just save it. "
@@ -1001,6 +1002,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             {"label": "wiki_context", "content": wiki_context},
             {"label": "skill_context", "content": skill_context},
             {"label": "knowledge_context", "content": knowledge_context},
+            {"label": "experience_context", "content": experience_context},
             {"label": "task_mode_system", "content": agent_system},
         ],
         "previous_chat_messages": [],
@@ -1018,6 +1020,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     seen_calls: set[tuple[str, str]] = set()
     state = TaskState(goal=user_input)
     final_repairs = 0
+    last_verdict: VerificationResult | None = None
+    used_incomplete_fallback = False
 
     for step in range(MAX_AGENT_ITER):
         if token_callback:
@@ -1055,6 +1059,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             candidate = msg.content or ""
             if AGENT_VERIFY_FINAL:
                 verdict = _verify_final_answer(owner, user_input, candidate, state)
+                last_verdict = verdict
                 if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
                     final_repairs += 1
                     messages.append({
@@ -1135,6 +1140,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 candidate = args.get("answer", "")
                 if AGENT_VERIFY_FINAL:
                     verdict = _verify_final_answer(owner, user_input, candidate, state)
+                    last_verdict = verdict
                     if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
                         final_repairs += 1
                         messages.append({
@@ -1172,11 +1178,19 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             MAX_AGENT_ITER, len(state.steps), len(state.failures),
         )
         final_text = _build_incomplete_task_answer(state, last_content)
+        used_incomplete_fallback = True
+
+    if used_incomplete_fallback:
+        exp_verified_ok, exp_score = False, 0.0
+    elif last_verdict is not None:
+        exp_verified_ok, exp_score = last_verdict.ok, last_verdict.score
+    else:
+        exp_verified_ok, exp_score = True, 1.0
 
     experience.record_experience(
         owner, user_input, state.steps, final_text,
-        verified_ok=(not AGENT_VERIFY_FINAL) or bool(final_text) and 'verdict' not in dir(),  # see note below
-        score=1.0,  # see note below
+        verified_ok=exp_verified_ok,
+        score=exp_score,
         embedder=_embedder,
     )
     owner._emit(final_text, token_callback=token_callback)

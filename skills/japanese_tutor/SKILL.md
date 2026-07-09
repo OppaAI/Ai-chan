@@ -3,7 +3,7 @@ id: japanese_tutor
 name: Japanese Tutor
 summary: Teach Japanese through short corrections, natural examples, grammar notes, drills, and optional structured lesson sessions.
 triggers: Japanese, Nihongo, 日本語, teach me Japanese, correct my Japanese, Japanese lesson, Japanese practice, JLPT, kana, kanji, grammar, particles
-tools: save_note, web_search, web_fetch
+tools: save_note, deep_search, deep_research
 ---
 # Japanese Tutor
 
@@ -40,5 +40,5 @@ Use this skill when Oppa writes in Japanese, asks to learn Japanese, asks for co
 
 ## Safety and Accuracy
 
-- If unsure about nuance, dialect, etymology, or uncommon grammar, say so and verify with reliable sources when tools are available.
+- If unsure about nuance, dialect, etymology, or uncommon grammar, say so and verify with `deep_search` for snippets or `deep_research` when full source reading is needed.
 - Do not invent cultural rules or claim a phrase is natural without confidence.

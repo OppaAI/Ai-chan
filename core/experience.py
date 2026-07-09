@@ -1,103 +1,122 @@
+"""Persistent experience store for Aiko's completed agentic task runs.
+
+Experience is not user memory and not wiki/knowledge. It is Aiko's procedural
+trace of what she tried: goal, ordered tools, outcomes, verification score, and
+a short result excerpt. Records do not decay or get forgotten; they are capped
+only to prevent unbounded growth/noise. Because tool arguments can contain
+incidental sensitive data, only argument keys and sanitized excerpts are stored,
+and the SQLite DB uses the same optional SQLCipher encryption path as memory.
 """
-core/experience.py
-
-Aiko's episodic/procedural memory of her own past agentic task runs —
-distinct from core/memory.py (facts *about the user*) and core/knowledge.py
-(human-authored docs/skills/wiki). Experience is machine-written: at the end
-of every agentic workflow, run_agentic_chat() records what goal was
-attempted, which tools were called in what order with what outcome, and
-whether the final answer passed verification. Future turns can then
-semantically recall "how did a similar task go last time" the same way
-knowledge_context_for() recalls "what do the docs say."
-
-Not encrypted like memory, but NOT assumed harmless either — tool args can
-carry incidental personal/sensitive content (a save_note body, a search
-query), so records are sanitized before persisting, same spirit as
-agentic._sanitize_user_facing_tool_detail.
-"""
-
 from __future__ import annotations
 
 import json
 import os
 import re
 import sqlite3
-import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from html import escape
 from pathlib import Path
 
-import numpy as np
+import sqlite_vec
 
 from core import reason
+from core.rag import fts_or_query, rrf_score
 from core.log import get_logger
+from core.secure import connect_sqlite
+from core.userspace import current_user_id, user_state_path
 
 log = get_logger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-_DB_PATH = Path(os.getenv("EXPERIENCE_DB_PATH", REPO_ROOT / "data" / "experience.db"))
-_EMBED_DIM = int(os.getenv("EXPERIENCE_EMBED_DIM", "1024"))  # match owner's embedder output dim
+EMBED_DIMS = int(os.getenv("EMBED_DIMS", "640"))
+EXPERIENCE_DB_PATH = os.getenv("EXPERIENCE_DB_PATH", "experience/experience.db")
+EXPERIENCE_QUERY_INSTRUCT = os.getenv("EXPERIENCE_QUERY_INSTRUCT", "Retrieve similar past agentic task runs").strip()
+EXPERIENCE_RRF_K = int(os.getenv("EXPERIENCE_RRF_K", "60"))
+EXPERIENCE_KNN_LIMIT = int(os.getenv("EXPERIENCE_KNN_LIMIT", "20"))
+EXPERIENCE_FTS_LIMIT = int(os.getenv("EXPERIENCE_FTS_LIMIT", "20"))
+EXPERIENCE_RECALL_SCORE_THRESHOLD = float(os.getenv("EXPERIENCE_RECALL_SCORE_THRESHOLD", "0.012"))
+EXPERIENCE_MAX_ROWS = int(os.getenv("EXPERIENCE_MAX_ROWS", "5000"))
+EXPERIENCE_CONTEXT_CHARS = int(os.getenv("EXPERIENCE_CONTEXT_CHARS", "2500"))
 
-_EXPERIENCE_INSTRUCT = "Which past task is most similar to this request?"
-_CHUNK_MIN_SCORE = float(os.getenv("EXPERIENCE_MIN_SCORE", "0.35"))
-_MAX_ROWS = int(os.getenv("EXPERIENCE_MAX_ROWS", "5000"))       # hard cap, oldest/lowest-score pruned
-_MAX_PER_GOAL_FAMILY = int(os.getenv("EXPERIENCE_MAX_PER_GOAL", "5"))  # dedupe near-identical goals
+_SECRET_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)")
 
-_lock = threading.RLock()
-_conn: sqlite3.Connection | None = None
-_vec_available = False
+_DDL = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS experiences (
+    id             TEXT PRIMARY KEY,
+    user_id        TEXT NOT NULL,
+    goal           TEXT NOT NULL,
+    record_text    TEXT NOT NULL,
+    steps_json     TEXT NOT NULL,
+    outcome        TEXT NOT NULL,
+    score          REAL NOT NULL,
+    answer_excerpt TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiences_user ON experiences(user_id);
+CREATE INDEX IF NOT EXISTS idx_experiences_created ON experiences(created_at);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS experiences_fts USING fts5(
+    record_text,
+    id UNINDEXED,
+    content='experiences',
+    content_rowid='rowid'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS experiences_vec USING vec0(
+    id TEXT PRIMARY KEY,
+    embedding FLOAT[{dims}]
+);
+
+CREATE TRIGGER IF NOT EXISTS experiences_ai AFTER INSERT ON experiences BEGIN
+    INSERT INTO experiences_fts(rowid, record_text, id) VALUES (new.rowid, new.record_text, new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS experiences_ad AFTER DELETE ON experiences BEGIN
+    INSERT INTO experiences_fts(experiences_fts, rowid, record_text, id)
+    VALUES ('delete', old.rowid, old.record_text, old.id);
+    DELETE FROM experiences_vec WHERE id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS experiences_au AFTER UPDATE OF record_text ON experiences BEGIN
+    INSERT INTO experiences_fts(experiences_fts, rowid, record_text, id)
+    VALUES ('delete', old.rowid, old.record_text, old.id);
+    INSERT INTO experiences_fts(rowid, record_text, id) VALUES (new.rowid, new.record_text, new.id);
+END;
+""".format(dims=EMBED_DIMS)
 
 
-def _connect() -> sqlite3.Connection:
-    global _conn, _vec_available
-    if _conn is not None:
-        return _conn
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS experiences (
-            id TEXT PRIMARY KEY,
-            goal TEXT NOT NULL,
-            steps_json TEXT NOT NULL,
-            outcome TEXT NOT NULL,           -- 'ok' | 'failed' | 'partial'
-            score REAL NOT NULL,             -- verifier score, 0..1
-            answer_excerpt TEXT NOT NULL,
-            created_at REAL NOT NULL
-        )
-    """)
-    try:
-        import sqlite_vec  # type: ignore
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        conn.execute(f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS experience_vectors
-            USING vec0(embedding float[{_EMBED_DIM}])
-        """)
-        _vec_available = True
-    except Exception as e:
-        log.warning("sqlite-vec unavailable for experience store; falling back to numpy brute-force cosine: %s", e)
-        _vec_available = False
+def _db_path(user_id: str | None = None) -> Path:
+    path = Path(EXPERIENCE_DB_PATH).expanduser()
+    if path.is_absolute():
+        return path
+    return user_state_path(str(path), user_id)
+
+
+def _connect(user_id: str | None = None) -> sqlite3.Connection:
+    uid = user_id or current_user_id()
+    conn = connect_sqlite(_db_path(uid), user_id=uid)
+    sqlite_vec.load(conn)
+    conn.executescript(_DDL)
     conn.commit()
-    _conn = conn
     return conn
 
 
-_ERROR_DETAIL_RE = re.compile(
-    r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)",
-)
-
-
-def _sanitize(text: str, max_chars: int = 300) -> str:
-    """Lightweight standalone sanitizer — deliberately not imported from
-    core.agentic to avoid a circular import (agentic.py will import this
-    module to record experience)."""
-    t = (text or "").strip()
-    t = _ERROR_DETAIL_RE.sub(r"\1\2[redacted]", t)
+def _sanitize(text: str, max_chars: int = 500) -> str:
+    t = _SECRET_RE.sub(r"\1\2[redacted]", text or "")
     t = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted]", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t[:max_chars]
+    return re.sub(r"\s+", " ", t).strip()[:max_chars]
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 
 
 @dataclass
@@ -105,149 +124,134 @@ class ExperienceStep:
     tool: str
     ok: bool
     error_type: str | None = None
-    arg_keys: list[str] = field(default_factory=list)  # keys only, not values — avoids persisting raw args
+    arg_keys: list[str] = field(default_factory=list)
 
 
-def record_experience(
-    owner,
-    goal: str,
-    steps: list[dict],       # TaskState.steps entries: {"tool","ok","attempts","error_type","args"}
-    final_answer: str,
-    verified_ok: bool,
-    score: float,
-    embedder=None,
-) -> str | None:
-    """Persist one completed (or abandoned) agentic run. Called from
-    run_agentic_chat() after final_text is decided. Returns the new row id,
-    or None if embedding/storage failed (never raises — experience is a
-    best-effort recall aid, not critical path)."""
-    try:
-        conn = _connect()
-        exp_steps = [
-            ExperienceStep(
-                tool=s["tool"], ok=s["ok"], error_type=s.get("error_type"),
-                arg_keys=sorted((s.get("args") or {}).keys()),
-            )
-            for s in steps
-        ]
-        outcome = "ok" if verified_ok else ("partial" if any(s.ok for s in exp_steps) else "failed")
-        row_id = str(uuid.uuid4())
-        record_text = (
-            f"Goal: {goal}\n"
-            f"Steps: {', '.join(f'{s.tool}({\"+\".join(s.arg_keys) or \"-\"})[{\"ok\" if s.ok else s.error_type or \"fail\"}]' for s in exp_steps)}\n"
-            f"Outcome: {outcome}"
+def record_experience(owner, goal: str, steps: list[dict], final_answer: str, verified_ok: bool, score: float, embedder=None) -> str | None:
+    uid = current_user_id()
+    exp_steps = [
+        ExperienceStep(
+            tool=str(s.get("tool", "unknown")),
+            ok=bool(s.get("ok")),
+            error_type=s.get("error_type"),
+            arg_keys=sorted((s.get("args") or {}).keys()),
         )
-        with _lock:
-            conn.execute(
-                "INSERT INTO experiences (id, goal, steps_json, outcome, score, answer_excerpt, created_at) VALUES (?,?,?,?,?,?,?)",
-                (
-                    row_id, _sanitize(goal, 500),
-                    json.dumps([s.__dict__ for s in exp_steps], ensure_ascii=False),
-                    outcome, float(score), _sanitize(final_answer, 400), time.time(),
-                ),
-            )
-            if embedder is not None:
-                try:
-                    vec = reason.normalize_vec(np.asarray(embedder.embed_query(record_text), dtype=np.float32))
-                    if _vec_available:
-                        conn.execute(
-                            "INSERT INTO experience_vectors (rowid, embedding) VALUES ((SELECT rowid FROM experiences WHERE id=?), ?)",
-                            (row_id, vec.tobytes()),
-                        )
-                except Exception as e:
-                    log.warning("Experience embedding failed for row %s: %s", row_id, e)
-            conn.commit()
-        _prune(conn, goal, embedder)
-        return row_id
-    except Exception as e:
-        log.warning("record_experience failed (non-fatal): %s", e)
-        return None
-
-
-def _prune(conn: sqlite3.Connection, goal: str, embedder=None) -> None:
-    """Cap total rows, and dedupe near-identical goals — keep the
-    highest-scored instances per goal family rather than letting repeated
-    identical tasks flood recall with redundant near-duplicates."""
-    with _lock:
-        total = conn.execute("SELECT COUNT(*) FROM experiences").fetchone()[0]
-        if total > _MAX_ROWS:
-            excess = total - _MAX_ROWS
-            ids = [r[0] for r in conn.execute(
-                "SELECT id FROM experiences ORDER BY score ASC, created_at ASC LIMIT ?", (excess,)
-            ).fetchall()]
-            for rid in ids:
-                conn.execute("DELETE FROM experiences WHERE id=?", (rid,))
-                if _vec_available:
-                    conn.execute("DELETE FROM experience_vectors WHERE rowid=(SELECT rowid FROM experiences WHERE id=?)", (rid,))
-            conn.commit()
-        # simple family cap: same first ~40 chars of sanitized goal
-        family = _sanitize(goal, 40)
-        rows = conn.execute(
-            "SELECT id, score, created_at FROM experiences WHERE goal LIKE ? ORDER BY score DESC, created_at DESC",
-            (f"{family}%",),
-        ).fetchall()
-        for rid, _score, _created in rows[_MAX_PER_GOAL_FAMILY:]:
-            conn.execute("DELETE FROM experiences WHERE id=?", (rid,))
-            if _vec_available:
-                conn.execute("DELETE FROM experience_vectors WHERE rowid=(SELECT rowid FROM experiences WHERE id=?)", (rid,))
+        for s in steps
+    ]
+    outcome = "ok" if verified_ok else ("partial" if any(s.ok for s in exp_steps) else "failed")
+    step_text = ", ".join(f"{s.tool}({'+'.join(s.arg_keys) or '-'})[{'ok' if s.ok else s.error_type or 'fail'}]" for s in exp_steps)
+    record_text = f"Goal: {_sanitize(goal, 700)}\nSteps: {step_text}\nOutcome: {outcome}\nScore: {float(score):.2f}"
+    row_id = str(uuid.uuid4())
+    conn = _connect(uid)
+    try:
+        conn.execute(
+            "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (row_id, uid, _sanitize(goal, 700), record_text, json.dumps([s.__dict__ for s in exp_steps], ensure_ascii=False), outcome, float(score), _sanitize(final_answer, 500), _now()),
+        )
+        if embedder is not None:
+            vec = embedder.embed_query(record_text, instruct=EXPERIENCE_QUERY_INSTRUCT)
+            conn.execute("INSERT INTO experiences_vec(id, embedding) VALUES(?, ?)", (row_id, sqlite_vec.serialize_float32(vec)))
         conn.commit()
+        _prune(conn, uid)
+        return row_id
+    except Exception as exc:
+        conn.rollback()
+        log.warning("record_experience failed (non-fatal): %s", exc)
+        return None
+    finally:
+        conn.close()
+
+
+def _prune(conn: sqlite3.Connection, uid: str) -> None:
+    total = conn.execute("SELECT COUNT(*) AS n FROM experiences WHERE user_id=?", (uid,)).fetchone()["n"]
+    excess = max(0, int(total) - EXPERIENCE_MAX_ROWS)
+    if not excess:
+        return
+    rows = conn.execute(
+        "SELECT id FROM experiences WHERE user_id=? ORDER BY score ASC, created_at ASC LIMIT ?",
+        (uid, excess),
+    ).fetchall()
+    for row in rows:
+        conn.execute("DELETE FROM experiences WHERE id=?", (row["id"],))
+    conn.commit()
+
+
+def _knn(conn: sqlite3.Connection, query: str, embedder, uid: str, limit: int) -> list[sqlite3.Row]:
+    if embedder is None:
+        return []
+    blob = sqlite_vec.serialize_float32(embedder.embed_query(query, instruct=EXPERIENCE_QUERY_INSTRUCT))
+    return conn.execute(
+        """
+        SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
+        FROM experiences_vec v
+        JOIN experiences e ON e.id = v.id
+        WHERE e.user_id=?
+        ORDER BY dist ASC
+        LIMIT ?
+        """,
+        (blob, uid, limit),
+    ).fetchall()
+
+
+def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sqlite3.Row]:
+    fts = fts_or_query(query)
+    if not fts:
+        return []
+    return conn.execute(
+        """
+        SELECT f.id
+        FROM experiences_fts f
+        JOIN experiences e ON e.id = f.id
+        WHERE experiences_fts MATCH ? AND e.user_id=?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (fts, uid, limit),
+    ).fetchall()
 
 
 def search_experience(query: str, limit: int = 3, embedder=None) -> list[dict]:
-    conn = _connect()
-    if embedder is None:
-        rows = conn.execute(
-            "SELECT id, goal, steps_json, outcome, score, answer_excerpt FROM experiences ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-    elif _vec_available:
-        try:
-            qvec = reason.normalize_vec(np.asarray(embedder.embed_query(query, instruct=_EXPERIENCE_INSTRUCT), dtype=np.float32))
-            rows = conn.execute(
-                """
-                SELECT e.id, e.goal, e.steps_json, e.outcome, e.score, e.answer_excerpt
-                FROM experience_vectors v
-                JOIN experiences e ON e.rowid = v.rowid
-                WHERE v.embedding MATCH ? AND k = ?
-                ORDER BY distance ASC
-                """,
-                (qvec.tobytes(), limit),
-            ).fetchall()
-        except Exception as e:
-            log.warning("sqlite-vec search failed, falling back: %s", e)
-            rows = _brute_force_search(conn, query, limit, embedder)
-    else:
-        rows = _brute_force_search(conn, query, limit, embedder)
-
-    return [
-        {"id": r[0], "goal": r[1], "steps": json.loads(r[2]), "outcome": r[3], "score": r[4], "answer_excerpt": r[5]}
-        for r in rows
-    ]
-
-
-def _brute_force_search(conn, query: str, limit: int, embedder) -> list[tuple]:
-    """numpy fallback when sqlite-vec extension isn't loadable — same
-    pattern as knowledge.py's in-memory matmul, just against all rows."""
-    all_rows = conn.execute("SELECT id, goal, steps_json, outcome, score, answer_excerpt FROM experiences").fetchall()
-    if not all_rows:
+    uid = current_user_id()
+    conn = _connect(uid)
+    try:
+        rank_knn = {row["id"]: i + 1 for i, row in enumerate(_knn(conn, query, embedder, uid, EXPERIENCE_KNN_LIMIT))}
+        rank_fts = {row["id"]: i + 1 for i, row in enumerate(_fts(conn, query, uid, EXPERIENCE_FTS_LIMIT))}
+        ids = set(rank_knn) | set(rank_fts)
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(f"SELECT * FROM experiences WHERE id IN ({placeholders})", list(ids)).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        scored = []
+        for eid in ids:
+            score = rrf_score(eid, rank_knn, rank_fts, k=EXPERIENCE_RRF_K)
+            if score >= EXPERIENCE_RECALL_SCORE_THRESHOLD and eid in by_id:
+                scored.append((score, eid))
+        scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
+        return [dict(by_id[eid]) | {"recall_score": score} for score, eid in scored[:limit]]
+    except Exception as exc:
+        log.warning("Experience search failed: %s", exc)
         return []
-    qvec = reason.normalize_vec(np.asarray(embedder.embed_query(query, instruct=_EXPERIENCE_INSTRUCT), dtype=np.float32))
-    texts = [f"Goal: {r[1]}\nOutcome: {r[3]}" for r in all_rows]
-    vecs = np.stack([reason.normalize_vec(np.asarray(embedder.embed_query(t), dtype=np.float32)) for t in texts])
-    scores = reason.batch_cosine_scores(qvec, vecs)
-    order = np.argsort(-scores)[:limit]
-    return [all_rows[i] for i in order if scores[i] >= _CHUNK_MIN_SCORE]
+    finally:
+        conn.close()
+
+
+def _attr(value: object) -> str:
+    return escape(str(value or ""), quote=True)
 
 
 def experience_context_for(query: str, limit: int = 3, embedder=None) -> str:
     hits = search_experience(query, limit=limit, embedder=embedder)
     if not hits:
         return "<experience_context>\nNo similar past task found.\n</experience_context>"
+    remaining = EXPERIENCE_CONTEXT_CHARS
     blocks = []
-    for h in hits:
-        step_line = ", ".join(f"{s['tool']}[{'ok' if s['ok'] else s.get('error_type') or 'fail'}]" for s in h["steps"])
-        blocks.append(
-            f'<past_task outcome="{h["outcome"]}" score="{h["score"]:.2f}">\n'
-            f"goal: {h['goal']}\nsteps: {step_line}\nresult: {h['answer_excerpt']}\n</past_task>"
-        )
+    for hit in hits:
+        if remaining <= 0:
+            break
+        steps = json.loads(hit["steps_json"] or "[]")
+        step_line = ", ".join(f"{s['tool']}[{'ok' if s['ok'] else s.get('error_type') or 'fail'}]" for s in steps)
+        body = f"goal: {hit['goal']}\nsteps: {step_line}\nresult: {hit['answer_excerpt']}"[:remaining]
+        blocks.append(f'<past_task outcome="{_attr(hit["outcome"])}" verifier_score="{float(hit["score"]):.2f}" recall_score="{hit["recall_score"]:.4f}">\n{body}\n</past_task>')
+        remaining -= len(body)
     return "<experience_context>\n" + "\n\n".join(blocks) + "\n</experience_context>"

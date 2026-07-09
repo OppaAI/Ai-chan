@@ -16,8 +16,7 @@ CONTEXT_WINDOW_TURNS: "5"  # Number of recent user+assistant turns sent as short
 REASONING_SCALE: "3"  # Multiplier applied to LLM_MAX_TOKENS for reasoning mode.
 
 # -- Semantic search thresholds --
-KNOWLEDGE_SEMANTIC_THRESHOLD: "0.35"  # Minimum cosine similarity for knowledge base results (0.0-1.0, higher = stricter).
-SKILL_SEMANTIC_THRESHOLD: "0.35"  # Minimum cosine similarity for skill matching (0.0-1.0, higher = stricter).
+SKILL_SEMANTIC_THRESHOLD: "0.35"  # Minimum cosine similarity for skill matching (0.0-1.0, higher = stricter). Wiki and learned-knowledge thresholds live in wiki.yaml and knowledge.yaml.
 
 # -- Sampling --
 TEMPERATURE: "0.80"  # Creativity/randomness; common range 0.2-1.0, higher is more varied.
