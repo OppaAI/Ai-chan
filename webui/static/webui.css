@@ -30,27 +30,16 @@
   --input-fg: #c8b8e8;
   --scrollbar: #1e1428;
 
-  /* FIX: this variable was referenced by body{} and .terms-text but never
-     defined, so text without an explicit color fell back to the browser
-     default (near-black) and was nearly invisible on the dark background. */
   --text: #cdbfe6;
 
-  /* Global typeface stack. Anthropic's actual serif reading font (Tiempos)
-     is licensed and not available on the open web, so this leans on the
-     closest system/web-safe serif equivalents: modern text serifs with
-     a similar restrained, slightly literary feel, falling back to Georgia
-     and then any serif before ever touching sans-serif. */
   --font-main: ui-serif, "Iowan Old Style", "Source Serif Pro", "Charter",
     Georgia, "Times New Roman", serif;
 
-  /* Official brand colors, used as solid backgrounds on the OAuth login
-     buttons so each one reads as its provider's actual login button. */
   --brand-github: #24292e;
   --brand-github-fg: #ffffff;
   --brand-patreon: #ff424d;
   --brand-patreon-fg: #ffffff;
 
-  /* Glass panel tokens, shared by the auth + terms overlays */
   --glass-bg: rgba(24, 16, 36, 0.5);
   --glass-border: rgba(200, 168, 240, 0.16);
   --glass-highlight: rgba(255, 255, 255, 0.06);
@@ -69,11 +58,13 @@ body {
 
 /* ── Portrait phones / narrow viewports ───────────────────────────
    Stack the VRM viewer on top of the chat panel instead of side by
-   side. Triggers on portrait orientation OR narrow width, so it also
-   kicks in on small landscape phones and split-screen views. */
+   side. Row split is intentionally fixed (40vh 1fr) and NOT driven
+   by --app-height — the two must stay independent or the avatar
+   strip and the input row fight over the same height budget. */
 @media (orientation: portrait),
 (max-width: 820px) {
   body {
+    height: var(--app-height, 100dvh);
     grid-template-columns: 1fr;
     grid-template-rows: 40vh 1fr;
   }
@@ -82,6 +73,8 @@ body {
     border-right: none;
     border-bottom: 1px solid var(--border);
     min-height: 0;
+    /* prevents grid's implicit min-height:auto from letting the
+       chat panel's content push this track to zero */
   }
 
   #panel {
@@ -107,12 +100,17 @@ body {
 @media (orientation: landscape) and (max-height: 480px) {
   body {
     grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr);
-    grid-template-rows: 100dvh;
+    grid-template-rows: var(--app-height, 100dvh);
   }
 
   #vrm-side {
     border-right: 1px solid var(--border);
     border-bottom: none;
+    min-height: 0;
+  }
+
+  #panel {
+    min-height: 0;
   }
 }
 
@@ -259,6 +257,9 @@ body {
   gap: 4px;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar) transparent;
+  min-height: 0;
+  /* required for the 1fr row to actually scroll instead of growing
+     to fit all chat content and pushing the input row off-screen */
 }
 
 #content::-webkit-scrollbar {
@@ -460,8 +461,12 @@ body {
   display: flex;
   align-items: center;
   padding: 8px 12px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom));
   gap: 8px;
   flex-shrink: 0;
+  /* safe-area-inset-bottom handles the gesture-nav bar / home
+     indicator on phones so the row itself never gets clipped there,
+     independent of the --app-height calculation */
 }
 
 #prompt-label {
@@ -514,8 +519,6 @@ body {
   box-shadow: 0 0 6px rgba(81, 212, 200, .35);
 }
 
-/* Touch devices: bigger tap targets, and 16px input font so iOS Safari
-   doesn't auto-zoom the page when the text field gets focus. */
 @media (hover: none) and (pointer: coarse) {
   #user-input {
     font-size: 16px;
@@ -606,8 +609,6 @@ body {
 .auth-overlay {
   position: fixed;
   inset: 0;
-  /* Glass over the app rather than a solid block, so the VRM/chat behind
-     it stays faintly visible through the blur. */
   background: rgba(10, 10, 15, 0.7);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -637,11 +638,6 @@ body {
   text-align: center;
   position: relative;
 
-  /* Glassmorphic card: translucent tinted fill, heavy blur, a hairline
-     border to catch light, soft outer shadow to lift it off the page,
-     an inset highlight for a subtle top-edge sheen, and a soft purple
-     glow ring around the whole card. The glow itself breathes via
-     panelGlow, and the card animates in on first paint via authPanelIn. */
   background: var(--glass-bg);
   backdrop-filter: blur(24px) saturate(160%);
   -webkit-backdrop-filter: blur(24px) saturate(160%);
@@ -690,10 +686,6 @@ body {
   text-transform: uppercase;
 }
 
-/* Smaller variant for longer headings (e.g. terms/disclaimer titles)
-   where 30px reads oversized against multi-word text. Sized down and
-   tightened until phrases like "Read Before Proceeding" fit one line
-   inside the 440px panel. */
 #terms-title {
   font-size: 24px;
   letter-spacing: .14em;
@@ -761,9 +753,6 @@ body {
   }
 }
 
-/* Solid brand-color fills, restored: each provider button reads as
-   that provider's actual login button (dark grey GitHub, red Patreon)
-   rather than an outlined/bracket frame. */
 .auth-btn {
   display: flex;
   align-items: center;
@@ -808,16 +797,8 @@ body {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
-  /* icons ship pre-tinted to match each button's foreground color via
-     the Simple Icons CDN color param in webui.html */
 }
 
-/* "Bracket frame" style: a full-width hairline along the top and bottom
-   only (no left/right sides), with a short vertical tick at each of the
-   four corners — a CSS-only recreation of a terminal/HUD button frame,
-   built entirely from stacked background gradients so it needs no
-   extra markup. Kept for #terms-continue below; no longer applied to
-   the auth provider buttons, which now use solid brand fills above. */
 .bracket {
   position: relative;
   background-color: transparent;
@@ -876,9 +857,6 @@ body {
   height: 16px;
 }
 
-/* Legal links: previously rendered at low opacity with the same dim
-   color as disabled UI chrome, which made them hard to read against the
-   glass panel. Brightened and given a hover state instead. */
 .auth-legal-links,
 #panel-footer-legal {
   font-size: 11px;
@@ -904,11 +882,6 @@ body {
   padding: 5px 0;
 }
 
-/* ── Terms / guidelines modal ─────────────────────────────────────────────
-   FIX: this content previously had no rules at all (just inherited body's
-   broken --text color), and the checkbox/button had no styling to signal
-   disabled vs enabled state. Shares the glass treatment above via
-   .auth-panel, which #terms-overlay reuses. */
 .terms-text {
   text-align: left;
   font-size: 14px;

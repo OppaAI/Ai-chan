@@ -37,6 +37,22 @@ const vMode = document.getElementById('v-mode');
 const AUTO_MIC = false;
 let autoListenRequested = false;
 
+// ── viewport height fix (mobile browser toolbar collapse/expand) ─────────
+// dvh units are unreliable on Firefox Android; visualViewport tracks the
+// true visible area after the toolbar/keyboard resizes it.
+function setAppHeight() {
+  const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  document.documentElement.style.setProperty('--app-height', `${h}px`);
+}
+setAppHeight();
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', setAppHeight);
+  window.visualViewport.addEventListener('scroll', setAppHeight);
+} else {
+  window.addEventListener('resize', setAppHeight);
+}
+window.addEventListener('orientationchange', () => setTimeout(setAppHeight, 100));
+
 // ── clock ─────────────────────────────────────────────────────────────────
 function tickClock() {
   const now = new Date();
