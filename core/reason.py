@@ -1,3 +1,4 @@
+# core/reason.py
 """core/reason.py
 
 Shared numpy-vectorized embedding utilities for semantic retrieval and
@@ -5,6 +6,11 @@ condensation. Centralizes what used to be four separate per-module
 implementations (tools.py web-evidence condensation, knowledge.py KB
 ranking, skills.py skill ranking, agentic.py policy filtering) into one
 batched-matmul scoring primitive instead of four Python-loop cosine calls.
+
+Also centralizes the close-vector label-scoring primitive used by
+think.py's semantic intent router (top-k mean cosine per label against a
+static example corpus) — previously a second, duplicate implementation of
+the same normalize/matmul math lived in think.py itself.
 
 Every scoring function here degrades gracefully to keyword overlap when no
 embedder is supplied or an embed call raises — semantic scoring is strictly
@@ -14,6 +20,7 @@ additive, never a hard dependency.
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from typing import Protocol
 
 import numpy as np
@@ -164,3 +171,64 @@ def select_relevant_chunks(
     scored = [(s, c) for s, c in scored if s > 0]
     scored.sort(key=lambda pair: -pair[0])
     return scored[:top_k]
+
+
+# ── close-vector label scoring ───────────────────────────────────────────────
+# Shared primitive for classifying one query against a static, labeled
+# example corpus (think.py's semantic intent router: agentic/webchat/
+# localchat). Kept here rather than in think.py so the normalize+matmul
+# math has exactly one implementation instead of two.
+
+def embed_example_matrix(
+    embedder: Embedder,
+    examples_by_label: dict[str, list[str] | tuple[str, ...]],
+    instruct: str = "",
+) -> tuple[list[str], np.ndarray]:
+    """Embed a {label: [examples...]} corpus into one aligned
+    (labels, matrix) pair — labels[i] is the label for matrix row i.
+
+    This always re-embeds; it does not cache. Callers with a static
+    example corpus (e.g. router examples that never change at runtime)
+    should cache the returned (labels, matrix) pair themselves, keyed on
+    corpus identity + instruct string, rather than paying the embed cost
+    on every call.
+    """
+    labels: list[str] = []
+    prompts: list[str] = []
+    for label, examples in examples_by_label.items():
+        labels.extend([label] * len(examples))
+        prompts.extend(examples)
+
+    if not prompts:
+        return [], np.empty((0, 0), dtype=np.float32)
+
+    raw = embedder.embed_queries(prompts, instruct=instruct) if instruct else embedder.embed_queries(prompts)
+    matrix = normalize_rows(np.asarray(raw, dtype=np.float32))
+    return labels, matrix
+
+
+def label_scores_topk(
+    query_vec,
+    labels: list[str],
+    example_vecs: np.ndarray,
+    top_k: int = 3,
+) -> dict[str, float]:
+    """Mean of the top-k cosine scores per label, for close-vector
+    classification against a static example corpus (intent routing, tagging,
+    etc). `labels` and `example_vecs` must be row-aligned, as returned by
+    embed_example_matrix. `query_vec` need not be pre-normalized —
+    batch_cosine_scores normalizes internally.
+
+    Returns {} if example_vecs is empty (nothing to score against).
+    """
+    if example_vecs.size == 0:
+        return {}
+    scores = batch_cosine_scores(query_vec, example_vecs)
+    by_label: dict[str, list[float]] = defaultdict(list)
+    for label, score in zip(labels, scores):
+        by_label[label].append(float(score))
+    k = max(1, top_k)
+    return {
+        label: sum(sorted(values, reverse=True)[:k]) / min(k, len(values))
+        for label, values in by_label.items()
+    }
