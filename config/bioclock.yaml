@@ -1,0 +1,7 @@
+# Bioclock config
+#
+# Settings for core/bioclock.py — the single source of truth for "now"
+# used by every module that reasons about dates or wall-clock time:
+# chat/webchat/agentic system prompts, proactive check-ins, and
+# core/schedule.py's job timing. One timezone, resolved one way, everywhere.
+TIMEZONE: "America/Vancouver"  # IANA timezone name used everywhere Aiko resolves "now"; examples: America/Vancouver, UTC, Asia/Tokyo.
