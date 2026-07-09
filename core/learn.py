@@ -2,7 +2,8 @@
 core/learn.py
 
 Aiko's two research depths, both operating on a topic YOU (or the idle
-learner loop) hand her — neither one picks its own topic.
+learner loop, or the scheduled deep-study window) hand her — neither depth
+picks its own topic on its own.
 
   - quick_studying: a single interactive-scale research pass. Thin alias
     over core.tools.deep_research — same TTL-cached, in-memory, ephemeral
@@ -15,7 +16,11 @@ learner loop) hand her — neither one picks its own topic.
     for the duration of the call (so 50-100 iterations can revisit the same
     pages without re-fetching or re-embedding them), rate-limits itself per
     host so it doesn't hammer the same sites across iterations, and ends by
-    distilling the accumulated evidence into compact atomic facts.
+    distilling the accumulated evidence into compact atomic facts. It can
+    also be interrupted gracefully mid-run via a threading.Event (see
+    `stop_event` below) — this is what lets a scheduled window (e.g.
+    "weekdays 05:00-18:00") stop a long-running session at the window's
+    edge instead of only at max_iterations.
 
     The scratch store is deleted when the call returns — it is NOT a
     persistent index. It exists only to make one long call efficient, the
@@ -25,13 +30,18 @@ learner loop) hand her — neither one picks its own topic.
     owns your actual knowledge graph / MSB schema can decide how to store
     them. This file does not know that schema and should not guess at it.
 
-Also owns the idle learner loop (idle_learner_loop) — the background
-process that decides, during genuine chat idle time, to pick a recent topic
-and study it via quick_studying, then persist the result to memory. The
-loop's *scheduling* (what counts as "idle", whether TTS is currently
-playing) is read directly off the owning AikoThink instance passed in;
-this module doesn't own that bookkeeping, only what happens once idle
-conditions are met.
+Also owns:
+  - idle_learner_loop: the background process that decides, once Aiko's
+    proactive check-in cycle has finished and she's gone quiet to rest
+    (NOT merely "no chat messages recently" — see the docstring below), to
+    pick a recent topic and study it via quick_studying, then persist the
+    result to memory.
+  - the scheduled deep-study window manager (_DeepStudySessionManager,
+    deep_study_window_start/stop, register_deep_study_handlers): wires
+    deep_studying into core.schedule's handler-based jobs so it runs only
+    inside a configured wall-clock window (see
+    schedule.ensure_deep_study_window_jobs) and stops cleanly at the
+    window's edge.
 
 Config note: this module's tunables (IDLE_LEARN_SECONDS,
 DEEP_STUDY_MAX_ITERATIONS, etc.) are read from os.environ at import time via
@@ -46,7 +56,10 @@ imported before whatever else in the app calls load_config().
 
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -60,25 +73,39 @@ from core.config import load_config
 
 load_config()
 
+from core import semantic_utils
 from core.tools import (
     _ask_llm_json,
-    _chunk_text,
-    _cosine,
-    _embed_batch,
     _is_private_or_local_host,
-    _keyword_overlap_score,
-    _score_chunk,
     _web_search_raw,
     deep_research,
     web_fetch,
     CONDENSE_CHUNK_CHARS,
     CONDENSE_MIN_SCORE,
-    DEEP_SEARCH_MAX_RESULTS,
+    MAX_RESULTS as DEEP_SEARCH_MAX_RESULTS,
 )
 
 from core.log import get_logger
 
 log = get_logger(__name__)
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Plain single-pair cosine similarity. tools.py's cosine helper
+    (semantic_utils.batch_cosine_scores) is batched/numpy-oriented for
+    scoring many chunks against one query vector at once; deep_studying's
+    distillation step scores one (topic_vec, chunk_embedding) pair at a
+    time against arbitrary accumulated chunks, so a tiny pure-python
+    version avoids forcing a numpy import/allocation per chunk here."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(y * y for y in b))
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
 
 # ── quick_studying ────────────────────────────────────────────────────────────
 
@@ -100,9 +127,11 @@ def quick_studying(
 
 # ── idle learner loop ─────────────────────────────────────────────────────────
 
-# How long (seconds) chat must be idle before the loop will pick a topic and
-# study it. Owned here now, not in think.py — this is a learn.py policy
-# about when autonomous learning is worth doing, not a chat-facade concern.
+# Floor on how long chat must have been quiet before the loop will even
+# consider studying — a safety minimum, not the primary gate anymore (see
+# idle_learner_loop's docstring). Kept so a proactive "resting" flag that
+# flips true immediately after a rest message can't trigger research in the
+# same instant the rest note goes out.
 IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
 IDLE_LEARNER_CHECK_INTERVAL = float(os.getenv("IDLE_LEARNER_CHECK_INTERVAL", 300))
 
@@ -124,20 +153,50 @@ def idle_learner_loop(owner, check_interval: float = IDLE_LEARNER_CHECK_INTERVAL
     topic, and dedup against already-learned topics — not the bookkeeping
     itself.
 
-    Every iteration: sleep, check idle conditions, and if idle for long
-    enough, pick the most recent substantial user message as a topic,
-    skip it if already studied this session or already in memory, then
-    run quick_studying on it and persist the distilled result.
+    "Idle" here is intentionally NOT just "no chat messages for a while."
+    It means the proactive check-in system (see config/proactive.yaml —
+    PROACTIVE_REST_AFTER_SECONDS / PROACTIVE_REST_MESSAGE) has already run
+    its own idle cycle to completion and gone quiet to rest. Studying
+    during an active proactive check-in window would compete with those
+    check-ins for the same idle time; studying only once Aiko has already
+    decided to rest keeps the two systems from stepping on each other.
+
+    This loop looks for that signal on `owner` in this order:
+      1. owner.is_proactive_resting() — a callable, if present.
+      2. owner._proactive_resting — a plain bool attribute, if present.
+    ADAPT THIS: point one of these at whatever your actual proactive
+    system (think.py / proactive.py) exposes once it fires
+    PROACTIVE_REST_MESSAGE and goes quiet. If owner exposes neither, this
+    loop falls back to IDLE_LEARN_SECONDS alone so it still degrades to
+    the old timer-only behavior rather than never firing.
+
+    Every check_interval: check idle/resting conditions, and if met, pick
+    the most recent substantial user message as a topic, skip it if
+    already studied this session or already in memory, then run
+    quick_studying on it and persist the distilled result.
     """
     while True:
         time.sleep(check_interval)
-        if time.time() - owner._last_chat_time < IDLE_LEARN_SECONDS:
-            continue  # user has been active recently, don't interrupt
+
+        chat_idle_long_enough = (time.time() - owner._last_chat_time) >= IDLE_LEARN_SECONDS
+
+        is_resting_fn = getattr(owner, "is_proactive_resting", None)
+        if callable(is_resting_fn):
+            proactive_resting = bool(is_resting_fn())
+        elif hasattr(owner, "_proactive_resting"):
+            proactive_resting = bool(getattr(owner, "_proactive_resting"))
+        else:
+            # No proactive-state hook found on owner — fall back to the
+            # old behavior (chat-idle timer only) rather than never firing.
+            proactive_resting = True
+
+        if not (chat_idle_long_enough and proactive_resting):
+            continue
 
         if owner._speak and owner._speak.is_playing():
             continue
 
-        log.info("[learner] Aiko is idle. Starting autonomous learning...")
+        log.info("[learner] Aiko is idle and resting. Starting autonomous learning...")
         try:
             with owner._history_lock:
                 candidates = [
@@ -389,7 +448,6 @@ def _next_subquery(
 
 
 def _hash_chunk(chunk: str) -> str:
-    import hashlib
     return hashlib.sha1(chunk.strip().lower().encode("utf-8", "ignore")).hexdigest()
 
 
@@ -421,13 +479,13 @@ def _score_and_store_page(
     use_embedder: bool,
     store: _ScratchStore,
 ) -> None:
-    for _, chunk in _chunk_text(url, text, DEEP_STUDY_CHUNK_CHARS):
+    for chunk in semantic_utils.chunk_text(text, DEEP_STUDY_CHUNK_CHARS):
         chunk_hash = _hash_chunk(chunk)
         embedding = None
         if use_embedder:
-            batch = _embed_batch(embedder, [chunk])
-            if batch:
-                embedding = batch[0]
+            batch = semantic_utils.embed_batch_or_none(embedder, [chunk])
+            if batch is not None and len(batch) > 0:
+                embedding = list(batch[0])
             else:
                 try:
                     embedding = embedder.embed_query(chunk)
@@ -470,9 +528,9 @@ def _distill(
             try:
                 score = _cosine(topic_vec, embedding)
             except Exception:
-                score = _keyword_overlap_score(topic, chunk)
+                score = semantic_utils.keyword_overlap_score(topic, chunk)
         else:
-            score = _keyword_overlap_score(topic, chunk)
+            score = semantic_utils.keyword_overlap_score(topic, chunk)
         scored.append((score, url, chunk))
 
     ranked = sorted(
@@ -533,9 +591,11 @@ def deep_studying(
     per_host_min_interval: float = DEEP_STUDY_PER_HOST_MIN_INTERVAL,
     on_distilled=None,
     session_id: str | None = None,
+    stop_event: threading.Event | None = None,
 ) -> str:
     """Autonomous, extended research on a single topic, meant for genuine
-    idle time (overnight dream cycles), not interactive use.
+    idle time (overnight dream cycles, or a scheduled deep-study window —
+    see register_deep_study_handlers), not interactive use.
 
     Runs up to max_iterations search-and-fetch rounds against one topic,
     expanding into new sub-queries each round (LLM-driven if client/model
@@ -546,11 +606,17 @@ def deep_studying(
     is deleted before this function returns.
 
     Stops early when: the model signals the topic is sufficiently covered,
-    no new sub-query can be found, or max_iterations is reached. There is no
-    hard external rate-limit handling here beyond the per-host minimum
-    interval — if your search backend (SearXNG) itself starts throttling,
-    _web_search_raw's error path will surface that as an empty round and
-    this loop will simply stop, same as deep_research does today.
+    no new sub-query can be found, max_iterations is reached, OR
+    stop_event is set (checked at the top of every iteration and again
+    right before asking for the next sub-query). stop_event is how a
+    scheduled window's "stop" edge (e.g. 18:00 on weekdays) interrupts a
+    long-running session gracefully: whatever has been gathered so far is
+    still distilled and handed to on_distilled before returning, it just
+    won't start a new iteration. There is no hard external rate-limit
+    handling here beyond the per-host minimum interval — if your search
+    backend (SearXNG) itself starts throttling, _web_search_raw's error
+    path will surface that as an empty round and this loop will simply
+    stop, same as deep_research does today.
 
     on_distilled, if given, is called as on_distilled(topic, distilled_text,
     ranked_chunks) after distillation, BEFORE the scratch store is deleted —
@@ -582,6 +648,10 @@ def deep_studying(
         iterations_run = 0
 
         while pending_queries and iterations_run < max_iterations:
+            if stop_event is not None and stop_event.is_set():
+                log.info("[deep_studying] session=%s stop_event set — winding down after %d iteration(s).", session_id, iterations_run)
+                break
+
             current_query = pending_queries.pop(0)
             if current_query in explored:
                 continue
@@ -609,6 +679,8 @@ def deep_studying(
                     pass
 
             for url in new_urls:
+                if stop_event is not None and stop_event.is_set():
+                    break
                 text = _fetch_one(url, rate_limiter, store, DEEP_STUDY_MAX_CHARS_PER_PAGE)
                 if not text:
                     continue
@@ -621,6 +693,9 @@ def deep_studying(
 
             if not adaptive:
                 continue  # no model to pick new sub-queries — just work through the seed list
+
+            if stop_event is not None and stop_event.is_set():
+                break
 
             if not pending_queries and iterations_run < max_iterations:
                 # Ask for the next sub-query only once the seed queue is
@@ -662,3 +737,133 @@ def deep_studying(
 
     finally:
         store.close_and_delete()
+
+
+# ── scheduled deep-study window ───────────────────────────────────────────────
+# Ties deep_studying into core.schedule's handler-based jobs so it only
+# runs inside a configured wall-clock window (see
+# schedule.ensure_deep_study_window_jobs: weekdays 05:00-18:00, weekends
+# 05:00-10:00 by default) instead of purely on the idle-learner's own
+# opportunistic timing. At most one window session runs at a time; the
+# *_stop handler signals it to wind down rather than killing the thread,
+# so whatever's been gathered so far still gets distilled and persisted.
+
+def _pick_window_topic(memorize) -> str | None:
+    """Very simple default topic picker for scheduled deep-study windows.
+
+    ADAPT THIS: this module deliberately doesn't know GRACE/Aiko's actual
+    curiosity/topic-selection policy, so it just checks for an optional
+    `pending_deep_study_topic` attribute on the memory store (a place your
+    own code — e.g. reflection, or a `/deep-study <topic>` command — could
+    stash a topic ahead of time) and otherwise declines to start rather
+    than guessing at a topic. Replace with real topic-selection logic
+    (e.g. pull the least-covered item from GRACE's knowledge graph, or the
+    top item in a backlog) whenever that's ready.
+    """
+    return getattr(memorize, "pending_deep_study_topic", None) or None
+
+
+class _DeepStudySessionManager:
+    """Tracks at most one running deep_studying session at a time, so the
+    scheduled start/stop handlers (see the four jobs seeded by
+    schedule.ensure_deep_study_window_jobs) can launch and gracefully
+    interrupt it without deep_studying itself knowing anything about
+    schedules, windows, or wall-clock time.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop_event: threading.Event | None = None
+
+    def is_running(self) -> bool:
+        with self._lock:
+            return self._thread is not None and self._thread.is_alive()
+
+    def start(self, memorize, client=None, model=None, topic: str | None = None) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                log.info("[deep_study_window] start requested but a session is already running — skipping.")
+                return
+            stop_event = threading.Event()
+            self._stop_event = stop_event
+
+        study_topic = topic or _pick_window_topic(memorize)
+        if not study_topic:
+            log.info("[deep_study_window] no topic available to study — skipping window start.")
+            return
+
+        def _run() -> None:
+            log.info("[deep_study_window] starting deep_studying for topic=%r", study_topic)
+            try:
+                embedder = getattr(getattr(memorize, "_mem", None), "_embedder", None)
+
+                def _on_distilled(distilled_topic, text, ranked_chunks):
+                    memorize.add([
+                        {"role": "system", "content": f"[deep-studied:{distilled_topic}]"},
+                        {"role": "assistant", "content": text[:4000]},
+                    ])
+
+                distilled = deep_studying(
+                    study_topic,
+                    client=client,
+                    model=model,
+                    embedder=embedder,
+                    stop_event=stop_event,
+                    on_distilled=_on_distilled,
+                )
+                log.info("[deep_study_window] finished — %s", distilled[:200].replace("\n", " "))
+            except Exception as e:
+                log.error("[deep_study_window] session failed: %s", e)
+
+        thread = threading.Thread(target=_run, name="aiko-deep-study-window", daemon=True)
+        with self._lock:
+            self._thread = thread
+        thread.start()
+
+    def stop(self, memorize=None) -> None:
+        with self._lock:
+            stop_event = self._stop_event
+        if stop_event is not None:
+            log.info("[deep_study_window] stop requested — signaling session to wind down.")
+            stop_event.set()
+        # Deliberately no join() here — this runs on the scheduler thread,
+        # and deep_studying may be mid-fetch; let it exit on its own next
+        # loop check (see stop_event checks in deep_studying) rather than
+        # blocking the scheduler thread until it does.
+
+
+_deep_study_manager = _DeepStudySessionManager()
+
+
+def deep_study_window_start(memorize, client=None, model=None) -> None:
+    """Registered as schedule.json handler "deep_study_start". Bind
+    client/model with functools.partial when registering (see
+    register_deep_study_handlers) — the scheduler always calls handlers as
+    fn(memorize), so those extra kwargs need to already be bound in."""
+    _deep_study_manager.start(memorize, client=client, model=model)
+
+
+def deep_study_window_stop(memorize) -> None:
+    """Registered as schedule.json handler "deep_study_stop"."""
+    _deep_study_manager.stop(memorize)
+
+
+def register_deep_study_handlers(client=None, model=None, timezone: str | None = None) -> None:
+    """Call once at app startup to wire deep_studying into the scheduler's
+    window (weekdays 05:00-18:00, weekends 05:00-10:00 by default) and seed
+    the four recurring jobs that bound it.
+
+        # at startup, after core.schedule's ScheduleRunner exists:
+        from core import learn
+        learn.register_deep_study_handlers(client=llm_client, model=llm_model)
+    """
+    from core import schedule as _schedule
+
+    _schedule.register_system_handler(
+        "deep_study_start",
+        functools.partial(deep_study_window_start, client=client, model=model),
+    )
+    _schedule.register_system_handler("deep_study_stop", deep_study_window_stop)
+    _schedule.ensure_deep_study_window_jobs(timezone=timezone)
+    log.info("[deep_study_window] handlers registered and window jobs ensured.")
