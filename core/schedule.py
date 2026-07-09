@@ -10,6 +10,10 @@ A scheduled job is a small local record with:
   - relative_days: optional integer day offset for phrases like tomorrow or the day after tomorrow
   - task: what Aiko should do or say when the job fires
   - action: announce or agentic
+  - handler: optional name of a pre-registered system handler (see
+    register_system_handler) to call directly instead of going through
+    on_due/chat — used for window-style jobs like the deep_studying
+    start/stop pair (see ensure_deep_study_window_jobs).
 
 The scheduler is deliberately local-first: jobs are stored in JSON under
 WORKSPACE_ROOT and a single daemon thread sleeps until the next due event.
@@ -22,15 +26,15 @@ by the user:
   - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
   - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
 
-Other system-style behaviors (e.g. weekly_social) live entirely in
-schedule.json as ordinary jobs, but instead of routing through on_due/chat,
-they name a "handler" — a Python callable registered once at startup via
-register_system_handler(). schedule.json can only ever select a handler
-from that pre-registered allowlist; it can never name or execute an
-arbitrary function. This lets timing/enable/disable be fully data-driven
-(edit schedule.json, no code change, no restart needed if the caller
-notifies the scheduler) while the actual behavior each handler runs is
-still something a human explicitly wired up in code.
+Other system-style behaviors (e.g. weekly_social, deep_study_start/stop)
+live entirely in schedule.json as ordinary jobs, but instead of routing
+through on_due/chat, they name a "handler" — a Python callable registered
+once at startup via register_system_handler(). schedule.json can only ever
+select a handler from that pre-registered allowlist; it can never name or
+execute an arbitrary function. This lets timing/enable/disable be fully
+data-driven (edit schedule.json, no code change, no restart needed if the
+caller notifies the scheduler) while the actual behavior each handler runs
+is still something a human explicitly wired up in code.
 """
 
 from __future__ import annotations
@@ -302,8 +306,17 @@ def schedule_job_record(
     days_of_week: list[str] | str | None = None,
     action: str = "agentic",
     relative_days: int | str | None = None,
+    handler: str | None = None,
 ) -> dict:
-    """Create and persist a scheduled job record, returning the stored dict."""
+    """Create and persist a scheduled job record, returning the stored dict.
+
+    `handler`, if given, must name a callable registered via
+    register_system_handler() before this job ever fires. When set, the
+    scheduler calls that handler directly instead of going through
+    on_due/chat with `task` (see _fire_due_user_jobs) — `title`/`task` are
+    still stored for readability/logging but are otherwise unused for
+    handler-based jobs.
+    """
     action = (action or "agentic").lower().strip()
     if action not in {"announce", "agentic"}:
         raise ValueError("action must be 'announce' or 'agentic'")
@@ -332,6 +345,7 @@ def schedule_job_record(
         "enabled": True,
         "kind": "scheduled_job",
         "action": action,
+        "handler": handler,
     }
     jobs = _read_all()
     jobs.append(job)
@@ -377,6 +391,52 @@ def cancel_reminder_record(reminder_id: str) -> bool:
     return cancel_schedule_record(reminder_id)
 
 
+# ── deep-study window job seeding ─────────────────────────────────────────────
+# These four jobs bound the wall-clock window in which the deep_studying
+# handlers (registered in core/learn.py — see register_deep_study_handlers)
+# are allowed to run: weekdays 05:00-18:00, weekends 05:00-10:00. They are
+# ordinary handler-based schedule.json jobs, not a new job type — the
+# "window" behavior comes entirely from pairing a *_start job with a
+# *_stop job on matching days, not from any scheduler-level concept of
+# windows.
+
+DEEP_STUDY_WINDOW_JOB_TITLES: dict[str, tuple[str, list[str], str]] = {
+    "deep_study_weekday_start": ("05:00", ["mon", "tue", "wed", "thu", "fri"], "deep_study_start"),
+    "deep_study_weekday_stop":  ("18:00", ["mon", "tue", "wed", "thu", "fri"], "deep_study_stop"),
+    "deep_study_weekend_start": ("05:00", ["sat", "sun"], "deep_study_start"),
+    "deep_study_weekend_stop":  ("10:00", ["sat", "sun"], "deep_study_stop"),
+}
+
+
+def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
+    """Idempotently seed the four recurring jobs that bound Aiko's
+    scheduled deep_studying window (weekdays 05:00-18:00, weekends
+    05:00-10:00). Safe to call on every app startup — existing jobs (by
+    title) are left alone rather than duplicated, so hand-edits to
+    schedule.json (e.g. disabling one window) survive restarts.
+
+    The handlers named here ("deep_study_start" / "deep_study_stop") must
+    be registered via register_system_handler() before these jobs can
+    actually fire anything — see core.learn.register_deep_study_handlers,
+    which does both the handler registration and calls this function.
+    """
+    existing_titles = {job.get("title") for job in _read_all()}
+    for title, (time_of_day, days, handler) in DEEP_STUDY_WINDOW_JOB_TITLES.items():
+        if title in existing_titles:
+            continue
+        schedule_job_record(
+            title=title,
+            task=title,
+            time_of_day=time_of_day,
+            frequency="custom_weekdays",
+            timezone=timezone,
+            days_of_week=days,
+            action="agentic",
+            handler=handler,
+        )
+        log.info("Seeded deep-study window job %r (%s, %s)", title, time_of_day, days)
+
+
 # ── scheduler instance registry ───────────────────────────────────────────────
 
 _scheduler_instance: ScheduleRunner | None = None
@@ -408,7 +468,11 @@ def register_system_handler(name: str, fn: Callable[[Any], Any]) -> None:
 
     `fn` is called as fn(memorize) when a job with matching "handler" fires.
     Call this once at startup for each system-style behavior you want
-    schedule.json to be able to schedule (e.g. weekly_social).
+    schedule.json to be able to schedule (e.g. weekly_social,
+    deep_study_start/deep_study_stop). If `fn` needs extra context (an LLM
+    client/model, say), bind it in with functools.partial before
+    registering — the scheduler always calls it with exactly one
+    positional arg, memorize.
     """
     _SYSTEM_HANDLERS[name] = fn
 

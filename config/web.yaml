@@ -1,29 +1,36 @@
 # Web config
 #
 # Settings for core/toolkit/researcher.py and semantic web-search triggering.
-# web_search/web_fetch are chat-mode primitives. Task-mode skills should use
-# deep_search for snippet-only support or deep_research for fetched-source work.
-
+# Controls local SearXNG endpoint and how many search results the agent consumes.
 # -- SearXNG --
 SEARXNG_URL: "http://localhost:8888"  # Base URL for self-hosted SearXNG instance.
 SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from chat; higher means fewer searches.
-SEARXNG_MAX_RESULTS: "3"  # Max snippets per SearXNG page for web_search, deep_search, and deep_research URL discovery.
+SEARXNG_MAX_RESULTS: "3"  # Max results per SearXNG call. Shared by web_search (snippet-only) and BOTH deep_search's and deep_research's underlying search calls.
 
-# -- deep_search (task-mode snippet search; no fetch by default) --
-DEEP_SEARCH_NUM_SEARCHES: "1"  # Number of SearXNG pages to pull for the same query. Must be >=1 because snippets need a search call.
-DEEP_SEARCH_NUM_FETCHES: "0"  # Keep 0: deep_search is snippet-only in task mode. Nonzero is a legacy escape hatch, not the intended workflow.
-DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Legacy only if DEEP_SEARCH_NUM_FETCHES is forced above 0.
-DEEP_SEARCH_MAX_WORKERS: "8"  # Max concurrent threads for multi-page search and deep_research fetches.
+# -- deep_search (direct single-pass search + fetch) --
+# These are deep_search()'s OWN defaults — used when something calls
+# deep_search() directly (e.g. a fast, wide, shallow lookup). They are now
+# fully independent of deep_research's per-round tunables below; changing
+# one does not change the other.
+DEEP_SEARCH_NUM_SEARCHES: "5"  # How many SearXNG pages to pull CONCURRENTLY for the SAME query and merge/dedup by URL, widening one-pass coverage without an LLM rewriting the query.
+DEEP_SEARCH_NUM_FETCHES: "1"  # How many (deduped) results to actually fetch full page text for. Set to 0 for snippet-only "search, don't fetch" passes.
+DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before condensing. Shared by deep_search AND deep_research (each research round is one deep_search call and inherits this).
+DEEP_SEARCH_MAX_WORKERS: "8"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on AuRoRA (Jetson, limited cores) vs AIVA if contention shows up. Shared by deep_search and deep_research.
 
-# -- deep_research (task-mode fetched-source research / self-learning) --
-DEEP_RESEARCH_NUM_SEARCHES: "1"  # Search pages per research round, used only to discover candidate URLs.
-DEEP_RESEARCH_NUM_FETCHES: "2"  # Full pages fetched per round. Set 0 only to disable page reading, which makes deep_research much less useful.
-DEEP_RESEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per fetched page text cap before evidence condensation.
-DEEP_RESEARCH_MAX_ROUNDS: "5"  # Hard ceiling on adaptive fetched-source rounds.
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "6000"  # Condensed evidence chars the continue/refine decision call sees.
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "8000"  # Condensed evidence chars the final synthesis call sees.
-DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for continue/refine decision call.
-DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "600"  # Token budget for final synthesis call.
+# -- deep_research (multi-round adaptive research) --
+# deep_research calls deep_search's internal impl once per round, but uses
+# ITS OWN search/fetch breadth per round rather than inheriting
+# DEEP_SEARCH_NUM_SEARCHES/NUM_FETCHES above. This lets you tune "how wide
+# is one direct deep_search() call" completely separately from "how wide
+# is one round of a multi-round deep_research() dig." Can also be
+# overridden per-call via deep_research(query, num_searches=..., num_fetches=...).
+DEEP_RESEARCH_NUM_SEARCHES: "1"  # SearXNG pages pulled per deep_research round.
+DEEP_RESEARCH_NUM_FETCHES: "2"  # Pages fetched per deep_research round.
+DEEP_RESEARCH_MAX_ROUNDS: "5"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "6000"  # How much CONDENSED (not raw) accumulated evidence the continue/refine decision call sees.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "8000"  # How much condensed accumulated evidence the final synthesis call sees.
+DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for the continue/refine decision call.
+DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "600"  # Token budget for the final synthesis call.
 
 # -- in-memory evidence condensation for fetched pages --
 CONDENSE_CHUNK_CHARS: "500"  # Chunk size for fetched pages before relevance scoring.
