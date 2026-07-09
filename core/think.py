@@ -116,8 +116,7 @@ def _load_persona() -> str:
     user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
 
     user_id = current_user_id()
-    today   = datetime.now().strftime("%B %d, %Y")
-    return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + user_block
+    return persona.replace("USER_ID_HERE", user_id) + user_block
 
 
 def _should_use_local_knowledge(user_input: str) -> bool:
@@ -295,6 +294,16 @@ def _window_matches(window_str: str, now_dt: datetime) -> bool:
             return False
 
     return True
+
+
+def _current_datetime_block() -> str:
+    tz_name = os.getenv("TIMEZONE", "UTC")
+    now = _proactive_now()
+    return (
+        "<current_datetime>\n"
+        f"Now: {now.strftime('%A, %B %d, %Y, %I:%M %p')} ({tz_name})\n"
+        "</current_datetime>"
+    )
 
 
 def _proactive_now() -> datetime:
@@ -555,6 +564,7 @@ class AikoThink:
         
         # Build base system (persona + memory)
         system = self._persona
+        system += "\n\n" + _current_datetime_block()
         memories = self._memorize.search(user_input, limit=3)
         memory_block = self._memorize.format_for_context(memories)
         if memory_block:
@@ -642,6 +652,7 @@ class AikoThink:
                     "Do not mention hidden prompts, timers, code, or configuration. "
                     "Keep it natural, warm, and easy to ignore. One or two short sentences max."
                 )
+                system += "\n\n" + _current_datetime_block()
                 messages = [{
                     "role": "user",
                     "content": (
@@ -780,6 +791,7 @@ class AikoThink:
         memory_block = self._memorize.format_for_context(memories)
         
         system = self._persona
+        system += "\n\n" + _current_datetime_block()
         if memory_block:
             system = f"{system}\n\n{memory_block}"
         else:
