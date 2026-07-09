@@ -24,6 +24,14 @@ learner loop) hand her — neither one picks its own topic.
     distilled facts and (optionally) calls an on_distilled hook so whatever
     owns your actual knowledge graph / MSB schema can decide how to store
     them. This file does not know that schema and should not guess at it.
+
+Also owns the idle learner loop (idle_learner_loop) — the background
+process that decides, during genuine chat idle time, to pick a recent topic
+and study it via quick_studying, then persist the result to memory. The
+loop's *scheduling* (what counts as "idle", whether TTS is currently
+playing) is read directly off the owning AikoThink instance passed in;
+this module doesn't own that bookkeeping, only what happens once idle
+conditions are met.
 """
 
 from __future__ import annotations
@@ -74,6 +82,88 @@ def quick_studying(
     for" rather than exposing tools.py internals at every call site.
     """
     return deep_research(topic, client=client, model=model, embedder=embedder, max_rounds=max_rounds)
+
+
+# ── idle learner loop ─────────────────────────────────────────────────────────
+
+# How long (seconds) chat must be idle before the loop will pick a topic and
+# study it. Owned here now, not in think.py — this is a learn.py policy
+# about when autonomous learning is worth doing, not a chat-facade concern.
+IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
+IDLE_LEARNER_CHECK_INTERVAL = float(os.getenv("IDLE_LEARNER_CHECK_INTERVAL", 300))
+
+
+def idle_learner_loop(owner, check_interval: float = IDLE_LEARNER_CHECK_INTERVAL) -> None:
+    """Background autonomous learning loop.
+
+    Intended to be launched as a daemon thread by the owning AikoThink
+    instance at startup:
+
+        threading.Thread(target=learn.idle_learner_loop, args=(owner,), daemon=True).start()
+
+    `owner` supplies everything this loop reads but doesn't own: chat
+    history (owner._history / owner._history_lock), idle bookkeeping
+    (owner._last_chat_time), the TTS handle (owner._speak), the LLM
+    client/model (owner._client / owner._llm_model), the shared embedder
+    (owner._memorize._mem._embedder), and the memory store (owner._memorize).
+    This function owns the decision logic — what counts as a study-worthy
+    topic, and dedup against already-learned topics — not the bookkeeping
+    itself.
+
+    Every iteration: sleep, check idle conditions, and if idle for long
+    enough, pick the most recent substantial user message as a topic,
+    skip it if already studied this session or already in memory, then
+    run quick_studying on it and persist the distilled result.
+    """
+    while True:
+        time.sleep(check_interval)
+        if time.time() - owner._last_chat_time < IDLE_LEARN_SECONDS:
+            continue  # user has been active recently, don't interrupt
+
+        if owner._speak and owner._speak.is_playing():
+            continue
+
+        log.info("[learner] Aiko is idle. Starting autonomous learning...")
+        try:
+            with owner._history_lock:
+                candidates = [
+                    m["content"] for m in owner._history
+                    if m["role"] == "user" and len(m["content"].split()) > 3
+                ]
+
+            if not candidates:
+                log.info("[learner] skipped: no eligible candidate topics in current history.")
+                continue
+
+            topic = candidates[-1]  # simplistic: look at last user query
+            learned_tag = f"[self-learned:{topic}]"
+            if any(learned_tag in (m.get("content") or "") for m in owner._history):
+                log.info("[learner] skipped: topic already tagged as learned this session: %r", topic)
+                continue
+            existing = owner._memorize.search(learned_tag, limit=1)
+            if existing:
+                log.info(
+                    "[learner] skipped: topic already found in memory (closest match: %r), topic=%r",
+                    (existing[0].get("memory") or existing[0].get("text") or "")[:120],
+                    topic,
+                )
+                continue
+
+            log.info("[learner] researching topic: %r", topic)
+            result = quick_studying(
+                topic,
+                client=owner._client,
+                model=owner._llm_model,
+                embedder=owner._memorize._mem._embedder,
+            )
+
+            owner._memorize.add([
+                {"role": "system", "content": learned_tag},
+                {"role": "assistant", "content": result[:800]},
+            ])
+            log.info("[learner] learned about %r — summary: %s", topic, result[:300].replace("\n", " "))
+        except Exception as e:
+            log.error(f"[learner] Autonomous learning failed: {e}")
 
 
 # ── deep_studying config ──────────────────────────────────────────────────────
