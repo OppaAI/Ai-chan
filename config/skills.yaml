@@ -1,0 +1,11 @@
+# Skills config
+#
+# Settings for core/skills.py (skills/<id>/SKILL.md workflow docs).
+# Two-stage RAG pattern: semantic-rank WHICH skills are candidates, then
+# chunk-rank WHICH PART of each matched SKILL.md gets injected.
+# -- whole-doc semantic ranking (which skills are candidates at all) --
+SKILL_SEMANTIC_THRESHOLD: "0.35"  # Min cosine similarity for a skill to be considered a candidate match. Lower = more skills surface per query, at the cost of precision.
+# -- chunk-level RAG selection (which part of a matched SKILL.md gets injected) --
+SKILL_CHUNK_CHARS: "600"  # Chunk size (chars) a matched SKILL.md is split into before relevance scoring.
+SKILL_CHUNKS_PER_MATCH: "4"  # Max relevant chunks kept per matched skill doc.
+SKILL_CHUNK_MIN_SCORE: "0.30"  # Min relevance score to keep a chunk; below this the skill falls back to its first chunk.
