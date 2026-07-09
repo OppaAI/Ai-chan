@@ -4,6 +4,7 @@
 # Put new config YAML files in this list when adding them.
 configs:
 - identity.yaml  # assistant/user names
+- bioclock.yaml  # standard date / wall clock
 - think.yaml  # chat LLM and sampling
 - agentic.yaml  # agent loop and routing
 - wiki.yaml  # human-authored wiki/persona/config/docs RAG sources
