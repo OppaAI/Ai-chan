@@ -65,17 +65,15 @@ class BootResult:
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and search exemplars at boot so first-turn latency is cold-free."""
     from core.think import (
-        _ROUTE_BINARY_EXAMPLES,
+        _ROUTE_TERNARY_EXAMPLES,
         _ROUTE_INSTRUCT_BINARY,
         _ROUTE_INSTRUCT_SEARCH,
         _ROUTE_INSTRUCT_TOOL,
-        _ROUTE_SEARCH_EXAMPLES,
         _ROUTE_TOOL_EXAMPLES,
     )
     try:
-        think._semantic_example_vectors(_ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
+        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
         think._semantic_example_vectors(_ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
-        think._semantic_example_vectors(_ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH)
         log.info("[wakeup] Semantic exemplar cache warmed")
     except Exception as e:
         log.warning("[wakeup] Semantic exemplar prewarm failed: %s", e)
