@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from core.toolkit.researcher import fetch_and_extract, web_search
+from core.toolkit.researcher import web_fetch, web_search
 
 _RELATIVE_RE = re.compile(
     r"(?P<num>\d+)\s*(?P<unit>hour|day|week|month)s?\s+ago", re.IGNORECASE
@@ -168,7 +168,7 @@ def search_jobs(
 
                 if not _location_matches(search_location, blob, aliases):
                     try:
-                        page = fetch_and_extract(url)
+                        page = web_fetch(url)
                         page_text = page.get("text", "")[:1500]
                     except Exception:
                         page_text = ""
