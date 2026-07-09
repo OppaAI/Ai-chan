@@ -570,7 +570,9 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content="Missing required argument: query must be a non-empty string. Reissue with a research question.",
             error_type="missing_args", retryable=True,
         )
-    if name == "learn_knowledge" and not (args.get("text") or args.get("relative_path") or "").strip():
+    if name == "learn_knowledge" and not (
+        (args.get("text") or "").strip() or (args.get("relative_path") or "").strip()
+        ):
         return ToolResult(
             ok=False, tool=name, args=args,
             content="Missing required argument: provide text or relative_path with knowledge to store.",
