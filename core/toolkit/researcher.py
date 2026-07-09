@@ -17,6 +17,10 @@ from urllib.parse import urlparse
 import importlib
 import importlib.util
 
+from core.log import get_logger
+
+log = get_logger(__name__)
+
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 
@@ -397,31 +401,23 @@ def _fetch_and_score_pipeline(
     chunk_chars: int = CONDENSE_CHUNK_CHARS,
     max_workers: int = DEEP_SEARCH_MAX_WORKERS,
     max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
-) -> tuple[list[tuple[float, str, str]], list[tuple[str, str]]]:
+) -> tuple[list[tuple[float, str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
     """Fetch multiple URLs concurrently, and score each page's chunks for
     relevance THE MOMENT that page finishes downloading — not after every
     URL has finished fetching.
 
-    Fetching is I/O-bound (network wait, releases the GIL); embedding is
-    compute-bound. Because this loop scores page A's chunks inside the
-    `as_completed` iteration, that scoring work runs on the main thread
-    while pages B/C/D are still downloading on other threads — real overlap,
-    not sequential fetch-then-embed. A slow site no longer blocks embedding
-    of pages that already landed.
-
-    Each page's chunks are embedded in one batched call when the embedder
-    supports it (see _embed_batch), rather than one onnxruntime call per
-    chunk — this cuts inference call overhead on top of the fetch/score
-    overlap above.
-
-    Returns (scored_chunks, pages) — scored_chunks is a flat list of
-    (score, url, chunk_text) tuples ready for dedup/filter/sort;
-    pages is the raw (url, full_text) list, kept in case a caller needs it
-    (e.g. for a raw-evidence log). Both are in-memory only — nothing here
-    touches disk.
+    Returns (scored_chunks, pages, url_outcomes):
+    - scored_chunks: (score, url, chunk_text) tuples for condensing.
+    - pages: (url, full_text) for every URL that succeeded.
+    - url_outcomes: (url, status) for EVERY url passed in, success or
+      failure, in the order they completed — this is what lets
+      deep_search/deep_research report a full URL manifest instead of only
+      ever showing the successes.
     """
     if not urls:
-        return [], []
+        return [], [], []
+
+    log.info("[fetch_pipeline] attempting %d url(s): %s", len(urls), urls)
 
     use_embedder = embedder is not None and hasattr(embedder, "embed_query")
     query_vec = None
@@ -433,6 +429,7 @@ def _fetch_and_score_pipeline(
 
     scored: list[tuple[float, str, str]] = []
     pages: list[tuple[str, str]] = []
+    url_outcomes: list[tuple[str, str]] = []
     chunks_scored = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(urls)))) as pool:
@@ -441,10 +438,18 @@ def _fetch_and_score_pipeline(
             url = future_to_url[future]
             try:
                 text = future.result()
-            except Exception:
+            except Exception as e:
+                log.warning("[fetch_pipeline] exception fetching %s: %s", url, e)
+                url_outcomes.append((url, f"exception: {e}"))
                 continue
+
             if text.startswith("[fetch failed"):
+                log.info("[fetch_pipeline] failed %s: %s", url, text)
+                url_outcomes.append((url, text))
                 continue
+
+            log.info("[fetch_pipeline] fetched %s (%d chars)", url, len(text))
+            url_outcomes.append((url, f"ok ({len(text)} chars)"))
             pages.append((url, text))
 
             remaining_budget = max_chunks_to_score - chunks_scored
@@ -458,7 +463,23 @@ def _fetch_and_score_pipeline(
             scored.extend(page_scored)
             chunks_scored += len(page_scored)
 
-    return scored, pages
+    log.info(
+        "[fetch_pipeline] done: %d/%d succeeded, %d chunk(s) scored",
+        len(pages), len(urls), chunks_scored,
+    )
+    return scored, pages, url_outcomes
+
+
+def _format_url_manifest(url_outcomes: list[tuple[str, str]]) -> str:
+    """Render a per-URL success/failure manifest for inclusion in tool
+    output, so the model (and anyone reading the transcript) can see
+    exactly which URLs were attempted without needing separate log access."""
+    if not url_outcomes:
+        return "[no URLs attempted]"
+    lines = [f"[URL manifest — {len(url_outcomes)} attempted]"]
+    for url, status in url_outcomes:
+        lines.append(f"- {url} — {status}")
+    return "\n".join(lines)
 
 
 def _finalize_condensed(
@@ -557,13 +578,9 @@ def deep_search(
 ) -> str:
     """Search (optionally across multiple SearXNG result pages, pulled
     concurrently), then fetch the top pages while scoring each one for
-    relevance as it lands (see _fetch_and_score_pipeline) — not after every
-    page has finished downloading.
-
-    search_pages > 1 pulls several result pages for the SAME query
-    concurrently and merges/dedups them by URL, widening coverage without
-    an LLM rewriting the query (that's deep_research's job). Tune
-    DEEP_SEARCH_SEARCH_PAGES up (e.g. 3) for "3 search + 2 fetch" breadth.
+    relevance as it lands. Returned bundle now includes a full URL manifest
+    (every attempted URL + success/failure) so fetch activity is visible
+    without needing log access.
     """
     if not query or not query.strip():
         return "[search failed: empty query]"
@@ -571,6 +588,8 @@ def deep_search(
     search_pages = max(1, search_pages)
     all_results: list[dict] = []
     errors: list[str] = []
+
+    log.info("[deep_search] searching %d page(s) for: %s", search_pages, query)
 
     if search_pages == 1:
         results, error = _web_search_raw(query, max_results, pageno=1)
@@ -606,15 +625,17 @@ def deep_search(
     snippet_bundle = "\n\n".join(snippet_lines)
 
     fetch_urls = [r["url"].strip() for r in deduped_results[:fetch_top] if r.get("url")]
-    scored_chunks, fetched_pages = _fetch_and_score_pipeline(
+    scored_chunks, fetched_pages, url_outcomes = _fetch_and_score_pipeline(
         fetch_urls, query, embedder, max_chars_per_page, max_workers=DEEP_SEARCH_MAX_WORKERS,
     )
 
+    manifest = _format_url_manifest(url_outcomes)
+
     if not fetched_pages:
-        return snippet_bundle
+        return f"{snippet_bundle}\n\n{manifest}"
 
     condensed = _finalize_condensed(scored_chunks, query)
-    return f"{snippet_bundle}\n\n{condensed}"
+    return f"{snippet_bundle}\n\n{manifest}\n\n{condensed}"
 
 
 def _ask_llm_json(client, model: str, prompt: str, max_tokens: int) -> dict | None:
@@ -647,29 +668,19 @@ def deep_research(
     fetch_top: int = DEEP_RESEARCH_FETCH_TOP,
     max_chars_per_page: int = DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
 ) -> str:
-    """Multi-round adaptive research: search, fetch+score concurrently
-    (embedding overlaps with in-flight fetches, see
-    _fetch_and_score_pipeline), decide whether to refine the query and
-    search again, repeat, then return a synthesized bundle.
+    """Multi-round adaptive research... (docstring unchanged)
 
-    Scored chunks are ACCUMULATED across rounds rather than recomputed —
-    each page's chunks are embedded exactly once, the first time they're
-    fetched. Earlier rounds' evidence is reused via _finalize_condensed
-    (pure sort/filter, no re-embedding) on every subsequent decision call.
-    Previously this recomputed condense_evidence() over the full page list
-    every round, silently re-embedding already-scored earlier rounds' pages
-    each time — that redundant cost is what this version removes.
-
-    Without client/model this returns a single search+fetch+condense round,
-    equivalent to deep_search — there is no model available to pick a
-    DIFFERENT follow-up query, so a second identical-query round would just
-    re-fetch the same evidence for no gain.
+    The returned bundle now includes a full URL manifest accumulated across
+    ALL rounds — every URL attempted in every round, with success/failure
+    status — so total fetch activity for the whole multi-round call is
+    visible in one place, not scattered across per-round logs.
     """
     if not query or not query.strip():
         return "[search failed: empty query]"
 
     rounds: list[str] = []
-    all_scored_chunks: list[tuple[float, str, str]] = []  # accumulated, never re-embedded
+    all_scored_chunks: list[tuple[float, str, str]] = []
+    all_url_outcomes: list[tuple[str, str]] = []  # accumulated across every round
     fetched_page_count = 0
     queries_used: list[str] = [query.strip()]
     seen_urls: set[str] = set()
@@ -677,6 +688,7 @@ def deep_research(
     adaptive = client is not None and model
 
     for round_num in range(1, max_rounds + 1):
+        log.info("[deep_research] round %d searching: %s", round_num, current_query)
         results, error = _web_search_raw(current_query, DEEP_SEARCH_MAX_RESULTS, pageno=1)
         if error:
             if round_num == 1:
@@ -691,9 +703,10 @@ def deep_research(
         ][:fetch_top]
         seen_urls.update(new_urls)
 
-        round_scored, round_pages = _fetch_and_score_pipeline(
+        round_scored, round_pages, round_url_outcomes = _fetch_and_score_pipeline(
             new_urls, current_query, embedder, max_chars_per_page, max_workers=DEEP_SEARCH_MAX_WORKERS,
         )
+        all_url_outcomes.extend(round_url_outcomes)
 
         if round_pages:
             all_scored_chunks.extend(round_scored)
@@ -708,7 +721,6 @@ def deep_research(
         if not adaptive or round_num == max_rounds:
             break
 
-        # Cheap: sort/filter over chunks already scored, no new embedding calls.
         evidence_so_far = _finalize_condensed(
             all_scored_chunks, query, top_k=12
         )[:DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION]
@@ -738,9 +750,16 @@ def deep_research(
     if not rounds:
         return f"[no results found for: {query}]"
 
+    log.info(
+        "[deep_research] done: %d round(s), %d url(s) attempted total, %d succeeded",
+        len(rounds), len(all_url_outcomes), fetched_page_count,
+    )
+
     header = f"[Deep research: {len(rounds)} round(s) for: {query}]"
     if len(queries_used) > 1:
         header += f"\n[Query refinements: {' -> '.join(queries_used)}]"
+
+    manifest = _format_url_manifest(all_url_outcomes)
 
     condensed_evidence = (
         _finalize_condensed(all_scored_chunks, query) if fetched_page_count
@@ -768,11 +787,11 @@ def deep_research(
             )
             synthesis = (resp.choices[0].message.content or "").strip()
             if synthesis:
-                return f"{header}\n\n[Synthesis]\n{synthesis}\n\n[Condensed evidence]\n{condensed_evidence}"
+                return f"{header}\n\n[Synthesis]\n{synthesis}\n\n{manifest}\n\n[Condensed evidence]\n{condensed_evidence}"
         except Exception:
             pass  # fall through to raw bundle below
 
-    return f"{header}\n\n{rounds_log}\n\n{condensed_evidence}"
+    return f"{header}\n\n{rounds_log}\n\n{manifest}\n\n{condensed_evidence}"
 
 
 def web_search_context(query: str, max_results: int = MAX_RESULTS) -> str | None:

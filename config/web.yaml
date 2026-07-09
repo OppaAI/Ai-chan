@@ -10,15 +10,15 @@ SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from c
 WEB_SEARCH_MAX_RESULTS: "3"  # Maximum search results returned per query to the plain web_search tool (snippet-only discovery). Independent of DEEP_SEARCH_MAX_RESULTS below — different tool.
 
 # -- deep_search (search + fetch pass, now tunable for extra breadth) --
-DEEP_SEARCH_MAX_RESULTS: "3"  # Search results to request per SearXNG page within a deep_search call.
-DEEP_SEARCH_FETCH_TOP: "2"  # How many (deduped) results to actually fetch full page text for.
+DEEP_SEARCH_MAX_RESULTS: "10"  # Search results to request per SearXNG page within a deep_search call.
+DEEP_SEARCH_FETCH_TOP: "5"  # How many (deduped) results to actually fetch full page text for.
 DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before condensing.
 DEEP_SEARCH_SEARCH_PAGES: "1"  # How many SearXNG result pages to pull CONCURRENTLY for the SAME query and merge/dedup by URL, widening one-pass coverage without an LLM rewriting the query. Set to 3 for "3 search + 2 fetch" breadth. This is the tunable for "deep_search only does 1 search."
-DEEP_SEARCH_MAX_WORKERS: "4"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on AuRoRA (Jetson, limited cores) vs AIVA if contention shows up.
+DEEP_SEARCH_MAX_WORKERS: "8"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on AuRoRA (Jetson, limited cores) vs AIVA if contention shows up.
 
 # -- deep_research (multi-round adaptive research) --
-DEEP_RESEARCH_MAX_ROUNDS: "3"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness.
-DEEP_RESEARCH_FETCH_TOP: "2"  # Pages fetched per round (now fetched concurrently, not sequentially).
+DEEP_RESEARCH_MAX_ROUNDS: "5"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness.
+DEEP_RESEARCH_FETCH_TOP: "10"  # Pages fetched per round (now fetched concurrently, not sequentially).
 DEEP_RESEARCH_MAX_CHARS_PER_PAGE: "1500"  # Per-page fetched text cap per round (smaller than deep_search's since rounds accumulate).
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "6000"  # How much CONDENSED (not raw) accumulated evidence the continue/refine decision call sees.
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "8000"  # How much condensed accumulated evidence the final synthesis call sees.
