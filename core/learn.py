@@ -32,6 +32,16 @@ loop's *scheduling* (what counts as "idle", whether TTS is currently
 playing) is read directly off the owning AikoThink instance passed in;
 this module doesn't own that bookkeeping, only what happens once idle
 conditions are met.
+
+Config note: this module's tunables (IDLE_LEARN_SECONDS,
+DEEP_STUDY_MAX_ITERATIONS, etc.) are read from os.environ at import time via
+os.getenv(...). Those values are populated from config/learn.yaml by
+core.config.load_config(). We call load_config() explicitly at the top of
+this module (it's idempotent — see core/config.py's _LOADED guard) so
+learn.yaml's values are honored regardless of what else has or hasn't
+imported core.config yet. Without this, module-level os.getenv() calls
+would silently fall back to hardcoded defaults if learn.py happened to be
+imported before whatever else in the app calls load_config().
 """
 
 from __future__ import annotations
@@ -45,6 +55,10 @@ import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
+
+from core.config import load_config
+
+load_config()
 
 from core.tools import (
     _ask_llm_json,
