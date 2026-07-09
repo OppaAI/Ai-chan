@@ -6,7 +6,10 @@ configs:
 - identity.yaml  # assistant/user names
 - think.yaml  # chat LLM and sampling
 - agentic.yaml  # agent loop and routing
+- knowledge.yaml  # knowledge base / RAG sources
 - memorize.yaml  # memory, embeddings, decay, consolidation
+- skills.yaml  # skill registry / capabilities
+- learn.yaml  # quick/deep studying + idle learner tunables
 - speak.yaml  # TTS output
 - listen.yaml  # ASR input, VAD, speaker verification
 - web.yaml  # SearXNG/search
