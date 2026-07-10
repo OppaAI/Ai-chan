@@ -33,7 +33,7 @@ import os
 import re
 from pathlib import Path
 
-_DEFAULT_USER_ID = "OppaAI"
+_DEFAULT_USER_ID = "Guest"
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _CURRENT_USER_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("aiko_current_user_id", default=None)
 

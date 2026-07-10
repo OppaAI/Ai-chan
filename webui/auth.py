@@ -54,7 +54,7 @@ PATREON_CAMPAIGN_ID = os.getenv("PATREON_CAMPAIGN_ID")
 REDIRECT_BASE = os.getenv("REDIRECT_BASE", "http://localhost:8787")
 
 # ── owner / contributor allowlist (GitHub) ───────────────────────────────────
-# Comma-separated in .env, e.g. ALLOWED_GITHUB_USERS=OppaAI,someOtherHandle
+# Comma-separated in .env, e.g. ALLOWED_GITHUB_USERS=Guest,someOtherHandle
 
 def _parse_allowlist(name: str) -> set[str]:
     raw = os.getenv(name, "")
@@ -66,7 +66,7 @@ ALLOWED_PATREON_USERS = _parse_allowlist("ALLOWED_PATREON_USERS")
 # Flip to true later when you're ready to accept PRs from anyone with commits
 # on the repo. Until then, GitHub login only works for the owner allowlist.
 CONTRIBUTORS_ENABLED = os.getenv("CONTRIBUTORS_ENABLED", "false").lower() == "true"
-GITHUB_REPO = os.getenv("GITHUB_REPO", "OppaAI/Aiko-chan")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "")
 
 # ── terms/guidelines gate ────────────────────────────────────────────────────
 # Bump TERMS_VERSION whenever you materially change the guidelines — anyone

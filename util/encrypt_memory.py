@@ -22,8 +22,8 @@ Usage:
     export DATA_KEY_SECRET="your-high-entropy-secret"   # must match what
                                                           # Aiko will use at runtime
     uv run python encrypt_memory.py \\
-        --user-id OppaAI \\
-        --input /home/oppa-ai/.aiko/OppaAI/memory/memory.db
+        --user-id <user_id> \\
+        --input ~/.aiko/<user_id>/memory/memory.db
 
 Then, after it reports success:
     mv memory.db memory.db.plaintext-backup   # keep for a while, don't delete yet
@@ -55,7 +55,7 @@ def _fail(msg: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, help="Path to existing plaintext memory.db")
-    parser.add_argument("--user-id", required=True, help="Aiko user_id (e.g. OppaAI) — must match core.userspace.current_user_id()")
+    parser.add_argument("--user-id", required=True, help="Aiko user_id — must match core.userspace.current_user_id()")
     parser.add_argument("--output", default=None, help="Output path for encrypted db (default: <input>.encrypted)")
     parser.add_argument("--page-size", type=int, default=4096, help="cipher_page_size — must match core/secure.py (default: 4096)")
     args = parser.parse_args()

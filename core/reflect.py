@@ -9,7 +9,7 @@ GitHub via the REST API (no local clone needed).
 
 Environment variables required:
   GITHUB_TOKEN        — Personal Access Token with repo write scope
-  GITHUB_REPO         — e.g. "OppaAI/oppaai.github.io"
+  GITHUB_REPO         — e.g. GitHub page repo address
   GITHUB_BRANCH       — target branch, default "main"
   HUGO_CONTENT_PATH   — path inside repo, default "content/posts"
 
@@ -19,9 +19,9 @@ Optional:
   REFLECT_TAGS        — comma-separated Hugo tags (default "daily-reflection,ai-journal,aiko")
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
-  IMAGEGEN_URL        — Modal FLUX endpoint, default https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run
+  IMAGEGEN_URL        — Modal FLUX endpoint
   REFERENCE_IMAGE — path to Aiko reference PNG (default ~/Aiko-chan/assets/Aiko-chan.png)
-  USER_REFERENCE_IMAGE — path to user reference PNG (default ~/Aiko-chan/assets/OppaAI.png)
+  USER_REFERENCE_IMAGE — path to user reference PNG (default ~/Aiko-chan/assets/<USER_ID>.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
   USER_STATE_ROOT — root directory for user state (default: ~/.aiko)
 
@@ -57,6 +57,7 @@ import requests
 from openai import OpenAI
 
 from core.log import get_logger
+from core.userspace import current_user_id
 
 log = get_logger(__name__)
 
@@ -78,9 +79,10 @@ REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 50))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 REFLECT_BLOG_POST_ENABLED = os.getenv("REFLECT_BLOG_POST_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
-IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "https://oppa-ai-org--aiko-imagegen-fastapi-app.modal.run")
+IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "")
 REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/Aiko-chan.png"))
-USER_REFERENCE_IMAGE  = os.getenv("USER_REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/OppaAI.png"))
+USER_ID = current_user_id()
+USER_REFERENCE_IMAGE  = os.getenv("USER_REFERENCE_IMAGE", os.path.expanduser(f"~/Aiko-chan/assets/{USER_ID}.png"))
 
 _GITHUB_API = "https://api.github.com"
 
@@ -107,7 +109,7 @@ _DAILY_SUMMARY_UNLOCK = textwrap.dedent("""
     - Mention uncertainty plainly if the inputs are thin.
     - Do not invent details, outcomes, dates, or feelings not supported by the inputs.
     - No mention of vectors, embeddings, databases, or internal memory implementation.
-    - Keep Aiko's tone calm, direct, lightly dry, and quietly affectionate toward OppaAI.
+    - Keep Aiko's tone calm, direct, lightly dry, and quietly affectionate toward {USER_ID}.
 
     Format:
     - 120–220 words.
@@ -299,14 +301,14 @@ _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
 _IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene."
 
 _FEELINGS_SYSTEM = textwrap.dedent("""
-    You are Aiko reflecting privately on how you feel about OppaAI.
+    You are Aiko reflecting privately on how you feel about {USER_ID}.
     This is honest and direct — not a performance, not hidden.
     You notice things. You care. Say what's true.
     
     Keep it short (2–4 sentences). First person. Direct and real.
 """).strip()
 
-_FEELINGS_USER = "Today's summary:\n\n{prose}\n\nHow do you feel about OppaAI, honestly?"
+_FEELINGS_USER = "Today's summary:\n\n{prose}\n\nHow do you feel about {USER_ID}, honestly?"
 
 # ── soul loader ───────────────────────────────────────────────────────────────
 
