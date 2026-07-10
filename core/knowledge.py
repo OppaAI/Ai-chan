@@ -25,13 +25,11 @@ from typing import Iterable, Protocol
 import xml.etree.ElementTree as ET
 from defusedxml import ElementTree as DET
 
-import sqlite_vec
-
 from core.config import load_config
 load_config()
 
 from core import reason
-from core.database import fts_or_query, initialize_sqlite_vec_db, resolve_user_db_path, rrf_score
+from core.databank import initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
 from core.log import get_logger
 from core.userspace import current_user_id, user_workspace_root
 
@@ -114,21 +112,12 @@ END;
 """.format(dims=EMBED_DIMS)
 
 
-def _db_path(user_id: str | None = None) -> Path:
-    path = Path(KNOWLEDGE_DB_PATH).expanduser()
-    if path.is_absolute():
-        return path
-    return resolve_user_db_path(path, user_id=user_id)
-
-
 def _connect(user_id: str | None = None) -> sqlite3.Connection:
-    uid = user_id or current_user_id()
-    return initialize_sqlite_vec_db(_db_path(uid), _DDL, user_id=uid)
+    return initialize_store_db(KNOWLEDGE_DB_PATH, _DDL, user_id=user_id, vector=True)
 
 
 def _now() -> str:
-    from core.bioclock import utc_now
-    return utc_now().isoformat()
+    return utc_now_iso()
 
 
 def _sanitize_text(text: str, max_chars: int = 200_000) -> str:
@@ -154,7 +143,7 @@ def _xml_text_from_zip(path: Path, members: Iterable[str]) -> str:
                 data = zf.read(member)
             except KeyError:
                 continue
-             root = DET.fromstring(data)
+            root = DET.fromstring(data)
             chunks.extend(t.strip() for t in root.itertext() if t and t.strip())
     return "\n".join(chunks)
 
@@ -296,10 +285,7 @@ def ingest_text(
                 (chunk_id, doc_id, uid, index, chunk, created_at),
             )
             if vectors:
-                conn.execute(
-                    "INSERT INTO learned_chunks_vec(id, embedding) VALUES(?, ?)",
-                    (chunk_id, sqlite_vec.serialize_float32(vectors[index])),
-                )
+                insert_vector(conn, "learned_chunks_vec", chunk_id, vectors[index])
         conn.commit()
         return doc_id
     except Exception as exc:
@@ -352,35 +338,27 @@ def _knn(conn: sqlite3.Connection, query: str, embedder: Embedder | None, uid: s
     if embedder is None:
         return []
     vector = embedder.embed_query(query, instruct=KNOWLEDGE_QUERY_INSTRUCT)
-    blob = sqlite_vec.serialize_float32(vector)
-    return conn.execute(
-        """
-        SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
-        FROM learned_chunks_vec v
-        JOIN learned_chunks c ON c.id = v.id
-        WHERE c.user_id = ?
-        ORDER BY dist ASC
-        LIMIT ?
-        """,
-        (blob, uid, limit),
-    ).fetchall()
+    return user_scoped_vec_knn(
+        conn,
+        vec_table="learned_chunks_vec",
+        owner_table="learned_chunks",
+        owner_alias="c",
+        vector=vector,
+        user_id=uid,
+        limit=limit,
+    )
 
 
 def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sqlite3.Row]:
-    fts = fts_or_query(query)
-    if not fts:
-        return []
-    return conn.execute(
-        """
-        SELECT f.id
-        FROM learned_chunks_fts f
-        JOIN learned_chunks c ON c.id = f.id
-        WHERE learned_chunks_fts MATCH ? AND c.user_id = ?
-        ORDER BY rank
-        LIMIT ?
-        """,
-        (fts, uid, limit),
-    ).fetchall()
+    return user_scoped_fts_search(
+        conn,
+        fts_table="learned_chunks_fts",
+        owner_table="learned_chunks",
+        owner_alias="c",
+        query=query,
+        user_id=uid,
+        limit=limit,
+    )
 
 
 def search_knowledge(
@@ -393,8 +371,8 @@ def search_knowledge(
     uid = user_id or current_user_id()
     conn = _connect(uid)
     try:
-        rank_knn = {row["id"]: i + 1 for i, row in enumerate(_knn(conn, query, embedder, uid, KNOWLEDGE_KNN_LIMIT))}
-        rank_fts = {row["id"]: i + 1 for i, row in enumerate(_fts(conn, query, uid, KNOWLEDGE_FTS_LIMIT))}
+        rank_knn = rank_by_id(_knn(conn, query, embedder, uid, KNOWLEDGE_KNN_LIMIT))
+        rank_fts = rank_by_id(_fts(conn, query, uid, KNOWLEDGE_FTS_LIMIT))
         ids = set(rank_knn) | set(rank_fts)
         if not ids:
             return []

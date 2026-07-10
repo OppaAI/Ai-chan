@@ -147,6 +147,8 @@ Aiko-chan/
 ├── core/
 │   ├── think.py         # OpenAI-compatible chat loop, routing, streaming, scheduler
 │   ├── memorize.py      # sqlite-vec backend, pinned memories, decay
+│   ├── databank.py      # shared SQLite/sqlite-vec helpers for local stores
+│   ├── journal.py       # encrypted daily journal blob store beside memory.db
 │   ├── forget.py        # decay scoring and cleanup gates
 │   ├── dream.py         # midnight consolidation scheduler
 │   ├── experience.py    # consolidate daily experience from memory

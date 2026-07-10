@@ -158,7 +158,8 @@ def _public_memory_rows(memorize: AikoMemorize, window: WeekWindow) -> list[dict
         text = (row.get("memory") or row.get("text") or "").strip()
         return (
             text.startswith("Daily experience summary for ")  # legacy single-blob prose
-            or text.startswith("Day record for ")               # faithful day-record block
+            or text.startswith("Day record for ")               # legacy faithful day-record block
+            or text.startswith("Daily journal of ")          # legacy memory-hosted journal block
             or bool(re.match(r"^\[\d{4}-\d{2}-\d{2}\]\s", text))  # per-fact pins, e.g. "[2026-07-05] ..."
         )
 
