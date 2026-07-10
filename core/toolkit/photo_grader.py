@@ -1,12 +1,26 @@
-"""Photo-library tools for Aiko's wildlife/nature/astro workflows."""
+"""
+core/toolkit/photo_grader.py
+
+Photo-library tools for Aiko's wildlife/nature/astro workflows.
+
+This module provides utilities for managing photo libraries:
+
+  - scan_photo_workspace()       — scan inbox for ingestible image files
+  - propose_photo_ingestion()    — suggest photos for library ingestion
+  - write_photo_ingestion_report() — generate an ingestion summary report
+
+Supports common RAW formats (CR2, CR3, NEF, ARW, ORF, RW2) and standard
+image formats (JPEG, PNG, TIFF, WebP, HEIC, DNG).
+"""
 
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime
 from itertools import islice
 from pathlib import Path
 
+from core.bioclock import local_now
 from core.toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
@@ -77,7 +91,7 @@ def write_photo_ingestion_report(title: str = "photo-ingestion", content: str = 
     try:
         base = safe_path(report_dir)
         base.mkdir(parents=True, exist_ok=True)
-        filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{slugify(title, 'photo-ingestion')}.md"
+        filename = f"{local_now().strftime('%Y%m%d-%H%M%S')}-{slugify(title, 'photo-ingestion')}.md"
         path = base / filename
         body = content.strip() or f"# Photo Ingestion Report\n\nCreated: {now_stamp()}\n\nNo details provided."
         path.write_text(body, encoding="utf-8")

@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
+from core.bioclock import local_now, timezone_name
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +41,9 @@ def notes_dir() -> Path:
 
 
 def now_stamp() -> str:
-    """Return a compact UTC timestamp for generated notes and plans."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    """Return a compact local-timezone timestamp for generated notes and plans."""
+    now = local_now()
+    return now.strftime(f"%Y-%m-%d %H:%M {timezone_name()}")
 
 
 def slugify(text: str, fallback: str = "task") -> str:

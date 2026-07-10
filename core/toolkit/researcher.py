@@ -1,4 +1,17 @@
-"""Web search and page extraction tools."""
+"""
+core/toolkit/researcher.py
+
+Web search and page extraction tools.
+
+This module provides web research capabilities for agentic workflows:
+
+  - web_search()    — search via configured SearXNG instance
+  - web_fetch()     — fetch and extract text from URLs
+  - deep_search()   — snippet-only search pass for task-mode workflows
+  - deep_research() — adaptive fetched-source research with synthesis
+
+Requires a running SearXNG instance (SEARXNG_URL env var).
+"""
 
 from __future__ import annotations
 

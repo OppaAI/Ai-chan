@@ -1,4 +1,19 @@
-"""Schedule and reminder tools."""
+"""
+core/toolkit/organizer.py
+
+Schedule and reminder tools.
+
+This module provides job scheduling and reminder functionality:
+
+  - schedule_job()       — schedule a local recurring job while Aiko is running
+  - list_schedule()      — list all scheduled jobs
+  - cancel_schedule()    — cancel a scheduled job
+  - schedule_reminder()  — schedule a one-time reminder
+  - list_reminders()     — list all reminders
+  - cancel_reminder()    — cancel a reminder
+
+Uses core.schedule for persistent record management.
+"""
 
 from __future__ import annotations
 

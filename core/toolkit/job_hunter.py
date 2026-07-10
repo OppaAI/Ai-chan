@@ -1,6 +1,18 @@
 """
+core/toolkit/job_hunter.py
+
 Job hunt: query configured scrape-friendly boards, filter by location +
 recency, and return structured postings.
+
+This module provides tools for searching and aggregating job postings
+from configured job boards:
+
+  - search_jobs()    — search configured job boards with location/type filters
+  - dedupe_postings() — collapse near-duplicate listings by URL or similarity
+
+Configuration lives in skills/job_hunt/job_hunt.json.
+
+Supported boards: Greenhouse, Lever, Ashby, RemoteOK, We Work Remotely, Wellfound.
 """
 
 from __future__ import annotations
@@ -12,6 +24,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from core.bioclock import local_now
 from core.toolkit.researcher import web_fetch, web_search
 
 _RELATIVE_RE = re.compile(
@@ -100,7 +113,7 @@ def _search_locations(config: dict[str, Any], location: str) -> list[str]:
 
 def _parse_relative_date(text: str) -> datetime | None:
     if _TODAY_RE.search(text):
-        return datetime.now()
+        return local_now()
     match = _RELATIVE_RE.search(text)
     if not match:
         return None
@@ -112,7 +125,7 @@ def _parse_relative_date(text: str) -> datetime | None:
         "week": timedelta(weeks=num),
         "month": timedelta(days=30 * num),
     }[unit]
-    return datetime.now() - delta
+    return local_now() - delta
 
 
 def _extract_field(pattern: re.Pattern, text: str) -> str:
@@ -177,7 +190,7 @@ def search_jobs(
                     blob += " " + page_text
 
                 posted = _parse_relative_date(blob)
-                if posted is not None and posted < datetime.now() - timedelta(days=max_age_days):
+                if posted is not None and posted < local_now() - timedelta(days=max_age_days):
                     continue
 
                 postings.append(JobPosting(
@@ -192,7 +205,9 @@ def search_jobs(
                     url=url,
                 ))
 
-    postings.sort(key=lambda posting: posting.posted_date or datetime.min, reverse=True)
+    from datetime import datetime as _dt
+    epoch_floor = _dt.min.replace(tzinfo=local_now().tzinfo)
+    postings.sort(key=lambda posting: posting.posted_date or epoch_floor, reverse=True)
     rows = dedupe_postings([posting.to_row() for posting in postings])
     return rows[:max_results]
 

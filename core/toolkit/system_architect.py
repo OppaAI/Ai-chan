@@ -1,4 +1,16 @@
-"""Read-only repo inspection tools for Aiko architecture work."""
+"""
+core/toolkit/system_architect.py
+
+Read-only repo inspection tools for Aiko architecture work.
+
+This module provides utilities for exploring and analyzing the codebase:
+
+  - repo_file_tree()    — generate a tree view of repository files
+  - repo_read_file()    — read file contents with safety checks
+  - repo_search_text()  — search for text patterns across repository files
+
+All operations are read-only and respect repository boundaries.
+"""
 
 from __future__ import annotations
 

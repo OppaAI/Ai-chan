@@ -1,10 +1,25 @@
-"""Planning, note, and workspace file tools."""
+"""
+core/toolkit/planner.py
+
+Planning, note, and workspace file tools.
+
+This module provides task planning and note-taking capabilities:
+
+  - make_plan()           — create a pragmatic step-by-step plan
+  - create_checklist()    — build a markdown checklist from items
+  - save_note()           — save a note, plan, draft, or task artifact
+  - read_workspace_file() — read a text file from workspace root
+  - summarize_task_state() — produce a compact task-state snapshot
+
+All file operations respect the per-user workspace isolation.
+"""
 
 from __future__ import annotations
 
 import textwrap
-from datetime import datetime, timezone
+from datetime import datetime
 
+from core.bioclock import local_now
 from core.toolkit.common import MAX_READ_CHARS, MAX_WRITE_CHARS, json_block, notes_dir, now_stamp, safe_path, slugify
 
 
@@ -46,7 +61,7 @@ def save_note(title: str, content: str, folder: str = "notes") -> str:
     """Save a note, plan, draft, or task artifact under WORKSPACE_ROOT."""
     base = notes_dir() if folder == "notes" else safe_path(folder)
     base.mkdir(parents=True, exist_ok=True)
-    filename = f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-{slugify(title)}.md"
+    filename = f"{local_now().strftime('%Y%m%d-%H%M%S')}-{slugify(title)}.md"
     path = base / filename
     body = content[:MAX_WRITE_CHARS]
     path.write_text(body, encoding="utf-8")
