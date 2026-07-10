@@ -92,7 +92,10 @@ def _terms_store_path(user_id: str | None) -> Path:
 def _load_terms_store(user_id: str | None) -> dict:
     path = _terms_store_path(user_id)
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            return {}
     return {}
 
 
