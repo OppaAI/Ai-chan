@@ -9,10 +9,6 @@ per-user keys derived from a server-secret. The key derivation uses HMAC-SHA256
 with a per-user context salt, so the same user always gets the same key without
 storing anything plaintext on disk.
 
-The legacy SQLCipher passphrase mode is supported for backward compatibility.
-Databases created with the old KDF will be transparently migrated to the raw
-hex key format on first access.
-
 Called by core/memorize.py (via connect_sqlite) and any other module that
 needs an encrypted SQLite connection for a specific user. The encryption
 setting is global (SQLITE_ENCRYPTION), but each user gets a unique key.
@@ -23,7 +19,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-import base64
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -59,16 +54,6 @@ def derive_user_sqlite_key(user_id: str) -> str:
     return digest.hex()
 
 
-def _derive_legacy_user_sqlite_key(user_id: str) -> str:
-    """Return the legacy SQLCipher passphrase used before raw hex keys."""
-    digest = hmac.new(_data_secret(), f"aiko-sqlite:{user_id}".encode("utf-8"), hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii")
-
-
-def _quote_sqlcipher_key(key: str) -> str:
-    return "'" + key.replace("'", "''") + "'"
-
-
 def _validate_sqlcipher_connection(conn: Any) -> None:
     # Force key validation immediately, so a wrong key fails at boot instead of
     # later after partial initialization.
@@ -89,24 +74,8 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
 
     raw_key = derive_user_sqlite_key(user_id)
     conn = sqlcipher.connect(str(path), check_same_thread=False)
-    try:
-        conn.execute(f"PRAGMA key = \"x'{raw_key}'\"")
-        conn.execute("PRAGMA cipher_page_size = 4096")
-        _validate_sqlcipher_connection(conn)
-        conn.row_factory = sqlcipher.Row
-        return conn
-    except Exception as raw_exc:
-        conn.close()
-        legacy_key = _derive_legacy_user_sqlite_key(user_id)
-        legacy_conn = sqlcipher.connect(str(path), check_same_thread=False)
-        try:
-            legacy_conn.execute(f"PRAGMA key = {_quote_sqlcipher_key(legacy_key)}")
-            legacy_conn.execute("PRAGMA cipher_page_size = 4096")
-            _validate_sqlcipher_connection(legacy_conn)
-            legacy_conn.execute(f"PRAGMA rekey = \"x'{raw_key}'\"")
-            _validate_sqlcipher_connection(legacy_conn)
-            legacy_conn.row_factory = sqlcipher.Row
-            return legacy_conn
-        except Exception:
-            legacy_conn.close()
-            raise raw_exc
+    conn.execute(f"PRAGMA key = \"x'{raw_key}'\"")
+    conn.execute("PRAGMA cipher_page_size = 4096")
+    _validate_sqlcipher_connection(conn)
+    conn.row_factory = sqlcipher.Row
+    return conn
