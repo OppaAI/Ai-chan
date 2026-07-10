@@ -749,7 +749,6 @@ def generate_and_post(
     date_tag = f"[{date_str}]"
     pinned_count = 0
     if memorize is not None:
-        _delete_existing_daily_pins(memorize, date)
         try:
             facts = _generate_daily_facts(prose, snippets, date)
         except Exception as e:
