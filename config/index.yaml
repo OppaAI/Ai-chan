@@ -4,9 +4,15 @@
 # Put new config YAML files in this list when adding them.
 configs:
 - identity.yaml  # assistant/user names
+- bioclock.yaml  # standard date / wall clock
 - think.yaml  # chat LLM and sampling
 - agentic.yaml  # agent loop and routing
+- wiki.yaml  # human-authored wiki/persona/config/docs RAG sources
+- knowledge.yaml  # learned knowledge vector RAG store
+- experience.yaml  # task experience vector RAG store
 - memorize.yaml  # memory, embeddings, decay, consolidation
+- skills.yaml  # skill registry / capabilities
+- learn.yaml  # quick/deep studying + idle learner tunables
 - speak.yaml  # TTS output
 - listen.yaml  # ASR input, VAD, speaker verification
 - web.yaml  # SearXNG/search

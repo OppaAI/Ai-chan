@@ -5,9 +5,13 @@ Skill document helpers and registry for local markdown skill files.
 
 ``persona/skills.md`` remains the short human-readable skill index loaded into
 Aiko's base persona. Full repeatable workflows live under ``skills/<id>/`` as
-``SKILL.md`` files and optional ``skill.yaml`` metadata. This module retrieves
-skill instructions for the agent loop; it deliberately does not run tools or own
-conversation state.
+``SKILL.md`` files and optional ``skill.yaml`` metadata.
+
+skill_context_for injects RAG-style excerpts, not whole SKILL.md files:
+search_skillsets ranks which skills are candidates, then skill_context_for
+chunks each matched doc and keeps only the query-relevant slice. The agent
+can still pull the complete workflow via the load_skillset tool when an
+excerpt isn't enough.
 """
 
 from __future__ import annotations
@@ -21,35 +25,25 @@ from typing import Protocol
 
 import numpy as np
 
+from core import reason
+
 DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
 
-# Same rationale as knowledge.py's _STOPWORDS: without filtering, common
-# words in the query can incidentally match inside an unrelated skill's
-# summary/triggers/tools text and pull the whole skill doc into context.
-_STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "do", "does", "did", "how", "what", "who", "when", "where", "why",
-    "we", "you", "i", "he", "she", "they", "this", "that", "these",
-    "those", "some", "any", "all", "each", "can", "could", "will",
-    "would", "should", "shall", "may", "might", "must", "to", "of", "in",
-    "on", "at", "for", "with", "and", "or", "not", "no", "yes", "make",
-    "made", "get", "got", "go", "going", "let", "lets", "want", "wants",
-    "just", "so", "up", "down", "out", "about", "if", "then", "than",
-})
+_STOPWORDS = reason.STOPWORDS
 
-# Minimum score before a skill counts as a genuine match — mirrors
-# knowledge.py's _MIN_RELEVANCE_SCORE so both retrieval paths behave the
-# same way with the same "one stray substring hit isn't enough" logic.
+# Minimum score before a skill counts as a genuine match at the whole-doc
+# level (keyword fallback path only).
 _MIN_RELEVANCE_SCORE = 3
 
-# ── semantic retrieval (Harrier embeddings) ─────────────────────────────────
-# Same pattern as knowledge.py: no owner/session object here, so callers pass
-# in an embedder explicitly. Falls back to keyword scoring above when no
-# embedder is given or embedding fails for any reason.
-
+# ── whole-doc semantic ranking (which skills are candidates at all) ────────
 _SKILL_INSTRUCT = "Which predefined skill workflow is most relevant to this task?"
 _SKILL_SEMANTIC_THRESHOLD = float(os.getenv("SKILL_SEMANTIC_THRESHOLD", "0.35"))
+
+# ── chunk-level RAG selection (which PART of a matched SKILL.md gets injected) ─
+_SKILL_CHUNK_CHARS = int(os.getenv("SKILL_CHUNK_CHARS", "600"))
+_SKILL_CHUNKS_PER_MATCH = int(os.getenv("SKILL_CHUNKS_PER_MATCH", "4"))
+_SKILL_CHUNK_MIN_SCORE = float(os.getenv("SKILL_CHUNK_MIN_SCORE", "0.30"))
 
 
 class Embedder(Protocol):
@@ -61,16 +55,9 @@ _skill_embed_cache: dict[tuple[str, float], np.ndarray] = {}
 _skill_embed_cache_lock = threading.RLock()
 
 
-def _normalize(vector: np.ndarray) -> np.ndarray:
-    arr = np.asarray(vector, dtype=np.float32)
-    norm = float(np.linalg.norm(arr))
-    return arr / norm if norm > 1e-12 else arr
-
-
 def _embed_source_text(doc: "SkillDoc") -> str:
-    """Condensed representation to embed — name, summary, and triggers
-    carry the actual topical signal; the full SKILL.md workflow body does
-    not need to be embedded."""
+    """Condensed representation to embed — name, summary, triggers carry
+    the topical signal; the full SKILL.md body is not embedded here."""
     return f"{doc.name}\n{doc.summary}\n{' '.join(doc.triggers)}\n{' '.join(doc.tools)}"
 
 
@@ -84,7 +71,7 @@ def _get_skill_embedding(doc: "SkillDoc", embedder: Embedder) -> np.ndarray:
         cached = _skill_embed_cache.get(cache_key)
         if cached is not None:
             return cached
-    vector = _normalize(np.asarray(embedder.embed_query(_embed_source_text(doc)), dtype=np.float32))
+    vector = reason.normalize_vec(np.asarray(embedder.embed_query(_embed_source_text(doc)), dtype=np.float32))
     with _skill_embed_cache_lock:
         _skill_embed_cache[cache_key] = vector
     return vector
@@ -93,19 +80,16 @@ def _get_skill_embedding(doc: "SkillDoc", embedder: Embedder) -> np.ndarray:
 def _semantic_rank_skills(
     query: str, docs: list["SkillDoc"], embedder: Embedder, threshold: float,
 ) -> list["SkillDoc"] | None:
-    """Return skills ranked by cosine similarity, or None if embedding
-    fails (caller falls back to keyword scoring)."""
+    """Rank skills by cosine similarity in one batched numpy matmul.
+    Returns None if embedding fails (caller falls back to keyword scoring)."""
     if not docs:
         return []
     try:
-        query_vector = _normalize(np.asarray(embedder.embed_query(query, instruct=_SKILL_INSTRUCT), dtype=np.float32))
-        scored: list[tuple[float, "SkillDoc"]] = []
-        for doc in docs:
-            score = float(np.dot(query_vector, _get_skill_embedding(doc, embedder)))
-            if score >= threshold:
-                scored.append((score, doc))
-        scored.sort(key=lambda pair: -pair[0])
-        return [doc for _score, doc in scored]
+        query_vec = np.asarray(embedder.embed_query(query, instruct=_SKILL_INSTRUCT), dtype=np.float32)
+        doc_vecs = np.stack([_get_skill_embedding(doc, embedder) for doc in docs])
+        scores = reason.batch_cosine_scores(query_vec, doc_vecs)
+        order = np.argsort(-scores)
+        return [docs[i] for i in order if scores[i] >= threshold]
     except Exception:
         return None
 
@@ -282,12 +266,9 @@ def search_skillsets(query: str, limit: int = 3, embedder: Embedder | None = Non
         ranked = _semantic_rank_skills(query, docs, embedder, _SKILL_SEMANTIC_THRESHOLD)
         if ranked is not None:
             return ranked[:limit]
-        # embedding failed — fall through to keyword scoring
 
     terms = [t.casefold() for t in query.split() if t.strip() and t.casefold() not in _STOPWORDS]
     if not terms:
-        # Query was entirely stopwords/junk — not a real topical query, so
-        # match nothing rather than returning arbitrary skills.
         return []
 
     scored: list[tuple[int, SkillDoc]] = []
@@ -304,9 +285,6 @@ def search_skillsets(query: str, limit: int = 3, embedder: Embedder | None = Non
             if term in name_cf:
                 score += 4
             if term in triggers_cf:
-                # triggers exist specifically to catch how a user would
-                # phrase this — a single trigger hit should be enough to
-                # clear the relevance floor on its own.
                 score += 4
             if term in summary_cf:
                 score += 2
@@ -324,7 +302,8 @@ def search_skillsets_json(query: str, limit: int = 3) -> str:
 
 
 def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:
-    """Load one full skill workflow document by id."""
+    """Load one full skill workflow document by id. Used for explicit
+    on-demand full loads — not injected automatically into every turn."""
     cleaned = skill_id.strip().replace("/", "").replace("\\", "")
     for doc in discover_skill_docs():
         if doc.skill_id == cleaned or doc.path.parent.name == cleaned:
@@ -339,16 +318,42 @@ def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:
 def skill_context_for(
     query: str, limit: int = 2, max_chars: int = 6000, embedder: Embedder | None = None,
 ) -> str:
-    """Build compact context for the most relevant skill workflows.
-
-    `max_chars` is a *total* budget shared across all loaded skills (split
-    evenly per match), not a per-skill cap — previously each matched skill
-    got its own fixed 6000-char allowance regardless of `limit`, so raising
-    `limit` silently multiplied the total injected size.
+    """Build compact context from only the query-relevant excerpts of the
+    most relevant skill workflows — not whole SKILL.md files. `max_chars`
+    is a total budget shared across all matched skills, split per-match by
+    remaining budget as it's consumed.
     """
     matches = search_skillsets(query, limit=limit, embedder=embedder)
     if not matches:
         return "<skill_context>\nNo matching predefined skills found. Use generic task tools.\n</skill_context>"
-    per_skill_chars = max(500, max_chars // max(1, len(matches)))
-    loaded = [load_skillset(doc.skill_id, max_chars=per_skill_chars) for doc in matches]
-    return "<skill_context>\n" + "\n\n".join(loaded) + "\n</skill_context>"
+
+    blocks: list[str] = []
+    remaining = max_chars
+    for doc in matches:
+        if remaining <= 0:
+            break
+        try:
+            full_text = doc.path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        pieces = reason.chunk_text(full_text, _SKILL_CHUNK_CHARS)
+        if not pieces:
+            continue
+        relevant = reason.select_relevant_chunks(
+            query, pieces, embedder, top_k=_SKILL_CHUNKS_PER_MATCH,
+            min_score=_SKILL_CHUNK_MIN_SCORE, instruct=_SKILL_INSTRUCT,
+        )
+        excerpt = "\n...\n".join(c for _score, c in relevant) if relevant else pieces[0]
+        excerpt = excerpt[:remaining]
+        if not excerpt:
+            continue
+        blocks.append(
+            f'<skill id="{doc.skill_id}" name="{doc.name}">\n{excerpt}\n\n'
+            f'[Excerpt only — call load_skillset("{doc.skill_id}") for the full workflow if this is insufficient.]\n'
+            f'</skill>'
+        )
+        remaining -= len(excerpt)
+
+    if not blocks:
+        return "<skill_context>\nNo matching predefined skills found. Use generic task tools.\n</skill_context>"
+    return "<skill_context>\n" + "\n\n".join(blocks) + "\n</skill_context>"

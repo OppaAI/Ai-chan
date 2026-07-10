@@ -2,9 +2,10 @@
 #
 # Settings for core/schedule.py.
 # This config stores scheduler paths and system job times; user-created jobs remain in per-user schedule.json.
+# Timezone now lives in config/bioclock.yaml (core/bioclock.py) — the single
+# source of truth for "now", used here and everywhere else Aiko needs a clock.
 
-# -- Paths and timezone --
-TIMEZONE: "America/Vancouver"  # IANA timezone name for reminders/jobs; examples: America/Vancouver, UTC, Asia/Tokyo.
+# -- Paths --
 WORKSPACE_ROOT: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/workspace.
 SCHEDULE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/workspace/tasks/schedule.json.
 

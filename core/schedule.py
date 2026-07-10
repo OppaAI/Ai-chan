@@ -5,11 +5,15 @@ Persistent scheduled jobs, reminders, and wake-up alarms for Aiko.
 
 A scheduled job is a small local record with:
   - time_of_day: local wall-clock time in HH:MM format
-  - frequency: once, hourly, daily, weekdays, weekly, biweekly, monthly, or custom_weekdays
+  - frequency: once, interval, hourly, daily, weekdays, weekly, biweekly, monthly, or custom_weekdays
   - days_of_week: optional weekday names for custom_weekdays/weekly jobs
   - relative_days: optional integer day offset for phrases like tomorrow or the day after tomorrow
   - task: what Aiko should do or say when the job fires
   - action: announce or agentic
+  - handler: optional name of a pre-registered system handler (see
+    register_system_handler) to call directly instead of going through
+    on_due/chat — used for window-style jobs like the deep_studying
+    start/stop pair (see ensure_deep_study_window_jobs).
 
 The scheduler is deliberately local-first: jobs are stored in JSON under
 WORKSPACE_ROOT and a single daemon thread sleeps until the next due event.
@@ -22,15 +26,22 @@ by the user:
   - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
   - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
 
-Other system-style behaviors (e.g. weekly_social) live entirely in
-schedule.json as ordinary jobs, but instead of routing through on_due/chat,
-they name a "handler" — a Python callable registered once at startup via
-register_system_handler(). schedule.json can only ever select a handler
-from that pre-registered allowlist; it can never name or execute an
-arbitrary function. This lets timing/enable/disable be fully data-driven
-(edit schedule.json, no code change, no restart needed if the caller
-notifies the scheduler) while the actual behavior each handler runs is
-still something a human explicitly wired up in code.
+Other system-style behaviors (e.g. weekly_social, deep_study_start/stop)
+live entirely in schedule.json as ordinary jobs, but instead of routing
+through on_due/chat, they name a "handler" — a Python callable registered
+once at startup via register_system_handler(). schedule.json can only ever
+select a handler from that pre-registered allowlist; it can never name or
+execute an arbitrary function. This lets timing/enable/disable be fully
+data-driven (edit schedule.json, no code change, no restart needed if the
+caller notifies the scheduler) while the actual behavior each handler runs
+is still something a human explicitly wired up in code.
+
+Timezone resolution no longer lives here — every "now"/timezone lookup in
+this file goes through core.bioclock, the app-wide single source of truth
+(config/bioclock.yaml). A job may still carry its own "timezone" field
+(e.g. a reminder scoped to a different zone than the app default); that
+value is simply passed through to bioclock as an override rather than
+resolved independently.
 """
 
 from __future__ import annotations
@@ -44,8 +55,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
+from core import bioclock
 from core.log import get_logger
 from core.userspace import current_user_id, user_state_path, user_workspace_root
 
@@ -68,9 +78,7 @@ def schedule_path() -> Path:
     override = os.getenv("SCHEDULE_PATH")
     if override:
         return Path(override).expanduser().resolve()
-    return (user_state_root() / "tasks" / "schedule.json").resolve()
-
-DEFAULT_TIMEZONE = os.getenv("TIMEZONE", "UTC")
+    return (user_workspace_root() / "tasks" / "schedule.json").resolve()
 
 # System job timing — env overridable, not user-modifiable via schedule.json
 DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
@@ -78,7 +86,7 @@ DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
 MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
 MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
 
-FREQUENCIES = {"once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
+FREQUENCIES = {"once", "interval", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 RELATIVE_DAY_ALIASES = {
     "today": 0,
     "tonight": 0,
@@ -99,20 +107,6 @@ _WEEKDAYS = {
     "saturday": 5, "sat": 5,
     "sunday": 6, "sun": 6,
 }
-
-
-def _timezone(name: str | None = None) -> ZoneInfo:
-    """Return a ZoneInfo object, falling back to UTC when the name is invalid."""
-    try:
-        return ZoneInfo(name or DEFAULT_TIMEZONE)
-    except ZoneInfoNotFoundError:
-        log.warning("Unknown timezone %s; falling back to UTC", name or DEFAULT_TIMEZONE)
-        return ZoneInfo("UTC")
-
-
-def _now(tz_name: str | None = None) -> datetime:
-    """Return the current timezone-aware datetime for schedule calculations."""
-    return datetime.now(_timezone(tz_name))
 
 
 def _parse_time_of_day(time_of_day: str) -> tuple[int, int]:
@@ -179,7 +173,7 @@ def _next_for_weekdays(time_of_day: str, weekdays: list[int], tz_name: str | Non
     """Return the next datetime matching one of the requested weekdays."""
     if not weekdays:
         raise ValueError("days_of_week is required for this frequency")
-    now = _now(tz_name)
+    now = bioclock.local_now(tz_name)
     base = _candidate_at(now, time_of_day)
     for offset in range(0, 14):
         candidate = base + timedelta(days=offset)
@@ -192,7 +186,7 @@ def _next_monthly(time_of_day: str, tz_name: str | None = None, anchor_day: int 
     """Return the next monthly occurrence on the anchor day, clamped to month length."""
     import calendar
 
-    now = _now(tz_name)
+    now = bioclock.local_now(tz_name)
     anchor = anchor_day or now.day
     hour, minute = _parse_time_of_day(time_of_day)
     year, month = now.year, now.month
@@ -233,16 +227,23 @@ def calculate_next_due(
     after: datetime | None = None,
     anchor_day: int | None = None,
     relative_days: int | str | None = None,
+    interval_seconds: int | str | None = None,
 ) -> datetime:
     """Calculate the next due datetime for a scheduled job."""
     frequency = (frequency or "daily").lower().strip()
     if frequency not in FREQUENCIES:
         raise ValueError(f"frequency must be one of: {', '.join(sorted(FREQUENCIES))}")
 
-    tz_name = timezone or DEFAULT_TIMEZONE
-    now = after.astimezone(_timezone(tz_name)) if after else _now(tz_name)
+    tz_name = bioclock.timezone_name(timezone)
+    now = after.astimezone(bioclock.get_timezone(tz_name)) if after else bioclock.local_now(tz_name)
     relative_offset = _normalize_relative_days(relative_days)
     candidate = _candidate_at(now, time_of_day, relative_offset)
+
+    if frequency == "interval":
+        seconds = int(interval_seconds or 60)
+        if seconds < 60:
+            raise ValueError("interval_seconds must be at least 60")
+        return now + timedelta(seconds=seconds)
 
     if frequency in {"once", "daily"}:
         return candidate if candidate > now else candidate + timedelta(days=1)
@@ -302,12 +303,22 @@ def schedule_job_record(
     days_of_week: list[str] | str | None = None,
     action: str = "agentic",
     relative_days: int | str | None = None,
+    handler: str | None = None,
+    interval_seconds: int | str | None = None,
 ) -> dict:
-    """Create and persist a scheduled job record, returning the stored dict."""
+    """Create and persist a scheduled job record, returning the stored dict.
+
+    `handler`, if given, must name a callable registered via
+    register_system_handler() before this job ever fires. When set, the
+    scheduler calls that handler directly instead of going through
+    on_due/chat with `task` (see _fire_due_user_jobs) — `title`/`task` are
+    still stored for readability/logging but are otherwise unused for
+    handler-based jobs.
+    """
     action = (action or "agentic").lower().strip()
     if action not in {"announce", "agentic"}:
         raise ValueError("action must be 'announce' or 'agentic'")
-    tz_name = timezone or DEFAULT_TIMEZONE
+    tz_name = bioclock.timezone_name(timezone)
     normalized_days = _normalize_weekdays(days_of_week)
     normalized_relative_days = _normalize_relative_days(relative_days)
     due = calculate_next_due(
@@ -316,6 +327,7 @@ def schedule_job_record(
         tz_name,
         normalized_days,
         relative_days=normalized_relative_days,
+        interval_seconds=interval_seconds,
     )
     job = {
         "id": uuid.uuid4().hex[:12],
@@ -325,13 +337,15 @@ def schedule_job_record(
         "frequency": (frequency or "daily").lower().strip(),
         "days_of_week": normalized_days,
         "relative_days": normalized_relative_days,
+        "interval_seconds": int(interval_seconds) if interval_seconds not in (None, "") else None,
         "timezone": tz_name,
         "next_due": due.isoformat(),
-        "created_at": _now(tz_name).isoformat(),
+        "created_at": bioclock.local_now(tz_name).isoformat(),
         "last_ran_at": None,
         "enabled": True,
         "kind": "scheduled_job",
         "action": action,
+        "handler": handler,
     }
     jobs = _read_all()
     jobs.append(job)
@@ -377,6 +391,79 @@ def cancel_reminder_record(reminder_id: str) -> bool:
     return cancel_schedule_record(reminder_id)
 
 
+# ── deep-study window job seeding ─────────────────────────────────────────────
+# These four jobs bound the wall-clock window in which the deep_studying
+# handlers (registered in core/learn.py — see register_deep_study_handlers)
+# are allowed to run: weekdays 05:00-18:00, weekends 05:00-10:00. They are
+# ordinary handler-based schedule.json jobs, not a new job type — the
+# "window" behavior comes entirely from pairing a *_start job with a
+# *_stop job on matching days, not from any scheduler-level concept of
+# windows.
+
+DEEP_STUDY_WINDOW_JOB_TITLES: dict[str, tuple[str, list[str], str]] = {
+    "deep_study_weekday_start": ("05:00", ["mon", "tue", "wed", "thu", "fri"], "deep_study_start"),
+    "deep_study_weekday_stop":  ("18:00", ["mon", "tue", "wed", "thu", "fri"], "deep_study_stop"),
+    "deep_study_weekend_start": ("05:00", ["sat", "sun"], "deep_study_start"),
+    "deep_study_weekend_stop":  ("10:00", ["sat", "sun"], "deep_study_stop"),
+}
+
+
+WORKSPACE_KNOWLEDGE_JOB_TITLE = "workspace_knowledge_scan"
+WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS = int(os.getenv("WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS", "60"))
+
+
+def ensure_workspace_knowledge_job(timezone: str | None = None) -> None:
+    """Idempotently seed the scheduled KB folder scan job.
+
+    The scheduler owns this periodic check so document-drop monitoring lives
+    alongside other schedule.json-driven system behaviors instead of running
+    a separate ticker thread.
+    """
+    existing_titles = {job.get("title") for job in _read_all()}
+    if WORKSPACE_KNOWLEDGE_JOB_TITLE in existing_titles:
+        return
+    schedule_job_record(
+        title=WORKSPACE_KNOWLEDGE_JOB_TITLE,
+        task="Scan workspace/knowledge for new RAG documents",
+        time_of_day="00:00",
+        frequency="interval",
+        timezone=timezone,
+        action="agentic",
+        handler="workspace_knowledge_scan",
+        interval_seconds=max(60, WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS),
+    )
+    log.info("Seeded workspace knowledge scan job every %ss", max(60, WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS))
+
+
+def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
+    """Idempotently seed the four recurring jobs that bound Aiko's
+    scheduled deep_studying window (weekdays 05:00-18:00, weekends
+    05:00-10:00). Safe to call on every app startup — existing jobs (by
+    title) are left alone rather than duplicated, so hand-edits to
+    schedule.json (e.g. disabling one window) survive restarts.
+
+    The handlers named here ("deep_study_start" / "deep_study_stop") must
+    be registered via register_system_handler() before these jobs can
+    actually fire anything — see core.learn.register_deep_study_handlers,
+    which does both the handler registration and calls this function.
+    """
+    existing_titles = {job.get("title") for job in _read_all()}
+    for title, (time_of_day, days, handler) in DEEP_STUDY_WINDOW_JOB_TITLES.items():
+        if title in existing_titles:
+            continue
+        schedule_job_record(
+            title=title,
+            task=title,
+            time_of_day=time_of_day,
+            frequency="custom_weekdays",
+            timezone=timezone,
+            days_of_week=days,
+            action="agentic",
+            handler=handler,
+        )
+        log.info("Seeded deep-study window job %r (%s, %s)", title, time_of_day, days)
+
+
 # ── scheduler instance registry ───────────────────────────────────────────────
 
 _scheduler_instance: ScheduleRunner | None = None
@@ -408,7 +495,11 @@ def register_system_handler(name: str, fn: Callable[[Any], Any]) -> None:
 
     `fn` is called as fn(memorize) when a job with matching "handler" fires.
     Call this once at startup for each system-style behavior you want
-    schedule.json to be able to schedule (e.g. weekly_social).
+    schedule.json to be able to schedule (e.g. weekly_social,
+    deep_study_start/deep_study_stop). If `fn` needs extra context (an LLM
+    client/model, say), bind it in with functools.partial before
+    registering — the scheduler always calls it with exactly one
+    positional arg, memorize.
     """
     _SYSTEM_HANDLERS[name] = fn
 
@@ -428,8 +519,7 @@ DueReminder = DueJob
 
 def _next_daily_reflect_and_dream() -> datetime:
     """Next wall-clock occurrence of the daily reflect+dream window."""
-    tz  = _timezone()
-    now = datetime.now(tz)
+    now = bioclock.local_now()
     candidate = now.replace(
         hour=DAILY_JOB_HOUR,
         minute=DAILY_JOB_MINUTE,
@@ -443,8 +533,7 @@ def _next_daily_reflect_and_dream() -> datetime:
 
 def _next_monthly_consolidate() -> datetime:
     """Next 1st-of-month occurrence of the monthly consolidation window."""
-    tz  = _timezone()
-    now = datetime.now(tz)
+    now = bioclock.local_now()
     # advance to next month's 1st
     if now.month == 12:
         first = now.replace(year=now.year + 1, month=1, day=1,
@@ -507,12 +596,11 @@ class ScheduleRunner:
         Returns True if yesterday's reflection was missed.
         Missed = next_daily is more than 20 hours away AND no post exists for yesterday.
         """
-        tz  = _timezone()
-        now = datetime.now(tz)
+        now = bioclock.local_now()
         hours_until_next = (self._next_daily - now).total_seconds() / 3600
         if hours_until_next < 20:
             return False  # job fired recently enough, no catchup needed
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+        yesterday = (bioclock.utc_now() - timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0,
         )
         exists = _reflection_post_exists(yesterday)
@@ -553,7 +641,7 @@ class ScheduleRunner:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            now = datetime.now(_timezone())
+            now = bioclock.local_now()
 
             # ── fire overdue system jobs ──────────────────────────────────────
             system_due = sorted(
@@ -583,10 +671,10 @@ class ScheduleRunner:
             candidates = [self._next_daily, self._next_monthly, *user_jobs]
             next_target = min(candidates)
 
-            delta = (next_target - datetime.now(_timezone())).total_seconds()
+            delta = (next_target - bioclock.local_now()).total_seconds()
             if delta > 0:
                 log.debug("Scheduler sleeping %.0fs until %s", delta, next_target.isoformat())
-                self._wakeup.wait(timeout=delta)
+                bioclock.wait_seconds(self._wakeup, delta)
                 self._wakeup.clear()
 
     # ── system job runners ────────────────────────────────────────────────────
@@ -606,8 +694,7 @@ class ScheduleRunner:
         try:
             log.info("daily_reflect_and_dream: starting.")
 
-            tz = _timezone()
-            now_local = datetime.now(tz)
+            now_local = bioclock.local_now()
             yesterday_local = (now_local - timedelta(days=1)).replace(
                 hour=0, minute=0, second=0, microsecond=0,
             )
@@ -648,7 +735,7 @@ class ScheduleRunner:
 
         try:
             log.info("monthly_consolidate: starting.")
-            result = self._consolidate_fn(self._memorize, now=datetime.now(_timezone()), user_id=self._user_id)
+            result = self._consolidate_fn(self._memorize, now=bioclock.local_now(), user_id=self._user_id)
             log.info("monthly_consolidate: done — %s", result)
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)
@@ -669,22 +756,23 @@ class ScheduleRunner:
         for job in jobs:
             if not job.get("enabled", True):
                 continue
-            tz_name = job.get("timezone") or DEFAULT_TIMEZONE
+            tz_name = bioclock.timezone_name(job.get("timezone"))
             try:
                 due = datetime.fromisoformat(job["next_due"])
                 if due.tzinfo is None:
-                    due = due.replace(tzinfo=_timezone(tz_name))
+                    due = due.replace(tzinfo=bioclock.get_timezone(tz_name))
             except Exception:
                 due = calculate_next_due(
                     job.get("time_of_day", "06:00"),
                     job.get("frequency", "daily"),
                     tz_name,
                     job.get("days_of_week"),
+                    interval_seconds=job.get("interval_seconds"),
                 )
                 job["next_due"] = due.isoformat()
                 changed = True
 
-            if due <= _now(tz_name):
+            if due <= bioclock.local_now(tz_name):
                 handler_name = job.get("handler") or (
                     "weekly_social" if job.get("kind") == "system_weekly_social" else None
                 )
@@ -702,7 +790,7 @@ class ScheduleRunner:
                         task=job.get("task", "Scheduled job"),
                         action=job.get("action", "agentic"),
                     ))
-                job["last_ran_at"] = _now(tz_name).isoformat()
+                job["last_ran_at"] = bioclock.local_now(tz_name).isoformat()
                 if job.get("frequency") == "once":
                     job["enabled"] = False
                 else:
@@ -711,7 +799,8 @@ class ScheduleRunner:
                         job.get("frequency", "daily"),
                         tz_name,
                         job.get("days_of_week"),
-                        after=_now(tz_name),
+                        after=bioclock.local_now(tz_name),
+                        interval_seconds=job.get("interval_seconds"),
                     ).isoformat()
                 changed = True
 

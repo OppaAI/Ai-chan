@@ -7,11 +7,19 @@
 MAX_AGENT_ITER: "8"  # Maximum tool/planning iterations per task; raise for complex tasks, lower for safety.
 ROUTER_MODEL: "smollm"  # Small model for LLM routing fallback; only used when ROUTE_MODE needs LLM routing.
 AGENT_MAX_TOKENS: "512"  # Max model output tokens per agent step.
+LLM_CTX_SIZE: "12288"  # Local llama-server context ceiling; used directly by agentic.py's context-budget guard now. Keep in sync with the actual llama-server --ctx-size.
+AGENT_CONTEXT_BUDGET_RATIO: "0.65"  # Fraction of LLM_CTX_SIZE the agent prompt (persona+memory+policy+wiki+skill+learned knowledge+experience+tool schemas) is allowed to occupy before blocks start getting dropped.
 AGENT_NOTE_MAX_CHARS: "1500"  # Max characters from notes/files injected into an agent step.
 AGENT_TOOL_RESULT_MAX_CHARS: "3000"  # Max characters retained from one tool result.
 AGENT_MEMORY_DRAIN_TIMEOUT: "0.25"  # Seconds to wait for pending memory writes before an agent task starts.
 MEMORY_AGENT_DRAIN_TIMEOUT: "0.25"  # Legacy alias for AGENT_MEMORY_DRAIN_TIMEOUT; keep same value.
 AGENT_MEMORY_RECALL_LIMIT: "2"  # Number of memories injected into agent context; keep low to save tokens.
+
+# -- Agentic policy RAG (skills.md/schedule.md excerpt selection) --
+AGENTIC_POLICY_CHUNK_CHARS: "600"  # Chunk size (chars) skills.md/schedule.md are split into before relevance scoring.
+AGENTIC_POLICY_CHUNKS_PER_FILE: "4"  # Max relevant chunks kept per policy file.
+AGENTIC_POLICY_CHUNK_MIN_SCORE: "0.25"  # Minimum relevance score to keep a policy chunk; below this the file falls back to its first chunk.
+AGENTIC_POLICY_MAX_CHARS: "3000"  # Hard cap on total policy excerpt chars injected into the agent system prompt, across both files.
 
 # -- Verification and retries --
 AGENT_VERIFY_FINAL: "1"  # Final-answer verifier toggle; options: 1/0, true/false, yes/no, on/off.
@@ -20,10 +28,13 @@ AGENT_MAX_FINAL_REPAIRS: "1"  # Max attempts to repair a final answer that fails
 AGENT_VERIFY_MIN_SCORE: "0.70"  # Minimum verifier score when LLM verification is enabled; range 0.0-1.0.
 AGENT_TOOL_RETRY_BACKOFF: "0.2"  # Seconds to wait before retrying a failed tool call.
 
-# -- agent tool retry policy --
-AGENT_WEB_TOOL_ATTEMPTS: "2"  # Retry attempts for web_search/deep_search/web_fetch on transient failure.
+# -- Agent tool retry policy --
+AGENT_WEB_TOOL_ATTEMPTS: "2"  # Retry attempts for task-mode deep_search on transient search failure. web_search/web_fetch are chat-only and not agentic tools.
 AGENT_LOCAL_TOOL_ATTEMPTS: "1"  # Retry attempts for save_note/schedule_job/schedule_reminder.
 AGENT_DEEP_RESEARCH_ATTEMPTS: "1"  # Retry attempts for deep_research specifically. Keep at 1 unless you can afford doubling a multi-round research call's cost (search+fetch×rounds + decision/synthesis LLM calls) on a retry.
+
+# -- Research call budget --
+AGENT_RESEARCH_MAX_CALLS: "1"  # Max combined deep_search+deep_research calls per agentic workflow. They share one budget so task mode does not repeatedly spend web/research calls in one workflow.
 
 # -- Workspace tool limits --
 MAX_WRITE_CHARS: "20000"  # Max characters allowed when agent saves a note/draft.

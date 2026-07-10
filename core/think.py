@@ -4,13 +4,17 @@ core/think.py
 Aiko's chat facade.
   - Routes between single-shot chat and the agentic task loop in core.agentic.
   - Streams llama.cpp response to console + TTS simultaneously.
-  - Queues long-term memory writes.
-  - Owns scheduled-job callbacks and idle learner handoff.
+  - Queues long-term memory writes (delegated to core.memorize's async write queue).
+  - Owns scheduled-job callbacks and idle learner handoff (delegated to core.learn).
+  - Owns the proactive idle check-in state machine (config/proactive.yaml),
+    which is also the "is Aiko resting" signal core.learn's idle_learner_loop
+    waits on before starting autonomous quick-study top-ups.
 """
 
 import logging
 import os
 import json
+import random
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -19,25 +23,27 @@ logging.getLogger("torch").setLevel(logging.ERROR)
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 from datetime import datetime
+from datetime import time as dt_time
 from openai import OpenAI
 from pathlib import Path
-import queue
 import re
 import threading
 import time
 import unicodedata
 
-import numpy as np
-
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import web_search_context
-from core.agentic  import run_agentic_chat
+from core.agentic  import run_agentic_chat, resolve_search_query, llm_resolve_search_query
+from core.wiki import wiki_knowledge_context_for
 from core.knowledge import knowledge_context_for
 from core.log      import get_logger
 from core.social import run_scheduled_weekly_social
-from core.schedule import DueJob, ScheduleRunner, register_system_handler
+from core.schedule import DueJob, register_system_handler
 from core.userspace import current_user_id, user_profile_path
+from core import bioclock
+from core import reason
+from core import learn
 
 log = get_logger(__name__)
 register_system_handler("weekly_social", run_scheduled_weekly_social)
@@ -61,9 +67,6 @@ CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
 _AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
 _REASONING_SCALE = int(os.getenv("REASONING_SCALE", 3))
-_IDLE_LEARN_SECONDS = int(os.getenv("IDLE_LEARN_SECONDS", 1800))
-_MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
-_MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 # Route task-vs-chat turns semantically by default using the same embedding
 # model as memory/RAG. Set ROUTE_MODE=llm to let the local LLM classify
 # instead, or ROUTE_MODE=chat to disable autonomous routing.
@@ -108,8 +111,7 @@ def _load_persona() -> str:
     user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
 
     user_id = current_user_id()
-    today   = datetime.now().strftime("%B %d, %Y")
-    return persona.replace("USER_ID_HERE", user_id).replace("TODAY_HERE", today) + user_block
+    return persona.replace("USER_ID_HERE", user_id) + user_block
 
 
 def _should_use_local_knowledge(user_input: str) -> bool:
@@ -165,6 +167,133 @@ def _extract_search_results_block(system_prompt: str) -> str:
     match = re.search(r"<search_results\b[^>]*>.*?</search_results>", system_prompt or "", re.DOTALL)
     return match.group(0) if match else ""
 
+
+# ── proactive check-in config (config/proactive.yaml, via os.environ) ─────────
+# core.config.load_config() has already populated these into the process
+# environment by the time this module is imported (see core/wakeup.py /
+# core/learn.py — whichever entrypoint runs first calls it). We just read
+# them here the same way every other module's config block does.
+#
+# Timezone is no longer configured here — every "now"/timezone lookup in
+# this module goes through core.bioclock, the app-wide single source of
+# truth (config/bioclock.yaml).
+
+def _bool_env(name: str, default: str) -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_str_list(raw: str) -> list[str]:
+    """Parse a YAML-list-turned-env-var back into a list of strings.
+
+    core.config may have serialized a YAML list either as a JSON array
+    string (e.g. '["00:00-06:00"]') or, if the YAML loader flattened it
+    some other way, as a comma/newline separated string. Handle both so
+    this doesn't silently break depending on how config.py encodes lists.
+    """
+    if not raw or not raw.strip():
+        return []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return [p.strip() for p in re.split(r"[,\n]", raw) if p.strip()]
+
+
+PROACTIVE_ENABLED = _bool_env("PROACTIVE_ENABLED", "1")
+PROACTIVE_FIRST_IDLE_MIN_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MIN_SECONDS", 300))
+PROACTIVE_FIRST_IDLE_MAX_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MAX_SECONDS", 900))
+PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", 1800))
+PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", 2))
+PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", 3600))
+PROACTIVE_USE_LLM = _bool_env("PROACTIVE_USE_LLM", "1")
+PROACTIVE_SPEAK = _bool_env("PROACTIVE_SPEAK", "1")
+PROACTIVE_REST_MESSAGE = os.getenv(
+    "PROACTIVE_REST_MESSAGE",
+    "You've been away for a while so I'll go quiet and rest. Ping me when you need me.",
+)
+PROACTIVE_REST_PROMPT_HINT = os.getenv(
+    "PROACTIVE_REST_PROMPT_HINT",
+    "{user} has not spoken to you for about an hour. Say one short warm line that "
+    "you are going quiet and resting until they return.",
+)
+PROACTIVE_QUIET_WINDOWS = _parse_str_list(os.getenv("PROACTIVE_QUIET_WINDOWS", ""))
+PROACTIVE_FOCUS_WINDOWS = _parse_str_list(os.getenv("PROACTIVE_FOCUS_WINDOWS", ""))
+PROACTIVE_PROMPT_HINTS = _parse_str_list(os.getenv("PROACTIVE_PROMPT_HINTS", ""))
+PROACTIVE_MESSAGES = _parse_str_list(os.getenv("PROACTIVE_MESSAGES", ""))
+# How often the background loop wakes to re-check idle/window conditions.
+# Not itself a proactive.yaml key — deliberately short relative to
+# PROACTIVE_FIRST_IDLE_MIN_SECONDS so a check-in fires close to its target
+# time rather than up to a whole cycle late.
+PROACTIVE_CHECK_INTERVAL_SECONDS = float(os.getenv("PROACTIVE_CHECK_INTERVAL_SECONDS", 60))
+
+_WEEKDAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+_TIME_RANGE_RE = re.compile(r"^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$")
+_DAY_RANGE_RE = re.compile(r"^([a-z]{3})-([a-z]{3})$")
+
+
+def _parse_time_range(range_str: str) -> tuple[dt_time, dt_time] | None:
+    match = _TIME_RANGE_RE.match(range_str.strip())
+    if not match:
+        return None
+    h1, m1, h2, m2 = (int(g) for g in match.groups())
+    try:
+        return dt_time(h1, m1), dt_time(h2, m2)
+    except ValueError:
+        return None
+
+
+def _time_in_range(now_t: dt_time, start_t: dt_time, end_t: dt_time) -> bool:
+    if start_t <= end_t:
+        return start_t <= now_t <= end_t
+    return now_t >= start_t or now_t <= end_t  # window wraps past midnight
+
+
+def _window_matches(window_str: str, now_dt: datetime) -> bool:
+    """Match one proactive.yaml window entry against the current time.
+
+    Two shapes are supported:
+      "00:00-06:00"             — daily, any weekday
+      "mon-fri 06:00-19:00"     — restricted to a weekday range
+    A single weekday name ("sat 06:00-11:00") is also accepted.
+    """
+    window_str = window_str.strip()
+    if not window_str:
+        return False
+    parts = window_str.split()
+    if len(parts) == 2:
+        day_part, time_part = parts
+    else:
+        day_part, time_part = None, parts[0]
+
+    time_range = _parse_time_range(time_part)
+    if not time_range:
+        log.warning("[proactive] unparsable window entry, ignoring: %r", window_str)
+        return False
+    if not _time_in_range(now_dt.time(), *time_range):
+        return False
+
+    if day_part:
+        day_part = day_part.lower()
+        range_match = _DAY_RANGE_RE.match(day_part)
+        if range_match:
+            d1, d2 = range_match.groups()
+            if d1 in _WEEKDAY_INDEX and d2 in _WEEKDAY_INDEX:
+                start_idx, end_idx = _WEEKDAY_INDEX[d1], _WEEKDAY_INDEX[d2]
+                today_idx = now_dt.weekday()
+                if start_idx <= end_idx:
+                    return start_idx <= today_idx <= end_idx
+                return today_idx >= start_idx or today_idx <= end_idx
+        elif day_part in _WEEKDAY_INDEX:
+            return now_dt.weekday() == _WEEKDAY_INDEX[day_part]
+        else:
+            log.warning("[proactive] unparsable day range in window entry: %r", window_str)
+            return False
+
+    return True
+
+
 # ── think ─────────────────────────────────────────────────────────────────────
 
 class AikoThink:
@@ -178,23 +307,53 @@ class AikoThink:
         self._history:  list[dict] = []
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
-        self._semantic_example_cache: dict[int, tuple[list[str], np.ndarray]] = {}
+        # Cache of (labels, embedding_matrix) per (example-corpus-id, instruct)
+        # pair — built via reason.embed_example_matrix, which always
+        # re-embeds; caching the result here avoids paying that cost on
+        # every routing call for a static example corpus.
+        self._semantic_example_cache: dict = {}
         self._semantic_example_cache_lock = threading.RLock()
         self._active_turn = threading.Event()
         self._turn_lock = threading.RLock()
         self._reasoning = False
         self.last_usage: dict = {}
         self.last_prompt_debug: dict = {}
-        self._mem_queue  = queue.Queue()
-        self._mem_worker = threading.Thread(target=self._mem_write_loop, daemon=True)
-        self._mem_worker.start()
 
         self._last_chat_time = time.time()
-        self._idle_learner_thread = threading.Thread(target=self._idle_learner_loop, daemon=True)
+        self._idle_learner_thread = threading.Thread(
+            target=learn.idle_learner_loop, args=(self,), daemon=True
+        )
         self._idle_learner_thread.start()
 
-        self._reminders = ScheduleRunner(on_due=self.handle_scheduled_job)
-        self._reminders.start()
+        # ── proactive idle check-in state machine ──────────────────────────
+        # See _proactive_tick / is_proactive_resting. Drives config/proactive.yaml
+        # (PROACTIVE_ENABLED etc., module-level above). is_proactive_resting()
+        # is the exact signal core.learn.idle_learner_loop waits on before it
+        # will start an autonomous quick_studying pass, so the two idle
+        # systems never compete for the same idle time.
+        self._proactive_lock = threading.Lock()
+        self._proactive_resting = False
+        self._proactive_last_checkin_time: float | None = None
+        self._proactive_checkin_times: list[float] = []  # rolling 1hr window, for MAX_PER_HOUR
+        self._proactive_next_first_delay = random.uniform(
+            PROACTIVE_FIRST_IDLE_MIN_SECONDS, PROACTIVE_FIRST_IDLE_MAX_SECONDS
+        )
+        self._proactive_thread: threading.Thread | None = None
+        if PROACTIVE_ENABLED:
+            self._proactive_thread = threading.Thread(target=self._proactive_loop, daemon=True)
+            self._proactive_thread.start()
+        else:
+            log.info("[proactive] disabled via PROACTIVE_ENABLED — no idle check-ins will run.")
+
+        # NOTE: this class used to also construct its own ScheduleRunner
+        # here (self._reminders = ScheduleRunner(...); self._reminders.start()).
+        # That has been removed — core.wakeup.AikoWakeup.boot() already
+        # constructs and starts the single app-wide ScheduleRunner (wired to
+        # memorize/reflect/consolidate as well as this instance's
+        # handle_scheduled_job), and register_scheduler() makes it
+        # discoverable to tools. Having two independent ScheduleRunner
+        # threads both reading schedule.json meant every due job — reminders,
+        # weekly_social, and the deep-study window jobs — fired twice.
 
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
         self._warmup_thread.start()
@@ -220,6 +379,7 @@ class AikoThink:
         with self._turn_lock:
             self._last_chat_time = time.time()
             self._active_turn.set()
+            self._note_user_activity()
             try:
                 intent = self._route_intent(user_input)
                 log.info("[route] intent=%s", intent)
@@ -234,17 +394,43 @@ class AikoThink:
                 self._last_chat_time = time.time()
                 self._active_turn.clear()
 
+    def _note_user_activity(self) -> None:
+        """Reset the proactive state machine on real user activity: clear
+        the resting flag (so the idle learner stops treating this as rest
+        time) and re-roll the next first-check-in delay so it's measured
+        from this turn, not whenever the last one happened to be."""
+        with self._proactive_lock:
+            self._proactive_resting = False
+            self._proactive_next_first_delay = random.uniform(
+                PROACTIVE_FIRST_IDLE_MIN_SECONDS, PROACTIVE_FIRST_IDLE_MAX_SECONDS
+            )
+
+    def is_proactive_resting(self) -> bool:
+        """True once Aiko has sent her PROACTIVE_REST_MESSAGE and gone
+        quiet for this idle stretch. This is the exact signal
+        core.learn.idle_learner_loop polls before starting an autonomous
+        quick_studying pass — see that function's docstring for why."""
+        return self._proactive_resting
+
     def _route_intent(self, user_input: str) -> str:
         """Ternary routing: single embedding, three-way decision with a
         high-confidence margin so a close call doesn't get committed to
-        agentic (or webchat) just because it happened to be checked first."""
+        agentic (or webchat) just because it happened to be checked first.
+
+        The close-vector label-scoring math itself (normalize + batched
+        matmul + top-k mean per label) lives in core.reason; this method
+        only owns the routing policy (thresholds, gap, LLM tie-break).
+        """
         self._pending_search_query = None  # reset
     
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "disabled"}:
             return "localchat"
     
         instruct = "What kind of task or question is this?"
-        scores = self._semantic_all_scores(user_input, _ROUTE_TERNARY_EXAMPLES, instruct)
+        embedder = self._memorize._mem._embedder
+        query_vec = embedder.embed_query(user_input, instruct=instruct)
+        labels, example_vecs = self._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, instruct)
+        scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
     
         agentic_score = scores.get("agentic", 0.0)
         webchat_score = scores.get("webchat", 0.0)
@@ -275,71 +461,22 @@ class AikoThink:
     
         return "localchat"
 
-    @staticmethod
-    def _normalized_vector(vector: list[float]) -> np.ndarray:
-        """Return one L2-normalized float32 embedding vector for cosine scoring."""
-        arr = np.asarray(vector, dtype=np.float32)
-        norm = float(np.linalg.norm(arr))
-        if norm <= 1e-12:
-            return arr
-        return arr / norm
-
-    @staticmethod
-    def _normalized_matrix(vectors: list[list[float]]) -> np.ndarray:
-        """Return row-wise L2-normalized float32 embeddings for vectorized cosine."""
-        matrix = np.asarray(vectors, dtype=np.float32)
-        if matrix.size == 0:
-            return matrix.reshape(0, 0)
-        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-        return matrix / np.clip(norms, 1e-12, None)
-
-    def _semantic_all_scores(self, user_input: str, examples_by_label: dict, instruct: str) -> dict[str, float]:
-        """Return top-k mean cosine score per label for stable close-vector routing."""
-        query_vector = self._normalized_vector(
-            self._memorize._mem._embedder.embed_query(user_input, instruct=instruct).tolist()
-        )
-        labels, example_vectors = self._semantic_example_vectors(examples_by_label, instruct)
-        if example_vectors.size == 0:
-            return {}
-        raw_scores = example_vectors @ query_vector
-        from collections import defaultdict
-        label_scores: dict[str, list[float]] = defaultdict(list)
-        for label, score in zip(labels, raw_scores):
-            label_scores[label].append(float(score))
-
-        scores: dict[str, float] = {}
-        top_k = max(1, _SEMANTIC_LABEL_TOP_K)
-        for label, values in label_scores.items():
-            strongest = sorted(values, reverse=True)[:top_k]
-            scores[label] = sum(strongest) / len(strongest)
-        return scores
-
-    def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], np.ndarray]:
-        """Return cached embeddings for a static semantic example corpus."""
+    def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], object]:
+        """Return cached (labels, matrix) for a static semantic example
+        corpus, built via reason.embed_example_matrix. embed_example_matrix
+        itself never caches — it always re-embeds — so the caching lives
+        here, keyed on corpus identity + instruct string, same as before
+        the math moved to core.reason."""
         cache_key = (id(examples_by_label), instruct)
-        cache = getattr(self, "_semantic_example_cache", None)
-        cache_lock = getattr(self, "_semantic_example_cache_lock", None)
-        if cache is None:
-            cache = self._semantic_example_cache = {}
-        if cache_lock is None:
-            cache_lock = self._semantic_example_cache_lock = threading.RLock()
-
-        with cache_lock:
-            cached = cache.get(cache_key)
+        with self._semantic_example_cache_lock:
+            cached = self._semantic_example_cache.get(cache_key)
             if cached is not None:
                 return cached
 
-            labels: list[str] = []
-            prompts: list[str] = []
-            for label, examples in examples_by_label.items():
-                labels.extend([label] * len(examples))
-                prompts.extend(examples)
-
-            vectors = self._normalized_matrix(
-                self._memorize._mem._embedder.embed_queries(prompts, instruct=instruct).tolist()
-            )
+            embedder = self._memorize._mem._embedder
+            labels, vectors = reason.embed_example_matrix(embedder, examples_by_label, instruct=instruct)
             cached = (labels, vectors)
-            cache[cache_key] = cached
+            self._semantic_example_cache[cache_key] = cached
             return cached
 
     def _classify_agent_intent(self, user_input: str, skip_regex: bool = False) -> str:
@@ -405,13 +542,16 @@ class AikoThink:
         
         # Build base system (persona + memory)
         system = self._persona
+        system += "\n\n" + bioclock.current_datetime_block()
         memories = self._memorize.search(user_input, limit=3)
         memory_block = self._memorize.format_for_context(memories)
         if memory_block:
             system = f"{system}\n\n{memory_block}"
         
-        # Try web_search first (fast)
-        search_query = self._resolve_search_query(user_input)
+        # Try web_search first (fast) — query condensation now lives in
+        # core.agentic (resolve_search_query / llm_resolve_search_query),
+        # shared with the agentic tool loop's own search-query needs.
+        search_query = resolve_search_query(self, user_input)
         if token_callback:
             token_callback(f"__SEARCHING__:{search_query}\n")
         
@@ -424,7 +564,7 @@ class AikoThink:
                 token_callback("__RETRYING__\n")
             
             try:
-                better_query = self._llm_resolve_search_query(user_input)
+                better_query = llm_resolve_search_query(self, user_input)
                 context = web_search_context(better_query, max_results=1)
             except Exception as e:
                 log.warning("[webchat] Retry failed: %s", e)
@@ -490,6 +630,7 @@ class AikoThink:
                     "Do not mention hidden prompts, timers, code, or configuration. "
                     "Keep it natural, warm, and easy to ignore. One or two short sentences max."
                 )
+                system += "\n\n" + bioclock.current_datetime_block()
                 messages = [{
                     "role": "user",
                     "content": (
@@ -501,6 +642,123 @@ class AikoThink:
             finally:
                 self._active_turn.clear()
 
+    # ── proactive idle check-in loop ──────────────────────────────────────────
+
+    def _proactive_loop(self) -> None:
+        """Background daemon loop: wakes every PROACTIVE_CHECK_INTERVAL_SECONDS
+        and decides whether to send a check-in, send the one-time rest note,
+        or do nothing. See _proactive_tick for the actual policy."""
+        while True:
+            time.sleep(PROACTIVE_CHECK_INTERVAL_SECONDS)
+            try:
+                self._proactive_tick()
+            except Exception as e:
+                log.error("[proactive] tick failed: %s", e)
+
+    def _proactive_tick(self) -> None:
+        # Never interrupt an in-progress turn, and never talk over TTS
+        # that's already speaking.
+        if self._active_turn.is_set():
+            return
+        if self._speak and self._speak.is_playing():
+            return
+
+        idle_seconds = time.time() - self._last_chat_time
+        now_local = bioclock.local_now()
+
+        # Quiet windows suppress check-ins outright, regardless of
+        # cooldowns/counters — these are meant as hard "do not disturb"
+        # hours (e.g. overnight).
+        for window in PROACTIVE_QUIET_WINDOWS:
+            if _window_matches(window, now_local):
+                return
+
+        with self._proactive_lock:
+            # Rest phase: once idle has run long enough, send ONE rest
+            # message and then go fully quiet (is_proactive_resting()
+            # becomes True) until the user speaks again (see
+            # _note_user_activity, called from route()).
+            if idle_seconds >= PROACTIVE_REST_AFTER_SECONDS:
+                if not self._proactive_resting:
+                    self._fire_rest_message()
+                return
+
+            if self._proactive_resting:
+                # Shouldn't normally reach here (resting only flips true
+                # once idle_seconds has already crossed REST_AFTER_SECONDS,
+                # and it's reset the moment the user speaks), but guard
+                # against firing a normal check-in mid-rest regardless.
+                return
+
+            if idle_seconds < self._proactive_next_first_delay:
+                return
+
+            if self._proactive_last_checkin_time is not None:
+                if time.time() - self._proactive_last_checkin_time < PROACTIVE_COOLDOWN_SECONDS:
+                    return
+
+            one_hour_ago = time.time() - 3600
+            self._proactive_checkin_times = [t for t in self._proactive_checkin_times if t >= one_hour_ago]
+            if len(self._proactive_checkin_times) >= PROACTIVE_MAX_PER_HOUR:
+                return
+
+            # Focus windows are the OPPOSITE of quiet windows: if any are
+            # configured, check-ins are only permitted while inside one of
+            # them (e.g. "don't ping outside work/focus hours"). If none
+            # are configured, check-ins are allowed any time outside quiet
+            # windows.
+            if PROACTIVE_FOCUS_WINDOWS:
+                in_focus = any(_window_matches(w, now_local) for w in PROACTIVE_FOCUS_WINDOWS)
+                if not in_focus:
+                    return
+
+            self._fire_checkin()
+
+    def _fire_rest_message(self) -> None:
+        """Send the one-time PROACTIVE_REST_MESSAGE and flip resting=True.
+        Called with self._proactive_lock already held."""
+        user_id = current_user_id()
+        hint = PROACTIVE_REST_PROMPT_HINT.replace("{user}", user_id)
+        message = None
+        if PROACTIVE_USE_LLM:
+            try:
+                message = self.proactive_checkin(hint)
+            except Exception as e:
+                log.warning("[proactive] rest message generation failed: %s", e)
+        if not message:
+            message = PROACTIVE_REST_MESSAGE
+
+        log.info("[proactive] going quiet to rest: %s", message)
+        if PROACTIVE_SPEAK and self._speak:
+            self._speak.speak(message)
+        self._proactive_resting = True
+
+    def _fire_checkin(self) -> None:
+        """Send one ordinary idle check-in. Called with self._proactive_lock
+        already held."""
+        user_id = current_user_id()
+        message = None
+        try:
+            if PROACTIVE_USE_LLM and PROACTIVE_PROMPT_HINTS:
+                hint = random.choice(PROACTIVE_PROMPT_HINTS).replace("{user}", user_id)
+                message = self.proactive_checkin(hint)
+            elif PROACTIVE_MESSAGES:
+                message = random.choice(PROACTIVE_MESSAGES)
+        except Exception as e:
+            log.warning("[proactive] check-in generation failed: %s", e)
+            message = random.choice(PROACTIVE_MESSAGES) if PROACTIVE_MESSAGES else None
+
+        if not message:
+            return
+
+        log.info("[proactive] check-in: %s", message)
+        if PROACTIVE_SPEAK and self._speak:
+            self._speak.speak(message)
+
+        now_ts = time.time()
+        self._proactive_last_checkin_time = now_ts
+        self._proactive_checkin_times.append(now_ts)
+
     def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None) -> str:
         """Standard chat: local knowledge only (persona + memory)."""
         if self._speak and self._speak.is_playing():
@@ -511,6 +769,7 @@ class AikoThink:
         memory_block = self._memorize.format_for_context(memories)
         
         system = self._persona
+        system += "\n\n" + bioclock.current_datetime_block()
         if memory_block:
             system = f"{system}\n\n{memory_block}"
         else:
@@ -519,11 +778,15 @@ class AikoThink:
         # Local knowledge context (if user asks about Aiko)
         if _should_use_local_knowledge(user_input):
             try:
-                local_context = knowledge_context_for(
-                    user_input, limit=3, max_chars=4500,
+                wiki_context = wiki_knowledge_context_for(
+                    user_input, limit=3, max_chars=3000,
                     embedder=self._memorize._mem._embedder,
                 )
-                system = f"{system}\n\n{local_context}"
+                learned_context = knowledge_context_for(
+                    user_input, limit=3, max_chars=2000,
+                    embedder=self._memorize._mem._embedder,
+                )
+                system = f"{system}\n\n{wiki_context}\n\n{learned_context}"
             except Exception as e:
                 log.error("Local knowledge lookup failed: %s", e)
         
@@ -585,18 +848,13 @@ class AikoThink:
 
     def set_reasoning(self, enabled: bool) -> None: self._reasoning = enabled
     def set_speak(self, speak) -> None: self._speak = speak
+
     def wait_for_memory(self, timeout: float | None = None) -> bool:
-        if timeout is None:
-            self._mem_queue.join()
-            return True
-        deadline = time.monotonic() + max(0.0, timeout)
-        with self._mem_queue.all_tasks_done:
-            while self._mem_queue.unfinished_tasks:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                self._mem_queue.all_tasks_done.wait(remaining)
-        return True
+        """Block until AikoMemorize's async write queue drains, or timeout
+        elapses. The queue itself now lives in core.memorize; this is a
+        thin passthrough kept for call sites (core.agentic) that only know
+        about the AikoThink instance."""
+        return self._memorize.wait_for_writes(timeout=timeout)
 
     def handle_scheduled_job(self, job: DueJob) -> None:
         """Announce or execute a due scheduled job without blocking the scheduler."""
@@ -622,52 +880,6 @@ class AikoThink:
             self.agentic_chat(prompt)
         except Exception as e:
             log.error("Scheduled agentic job failed: %s", e)
-
-    # ── idle learner ──────────────────────────────────────────────────────────
-
-    def _idle_learner_loop(self):
-        """Background autonomous learning loop."""
-        while True:
-            time.sleep(300)  # check every 5 minutes
-            if time.time() - self._last_chat_time < _IDLE_LEARN_SECONDS:
-                continue  # user has been active recently, don't interrupt
-
-            if self._speak and self._speak.is_playing():
-                continue
-
-            log.info("[learner] Aiko is idle. Starting autonomous learning...")
-            try:
-                with self._history_lock:
-                    candidates = [m["content"] for m in self._history if m["role"] == "user" and len(m["content"].split()) > 3]
-
-                if not candidates:
-                    log.info("[learner] skipped: no eligible candidate topics in current history.")
-                    continue
-
-                topic = candidates[-1]  # simplistic: look at last user query
-                learned_tag = f"[self-learned:{topic}]"
-                if any(learned_tag in (m.get("content") or "") for m in self._history):
-                    log.info("[learner] skipped: topic already tagged as learned this session: %r", topic)
-                    continue
-                existing = self._memorize.search(learned_tag, limit=1)
-                if existing:
-                    log.info(
-                        "[learner] skipped: topic already found in memory (closest match: %r), topic=%r",
-                        (existing[0].get("memory") or existing[0].get("text") or "")[:120],
-                        topic,
-                    )
-                    continue
-
-                log.info("[learner] researching topic: %r", topic)
-                result = self.agentic_chat(f"Research this topic briefly: {topic}")
-
-                self._memorize.add([
-                    {"role": "system", "content": learned_tag},
-                    {"role": "assistant", "content": result[:800]}
-                ])
-                log.info("[learner] learned about %r — summary: %s", topic, result[:300].replace("\n", " "))
-            except Exception as e:
-                log.error(f"[learner] Autonomous learning failed: {e}")
 
     # ── internal ──────────────────────────────────────────────────────────────
 
@@ -794,50 +1006,6 @@ class AikoThink:
         # routing already set _pending_search_query in _route_intent
         return self._pending_search_query is not None
 
-    def _resolve_search_query(self, user_input: str) -> str:
-        """Condense user message into a clean search query.
-        Strips conversational framing first; falls back to LLM only if still noisy."""
-        # fast pass — strip conversational wrapper
-        noise = re.compile(
-            r"^(go\s+)?(can\s+you\s+)?(please\s+)?"
-            r"(pull\s+up|find\s+out|check|look\s+up|search\s+for|tell\s+me)[\s,]*",
-            re.IGNORECASE,
-        )
-        resolved = noise.sub("", user_input).strip()
-
-        # if still looks like a full sentence (long + has verb framing), ask LLM to condense
-        if len(resolved.split()) > 8 or resolved.lower().startswith(("what", "who", "when", "where", "is ", "has ", "did ")):
-            return self._llm_resolve_search_query(resolved)
-
-        return resolved or user_input
-
-    def _llm_resolve_search_query(self, user_input: str) -> str:
-        """LLM fallback: condense a verbose query into 3-5 search keywords."""
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._router_model,
-                messages=[{"role": "user", "content": (
-                    f"Message: {user_input!r}\n\n"
-                    "Output only a 3-5 word search query. No explanation.\n\n"
-                    "Message: 'what's the latest llama.cpp version'\n"
-                    "Query: llama.cpp latest stable release\n\n"
-                    "Message: 'has NVIDIA released any new Jetson hardware this year'\n"
-                    "Query: NVIDIA Jetson new hardware 2025\n\n"
-                    "Message: 'what's the Canucks score from last night'\n"
-                    "Query: Canucks score last night\n\n"
-                    "Message: 'did llama.cpp merge the Vulkan backend yet'\n"
-                    "Query: llama.cpp Vulkan backend merged\n\n"
-                    "Query:"
-                )}],
-                stream=False, max_tokens=20, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
-            )
-            resolved = (resp.choices[0].message.content or "").strip().split('\n')[0]
-            resolved = resolved.strip('*_`()').strip()[:100]
-            return resolved or user_input
-        except Exception as e:
-            log.warning("LLM search query resolution failed: %s", e)
-            return user_input
-
     def _sanitize_history(self, messages: list[dict]) -> list[dict]:
         if not messages: return []
         sanitized = [messages[0]]
@@ -847,39 +1015,22 @@ class AikoThink:
         while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
 
-
     def _store_async(self, user_input: str, response_text: str) -> None:
-        self._mem_queue.put((user_input, response_text))
-
-    def _mem_write_loop(self) -> None:
-        while True:
-            user_input, response_text = self._mem_queue.get()
-            try:
-                self._wait_for_memory_write_window()
-                self._memorize.add([
-                    {"role": "user",      "content": user_input[:500]},
-                    {"role": "assistant", "content": response_text[:800]},
-                ])
-            except Exception as e:
-                log.error(f"Async memory write failed: {e}")
-            finally:
-                self._mem_queue.task_done()
-
-    def _wait_for_memory_write_window(self) -> None:
-        """Wait until chat has been idle before using the shared LLM for extraction."""
-        deadline = time.monotonic() + max(0.0, _MEMORY_WRITE_MAX_WAIT)
-        while True:
-            idle_for = time.time() - self._last_chat_time
-            if not self._active_turn.is_set() and idle_for >= _MEMORY_WRITE_IDLE_GRACE:
-                return
-            if (
-                _MEMORY_WRITE_MAX_WAIT > 0
-                and time.monotonic() >= deadline
-                and not self._active_turn.is_set()
-            ):
-                return
-            sleep_for = min(0.5, max(0.05, _MEMORY_WRITE_IDLE_GRACE - idle_for))
-            time.sleep(sleep_for)
+        """Queue a fire-and-forget memory write. The actual queue/worker
+        thread now lives on AikoMemorize (core.memorize); this just wires
+        up this instance's idle-tracking callables (is_active_turn /
+        idle_since) so the write waits for a genuinely idle window before
+        using the shared LLM for fact extraction. Kept as a method (rather
+        than inlining self._memorize.queue_write(...) at every call site)
+        because core.agentic's run_agentic_chat also calls
+        owner._store_async(...) directly at the end of the agent loop.
+        """
+        self._memorize.queue_write(
+            user_input,
+            response_text,
+            is_active_turn=self._active_turn.is_set,
+            idle_since=lambda: self._last_chat_time,
+        )
 
 
 _STREAM_SENTENCE_END = set(".?!。？！")
@@ -942,4 +1093,4 @@ def split_stream_sentences(buffer: str) -> tuple[list[str], str]:
             sentence = remaining[:split_pt + 1].strip()
             tail = remaining[split_pt + 1:]
             return ([sentence] if sentence else []), tail
-    return sentences, remaining 
+    return sentences, remaining

@@ -112,12 +112,22 @@ Custom backend (replaces Qdrant + mem0):
     insert unbounded duplicate rows that dream()'s merge pass could never
     clean up once pinned=1 was set.
 
+Async write queue:
+  - AikoMemorize.queue_write() lets a caller (think.py's chat/webchat
+    turns) enqueue a fire-and-forget memory write without blocking the
+    turn on LLM-based fact extraction. This module owns the worker
+    thread/queue; the caller only needs to decide *when* it's safe to run
+    (idle vs mid-turn), which it expresses via two small callables
+    (is_active_turn, idle_since) rather than this module reaching into the
+    caller's turn-tracking state directly.
+
 Dependencies:
   pip install sqlite-vec onnxruntime tokenizers
 """
 import json
 import os
 from collections import OrderedDict
+import queue
 import threading
 import re
 import sqlite3
@@ -128,9 +138,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from core.secure import connect_sqlite
+from core.database import connect_sqlite_vec, resolve_user_db_path
 from core.userspace import current_user_id, user_state_path
-
 import sqlite_vec
 from openai import OpenAI
 
@@ -187,6 +196,13 @@ LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 # stage 3). Independent of MEMORY_RANK_RECENCY_WEIGHT's continuous blend.
 MEMORY_RECENCY_RERANK_ENABLED = _env_bool("MEMORY_RECENCY_RERANK_ENABLED", "1")
 MEMORY_RECENCY_RERANK_THRESHOLD = float(os.getenv("MEMORY_RECENCY_RERANK_THRESHOLD", "0.012"))
+
+# Async write queue — idle-grace window before an enqueued write is allowed
+# to run (avoids contending with the shared LLM mid-turn), and a hard cap so
+# a write is never held back indefinitely if the caller's turn state gets
+# stuck "active". See AikoMemorize.queue_write().
+MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
+MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 
 USER_ID = current_user_id  # Backward-compatible callable alias; resolve at call time.
 
@@ -565,13 +581,7 @@ class _MemoryBackend:
         self._apply_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = connect_sqlite(self._db_path, user_id=self._user_id)
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        return conn
+        return connect_sqlite_vec(self._db_path, user_id=self._user_id)
 
     def _apply_schema(self) -> None:
         self._conn.executescript(_DDL)
@@ -1094,6 +1104,14 @@ class AikoMemorize:
         multiple pinned rows with identical text down to the most recent
         one, since dream() structurally cannot do this for pinned rows.
 
+    Async write queue:
+        queue_write() lets a caller enqueue a fire-and-forget memory write
+        (LLM-based fact extraction + persist) that runs on a dedicated
+        background thread, without blocking the caller's turn. The caller
+        expresses when it's safe to run via two callables (is_active_turn,
+        idle_since) rather than this class inspecting the caller's state
+        directly — see queue_write() below.
+
     Dream pass (call nightly at 00:00):
         1. Boost salient memories' access_count so they survive decay.
         2. Merge near-duplicate vectors — keeps higher-access copy.
@@ -1101,7 +1119,7 @@ class AikoMemorize:
     """
 
     def __init__(self, silent: bool = False) -> None:
-        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory/memory.db", current_user_id()))
+        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=current_user_id()))
 
         if not silent:
             log.info("Opening sqlite-vec memory store...")
@@ -1115,6 +1133,10 @@ class AikoMemorize:
         self._conn = self._mem._conn
         self._search_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
         self._search_cache_lock = threading.RLock()
+
+        self._write_queue: "queue.Queue[tuple]" = queue.Queue()
+        self._write_worker = threading.Thread(target=self._write_loop, daemon=True)
+        self._write_worker.start()
 
         if not silent:
             log.info("Ready.")
@@ -1176,6 +1198,78 @@ class AikoMemorize:
         except Exception as e:
             log.error(f"Pin failed: {e}")
             return False
+
+    # ── async write queue ────────────────────────────────────────────────────
+
+    def queue_write(
+        self,
+        user_input: str,
+        response_text: str,
+        *,
+        is_active_turn=None,
+        idle_since=None,
+    ) -> None:
+        """Queue an async memory write for a conversation turn.
+
+        Runs on this instance's dedicated write-worker thread — the caller's
+        turn is never blocked on LLM-based fact extraction. `is_active_turn`
+        (callable[[], bool]) and `idle_since` (callable[[], float], a
+        time.time()-style timestamp of the caller's last chat activity) let
+        the write wait for an idle window before using the shared LLM,
+        without this module needing to know how the caller tracks turn
+        state. If either is omitted, the write runs as soon as it's
+        dequeued with no idle wait.
+        """
+        self._write_queue.put((user_input, response_text, is_active_turn, idle_since))
+
+    def _write_loop(self) -> None:
+        while True:
+            user_input, response_text, is_active_turn, idle_since = self._write_queue.get()
+            try:
+                self._wait_for_write_window(is_active_turn, idle_since)
+                self.add([
+                    {"role": "user", "content": user_input[:500]},
+                    {"role": "assistant", "content": response_text[:800]},
+                ])
+            except Exception as e:
+                log.error(f"Async memory write failed: {e}")
+            finally:
+                self._write_queue.task_done()
+
+    def _wait_for_write_window(self, is_active_turn, idle_since) -> None:
+        """Wait until the caller reports idle before running an extraction
+        write on the shared LLM. No-ops immediately if the caller didn't
+        supply idle-tracking callables."""
+        if is_active_turn is None or idle_since is None:
+            return
+        deadline = time.monotonic() + max(0.0, MEMORY_WRITE_MAX_WAIT)
+        while True:
+            idle_for = time.time() - idle_since()
+            if not is_active_turn() and idle_for >= MEMORY_WRITE_IDLE_GRACE:
+                return
+            if (
+                MEMORY_WRITE_MAX_WAIT > 0
+                and time.monotonic() >= deadline
+                and not is_active_turn()
+            ):
+                return
+            sleep_for = min(0.5, max(0.05, MEMORY_WRITE_IDLE_GRACE - idle_for))
+            time.sleep(sleep_for)
+
+    def wait_for_writes(self, timeout: float | None = None) -> bool:
+        """Block until all queued async writes complete, or `timeout`
+        elapses. Returns True if the queue drained, False on timeout."""
+        if timeout is None:
+            self._write_queue.join()
+            return True
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._write_queue.all_tasks_done:
+            while self._write_queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._write_queue.all_tasks_done.wait(remaining)
+        return True
 
     # ── read ──────────────────────────────────────────────────────────────────
 

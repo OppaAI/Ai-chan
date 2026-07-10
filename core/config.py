@@ -13,7 +13,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
+try:
+    import yaml
+except ImportError:  # pragma: no cover - lightweight fallback for minimal tooling envs
+    yaml = None
+
 
 try:
     from dotenv import dotenv_values
@@ -22,6 +26,65 @@ except ImportError:  # pragma: no cover - optional dependency fallback
         return {}
 
 _LOADED = False
+
+
+def _strip_comment(line: str) -> str:
+    """Strip a trailing `# comment`, but not a `#` inside quotes."""
+    in_squote = in_dquote = False
+    for i, ch in enumerate(line):
+        if ch == "'" and not in_dquote:
+            in_squote = not in_squote
+        elif ch == '"' and not in_squote:
+            in_dquote = not in_dquote
+        elif ch == "#" and not in_squote and not in_dquote:
+            return line[:i]
+    return line
+
+
+def _simple_yaml_load(text: str) -> dict[str, Any]:
+    """Tiny fallback parser for Aiko's simple config/*.yaml files.
+
+    It supports top-level KEY: VALUE pairs and the config/index.yaml list used
+    during bootstrap. Full YAML support is still provided by PyYAML when
+    installed, which is the normal runtime path.
+    """
+    data: dict[str, Any] = {}
+    current_key: str | None = None
+    pending_empty: set[str] = set()
+    for raw in text.splitlines():
+        line = _strip_comment(raw).rstrip()
+        if not line.strip():
+            continue
+        stripped = line.strip()
+        if stripped.startswith("-") and current_key:
+            if current_key in pending_empty:
+                # First list item seen: this key was a list all along.
+                data[current_key] = []
+                pending_empty.discard(current_key)
+            data.setdefault(current_key, []).append(stripped[1:].strip().strip('"\''))
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        current_key = key
+        if value == "":
+            # Ambiguous: could be an unset scalar or the start of a list.
+            # Default to "unset" (empty string) and only promote to a list
+            # if `-` items actually follow.
+            data[key] = ""
+            pending_empty.add(key)
+        else:
+            data[key] = value.strip('"\'')
+            pending_empty.discard(key)
+    return data
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(text) if yaml is not None else _simple_yaml_load(text)
+    return data or {}
 
 
 def _stringify(value: Any) -> str:
@@ -100,7 +163,7 @@ def load_config(*, override: bool = False) -> None:
     if config_dir.exists():
         index_path = config_dir / "index.yaml"
         if index_path.exists():
-            index_data = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
+            index_data = _load_yaml_mapping(index_path)
             config_names = index_data.get("configs", [])
             if not isinstance(config_names, list):
                 raise ValueError(f"{index_path} configs must be a list")
@@ -113,7 +176,7 @@ def load_config(*, override: bool = False) -> None:
         for path in paths:
             if not path.exists():
                 raise FileNotFoundError(f"Configured YAML file not found: {path}")
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            data = _load_yaml_mapping(path)
             if not isinstance(data, dict):
                 raise ValueError(f"{path} must contain a YAML mapping")
             for key, value in _flatten(data).items():

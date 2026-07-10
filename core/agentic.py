@@ -4,6 +4,11 @@ core/agentic.py
 Aiko's task-mode loop: tool schemas, ReAct-style dispatch, and final response
 handling. Pure tool implementations stay in core/tools.py; chat facade, TTS,
 history, and memory queue ownership stay in core/think.py.
+
+Also owns webchat's search-query condensation (resolve_search_query /
+llm_resolve_search_query) — both take `owner` (the AikoThink instance) for
+LLM client/model access, the same pattern dispatch_tool already uses for
+deep_search/deep_research.
 """
 
 from __future__ import annotations
@@ -16,14 +21,18 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import numpy as np
+
 from core.log import get_logger
+from core import bioclock
+from core import reason
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
-from core.knowledge import knowledge_context_for, wiki_context_for
+from core.wiki import wiki_context_for, wiki_knowledge_context_for
+from core.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
+from core import experience
 from core.tools import (
-    web_fetch,
     deep_search,
     deep_research,
-    web_search,
     make_plan,
     create_checklist,
     save_note,
@@ -48,12 +57,8 @@ log = get_logger(__name__)
 
 MAX_AGENT_ITER = int(os.getenv("MAX_AGENT_ITER", 8))
 AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS", 512)))
-# Belt-and-suspenders budget check: even with better relevance scoring in
-# knowledge.py/skills.py, a coincidental match can still slip through. This
-# is a rough chars/4 ≈ tokens estimate (no tokenizer call here), used only
-# to decide whether to drop the lowest-priority context blocks before ever
-# reaching llama.cpp — a soft degradation instead of a hard 400 mid-task.
 LLM_CTX_SIZE = int(os.getenv("LLM_CTX_SIZE", 12288))
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", 120))
 AGENT_CONTEXT_BUDGET_RATIO = float(os.getenv("AGENT_CONTEXT_BUDGET_RATIO", 0.65))
 AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("AGENT_MEMORY_DRAIN_TIMEOUT", os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25)))
 AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
@@ -65,29 +70,112 @@ AGENT_MAX_FINAL_REPAIRS = int(os.getenv("AGENT_MAX_FINAL_REPAIRS", 2))
 AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
 
+# Max number of times deep_search/deep_research together can be invoked in
+# ONE agentic workflow. Previously hardcoded to exactly once; now tunable.
+# The two tools share one budget so a single agentic workflow cannot keep
+# spending web/research calls after enough evidence or snippets were gathered.
+AGENT_RESEARCH_MAX_CALLS = int(os.getenv("AGENT_RESEARCH_MAX_CALLS", 1))
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AGENTIC_POLICY_PATHS = (
     _REPO_ROOT / "persona" / "skills.md",
     _REPO_ROOT / "persona" / "schedule.md",
 )
 
+# Agentic policy context is now RAG-selected against the user's request,
+# not injected whole. It's still bounded by _AGENTIC_POLICY_MAX_CHARS and
+# is also a droppable block in _enforce_agentic_context_budget below, so a
+# growing skills.md/schedule.md can no longer silently blow the fixed
+# "immovable" portion of the context budget.
+_AGENTIC_POLICY_CHUNK_CHARS = int(os.getenv("AGENTIC_POLICY_CHUNK_CHARS", "600"))
+_AGENTIC_POLICY_CHUNKS_PER_FILE = int(os.getenv("AGENTIC_POLICY_CHUNKS_PER_FILE", "4"))
+_AGENTIC_POLICY_CHUNK_MIN_SCORE = float(os.getenv("AGENTIC_POLICY_CHUNK_MIN_SCORE", "0.25"))
+_AGENTIC_POLICY_MAX_CHARS = int(os.getenv("AGENTIC_POLICY_MAX_CHARS", "3000"))
+_AGENTIC_POLICY_INSTRUCT = "Which policy guidance applies to this task?"
 
-def _agentic_policy_context() -> str:
-    """Load task-only persona policy for the agent loop.
 
-    Normal chat intentionally excludes these files to keep casual turns light;
-    task mode injects them explicitly so scheduling and tool discipline remain
-    available before the first tool-choice call.
-    """
+def _agentic_policy_context(user_input: str, embedder=None) -> str:
+    """Load only the task policy excerpts relevant to this request, instead
+    of the entire skills.md/schedule.md files on every task-mode turn."""
     blocks: list[str] = []
+    remaining = _AGENTIC_POLICY_MAX_CHARS
     for path in _AGENTIC_POLICY_PATHS:
+        if remaining <= 0:
+            break
         text = load_skills(path).strip()
-        if text:
-            rel = path.relative_to(_REPO_ROOT)
-            blocks.append(f'<agentic_policy path="{rel}">\n{text}\n</agentic_policy>')
+        if not text:
+            continue
+        pieces = reason.chunk_text(text, _AGENTIC_POLICY_CHUNK_CHARS)
+        if not pieces:
+            continue
+        relevant = reason.select_relevant_chunks(
+            user_input, pieces, embedder, top_k=_AGENTIC_POLICY_CHUNKS_PER_FILE,
+            min_score=_AGENTIC_POLICY_CHUNK_MIN_SCORE, instruct=_AGENTIC_POLICY_INSTRUCT,
+        )
+        excerpt = "\n...\n".join(c for _score, c in relevant) if relevant else pieces[0]
+        excerpt = excerpt[:remaining]
+        if not excerpt:
+            continue
+        rel = path.relative_to(_REPO_ROOT)
+        blocks.append(f'<agentic_policy path="{rel}">\n{excerpt}\n</agentic_policy>')
+        remaining -= len(excerpt)
     if not blocks:
-        return "<agentic_policy_context>\nNo task policy files found.\n</agentic_policy_context>"
+        return "<agentic_policy_context>\nNo matching task policy found for this request.\n</agentic_policy_context>"
     return "<agentic_policy_context>\n" + "\n\n".join(blocks) + "\n</agentic_policy_context>"
+
+
+# ── webchat search-query condensation ────────────────────────────────────────
+# Used by think.py's webchat() to turn a conversational user message into a
+# clean search-engine query before calling web_search_context. Lives here
+# (not tools.py) so it can take `owner` the same way dispatch_tool does for
+# deep_search/deep_research — both need the caller's already-loaded LLM
+# client/model rather than constructing a second one.
+
+def resolve_search_query(owner, user_input: str) -> str:
+    """Condense a user message into a clean search query. Strips
+    conversational framing first; falls back to llm_resolve_search_query
+    only if the result still looks like a full sentence."""
+    noise = re.compile(
+        r"^(go\s+)?(can\s+you\s+)?(please\s+)?"
+        r"(pull\s+up|find\s+out|check|look\s+up|search\s+for|tell\s+me)[\s,]*",
+        re.IGNORECASE,
+    )
+    resolved = noise.sub("", user_input).strip()
+
+    # if still looks like a full sentence (long + has verb framing), ask LLM to condense
+    if len(resolved.split()) > 8 or resolved.lower().startswith(("what", "who", "when", "where", "is ", "has ", "did ")):
+        return llm_resolve_search_query(owner, resolved)
+
+    return resolved or user_input
+
+
+def llm_resolve_search_query(owner, user_input: str) -> str:
+    """LLM fallback: condense a verbose query into 3-5 search keywords,
+    using the owning AikoThink instance's already-loaded router model."""
+    try:
+        resp = owner._client.chat.completions.create(
+            model=owner._router_model,
+            messages=[{"role": "user", "content": (
+                f"Message: {user_input!r}\n\n"
+                "Output only a 3-5 word search query. No explanation.\n\n"
+                "Message: 'what's the latest llama.cpp version'\n"
+                "Query: llama.cpp latest stable release\n\n"
+                "Message: 'has NVIDIA released any new Jetson hardware this year'\n"
+                "Query: NVIDIA Jetson new hardware 2025\n\n"
+                "Message: 'what's the Canucks score from last night'\n"
+                "Query: Canucks score last night\n\n"
+                "Message: 'did llama.cpp merge the Vulkan backend yet'\n"
+                "Query: llama.cpp Vulkan backend merged\n\n"
+                "Query:"
+            )}],
+            stream=False, max_tokens=20, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
+        )
+        resolved = (resp.choices[0].message.content or "").strip().split('\n')[0]
+        resolved = resolved.strip('*_`()').strip()[:100]
+        return resolved or user_input
+    except Exception as e:
+        log.warning("LLM search query resolution failed: %s", e)
+        return user_input
 
 
 _ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^\]:]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)
@@ -98,7 +186,11 @@ _DISCLOSURE_RE = re.compile(
 )
 _EXTERNAL_ACTION_RE = re.compile(r"\b(send|sent|email|post|posted|buy|bought|book|booked|order|ordered|delete|deleted)\b", re.IGNORECASE)
 _LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|draft|note|workspace)\b", re.IGNORECASE)
-_RESEARCH_CONTEXT_TOOLS = {"deep_search", "deep_research", "web_fetch"}
+# Any tool message over this length gets compacted to a preview once a
+# later assistant message has arrived — generalized from a research-only
+# rule to cover every bulky tool (repo_read_file, search_jobs, etc.), since
+# any of them can accumulate across MAX_AGENT_ITER iterations otherwise.
+_COMPACTABLE_MIN_CHARS = 800
 _RESEARCH_TOOLS = {"deep_search", "deep_research"}
 
 
@@ -115,10 +207,10 @@ _TOOLS: dict[str, tuple[dict, object]] = {}
 
 def _owner_embedder(owner):
     """Reuse the already-warm HarrierEmbedder — same instance think.py uses
-    for memory search and intent routing — so condense_evidence() in
-    core/tools.py gets relevance scoring with zero extra model load. Returns
-    None if unavailable; condense_evidence() then falls back to keyword
-    overlap scoring instead of failing."""
+    for memory search and intent routing — so every relevance-scoring call
+    (web evidence, KB, skills, agentic policy) gets semantic scoring with
+    zero extra model load. Returns None if unavailable; every scoring path
+    then falls back to keyword overlap instead of failing."""
     return getattr(getattr(getattr(owner, "_memorize", None), "_mem", None), "_embedder", None)
 
 
@@ -208,28 +300,29 @@ def tool_schemas() -> list[dict]:
 
 _TOOL_SCHEMAS = [
         {"type": "function", "function": {
-            "name": "web_search",
-            "description": "Snippet-only web search for discovering candidate sources. Does not fetch page text.",
-            "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "The search query."}},
-                "required": ["query"]}}},
-        {"type": "function", "function": {
             "name": "deep_search",
-            "description": "Search + fetch top pages in one call, with results condensed to only the query-relevant excerpts (embedding-scored; irrelevant fetched content is filtered out, not just truncated). Can span multiple concurrent search-result pages depending on server config for wider coverage of one query. Use for a single, well-scoped question. At most once per workflow — use deep_research instead if the topic needs more than one search angle.",
+            "description": (
+                "In agentic task mode: snippet-only web search as ONE support step inside "
+                "a larger workflow, where research itself is not the deliverable. Use this "
+                "when the task needs current web result snippets/URLs to decide the next "
+                "step. It does not fetch full pages; use deep_research for heavy source "
+                "reading, synthesis, or self-learning."
+            ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "The focused research query to search and fetch."}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
             "name": "deep_research",
-            "description": "Multi-round research: searches, reads, and — when the evidence is incomplete — automatically refines the query and searches again across several rounds, then returns a synthesized answer. Use for broad, multi-angle, or ambiguous questions that a single search+fetch pass won't cover. At most once per workflow, and not combined with deep_search in the same workflow.",
+            "description": (
+                "In agentic task mode: heavy research/source-reading tool for when the "
+                "research itself is the deliverable or for deliberate self-learning. It "
+                "uses search only to discover candidate URLs, then fetches full pages, "
+                "condenses evidence, optionally iterates/refines, and synthesizes. Costs "
+                "more than deep_search; do not use for simple snippet lookup."
+            ),
             "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool will refine it internally."}},
+                "query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool refines it internally."}},
                 "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "web_fetch", "description": "Fetch one explicitly supplied URL when the user provides it or a prior snippet result must be verified. Prefer deep_search/deep_research for research workflows; do not use web_fetch to bulk-fetch search results.",
-            "parameters": {"type": "object", "properties": {
-                "url": {"type": "string", "description": "The URL to fetch."}},
-                "required": ["url"]}}},
         {"type": "function", "function": {
             "name": "make_plan", "description": "Make plan.",
             "parameters": {"type": "object", "properties": {
@@ -354,6 +447,22 @@ _TOOL_SCHEMAS = [
                 "limit": {"type": "integer"}},
                 "required": ["query"]}}},
         {"type": "function", "function": {
+            "name": "learn_knowledge",
+            "description": (
+                "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). "
+                "Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted "
+                "document text, or after explicit self-learning/research should be retained. "
+                "Do not use for private personal preferences; those belong in memory. Do not use "
+                "for merely saving a human-readable note; use save_note for that."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "title": {"type": "string", "description": "Short title for the learned document or fact set."},
+                "text": {"type": "string", "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."},
+                "relative_path": {"type": "string", "description": "Optional workspace-relative document path to ingest instead of text."},
+                "source": {"type": "string", "description": "Optional source URL/path/context for pasted text."},
+                "kind": {"type": "string", "enum": ["ingested", "self_learned", "study_note"], "description": "Where this knowledge came from."}},
+                "required": ["title"]}}},
+        {"type": "function", "function": {
             "name": "search_jobs", "description": "Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string"},
@@ -369,11 +478,14 @@ _TOOL_SCHEMAS = [
                 "required": ["answer"]}}},
     ]
 
+# Rough fixed schema-token cost injected into EVERY chat.completions.create()
+# call via tools=tools — computed once at import time so the context budget
+# check below accounts for it instead of silently ignoring it.
+_TOOL_SCHEMA_TOKENS_ESTIMATE = max(1, len(json.dumps(_TOOL_SCHEMAS)) // 4)
+
 
 def _register_tools() -> None:
     handlers = {
-        "web_search": lambda args: web_search(args.get("query", "")),
-        "web_fetch": lambda args: web_fetch(args.get("url", "")),
         "make_plan": lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
         "create_checklist": lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
         "save_note": lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
@@ -447,13 +559,6 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             error_type="missing_args", retryable=True,
         )
 
-    # Guard against blank strings for search/fetch
-    if name == "web_search" and not (args.get("query") or "").strip():
-        return ToolResult(
-            ok=False, tool=name, args=args,
-            content="Missing required argument: query must be a non-empty string. Reissue with a specific search query.",
-            error_type="missing_args", retryable=True,
-        )
     if name == "deep_search" and not (args.get("query") or "").strip():
         return ToolResult(
             ok=False, tool=name, args=args,
@@ -466,10 +571,12 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content="Missing required argument: query must be a non-empty string. Reissue with a research question.",
             error_type="missing_args", retryable=True,
         )
-    if name == "web_fetch" and not (args.get("url") or "").strip():
+    if name == "learn_knowledge" and not (
+        (args.get("text") or "").strip() or (args.get("relative_path") or "").strip()
+        ):
         return ToolResult(
             ok=False, tool=name, args=args,
-            content="Missing required argument: url must be a non-empty string.",
+            content="Missing required argument: provide text or relative_path with knowledge to store.",
             error_type="missing_args", retryable=True,
         )
 
@@ -500,8 +607,7 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
     """Run one named tool with already-decoded JSON args.
 
     ``owner`` is the AikoThink instance driving this agentic turn.
-    deep_search and deep_research both need it for the shared embedder
-    (relevance-condensed evidence, in-memory only, no disk writes);
+    deep_search and deep_research both need it for the shared embedder;
     deep_research additionally needs the already-loaded local LLM
     client/model for its adaptive continue/refine and synthesis steps.
     Every other tool is a pure function of its args and ignores it.
@@ -518,6 +624,23 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("query", ""),
             embedder=_owner_embedder(owner),
         )
+    if name == "learn_knowledge":
+        if (args.get("relative_path") or "").strip():
+            doc_id = ingest_knowledge_file(
+                args.get("relative_path", ""),
+                title=args.get("title") or None,
+                kind=args.get("kind", "ingested"),
+                embedder=_owner_embedder(owner),
+            )
+        else:
+            doc_id = ingest_knowledge_text(
+                args.get("title", "Learned knowledge"),
+                args.get("text", ""),
+                source=args.get("source", ""),
+                kind=args.get("kind", "ingested"),
+                embedder=_owner_embedder(owner),
+            )
+        return json.dumps({"ok": bool(doc_id), "doc_id": doc_id}, ensure_ascii=False)
     entry = _TOOLS.get(name)
     if not entry:
         return f"[unknown tool: {name}]"
@@ -544,11 +667,8 @@ def dispatch_tool_checked(name: str, args: dict, owner=None) -> ToolResult:
 
 def _max_attempts_for(name: str) -> int:
     if name == "deep_research":
-        # A failed multi-round adaptive research call is expensive (several
-        # search+fetch rounds plus 2 extra LLM calls per round). Retry once,
-        # not with the same budget as a cheap single web_search/web_fetch.
         return max(1, int(os.getenv("AGENT_DEEP_RESEARCH_ATTEMPTS", 1)))
-    if name in {"web_search", "deep_search", "web_fetch"}:
+    if name == "deep_search":
         return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
     if name in {"save_note", "schedule_job", "schedule_reminder"}:
         return max(1, int(os.getenv("AGENT_LOCAL_TOOL_ATTEMPTS", 1)))
@@ -575,41 +695,30 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
     return last
 
 
-def _has_successful_tool_call(state: TaskState, tool_name: str) -> bool:
-    """Return True only when a prior call to a tool completed successfully."""
-    return any(step["tool"] == tool_name and step["ok"] for step in state.steps)
+def _research_call_count(state: TaskState) -> int:
+    """How many times deep_search/deep_research have already SUCCEEDED in
+    this workflow. The two tools share one counted budget so one task cannot
+    keep spending web/research calls indefinitely."""
+    return sum(1 for step in state.steps if step["tool"] in _RESEARCH_TOOLS and step["ok"])
 
 
-def _has_used_research_tool(state: TaskState) -> bool:
-    """True once either deep_search or deep_research has succeeded.
+def _compact_processed_tool_context(messages: list[dict], preview_chars: int = 1500) -> None:
+    """Shrink already-consumed tool observations once a later assistant
+    message has arrived, instead of letting every tool call in the loop
+    accumulate uncompacted for all MAX_AGENT_ITER iterations.
 
-    The two tools overlap in purpose (both do search+fetch), so they share
-    one once-per-workflow budget instead of two independent caps — otherwise
-    a model could call both in the same workflow and double up on fetching.
-    """
-    return any(_has_successful_tool_call(state, name) for name in _RESEARCH_TOOLS)
-
-
-def _compact_processed_research_context(messages: list[dict], preview_chars: int = 1500) -> None:
-    """Shrink already-consumed research tool observations instead of wiping
-    them to a content-free placeholder.
-
-    deep_search/deep_research now return embedding-condensed,
-    relevance-filtered bundles rather than raw fetched pages — what lands
-    here is already dense. So instead of discarding it outright once a later
-    assistant message has arrived (which previously lost the content
-    entirely, leaving later steps unable to reference specifics), keep a
-    bounded preview so a subsequent plan/checklist/note write in the same
-    workflow can still pull details without re-reading the full observation
-    on every later turn.
+    Generalized from a research-tool-only rule: any tool's output can
+    accumulate across iterations (repo_read_file, search_jobs, etc.), not
+    just deep_search/deep_research, so this now applies uniformly
+    to any tool-role message over _COMPACTABLE_MIN_CHARS.
     """
     for message in messages:
-        if message.get("role") != "tool" or message.get("name") not in _RESEARCH_CONTEXT_TOOLS:
+        if message.get("role") != "tool":
             continue
         content = str(message.get("content") or "")
-        if '"research_context_compacted"' in content:
+        if '"context_compacted"' in content:
             continue
-        if len(content) < 800:
+        if len(content) < _COMPACTABLE_MIN_CHARS:
             continue
         try:
             parsed = json.loads(content)
@@ -620,7 +729,7 @@ def _compact_processed_research_context(messages: list[dict], preview_chars: int
             {
                 "ok": True,
                 "tool": message.get("name"),
-                "research_context_compacted": True,
+                "context_compacted": True,
                 "evidence_preview": original_content[:preview_chars],
             },
             ensure_ascii=False,
@@ -647,14 +756,7 @@ def _sanitize_user_facing_tool_detail(detail: str, max_chars: int = 300) -> str:
     return text[:max_chars] or "unknown tool failure"
 
 def _build_incomplete_task_answer(state: TaskState, last_content: str = "") -> str:
-    """Create a useful final response when the model never emits final_answer.
-
-    This is the last-resort path for small/local models that keep looping,
-    produce invalid tool calls, or spend the whole iteration budget repairing a
-    final answer. It should disclose blockers without using the generic
-    "got lost" apology that makes successful partial work look like a total
-    failure.
-    """
+    """Create a useful final response when the model never emits final_answer."""
     lines: list[str] = []
     if state.evidence:
         lines.append("I completed these step(s):")
@@ -759,7 +861,7 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
 
 def _estimate_tokens(text: str) -> int:
     """Rough chars/4 token estimate — good enough for a budget guard, not
-    for billing/accounting (those use the real /tokenize endpoint elsewhere)."""
+    for billing/accounting."""
     return max(1, len(text) // 4)
 
 
@@ -771,21 +873,33 @@ def _enforce_agentic_context_budget(
     wiki_context: str,
     skill_context: str,
     knowledge_context: str,
-) -> tuple[str, str, str]:
-    """Drop wiki/knowledge/skill context, lowest priority first, if the
-    assembled prompt would still exceed the ctx budget after the per-call
-    caps applied at the call site. Returns the (possibly trimmed) three
-    context strings in their original order."""
-    budget = int(LLM_CTX_SIZE * AGENT_CONTEXT_BUDGET_RATIO)
-    fixed = persona + agentic_policy_context + memory_context + user_input
-    fixed_tokens = _estimate_tokens(fixed)
+    experience_context: str,
+) -> tuple[str, str, str, str, str]:
+    """Drop context blocks, lowest priority first, if the assembled prompt
+    would still exceed the ctx budget. Fixed cost now includes an estimate
+    of the tool-schema tokens sent with every call (previously ignored),
+    and agentic_policy_context is a droppable block rather than treated as
+    immovable — it's RAG-selected and capped now, but a growing
+    skills.md/schedule.md should still be trimmable under real pressure
+    instead of silently contributing to overflow.
 
-    # Priority order to drop, weakest first: wiki > knowledge > skill.
+    Returns (wiki, skill, knowledge, agentic_policy, experience) in that order.
+    """
+    budget = int(LLM_CTX_SIZE * AGENT_CONTEXT_BUDGET_RATIO)
+    fixed = persona + memory_context + user_input
+    fixed_tokens = _estimate_tokens(fixed) + _TOOL_SCHEMA_TOKENS_ESTIMATE
+
+    # Priority order to drop, weakest first: experience > wiki > knowledge > agentic_policy > skill.
     # Skill workflows are kept longest since they carry concrete tool
-    # instructions the agent loop actually needs to act correctly; wiki
-    # pages are the most "nice to have" background context.
-    blocks = {"wiki": wiki_context, "knowledge": knowledge_context, "skill": skill_context}
-    drop_order = ["wiki", "knowledge", "skill"]
+    # instructions the agent loop needs to act correctly.
+    blocks = {
+        "wiki": wiki_context,
+        "knowledge": knowledge_context,
+        "experience": experience_context,
+        "agentic_policy": agentic_policy_context,
+        "skill": skill_context,
+    }
+    drop_order = ["experience", "wiki", "knowledge", "agentic_policy", "skill"]
 
     for name in drop_order:
         total_tokens = fixed_tokens + sum(_estimate_tokens(v) for v in blocks.values())
@@ -795,9 +909,12 @@ def _enforce_agentic_context_budget(
             "[agentic] context budget exceeded (%s > %s est. tokens); dropping %s block",
             total_tokens, budget, name,
         )
-        blocks[name] = f"<{name}_context>\nOmitted this turn — context budget exceeded.\n</{name}_context>"
+        if name == "agentic_policy":
+            blocks[name] = "<agentic_policy_context>\nOmitted this turn — context budget exceeded.\n</agentic_policy_context>"
+        else:
+            blocks[name] = f"<{name}_context>\nOmitted this turn — context budget exceeded.\n</{name}_context>"
 
-    return blocks["wiki"], blocks["skill"], blocks["knowledge"]
+    return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"]
 
 
 def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
@@ -809,31 +926,27 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     memories = owner._memorize.search(user_input, limit=AGENT_MEMORY_RECALL_LIMIT)
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
-    agentic_policy_context = _agentic_policy_context()
-    # These previously had no size caps at all in the agentic path (unlike
-    # think.py's normal chat path, which caps knowledge_context_for at
-    # limit=3/max_chars=4500). An unrelated but coincidentally-matched skill
-    # or doc could inject thousands of tokens into a task-mode turn with no
-    # ceiling, which is what caused the 12288-ctx overflow on a routine
-    # "let's make cookies" turn. Cap all three here; the relevance-scoring
-    # fixes in knowledge.py/skills.py reduce *bad* matches, but these caps
-    # bound the damage even from a still-imperfect match.
+
     # Reuse the same HarrierEmbedder instance already warm for memory search
-    # and intent routing (think.py's _semantic_all_scores uses the same
-    # object) — no extra model load, just one more embed_query() call per
-    # context type. Falls back to keyword scoring automatically if this
-    # embedder is missing or an embed call fails (see knowledge.py/skills.py).
+    # and intent routing for every RAG-selection call below (agentic policy,
+    # wiki, skill, knowledge). Falls back to keyword scoring automatically
+    # if unavailable.
     _embedder = _owner_embedder(owner)
+    agentic_policy_context = _agentic_policy_context(user_input, embedder=_embedder)
     wiki_context = wiki_context_for(user_input, limit=1, max_chars=1500, embedder=_embedder)
     skill_context = skill_context_for(user_input, limit=2, max_chars=3000, embedder=_embedder)
-    knowledge_context = knowledge_context_for(user_input, limit=2, max_chars=2500, embedder=_embedder)
-    wiki_context, skill_context, knowledge_context = _enforce_agentic_context_budget(
+    wiki_knowledge_context = wiki_knowledge_context_for(user_input, limit=2, max_chars=2500, embedder=_embedder)
+    knowledge_context = knowledge_context_for(user_input, limit=3, max_chars=2500, embedder=_embedder)
+    experience_context = experience.experience_context_for(user_input, limit=3, embedder=_embedder)
+    knowledge_context = f"{wiki_knowledge_context}\n\n{knowledge_context}"
+    wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,
-        wiki_context, skill_context, knowledge_context,
+        wiki_context, skill_context, knowledge_context, experience_context,
     )
 
     agent_system = (
         f"{owner._persona}\n\n"
+        f"{bioclock.current_datetime_block()}\n\n"
         f"{agentic_policy_context}\n\n"
         f"{wiki_context}\n\n"
         "[TASK MODE OVERRIDE] The speech style limits in the persona do NOT apply "
@@ -842,11 +955,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         f"{memory_context}\n\n"
         f"{skill_context}\n\n"
         f"{knowledge_context}\n\n"
+        f"{experience_context}\n\n"
         "[TASK MODE] You MUST use tools to complete tasks. Treat agentic work as "
         "a sequence of steps, not one category: plan/decide when useful, research "
-        "with web_search for snippet-only discovery, deep_search for a single "
-        "search+fetch pass, or deep_research for a multi-round adaptive research "
-        "pass when the topic needs more than one search angle, "
+        "with deep_search for snippet-only discovery/support inside a workflow, "
+        "or deep_research for fetched source reading, synthesis, and self-learning, "
         "inspect repository files for coding or architecture work, schedule with "
         "schedule_job or schedule_reminder when requested, and write or save the "
         "result when the user asks for an artifact. Research tasks should normally "
@@ -860,11 +973,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "Tool observations are structured JSON. If ok=false, do not pretend the "
         "action succeeded: retry with corrected arguments, choose another tool or "
         "query, or clearly disclose the limitation in the final answer. "
-        "Use deep_search or deep_research at most once per agentic workflow, and only one "
-        "of the two, not both. After it returns, read its evidence and continue with the "
-        "next productive step (plan, summarize, save, or answer) instead of searching again. "
-        "Use web_search only for lightweight snippet discovery; snippets alone are not "
-        "enough for verified detailed notes. "
+        f"deep_search/deep_research together may be used at most {AGENT_RESEARCH_MAX_CALLS} "
+        "time(s) per agentic workflow. After research returns, read its evidence and "
+        "continue with the next productive step (plan, summarize, save, or answer) "
+        "instead of searching again. In task mode, do not use web_search/web_fetch directly; "
+        "deep_search is snippet-only and deep_research is for fetched evidence. "
         "When writing notes after research: cross-check any hardware specs, "
         "commands, or version numbers against fetched page content only — "
         "never state technical facts from memory alone. If a fact cannot be "
@@ -872,8 +985,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
         "If a research tool result explicitly says no relevant content was "
         "found, disclose that gap plainly in the final answer instead of "
         "guessing or filling it in from memory. "
-        "Use <skill_context> and <knowledge_context> when they match the task. For repeatable workflows, "
-        "prefer the predefined skill's workflow and local knowledge and operating cards over inventing a new process. "
+        "Use <skill_context>, <knowledge_context>, and <experience_context> when they match the task. "
+        "For repeatable workflows, prefer predefined skill workflow, learned knowledge, wiki operating cards, and successful similar past experience over inventing a new process. "
         "If no matching skill exists, continue with generic tools. "
         "CRITICAL: When asked to save a file, call save_note BEFORE writing "
         "any content in chat. Do not describe what you will save — just save it. "
@@ -893,6 +1006,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             {"label": "wiki_context", "content": wiki_context},
             {"label": "skill_context", "content": skill_context},
             {"label": "knowledge_context", "content": knowledge_context},
+            {"label": "experience_context", "content": experience_context},
             {"label": "task_mode_system", "content": agent_system},
         ],
         "previous_chat_messages": [],
@@ -910,6 +1024,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     seen_calls: set[tuple[str, str]] = set()
     state = TaskState(goal=user_input)
     final_repairs = 0
+    last_verdict: VerificationResult | None = None
+    used_incomplete_fallback = False
 
     for step in range(MAX_AGENT_ITER):
         if token_callback:
@@ -932,7 +1048,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 "total_tokens": getattr(usage, "total_tokens", None),
             }
             messages.append(msg.model_dump(exclude_none=True))
-            _compact_processed_research_context(messages)
+            _compact_processed_tool_context(messages)
         except Exception as e:
             log.error("Agent LLM call failed: %s", e)
             state.record(ToolResult(
@@ -947,6 +1063,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             candidate = msg.content or ""
             if AGENT_VERIFY_FINAL:
                 verdict = _verify_final_answer(owner, user_input, candidate, state)
+                last_verdict = verdict
                 if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
                     final_repairs += 1
                     messages.append({
@@ -983,13 +1100,14 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 continue
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
-            if name in _RESEARCH_TOOLS and _has_used_research_tool(state):
+            if name in _RESEARCH_TOOLS and _research_call_count(state) >= AGENT_RESEARCH_MAX_CALLS:
                 result = ToolResult(
                     ok=False, tool=name, args=args,
                     content=(
-                        "A deep_search/deep_research call was already used in this "
-                        "agentic workflow. Do not search again; use the evidence "
-                        "already gathered to plan, summarize, save, or answer."
+                        f"deep_search/deep_research have already been used "
+                        f"{AGENT_RESEARCH_MAX_CALLS} time(s) in this agentic workflow. "
+                        "Do not search again; use the evidence already gathered to "
+                        "plan, summarize, save, or answer."
                     ),
                     error_type="research_limit_reached",
                     retryable=False,
@@ -1026,6 +1144,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
                 candidate = args.get("answer", "")
                 if AGENT_VERIFY_FINAL:
                     verdict = _verify_final_answer(owner, user_input, candidate, state)
+                    last_verdict = verdict
                     if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
                         final_repairs += 1
                         messages.append({
@@ -1063,7 +1182,21 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             MAX_AGENT_ITER, len(state.steps), len(state.failures),
         )
         final_text = _build_incomplete_task_answer(state, last_content)
+        used_incomplete_fallback = True
 
+    if used_incomplete_fallback:
+        exp_verified_ok, exp_score = False, 0.0
+    elif last_verdict is not None:
+        exp_verified_ok, exp_score = last_verdict.ok, last_verdict.score
+    else:
+        exp_verified_ok, exp_score = True, 1.0
+
+    experience.record_experience(
+        owner, user_input, state.steps, final_text,
+        verified_ok=exp_verified_ok,
+        score=exp_score,
+        embedder=_embedder,
+    )
     owner._emit(final_text, token_callback=token_callback)
 
     with owner._history_lock:

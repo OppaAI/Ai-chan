@@ -1,0 +1,15 @@
+# Learned knowledge vector-store config
+#
+# Settings for core/knowledge.py, Aiko's machine-writable RAG store for
+# durable learned facts, user-ingested document/PDF text, and self-learning
+# research notes. This is separate from core/wiki.py, which indexes
+# human-authored wiki/skill/persona/config files.
+
+KNOWLEDGE_DB_PATH: "knowledge/knowledge.db"  # Relative paths are stored under the active user's state dir; encrypted when SQLITE_ENCRYPTION=1.
+KNOWLEDGE_STORE_CHUNK_CHARS: "900"  # Chunk size at ingest time; chunks are embedded once and stored individually.
+KNOWLEDGE_CONTEXT_CHARS: "3500"  # Max learned-knowledge context characters injected into a prompt.
+KNOWLEDGE_KNN_LIMIT: "20"  # sqlite-vec semantic candidates before RRF fusion.
+KNOWLEDGE_FTS_LIMIT: "20"  # FTS5 lexical candidates before RRF fusion.
+KNOWLEDGE_RRF_K: "60"  # Reciprocal Rank Fusion constant; higher dampens rank differences.
+KNOWLEDGE_RECALL_SCORE_THRESHOLD: "0.012"  # Minimum fused score for a learned chunk to be injected.
+KNOWLEDGE_QUERY_INSTRUCT: "Retrieve durable learned knowledge relevant to the request"

@@ -1,75 +1,56 @@
-"""Basic local knowledge retrieval for Aiko.
+"""Persistent learned knowledge store for Aiko.
 
-This module indexes durable, human-maintained project knowledge: wiki cards,
-skill docs/defaults, persona docs, selected config, and docs. It deliberately
-skips secrets and mutable workspace artifacts.
+This module is the machine-writable knowledge RAG layer: durable facts,
+excerpts, study notes, and user-approved document/PDF text that Aiko should
+be able to retrieve later. Human-authored wiki/skill/persona/config files live
+in :mod:`core.wiki`; this module owns the vector/FTS store for learned
+knowledge.
+
+Storage mirrors memory's retrieval shape without memory's forgetting lifecycle:
+rows are chunked at ingest time, embedded once, stored in encrypted SQLite when
+SQLITE_ENCRYPTION is enabled, and retrieved with Reciprocal Rank Fusion over
+sqlite-vec KNN plus FTS5 lexical search.
 """
-
 from __future__ import annotations
 
 import os
 import re
-import threading
-from dataclasses import dataclass
-from datetime import datetime, timezone
+import sqlite3
+import uuid
+import zipfile
+import xml.etree.ElementTree as ET
 from html import escape
 from pathlib import Path
 from typing import Iterable, Protocol
+import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as DET
 
-import numpy as np
+import sqlite_vec
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from core.config import load_config
+load_config()
 
-_SOURCE_GLOBS: tuple[tuple[str, str], ...] = (
-    ("wiki", "wiki/*.md"),
-    ("skill", "skills/*/SKILL.md"),
-    ("skill_config", "skills/*/*.json"),
-    ("persona", "persona/*.md"),
-    ("persona_config", "persona/*.json"),
-    ("config", "config/*.yaml"),
-    ("config", "config/*.json"),
-    ("config", "config/*.toml"),
-    ("docs", "*.md"),
-    ("docs", "docs/*.md"),
-)
+from core import reason
+from core.database import fts_or_query, initialize_sqlite_vec_db, resolve_user_db_path, rrf_score
+from core.log import get_logger
+from core.userspace import current_user_id, user_workspace_root
 
-_WORD_RE = re.compile(r"[a-z0-9_./-]+", re.IGNORECASE)
-_HEADING_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
-_FRONT_MATTER_RE = re.compile(r"^---\n(?P<meta>.*?)\n---\n", re.DOTALL)
+log = get_logger(__name__)
 
-# Common words that appear in nearly every document regardless of topic.
-# Without filtering these, a long unrelated doc (e.g. an install guide) can
-# rack up incidental +1 "text" hits on words like "how"/"make"/"we" and
-# qualify for injection even though it has nothing to do with the query.
-_STOPWORDS = frozenset({
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "do", "does", "did", "how", "what", "who", "when", "where", "why",
-    "we", "you", "i", "he", "she", "they", "this", "that", "these",
-    "those", "some", "any", "all", "each", "can", "could", "will",
-    "would", "should", "shall", "may", "might", "must", "to", "of", "in",
-    "on", "at", "for", "with", "and", "or", "not", "no", "yes", "make",
-    "made", "get", "got", "go", "going", "let", "lets", "want", "wants",
-    "just", "so", "up", "down", "out", "about", "if", "then", "than",
-})
+EMBED_DIMS = int(os.getenv("EMBED_DIMS", "640"))
+KNOWLEDGE_DB_PATH = os.getenv("KNOWLEDGE_DB_PATH", "knowledge/knowledge.db")
+KNOWLEDGE_RRF_K = int(os.getenv("KNOWLEDGE_RRF_K", "60"))
+KNOWLEDGE_KNN_LIMIT = int(os.getenv("KNOWLEDGE_KNN_LIMIT", "20"))
+KNOWLEDGE_FTS_LIMIT = int(os.getenv("KNOWLEDGE_FTS_LIMIT", "20"))
+KNOWLEDGE_RECALL_SCORE_THRESHOLD = float(os.getenv("KNOWLEDGE_RECALL_SCORE_THRESHOLD", "0.012"))
+KNOWLEDGE_CHUNK_CHARS = int(os.getenv("KNOWLEDGE_STORE_CHUNK_CHARS", os.getenv("KNOWLEDGE_CHUNK_CHARS", "900")))
+KNOWLEDGE_CONTEXT_CHARS = int(os.getenv("KNOWLEDGE_CONTEXT_CHARS", "3500"))
+KNOWLEDGE_QUERY_INSTRUCT = os.getenv(
+    "KNOWLEDGE_QUERY_INSTRUCT",
+    "Retrieve durable learned knowledge relevant to the request",
+).strip()
+KNOWLEDGE_WORKSPACE_DIR = os.getenv("KNOWLEDGE_WORKSPACE_DIR", "knowledge").strip().strip("/") or "knowledge"
 
-# Minimum score a knowledge item must reach before it's considered a genuine
-# match under the keyword fallback path. Without this floor, search_knowledge
-# includes anything with score > 0, which one stray substring hit satisfies.
-_MIN_RELEVANCE_SCORE = 3
-
-# ── semantic retrieval (Harrier embeddings) ─────────────────────────────────
-#
-# knowledge.py has no owner/session object of its own, so it can't reach
-# think.py's HarrierEmbedder directly. Callers pass one in explicitly (duck
-# typed to embed_query/embed_queries, matching think.py's usage) via the
-# `embedder` parameter on search_knowledge/knowledge_context_for/
-# wiki_context_for. When no embedder is given, or embedding fails for any
-# reason, everything falls back to the keyword scoring above — semantic
-# retrieval is strictly additive, never a hard dependency.
-
-_KNOWLEDGE_INSTRUCT = "Which document is most relevant to this request or question?"
-_KNOWLEDGE_SEMANTIC_THRESHOLD = float(os.getenv("KNOWLEDGE_SEMANTIC_THRESHOLD", "0.35"))
-_EMBED_TEXT_CHARS = 800  # condensed per-item representation, not the full doc
 
 
 class Embedder(Protocol):
@@ -77,259 +58,395 @@ class Embedder(Protocol):
     def embed_queries(self, texts: list[str], instruct: str = "") -> object: ...
 
 
-_item_embed_cache: dict[tuple[str, str], np.ndarray] = {}
-_item_embed_cache_lock = threading.RLock()
+_DDL = """
+PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS learned_docs (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL DEFAULT 'ingested',
+    created_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS learned_chunks (
+    id          TEXT PRIMARY KEY,
+    doc_id      TEXT NOT NULL REFERENCES learned_docs(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_learned_docs_user ON learned_docs(user_id);
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_doc ON learned_chunks(doc_id);
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_user ON learned_chunks(user_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_fts USING fts5(
+    text,
+    id UNINDEXED,
+    content='learned_chunks',
+    content_rowid='rowid'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_vec USING vec0(
+    id TEXT PRIMARY KEY,
+    embedding FLOAT[{dims}]
+);
+
+CREATE TRIGGER IF NOT EXISTS learned_chunks_ai AFTER INSERT ON learned_chunks BEGIN
+    INSERT INTO learned_chunks_fts(rowid, text, id) VALUES (new.rowid, new.text, new.id);
+END;
+
+CREATE TRIGGER IF NOT EXISTS learned_chunks_ad AFTER DELETE ON learned_chunks BEGIN
+    INSERT INTO learned_chunks_fts(learned_chunks_fts, rowid, text, id)
+    VALUES ('delete', old.rowid, old.text, old.id);
+    DELETE FROM learned_chunks_vec WHERE id = old.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS learned_chunks_au AFTER UPDATE OF text ON learned_chunks BEGIN
+    INSERT INTO learned_chunks_fts(learned_chunks_fts, rowid, text, id)
+    VALUES ('delete', old.rowid, old.text, old.id);
+    INSERT INTO learned_chunks_fts(rowid, text, id) VALUES (new.rowid, new.text, new.id);
+END;
+""".format(dims=EMBED_DIMS)
 
 
-def _normalize(vector: np.ndarray) -> np.ndarray:
-    arr = np.asarray(vector, dtype=np.float32)
-    norm = float(np.linalg.norm(arr))
-    return arr / norm if norm > 1e-12 else arr
+def _db_path(user_id: str | None = None) -> Path:
+    path = Path(KNOWLEDGE_DB_PATH).expanduser()
+    if path.is_absolute():
+        return path
+    return resolve_user_db_path(path, user_id=user_id)
 
 
-def _embed_source_text(item: "KnowledgeItem") -> str:
-    """Condensed text to embed per item — title + tags + a text excerpt,
-    not the full document (keeps embedding calls cheap and keeps the
-    vector focused on what the item is about rather than diluted by
-    boilerplate deep in a long file)."""
-    body = _FRONT_MATTER_RE.sub("", item.text, count=1).strip()
-    return f"{item.title}\n{' '.join(item.tags)}\n{body[:_EMBED_TEXT_CHARS]}"
+def _connect(user_id: str | None = None) -> sqlite3.Connection:
+    uid = user_id or current_user_id()
+    return initialize_sqlite_vec_db(_db_path(uid), _DDL, user_id=uid)
 
 
-def _get_item_embedding(item: "KnowledgeItem", embedder: Embedder) -> np.ndarray:
-    """Cached per (item_id, updated_at) — unchanged files never get
-    re-embedded, only new/edited ones."""
-    cache_key = (item.item_id, item.updated_at)
-    with _item_embed_cache_lock:
-        cached = _item_embed_cache.get(cache_key)
-        if cached is not None:
-            return cached
-    vector = _normalize(np.asarray(embedder.embed_query(_embed_source_text(item)), dtype=np.float32))
-    with _item_embed_cache_lock:
-        _item_embed_cache[cache_key] = vector
-    return vector
+def _now() -> str:
+    from core.bioclock import utc_now
+    return utc_now().isoformat()
 
 
-def _semantic_rank(
-    query: str, items: list["KnowledgeItem"], embedder: Embedder, threshold: float,
-) -> list["KnowledgeItem"] | None:
-    """Return items ranked by cosine similarity to the query, filtered by
-    `threshold`, or None if embedding fails (caller falls back to keyword
-    scoring in that case)."""
-    if not items:
-        return []
-    try:
-        query_vector = _normalize(np.asarray(embedder.embed_query(query, instruct=_KNOWLEDGE_INSTRUCT), dtype=np.float32))
-        scored: list[tuple[float, "KnowledgeItem"]] = []
-        for item in items:
-            item_vector = _get_item_embedding(item, embedder)
-            score = float(np.dot(query_vector, item_vector))
-            if score >= threshold:
-                scored.append((score, item))
-        scored.sort(key=lambda pair: -pair[0])
-        return [item for _score, item in scored]
-    except Exception:
-        return None
+def _sanitize_text(text: str, max_chars: int = 200_000) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip())[:max_chars]
 
 
-@dataclass(frozen=True)
-class KnowledgeItem:
-    item_id: str
-    kind: str
-    path: Path
-    title: str
-    text: str
-    tags: tuple[str, ...]
-    updated_at: str
-
-    def relative_path(self) -> str:
-        try:
-            return str(self.path.resolve().relative_to(REPO_ROOT.resolve()))
-        except ValueError:
-            return str(self.path)
-
-    def as_dict(self) -> dict:
-        return {
-            "id": self.item_id,
-            "kind": self.kind,
-            "path": self.relative_path(),
-            "title": self.title,
-            "tags": list(self.tags),
-            "updated_at": self.updated_at,
-        }
 
 
-def _read_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+
+def _safe_workspace_path(relative_path: str, user_id: str | None = None) -> Path:
+    root = user_workspace_root(user_id).resolve()
+    target = (root / relative_path).expanduser().resolve()
+    if root not in target.parents and target != root:
+        raise ValueError("path must stay inside the user workspace")
+    return target
 
 
-def _title_from_text(path: Path, text: str) -> str:
-    front = _FRONT_MATTER_RE.search(text)
-    if front:
-        for line in front.group("meta").splitlines():
-            key, found, value = line.partition(":")
-            if found and key.strip() in {"name", "title"}:
-                return value.strip().strip("'\"")
-    heading = _HEADING_RE.search(text)
-    if heading:
-        return heading.group(1).strip()
-    return path.stem.replace("_", " ").title()
-
-
-def _tags_for(kind: str, path: Path, text: str) -> tuple[str, ...]:
-    tags = {kind, path.stem}
-    try:
-        rel_parts = path.relative_to(REPO_ROOT).parts
-    except ValueError:
-        rel_parts = path.parts
-    tags.update(part for part in rel_parts[:-1] if part not in {".", ""})
-    front = _FRONT_MATTER_RE.search(text)
-    if front:
-        for line in front.group("meta").splitlines():
-            key, found, value = line.partition(":")
-            if found and key.strip() in {"id", "status", "owner", "related", "triggers", "tools"}:
-                tags.update(part.strip() for part in value.split(",") if part.strip())
-    return tuple(sorted(tags))
-
-
-def _updated_at(path: Path) -> str:
-    try:
-        mtime = path.stat().st_mtime
-    except OSError:
-        return ""
-    return datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
-
-
-def discover_knowledge_items(root: str | Path = REPO_ROOT) -> list[KnowledgeItem]:
-    base = Path(root)
-    items: list[KnowledgeItem] = []
-    for kind, pattern in _SOURCE_GLOBS:
-        for path in sorted(base.glob(pattern)):
-            if not path.is_file():
-                continue
+def _xml_text_from_zip(path: Path, members: Iterable[str]) -> str:
+    chunks: list[str] = []
+    with zipfile.ZipFile(path) as zf:
+        for member in members:
             try:
-                text = _read_text(path)
-            except OSError:
+                data = zf.read(member)
+            except KeyError:
                 continue
-            rel = path.relative_to(base)
-            item_id = str(rel.with_suffix("")).replace("/", ".")
-            items.append(KnowledgeItem(
-                item_id=item_id,
-                kind=kind,
-                path=path,
-                title=_title_from_text(path, text),
-                text=text,
-                tags=_tags_for(kind, path, text),
-                updated_at=_updated_at(path),
-            ))
-    return items
+             root = DET.fromstring(data)
+            chunks.extend(t.strip() for t in root.itertext() if t and t.strip())
+    return "\n".join(chunks)
 
 
-def _terms(text: str) -> list[str]:
-    return [
-        match.group(0).casefold()
-        for match in _WORD_RE.finditer(text)
-        if match.group(0).strip() and match.group(0).casefold() not in _STOPWORDS
-    ]
+def _xlsx_text(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        shared: list[str] = []
+        try:
+            root = DET.fromstring(zf.read("xl/sharedStrings.xml"))
+            shared = [" ".join(t.strip() for t in si.itertext() if t and t.strip()) for si in root]
+        except KeyError:
+            pass
+        out: list[str] = []
+        for name in sorted(n for n in zf.namelist() if n.startswith("xl/worksheets/") and n.endswith(".xml")):
+            root = DET.fromstring(zf.read(name))
+            for c in root.iter():
+                if not c.tag.endswith("}c"):
+                    continue
+                cell_type = c.attrib.get("t")
+                value = None
+                for child in c:
+                    if child.tag.endswith("}v"):
+                        value = child.text
+                        break
+                if value is None:
+                    continue
+                if cell_type == "s":
+                    try:
+                        value = shared[int(value)]
+                    except Exception:
+                        pass
+                out.append(str(value))
+    return "\n".join(out)
 
 
-def _score_item(item: KnowledgeItem, terms: Iterable[str]) -> int:
-    title = item.title.casefold()
-    item_id = item.item_id.casefold()
-    tags = " ".join(item.tags).casefold()
-    text = item.text.casefold()
-    score = 0
-    for term in terms:
-        if term in item_id:
-            score += 5
-        if term in title:
-            score += 4
-        if term in tags:
-            score += 3
-        if term in text:
-            score += 1
-    return score
+def _epub_text(path: Path) -> str:
+    texts: list[str] = []
+    with zipfile.ZipFile(path) as zf:
+        for name in sorted(zf.namelist()):
+            if name.casefold().endswith((".xhtml", ".html", ".htm")):
+                raw = zf.read(name).decode("utf-8", errors="replace")
+                raw = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", raw, flags=re.I)
+                texts.append(re.sub(r"<[^>]+>", " ", raw))
+    return "\n".join(texts)
+
+
+def extract_text_from_file(relative_path: str, *, user_id: str | None = None, max_chars: int = 200_000) -> tuple[str, str]:
+    """Extract text from a workspace document for learned-knowledge ingest.
+
+    Supports plain text/Markdown/config files directly, HTML via trafilatura
+    when installed, and PDF via pypdf/PyPDF2 when installed. Returns
+    (text, source_path). Raises ValueError with a user-facing reason when the
+    file cannot be read/extracted.
+    """
+    path = _safe_workspace_path(relative_path, user_id)
+    if not path.is_file():
+        raise ValueError(f"workspace file not found: {relative_path}")
+    suffix = path.suffix.casefold()
+    if suffix in {".txt", ".md", ".rst", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log", ".py", ".js", ".ts", ".html", ".htm", ".tex", ".latex", ".rtf"}:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        if suffix in {".html", ".htm"}:
+            try:
+                import trafilatura  # type: ignore
+                raw = trafilatura.extract(raw, include_links=False, include_tables=False) or raw
+            except Exception:
+                pass
+        return _sanitize_text(raw, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".docx":
+        text = _xml_text_from_zip(path, ["word/document.xml"])
+        return _sanitize_text(text, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".xlsx":
+        return _sanitize_text(_xlsx_text(path), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".epub":
+        return _sanitize_text(_epub_text(path), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".pdf":
+        reader_cls = None
+        try:
+            from pypdf import PdfReader  # type: ignore
+            reader_cls = PdfReader
+        except Exception:
+            try:
+                from PyPDF2 import PdfReader  # type: ignore
+                reader_cls = PdfReader
+            except Exception as exc:
+                raise ValueError("PDF ingest needs pypdf or PyPDF2 installed") from exc
+        reader = reader_cls(str(path))
+        pages = []
+        for page in reader.pages:
+            pages.append(page.extract_text() or "")
+            if sum(len(p) for p in pages) >= max_chars:
+                break
+        return _sanitize_text("\n\n".join(pages), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    raise ValueError(f"unsupported knowledge file type: {suffix or 'no extension'}")
+
+
+def ingest_file(
+    relative_path: str,
+    *,
+    title: str | None = None,
+    kind: str = "ingested",
+    embedder: Embedder | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    """Extract a workspace file and store it in learned knowledge RAG."""
+    text, source = extract_text_from_file(relative_path, user_id=user_id)
+    return ingest_text(title or Path(relative_path).stem.replace("_", " ").title(), text, source=source, kind=kind, embedder=embedder, user_id=user_id)
+
+def ingest_text(
+    title: str,
+    text: str,
+    *,
+    source: str = "",
+    kind: str = "ingested",
+    embedder: Embedder | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    """Chunk, embed, and persist durable learned knowledge."""
+    clean = _sanitize_text(text)
+    if not clean:
+        return None
+    uid = user_id or current_user_id()
+    doc_id = str(uuid.uuid4())
+    created_at = _now()
+    chunks = reason.chunk_text(clean, KNOWLEDGE_CHUNK_CHARS) or [clean]
+    conn = _connect(uid)
+    try:
+        conn.execute(
+            "INSERT INTO learned_docs(id,user_id,title,source,kind,created_at) VALUES(?,?,?,?,?,?)",
+            (doc_id, uid, (title or "Untitled knowledge")[:200], source[:500], kind[:50], created_at),
+        )
+        vectors = []
+        if embedder is not None:
+            batch = reason.embed_batch_or_none(embedder, chunks)
+            vectors = list(batch) if batch is not None and len(batch) == len(chunks) else []
+        for index, chunk in enumerate(chunks):
+            chunk_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at) VALUES(?,?,?,?,?,?)",
+                (chunk_id, doc_id, uid, index, chunk, created_at),
+            )
+            if vectors:
+                conn.execute(
+                    "INSERT INTO learned_chunks_vec(id, embedding) VALUES(?, ?)",
+                    (chunk_id, sqlite_vec.serialize_float32(vectors[index])),
+                )
+        conn.commit()
+        return doc_id
+    except Exception as exc:
+        conn.rollback()
+        log.warning("Failed to ingest knowledge: %s", exc)
+        return None
+    finally:
+        conn.close()
+
+
+
+def _knowledge_sources(conn: sqlite3.Connection, uid: str) -> set[str]:
+    rows = conn.execute("SELECT source FROM learned_docs WHERE user_id=?", (uid,)).fetchall()
+    return {str(row["source"]) for row in rows if row["source"]}
+
+
+def ingest_workspace_knowledge_folder(*, embedder: Embedder | None = None, user_id: str | None = None) -> list[str]:
+    """Ingest new files dropped under <workspace>/knowledge into the KB DB.
+
+    The scan is idempotent by source path: files already present in learned_docs.source
+    are skipped. Unsupported files are logged and left in place for a future run.
+    """
+    uid = user_id or current_user_id()
+    root = user_workspace_root(uid)
+    folder = (root / KNOWLEDGE_WORKSPACE_DIR).resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    conn = _connect(uid)
+    try:
+        known = _knowledge_sources(conn, uid)
+    finally:
+        conn.close()
+    doc_ids: list[str] = []
+    for path in sorted(p for p in folder.rglob("*") if p.is_file() and not p.name.startswith(".")):
+        rel = str(path.relative_to(root))
+        if rel in known:
+            continue
+        try:
+            doc_id = ingest_file(rel, kind="workspace_drop", embedder=embedder, user_id=uid)
+        except Exception as exc:
+            log.warning("skipping workspace knowledge file %s: %s", rel, exc)
+            continue
+        if doc_id:
+            known.add(rel)
+            doc_ids.append(doc_id)
+            log.info("ingested workspace knowledge file %s as %s", rel, doc_id)
+    return doc_ids
+
+
+def _knn(conn: sqlite3.Connection, query: str, embedder: Embedder | None, uid: str, limit: int) -> list[sqlite3.Row]:
+    if embedder is None:
+        return []
+    vector = embedder.embed_query(query, instruct=KNOWLEDGE_QUERY_INSTRUCT)
+    blob = sqlite_vec.serialize_float32(vector)
+    return conn.execute(
+        """
+        SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
+        FROM learned_chunks_vec v
+        JOIN learned_chunks c ON c.id = v.id
+        WHERE c.user_id = ?
+        ORDER BY dist ASC
+        LIMIT ?
+        """,
+        (blob, uid, limit),
+    ).fetchall()
+
+
+def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sqlite3.Row]:
+    fts = fts_or_query(query)
+    if not fts:
+        return []
+    return conn.execute(
+        """
+        SELECT f.id
+        FROM learned_chunks_fts f
+        JOIN learned_chunks c ON c.id = f.id
+        WHERE learned_chunks_fts MATCH ? AND c.user_id = ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (fts, uid, limit),
+    ).fetchall()
 
 
 def search_knowledge(
     query: str,
-    limit: int = 6,
-    kinds: Iterable[str] | None = None,
+    limit: int = 5,
+    *,
     embedder: Embedder | None = None,
-) -> list[KnowledgeItem]:
-    wanted = {kind for kind in kinds} if kinds is not None else None
-    items = [item for item in discover_knowledge_items() if wanted is None or item.kind in wanted]
-    if not query.strip():
-        return items[:limit]
-
-    if embedder is not None:
-        ranked = _semantic_rank(query, items, embedder, _KNOWLEDGE_SEMANTIC_THRESHOLD)
-        if ranked is not None:
-            return ranked[:limit]
-        # embedding failed for some reason — fall through to keyword scoring
-
-    query_terms = _terms(query)
-    if not query_terms:
-        # Query had content but it was entirely stopwords (e.g. "how do we
-        # do this") — that's not a real topical query, so match nothing
-        # rather than silently returning arbitrary items.
+    user_id: str | None = None,
+) -> list[dict]:
+    uid = user_id or current_user_id()
+    conn = _connect(uid)
+    try:
+        rank_knn = {row["id"]: i + 1 for i, row in enumerate(_knn(conn, query, embedder, uid, KNOWLEDGE_KNN_LIMIT))}
+        rank_fts = {row["id"]: i + 1 for i, row in enumerate(_fts(conn, query, uid, KNOWLEDGE_FTS_LIMIT))}
+        ids = set(rank_knn) | set(rank_fts)
+        if not ids:
+            return []
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"""
+            SELECT c.id, c.text, c.chunk_index, c.created_at,
+                   d.title, d.source, d.kind, d.id AS doc_id
+            FROM learned_chunks c
+            JOIN learned_docs d ON d.id = c.doc_id
+            WHERE c.id IN ({placeholders})
+            """,
+            list(ids),
+        ).fetchall()
+        by_id = {row["id"]: row for row in rows}
+        scored: list[tuple[float, str]] = []
+        for cid in ids:
+            score = rrf_score(cid, rank_knn, rank_fts, k=KNOWLEDGE_RRF_K)
+            if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD and cid in by_id:
+                scored.append((score, cid))
+        scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
+        return [dict(by_id[cid]) | {"score": score} for score, cid in scored[:limit]]
+    except Exception as exc:
+        log.warning("Knowledge search failed: %s", exc)
         return []
-
-    scored = [
-        (score, item)
-        for item in items
-        if (score := _score_item(item, query_terms)) >= _MIN_RELEVANCE_SCORE
-    ]
-    scored.sort(key=lambda pair: (-pair[0], pair[1].kind, pair[1].item_id))
-    return [item for _score, item in scored[:limit]]
+    finally:
+        conn.close()
 
 
 def _attr(value: object) -> str:
-    return escape(str(value), quote=True)
+    return escape(str(value or ""), quote=True)
 
 
 def knowledge_context_for(
-    query: str, limit: int = 5, max_chars: int = 9000, embedder: Embedder | None = None,
+    query: str,
+    limit: int = 5,
+    max_chars: int | None = None,
+    embedder: Embedder | None = None,
 ) -> str:
-    selected = search_knowledge(query, limit=limit, embedder=embedder)
-    if not selected:
-        return "<knowledge_context>\nNo matching local knowledge found.\n</knowledge_context>"
-
-    chunks: list[str] = []
-    remaining = max_chars
-    for item in selected:
+    hits = search_knowledge(query, limit=limit, embedder=embedder)
+    if not hits:
+        return "<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"
+    remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
+    blocks: list[str] = []
+    for hit in hits:
         if remaining <= 0:
             break
-        text = item.text.strip()[:remaining]
-        meta = item.as_dict()
-        attrs = (
-            f'id="{_attr(meta["id"])}" '
-            f'kind="{_attr(meta["kind"])}" '
-            f'path="{_attr(meta["path"])}" '
-            f'title="{_attr(meta["title"])}" '
-            f'updated_at="{_attr(meta["updated_at"])}"'
-        )
-        chunks.append(
-            f"<knowledge_item {attrs}>\n"
-            f"tags: {', '.join(meta['tags'])}\n\n{text}\n</knowledge_item>"
+        text = str(hit["text"])[:remaining]
+        blocks.append(
+            f'<knowledge_chunk doc_id="{_attr(hit["doc_id"])}" title="{_attr(hit["title"])}" '
+            f'kind="{_attr(hit["kind"])}" source="{_attr(hit["source"])}" score="{hit["score"]:.4f}">\n'
+            f'{text}\n</knowledge_chunk>'
         )
         remaining -= len(text)
-    return "<knowledge_context>\n" + "\n\n".join(chunks) + "\n</knowledge_context>"
-
-
-def wiki_context_for(
-    query: str, limit: int = 2, max_chars: int = 5000, embedder: Embedder | None = None,
-) -> str:
-    selected = search_knowledge(query, limit=limit, kinds=("wiki",), embedder=embedder)
-    if not selected:
-        return "<wiki_context>\nNo operational wiki pages found.\n</wiki_context>"
-
-    chunks: list[str] = []
-    remaining = max_chars
-    for item in selected:
-        if remaining <= 0:
-            break
-        text = item.text.strip()[:remaining]
-        chunks.append(f"<wiki_page id=\"{_attr(item.path.stem)}\">\n{text}\n</wiki_page>")
-        remaining -= len(text)
-    return "<wiki_context>\n" + "\n\n".join(chunks) + "\n</wiki_context>"
+    return "<knowledge_context>\n" + "\n\n".join(blocks) + "\n</knowledge_context>"
