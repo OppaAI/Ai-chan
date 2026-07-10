@@ -127,7 +127,13 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
     ]
     outcome = "ok" if verified_ok else ("partial" if any(s.ok for s in exp_steps) else "failed")
     step_text = ", ".join(f"{s.tool}({'+'.join(s.arg_keys) or '-'})[{'ok' if s.ok else s.error_type or 'fail'}]" for s in exp_steps)
-    record_text = f"Goal: {_sanitize(goal, 700)}\nSteps: {step_text}\nOutcome: {outcome}\nScore: {float(score):.2f}"
+    record_text = (
+        f"Goal: {_sanitize(goal, 700)}\n"
+        f"Steps: {step_text}\n"
+        f"Outcome: {outcome}\n"
+        f"Score: {float(score):.2f}\n"
+        f"Result: {_sanitize(final_answer, 300)}"
+    )
     row_id = str(uuid.uuid4())
     conn = _connect(uid)
     try:
