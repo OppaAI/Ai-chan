@@ -26,15 +26,11 @@ Optional:
   USER_STATE_ROOT — root directory for user state (default: ~/.aiko)
 
 Idempotency:
-  generate_and_post() pins two kinds of permanent memory per date: a
-  stylized prose summary ("Daily experience summary for YYYY-MM-DD: ...")
-  and a faithful fact-list ("Day record for YYYY-MM-DD: ..."). Both are
-  pinned (immune to dream()'s decay cleanup and merge-as-loser), so if this
-  function runs more than once for the same date — a double-fired
-  scheduler, a crash-and-restart, a manual rerun after a dry run — it used
-  to just keep stacking new pinned rows, since the prose is regenerated
-  fresh each call (temperature=0.85) and rarely lands close enough in
-  embedding space to trip add_raw()'s write-time cosine dedup.
+  generate_and_post() pins daily atomic facts to memory.db and the faithful
+  day-level blob ("Daily journal of YYYY-MM-DD: ...") to journal.db. The
+  journal uses the same encrypted SQLite path as memory and is upserted by
+  date, so reruns replace the day blob instead of stacking duplicates.
+  Legacy memory.db "Day record for YYYY-MM-DD:" blobs are still cleaned up.
 
   _delete_existing_daily_pins() now runs immediately before the pin step,
   matching by content prefix (the date string embedded in the memory text)
@@ -92,7 +88,9 @@ _GITHUB_API = "https://api.github.com"
 # If you change either f-string's wording at the call sites, update these too.
 
 _DAILY_SUMMARY_PREFIX_TMPL = "Daily experience summary for {date_str}:"
-_DAY_RECORD_PREFIX_TMPL    = "Day record for {date_str}:"
+_DAY_JOURNAL_PREFIX_TMPL = "Daily journal of {date_str}:"
+# Backward-compatible name for legacy cleanup callers.
+_DAY_RECORD_PREFIX_TMPL = _DAY_JOURNAL_PREFIX_TMPL
 
 # ── daily summary mode unlock ─────────────────────────────────────────────────
 
@@ -592,19 +590,19 @@ def _push_post_and_image(
         log.error(f"Ref update failed {update_resp.status_code}: {update_resp.text[:300]}")
         return False
 
-# ── faithful daily record (non-LLM, permanent) ────────────────────────────────
+# ── faithful daily journal (non-LLM, permanent) ────────────────────────────────
 
-def build_daily_record(snippets: list[str], date: datetime) -> str:
+def build_daily_journal(snippets: list[str], date: datetime) -> str:
     """
-    Build a faithful, non-LLM record of one day's deduplicated memory facts.
+    Build a faithful, non-LLM journal of one day's deduplicated memory facts.
     No paraphrasing, no invention — verbatim facts in chronological order.
-    Meant to be pinned forever as ground truth, separate from the stylized
-    prose reflection.
+    Meant to be pinned forever in journal.db as ground truth, separate
+    from the stylized prose reflection.
     """
     date_str = date.strftime("%Y-%m-%d")
     if not snippets:
-        return f"Day record for {date_str}: no memories recorded."
-    header = f"Day record for {date_str}:"
+        return f"Daily journal of {date_str}: no memories recorded."
+    header = f"Daily journal of {date_str}:"
     return header + "\n" + "\n".join(f"- {s}" for s in snippets)
 
 # ── idempotency guard ─────────────────────────────────────────────────────────
@@ -612,7 +610,7 @@ def build_daily_record(snippets: list[str], date: datetime) -> str:
 def _delete_existing_daily_pins(memorize, date: datetime) -> int:
     date_str = date.strftime("%Y-%m-%d")
     date_tag = f"[{date_str}]"
-    day_record_prefix = _DAY_RECORD_PREFIX_TMPL.format(date_str=date_str)
+    day_record_prefix = _DAY_JOURNAL_PREFIX_TMPL.format(date_str=date_str)
 
     try:
         all_mems = memorize.get_all()
@@ -623,13 +621,10 @@ def _delete_existing_daily_pins(memorize, date: datetime) -> int:
     deleted = 0
     for m in all_mems:
         text = m.get("memory") or ""
-        # Matches both pin shapes for this date: atomic facts tagged
-        # "[YYYY-MM-DD] ..." and the single "Day record for YYYY-MM-DD:"
-        # block. Previously only the fact tag was checked, so a rerun for
-        # the same date (double-fired scheduler, crash+restart, manual
-        # rerun) left the old day-record block in place and pinned a
-        # second, near-identical one alongside it instead of replacing it.
-        if not (text.startswith(date_tag) or text.startswith(day_record_prefix)):
+        # Matches memory.db pin shapes for this date: atomic facts tagged
+        # "[YYYY-MM-DD] ..." and legacy day-record/journal blobs. New daily
+        # journal blobs live in journal.db and are replaced by date there.
+        if not (text.startswith(date_tag) or text.startswith(day_record_prefix) or text.startswith(f"Day record for {date_str}:")):
             continue
         mem_id = m.get("id")
         if not mem_id:
@@ -668,7 +663,7 @@ def generate_and_post(
     so reruns replace rather than accumulate. See
     _delete_existing_daily_pins() for why this can't be done via created_at.
 
-    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, feelings, image_generated, pinned, record_pinned}
+    Returns dict: {success, slug, word_count, mem_count, duration_s, prose, feelings, image_generated, pinned, journal_pinned}
     """
     t_start    = time.perf_counter()
     local_tz   = datetime.now().astimezone().tzinfo
@@ -738,6 +733,7 @@ def generate_and_post(
             "feelings":        feelings,
             "image_generated": image_generated,
             "pinned":          False,
+            "journal_pinned":  False,
         }
 
     # Step 3b: idempotency guard — remove any stale pins for this date
@@ -768,15 +764,16 @@ def generate_and_post(
 
     pinned = pinned_count > 0
 
-    # Step 4b: pin the faithful fact-list day record — ground truth, separate
-    # from the stylized prose above. Never paraphrased, never invented.
-    record_pinned = False
-    if memorize is not None:
-        try:
-            day_record = build_daily_record(snippets, date)
-            record_pinned = bool(memorize.add_raw(day_record, pinned=True))
-        except Exception as e:
-            log.error(f"Daily record pin failed: {e}")
+    # Step 4b: pin the faithful fact-list daily journal in journal.db — ground
+    # truth, separate from both atomic memory facts and stylized prose. Never
+    # paraphrased, never invented.
+    journal_pinned = False
+    try:
+        from core.journal import pin_daily_journal
+        daily_journal = build_daily_journal(snippets, date)
+        journal_pinned = bool(pin_daily_journal(daily_journal, date))
+    except Exception as e:
+        log.error(f"Daily journal pin failed: {e}")
 
     # Step 5: optionally push image and Hugo post together. Daily memory
     # pins still happen even when public blog posting is disabled.
@@ -802,4 +799,5 @@ def generate_and_post(
         "feelings":        feelings,
         "image_generated": image_generated,
         "pinned":          pinned,
+        "journal_pinned":  journal_pinned,
     }

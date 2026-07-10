@@ -138,7 +138,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from core.database import connect_sqlite_vec, resolve_user_db_path
+from core.databank import initialize_store_db, resolve_user_db_path
 from core.userspace import current_user_id, user_state_path
 import sqlite_vec
 from openai import OpenAI
@@ -581,11 +581,11 @@ class _MemoryBackend:
         self._apply_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        return connect_sqlite_vec(self._db_path, user_id=self._user_id)
+        return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
 
     def _apply_schema(self) -> None:
-        self._conn.executescript(_DDL)
-        self._conn.commit()
+        # Schema is applied by databank.initialize_store_db().
+        pass
 
     # ── embedding ─────────────────────────────────────────────────────────────
 
