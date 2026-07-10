@@ -28,6 +28,19 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 _LOADED = False
 
 
+def _strip_comment(line: str) -> str:
+    """Strip a trailing `# comment`, but not a `#` inside quotes."""
+    in_squote = in_dquote = False
+    for i, ch in enumerate(line):
+        if ch == "'" and not in_dquote:
+            in_squote = not in_squote
+        elif ch == '"' and not in_squote:
+            in_dquote = not in_dquote
+        elif ch == "#" and not in_squote and not in_dquote:
+            return line[:i]
+    return line
+
+
 def _simple_yaml_load(text: str) -> dict[str, Any]:
     """Tiny fallback parser for Aiko's simple config/*.yaml files.
 
@@ -37,12 +50,17 @@ def _simple_yaml_load(text: str) -> dict[str, Any]:
     """
     data: dict[str, Any] = {}
     current_key: str | None = None
+    pending_empty: set[str] = set()
     for raw in text.splitlines():
-        line = raw.split("#", 1)[0].rstrip()
+        line = _strip_comment(raw).rstrip()
         if not line.strip():
             continue
         stripped = line.strip()
         if stripped.startswith("-") and current_key:
+            if current_key in pending_empty:
+                # First list item seen: this key was a list all along.
+                data[current_key] = []
+                pending_empty.discard(current_key)
             data.setdefault(current_key, []).append(stripped[1:].strip().strip('"\''))
             continue
         if ":" not in line:
@@ -52,9 +70,14 @@ def _simple_yaml_load(text: str) -> dict[str, Any]:
         value = value.strip()
         current_key = key
         if value == "":
-            data[key] = []
+            # Ambiguous: could be an unset scalar or the start of a list.
+            # Default to "unset" (empty string) and only promote to a list
+            # if `-` items actually follow.
+            data[key] = ""
+            pending_empty.add(key)
         else:
             data[key] = value.strip('"\'')
+            pending_empty.discard(key)
     return data
 
 
