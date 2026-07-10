@@ -1156,3 +1156,158 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             messages.append(msg.model_dump(exclude_none=True))
             _compact_processed_tool_context(messages)
         except Exception as e:
+            log.error("Agent LLM call failed: %s", e)
+            state.record(ToolResult(
+                ok=False, tool="llm_call", args={},
+                content=f"[llm_call_failed: {e}]",
+                error_type="llm_call_failed",
+                retryable=False,
+            ))
+            break
+
+        if not msg.tool_calls:
+            candidate = msg.content or ""
+            if AGENT_VERIFY_FINAL:
+                verdict = _verify_final_answer(owner, user_input, candidate, state)
+                last_verdict = verdict
+                if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
+                    final_repairs += 1
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Verifier rejected the candidate final answer. "
+                            "Repair the task or answer before finalizing.\n"
+                            f"Verifier score: {verdict.score}\n"
+                            f"Feedback:\n{verdict.feedback}\n\n"
+                            f"Task ledger:\n{state.summary()}"
+                        ),
+                    })
+                    continue
+            final_text = candidate
+            break
+
+        for call in msg.tool_calls:
+            name = call.function.name
+            try:
+                args = json.loads(call.function.arguments)
+            except json.JSONDecodeError as e:
+                args = {}
+                result = ToolResult(
+                    ok=False, tool=name, args=args,
+                    content=f"Invalid JSON arguments: {e}. Reissue this tool call with valid JSON.",
+                    error_type="invalid_json",
+                    retryable=True,
+                )
+                state.record(result)
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": result.observation(),
+                })
+                continue
+
+            log.info("[agent] step %s → %s(%s)", step, name, args)
+            if name in _RESEARCH_TOOLS and _research_call_count(state) >= AGENT_RESEARCH_MAX_CALLS:
+                result = ToolResult(
+                    ok=False, tool=name, args=args,
+                    content=(
+                        f"deep_search/deep_research have already been used "
+                        f"{AGENT_RESEARCH_MAX_CALLS} time(s) in this agentic workflow. "
+                        "Do not search again; use the evidence already gathered to "
+                        "plan, summarize, save, or answer."
+                    ),
+                    error_type="research_limit_reached",
+                    retryable=False,
+                )
+                state.record(result)
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": result.observation(),
+                })
+                continue
+            call_key = (name, json.dumps(args, sort_keys=True))
+            if name != "final_answer" and call_key in seen_calls:
+                result = ToolResult(
+                    ok=False, tool=name, args=args,
+                    content=(
+                        f"Repeated tool call skipped for {name}. Choose a different "
+                        "query/argument/tool, or finalize with a disclosed limitation."
+                    ),
+                    error_type="repeated_tool_call",
+                    retryable=True,
+                )
+                state.record(result)
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": result.observation(),
+                })
+                continue
+            if name != "final_answer":
+                seen_calls.add(call_key)
+            if token_callback:
+                token_callback(f"__TOOL__:{name}({args})\n")
+
+            if name == "final_answer":
+                candidate = args.get("answer", "")
+                if AGENT_VERIFY_FINAL:
+                    verdict = _verify_final_answer(owner, user_input, candidate, state)
+                    last_verdict = verdict
+                    if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
+                        final_repairs += 1
+                        messages.append({
+                            "role": "tool", "tool_call_id": call.id,
+                            "name": name,
+                            "content": json.dumps({
+                                "ok": False,
+                                "error_type": "verification_failed",
+                                "score": verdict.score,
+                                "feedback": verdict.feedback,
+                                "task_ledger": json.loads(state.summary()),
+                                "instruction": "Repair the missing/unsupported parts, then call final_answer again.",
+                            }, ensure_ascii=False, indent=2),
+                        })
+                        continue
+                final_text = candidate
+                messages.append({
+                    "role": "tool", "tool_call_id": call.id,
+                    "name": name, "content": "Answer submitted.",
+                })
+                break
+
+            result = execute_tool_with_policy(name, args, state, owner=owner)
+            messages.append({
+                "role": "tool", "tool_call_id": call.id,
+                "name": name, "content": result.observation(),
+            })
+
+        if final_text:
+            break
+
+    if not final_text:
+        log.warning(
+            "Agent loop ended without a final answer after %s iterations; tools=%s failures=%s",
+            MAX_AGENT_ITER, len(state.steps), len(state.failures),
+        )
+        final_text = _build_incomplete_task_answer(state, last_content)
+        used_incomplete_fallback = True
+
+    if used_incomplete_fallback:
+        exp_verified_ok, exp_score = False, 0.0
+    elif last_verdict is not None:
+        exp_verified_ok, exp_score = last_verdict.ok, last_verdict.score
+    else:
+        exp_verified_ok, exp_score = True, 1.0
+
+    experience.record_experience(
+        owner, user_input, state.steps, final_text,
+        verified_ok=exp_verified_ok,
+        score=exp_score,
+        embedder=_embedder,
+    )
+    owner._emit(final_text, token_callback=token_callback)
+
+    with owner._history_lock:
+        owner._history.append({"role": "user", "content": user_input})
+        owner._history.append({"role": "assistant", "content": final_text})
+
+    owner._store_async(user_input, final_text)
+    return final_text
