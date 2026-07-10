@@ -37,6 +37,7 @@ dependencies = [
     "fastapi>=0.139.0",
     "uvicorn>=0.50.2",
     "pysqlcipher3>=1.2.0",
+    "defusedxml>=0.7.1",
 ]
 
 [tool.uv]
