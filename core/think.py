@@ -9,6 +9,17 @@ Aiko's chat facade.
   - Owns the proactive idle check-in state machine (config/proactive.yaml),
     which is also the "is Aiko resting" signal core.learn's idle_learner_loop
     waits on before starting autonomous quick-study top-ups.
+
+Memory + knowledge-base fetch:
+  route() kicks off _fetch_memory_and_knowledge() on core.concurrency's
+  shared CONTEXT_POOL BEFORE intent is resolved, since every path
+  (localchat/webchat/agentic) needs memory + KB regardless of which one
+  intent routing picks. The resulting future is handed to whichever
+  handler ends up running, so the fetch overlaps intent classification
+  itself instead of waiting for it to finish first. Wiki/policy/skill/
+  experience context is agentic-only and fetched separately, inside
+  core.agentic.run_agentic_chat, only once intent has actually resolved
+  to "agentic".
 """
 
 import logging
@@ -37,6 +48,7 @@ from core.tools    import web_search_context
 from core.agentic  import run_agentic_chat, resolve_search_query, llm_resolve_search_query
 from core.wiki import wiki_knowledge_context_for
 from core.knowledge import knowledge_context_for
+from core.concurrency import CONTEXT_POOL
 from core.log      import get_logger
 from core.social import run_scheduled_weekly_social
 from core.schedule import DueJob, register_system_handler
@@ -63,6 +75,11 @@ LLM_MODEL    = os.getenv("LLM_MODEL",    "ministral")
 ROUTER_MODEL = os.getenv("ROUTER_MODEL", LLM_MODEL)
 LLM_TIMEOUT  = float(os.getenv("LLM_TIMEOUT", 120))
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
+
+# Shared default recall/knowledge depth across all three chat paths
+# (localchat/webchat/agentic) — see _fetch_memory_and_knowledge below.
+MEMORY_RECALL_LIMIT = int(os.getenv("MEMORY_RECALL_LIMIT", 3))
+KNOWLEDGE_RECALL_LIMIT = int(os.getenv("KNOWLEDGE_RECALL_LIMIT", 3))
 
 _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
 _AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
@@ -117,9 +134,10 @@ def _load_persona() -> str:
 def _should_use_local_knowledge(user_input: str) -> bool:
     """Return True for normal-chat questions about Aiko's local docs/files.
 
-    This keeps casual chat fast while still letting non-task questions about
-    Aiko's architecture, features, hardware/docs, wiki, and knowledge base use
-    the local markdown corpus without entering the tool loop.
+    This is separate from the general memory+KB fetch every path already
+    gets (see _fetch_memory_and_knowledge) — it's an additional, narrower
+    lookup specifically for wiki-authored architecture/feature docs, gated
+    so casual chat doesn't pay for it on every turn.
     """
     return bool(_LOCAL_KNOWLEDGE_RE.search(user_input))
 
@@ -375,24 +393,75 @@ class AikoThink:
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
-        """Main entry point. Ternary routing."""
+        """Main entry point. Ternary routing.
+
+        Memory + knowledge-base fetch is kicked off here, BEFORE intent is
+        known — every path (localchat/webchat/agentic) needs both, so
+        there's no reason to wait for _route_intent() to finish before
+        starting them. The future is threaded through to whichever handler
+        ends up running.
+        """
         with self._turn_lock:
             self._last_chat_time = time.time()
             self._active_turn.set()
             self._note_user_activity()
             try:
+                mem_kb_future = CONTEXT_POOL.submit(self._fetch_memory_and_knowledge, user_input)
+
                 intent = self._route_intent(user_input)
                 log.info("[route] intent=%s", intent)
-                
+
                 if intent == "agentic":
-                    return self.agentic_chat(user_input, token_callback=token_callback)
+                    return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
                 elif intent == "webchat":
-                    return self.webchat(user_input, token_callback=token_callback)
+                    return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
                 else:  # localchat
-                    return self.chat(user_input, token_callback=token_callback, _skip_search=True)
+                    return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future)
             finally:
                 self._last_chat_time = time.time()
                 self._active_turn.clear()
+
+    def _fetch_memory_and_knowledge(
+        self, user_input: str, mem_limit: int = MEMORY_RECALL_LIMIT, know_limit: int = KNOWLEDGE_RECALL_LIMIT
+    ) -> tuple[list[dict], str]:
+        """Fetch long-term memory + learned-knowledge (KB) concurrently.
+
+        Both are independent reads against separate stores (memory.db /
+        knowledge.db) with no dependency on user intent, so route() fires
+        this off before intent routing even runs and hands the resulting
+        future to whichever path (agentic/webchat/localchat) gets picked.
+        Callers that run standalone (e.g. a scheduled agentic job with no
+        prior route() call) can call this directly instead.
+
+        Returns (memories, knowledge_block).
+        """
+        embedder = self._memorize._mem._embedder
+        mem_future = CONTEXT_POOL.submit(self._memorize.search, user_input, limit=mem_limit)
+        know_future = CONTEXT_POOL.submit(
+            knowledge_context_for, user_input, limit=know_limit, max_chars=2000, embedder=embedder
+        )
+        try:
+            memories = mem_future.result()
+        except Exception as e:
+            log.error("Memory search failed: %s", e)
+            memories = []
+        try:
+            knowledge_block = know_future.result()
+        except Exception as e:
+            log.error("Knowledge lookup failed: %s", e)
+            knowledge_block = "<knowledge_context>\nLookup failed.\n</knowledge_context>"
+        return memories, knowledge_block
+
+    def _resolve_mem_kb(self, user_input: str, mem_kb_future) -> tuple[list[dict], str]:
+        """Resolve a pending memory+KB future, or fetch directly if this
+        handler was called standalone (no future supplied by route())."""
+        if mem_kb_future is not None:
+            try:
+                return mem_kb_future.result()
+            except Exception as e:
+                log.error("Memory/KB fetch failed: %s", e)
+                return [], "<knowledge_context>\nLookup failed.\n</knowledge_context>"
+        return self._fetch_memory_and_knowledge(user_input)
 
     def _note_user_activity(self) -> None:
         """Reset the proactive state machine on real user activity: clear
@@ -524,29 +593,33 @@ class AikoThink:
             return "chat"
 
 
-    def agentic_chat(self, user_input: str, token_callback=None) -> str:
+    def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None) -> str:
         """Delegate task-mode execution to core.agentic."""
         with self._turn_lock:
             self._last_chat_time = time.time()
             self._active_turn.set()
             try:
-                return run_agentic_chat(self, user_input, token_callback=token_callback)
+                return run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
             finally:
                 self._last_chat_time = time.time()
                 self._active_turn.clear()
               
-    def webchat(self, user_input: str, token_callback=None) -> str:
+    def webchat(self, user_input: str, token_callback=None, mem_kb_future=None) -> str:
         """Web-aware chat: web_search + optional webfetch fallback."""
         if self._speak and self._speak.is_playing():
             self._speak.stop()
         
-        # Build base system (persona + memory)
+        # Memory + KB — either resolved from route()'s pre-intent future,
+        # or fetched directly if this was called standalone.
+        memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
+        memory_block = self._memorize.format_for_context(memories)
+
+        # Build base system (persona + memory + knowledge)
         system = self._persona
         system += "\n\n" + bioclock.current_datetime_block()
-        memories = self._memorize.search(user_input, limit=3)
-        memory_block = self._memorize.format_for_context(memories)
         if memory_block:
             system = f"{system}\n\n{memory_block}"
+        system = f"{system}\n\n{knowledge_block}"
         
         # Try web_search first (fast) — query condensation now lives in
         # core.agentic (resolve_search_query / llm_resolve_search_query),
@@ -603,6 +676,7 @@ class AikoThink:
             "mode": "webchat",
             "system_prompt": system,
             "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
+            "knowledge_prompt": knowledge_block,
             "web_prompt": _extract_search_results_block(system),
             "previous_chat_messages": [dict(m) for m in trimmed],
         }
@@ -759,13 +833,14 @@ class AikoThink:
         self._proactive_last_checkin_time = now_ts
         self._proactive_checkin_times.append(now_ts)
 
-    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None) -> str:
-        """Standard chat: local knowledge only (persona + memory)."""
+    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None) -> str:
+        """Standard chat: local knowledge only (persona + memory + KB)."""
         if self._speak and self._speak.is_playing():
             self._speak.stop()
         
-        # Memory + persona (no web)
-        memories = self._memorize.search(user_input, limit=3)
+        # Memory + KB — either resolved from route()'s pre-intent future,
+        # or fetched directly if this was called standalone.
+        memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
         memory_block = self._memorize.format_for_context(memories)
         
         system = self._persona
@@ -774,21 +849,20 @@ class AikoThink:
             system = f"{system}\n\n{memory_block}"
         else:
             system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
+        system = f"{system}\n\n{knowledge_block}"
         
-        # Local knowledge context (if user asks about Aiko)
+        # Additional narrower wiki lookup — only when the user is asking
+        # about Aiko's own architecture/docs, distinct from the general KB
+        # fetch above. Gated so casual chat doesn't pay for it every turn.
         if _should_use_local_knowledge(user_input):
             try:
                 wiki_context = wiki_knowledge_context_for(
                     user_input, limit=3, max_chars=3000,
                     embedder=self._memorize._mem._embedder,
                 )
-                learned_context = knowledge_context_for(
-                    user_input, limit=3, max_chars=2000,
-                    embedder=self._memorize._mem._embedder,
-                )
-                system = f"{system}\n\n{wiki_context}\n\n{learned_context}"
+                system = f"{system}\n\n{wiki_context}"
             except Exception as e:
-                log.error("Local knowledge lookup failed: %s", e)
+                log.error("Local wiki-knowledge lookup failed: %s", e)
         
         # Build messages
         llm_prompt = user_input
@@ -810,6 +884,7 @@ class AikoThink:
             "mode": "localchat",
             "system_prompt": system,
             "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
+            "knowledge_prompt": knowledge_block,
             "web_prompt": "",
             "previous_chat_messages": [dict(m) for m in trimmed],
         }
@@ -852,8 +927,13 @@ class AikoThink:
     def wait_for_memory(self, timeout: float | None = None) -> bool:
         """Block until AikoMemorize's async write queue drains, or timeout
         elapses. The queue itself now lives in core.memorize; this is a
-        thin passthrough kept for call sites (core.agentic) that only know
-        about the AikoThink instance."""
+        thin passthrough kept for call sites that only know about the
+        AikoThink instance. No longer called from core.agentic's turn
+        start (see run_agentic_chat) — draining there was removed since
+        the write's own idle-grace window plus real turn latency meant it
+        rarely caught anything. Still available for any caller that
+        genuinely needs to block until writes are flushed (e.g. shutdown).
+        """
         return self._memorize.wait_for_writes(timeout=timeout)
 
     def handle_scheduled_job(self, job: DueJob) -> None:
