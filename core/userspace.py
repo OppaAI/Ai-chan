@@ -63,12 +63,19 @@ def normalize_user_id(provider: str | None, user_id: object) -> str:
 def user_state_dir(user_id: str | None = None) -> Path:
     """Root directory for user-private mutable state.
 
-    Resolves to <USER_STATE_ROOT>/<user_id>.
+    Resolves to <USER_STATE_ROOT>/<user_id>, creating it (and locking it
+    down to owner-only access) if it doesn't already exist.
     """
     root_value = os.getenv("USER_STATE_ROOT") or str(Path.home() / ".aiko")
     root = Path(root_value).expanduser()
     uid = _SAFE_RE.sub("_", user_id or current_user_id()).strip("._-") or _DEFAULT_USER_ID
-    return root / uid
+    path = root / uid
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+    return path
 
 
 def user_state_path(filename: str, user_id: str | None = None) -> Path:
