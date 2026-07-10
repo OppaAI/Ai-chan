@@ -10,42 +10,85 @@ SEARXNG_MAX_RESULTS: "3"  # Max results per SearXNG call. Shared by web_search (
 
 # -- deep_search (direct single-pass search + fetch) --
 # These are deep_search()'s OWN defaults — used when something calls
-# deep_search() directly (e.g. a fast, wide, shallow lookup). They are now
-# fully independent of deep_research's per-round tunables below; changing
-# one does not change the other.
-DEEP_SEARCH_NUM_SEARCHES: "5"  # How many SearXNG pages to pull CONCURRENTLY for the SAME query and merge/dedup by URL, widening one-pass coverage without an LLM rewriting the query.
-DEEP_SEARCH_NUM_FETCHES: "1"  # How many (deduped) results to actually fetch full page text for. Set to 0 for snippet-only "search, don't fetch" passes.
-DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before condensing. Shared by deep_search AND deep_research (each research round is one deep_search call and inherits this).
+# deep_search() directly (e.g. a fast, wide, shallow lookup). They are fully
+# independent of deep_research's per-round tunables below; changing one does
+# not change the other. deep_search NEVER uses Crawl4AI, robots gating, or
+# sitemap expansion — those are deep_research-only, by design, to keep this
+# the fast path.
+DEEP_SEARCH_NUM_SEARCHES: "7"  # How many SearXNG pages to pull CONCURRENTLY for the SAME query and merge/dedup by URL, widening one-pass coverage without an LLM rewriting the query.
+DEEP_SEARCH_NUM_FETCHES: "0"  # How many (deduped) results to actually fetch full page text for. Set to 0 for snippet-only "search, don't fetch" passes.
+DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before condensing, for deep_search's own fetches only. deep_research now has its own DEEP_RESEARCH_MAX_CHARS_PER_PAGE below instead of inheriting this.
 DEEP_SEARCH_MAX_WORKERS: "8"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on AuRoRA (Jetson, limited cores) vs AIVA if contention shows up. Shared by deep_search and deep_research.
 
-# -- deep_research (multi-round adaptive research) --
+# -- deep_research (multi-round adaptive research, accuracy-first) --
 # deep_research calls deep_search's internal impl once per round, but uses
 # ITS OWN search/fetch breadth per round rather than inheriting
 # DEEP_SEARCH_NUM_SEARCHES/NUM_FETCHES above. This lets you tune "how wide
 # is one direct deep_search() call" completely separately from "how wide
 # is one round of a multi-round deep_research() dig." Can also be
 # overridden per-call via deep_research(query, num_searches=..., num_fetches=...).
-DEEP_RESEARCH_NUM_SEARCHES: "1"  # SearXNG pages pulled per deep_research round.
-DEEP_RESEARCH_NUM_FETCHES: "2"  # Pages fetched per deep_research round.
-DEEP_RESEARCH_MAX_ROUNDS: "5"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness.
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "6000"  # How much CONDENSED (not raw) accumulated evidence the continue/refine decision call sees.
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "8000"  # How much condensed accumulated evidence the final synthesis call sees.
+#
+# Latency is intentionally secondary here — deep_search is the fast path,
+# deep_research is the trusted-KB/self-study path. Tuned wider than
+# deep_search on purpose.
+DEEP_RESEARCH_NUM_SEARCHES: "5"  # SearXNG pages pulled per deep_research round.
+DEEP_RESEARCH_NUM_FETCHES: "3"  # Pages fetched per deep_research round. Bumped from 2 — more corroborating sources per round means the agreement bonus below has more to work with.
+DEEP_RESEARCH_MAX_CHARS_PER_PAGE: "3500"  # Per-page fetched text cap for deep_research's fetches specifically. No longer inherits DEEP_SEARCH_MAX_CHARS_PER_PAGE — Crawl4AI's markdown output tends to run longer than trafilatura's plain extraction, so this got its own higher budget.
+DEEP_RESEARCH_MAX_ROUNDS: "5"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness. Each round now also does a Crawl4AI batch fetch + sitemap check, so a full 5-round dig is meaningfully heavier than before — watch this against AGENT_RESEARCH_MAX_CALLS in agentic.py, which still caps deep_research to 1 call per agentic workflow regardless of this setting.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "8000"  # How much CONDENSED (not raw) accumulated evidence the continue/refine decision call sees. Bumped from 6000 alongside the wider per-round fetch count.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "12000"  # How much condensed accumulated evidence the final synthesis call sees. Bumped from 8000 for the same reason.
 DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for the continue/refine decision call.
-DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "600"  # Token budget for the final synthesis call.
+DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "700"  # Token budget for the final synthesis call. Bumped slightly from 600 to give room for the corroborated-vs-single-source framing the synthesis prompt now asks for.
 
 # -- in-memory evidence condensation (embedding-based relevance filtering) --
-# Shared by deep_search and deep_research. Everything here stays in process
-# memory (plain lists/tuples) — nothing is written to disk. Fetched text is
-# no longer truncated blindly by char count; instead every chunk is scored
-# for relevance to the query and only chunks clearing CONDENSE_MIN_SCORE
-# survive into what the agent/LLM actually sees.
-CONDENSE_CHUNK_CHARS: "500"  # Chunk size (chars) fetched pages are split into before scoring.
-CONDENSE_TOP_K: "8"  # Max relevant chunks kept in the final condensed bundle, regardless of how many pages/rounds were fetched.
-CONDENSE_MIN_SCORE: "0.15"  # Minimum relevance score (cosine similarity, or keyword-overlap fallback) to keep a chunk. Below this, content is dropped, not truncated-and-kept.
-CONDENSE_MAX_CHUNKS_TO_SCORE: "60"  # Caps embedding latency regardless of total fetched volume. Lower on AuRoRA (Jetson) if embedding calls stack up (~200ms each per your harrier embedder benchmarks — 60 chunks ≈ 12s worst case).
+# deep_search keeps its own knobs below unchanged. deep_research now uses
+# the separate RESEARCH_CONDENSE_* knobs further down instead — a wider net
+# and a lower score bar, because the corroboration bonus promotes
+# borderline chunks that get independently confirmed by a second domain, so
+# a stricter min-score up front would throw those away before they ever got
+# the chance to be corroborated.
+CONDENSE_CHUNK_CHARS: "500"  # Chunk size (chars) fetched pages are split into before scoring. Shared by deep_search and deep_research.
+CONDENSE_TOP_K: "8"  # Max relevant chunks kept in deep_search's condensed bundle.
+CONDENSE_MIN_SCORE: "0.15"  # Minimum relevance score to keep a chunk in deep_search's condensed bundle. Below this, content is dropped, not truncated-and-kept.
+CONDENSE_MAX_CHUNKS_TO_SCORE: "60"  # Caps embedding latency for deep_search regardless of total fetched volume. Lower on AuRoRA (Jetson) if embedding calls stack up (~200ms each per your harrier embedder benchmarks — 60 chunks ≈ 12s worst case).
+
+# -- deep_research condensation (wider net, corroboration-aware) --
+RESEARCH_CONDENSE_TOP_K: "12"  # Max relevant chunks kept in deep_research's condensed bundle per round — higher than deep_search's 8 since a trusted-KB answer benefits from more corroborating excerpts surviving into synthesis.
+RESEARCH_CONDENSE_MIN_SCORE: "0.12"  # Lower bar than deep_search's 0.15 — borderline chunks get a chance to clear the bar via the corroboration bonus below instead of being dropped outright.
+RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE: "100"  # Same embedding-latency cap as CONDENSE_MAX_CHUNKS_TO_SCORE but sized for deep_research's wider per-round fetch count. On AuRoRA (Jetson), 100 chunks at ~200ms/chunk is ~20s worst case per round — budget accordingly against DEEP_RESEARCH_MAX_ROUNDS above. Drop this first if a full research dig is competing with anything latency-sensitive on the Jetson.
+
+# -- cross-source corroboration ("sources agreement" scoring, deep_research only) --
+# Independent confirmation of the same claim from a SECOND domain boosts
+# that chunk's relevance score; repeats from the same domain don't count.
+# This is separate from the robots.txt crawl-permission check below — this
+# one is about whether multiple independent sources agree on a claim, not
+# whether a source allows itself to be crawled.
+RESEARCH_AGREEMENT_BONUS: "0.12"  # Score added per additional independent corroborating domain (capped at 1.0 total).
+RESEARCH_AGREEMENT_SIMILARITY: "0.5"  # Word-shingle Jaccard similarity threshold above which two chunks from different domains count as corroborating each other. Raise toward 0.7-0.8 if unrelated chunks are getting falsely flagged as agreeing; lower toward 0.3-0.4 if genuinely-corroborating chunks with different phrasing aren't being caught.
+RESEARCH_AGREEMENT_SHINGLE_SIZE: "5"  # Word-shingle length used for the similarity check above.
+
+# -- Crawl4AI (deep_research only, richer page extraction) --
+# Requires `uv pip install crawl4ai` plus `crawl4ai-setup` (installs the
+# Playwright browser binary) on whichever machine runs deep_research. If
+# crawl4ai isn't installed, or RESEARCH_USE_CRAWL4AI is off, deep_research
+# transparently falls back to web_fetch (requests+trafilatura) for every
+# URL — nothing breaks, it just loses the JS-rendering advantage.
+RESEARCH_USE_CRAWL4AI: "1"  # 1 to prefer Crawl4AI's batched Playwright fetch for deep_research; 0 to always use web_fetch instead.
+CRAWL4AI_TIMEOUT_MS: "20000"  # Per-page timeout for Crawl4AI's Playwright load. Consider raising on AuRoRA (Jetson) for cold-start latency on first run.
+CRAWL4AI_MAX_CONCURRENT: "4"  # Max concurrent Playwright pages within one Crawl4AI batch session. Headless Chromium is not light — drop this to 2 on AuRoRA if it's competing with llama-server for RAM during a research round.
+CRAWL4AI_WORD_COUNT_THRESHOLD: "40"  # Minimum word count for Crawl4AI to consider a page block worth keeping, filtering out nav/boilerplate fragments.
+
+# -- robots.txt compliance ("source agreement" to be crawled) + sitemap discovery --
+# deep_research-only. deep_search never checks robots.txt or expands via
+# sitemap — it stays on the fast, minimal-footprint path.
+RESEARCH_RESPECT_ROBOTS: "1"  # 1 to only fetch URLs the source's own robots.txt permits for our user-agent (fails open if robots.txt is unreachable/unparseable, matching standard crawler convention). 0 to disable the check entirely.
+ROBOTS_CACHE_TTL_SECONDS: "3600"  # How long a fetched robots.txt is cached in-process before being re-fetched.
+RESEARCH_SITEMAP_ENABLED: "1"  # 1 to let deep_research widen candidate URLs via sitemap.xml discovery for the top 1-2 domains in each round's search results (useful when one authoritative docs site is worth exploring beyond just the search snippet). 0 to disable.
+RESEARCH_SITEMAP_MAX_URLS: "6"  # Max sitemap-discovered URLs added per round, on top of the normal DEEP_RESEARCH_NUM_FETCHES search-derived URLs.
+RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots.txt/sitemap.xml during discovery.
 
 # -- web_fetch download guard & caching --
-WEB_FETCH_MAX_DOWNLOAD_BYTES: "5000000"  # Hard byte cap per fetch; download aborted mid-stream before extraction/truncation, bounding worst-case memory for one fetch.
+WEB_FETCH_MAX_DOWNLOAD_BYTES: "5_000_000"  # Hard byte cap per fetch; download aborted mid-stream before extraction/truncation, bounding worst-case memory for one fetch.
 WEB_FETCH_TIMEOUT_SECONDS: "8"  # Per-request timeout for web_fetch's underlying HTTP call.
 TOOLS_CACHE_TTL_SECONDS: "900"  # In-process cache lifetime (seconds) for both search results and fetched pages. 15 min default.
 TOOLS_CACHE_MAX_ENTRIES: "256"  # Max entries per cache (search cache and fetch cache each get their own instance of this limit) before oldest entries are evicted.
