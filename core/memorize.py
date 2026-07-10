@@ -138,9 +138,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from core.secure import connect_sqlite
+from core.database import connect_sqlite_vec, resolve_user_db_path
 from core.userspace import current_user_id, user_state_path
-
 import sqlite_vec
 from openai import OpenAI
 
@@ -582,13 +581,7 @@ class _MemoryBackend:
         self._apply_schema()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = connect_sqlite(self._db_path, user_id=self._user_id)
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-        return conn
+        return connect_sqlite_vec(self._db_path, user_id=self._user_id)
 
     def _apply_schema(self) -> None:
         self._conn.executescript(_DDL)
@@ -1126,7 +1119,7 @@ class AikoMemorize:
     """
 
     def __init__(self, silent: bool = False) -> None:
-        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory/memory.db", current_user_id()))
+        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=current_user_id()))
 
         if not silent:
             log.info("Opening sqlite-vec memory store...")

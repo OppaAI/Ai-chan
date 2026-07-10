@@ -1,9 +1,8 @@
 import os
 import json
-import time
 import secrets
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import timedelta
 from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket
@@ -12,7 +11,8 @@ import httpx
 from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-from core.userspace import normalize_user_id
+from core import bioclock
+from core.userspace import normalize_user_id, user_state_path
 
 load_dotenv()
 
@@ -72,32 +72,50 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "OppaAI/Aiko-chan")
 # Bump TERMS_VERSION whenever you materially change the guidelines — anyone
 # who accepted an older version gets re-prompted next login.
 TERMS_VERSION = "2026-07-07"
-TERMS_STORE_PATH = Path(os.getenv("TERMS_STORE_PATH", "terms_acceptance.json"))
+TERMS_STORE_PATH = os.getenv("TERMS_STORE_PATH", "").strip()
 
 
-def _load_terms_store() -> dict:
-    if TERMS_STORE_PATH.exists():
-        return json.loads(TERMS_STORE_PATH.read_text())
+def _terms_store_path(user_id: str | None) -> Path:
+    """Per-user terms acceptance store next to profile/user.md by default."""
+    if TERMS_STORE_PATH:
+        override = Path(TERMS_STORE_PATH).expanduser()
+        if override.is_absolute():
+            return override
+        if user_id:
+            return user_state_path(f"profile/{TERMS_STORE_PATH}", str(user_id)).resolve()
+        return override.resolve()
+    if user_id:
+        return user_state_path("profile/terms_acceptance.json", str(user_id)).resolve()
+    return Path("terms_acceptance.json").resolve()
+
+
+def _load_terms_store(user_id: str | None) -> dict:
+    path = _terms_store_path(user_id)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
-def _save_terms_store(store: dict) -> None:
-    TERMS_STORE_PATH.write_text(json.dumps(store))
+def _save_terms_store(user_id: str | None, store: dict) -> None:
+    path = _terms_store_path(user_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _has_accepted_terms(provider: str, user_id) -> bool:
-    store = _load_terms_store()
+    store = _load_terms_store(str(user_id) if user_id is not None else None)
     entry = store.get(f"{provider}:{user_id}")
     return bool(entry and entry.get("version") == TERMS_VERSION)
 
 
 def _record_terms_acceptance(provider: str, user_id) -> None:
-    store = _load_terms_store()
+    uid = str(user_id) if user_id is not None else None
+    store = _load_terms_store(uid)
     store[f"{provider}:{user_id}"] = {
         "version": TERMS_VERSION,
-        "accepted_at": datetime.now().isoformat(),
+        "accepted_at": bioclock.local_now().isoformat(),
     }
-    _save_terms_store(store)
+    _save_terms_store(uid, store)
 
 
 # ── in-memory state ──────────────────────────────────────────────────────────
@@ -114,7 +132,7 @@ STATE_TTL_SECONDS = 300  # 5 minutes to complete the provider round-trip
 
 def _new_state() -> str:
     state = secrets.token_urlsafe(24)
-    oauth_states[state] = time.time() + STATE_TTL_SECONDS
+    oauth_states[state] = bioclock.monotonic_now() + STATE_TTL_SECONDS
     return state
 
 
@@ -123,7 +141,7 @@ def _consume_state(state: str | None) -> None:
     if not state or state not in oauth_states:
         raise HTTPException(status_code=400, detail="Invalid or missing OAuth state")
     expiry = oauth_states.pop(state)
-    if time.time() > expiry:
+    if bioclock.monotonic_now() > expiry:
         raise HTTPException(status_code=400, detail="OAuth state expired — try logging in again")
 
 
@@ -136,7 +154,7 @@ def _create_session(user_id, username: str, email: str | None, provider: str) ->
         "username": username,
         "email": email,
         "provider": provider,
-        "created_at": datetime.now(),
+        "created_at": bioclock.local_now(),
         # gate stays closed until they check the box, unless they've already
         # accepted this exact terms version in a previous session
         "accepted_terms": (
@@ -189,7 +207,7 @@ async def require_session(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     session = sessions[session_id]
-    if datetime.now() - session["created_at"] > timedelta(days=30):
+    if bioclock.local_now() - session["created_at"] > timedelta(days=30):
         del sessions[session_id]
         raise HTTPException(status_code=401, detail="Session expired")
 

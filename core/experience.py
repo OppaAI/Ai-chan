@@ -13,20 +13,20 @@ import json
 import os
 import re
 import sqlite3
-import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
 import sqlite_vec
 
+from core.config import load_config
+load_config()
+
 from core import reason
-from core.rag import fts_or_query, rrf_score
+from core.database import fts_or_query, initialize_sqlite_vec_db, resolve_user_db_path, rrf_score
 from core.log import get_logger
-from core.secure import connect_sqlite
-from core.userspace import current_user_id, user_state_path
+from core.userspace import current_user_id
 
 log = get_logger(__name__)
 
@@ -95,16 +95,12 @@ def _db_path(user_id: str | None = None) -> Path:
     path = Path(EXPERIENCE_DB_PATH).expanduser()
     if path.is_absolute():
         return path
-    return user_state_path(str(path), user_id)
+    return resolve_user_db_path(path, user_id=user_id)
 
 
 def _connect(user_id: str | None = None) -> sqlite3.Connection:
     uid = user_id or current_user_id()
-    conn = connect_sqlite(_db_path(uid), user_id=uid)
-    sqlite_vec.load(conn)
-    conn.executescript(_DDL)
-    conn.commit()
-    return conn
+    return initialize_sqlite_vec_db(_db_path(uid), _DDL, user_id=uid)
 
 
 def _sanitize(text: str, max_chars: int = 500) -> str:
@@ -114,7 +110,8 @@ def _sanitize(text: str, max_chars: int = 500) -> str:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    from core.bioclock import utc_now
+    return utc_now().isoformat()
 
 
 

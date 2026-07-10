@@ -13,7 +13,11 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
+try:
+    import yaml
+except ImportError:  # pragma: no cover - lightweight fallback for minimal tooling envs
+    yaml = None
+
 
 try:
     from dotenv import dotenv_values
@@ -22,6 +26,42 @@ except ImportError:  # pragma: no cover - optional dependency fallback
         return {}
 
 _LOADED = False
+
+
+def _simple_yaml_load(text: str) -> dict[str, Any]:
+    """Tiny fallback parser for Aiko's simple config/*.yaml files.
+
+    It supports top-level KEY: VALUE pairs and the config/index.yaml list used
+    during bootstrap. Full YAML support is still provided by PyYAML when
+    installed, which is the normal runtime path.
+    """
+    data: dict[str, Any] = {}
+    current_key: str | None = None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        stripped = line.strip()
+        if stripped.startswith("-") and current_key:
+            data.setdefault(current_key, []).append(stripped[1:].strip().strip('"\''))
+            continue
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        current_key = key
+        if value == "":
+            data[key] = []
+        else:
+            data[key] = value.strip('"\'')
+    return data
+
+
+def _load_yaml_mapping(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8")
+    data = yaml.safe_load(text) if yaml is not None else _simple_yaml_load(text)
+    return data or {}
 
 
 def _stringify(value: Any) -> str:
@@ -100,7 +140,7 @@ def load_config(*, override: bool = False) -> None:
     if config_dir.exists():
         index_path = config_dir / "index.yaml"
         if index_path.exists():
-            index_data = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
+            index_data = _load_yaml_mapping(index_path)
             config_names = index_data.get("configs", [])
             if not isinstance(config_names, list):
                 raise ValueError(f"{index_path} configs must be a list")
@@ -113,7 +153,7 @@ def load_config(*, override: bool = False) -> None:
         for path in paths:
             if not path.exists():
                 raise FileNotFoundError(f"Configured YAML file not found: {path}")
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            data = _load_yaml_mapping(path)
             if not isinstance(data, dict):
                 raise ValueError(f"{path} must contain a YAML mapping")
             for key, value in _flatten(data).items():

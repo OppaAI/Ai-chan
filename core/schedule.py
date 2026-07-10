@@ -5,7 +5,7 @@ Persistent scheduled jobs, reminders, and wake-up alarms for Aiko.
 
 A scheduled job is a small local record with:
   - time_of_day: local wall-clock time in HH:MM format
-  - frequency: once, hourly, daily, weekdays, weekly, biweekly, monthly, or custom_weekdays
+  - frequency: once, interval, hourly, daily, weekdays, weekly, biweekly, monthly, or custom_weekdays
   - days_of_week: optional weekday names for custom_weekdays/weekly jobs
   - relative_days: optional integer day offset for phrases like tomorrow or the day after tomorrow
   - task: what Aiko should do or say when the job fires
@@ -78,7 +78,7 @@ def schedule_path() -> Path:
     override = os.getenv("SCHEDULE_PATH")
     if override:
         return Path(override).expanduser().resolve()
-    return (user_state_root() / "tasks" / "schedule.json").resolve()
+    return (user_workspace_root() / "tasks" / "schedule.json").resolve()
 
 # System job timing — env overridable, not user-modifiable via schedule.json
 DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
@@ -86,7 +86,7 @@ DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
 MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
 MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
 
-FREQUENCIES = {"once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
+FREQUENCIES = {"once", "interval", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 RELATIVE_DAY_ALIASES = {
     "today": 0,
     "tonight": 0,
@@ -227,6 +227,7 @@ def calculate_next_due(
     after: datetime | None = None,
     anchor_day: int | None = None,
     relative_days: int | str | None = None,
+    interval_seconds: int | str | None = None,
 ) -> datetime:
     """Calculate the next due datetime for a scheduled job."""
     frequency = (frequency or "daily").lower().strip()
@@ -237,6 +238,12 @@ def calculate_next_due(
     now = after.astimezone(bioclock.get_timezone(tz_name)) if after else bioclock.local_now(tz_name)
     relative_offset = _normalize_relative_days(relative_days)
     candidate = _candidate_at(now, time_of_day, relative_offset)
+
+    if frequency == "interval":
+        seconds = int(interval_seconds or 60)
+        if seconds < 60:
+            raise ValueError("interval_seconds must be at least 60")
+        return now + timedelta(seconds=seconds)
 
     if frequency in {"once", "daily"}:
         return candidate if candidate > now else candidate + timedelta(days=1)
@@ -297,6 +304,7 @@ def schedule_job_record(
     action: str = "agentic",
     relative_days: int | str | None = None,
     handler: str | None = None,
+    interval_seconds: int | str | None = None,
 ) -> dict:
     """Create and persist a scheduled job record, returning the stored dict.
 
@@ -319,6 +327,7 @@ def schedule_job_record(
         tz_name,
         normalized_days,
         relative_days=normalized_relative_days,
+        interval_seconds=interval_seconds,
     )
     job = {
         "id": uuid.uuid4().hex[:12],
@@ -328,6 +337,7 @@ def schedule_job_record(
         "frequency": (frequency or "daily").lower().strip(),
         "days_of_week": normalized_days,
         "relative_days": normalized_relative_days,
+        "interval_seconds": int(interval_seconds) if interval_seconds not in (None, "") else None,
         "timezone": tz_name,
         "next_due": due.isoformat(),
         "created_at": bioclock.local_now(tz_name).isoformat(),
@@ -396,6 +406,33 @@ DEEP_STUDY_WINDOW_JOB_TITLES: dict[str, tuple[str, list[str], str]] = {
     "deep_study_weekend_start": ("05:00", ["sat", "sun"], "deep_study_start"),
     "deep_study_weekend_stop":  ("10:00", ["sat", "sun"], "deep_study_stop"),
 }
+
+
+WORKSPACE_KNOWLEDGE_JOB_TITLE = "workspace_knowledge_scan"
+WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS = int(os.getenv("WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS", "60"))
+
+
+def ensure_workspace_knowledge_job(timezone: str | None = None) -> None:
+    """Idempotently seed the scheduled KB folder scan job.
+
+    The scheduler owns this periodic check so document-drop monitoring lives
+    alongside other schedule.json-driven system behaviors instead of running
+    a separate ticker thread.
+    """
+    existing_titles = {job.get("title") for job in _read_all()}
+    if WORKSPACE_KNOWLEDGE_JOB_TITLE in existing_titles:
+        return
+    schedule_job_record(
+        title=WORKSPACE_KNOWLEDGE_JOB_TITLE,
+        task="Scan workspace/knowledge for new RAG documents",
+        time_of_day="00:00",
+        frequency="interval",
+        timezone=timezone,
+        action="agentic",
+        handler="workspace_knowledge_scan",
+        interval_seconds=max(60, WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS),
+    )
+    log.info("Seeded workspace knowledge scan job every %ss", max(60, WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS))
 
 
 def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
@@ -563,7 +600,7 @@ class ScheduleRunner:
         hours_until_next = (self._next_daily - now).total_seconds() / 3600
         if hours_until_next < 20:
             return False  # job fired recently enough, no catchup needed
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).replace(
+        yesterday = (bioclock.utc_now() - timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0,
         )
         exists = _reflection_post_exists(yesterday)
@@ -637,7 +674,7 @@ class ScheduleRunner:
             delta = (next_target - bioclock.local_now()).total_seconds()
             if delta > 0:
                 log.debug("Scheduler sleeping %.0fs until %s", delta, next_target.isoformat())
-                self._wakeup.wait(timeout=delta)
+                bioclock.wait_seconds(self._wakeup, delta)
                 self._wakeup.clear()
 
     # ── system job runners ────────────────────────────────────────────────────
@@ -730,6 +767,7 @@ class ScheduleRunner:
                     job.get("frequency", "daily"),
                     tz_name,
                     job.get("days_of_week"),
+                    interval_seconds=job.get("interval_seconds"),
                 )
                 job["next_due"] = due.isoformat()
                 changed = True
@@ -762,6 +800,7 @@ class ScheduleRunner:
                         tz_name,
                         job.get("days_of_week"),
                         after=bioclock.local_now(tz_name),
+                        interval_seconds=job.get("interval_seconds"),
                     ).isoformat()
                 changed = True
 

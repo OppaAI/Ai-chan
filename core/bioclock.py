@@ -18,7 +18,12 @@ always wins, the config default is only the fallback when none is given.
 """
 
 import os
-from datetime import datetime
+import time
+import threading
+
+from core.config import load_config
+load_config()
+from datetime import datetime, timezone
 
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -60,5 +65,26 @@ def current_datetime_block(name: str | None = None) -> str:
     return (
         "<current_datetime>\n"
         f"Now: {now.strftime('%A, %B %d, %Y, %I:%M %p')} ({timezone_name(name)})\n"
+        f"UTC: {utc_now().isoformat()}\n"
         "</current_datetime>"
     )
+
+
+def utc_now() -> datetime:
+    """Timezone-aware UTC now for persisted timestamps."""
+    return datetime.now(timezone.utc)
+
+
+def monotonic_now() -> float:
+    """Monotonic seconds for durations, cooldowns, and polling intervals."""
+    return time.monotonic()
+
+
+def sleep_seconds(seconds: float) -> None:
+    """Sleep for a duration; centralized so ticker/polling loops share one clock module."""
+    time.sleep(max(0.0, float(seconds)))
+
+
+def wait_seconds(event: threading.Event, seconds: float) -> bool:
+    """Wait on an event for a duration using the centralized clock API."""
+    return event.wait(timeout=max(0.0, float(seconds)))
