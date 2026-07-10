@@ -10,5 +10,5 @@ EXPERIENCE_KNN_LIMIT: "20"  # sqlite-vec semantic candidates before RRF fusion.
 EXPERIENCE_FTS_LIMIT: "20"  # FTS5 lexical candidates before RRF fusion.
 EXPERIENCE_RRF_K: "60"  # Reciprocal Rank Fusion constant; higher dampens rank differences.
 EXPERIENCE_RECALL_SCORE_THRESHOLD: "0.012"  # Minimum fused score for a past task to be injected.
-EXPERIENCE_MAX_ROWS: "5000"  # Hard cap per user; lowest-scored/oldest rows are pruned only to limit noise/storage.
+EXPERIENCE_MAX_ROWS: "10000"  # Hard cap per user; lowest-scored/oldest rows are pruned only to limit noise/storage.
 EXPERIENCE_QUERY_INSTRUCT: "Retrieve similar past agentic task runs"
