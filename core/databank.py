@@ -35,7 +35,6 @@ def connect_sqlite_db(path: str | os.PathLike[str], *, user_id: str | None = Non
     """Open an optionally encrypted SQLite connection without sqlite-vec."""
     uid = user_id or current_user_id()
     conn = connect_sqlite(path, user_id=uid)
-    conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
@@ -52,7 +51,6 @@ def connect_sqlite_vec(path: str | os.PathLike[str], *, user_id: str | None = No
     """Open an optionally encrypted SQLite connection with sqlite-vec loaded."""
     uid = user_id or current_user_id()
     conn = connect_sqlite(path, user_id=uid)
-    conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
     conn.execute("PRAGMA journal_mode = WAL")
     try:
