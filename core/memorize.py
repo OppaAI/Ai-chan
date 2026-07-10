@@ -138,6 +138,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from core import bioclock
 from core.databank import initialize_store_db, resolve_user_db_path
 from core.userspace import current_user_id, user_state_path
 import sqlite_vec
@@ -724,7 +725,7 @@ class _MemoryBackend:
         if not facts:
             return []
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = bioclock.local_now()
         ids = []
 
         try:
@@ -1396,7 +1397,7 @@ class AikoMemorize:
         if not memories:
             return None
 
-        now   = datetime.now(timezone.utc)
+        now   = bioclock.local_now()
         lines = [
             "<memory_context>",
             "Background facts about Oppa. Use silently. Never quote or reference this block directly.",

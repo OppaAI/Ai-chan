@@ -1,5 +1,6 @@
 """
 core/tools.py
+
 Compatibility facade for Aiko's autonomous toolkit.
 Keep this file even though implementations live in ``core/toolkit``: it gives
 older callers and the agent loop one stable import surface while domain tools

@@ -50,12 +50,10 @@ import textwrap
 import threading
 import time
 import warnings
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 warnings.filterwarnings("ignore")
 
-import logging
-
+from core.bioclock import local_now
 from core.log import get_logger, silent_stderr
 from core.wakeup import AikoWakeup
 from core.toolkit.researcher import web_search
@@ -278,10 +276,7 @@ def _time_window_matches(window: str, now: datetime | None = None) -> bool:
       - "fri-mon 22:00-06:00"
     """
     if now is None:
-        try:
-            now = datetime.now(ZoneInfo(PROACTIVE_TIMEZONE)) if PROACTIVE_TIMEZONE else datetime.now()
-        except ZoneInfoNotFoundError:
-            now = datetime.now()
+        now = local_now(PROACTIVE_TIMEZONE)
     raw = window.strip().lower()
     if not raw:
         return False
@@ -317,10 +312,7 @@ def _in_proactive_silence_window() -> bool:
 
 def _seconds_until_proactive_silence_ends() -> float:
     """Return seconds until configured quiet/focus windows no longer match."""
-    try:
-        now = datetime.now(ZoneInfo(PROACTIVE_TIMEZONE)) if PROACTIVE_TIMEZONE else datetime.now()
-    except ZoneInfoNotFoundError:
-        now = datetime.now()
+    now = local_now(PROACTIVE_TIMEZONE)
 
     windows = [*PROACTIVE_QUIET_WINDOWS, *PROACTIVE_FOCUS_WINDOWS]
     if not any(_time_window_matches(window, now) for window in windows):

@@ -1,13 +1,17 @@
-"""Basic local wiki retrieval for Aiko.
+"""
+core/wiki.py
 
-This module indexes durable, human-maintained project wiki: wiki cards,
-skill docs/defaults, persona docs, selected config, and docs. It deliberately
-skips secrets and mutable workspace artifacts.
+Basic local wiki retrieval for Aiko.
 
-Injected context is RAG-style, not whole-file: search_wiki ranks whole
-items, then wiki_context_for chunk each selected
-item's body and inject only the query-relevant excerpts via
-reason.select_relevant_chunks, instead of dumping full file text.
+This module indexes durable, human-maintained project knowledge sources:
+
+  - discover_wiki_items()  — scan wiki, skill docs, persona docs, config, docs
+  - search_wiki()          — find relevant items by keyword or semantic search
+  - wiki_context_for()     — inject operational wiki pages via RAG-style chunking
+  - wiki_knowledge_context_for() — inject all knowledge sources via RAG-style chunking
+
+Supports RAG-style chunking and semantic ranking via reason.select_relevant_chunks.
+Designed to avoid injecting secrets and mutable workspace artifacts.
 """
 
 from __future__ import annotations

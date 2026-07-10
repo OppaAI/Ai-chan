@@ -53,6 +53,7 @@ from pathlib import Path
 
 from openai import OpenAI
 
+from core import bioclock
 from core.log import get_logger
 from core.userspace import current_user_id, user_state_path
 from core.reflect import _extract_json_arrays, _salvage_truncated_facts
@@ -310,7 +311,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     if not CONSOLIDATION_ENABLED:
         return {"ran": False, "reason": "disabled"}
 
-    now = now or datetime.now()
+    now = now or bioclock.local_now()
     user_id = user_id or getattr(memorize, "_user_id", None) or current_user_id()
 
     start, end, month_key = target_month_for(now)

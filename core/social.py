@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
 from openai import OpenAI
 
+from core.bioclock import get_timezone
 from core.log import get_logger
 from core.memorize import AikoMemorize
 from core.userspace import user_workspace_root
@@ -54,7 +55,6 @@ def weekly_social_root() -> Path:
     if override:
         return Path(override).expanduser().resolve()
     return (user_workspace_root() / "social" / "weekly").resolve()
-TIMEZONE_NAME = os.getenv("TIMEZONE", "UTC")
 
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
 WEEKLY_AUTOPOST = os.getenv("WEEKLY_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
@@ -140,7 +140,7 @@ def _timezone(name: str | None = None) -> ZoneInfo:
 
 def last_completed_sunday_saturday(now: datetime | None = None, tz_name: str | None = None) -> WeekWindow:
     """Return the most recent fully completed Sunday-Saturday window."""
-    tz = _timezone(tz_name)
+    tz = get_timezone(tz_name)
     current = now.astimezone(tz) if now else datetime.now(tz)
     today = current.replace(hour=0, minute=0, second=0, microsecond=0)
     days_since_sunday = (today.weekday() + 1) % 7
