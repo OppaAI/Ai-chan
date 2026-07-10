@@ -22,6 +22,8 @@ import xml.etree.ElementTree as ET
 from html import escape
 from pathlib import Path
 from typing import Iterable, Protocol
+import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as DET
 
 import sqlite_vec
 
@@ -152,7 +154,7 @@ def _xml_text_from_zip(path: Path, members: Iterable[str]) -> str:
                 data = zf.read(member)
             except KeyError:
                 continue
-            root = ET.fromstring(data)
+             root = DET.fromstring(data)
             chunks.extend(t.strip() for t in root.itertext() if t and t.strip())
     return "\n".join(chunks)
 
@@ -161,13 +163,13 @@ def _xlsx_text(path: Path) -> str:
     with zipfile.ZipFile(path) as zf:
         shared: list[str] = []
         try:
-            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            root = DET.fromstring(zf.read("xl/sharedStrings.xml"))
             shared = [" ".join(t.strip() for t in si.itertext() if t and t.strip()) for si in root]
         except KeyError:
             pass
         out: list[str] = []
         for name in sorted(n for n in zf.namelist() if n.startswith("xl/worksheets/") and n.endswith(".xml")):
-            root = ET.fromstring(zf.read(name))
+            root = DET.fromstring(zf.read(name))
             for c in root.iter():
                 if not c.tag.endswith("}c"):
                     continue
