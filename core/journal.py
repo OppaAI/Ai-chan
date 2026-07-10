@@ -1,4 +1,7 @@
-"""Encrypted daily journal store for faithful reflection records.
+"""
+core/journal.py
+
+Encrypted daily journal store for faithful reflection records.
 
 Daily journal rows are separate from memory facts: they keep the large,
 verbatim day-level blob in ``journal.db`` beside ``memory.db`` while using the
@@ -9,6 +12,7 @@ from __future__ import annotations
 import os
 import uuid
 from datetime import datetime
+
 from core.databank import delete_user_row, initialize_store_db, utc_now_iso
 from core.userspace import current_user_id
 
@@ -29,7 +33,6 @@ CREATE TABLE IF NOT EXISTS journals (
     updated_at TEXT NOT NULL,
     UNIQUE(user_id, entry_date)
 );
-
 CREATE INDEX IF NOT EXISTS idx_journals_user_date ON journals(user_id, entry_date);
 """
 
@@ -48,6 +51,12 @@ def daily_journal_tag(date: datetime | str) -> str:
 
 
 def pin_daily_journal(body: str, date: datetime, *, user_id: str | None = None) -> str | None:
+    """Pin a journal entry for a given local calendar day.
+
+    ``date`` must be the LOCAL date the entry belongs to (e.g. from
+    core.bioclock.local_now()), since entry_date is used as a plain
+    string key/index, not a timezone-aware comparison.
+    """
     uid = user_id or current_user_id()
     entry_date = date.strftime("%Y-%m-%d")
     tag = daily_journal_tag(entry_date)
@@ -81,6 +90,13 @@ def pin_daily_journal(body: str, date: datetime, *, user_id: str | None = None) 
 
 
 def get_between(start: datetime, end: datetime, *, user_id: str | None = None) -> list[dict]:
+    """Fetch pinned journals with entry_date in [start, end).
+
+    ``start``/``end`` must be LOCAL dates (e.g. from core.bioclock.local_now()),
+    matching the local basis entry_date is stored in. Passing UTC-shifted
+    datetimes here will misalign the YYYY-MM-DD window near midnight and can
+    put month-boundary entries in the wrong bucket or drop them entirely.
+    """
     uid = user_id or current_user_id()
     start_s = start.strftime("%Y-%m-%d")
     end_s = end.strftime("%Y-%m-%d")

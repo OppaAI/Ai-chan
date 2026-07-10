@@ -1,4 +1,7 @@
-"""Persistent experience store for Aiko's completed agentic task runs.
+"""
+core/experience.py
+
+Persistent experience store for Aiko's completed agentic task runs.
 
 Experience is not user memory and not wiki/knowledge. It is Aiko's procedural
 trace of what she tried: goal, ordered tools, outcomes, verification score, and

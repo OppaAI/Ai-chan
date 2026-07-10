@@ -1,4 +1,3 @@
-# core/reason.py
 """core/reason.py
 
 Shared numpy-vectorized embedding utilities for semantic retrieval and

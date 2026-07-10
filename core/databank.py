@@ -1,4 +1,7 @@
-"""Shared database helpers for Aiko's local RAG stores.
+"""
+core/databank.py
+
+Shared database helpers for Aiko's local RAG stores.
 
 Memory, learned knowledge, and experience all use local SQLite/sqlite-vec
 stores, optionally encrypted through core.secure. Keep common connection,

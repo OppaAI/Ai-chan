@@ -1,4 +1,7 @@
-"""Persistent learned knowledge store for Aiko.
+"""
+core/knowledge.py
+
+Persistent learned knowledge store for Aiko.
 
 This module is the machine-writable knowledge RAG layer: durable facts,
 excerpts, study notes, and user-approved document/PDF text that Aiko should
