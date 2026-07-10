@@ -189,7 +189,7 @@ class AikoWakeup:
         else:
             log.error("AikoThink failed to boot — deep-study window handlers not registered.")
 
-        from core.schedule import ScheduleRunner, register_scheduler
+        from core.schedule import ScheduleRunner, register_scheduler, register_system_handler, ensure_workspace_knowledge_job
         from core.reflect import generate_and_post
         from core.consolidate import maybe_run_consolidation
 
@@ -212,6 +212,23 @@ class AikoWakeup:
         )
         register_scheduler(_scheduler)  # Allow tools to notify scheduler of new jobs
         _scheduler.start()
+
+        # Schedule-driven workspace/knowledge scan. The schedule runner keeps
+        # using one sleep-until-next-event loop; the KB scan is represented in
+        # schedule.json as a normal interval handler job.
+        if memorize[0] is not None:
+            try:
+                from core.knowledge import ingest_workspace_knowledge_folder
+
+                register_system_handler(
+                    "workspace_knowledge_scan",
+                    lambda _memorize: ingest_workspace_knowledge_folder(embedder=memorize[0]._mem._embedder),
+                )
+                ensure_workspace_knowledge_job()
+                _scheduler.notify_new_job()
+                log.info("[wakeup] Workspace knowledge scan schedule ensured")
+            except Exception as exc:
+                log.warning("[wakeup] Workspace knowledge scan schedule failed: %s", exc)
 
         # ── voice subsystems ──────────────────────────────────────────────────
 

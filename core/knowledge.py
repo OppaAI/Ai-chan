@@ -16,20 +16,24 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-import time
 import uuid
-from datetime import datetime, timezone
+import zipfile
+import xml.etree.ElementTree as ET
 from html import escape
 from pathlib import Path
 from typing import Iterable, Protocol
+import xml.etree.ElementTree as ET
+from defusedxml import ElementTree as DET
 
 import sqlite_vec
 
+from core.config import load_config
+load_config()
+
 from core import reason
-from core.rag import fts_or_query, rrf_score
+from core.database import fts_or_query, initialize_sqlite_vec_db, resolve_user_db_path, rrf_score
 from core.log import get_logger
-from core.secure import connect_sqlite
-from core.userspace import current_user_id, user_state_path, user_workspace_root
+from core.userspace import current_user_id, user_workspace_root
 
 log = get_logger(__name__)
 
@@ -45,6 +49,7 @@ KNOWLEDGE_QUERY_INSTRUCT = os.getenv(
     "KNOWLEDGE_QUERY_INSTRUCT",
     "Retrieve durable learned knowledge relevant to the request",
 ).strip()
+KNOWLEDGE_WORKSPACE_DIR = os.getenv("KNOWLEDGE_WORKSPACE_DIR", "knowledge").strip().strip("/") or "knowledge"
 
 
 
@@ -113,20 +118,17 @@ def _db_path(user_id: str | None = None) -> Path:
     path = Path(KNOWLEDGE_DB_PATH).expanduser()
     if path.is_absolute():
         return path
-    return user_state_path(str(path), user_id)
+    return resolve_user_db_path(path, user_id=user_id)
 
 
 def _connect(user_id: str | None = None) -> sqlite3.Connection:
     uid = user_id or current_user_id()
-    conn = connect_sqlite(_db_path(uid), user_id=uid)
-    sqlite_vec.load(conn)
-    conn.executescript(_DDL)
-    conn.commit()
-    return conn
+    return initialize_sqlite_vec_db(_db_path(uid), _DDL, user_id=uid)
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    from core.bioclock import utc_now
+    return utc_now().isoformat()
 
 
 def _sanitize_text(text: str, max_chars: int = 200_000) -> str:
@@ -144,6 +146,61 @@ def _safe_workspace_path(relative_path: str, user_id: str | None = None) -> Path
     return target
 
 
+def _xml_text_from_zip(path: Path, members: Iterable[str]) -> str:
+    chunks: list[str] = []
+    with zipfile.ZipFile(path) as zf:
+        for member in members:
+            try:
+                data = zf.read(member)
+            except KeyError:
+                continue
+             root = DET.fromstring(data)
+            chunks.extend(t.strip() for t in root.itertext() if t and t.strip())
+    return "\n".join(chunks)
+
+
+def _xlsx_text(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        shared: list[str] = []
+        try:
+            root = DET.fromstring(zf.read("xl/sharedStrings.xml"))
+            shared = [" ".join(t.strip() for t in si.itertext() if t and t.strip()) for si in root]
+        except KeyError:
+            pass
+        out: list[str] = []
+        for name in sorted(n for n in zf.namelist() if n.startswith("xl/worksheets/") and n.endswith(".xml")):
+            root = DET.fromstring(zf.read(name))
+            for c in root.iter():
+                if not c.tag.endswith("}c"):
+                    continue
+                cell_type = c.attrib.get("t")
+                value = None
+                for child in c:
+                    if child.tag.endswith("}v"):
+                        value = child.text
+                        break
+                if value is None:
+                    continue
+                if cell_type == "s":
+                    try:
+                        value = shared[int(value)]
+                    except Exception:
+                        pass
+                out.append(str(value))
+    return "\n".join(out)
+
+
+def _epub_text(path: Path) -> str:
+    texts: list[str] = []
+    with zipfile.ZipFile(path) as zf:
+        for name in sorted(zf.namelist()):
+            if name.casefold().endswith((".xhtml", ".html", ".htm")):
+                raw = zf.read(name).decode("utf-8", errors="replace")
+                raw = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", raw, flags=re.I)
+                texts.append(re.sub(r"<[^>]+>", " ", raw))
+    return "\n".join(texts)
+
+
 def extract_text_from_file(relative_path: str, *, user_id: str | None = None, max_chars: int = 200_000) -> tuple[str, str]:
     """Extract text from a workspace document for learned-knowledge ingest.
 
@@ -156,7 +213,7 @@ def extract_text_from_file(relative_path: str, *, user_id: str | None = None, ma
     if not path.is_file():
         raise ValueError(f"workspace file not found: {relative_path}")
     suffix = path.suffix.casefold()
-    if suffix in {".txt", ".md", ".rst", ".json", ".yaml", ".yml", ".toml", ".csv", ".log", ".py", ".js", ".ts", ".html", ".htm"}:
+    if suffix in {".txt", ".md", ".rst", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log", ".py", ".js", ".ts", ".html", ".htm", ".tex", ".latex", ".rtf"}:
         raw = path.read_text(encoding="utf-8", errors="replace")
         if suffix in {".html", ".htm"}:
             try:
@@ -165,6 +222,13 @@ def extract_text_from_file(relative_path: str, *, user_id: str | None = None, ma
             except Exception:
                 pass
         return _sanitize_text(raw, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".docx":
+        text = _xml_text_from_zip(path, ["word/document.xml"])
+        return _sanitize_text(text, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".xlsx":
+        return _sanitize_text(_xlsx_text(path), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    if suffix == ".epub":
+        return _sanitize_text(_epub_text(path), max_chars), str(path.relative_to(user_workspace_root(user_id)))
     if suffix == ".pdf":
         reader_cls = None
         try:
@@ -244,6 +308,44 @@ def ingest_text(
         return None
     finally:
         conn.close()
+
+
+
+def _knowledge_sources(conn: sqlite3.Connection, uid: str) -> set[str]:
+    rows = conn.execute("SELECT source FROM learned_docs WHERE user_id=?", (uid,)).fetchall()
+    return {str(row["source"]) for row in rows if row["source"]}
+
+
+def ingest_workspace_knowledge_folder(*, embedder: Embedder | None = None, user_id: str | None = None) -> list[str]:
+    """Ingest new files dropped under <workspace>/knowledge into the KB DB.
+
+    The scan is idempotent by source path: files already present in learned_docs.source
+    are skipped. Unsupported files are logged and left in place for a future run.
+    """
+    uid = user_id or current_user_id()
+    root = user_workspace_root(uid)
+    folder = (root / KNOWLEDGE_WORKSPACE_DIR).resolve()
+    folder.mkdir(parents=True, exist_ok=True)
+    conn = _connect(uid)
+    try:
+        known = _knowledge_sources(conn, uid)
+    finally:
+        conn.close()
+    doc_ids: list[str] = []
+    for path in sorted(p for p in folder.rglob("*") if p.is_file() and not p.name.startswith(".")):
+        rel = str(path.relative_to(root))
+        if rel in known:
+            continue
+        try:
+            doc_id = ingest_file(rel, kind="workspace_drop", embedder=embedder, user_id=uid)
+        except Exception as exc:
+            log.warning("skipping workspace knowledge file %s: %s", rel, exc)
+            continue
+        if doc_id:
+            known.add(rel)
+            doc_ids.append(doc_id)
+            log.info("ingested workspace knowledge file %s as %s", rel, doc_id)
+    return doc_ids
 
 
 def _knn(conn: sqlite3.Connection, query: str, embedder: Embedder | None, uid: str, limit: int) -> list[sqlite3.Row]:
