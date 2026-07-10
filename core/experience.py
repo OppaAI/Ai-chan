@@ -16,15 +16,11 @@ import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from html import escape
-from pathlib import Path
-
-import sqlite_vec
-
 from core.config import load_config
 load_config()
 
 from core import reason
-from core.database import fts_or_query, initialize_sqlite_vec_db, resolve_user_db_path, rrf_score
+from core.databank import delete_by_id, initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
 from core.log import get_logger
 from core.userspace import current_user_id
 
@@ -91,16 +87,8 @@ END;
 """.format(dims=EMBED_DIMS)
 
 
-def _db_path(user_id: str | None = None) -> Path:
-    path = Path(EXPERIENCE_DB_PATH).expanduser()
-    if path.is_absolute():
-        return path
-    return resolve_user_db_path(path, user_id=user_id)
-
-
 def _connect(user_id: str | None = None) -> sqlite3.Connection:
-    uid = user_id or current_user_id()
-    return initialize_sqlite_vec_db(_db_path(uid), _DDL, user_id=uid)
+    return initialize_store_db(EXPERIENCE_DB_PATH, _DDL, user_id=user_id, vector=True)
 
 
 def _sanitize(text: str, max_chars: int = 500) -> str:
@@ -110,8 +98,7 @@ def _sanitize(text: str, max_chars: int = 500) -> str:
 
 
 def _now() -> str:
-    from core.bioclock import utc_now
-    return utc_now().isoformat()
+    return utc_now_iso()
 
 
 
@@ -149,7 +136,7 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
         if embedder is not None:
             try:
                 vec = embedder.embed_query(record_text, instruct=EXPERIENCE_QUERY_INSTRUCT)
-                conn.execute("INSERT INTO experiences_vec(id, embedding) VALUES(?, ?)", (row_id, sqlite_vec.serialize_float32(vec)))
+                insert_vector(conn, "experiences_vec", row_id, vec)
                 conn.commit()
             except Exception as embed_exc:
                 log.warning("experience embedding failed (record kept, FTS-only): %s", embed_exc)
@@ -173,50 +160,43 @@ def _prune(conn: sqlite3.Connection, uid: str) -> None:
         (uid, excess),
     ).fetchall()
     for row in rows:
-        conn.execute("DELETE FROM experiences WHERE id=?", (row["id"],))
+        delete_by_id(conn, "experiences", row["id"])
     conn.commit()
 
 
 def _knn(conn: sqlite3.Connection, query: str, embedder, uid: str, limit: int) -> list[sqlite3.Row]:
     if embedder is None:
         return []
-    blob = sqlite_vec.serialize_float32(embedder.embed_query(query, instruct=EXPERIENCE_QUERY_INSTRUCT))
-    return conn.execute(
-        """
-        SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
-        FROM experiences_vec v
-        JOIN experiences e ON e.id = v.id
-        WHERE e.user_id=?
-        ORDER BY dist ASC
-        LIMIT ?
-        """,
-        (blob, uid, limit),
-    ).fetchall()
+    vector = embedder.embed_query(query, instruct=EXPERIENCE_QUERY_INSTRUCT)
+    return user_scoped_vec_knn(
+        conn,
+        vec_table="experiences_vec",
+        owner_table="experiences",
+        owner_alias="e",
+        vector=vector,
+        user_id=uid,
+        limit=limit,
+    )
 
 
 def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sqlite3.Row]:
-    fts = fts_or_query(query)
-    if not fts:
-        return []
-    return conn.execute(
-        """
-        SELECT f.id
-        FROM experiences_fts f
-        JOIN experiences e ON e.id = f.id
-        WHERE experiences_fts MATCH ? AND e.user_id=?
-        ORDER BY rank
-        LIMIT ?
-        """,
-        (fts, uid, limit),
-    ).fetchall()
+    return user_scoped_fts_search(
+        conn,
+        fts_table="experiences_fts",
+        owner_table="experiences",
+        owner_alias="e",
+        query=query,
+        user_id=uid,
+        limit=limit,
+    )
 
 
 def search_experience(query: str, limit: int = 3, embedder=None) -> list[dict]:
     uid = current_user_id()
     conn = _connect(uid)
     try:
-        rank_knn = {row["id"]: i + 1 for i, row in enumerate(_knn(conn, query, embedder, uid, EXPERIENCE_KNN_LIMIT))}
-        rank_fts = {row["id"]: i + 1 for i, row in enumerate(_fts(conn, query, uid, EXPERIENCE_FTS_LIMIT))}
+        rank_knn = rank_by_id(_knn(conn, query, embedder, uid, EXPERIENCE_KNN_LIMIT))
+        rank_fts = rank_by_id(_fts(conn, query, uid, EXPERIENCE_FTS_LIMIT))
         ids = set(rank_knn) | set(rank_fts)
         if not ids:
             return []

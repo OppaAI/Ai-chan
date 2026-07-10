@@ -7,7 +7,7 @@ Runs on/after the first day of a month and consolidates the month before the
 most recent full month. Example: on July 1, keep June intact and summarize May.
 
 Scope: this ONLY touches pinned daily-granularity memory (atomic facts tagged
-"[YYYY-MM-DD] ..." and "Day record for YYYY-MM-DD:" blocks written nightly by
+"[YYYY-MM-DD] ..." rows in memory.db plus "Daily journal of YYYY-MM-DD:" blobs in journal.db written nightly by
 core.reflect). Unpinned memory is entirely out of scope here — its lifecycle
 is owned by core.forget's decay scoring, applied nightly via memorize.dream().
 Consolidation never reads, scores, or deletes unpinned rows.
@@ -55,7 +55,7 @@ from openai import OpenAI
 
 from core.log import get_logger
 from core.userspace import current_user_id, user_state_path
-from core.reflect import _extract_json_arrays, _salvage_truncated_facts, _DAY_RECORD_PREFIX_TMPL
+from core.reflect import _extract_json_arrays, _salvage_truncated_facts
 
 log = get_logger(__name__)
 
@@ -297,8 +297,8 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     back on the 5th) computes the same target month an on-time run would
     have, and the state check below correctly recognizes it as not yet done.
 
-    Compresses pinned daily-granularity memory (atomic "[YYYY-MM-DD] fact"
-    rows and "Day record for YYYY-MM-DD:" blocks) for the target month into
+    Compresses pinned daily-granularity records (atomic "[YYYY-MM-DD] fact"
+    rows from memory.db and "Daily journal of YYYY-MM-DD:" blobs from journal.db) for the target month into
     a smaller set of pinned "[YYYY-MM] fact" rows, then deletes the
     daily-granularity originals for that month. Unpinned memory is never
     read, scored, or deleted here — that lifecycle belongs entirely to
@@ -322,25 +322,33 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     end_utc   = end.astimezone(timezone.utc)
     all_memories = memorize.get_between(start_utc, end_utc)
 
-    # Scope to pinned daily-granularity rows only — atomic fact pins and
-    # day-record blocks. Anything else pinned (identity facts, standing
-    # preferences, etc.) is left completely untouched, and unpinned memory
-    # is never considered here at all.
+    # Scope memory.db to pinned daily-granularity atomic facts only. The large
+    # faithful daily blobs moved to journal.db so memory recall is not polluted
+    # by oversized pinned entries.
     daily_rows = [
-        m for m in all_memories
+        dict(m) | {"_store": "memory", "_text": (m.get("memory") or "").strip()}
+        for m in all_memories
         if int(m.get("pinned") or 0) == 1
-        and (
-            _DAILY_FACT_TAG_RE.match((m.get("memory") or "").strip())
-            or (m.get("memory") or "").startswith("Day record for ")
-        )
+        and _DAILY_FACT_TAG_RE.match((m.get("memory") or "").strip())
     ]
+
+    try:
+        from core import journal
+        journal_rows = journal.get_between(start_utc, end_utc, user_id=user_id)
+        daily_rows.extend(
+            dict(j) | {"_store": "journal", "_text": (j.get("body") or "").strip()}
+            for j in journal_rows
+            if int(j.get("pinned") or 0) == 1
+        )
+    except Exception as exc:
+        log.warning("Failed to load daily journals for monthly consolidation: %s", exc)
 
     if len(daily_rows) < CONSOLIDATION_MIN_MEMS:
         state["last_consolidated_month"] = month_key
         _save_state(state, user_id)
         return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(daily_rows)}
 
-    source_facts = [(m.get("memory") or "").strip() for m in daily_rows if (m.get("memory") or "").strip()]
+    source_facts = [m.get("_text", "").strip() for m in daily_rows if m.get("_text", "").strip()]
     chunks = [source_facts[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(source_facts), CONSOLIDATION_CHUNK_MEMS)]
 
     chunk_facts = [
@@ -382,7 +390,11 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
             if not mem_id:
                 continue
             try:
-                memorize.delete(mem_id)
+                if m.get("_store") == "journal":
+                    from core import journal
+                    journal.delete(mem_id, user_id=user_id)
+                else:
+                    memorize.delete(mem_id)
                 daily_deleted += 1
             except Exception as e:
                 log.warning("Failed to delete consolidated daily row %s: %s", mem_id, e)
