@@ -14,5 +14,5 @@ SOUL_PATH: "persona/soul.md"  # Local persona/soul prompt file used by reflectio
 # -- Reflection content --
 REFLECT_MAX_MEMS: "100"  # Maximum memory snippets included in a reflection prompt.
 REFLECT_TAGS: "daily-reflection,ai-journal,aiko"  # Comma-separated Hugo front matter tags.
-REFERENCE_IMAGE: "~/.aiko/aiko.png"  # Path or URL to Aiko reference image for image generation/reflection.
-USER_REFERENCE_IMAGE: "~/.aiko/OppaAI/profile/user.png"  # Path or URL to user reference image for image generation/reflection.
+REFERENCE_IMAGE: "/home/oppa-ai/.aiko/aiko.png"  # Path or URL to Aiko reference image for image generation/reflection.
+USER_REFERENCE_IMAGE: "/home/oppa-ai/.aiko/OppaAI/profile/user.png"  # Path or URL to user reference image for image generation/reflection.
