@@ -126,7 +126,7 @@ class AikoWakeup:
         Returns:
             BootResult with think, memorize, speak, listen references.
         """
-        from core.silence  import silent_stderr
+        from core.log import get_logger, silent_stderr
         from core.memorize import AikoMemorize
 
         with silent_stderr():

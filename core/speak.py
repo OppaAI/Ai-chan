@@ -28,8 +28,7 @@ import threading
 import argparse
 import unicodedata
 import queue
-from core.silence import silent_stderr
-from core.log import get_logger
+from core.log import get_logger, silent_stderr
 
 log = get_logger(__name__)
 

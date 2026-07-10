@@ -26,6 +26,8 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_MAX_BYTES    = int(os.getenv("LOG_MAX_BYTES",    5 * 1024 * 1024))
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", 3))
 
+from contextlib import contextmanager
+
 _FORMAT     = "%(asctime)s  [%(levelname)-8s]  %(name)s — %(message)s"
 _DATE_FMT   = "%Y-%m-%d %H:%M:%S"
 _initialized = False
@@ -73,3 +75,17 @@ def get_logger(name: str) -> logging.Logger:
     """Return a named logger. Initialises root logger on first call."""
     _setup()
     return logging.getLogger(name)
+
+
+@contextmanager
+def silent_stderr():
+    """Redirect fd 2 to /dev/null — silences C-library noise (ALSA, ONNX, PyAudio)."""
+    devnull_fd      = os.open(os.devnull, os.O_WRONLY)
+    real_stderr_fd  = os.dup(2)
+    try:
+        os.dup2(devnull_fd, 2)
+        yield
+    finally:
+        os.dup2(real_stderr_fd, 2)
+        os.close(real_stderr_fd)
+        os.close(devnull_fd)
