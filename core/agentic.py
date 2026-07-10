@@ -9,6 +9,19 @@ Also owns webchat's search-query condensation (resolve_search_query /
 llm_resolve_search_query) — both take `owner` (the AikoThink instance) for
 LLM client/model access, the same pattern dispatch_tool already uses for
 deep_search/deep_research.
+
+Context fetch shape:
+  Memory + knowledge-base (KB) are intent-agnostic — core.think.route()
+  fetches both concurrently BEFORE intent is even resolved, since every
+  path needs them. run_agentic_chat receives that fetch as `mem_kb_future`
+  (or fetches directly if called standalone, e.g. a scheduled job with no
+  prior route() call).
+
+  Wiki, agentic-policy, skill, and experience context are agentic-only —
+  they're only useful once intent has actually resolved to "agentic" — so
+  they're fetched here, concurrently with each other, via
+  _fetch_agentic_only_context(), on the same shared pool
+  (core.concurrency.CONTEXT_POOL).
 """
 
 from __future__ import annotations
@@ -26,6 +39,7 @@ import numpy as np
 from core.log import get_logger
 from core import bioclock
 from core import reason
+from core.concurrency import CONTEXT_POOL
 from core.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from core.wiki import wiki_context_for, wiki_knowledge_context_for
 from core.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
@@ -60,8 +74,17 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", os.getenv("LLM_MAX_TOKENS",
 LLM_CTX_SIZE = int(os.getenv("LLM_CTX_SIZE", 12288))
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", 120))
 AGENT_CONTEXT_BUDGET_RATIO = float(os.getenv("AGENT_CONTEXT_BUDGET_RATIO", 0.65))
-AGENT_MEMORY_DRAIN_TIMEOUT = float(os.getenv("AGENT_MEMORY_DRAIN_TIMEOUT", os.getenv("MEMORY_AGENT_DRAIN_TIMEOUT", 0.25)))
-AGENT_MEMORY_RECALL_LIMIT = int(os.getenv("AGENT_MEMORY_RECALL_LIMIT", min(int(os.getenv("MEMORY_RECALL_LIMIT", 3)), 2)))
+# AGENT_MEMORY_DRAIN_TIMEOUT and AGENT_MEMORY_RECALL_LIMIT removed:
+#   - Draining removed: the async write's own idle-grace window
+#     (MEMORY_WRITE_IDLE_GRACE in memorize.py) plus real agentic turn
+#     latency (multi-iteration tool loop) meant a queued write was either
+#     not started yet or already finished by the time the next turn's
+#     search() ran — a short drain wait never caught anything real.
+#   - Recall limit removed: memory (and KB) fetch now happens once,
+#     centrally, in core.think._fetch_memory_and_knowledge, shared by all
+#     three chat paths (see MEMORY_RECALL_LIMIT / KNOWLEDGE_RECALL_LIMIT in
+#     core.think). Agentic no longer owns a separate limit knob for the
+#     same data.
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", 1500))
 AGENT_TOOL_RESULT_MAX_CHARS = int(os.getenv("AGENT_TOOL_RESULT_MAX_CHARS", 3000))
 AGENT_VERIFY_FINAL = os.getenv("AGENT_VERIFY_FINAL", "1").lower() in {"1", "true", "yes", "on"}
@@ -69,6 +92,12 @@ AGENT_VERIFY_LLM = os.getenv("AGENT_VERIFY_LLM", "1").lower() in {"1", "true", "
 AGENT_MAX_FINAL_REPAIRS = int(os.getenv("AGENT_MAX_FINAL_REPAIRS", 2))
 AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
+
+# Rolling STM window shared across all three chat paths. Mirrors
+# CONTEXT_WINDOW_TURNS in core.think (kept as a distinct name here rather
+# than importing core.think, which already imports core.agentic — that
+# would create a circular import).
+AGENT_HISTORY_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
 # Max number of times deep_search/deep_research together can be invoked in
 # ONE agentic workflow. Previously hardcoded to exactly once; now tunable.
@@ -212,6 +241,59 @@ def _owner_embedder(owner):
     zero extra model load. Returns None if unavailable; every scoring path
     then falls back to keyword overlap instead of failing."""
     return getattr(getattr(getattr(owner, "_memorize", None), "_mem", None), "_embedder", None)
+
+
+def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
+    """Fetch agentic-specific context blocks concurrently: agentic policy
+    (skills.md/schedule.md excerpts), wiki (architecture cards + wiki's own
+    knowledge RAG), predefined skill workflows, and past-task experience.
+
+    These only matter once intent has resolved to "agentic" — unlike
+    memory + KB, which core.think.route() fetches for every path up front,
+    before intent is even known. All four reads here are independent
+    (separate stores, no shared output), so they run concurrently on the
+    same pool and are joined afterward; order of completion is irrelevant.
+
+    Per-key try/except means one failed lookup surfaces a fallback block
+    instead of sinking the other three.
+    """
+    futures = {
+        "agentic_policy": CONTEXT_POOL.submit(_agentic_policy_context, user_input, embedder=embedder),
+        "wiki": CONTEXT_POOL.submit(wiki_context_for, user_input, limit=1, max_chars=1500, embedder=embedder),
+        "wiki_knowledge": CONTEXT_POOL.submit(wiki_knowledge_context_for, user_input, limit=2, max_chars=2500, embedder=embedder),
+        "skill": CONTEXT_POOL.submit(skill_context_for, user_input, limit=2, max_chars=3000, embedder=embedder),
+        "experience": CONTEXT_POOL.submit(experience.experience_context_for, user_input, limit=3, embedder=embedder),
+    }
+    fallbacks = {
+        "agentic_policy": "<agentic_policy_context>\nLookup failed.\n</agentic_policy_context>",
+        "wiki": "<wiki_context>\nLookup failed.\n</wiki_context>",
+        "wiki_knowledge": "<wiki_knowledge_context>\nLookup failed.\n</wiki_knowledge_context>",
+        "skill": "<skill_context>\nLookup failed.\n</skill_context>",
+        "experience": "<experience_context>\nLookup failed.\n</experience_context>",
+    }
+    results = {}
+    for key, future in futures.items():
+        try:
+            results[key] = future.result()
+        except Exception as e:
+            log.error("[agentic] context fetch '%s' failed: %s", key, e)
+            results[key] = fallbacks[key]
+    return results
+
+
+def _recent_history_messages(owner, max_turns: int = AGENT_HISTORY_TURNS) -> list[dict]:
+    """Last `max_turns` user+assistant pairs from STM history (owner._history),
+    ready for direct inclusion in a chat.completions messages list. Mirrors
+    the same trim + sanitize logic core.think's chat()/webchat() already
+    apply to their own history slices, via owner._sanitize_history, so
+    agentic gets the same rolling-window behavior the other two paths have
+    always had. Read-only — never mutates owner._history."""
+    with owner._history_lock:
+        snapshot = list(owner._history)
+    if not snapshot:
+        return []
+    trimmed = snapshot[-(max_turns * 2):]
+    return owner._sanitize_history(trimmed)
 
 
 @dataclass
@@ -917,28 +999,47 @@ def _enforce_agentic_context_budget(
     return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"]
 
 
-def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
-    """Run task mode using the owning AikoThink instance for model/memory/output."""
+def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None) -> str:
+    """Run task mode using the owning AikoThink instance for model/memory/output.
+
+    mem_kb_future: a concurrent.futures.Future from
+    owner._fetch_memory_and_knowledge(user_input), submitted by
+    core.think.route() BEFORE intent was resolved to "agentic" (memory+KB
+    are intent-agnostic, so route() doesn't wait for routing to finish
+    before starting them). If this is None (e.g. a scheduled job calling
+    agentic_chat() directly, with no prior route() call), the fetch runs
+    here instead.
+    """
     tools = tool_schemas()
 
-    if not owner.wait_for_memory(timeout=AGENT_MEMORY_DRAIN_TIMEOUT):
-        log.debug("Agent memory queue still draining; continuing without blocking turn start.")
-    memories = owner._memorize.search(user_input, limit=AGENT_MEMORY_RECALL_LIMIT)
+    if mem_kb_future is not None:
+        try:
+            memories, knowledge_block = mem_kb_future.result()
+        except Exception as e:
+            log.error("Memory/KB fetch failed: %s", e)
+            memories, knowledge_block = [], "<knowledge_context>\nLookup failed.\n</knowledge_context>"
+    else:
+        memories, knowledge_block = owner._fetch_memory_and_knowledge(user_input)
+
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
 
     # Reuse the same HarrierEmbedder instance already warm for memory search
     # and intent routing for every RAG-selection call below (agentic policy,
-    # wiki, skill, knowledge). Falls back to keyword scoring automatically
+    # wiki, skill, experience). Falls back to keyword scoring automatically
     # if unavailable.
     _embedder = _owner_embedder(owner)
-    agentic_policy_context = _agentic_policy_context(user_input, embedder=_embedder)
-    wiki_context = wiki_context_for(user_input, limit=1, max_chars=1500, embedder=_embedder)
-    skill_context = skill_context_for(user_input, limit=2, max_chars=3000, embedder=_embedder)
-    wiki_knowledge_context = wiki_knowledge_context_for(user_input, limit=2, max_chars=2500, embedder=_embedder)
-    knowledge_context = knowledge_context_for(user_input, limit=3, max_chars=2500, embedder=_embedder)
-    experience_context = experience.experience_context_for(user_input, limit=3, embedder=_embedder)
-    knowledge_context = f"{wiki_knowledge_context}\n\n{knowledge_context}"
+
+    # Wiki/policy/skill/experience are agentic-only — fetched now,
+    # concurrently with each other, since intent has already resolved to
+    # "agentic" by the time run_agentic_chat runs.
+    agentic_ctx = _fetch_agentic_only_context(user_input, embedder=_embedder)
+    agentic_policy_context = agentic_ctx["agentic_policy"]
+    wiki_context = agentic_ctx["wiki"]
+    skill_context = agentic_ctx["skill"]
+    experience_context = agentic_ctx["experience"]
+    knowledge_context = f'{agentic_ctx["wiki_knowledge"]}\n\n{knowledge_block}'
+
     wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,
         wiki_context, skill_context, knowledge_context, experience_context,
@@ -998,6 +1099,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
     )
     messages = [
         {"role": "system", "content": agent_system},
+        *_recent_history_messages(owner),
         {"role": "user", "content": user_input},
     ]
     owner.last_prompt_debug = {
@@ -1013,7 +1115,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             {"label": "experience_context", "content": experience_context},
             {"label": "task_mode_system", "content": agent_system},
         ],
-        "previous_chat_messages": [],
+        "previous_chat_messages": [dict(m) for m in messages[1:-1]],
     }
     owner.last_usage = {
         "prompt_messages": list(messages),
@@ -1054,158 +1156,3 @@ def run_agentic_chat(owner, user_input: str, token_callback=None) -> str:
             messages.append(msg.model_dump(exclude_none=True))
             _compact_processed_tool_context(messages)
         except Exception as e:
-            log.error("Agent LLM call failed: %s", e)
-            state.record(ToolResult(
-                ok=False, tool="llm_call", args={},
-                content=f"[llm_call_failed: {e}]",
-                error_type="llm_call_failed",
-                retryable=False,
-            ))
-            break
-
-        if not msg.tool_calls:
-            candidate = msg.content or ""
-            if AGENT_VERIFY_FINAL:
-                verdict = _verify_final_answer(owner, user_input, candidate, state)
-                last_verdict = verdict
-                if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
-                    final_repairs += 1
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "Verifier rejected the candidate final answer. "
-                            "Repair the task or answer before finalizing.\n"
-                            f"Verifier score: {verdict.score}\n"
-                            f"Feedback:\n{verdict.feedback}\n\n"
-                            f"Task ledger:\n{state.summary()}"
-                        ),
-                    })
-                    continue
-            final_text = candidate
-            break
-
-        for call in msg.tool_calls:
-            name = call.function.name
-            try:
-                args = json.loads(call.function.arguments)
-            except json.JSONDecodeError as e:
-                args = {}
-                result = ToolResult(
-                    ok=False, tool=name, args=args,
-                    content=f"Invalid JSON arguments: {e}. Reissue this tool call with valid JSON.",
-                    error_type="invalid_json",
-                    retryable=True,
-                )
-                state.record(result)
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": result.observation(),
-                })
-                continue
-
-            log.info("[agent] step %s → %s(%s)", step, name, args)
-            if name in _RESEARCH_TOOLS and _research_call_count(state) >= AGENT_RESEARCH_MAX_CALLS:
-                result = ToolResult(
-                    ok=False, tool=name, args=args,
-                    content=(
-                        f"deep_search/deep_research have already been used "
-                        f"{AGENT_RESEARCH_MAX_CALLS} time(s) in this agentic workflow. "
-                        "Do not search again; use the evidence already gathered to "
-                        "plan, summarize, save, or answer."
-                    ),
-                    error_type="research_limit_reached",
-                    retryable=False,
-                )
-                state.record(result)
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": result.observation(),
-                })
-                continue
-            call_key = (name, json.dumps(args, sort_keys=True))
-            if name != "final_answer" and call_key in seen_calls:
-                result = ToolResult(
-                    ok=False, tool=name, args=args,
-                    content=(
-                        f"Repeated tool call skipped for {name}. Choose a different "
-                        "query/argument/tool, or finalize with a disclosed limitation."
-                    ),
-                    error_type="repeated_tool_call",
-                    retryable=True,
-                )
-                state.record(result)
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": result.observation(),
-                })
-                continue
-            if name != "final_answer":
-                seen_calls.add(call_key)
-            if token_callback:
-                token_callback(f"__TOOL__:{name}({args})\n")
-
-            if name == "final_answer":
-                candidate = args.get("answer", "")
-                if AGENT_VERIFY_FINAL:
-                    verdict = _verify_final_answer(owner, user_input, candidate, state)
-                    last_verdict = verdict
-                    if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
-                        final_repairs += 1
-                        messages.append({
-                            "role": "tool", "tool_call_id": call.id,
-                            "name": name,
-                            "content": json.dumps({
-                                "ok": False,
-                                "error_type": "verification_failed",
-                                "score": verdict.score,
-                                "feedback": verdict.feedback,
-                                "task_ledger": json.loads(state.summary()),
-                                "instruction": "Repair the missing/unsupported parts, then call final_answer again.",
-                            }, ensure_ascii=False, indent=2),
-                        })
-                        continue
-                final_text = candidate
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": "Answer submitted.",
-                })
-                break
-
-            result = execute_tool_with_policy(name, args, state, owner=owner)
-            messages.append({
-                "role": "tool", "tool_call_id": call.id,
-                "name": name, "content": result.observation(),
-            })
-
-        if final_text:
-            break
-
-    if not final_text:
-        log.warning(
-            "Agent loop ended without a final answer after %s iterations; tools=%s failures=%s",
-            MAX_AGENT_ITER, len(state.steps), len(state.failures),
-        )
-        final_text = _build_incomplete_task_answer(state, last_content)
-        used_incomplete_fallback = True
-
-    if used_incomplete_fallback:
-        exp_verified_ok, exp_score = False, 0.0
-    elif last_verdict is not None:
-        exp_verified_ok, exp_score = last_verdict.ok, last_verdict.score
-    else:
-        exp_verified_ok, exp_score = True, 1.0
-
-    experience.record_experience(
-        owner, user_input, state.steps, final_text,
-        verified_ok=exp_verified_ok,
-        score=exp_score,
-        embedder=_embedder,
-    )
-    owner._emit(final_text, token_callback=token_callback)
-
-    with owner._history_lock:
-        owner._history.append({"role": "user", "content": user_input})
-        owner._history.append({"role": "assistant", "content": final_text})
-
-    owner._store_async(user_input, final_text)
-    return final_text
