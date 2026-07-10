@@ -334,7 +334,11 @@ def ingest_workspace_knowledge_folder(*, embedder: Embedder | None = None, user_
         rel = str(path.relative_to(root))
         if rel in known:
             continue
-        doc_id = ingest_file(rel, kind="workspace_drop", embedder=embedder, user_id=uid)
+        try:
+            doc_id = ingest_file(rel, kind="workspace_drop", embedder=embedder, user_id=uid)
+        except Exception as exc:
+            log.warning("skipping workspace knowledge file %s: %s", rel, exc)
+            continue
         if doc_id:
             known.add(rel)
             doc_ids.append(doc_id)
