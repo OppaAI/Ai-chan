@@ -75,6 +75,26 @@ class HarrierEmbedder:
         self.timeout    = timeout
         self._session   = requests.Session()
 
+        # Concurrent calls hit this session from multiple threads at once
+        # (route()'s ternary-routing embed_query call + the two CONTEXT_POOL
+        # futures in _fetch_memory_and_knowledge). Default urllib3 pool size
+        # is too small for that and transient RemoteDisconnected errors from
+        # the backend aren't retried at all by default — add both.
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=requests.adapters.Retry(
+                total=2,
+                connect=2,
+                read=2,
+                backoff_factor=0.2,
+                status_forcelist=[502, 503, 504],
+                allowed_methods=frozenset(["GET", "POST"]),
+            ),
+        )
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
+
     # ── core inference ────────────────────────────────────────────────────────
 
     def _embed_texts(self, texts: list[str]) -> np.ndarray:
