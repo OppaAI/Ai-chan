@@ -186,18 +186,31 @@ def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list
     if importlib.util.find_spec("requests") is None:
         return None, "[search failed: requests is not installed]"
     requests = importlib.import_module("requests")
-    try:
-        response = requests.get(
-            f"{SEARXNG_URL}/search",
-            params={"q": query, "format": "json", "pageno": pageno},
-            timeout=8,
-        )
-        response.raise_for_status()
-        data = response.json()
-    except requests.exceptions.RequestException as e:
-        return None, f"[search failed: {e}]"
-    except ValueError:
-        return None, "[search failed: invalid JSON response]"
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                f"{SEARXNG_URL}/search",
+                params={"q": query, "format": "json", "pageno": pageno},
+                timeout=8,
+            )
+            if response.status_code == 429:
+                last_error = f"[search failed: rate limited (attempt {attempt + 1})]"
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            response.raise_for_status()
+            data = response.json()
+            break
+        except requests.exceptions.ConnectionError as e:
+            last_error = f"[search failed: {e}]"
+            time.sleep(1.0 * (attempt + 1))
+            continue
+        except ValueError:
+            return None, "[search failed: invalid JSON response]"
+        except requests.exceptions.RequestException as e:
+            return None, f"[search failed: {e}]"
+    else:
+        return None, last_error or "[search failed: max retries]"
 
     results = data.get("results", [])[:max_results]
     _cache_set(_search_cache, cache_key, results)

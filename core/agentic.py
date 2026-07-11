@@ -5,11 +5,6 @@ Aiko's task-mode loop: tool schemas, ReAct-style dispatch, and final response
 handling. Pure tool implementations stay in core/tools.py; chat facade, TTS,
 history, and memory queue ownership stay in core/think.py.
 
-Also owns webchat's search-query condensation (resolve_search_query /
-llm_resolve_search_query) — both take `owner` (the AikoThink instance) for
-LLM client/model access, the same pattern dispatch_tool already uses for
-deep_search/deep_research.
-
 Context fetch shape:
   Memory + knowledge-base (KB) are intent-agnostic — core.think.route()
   fetches both concurrently BEFORE intent is even resolved, since every
@@ -151,72 +146,6 @@ def _agentic_policy_context(user_input: str, embedder=None) -> str:
     if not blocks:
         return "<agentic_policy_context>\nNo matching task policy found for this request.\n</agentic_policy_context>"
     return "<agentic_policy_context>\n" + "\n\n".join(blocks) + "\n</agentic_policy_context>"
-
-
-# ── webchat search-query condensation ────────────────────────────────────────
-# Used by think.py's webchat() to turn a conversational user message into a
-# clean search-engine query before calling web_search_context. Lives here
-# (not tools.py) so it can take `owner` the same way dispatch_tool does for
-# deep_search/deep_research — both need the caller's already-loaded LLM
-# client/model rather than constructing a second one.
-
-def resolve_search_query(owner, user_input: str) -> str:
-    """Condense a user message into a clean search query via the router LLM.
-    Short, already-keyword-like input skips the LLM call as a latency
-    shortcut; everything else is condensed."""
-    stripped = user_input.strip()
-    words = stripped.split()
-
-    # Cheap bypass: short and no sentence punctuation/framing → already a query.
-    if len(words) <= 5 and not stripped.endswith(("?", ".")):
-        return stripped
-
-    return llm_resolve_search_query(owner, stripped)
-
-
-def llm_resolve_search_query(owner, user_input: str) -> str:
-    """LLM fallback: condense a verbose query into 3-5 search keywords,
-    using the owning AikoThink instance's already-loaded router model."""
-    try:
-        resp = owner._client.chat.completions.create(
-            model=owner._router_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You rewrite a user's message as a short web search query. "
-                        "Output ONLY the search query — 3 to 5 words, no quotes, "
-                        "no explanation, no labels. Never repeat or reuse wording "
-                        "from any other conversation — rewrite only the exact "
-                        "message given to you in this turn."
-                    ),
-                },
-                {"role": "user", "content": user_input},
-            ],
-            stream=False, max_tokens=20, temperature=0.2, top_p=0.9, timeout=LLM_TIMEOUT,
-        )
-        resolved = (resp.choices[0].message.content or "").strip().split("\n")[0]
-        resolved = resolved.strip('*_`()"\'').strip()[:100]
-        resolved = resolved or user_input
-
-        # Semantic guard: reject a resolution that isn't actually about the
-        # same topic as the input, instead of relying on brittle token
-        # overlap (see core/reason.py — same primitive used for KB/wiki/
-        # skill/agentic-policy relevance scoring elsewhere).
-        similarity = reason.block_relevance_score(_owner_embedder(owner), user_input, resolved)
-        log.info("[search_query] raw=%r -> resolved=%r similarity=%.3f", user_input, resolved, similarity)
-
-        if similarity < 0.35:
-            log.warning(
-                "[search_query] resolved query too dissimilar from input (%.3f); using raw input instead: %r -> %r",
-                similarity, user_input, resolved,
-            )
-            return user_input
-
-        return resolved
-    except Exception as e:
-        log.warning("LLM search query resolution failed: %s", e)
-        return user_input
 
 
 _ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^\]:]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)

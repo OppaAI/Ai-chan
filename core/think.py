@@ -45,7 +45,7 @@ import unicodedata
 from core.memorize import AikoMemorize
 from core.speak    import AikoSpeak
 from core.tools    import web_search_context
-from core.agentic  import run_agentic_chat, resolve_search_query, llm_resolve_search_query
+from core.agentic  import run_agentic_chat
 from core.wiki import wiki_knowledge_context_for
 from core.knowledge import knowledge_context_for
 from core.concurrency import CONTEXT_POOL
@@ -638,24 +638,21 @@ class AikoThink:
             system = f"{system}\n\n{memory_block}"
         system = f"{system}\n\n{knowledge_block}"
         
-        # Try web_search first (fast) — query condensation now lives in
-        # core.agentic (resolve_search_query / llm_resolve_search_query),
-        # shared with the agentic tool loop's own search-query needs.
-        search_query = resolve_search_query(self, user_input)
+        # Search directly with the raw user input — same approach as /web.
+        # No LLM-based query condensation: it adds latency, depends on a
+        # small router model that often produces worse queries than the
+        # original text, and /web already proves the raw path works.
         if token_callback:
-            token_callback(f"__SEARCHING__:{search_query}\n")
+            token_callback(f"__SEARCHING__:{user_input}\n")
         
-        context = web_search_context(search_query, max_results=int(os.getenv("SEARXNG_MAX_RESULTS", 3)))
-        
-        # Fallback: retry with better query or webfetch
-        if not context or context.startswith("["):
-            log.info("[webchat] Snippets failed, retrying with better query...")
+        context = web_search_context(user_input, max_results=int(os.getenv("SEARXNG_MAX_RESULTS", 3)))
+
+        if not context:
+            log.info("[webchat] First search returned nothing, retrying once...")
             if token_callback:
                 token_callback("__RETRYING__\n")
-            
             try:
-                better_query = llm_resolve_search_query(self, user_input)
-                context = web_search_context(better_query, max_results=1)
+                context = web_search_context(user_input, max_results=1)
             except Exception as e:
                 log.warning("[webchat] Retry failed: %s", e)
                 context = None
@@ -664,7 +661,7 @@ class AikoThink:
         if context and not context.startswith("["):
             system = (
                 f"{system}\n\n"
-                f"<search_results query='{search_query}'>\n"
+                f"<search_results query='{user_input}'>\n"
                 f"Answer ONLY using these search results:\n\n"
                 f"{context}\n"
                 f"</search_results>"
