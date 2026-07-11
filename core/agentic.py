@@ -175,9 +175,9 @@ def resolve_search_query(owner, user_input: str) -> str:
 
 
 def llm_resolve_search_query(owner, user_input: str) -> str:
-     """LLM fallback: condense a verbose query into 3-5 search keywords,
-     using the owning AikoThink instance's already-loaded router model."""
-     try:
+    """LLM fallback: condense a verbose query into 3-5 search keywords,
+    using the owning AikoThink instance's already-loaded router model."""
+    try:
         resp = owner._client.chat.completions.create(
             model=owner._router_model,
             messages=[{"role": "user", "content": (
