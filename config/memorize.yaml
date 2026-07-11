@@ -5,7 +5,7 @@
 
 # -- Storage and embedding endpoint --
 SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory.db.
-EMBED_BASE_URL: "http://127.0.0.1:46377"  # Embedding server base URL used by core/embed.py.
+EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by core/embed.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.
 EMBED_MODEL_FILE: "model_quantized.onnx"  # ONNX model filename for local custom embedder.
