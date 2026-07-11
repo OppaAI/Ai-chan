@@ -58,6 +58,16 @@ from core.log import get_logger, silent_stderr
 from core.wakeup import AikoWakeup
 from core.toolkit.researcher import web_search
 
+# CLI auth (GitHub device flow) — lazy-imported so it doesn't pull in
+# httpx for users who never use --cli
+_CliAuth = None
+def _get_cli_auth():
+    global _CliAuth
+    if _CliAuth is None:
+        from cli.auth import CliAuth
+        _CliAuth = CliAuth()
+    return _CliAuth
+
 log = get_logger(__name__)
 
 with silent_stderr():
@@ -115,6 +125,128 @@ _MED_RED   = "\033[38;5;203m"   # web prompt
 _MED_CYAN  = "\033[38;5;80m"    # agentic prompts
 _LAVENDER  = "\033[38;5;183m"   # memory entries
 _DIM       = "\033[2m"
+
+# ── context-type ANSI colours for compact debug ──────────────────────────
+_CTX_COLORS = {
+    "input":    "\033[38;5;47m",    # green
+    "text":     "\033[38;5;47m",    # green
+    "voice":    "\033[38;5;50m",    # teal
+    "sys":      "\033[38;5;250m",   # grey
+    "mem":      "\033[38;5;183m",   # lavender
+    "kb":       "\033[38;5;215m",   # orange
+    "knowledge":"\033[38;5;215m",   # orange (alias for kb)
+    "wiki":     "\033[38;5;159m",   # light cyan
+    "exp":      "\033[38;5;218m",   # pink
+    "experience":"\033[38;5;218m",  # pink (alias for exp)
+    "agentic":  "\033[38;5;80m",    # med cyan
+    "web":      "\033[38;5;203m",   # med red
+    "tools":    "\033[38;5;226m",   # yellow
+    "skill":    "\033[38;5;226m",   # yellow
+    "query":    "\033[38;5;154m",   # lime
+    "wip":      "\033[38;5;209m",   # orange-red
+    "cond":     "\033[38;5;141m",   # purple
+    "summary":  "\033[38;5;117m",   # light blue
+    "answer":   "\033[38;5;51m",    # bright cyan
+    "output":   "\033[38;5;87m",    # light cyan
+    "chat":     "\033[38;5;222m",   # tan
+    "tts":      "\033[38;5;198m",   # hot pink
+    "thinking": "\033[38;5;226m",   # yellow
+    "plan":     "\033[38;5;141m",   # purple
+    "task":     "\033[38;5;80m",    # med cyan (alias for agentic)
+}
+
+# Alias helper: pick the colour for *any* label by fuzzy key
+def _ctx_color(label: str) -> str:
+    """Return the ANSI colour for a context label, falling back through
+    partial matches (e.g. 'knowledge_context' -> 'kb')."""
+    if label in _CTX_COLORS:
+        return _CTX_COLORS[label]
+    for key, code in _CTX_COLORS.items():
+        if key in label:
+            return code
+    return _GREY
+
+
+def _ctx_preview(content: str, max_chars: int = 500) -> str:
+    """Truncate content to ~max_chars, replacing newlines with ↵."""
+    if not content:
+        return ""
+    preview = content[:max_chars].replace("\n", "↵")
+    if len(content) > max_chars:
+        preview += "…"
+    return preview
+
+
+def _ctx_line(label: str, tok: int, latency_ms: float, content: str,
+              max_chars: int = 500, max_lines: int = 5) -> str:
+    """Multi-line content with subsequent lines indented under the header.
+
+    [label][+XXms][YYY tok] first line of content
+                             second line indented
+                             third line indented …
+    """
+    color = _ctx_color(label)
+    raw_lines = content.split("\n")
+    out: list[str] = []
+    char_count = 0
+    for i, line in enumerate(raw_lines):
+        if i >= max_lines:
+            out[-1] += "…"
+            break
+        remaining = max_chars - char_count
+        if remaining <= 0:
+            break
+        trunc = line[:remaining]
+        if len(line) > remaining:
+            trunc = trunc[:max(0, remaining - 1)] + "…"
+        out.append(trunc)
+        char_count += len(trunc) + 1
+
+    header = f"[{label}][{latency_ms:+.0f}ms][{tok} tok]"
+    indent = " " * (len(header) + 1)
+    body = ("\n" + indent).join(out)
+    return _c(color, f"{header} {body}")
+
+
+def _gantt_lines(items: list[tuple[str, float, int, str]],
+                 max_bar: int = 48) -> list[str]:
+    """Dual-bar chart: left = time latency, right = token proportion + %.
+    items: (label, latency_ms, tokens, colour_code)
+    """
+    if not items:
+        return []
+    total_tok = max(sum(t for _, _, t, _ in items), 1)
+    max_tok   = max(t for _, _, t, _ in items)
+    max_lat   = max((lat for _, lat, _, _ in items if lat > 0), default=1)
+    hw = max_bar // 2  # each bar gets half the width
+    out = ["── context gantt ───────────────────────────────────────"]
+    for label, lat_ms, tok, color in items:
+        pct = tok / total_tok * 100
+        # latency bar (only shown for items with actual latency)
+        lat_len = int(hw * lat_ms / max_lat) if lat_ms > 0 else 0
+        lat_bar = "█" * lat_len
+        # token bar (at least 1 char so every item is visible)
+        tok_len = max(1, int(hw * tok / max_tok))
+        tok_bar = "█" * tok_len
+        out.append(_c(color,
+                      f" {label:<8} {lat_bar:<{hw}} {lat_ms:+.0f}ms  "
+                      f"{tok:>5}tok  {tok_bar:<{hw}} {pct:5.1f}%"))
+    total_t = sum(t for _, _, t, _ in items)
+    out.append(_c(_DIM,
+                  f" {'total':<8} {'─' * hw}          "
+                  f"{total_t:>5}tok  {'─' * hw} {100:5.1f}%"))
+    return out
+
+
+def _log_ctx(logger, label: str, tok: int, latency_ms: float,
+             content: str, max_log_chars: int = 2000) -> None:
+    """Log a single context entry at INFO level."""
+    preview = (content[:max_log_chars].replace("\n", "\\n")
+               if content else "")
+    if len(content or "") > max_log_chars:
+        preview += "..."
+    logger.info("[ctx] [%s][%+.0fms][%d tok] %s",
+                label, latency_ms, tok, preview)
 
 
 def _box_text(text: str, color: str, width: int = 66) -> str:
@@ -759,38 +891,64 @@ def _match_voice_command(text: str) -> str | None:
 # If core/think.py emits additional marker types, add them here rather than
 # letting them fall through to ui.stream_token() as literal text.
 
-_STATUS_MARKERS: dict[str, tuple[str, str]] = {
-    "__THINKING__":  ("🤔", "Thinking"),
-    "__TOOL__":      ("🔧", "Using tool"),
-    "__SEARCHING__": ("🔍", "Searching"),
-}
+# agentic iteration counter (kept as module-level state since
+# _handle_status_marker is called across turns)
+_AGENT_STEP = 0
 
 
 def _handle_status_marker(ui, token: str) -> bool:
     """
     Detect a "__MARKER__" or "__MARKER__:payload" token and render it as a
-    live status line describing what Aiko is actually doing, instead of
-    streaming the raw marker into the chat text.
-
-    core/agentic.py emits these with a trailing newline (e.g. "__THINKING__\n"
-    and "__TOOL__:name(args)\n"), so strip trailing newlines before matching.
-
-    Returns True if the token was a recognized status marker (caller should
-    not also pass it to ui.stream_token), False otherwise.
+    live status line. Richer than the old icon-based version:
+      - __THINKING__  → [thinking] step N
+      - __TOOL__      → [tools] name(args)  with formatted args
+      - __SEARCHING__ → [web] searching: query
     """
     stripped_token = token.rstrip("\r\n")
-    for marker, (icon, label) in _STATUS_MARKERS.items():
-        if stripped_token == marker:
-            ui.add_message('sys', f'{icon} {label}...')
-            ui._draw()
-            return True
-        prefix = marker + ":"
-        if stripped_token.startswith(prefix):
-            payload = stripped_token[len(prefix):].strip()
-            text = f'{icon} {label}: {payload}' if payload else f'{icon} {label}...'
-            ui.add_message('sys', text)
-            ui._draw()
-            return True
+    if not stripped_token:
+        return False
+
+    # ── __THINKING__ ───────────────────────────────────────────────────
+    if stripped_token == "__THINKING__":
+        global _AGENT_STEP
+        _AGENT_STEP += 1
+        ui.add_message('sys',
+                       _c(_CTX_COLORS["thinking"],
+                          f"[thinking] step {_AGENT_STEP}"))
+        ui._draw()
+        return True
+
+    # ── __SEARCHING__:<query> ──────────────────────────────────────────
+    _SEARCH_PREFIX = "__SEARCHING__:"
+    if stripped_token.startswith(_SEARCH_PREFIX):
+        query = stripped_token[len(_SEARCH_PREFIX):].strip()
+        ui.add_message('sys',
+                       _c(_CTX_COLORS["web"],
+                          f"[web] {_ctx_preview(query, 300)}"))
+        ui._draw()
+        return True
+
+    # ── __TOOL__:name(args) ────────────────────────────────────────────
+    _TOOL_PREFIX = "__TOOL__:"
+    if stripped_token.startswith(_TOOL_PREFIX):
+        payload = stripped_token[len(_TOOL_PREFIX):].strip()
+        # Try to pretty-print JSON args
+        if "(" in payload and payload.endswith(")"):
+            name = payload[:payload.index("(")]
+            args_raw = payload[payload.index("(") + 1:-1]
+            display = name
+            if args_raw and args_raw.strip("{} "):
+                # Show just the first ~200 chars of args
+                args_trimmed = _ctx_preview(args_raw, 200)
+                display = f"{name}({args_trimmed})"
+        else:
+            display = _ctx_preview(payload, 300)
+        ui.add_message('sys',
+                       _c(_CTX_COLORS["tools"],
+                          f"[tools] {display}"))
+        ui._draw()
+        return True
+
     return False
 
 
@@ -938,11 +1096,9 @@ class AikoSimpleCLI:
 
     def set_latency_stats(self, stats: dict) -> None:
         """
-        Render the per-turn debug breakdown.
-
-        `stats` is either the old-style single-key dict (kept for backward
-        compatibility with any other UI implementing this same interface)
-        or the full breakdown dict from _latency_parts() when --debug is on.
+        Per-turn debug / latency summary.
+        Detailed context entries are already shown inline via add_message();
+        this just adds a one-line latency summary and the V→A voice metric.
         """
         self._latency_stats = stats
         v_to_a = stats.get("voice_end_to_first_audio")
@@ -950,41 +1106,16 @@ class AikoSimpleCLI:
             print(f"  ⏱  V→A (voice end → Aiko's first audio): {v_to_a}")
         if not self.debug:
             return
-        # full breakdown, only in --debug mode
-        print("  ┌────────────── debug metrics ──────────────┐")
-        print(f"  │ tokens in/out/total │ {stats.get('input_tokens', 'n/a')} / {stats.get('output_tokens', 'n/a')} / {stats.get('total_tokens', 'n/a')}")
-        print(f"  │ generation speed   │ {stats.get('tokens_per_second', 'n/a')} tok/s")
-        print("  ├────────────── latency ────────────────────┤")
-        latency_rows = [
-            ("ASR", "asr_inference"),
-            ("Intent", "agentic_intent"),
-            ("Search", "web_search"),
-            ("LLM", "llm_inference"),
-            ("TTS", "tts_inference"),
-            ("voice→submit", "voice_end_to_submit"),
-            ("submit→1st_tok", "submit_to_first_token"),
-            ("submit→done", "submit_to_assistant_done"),
-            ("done→1st_audio", "assistant_done_to_first_audio"),
-            ("submit→turn_done", "submit_to_turn_done"),
-        ]
-        for label, key in latency_rows:
-            print(f"  │ {label:<16} │ {stats.get(key, 'n/a')}")
-        tok_breakdown = stats.get("token_breakdown")
-        if tok_breakdown:
-            print("  ├──────────── token breakdown ──────────────┤")
-            rows = [
-                ("system", tok_breakdown.get("system_prompt_tokens", 0)),
-                ("web", tok_breakdown.get("web_prompt_tokens", 0)),
-                ("agentic", tok_breakdown.get("agentic_prompt_tokens", 0)),
-                ("memory", tok_breakdown.get("memory_prompt_tokens", 0)),
-                ("prev chat", tok_breakdown.get("previous_chat_tokens", 0)),
-                ("user", tok_breakdown.get("user_turn_tokens", 0)),
-                ("assistant out", tok_breakdown.get("output_tokens", 0)),
-            ]
-            for label, value in rows:
-                print(f"  │ {label:<16} │ {value} tok")
-            print(f"  │ previous turns   │ {tok_breakdown.get('previous_chat_message_count', 0)} messages")
-        print("  └───────────────────────────────────────────┘")
+        tok_s = stats.get("tokens_per_second", "n/a")
+        in_t = stats.get("input_tokens", "n/a")
+        out_t = stats.get("output_tokens", "n/a")
+        total = stats.get("total_tokens", "n/a")
+        gen = stats.get("llm_inference", "n/a")
+        asr = stats.get("asr_inference", "n/a")
+        intent = stats.get("agentic_intent", "n/a")
+        search = stats.get("web_search", "n/a")
+        print(f"  ⚡ {tok_s} tok/s  |  in/out/total: {in_t}/{out_t}/{total}  "
+              f"|  asr={asr} intent={intent} search={search} llm={gen}")
 
     # ── input ────────────────────────────────────────────────────────────
     def get_input(self):
@@ -1058,6 +1189,8 @@ def parse_args():
                    help="use the plain no-curses CLI instead of the WebUI — for local testing only")
     p.add_argument("--clear-mem", action="store_true",
                    help="wipe all stored memories and exit")
+    p.add_argument("--logout",   action="store_true",
+                   help="clear stored CLI auth token and exit")
     return p.parse_args()
 
 
@@ -1066,9 +1199,24 @@ def parse_args():
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _run_cli(args):
-    """Launch Aiko with the plain no-curses CLI (testing only)."""
+    """Launch Aiko with the plain no-curses CLI (testing only).
+    Enforces GitHub OAuth if GITHUB_CLIENT_ID is set in .env."""
+    cli_auth = _get_cli_auth()
+    if cli_auth.is_configured():
+        if not cli_auth.is_authenticated():
+            print("  GitHub OAuth is required for CLI access.")
+            if not cli_auth.login():
+                print("  Authentication failed — exiting.")
+                sys.exit(1)
+        gh_user = cli_auth.get_user_id()
+        os.environ["USER_ID"] = gh_user
+        log.info("CLI session as GitHub user %s", gh_user)
     ui = AikoSimpleCLI(no_voice=args.text, debug=args.debug)
-    _run_session(ui, args)
+    try:
+        _run_session(ui, args)
+    finally:
+        if cli_auth.is_configured():
+            cli_auth.logout()
 
 
 def _run_webui(args):
@@ -1606,23 +1754,18 @@ def _run_session(ui, args):
                 current_latency["asr_done_at"] = voice_info["asr_done_at"]
 
         if args.debug:
-            # ── system prompt (grey) ────────────────────────────────────
-            system_prompt = getattr(think, "_persona", None)
-            if system_prompt:
-                ui.add_message('sys', _c(_GREY, f'[system prompt]\n{system_prompt}'))
-                current_latency["system_prompt_tokens"] = _count_tokens(system_prompt)
-            else:
-                current_latency["system_prompt_tokens"] = 0
+            # ── pre-turn metrics only (memory search timing / entry count).
+            #    The actual formatted context blocks are shown post-turn
+            #    since that is what the LLM actually sees.
+            system_prompt = getattr(think, "_persona", None) or ""
+            current_latency["system_prompt_tokens"] = _count_tokens(system_prompt)
 
-            # ── memory retrieval (lavender, boxed) ──────────────────────
             if memorize is not None:
                 hits = memorize.search(user_input)
                 if hits:
-                    ui.add_message('sys', f'{len(hits)} memories retrieved:')
                     mem_texts = [m.get("memory") or m.get("text") or str(m) for m in hits]
-                    for text in mem_texts:
-                        ui.add_message('sys', _box_text(text, _LAVENDER))
-                    current_latency["memory_entry_tokens"] = [_count_tokens(t) for t in mem_texts]
+                    mem_toks = [_count_tokens(t) for t in mem_texts]
+                    current_latency["memory_entry_tokens"] = mem_toks
                     current_latency["memory_entry_count"] = len(mem_texts)
                 else:
                     current_latency["memory_entry_tokens"] = []
@@ -1662,15 +1805,7 @@ def _run_session(ui, args):
                 memory_prompt = prompt_debug.get("memory_prompt") or ""
                 agentic_prompts = prompt_debug.get("agentic_prompts") or []
                 previous_chat_messages = prompt_debug.get("previous_chat_messages") or []
-
-                if web_prompt:
-                    ui.add_message('sys', _c(_MED_RED, f'[web prompt]\n{web_prompt}'))
-                if agentic_prompts:
-                    for prompt_item in agentic_prompts:
-                        label = prompt_item.get("label", "agentic_prompt") if isinstance(prompt_item, dict) else "agentic_prompt"
-                        content = prompt_item.get("content", "") if isinstance(prompt_item, dict) else str(prompt_item)
-                        if content:
-                            ui.add_message('sys', _c(_MED_CYAN, f'[{label}]\n{content}'))
+                knowledge_prompt = prompt_debug.get("knowledge_prompt") or ""
 
                 previous_chat_texts = [
                     f"{m.get('role', 'unknown')}: {m.get('content', '')}"
@@ -1680,16 +1815,89 @@ def _run_session(ui, args):
                 prompt_messages = usage.get("prompt_messages") or []
                 completion_text = usage.get("completion_text") or ""
 
-                current_latency["system_prompt_tokens"] = _count_tokens(system_prompt)
-                current_latency["web_prompt_tokens"] = _count_tokens(web_prompt)
-                current_latency["memory_prompt_tokens"] = _count_tokens(memory_prompt)
-                current_latency["agentic_prompt_tokens"] = sum(
-                    _count_tokens((item.get("content", "") if isinstance(item, dict) else str(item)))
-                    for item in agentic_prompts
-                )
-                current_latency["previous_chat_tokens"] = sum(_count_tokens(t) for t in previous_chat_texts)
+                # ── compact context display (all items injected) ───────────
+                ctx_entries: list[tuple[str, float, int, str]] = []
+
+                # system
+                sys_tok = _count_tokens(system_prompt)
+                ctx_entries.append(("sys", 0.0, sys_tok, system_prompt))
+
+                # web search results
+                web_tok = _count_tokens(web_prompt)
+                if web_prompt:
+                    web_lat = _latency_seconds(current_latency, "search_start_at", "search_done_at")
+                    ctx_entries.append(("web", (web_lat or 0) * 1000, web_tok, web_prompt))
+
+                # memory context block
+                mem_tok = _count_tokens(memory_prompt)
+                if memory_prompt:
+                    ctx_entries.append(("mem", 0.0, mem_tok, memory_prompt))
+
+                # knowledge base
+                kb_tok = _count_tokens(knowledge_prompt)
+                if knowledge_prompt:
+                    ctx_entries.append(("kb", 0.0, kb_tok, knowledge_prompt))
+
+                # agentic sub-contexts (policy, wiki, skill, experience, task_mode)
+                agentic_tok = 0
+                for item in agentic_prompts:
+                    lbl = item.get("label", "agentic") if isinstance(item, dict) else "agentic"
+                    content = item.get("content", "") if isinstance(item, dict) else str(item)
+                    if content:
+                        tok = _count_tokens(content)
+                        agentic_tok += tok
+                        ctx_entries.append((lbl, 0.0, tok, content))
+
+                # previous chat history
+                chat_tok = sum(_count_tokens(t) for t in previous_chat_texts)
+                if chat_tok > 0:
+                    chat_content = "\n".join(previous_chat_texts)
+                    ctx_entries.append(("chat", 0.0, chat_tok, chat_content))
+
+                # user input
+                user_tok = _count_tokens(user_input)
+                ctx_entries.append(("input", 0.0, user_tok, user_input))
+
+                # assistant output
+                out_tok = current_latency.get("output_tokens") or (len(completion_text.split()) if completion_text else 0) or _count_tokens(completion_text)
+                llm_lat = _latency_seconds(current_latency, "first_assistant_token_at", "assistant_done_at")
+                if completion_text:
+                    ctx_entries.append(("output", (llm_lat or 0) * 1000, out_tok, completion_text))
+
+                # show every context entry with category separators
+                def _ctx_group(l: str) -> str:
+                    for prefix, grp in (("sys","ctx"),("mem","ctx"),("kb","ctx"),
+                                        ("wiki","ctx"),("knowledge","ctx"),
+                                        ("exp","ctx"),("experience","ctx"),
+                                        ("agentic","inst"),("tool","inst"),
+                                        ("skill","inst"),("task","inst"),
+                                        ("web","web"),
+                                        ("chat","hist")):
+                        if l.startswith(prefix) or prefix in l:
+                            return grp
+                    return "turn"
+                _GROUP_LABEL = {"ctx":"context", "inst":"instructions",
+                                "web":"web results", "hist":"history",
+                                "turn":"current turn"}
+                _last_group = ""
+                for label, lat_ms, tok, content in ctx_entries:
+                    if not content:
+                        continue
+                    grp = _ctx_group(label)
+                    if grp != _last_group:
+                        _last_group = grp
+                        ui.add_message('sys',
+                                       _c(_DIM, f"── {_GROUP_LABEL.get(grp, grp)} ──"))
+                    ui.add_message('sys', _ctx_line(label, tok, lat_ms, content))
+
+                # ── token accounting (preserved for _latency_parts) ────────
+                current_latency["system_prompt_tokens"] = sys_tok
+                current_latency["web_prompt_tokens"] = web_tok
+                current_latency["memory_prompt_tokens"] = mem_tok
+                current_latency["agentic_prompt_tokens"] = agentic_tok
+                current_latency["previous_chat_tokens"] = chat_tok
                 current_latency["previous_chat_message_count"] = len(previous_chat_texts)
-                current_latency["user_turn_tokens"] = _count_tokens(user_input)
+                current_latency["user_turn_tokens"] = user_tok
 
                 if current_latency.get("input_tokens") is None and prompt_messages:
                     current_latency["input_tokens"] = sum(
@@ -1700,9 +1908,26 @@ def _run_session(ui, args):
                 if current_latency.get("output_tokens") is None and completion_text:
                     current_latency["output_tokens"] = _count_tokens(completion_text)
                 if current_latency.get("total_tokens") is None:
-                    in_tok = current_latency.get("input_tokens") or 0
-                    out_tok = current_latency.get("output_tokens") or 0
-                    current_latency["total_tokens"] = in_tok + out_tok
+                    in_tok_val = current_latency.get("input_tokens") or 0
+                    out_tok_val = current_latency.get("output_tokens") or 0
+                    current_latency["total_tokens"] = in_tok_val + out_tok_val
+
+                # ── gantt chart (token-proportion bars with %) ──────────────
+                gantt_items: list[tuple[str, float, int, str]] = []
+                for label, lat_ms, tok, content in ctx_entries:
+                    if tok > 0:
+                        gantt_items.append((label, lat_ms, tok, _ctx_color(label)))
+                for g_line in _gantt_lines(gantt_items):
+                    ui.add_message('sys', g_line)
+
+                # ── log everything ─────────────────────────────────────────
+                _log_ctx(log, "turn", 0, 0, f"mode={current_latency.get('mode','?')} "
+                         f"user={user_input[:200]}")
+                for label, lat_ms, tok, content in ctx_entries:
+                    _log_ctx(log, label, tok, lat_ms, content)
+                log.info("[ctx] gantt: %s",
+                         " | ".join(f"{l}={lat:.0f}ms/{t}tok"
+                                    for l, lat, t, _ in gantt_items))
 
             if typewriter is not None and _sentence_buf:
                 typewriter.feed_sentence("".join(_sentence_buf))
@@ -1737,11 +1962,17 @@ def _run_session(ui, args):
 def main():
     """Primary entry point for the Aiko-chan CLI."""
     args = parse_args()
+
     if args.clear_mem:
         log.info("Clearing all memories...")
         m = AikoMemorize()
         m.clear()
         sys.exit(0)
+
+    if args.logout:
+        _get_cli_auth().logout()
+        sys.exit(0)
+
     if args.cli:
         _run_cli(args)
     else:
