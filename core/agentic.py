@@ -175,9 +175,9 @@ def resolve_search_query(owner, user_input: str) -> str:
 
 
 def llm_resolve_search_query(owner, user_input: str) -> str:
-    """LLM fallback: condense a verbose query into 3-5 search keywords,
-    using the owning AikoThink instance's already-loaded router model."""
-    try:
+     """LLM fallback: condense a verbose query into 3-5 search keywords,
+     using the owning AikoThink instance's already-loaded router model."""
+     try:
         resp = owner._client.chat.completions.create(
             model=owner._router_model,
             messages=[{"role": "user", "content": (
@@ -197,7 +197,32 @@ def llm_resolve_search_query(owner, user_input: str) -> str:
         )
         resolved = (resp.choices[0].message.content or "").strip().split('\n')[0]
         resolved = resolved.strip('*_`()').strip()[:100]
-        return resolved or user_input
+        resolved = resolved or user_input
+
+        # Guard against the router copying one of the few-shot examples
+        # verbatim instead of condensing the actual user_input (common
+        # failure mode for small routers under uncertainty). Require at
+        # least one non-trivial word of overlap between the resolved query
+        # and the original message; otherwise fall back to raw input.
+        _STOPWORDS = {
+            "the", "a", "an", "what", "whats", "what's", "is", "are", "of",
+            "in", "on", "at", "to", "for", "from", "latest", "current",
+            "recent", "most", "score", "news",
+        }
+        input_words = set(re.findall(r"\w+", user_input.lower())) - _STOPWORDS
+        resolved_words = set(re.findall(r"\w+", resolved.lower())) - _STOPWORDS
+        overlap = input_words & resolved_words
+
+        log.info("[search_query] raw=%r -> resolved=%r overlap=%s", user_input, resolved, overlap or None)
+
+        if not overlap:
+            log.warning(
+                "[search_query] resolved query had no overlap with input; using raw input instead: %r -> %r",
+                user_input, resolved,
+            )
+            return user_input
+
+        return resolved
     except Exception as e:
         log.warning("LLM search query resolution failed: %s", e)
         return user_input
@@ -954,7 +979,7 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
             messages=[{"role": "user", "content": prompt}],
             stream=False,
             max_tokens=160,
-            temperature=0.0,
+            temperature=0.2,
         )
         raw = (resp.choices[0].message.content or "").strip()
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
