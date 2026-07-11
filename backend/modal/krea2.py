@@ -9,7 +9,7 @@ The original version of this script assumed A100/H100 and kept pipe_raw AND pipe
 fully resident on GPU in bf16, plus a separate Qwen3-VL-4B for grounding. That's 50-60GB+
 of weights alone — nowhere close to fitting A10G's 24GB.
 
-This version fits A10G by doing two things differently:
+This version fits A10G by doing three things differently:
 
   1. NF4 QUANTIZATION on every heavy weight (both transformers + the VLM), via
      bitsandbytes' BitsAndBytesConfig. Rough sizes: a ~12B-class transformer in bf16 is
@@ -19,23 +19,53 @@ This version fits A10G by doing two things differently:
      lives on CPU (quantized weights still take real CPU RAM — see the memory bump on
      the @app.cls below). Each call moves only the piece it currently needs onto "cuda",
      runs, then evicts it and calls torch.cuda.empty_cache() before the next piece comes
-     on. Concretely, identity_edit() now runs in two GPU phases:
+     on. Concretely, identity_edit() runs in two GPU phases:
        Phase A: VLM on GPU  -> compute pos_embeds (+ neg_embeds if CFG>1) -> VLM off GPU
        Phase B: active diffusion pipe on GPU -> denoise loop + VAE decode -> pipe off GPU
      These phases never overlap on GPU, so peak VRAM is roughly max(VLM, one pipe) instead
      of VLM + both pipes.
 
-  I have NOT been able to test this against real weights/a real GPU (no GPU access in the
-  sandbox that wrote this), so treat the NF4 memory estimates above as engineering
-  estimates, not measurements. If you still OOM on first run, the first things to try are:
-  lowering `grounding_px`, capping resolution below the 2MP default, and quantizing with
-  `load_in_4bit` + `bnb_4bit_use_double_quant=True` (already on below) rather than 8-bit,
-  which would roughly double the resident size back up.
+  3. SDPA ATTENTION + TIGHTER DEFAULT RESOLUTION for the edit path specifically.
+     generate() (plain txt2img) was fine on A10G, but identity_edit()'s custom
+     krea2_edit_forward() concatenates [text, source latent(s), target latent] into one
+     long sequence before running the transformer blocks. With flash-attn disabled
+     (DIFFUSERS_NO_FLASH_ATTN=1) this fell back to eager/naive attention, whose memory
+     scales quadratically with sequence length — one or two extra source-image token
+     blocks on top of the target was enough to blow the 24GB budget mid-denoise, even
+     though the exact same GPU handled generate() fine. Fix applied below:
+       - attn_implementation="sdpa" on both the transformer and text_encoder loads,
+         which routes attention through PyTorch's memory-efficient SDPA kernel instead
+         of eager bmm attention, without needing the separate flash-attn package.
+       - max_pixels default lowered from 2,000,000 -> 1,000,000 and exposed as a
+         request parameter, so sequence length (and therefore attention memory) is
+         smaller by default and tunable per-call.
+       - grounding_px default lowered from 768 -> 512 for the same reason on the VLM
+         (Phase A) side.
+     If you still OOM after this, drop max_pixels further (e.g. 600_000) before
+     touching anything else — it's the cheapest remaining lever.
 
-Everything below the quantization/offload changes (RoPE-frame source injection, LoRA
-caveats, image-grounded text conditioning template) is unchanged from the original —
-see inline comments there for the same caveats about unverified LoRA key names and
-tokenization offsets.
+  4. OOM-SAFE ERROR HANDLING. Previously an OOM inside identity_edit() (or during
+     load()) would SIGKILL the whole container mid-request, so the caller (curl) got
+     a closed connection with an EMPTY body — which is why `json.load` on the client
+     side failed with "Expecting value: line 1 column 1 (char 0)" instead of a useful
+     error. identity_edit() and generate() now catch torch.cuda.OutOfMemoryError,
+     evict whatever's on GPU, clear the cache, and raise an HTTPException with a
+     real message and a 507 status instead of dying silently. This won't save you
+     from an OOM (you still need the fixes above/below for that), but it turns a
+     confusing empty-body crash into an actual diagnosable error message.
+
+  I have NOT been able to test this against real weights/a real GPU (no GPU access in
+  the sandbox that wrote this), so treat the NF4 memory estimates above as engineering
+  estimates, not measurements. If you still OOM on first run, the first things to try
+  are: lowering `grounding_px`, capping `max_pixels` further, and confirming
+  `attn_implementation="sdpa"` is actually being honored by your installed
+  diffusers/transformers versions (print `pipe.transformer.config._attn_implementation`
+  after load to check).
+
+Everything below the quantization/offload/attention changes (RoPE-frame source
+injection, LoRA caveats, image-grounded text conditioning template) is unchanged from
+the original — see inline comments there for the same caveats about unverified LoRA
+key names and tokenization offsets.
 
 Requires Modal secrets:
   - huggingface-secret (HF_TOKEN) — the LoRA repo is gated behind the Krea 2 Community
@@ -67,10 +97,15 @@ image = (
         "numpy",
         "einops",
         "peft",
-        "bitsandbytes",       # NEW: needed for NF4 quantization
+        "bitsandbytes",       # needed for NF4 quantization
         "fastapi[standard]",
     )
-    .env({"DIFFUSERS_NO_FLASH_ATTN": "1"})
+    .env({
+        "DIFFUSERS_NO_FLASH_ATTN": "1",
+        # Reduces allocator fragmentation — cheap extra headroom on a GPU this
+        # tight on memory. Suggested directly by the OOM error text itself.
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    })
 )
 
 weights_volume = modal.Volume.from_name("aiko-imagegen-krea2-weights", create_if_missing=True)
@@ -83,6 +118,13 @@ TURBO_MODEL_ID = "krea/Krea-2-Turbo"  # distilled — use for most edits (CFG 1,
 LORA_REPO_ID = "conradlocke/krea2-identity-edit"
 LORA_FILENAME = "krea2_identity_edit_v1_1.safetensors"  # full-rank; see repo for r128/r64 variants
 VLM_PROCESSOR_ID = "Qwen/Qwen3-VL-4B-Instruct"  # for image-grounded text conditioning only
+
+# NEW: default caps for the edit path, tuned down from the original A100-era defaults
+# so identity_edit()'s longer [text + source(s) + target] attention sequence fits in
+# A10G's 24GB when combined with attn_implementation="sdpa". Both are still overridable
+# per-request via EditRequest.
+DEFAULT_MAX_PIXELS = 1_000_000   # was 2,000,000
+DEFAULT_GROUNDING_PX = 512       # was 768
 
 app = modal.App("aiko-imagegen-krea2", image=image)
 
@@ -141,7 +183,10 @@ def download_weights(model: str = "both"):
 # krea2_edit_forward(), rewritten against diffusers' Krea2Transformer2DModel
 # submodules (img_in / time_embed / time_mod_proj / text_fusion / txt_in /
 # rotary_emb / transformer_blocks / final_layer). UNCHANGED from the original —
-# this is pure math and doesn't care which device the tensors live on.
+# this is pure math and doesn't care which device the tensors live on, and it
+# doesn't care whether the blocks underneath are running eager or SDPA attention
+# either — that's decided by each block's own attn_implementation, set at
+# from_pretrained() time in load() below.
 # ---------------------------------------------------------------------------
 def _build_position_ids(text_len, grid_h, grid_w, num_sources, device):
     """(text | source_1..N | target) position ids, shape (seq, 3).
@@ -221,9 +266,9 @@ def krea2_edit_forward(transformer, target_hidden_states, source_latents, text_e
 
 
 # ---------------------------------------------------------------------------
-# GPU time-sharing helpers — NEW for the A10G fit. These move a nn.Module (or
-# a whole pipeline's heavy submodules) between "cuda" and "cpu" on demand, so
-# only one heavy model occupies GPU memory at any given instant.
+# GPU time-sharing helpers — move a nn.Module (or a whole pipeline's heavy
+# submodules) between "cuda" and "cpu" on demand, so only one heavy model
+# occupies GPU memory at any given instant.
 # ---------------------------------------------------------------------------
 def _pipe_to(pipe, device):
     """Move a diffusion pipeline's heavy submodules to `device`. Light stuff
@@ -242,12 +287,27 @@ def _sync_and_clear():
         torch.cuda.empty_cache()
 
 
+def _evict_all(pipe):
+    """Best-effort emergency eviction used in OOM except-blocks below — moves
+    everything for the given pipe back to CPU and clears the cache. Wrapped in
+    its own try/except since we may be calling this while already handling an
+    OOM, and a second CUDA call can itself raise."""
+    try:
+        _pipe_to(pipe, "cpu")
+    except Exception:
+        pass
+    try:
+        _sync_and_clear()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # model class
 # ---------------------------------------------------------------------------
 @app.cls(
     gpu="A10G",
-    # NEW: both pipelines + the VLM now live quantized on CPU/disk between GPU
+    # Both pipelines + the VLM now live quantized on CPU/disk between GPU
     # phases instead of being reloaded per call, so we ask for more host RAM
     # than the default. Adjust down if your Modal plan caps this.
     memory=32768,
@@ -289,13 +349,41 @@ class AikoKrea2ImageGen:
             # Load the transformer NF4-quantized explicitly, then hand it to the
             # pipeline — quantization_config on from_pretrained's top level doesn't
             # reliably propagate to every submodule for custom pipeline classes.
+            #
+            # NEW: attn_implementation="sdpa" routes attention through PyTorch's
+            # memory-efficient scaled-dot-product-attention kernel instead of eager
+            # bmm attention. This matters a lot more for identity_edit()'s custom
+            # krea2_edit_forward() than for plain generate() — the edit path's
+            # sequence is [text, source latent(s), target latent] concatenated
+            # together, which is considerably longer than text2img's, and eager
+            # attention's memory scales quadratically with that length. This was
+            # the likely cause of edit-only OOMs on A10G even though generate()
+            # was fine.
             from diffusers import Krea2Transformer2DModel
             transformer = Krea2Transformer2DModel.from_pretrained(
                 local_path, subfolder="transformer",
                 quantization_config=bnb_config, torch_dtype=torch.bfloat16,
+                attn_implementation="sdpa",
             )
+
+            # NF4-quantize the text_encoder (Qwen3-VL, ~8.3GB in bf16) too, and
+            # also give it SDPA for the same reason as above — grounding runs the
+            # VLM over the instruction text plus one or two resized reference
+            # images, which is a much longer sequence than a plain caption.
+            # AutoModel is used here (rather than a specific class) so this
+            # doesn't depend on guessing Qwen3-VL's exact registered class name;
+            # trust_remote_code is on since Qwen-VL family models commonly need it.
+            from transformers import AutoModel
+            text_encoder = AutoModel.from_pretrained(
+                local_path, subfolder="text_encoder",
+                quantization_config=bnb_config, torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                attn_implementation="sdpa",
+            )
+
             pipe = Krea2Pipeline.from_pretrained(
-                local_path, transformer=transformer, torch_dtype=torch.bfloat16,
+                local_path, transformer=transformer, text_encoder=text_encoder,
+                torch_dtype=torch.bfloat16,
             )
             # Everything parked on CPU at rest — moved to cuda only during its
             # active phase inside generate()/identity_edit().
@@ -326,7 +414,7 @@ class AikoKrea2ImageGen:
         from transformers import AutoModel
         self.vlm_text_encoder = None  # lazily bound per-pipe text_encoder below
 
-        print("Krea 2 Raw + Turbo (NF4) + Identity Edit LoRA ready. Everything parked on CPU.")
+        print("Krea 2 Raw + Turbo (NF4, SDPA) + Identity Edit LoRA ready. Everything parked on CPU.")
 
     def load_identity_lora(self, pipe, lora_path, adapter_name="identity_edit", scale=1.0):
         """Load the community identity-edit LoRA onto a pipeline's transformer.
@@ -385,7 +473,7 @@ class AikoKrea2ImageGen:
     KREA2_EDIT_SUFFIX = "<|im_end|>\n<|im_start|>assistant\n"
     VISION_BLOCK = "<|vision_start|><|image_pad|><|vision_end|>"
 
-    def _grounded_text_embeds(self, pipe, prompt, pil_images, grounding_px=768):
+    def _grounded_text_embeds(self, pipe, prompt, pil_images, grounding_px=DEFAULT_GROUNDING_PX):
         """Image-grounded instruction encoding: Qwen3-VL reads the source image(s) WHILE
         reading the instruction, matching how the LoRA was trained. Caller is responsible
         for pipe.text_encoder currently being on cuda — see phase management below."""
@@ -440,6 +528,7 @@ class AikoKrea2ImageGen:
     ) -> str:
         """Plain text-to-image, no reference. Always uses Raw (undistilled) for full CFG."""
         import torch
+        from fastapi import HTTPException
 
         pipe = self.pipe_raw
         _pipe_to(pipe, "cuda")
@@ -450,6 +539,13 @@ class AikoKrea2ImageGen:
                 num_inference_steps=steps, guidance_scale=guidance_scale,
                 max_sequence_length=max_sequence_length, generator=generator,
             ).images[0]
+        except torch.cuda.OutOfMemoryError as e:
+            _evict_all(pipe)
+            raise HTTPException(
+                status_code=507,
+                detail=f"GPU out of memory during generate() at {width}x{height}, "
+                       f"{steps} steps. Try a smaller width/height. ({e})",
+            )
         finally:
             _pipe_to(pipe, "cpu")
             _sync_and_clear()
@@ -467,7 +563,8 @@ class AikoKrea2ImageGen:
         is_removal: bool = False,            # True -> Raw/CFG3/~20 steps per LoRA card
         steps: int | None = None,
         guidance_scale: float | None = None,
-        grounding_px: int = 768,
+        grounding_px: int = DEFAULT_GROUNDING_PX,
+        max_pixels: int = DEFAULT_MAX_PIXELS,
         seed: int = -1,
     ) -> str:
         """Instruction-based, identity-preserving edit using the community LoRA's
@@ -476,10 +573,18 @@ class AikoKrea2ImageGen:
         A10G phase management: Phase A brings up only the active pipe's text_encoder
         (the VLM) to compute pos/neg embeds, then evicts it. Phase B brings up the
         active pipe's transformer + vae to run the denoise loop + decode, then evicts
-        those too. The two phases never overlap on GPU."""
+        those too. The two phases never overlap on GPU.
+
+        max_pixels and grounding_px are now request-level knobs (defaulted lower than
+        the original A100-era version) since this path's attention sequence length —
+        and therefore memory — scales with both. If you hit an OOM here, lower
+        max_pixels first (cheapest, biggest effect), then grounding_px, before anything
+        else.
+        """
         import torch
         import numpy as np
         from PIL import Image
+        from fastapi import HTTPException
 
         pipe = self.pipe_raw if is_removal else self.pipe_turbo
         if steps is None:
@@ -493,12 +598,11 @@ class AikoKrea2ImageGen:
         if reference_image_b is not None:
             ref_img_b = Image.open(io.BytesIO(base64.b64decode(reference_image_b))).convert("RGB")
 
-        # Match output AR to the (first) source image, capped at ~2MP per the LoRA card.
+        # Match output AR to the (first) source image, capped at `max_pixels`.
         # On A10G, if you still see OOMs on the denoise loop, lower max_pixels first —
         # this is the cheapest knob before touching grounding_px or steps.
         src_w, src_h = ref_img.size
         multiple = pipe.vae_scale_factor * pipe.patch_size
-        max_pixels = 2_000_000
         scale = min(1.0, (max_pixels / (src_w * src_h)) ** 0.5)
         width = max(multiple, round(src_w * scale / multiple) * multiple)
         height = max(multiple, round(src_h * scale / multiple) * multiple)
@@ -513,6 +617,13 @@ class AikoKrea2ImageGen:
             neg_embeds = neg_mask = None
             if do_cfg:
                 neg_embeds, neg_mask = self._grounded_text_embeds(pipe, "", ref_images_for_grounding, grounding_px)
+        except torch.cuda.OutOfMemoryError as e:
+            _evict_all(pipe)
+            raise HTTPException(
+                status_code=507,
+                detail=f"GPU out of memory during VLM grounding (Phase A) at "
+                       f"grounding_px={grounding_px}. Try a lower grounding_px. ({e})",
+            )
         finally:
             pipe.text_encoder.to("cpu")
             _sync_and_clear()
@@ -575,15 +686,28 @@ class AikoKrea2ImageGen:
 
                     latents = pipe.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
-            # --- decode ---
-            latents = pipe._unpack_latents(latents, height, width).to(pipe.vae.dtype)
-            latents_mean = torch.tensor(pipe.vae.config.latents_mean).view(
-                1, pipe.vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-            latents_std = (1.0 / torch.tensor(pipe.vae.config.latents_std)).view(
-                1, pipe.vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
-            latents = latents / latents_std + latents_mean
-            decoded = pipe.vae.decode(latents, return_dict=False)[0][:, :, 0]
-            pil_image = pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+            # --- decode --- (wrapped in no_grad — this was previously outside the
+            # loop's no_grad scope, which left the decoded tensor requiring grad
+            # and broke postprocess()'s .numpy() call)
+            with torch.no_grad():
+                latents = pipe._unpack_latents(latents, height, width).to(pipe.vae.dtype)
+                latents_mean = torch.tensor(pipe.vae.config.latents_mean).view(
+                    1, pipe.vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+                latents_std = (1.0 / torch.tensor(pipe.vae.config.latents_std)).view(
+                    1, pipe.vae.config.z_dim, 1, 1, 1).to(latents.device, latents.dtype)
+                latents = latents / latents_std + latents_mean
+                decoded = pipe.vae.decode(latents, return_dict=False)[0][:, :, 0]
+                pil_image = pipe.image_processor.postprocess(decoded, output_type="pil")[0]
+        except torch.cuda.OutOfMemoryError as e:
+            _evict_all(pipe)
+            raise HTTPException(
+                status_code=507,
+                detail=f"GPU out of memory during denoise/decode (Phase B) at "
+                       f"{width}x{height} ({grid_h}x{grid_w} grid, {steps} steps, "
+                       f"{len(source_latents) if 'source_latents' in locals() else '?'} source "
+                       f"image(s)). Try a lower max_pixels (currently {max_pixels}), fewer "
+                       f"steps, or a single reference image. ({e})",
+            )
         finally:
             pipe.transformer.to("cpu")
             pipe.vae.to("cpu")
@@ -595,7 +719,7 @@ class AikoKrea2ImageGen:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI wrapper (unchanged)
+# FastAPI wrapper
 # ---------------------------------------------------------------------------
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -621,7 +745,8 @@ class EditRequest(BaseModel):
     is_removal: bool = False
     steps: Optional[int] = None
     guidance_scale: Optional[float] = None
-    grounding_px: int = 768
+    grounding_px: int = DEFAULT_GROUNDING_PX
+    max_pixels: int = DEFAULT_MAX_PIXELS
     seed: int = -1
 
 
@@ -658,6 +783,11 @@ def fastapi_app():
             "lora": "krea2-identity-edit-v1.1",
             "gpu": "A10G",
             "quantization": "nf4",
+            "attn_implementation": "sdpa",
+            "defaults": {
+                "max_pixels": DEFAULT_MAX_PIXELS,
+                "grounding_px": DEFAULT_GROUNDING_PX,
+            },
         }
 
     return web_app
