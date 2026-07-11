@@ -180,45 +180,36 @@ def llm_resolve_search_query(owner, user_input: str) -> str:
     try:
         resp = owner._client.chat.completions.create(
             model=owner._router_model,
-            messages=[{"role": "user", "content": (
-                f"Message: {user_input!r}\n\n"
-                "Output only a 3-5 word search query. No explanation.\n\n"
-                "Message: 'what's the latest llama.cpp version'\n"
-                "Query: llama.cpp latest stable release\n\n"
-                "Message: 'has NVIDIA released any new Jetson hardware this year'\n"
-                "Query: NVIDIA Jetson new hardware 2025\n\n"
-                "Message: 'what's the Canucks score from last night'\n"
-                "Query: Canucks score last night\n\n"
-                "Message: 'did llama.cpp merge the Vulkan backend yet'\n"
-                "Query: llama.cpp Vulkan backend merged\n\n"
-                "Query:"
-            )}],
-            stream=False, max_tokens=20, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You rewrite a user's message as a short web search query. "
+                        "Output ONLY the search query — 3 to 5 words, no quotes, "
+                        "no explanation, no labels. Never repeat or reuse wording "
+                        "from any other conversation — rewrite only the exact "
+                        "message given to you in this turn."
+                    ),
+                },
+                {"role": "user", "content": user_input},
+            ],
+            stream=False, max_tokens=20, temperature=0.2, top_p=0.9, timeout=LLM_TIMEOUT,
         )
-        resolved = (resp.choices[0].message.content or "").strip().split('\n')[0]
-        resolved = resolved.strip('*_`()').strip()[:100]
+        resolved = (resp.choices[0].message.content or "").strip().split("\n")[0]
+        resolved = resolved.strip('*_`()"\'').strip()[:100]
         resolved = resolved or user_input
 
-        # Guard against the router copying one of the few-shot examples
-        # verbatim instead of condensing the actual user_input (common
-        # failure mode for small routers under uncertainty). Require at
-        # least one non-trivial word of overlap between the resolved query
-        # and the original message; otherwise fall back to raw input.
-        _STOPWORDS = {
-            "the", "a", "an", "what", "whats", "what's", "is", "are", "of",
-            "in", "on", "at", "to", "for", "from", "latest", "current",
-            "recent", "most", "score", "news",
-        }
-        input_words = set(re.findall(r"\w+", user_input.lower())) - _STOPWORDS
-        resolved_words = set(re.findall(r"\w+", resolved.lower())) - _STOPWORDS
-        overlap = input_words & resolved_words
+        # Semantic guard: reject a resolution that isn't actually about the
+        # same topic as the input, instead of relying on brittle token
+        # overlap (see core/reason.py — same primitive used for KB/wiki/
+        # skill/agentic-policy relevance scoring elsewhere).
+        similarity = reason.block_relevance_score(_owner_embedder(owner), user_input, resolved)
+        log.info("[search_query] raw=%r -> resolved=%r similarity=%.3f", user_input, resolved, similarity)
 
-        log.info("[search_query] raw=%r -> resolved=%r overlap=%s", user_input, resolved, overlap or None)
-
-        if not overlap:
+        if similarity < 0.35:
             log.warning(
-                "[search_query] resolved query had no overlap with input; using raw input instead: %r -> %r",
-                user_input, resolved,
+                "[search_query] resolved query too dissimilar from input (%.3f); using raw input instead: %r -> %r",
+                similarity, user_input, resolved,
             )
             return user_input
 
