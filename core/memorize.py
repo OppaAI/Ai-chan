@@ -1312,6 +1312,7 @@ class AikoMemorize:
             if cached and now_s - cached[0] <= SEARCH_CACHE_TTL:
                 self._search_cache.move_to_end(cache_key)
                 results = [dict(r) for r in cached[1]]
+                log.debug("[memory] cache hit, scores=%s", [r.get("_recall_score") for r in results])  # temp
                 self._touch_memories(results)
                 return results
             if cached:
@@ -1321,12 +1322,11 @@ class AikoMemorize:
         self._touch_memories(results)
 
         with self._search_cache_lock:
-            cached = self._search_cache.get(cache_key)
-            if cached and now_s - cached[0] <= SEARCH_CACHE_TTL:
-                self._search_cache.move_to_end(cache_key)
-                results = [dict(r) for r in cached[1]]
-                self._touch_memories(results)
-                return results
+            self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
+            while len(self._search_cache) > SEARCH_CACHE_SIZE:
+                self._search_cache.popitem(last=False)
+
+        return results
 
     def _recent_or_important_memories(self, user_id: str, limit: int) -> list[dict]:
         """
