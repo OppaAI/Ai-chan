@@ -80,6 +80,13 @@ CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 # (localchat/webchat/agentic) — see _fetch_memory_and_knowledge below.
 MEMORY_RECALL_LIMIT = int(os.getenv("MEMORY_RECALL_LIMIT", 3))
 KNOWLEDGE_RECALL_LIMIT = int(os.getenv("KNOWLEDGE_RECALL_LIMIT", 3))
+# Minimum recall score (see _MemoryBackend._rank_and_score's final_score in
+# core/memorize.py for the formula) a memory must clear to be included in
+# context. Same numeric scale as memorize.py's MEMORY_RECALL_SCORE_THRESHOLD
+# (~0.015) — that constant only decides quick-vs-wide search, this one
+# actually filters weak individual results out of what gets returned.
+# 0 = off (default) — no memory is ever dropped for being weak.
+MEMORY_MIN_SCORE = float(os.getenv("MEMORY_MIN_SCORE", "0.0"))
 
 _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
 _AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
@@ -445,6 +452,16 @@ class AikoThink:
         except Exception as e:
             log.error("Memory search failed: %s", e)
             memories = []
+
+        if MEMORY_MIN_SCORE > 0:
+            before = len(memories)
+            memories = [m for m in memories if m.get("_recall_score", 0.0) >= MEMORY_MIN_SCORE]
+            if len(memories) < before:
+                log.debug(
+                    "[memory] filtered %d/%d below MEMORY_MIN_SCORE=%.4f",
+                    before - len(memories), before, MEMORY_MIN_SCORE,
+                )
+
         try:
             knowledge_block = know_future.result()
         except Exception as e:
