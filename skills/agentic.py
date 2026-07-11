@@ -37,6 +37,7 @@ from cognition import reason
 from cognition import CONTEXT_POOL
 from skills.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from skills.wiki import wiki_context_for, wiki_knowledge_context_for
+from skills.capability import match_capabilities, filtered_tool_schemas
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from memory import experience
 from toolkit.tools import (
@@ -979,7 +980,19 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     agentic_chat() directly, with no prior route() call), the fetch runs
     here instead.
     """
-    tools = tool_schemas()
+    # Reuse the same HarrierEmbedder instance already warm for memory search
+    # and intent routing for every RAG-selection call below (agentic policy,
+    # wiki, skill, experience, and now capability matching). Falls back to
+    # keyword scoring automatically if unavailable.
+    _embedder = _owner_embedder(owner)
+
+    # Narrow the tool list actually sent to the LLM this turn. Previously
+    # every _TOOL_SCHEMAS entry (~20 tools) was sent on every turn regardless
+    # of relevance — a real cost for a 3B model's tool-selection accuracy.
+    # No match -> filtered_tool_schemas returns everything unchanged, so this
+    # can only shrink the list, never regress a turn.
+    _matched_caps = match_capabilities(user_input, embedder=_embedder)
+    tools = filtered_tool_schemas(tool_schemas(), _matched_caps)
 
     if mem_kb_future is not None:
         try:
@@ -992,12 +1005,6 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
 
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
-
-    # Reuse the same HarrierEmbedder instance already warm for memory search
-    # and intent routing for every RAG-selection call below (agentic policy,
-    # wiki, skill, experience). Falls back to keyword scoring automatically
-    # if unavailable.
-    _embedder = _owner_embedder(owner)
 
     # Wiki/policy/skill/experience are agentic-only — fetched now,
     # concurrently with each other, since intent has already resolved to
@@ -1087,6 +1094,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             {"label": "experience_context", "content": experience_context},
             {"label": "task_mode_system", "content": agent_system},
         ],
+        "matched_capabilities": _matched_caps,
         "previous_chat_messages": [dict(m) for m in messages[1:-1]],
     }
     owner.last_usage = {
