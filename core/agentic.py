@@ -278,22 +278,57 @@ def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
         except Exception as e:
             log.error("[agentic] context fetch '%s' failed: %s", key, e)
             results[key] = fallbacks[key]
+    scores = {
+        key: reason.block_relevance_score(embedder, user_input, text)
+        for key, text in results.items()
+    }
+    results["_scores"] = scores
     return results
 
 
-def _recent_history_messages(owner, max_turns: int = AGENT_HISTORY_TURNS) -> list[dict]:
-    """Last `max_turns` user+assistant pairs from STM history (owner._history),
-    ready for direct inclusion in a chat.completions messages list. Mirrors
-    the same trim + sanitize logic core.think's chat()/webchat() already
-    apply to their own history slices, via owner._sanitize_history, so
-    agentic gets the same rolling-window behavior the other two paths have
-    always had. Read-only — never mutates owner._history."""
+AGENT_HISTORY_CANDIDATE_MULTIPLIER = int(os.getenv("AGENT_HISTORY_CANDIDATE_MULTIPLIER", 3))
+AGENT_HISTORY_RECENCY_HALFLIFE = float(os.getenv("AGENT_HISTORY_RECENCY_HALFLIFE", 4))  # turns
+AGENT_HISTORY_ALWAYS_KEEP_RECENT = int(os.getenv("AGENT_HISTORY_ALWAYS_KEEP_RECENT", 2))
+
+
+def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT_HISTORY_TURNS) -> list[dict]:
     with owner._history_lock:
         snapshot = list(owner._history)
     if not snapshot:
         return []
-    trimmed = snapshot[-(max_turns * 2):]
-    return owner._sanitize_history(trimmed)
+    sanitized = owner._sanitize_history(snapshot)
+
+    pairs, i = [], 0
+    while i < len(sanitized) - 1:
+        if sanitized[i]["role"] == "user" and sanitized[i + 1]["role"] == "assistant":
+            pairs.append((sanitized[i], sanitized[i + 1]))
+            i += 2
+        else:
+            i += 1
+    if not pairs or not user_input:
+        return sanitized[-(max_turns * 2):]
+
+    candidates = pairs[-(max_turns * AGENT_HISTORY_CANDIDATE_MULTIPLIER):]
+    n = len(candidates)
+    embedder = _owner_embedder(owner)
+
+    scored = []
+    for idx, (u_msg, a_msg) in enumerate(candidates):
+        turns_ago = n - 1 - idx
+        recency_weight = 0.5 ** (turns_ago / AGENT_HISTORY_RECENCY_HALFLIFE)
+        relevance = reason.block_relevance_score(embedder, user_input, u_msg["content"])
+        scored.append((0.5 * recency_weight + 0.5 * relevance, idx))
+
+    keep_idx = set(range(max(0, n - AGENT_HISTORY_ALWAYS_KEEP_RECENT), n))  # continuity floor
+    for score, idx in sorted(scored, reverse=True):
+        if len(keep_idx) >= max_turns:
+            break
+        keep_idx.add(idx)
+
+    messages = []
+    for idx in sorted(keep_idx):
+        messages.extend(candidates[idx])
+    return messages
 
 
 @dataclass
@@ -948,53 +983,36 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _enforce_agentic_context_budget(
-    persona: str,
-    agentic_policy_context: str,
-    memory_context: str,
-    user_input: str,
-    wiki_context: str,
-    skill_context: str,
-    knowledge_context: str,
-    experience_context: str,
+    persona, agentic_policy_context, memory_context, user_input,
+    wiki_context, skill_context, knowledge_context, experience_context,
+    scores: dict[str, float] | None = None,
 ) -> tuple[str, str, str, str, str]:
-    """Drop context blocks, lowest priority first, if the assembled prompt
-    would still exceed the ctx budget. Fixed cost now includes an estimate
-    of the tool-schema tokens sent with every call (previously ignored),
-    and agentic_policy_context is a droppable block rather than treated as
-    immovable — it's RAG-selected and capped now, but a growing
-    skills.md/schedule.md should still be trimmable under real pressure
-    instead of silently contributing to overflow.
-
-    Returns (wiki, skill, knowledge, agentic_policy, experience) in that order.
-    """
     budget = int(LLM_CTX_SIZE * AGENT_CONTEXT_BUDGET_RATIO)
     fixed = persona + memory_context + user_input
     fixed_tokens = _estimate_tokens(fixed) + _TOOL_SCHEMA_TOKENS_ESTIMATE
 
-    # Priority order to drop, weakest first: experience > wiki > knowledge > agentic_policy > skill.
-    # Skill workflows are kept longest since they carry concrete tool
-    # instructions the agent loop needs to act correctly.
     blocks = {
-        "wiki": wiki_context,
-        "knowledge": knowledge_context,
-        "experience": experience_context,
-        "agentic_policy": agentic_policy_context,
+        "wiki": wiki_context, "knowledge": knowledge_context,
+        "experience": experience_context, "agentic_policy": agentic_policy_context,
         "skill": skill_context,
     }
-    drop_order = ["experience", "wiki", "knowledge", "agentic_policy", "skill"]
+    scores = scores or {}
+    # fallback tie-break preserves your original weakest-first order when
+    # scores are missing or tied
+    fallback_rank = {"experience": 0, "wiki": 1, "knowledge": 2, "agentic_policy": 3, "skill": 4}
+    remaining = set(blocks)
 
-    for name in drop_order:
+    while remaining:
         total_tokens = fixed_tokens + sum(_estimate_tokens(v) for v in blocks.values())
         if total_tokens <= budget:
             break
+        victim = min(remaining, key=lambda k: (scores.get(k, -1.0), fallback_rank[k]))
         log.warning(
-            "[agentic] context budget exceeded (%s > %s est. tokens); dropping %s block",
-            total_tokens, budget, name,
+            "[agentic] context budget exceeded (%s > %s est. tokens); dropping %s (score=%.3f)",
+            total_tokens, budget, victim, scores.get(victim, -1.0),
         )
-        if name == "agentic_policy":
-            blocks[name] = "<agentic_policy_context>\nOmitted this turn — context budget exceeded.\n</agentic_policy_context>"
-        else:
-            blocks[name] = f"<{name}_context>\nOmitted this turn — context budget exceeded.\n</{name}_context>"
+        blocks[victim] = f"<{victim}_context>\nOmitted this turn — context budget exceeded.\n</{victim}_context>"
+        remaining.discard(victim)
 
     return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"]
 
@@ -1034,15 +1052,18 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # concurrently with each other, since intent has already resolved to
     # "agentic" by the time run_agentic_chat runs.
     agentic_ctx = _fetch_agentic_only_context(user_input, embedder=_embedder)
+    scores = agentic_ctx.pop("_scores", {})
     agentic_policy_context = agentic_ctx["agentic_policy"]
     wiki_context = agentic_ctx["wiki"]
     skill_context = agentic_ctx["skill"]
     experience_context = agentic_ctx["experience"]
     knowledge_context = f'{agentic_ctx["wiki_knowledge"]}\n\n{knowledge_block}'
+    scores["knowledge"] = reason.block_relevance_score(_embedder, user_input, knowledge_context)
 
     wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,
         wiki_context, skill_context, knowledge_context, experience_context,
+        scores=scores,
     )
 
     agent_system = (
@@ -1099,7 +1120,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     )
     messages = [
         {"role": "system", "content": agent_system},
-        *_recent_history_messages(owner),
+        *_recent_history_messages(owner, user_input),
         {"role": "user", "content": user_input},
     ]
     owner.last_prompt_debug = {
