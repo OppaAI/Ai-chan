@@ -278,9 +278,15 @@ def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
         except Exception as e:
             log.error("[agentic] context fetch '%s' failed: %s", key, e)
             results[key] = fallbacks[key]
+    # wiki_knowledge is folded into knowledge_context downstream in
+    # run_agentic_chat and scored there (combined with knowledge_block) —
+    # scoring it here too is a wasted embedding call whose result
+    # _enforce_agentic_context_budget never reads (it only consumes the 5
+    # budget-block keys: wiki, knowledge, experience, agentic_policy, skill).
     scores = {
         key: reason.block_relevance_score(embedder, user_input, text)
         for key, text in results.items()
+        if key != "wiki_knowledge"
     }
     results["_scores"] = scores
     return results
