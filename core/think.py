@@ -658,7 +658,7 @@ class AikoThink:
                 context = None
         
         # Inject web context if available
-        if context and not context.startswith("["):
+        if context:
             system = (
                 f"{system}\n\n"
                 f"<search_results query='{user_input}'>\n"
