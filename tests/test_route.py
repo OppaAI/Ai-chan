@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.WARNING)
 
 try:
-    from core.config import load_config
+    from system.config import load_config
     load_config()
 except ImportError:
     pass
@@ -34,8 +34,8 @@ from unittest.mock import MagicMock
 sys.modules.setdefault("pygame", MagicMock())
 sys.modules.setdefault("openai", MagicMock())
 
-from core.memorize import AikoMemorize
-from core.think import (
+from memory.memorize import AikoMemorize
+from cognition.think import (
     AikoThink,
     LLM_BASE_URL,
     LLM_MODEL,
@@ -54,7 +54,7 @@ from core.think import (
     _ROUTE_INSTRUCT_SEARCH,
     _AGENTIC_ROUTE_RE,
 )
-from core.agentic import tool_schemas
+from skills.agentic import tool_schemas
 
 # ── colour helpers ────────────────────────────────────────────────────────────
 
@@ -354,7 +354,7 @@ def _sequence_for_route(route: str, prompt: str) -> list[dict]:
     return sequence or [{"step": 1, "kind": "agentic", "tool": "final_answer", "query": "", "run": "report route decision"}]
 
 def print_sequence(route: str, prompt: str) -> None:
-    print(f"\n{BOLD}▶ dry-run sequence  (from core.agentic tool schemas){RESET}")
+    print(f"\n{BOLD}▶ dry-run sequence  (from skills.agentic tool schemas){RESET}")
     print(f"  {'#':>2}  {'kind':<10} {'tool':<22} query/run")
     print(f"  {'-' * 72}")
     for item in _sequence_for_route(route, prompt):

@@ -1,4 +1,4 @@
-from core.memorize import AikoMemorize
+from memory.memorize import AikoMemorize
 
 memorize = AikoMemorize(silent=True)
 learned = [

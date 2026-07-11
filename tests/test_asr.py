@@ -7,7 +7,7 @@ own exceptions, so a bare "error during init" from the app doesn't tell you
 which stage failed. This script runs each stage separately and prints a full
 traceback at whichever one breaks.
 
-Run from the project root (same directory as main.py) so `import core.listen`
+Run from the project root (same directory as main.py) so `import sensory.listen`
 resolves:
 
     uv run python test_listen_init.py                # full staged init, no mic
@@ -48,7 +48,7 @@ def run_stage(label: str, fn):
 
 def check_env():
     """Import core.listen and resolve device/precision exactly as AikoListen.__init__ does."""
-    import core.listen as L
+    import sensory.listen as L
 
     print(f"ASR_DEVICE      = {L.ASR_DEVICE}")
     print(f"ASR_PRECISION   = {L.ASR_PRECISION}")
@@ -75,7 +75,7 @@ def check_env():
 
 def check_mirror_download(precision: str):
     """Isolate the HF snapshot_download step from the sherpa_onnx load step."""
-    import core.listen as L
+    import sensory.listen as L
     import huggingface_hub as hf
 
     repo = L._JA_EN_MIRROR_REPO
@@ -123,7 +123,7 @@ def check_mirror_download(precision: str):
 
 def check_asr_full(device: str, precision: str):
     """Exercise the real load_asr() path exactly as AikoListen calls it."""
-    import core.listen as L
+    import sensory.listen as L
 
     listener = L.AikoListen()
     listener.load_asr()

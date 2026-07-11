@@ -38,7 +38,7 @@ if str(ROOT) not in sys.path:
 
 # ── optional dotenv ───────────────────────────────────────────────────────────
 try:
-    from core.config import load_config
+    from system.config import load_config
     load_config()
 except ImportError:
     pass
@@ -193,7 +193,7 @@ def main():
     print("Loading embedding model (may download on first run)...")
     t0 = time.perf_counter()
     try:
-        from core.embed import HarrierEmbedder
+        from memory.embed import HarrierEmbedder
         embedder = HarrierEmbedder(model_id=model, dims=dims, batch_size=args.batch)
         # warm up — triggers ONNX session load now, not mid-migration
         list(embedder.embed(["warmup"]))

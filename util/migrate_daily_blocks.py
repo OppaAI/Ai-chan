@@ -12,12 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datetime import datetime
 
-from core.config import load_config
+from system.config import load_config
 load_config()
 
-from core.log import get_logger
-from core.memorize import AikoMemorize, USER_ID
-from core.reflect import _generate_daily_facts
+from system.log import get_logger
+from memory.memorize import AikoMemorize, USER_ID
+from cognition.reflect import _generate_daily_facts
 
 log = get_logger(__name__)
 

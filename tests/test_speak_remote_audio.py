@@ -10,7 +10,7 @@ dotenv_stub = types.SimpleNamespace(load_dotenv=lambda *_args, **_kwargs: None)
 sys.modules.setdefault("yaml", yaml_stub)
 sys.modules.setdefault("dotenv", dotenv_stub)
 
-from core.speak import AikoSpeak
+from sensory.speak import AikoSpeak
 
 
 class _RemoteOwner:

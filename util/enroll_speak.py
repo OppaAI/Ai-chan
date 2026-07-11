@@ -33,7 +33,7 @@ import numpy as np
 import sherpa_onnx
 
 try:
-    from core.config import load_config
+    from system.config import load_config
     load_config()
 except ImportError:
     pass

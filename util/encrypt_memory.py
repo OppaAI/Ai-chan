@@ -41,7 +41,7 @@ from pathlib import Path
 # Ensure the repo root is importable regardless of where this script lives
 # (e.g. util/encrypt_memory.py) or what directory it's invoked from — Python
 # only auto-adds the *script's own* directory to sys.path, not its parent,
-# so `import core.secure` fails if this script sits in a subfolder like util/.
+# so `import system.secure` fails if this script sits in a subfolder like util/.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -75,10 +75,10 @@ def main() -> None:
     # import resolves to the actual core/secure.py, guaranteeing the key
     # matches what connect_sqlite() will derive at runtime.
     try:
-        from core.secure import derive_user_sqlite_key
+        from system.secure import derive_user_sqlite_key
     except ImportError as e:
         _fail(
-            f"Could not import core.secure (repo root guessed as {_REPO_ROOT}): {e}\n"
+            f"Could not import system.secure (repo root guessed as {_REPO_ROOT}): {e}\n"
             "If that path looks wrong, move this script or adjust _REPO_ROOT above."
         )
 

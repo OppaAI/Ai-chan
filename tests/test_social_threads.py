@@ -25,7 +25,7 @@ sys.modules.setdefault("core.reflect", mock_reflect_module)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core import social
+from skills import social
 
 
 class DummyResponse:

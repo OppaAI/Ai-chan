@@ -32,7 +32,7 @@ WebUI as the default front end, plus cli/simple_cli.py for quick, no-frills
 local testing. Move tui/tui.py to archive/tui/ in your own checkout —
 nothing here imports curses anymore.
 """
-from core.config import load_config
+from system.config import load_config
 load_config()
 
 import argparse
@@ -53,10 +53,10 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-from core.bioclock import local_now
-from core.log import get_logger, silent_stderr
-from core.wakeup import AikoWakeup
-from core.toolkit.researcher import web_search
+from system.bioclock import local_now
+from system.log import get_logger, silent_stderr
+from system.wakeup import AikoWakeup
+from toolkit.research import web_search
 
 # CLI auth (GitHub device flow) — lazy-imported so it doesn't pull in
 # httpx for users who never use --cli
@@ -64,17 +64,17 @@ _CliAuth = None
 def _get_cli_auth():
     global _CliAuth
     if _CliAuth is None:
-        from cli.auth import CliAuth
+        from interface.cli.auth import CliAuth
         _CliAuth = CliAuth()
     return _CliAuth
 
 log = get_logger(__name__)
 
 with silent_stderr():
-    from core.memorize import AikoMemorize
+    from memory.memorize import AikoMemorize
 
-from webui.webui import AikoWeb, HTTP_PORT, WEBUI_HTTPS
-from webui.auth import app as auth_app
+from interface.webui.webui import AikoWeb, HTTP_PORT, WEBUI_HTTPS
+from interface.webui.auth import app as auth_app
 
 
 app = FastAPI()

@@ -6,6 +6,7 @@
 # human-authored wiki/skill/persona/config files.
 
 KNOWLEDGE_DB_PATH: "knowledge/knowledge.db"  # Relative paths are stored under the active user's state dir; encrypted when SQLITE_ENCRYPTION=1.
+KNOWLEDGE_WORKSPACE_DIR: ""  # Default ~/.aiko/<user_id>/library; empty = use code default
 KNOWLEDGE_STORE_CHUNK_CHARS: "900"  # Chunk size at ingest time; chunks are embedded once and stored individually.
 KNOWLEDGE_CONTEXT_CHARS: "3500"  # Max learned-knowledge context characters injected into a prompt.
 KNOWLEDGE_KNN_LIMIT: "20"  # sqlite-vec semantic candidates before RRF fusion.

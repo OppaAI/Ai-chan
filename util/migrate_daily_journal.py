@@ -51,10 +51,10 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from core.secure import connect_sqlite, sqlite_encryption_enabled  # noqa: E402
+from system.secure import connect_sqlite, sqlite_encryption_enabled  # noqa: E402
 
 try:
-    from core.userspace import current_user_id  # noqa: E402
+    from system.userspace import current_user_id  # noqa: E402
 except Exception:
     current_user_id = None  # fall back to requiring --user-id explicitly
 
