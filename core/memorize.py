@@ -994,7 +994,14 @@ class _MemoryBackend:
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
         top_ids = ordered_ids[:limit]
 
-        return [dict(row_by_id[mid]) for mid in top_ids if mid in row_by_id]
+        results = []
+        for mid in top_ids:
+            if mid not in row_by_id:
+                continue
+            d = dict(row_by_id[mid])
+            d["_recall_score"] = scores.get(mid, 0.0)
+            results.append(d)
+        return results
 
     def iter_all(self, user_id: str, batch_size: int = LIFECYCLE_BATCH_SIZE):
         """Yield memory records for a user in rowid order without one giant list."""
@@ -1360,7 +1367,12 @@ class AikoMemorize:
                 best_by_text[norm] = row
 
         deduped = [best_by_text[norm] for norm in order][:int(limit)]
-        return [dict(r) for r in deduped]
+        out = []
+        for r in deduped:
+            d = dict(r)
+            d["_recall_score"] = 1.0  # broad recall is explicit — never filtered
+            out.append(d)
+        return out
 
     def _touch_memories(self, results: list[dict]) -> None:
         """Update decay access metadata for a search result set."""
