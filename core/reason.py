@@ -45,6 +45,28 @@ class Embedder(Protocol):
     def embed_query(self, text: str, instruct: str = "") -> object: ...
     def embed_queries(self, texts: list[str], instruct: str = "") -> object: ...
 
+def cosine_similarity(vec_a, vec_b) -> float:
+    a = np.asarray(vec_a, dtype=float)
+    b = np.asarray(vec_b, dtype=float)
+    na, nb = np.linalg.norm(a), np.linalg.norm(b)
+    if na == 0 or nb == 0:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def block_relevance_score(embedder, query: str, text: str, instruct: str | None = None) -> float:
+    """Post-hoc relevance score for an already-assembled context block —
+    used for budget arbitration when the block's own retrieval score
+    isn't threaded through by its source module (wiki/skill/experience)."""
+    if embedder is None or not query or not text:
+        return 0.0
+    try:
+        q_vec = embedder.embed_query(query, instruct=instruct)
+        b_vec = embedder.embed_query(text[:1500], instruct=instruct)
+    except Exception:
+        return 0.0
+    return cosine_similarity(q_vec, b_vec)
+
 
 def normalize_rows(matrix: np.ndarray) -> np.ndarray:
     """L2-normalize each row of a 2D array; zero rows are left untouched
