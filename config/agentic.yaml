@@ -33,6 +33,11 @@ AGENT_WEB_TOOL_ATTEMPTS: "2"  # Retry attempts for task-mode deep_search on tran
 AGENT_LOCAL_TOOL_ATTEMPTS: "1"  # Retry attempts for save_note/schedule_job/schedule_reminder.
 AGENT_DEEP_RESEARCH_ATTEMPTS: "1"  # Retry attempts for deep_research specifically. Keep at 1 unless you can afford doubling a multi-round research call's cost (search+fetch×rounds + decision/synthesis LLM calls) on a retry.
 
+# -- Agentic history recall (recency + relevance weighted STM) --
+AGENT_HISTORY_CANDIDATE_MULTIPLIER: "3"  # How many past turns (x AGENT_HISTORY_TURNS/CONTEXT_WINDOW_TURNS) are considered as scoring candidates before selecting the final window.
+AGENT_HISTORY_RECENCY_HALFLIFE: "4"  # Turns until a candidate's recency weight halves in the blended recency+relevance score.
+AGENT_HISTORY_ALWAYS_KEEP_RECENT: "2"  # Number of most-recent turns always kept regardless of score, as a continuity floor.
+
 # -- Research call budget --
 AGENT_RESEARCH_MAX_CALLS: "1"  # Max combined deep_search+deep_research calls per agentic workflow. They share one budget so task mode does not repeatedly spend web/research calls in one workflow.
 
