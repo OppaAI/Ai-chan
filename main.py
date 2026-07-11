@@ -1212,11 +1212,7 @@ def _run_cli(args):
         os.environ["USER_ID"] = gh_user
         log.info("CLI session as GitHub user %s", gh_user)
     ui = AikoSimpleCLI(no_voice=args.text, debug=args.debug)
-    try:
-        _run_session(ui, args)
-    finally:
-        if cli_auth.is_configured():
-            cli_auth.logout()
+    _run_session(ui, args)
 
 
 def _run_webui(args):
