@@ -648,7 +648,7 @@ class AikoThink:
         context = web_search_context(search_query, max_results=int(os.getenv("SEARXNG_MAX_RESULTS", 3)))
         
         # Fallback: retry with better query or webfetch
-        if not context or context.startswith("[search failed") or "no results" in context.lower():
+        if not context or context.startswith("["):
             log.info("[webchat] Snippets failed, retrying with better query...")
             if token_callback:
                 token_callback("__RETRYING__\n")
@@ -672,7 +672,19 @@ class AikoThink:
         else:
             if token_callback:
                 token_callback("[No web results available; using local knowledge]\n")
-        
+            system = (
+                f"{system}\n\n"
+                "<search_failed>\n"
+                "Web search was attempted for this question but returned no usable "
+                "results. You have no current information on this topic — not from "
+                "search, and your training data may be stale on anything time-sensitive "
+                "(scores, news, prices, current events, recent releases). Do not guess "
+                "or invent scores, names, dates, or other current-event details. Say "
+                "plainly that you couldn't retrieve current information on this. It is "
+                "fine and expected to say you don't know.\n"
+                "</search_failed>"
+            )
+
         # Build message history (same as chat())
         llm_prompt = user_input
         if self._reasoning:

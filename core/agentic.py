@@ -161,21 +161,17 @@ def _agentic_policy_context(user_input: str, embedder=None) -> str:
 # client/model rather than constructing a second one.
 
 def resolve_search_query(owner, user_input: str) -> str:
-    """Condense a user message into a clean search query. Strips
-    conversational framing first; falls back to llm_resolve_search_query
-    only if the result still looks like a full sentence."""
-    noise = re.compile(
-        r"^(go\s+)?(can\s+you\s+)?(please\s+)?"
-        r"(pull\s+up|find\s+out|check|look\s+up|search\s+for|tell\s+me)[\s,]*",
-        re.IGNORECASE,
-    )
-    resolved = noise.sub("", user_input).strip()
+    """Condense a user message into a clean search query via the router LLM.
+    Short, already-keyword-like input skips the LLM call as a latency
+    shortcut; everything else is condensed."""
+    stripped = user_input.strip()
+    words = stripped.split()
 
-    # if still looks like a full sentence (long + has verb framing), ask LLM to condense
-    if len(resolved.split()) > 8 or resolved.lower().startswith(("what", "who", "when", "where", "is ", "has ", "did ")):
-        return llm_resolve_search_query(owner, resolved)
+    # Cheap bypass: short and no sentence punctuation/framing → already a query.
+    if len(words) <= 5 and not stripped.endswith(("?", ".")):
+        return stripped
 
-    return resolved or user_input
+    return llm_resolve_search_query(owner, stripped)
 
 
 def llm_resolve_search_query(owner, user_input: str) -> str:
@@ -933,8 +929,12 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
     if _EXTERNAL_ACTION_RE.search(user_input) and not _LOCAL_ARTIFACT_RE.search(stripped):
         issues.append("The answer may imply an unsupported external action instead of a local draft/staged artifact.")
 
-    if issues or not AGENT_VERIFY_LLM:
-        return VerificationResult(ok=not issues, feedback="\n".join(issues) or "Verified by deterministic checks.", score=0.0 if issues else 1.0)
+    if issues and not AGENT_VERIFY_LLM:
+        return VerificationResult(ok=False, feedback="\n".join(issues), score=0.0)
+    if not issues and not AGENT_VERIFY_LLM:
+        return VerificationResult(ok=True, feedback="Verified by deterministic checks.", score=1.0)
+
+    deterministic_note = f"\n\nDeterministic checks flagged (weigh, don't auto-fail): {'; '.join(issues)}" if issues else ""
 
     prompt = (
         "You are Aiko's final-answer verifier. This is NOT just a JSON schema check. "
