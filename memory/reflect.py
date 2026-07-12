@@ -53,7 +53,7 @@ import requests
 from openai import OpenAI
 
 from system.log import get_logger
-from system.userspace import current_user_id
+from system.userspace import current_user_id, current_display_name
 
 log = get_logger(__name__)
 
@@ -77,8 +77,16 @@ REFLECT_BLOG_POST_ENABLED = os.getenv("REFLECT_BLOG_POST_ENABLED", "1").lower() 
 
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "")
 REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/Aiko-chan.png"))
-USER_ID = current_user_id()
-USER_REFERENCE_IMAGE  = os.getenv("USER_REFERENCE_IMAGE", os.path.expanduser(f"~/Aiko-chan/assets/{USER_ID}.png"))
+
+def _user_reference_image_path() -> str:
+    """Resolve the current user's reference-image path fresh, per call —
+    not at import time, so this doesn't depend on reflect.py always being
+    imported after login (which is currently true only by accident of
+    wakeup.py's import order)."""
+    override = os.getenv("USER_REFERENCE_IMAGE")
+    if override:
+        return override
+    return os.path.expanduser(f"~/Aiko-chan/assets/{current_user_id()}.png")
 
 _GITHUB_API = "https://api.github.com"
 
@@ -127,7 +135,7 @@ _REFLECTION_USER = textwrap.dedent("""
 
 _DAILY_FACTS_PROMPT = textwrap.dedent("""
     Rewrite this day's narrative summary as a list of short, atomic factual
-    statements about Oppa's activities, decisions, and events that day.
+    statements about {USER_ID}'s activities, decisions, and events that day.
 
     Rules:
     - Distill the narrative's real content (projects, bugs, decisions, plans,
@@ -137,7 +145,7 @@ _DAILY_FACTS_PROMPT = textwrap.dedent("""
       underlying events and facts.
     - Do not invent details, outcomes, or facts not supported by the narrative
       — only translate what's actually there into plainer language.
-    - One fact per line, third person, about Oppa.
+    - One fact per line, third person, about {USER_ID}.
     - Each fact must be self-contained and short (readable without the
       day's context).
     - If the narrative genuinely contains no concrete events (pure mood/
@@ -230,9 +238,6 @@ def _generate_daily_facts(
     notes = "\n".join(f"- {s}" for s in snippets[:REFLECT_MAX_MEMS]) or "- none"
     prompt_template = _DAILY_FACTS_PROMPT
     if _retry:
-        # Second attempt: push back on empty-array laziness. Only used
-        # when the first pass returned [] — the narrative almost always
-        # has *something* concrete, even if stylized.
         prompt_template += (
             "\n\nIMPORTANT: Only return [] if the narrative truly describes "
             "nothing but atmosphere with zero concrete events. If any "
@@ -244,6 +249,7 @@ def _generate_daily_facts(
         date_str=date.strftime("%Y-%m-%d"),
         prose=prose,
         notes=notes,
+        USER_ID=current_display_name(),
     )
     raw = _llm_chat(
         system="You are a precise fact-extraction assistant.",
@@ -326,7 +332,8 @@ def _load_soul() -> str:
 
 
 def _build_reflection_system() -> str:
-    return f"{_load_soul()}\n\n{_DAILY_SUMMARY_UNLOCK}"
+    unlock = _DAILY_SUMMARY_UNLOCK.format(USER_ID=current_display_name())
+    return f"{_load_soul()}\n\n{unlock}"
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
@@ -359,8 +366,9 @@ def _generate_feelings(prose: str) -> str:
     Ask Aiko to reflect honestly on how she feels about OppaAI,
     based on the day's summary.
     """
-    system = f"{_load_soul()}\n\n{_FEELINGS_SYSTEM}"
-    user_prompt = _FEELINGS_USER.format(prose=prose[:600])
+    user_id = current_display_name()
+    system = f"{_load_soul()}\n\n{_FEELINGS_SYSTEM.format(USER_ID=user_id)}"
+    user_prompt = _FEELINGS_USER.format(prose=prose[:600], USER_ID=user_id)
     return _llm_chat(system, user_prompt, max_tokens=1024, temperature=0.8)
 
 # ── image generation ──────────────────────────────────────────────────────────
@@ -368,7 +376,7 @@ def _generate_feelings(prose: str) -> str:
 def _load_reference_images() -> list[str]:
     """Load Aiko and user reference images as base64 strings."""
     refs = []
-    for path in [REFERENCE_IMAGE, USER_REFERENCE_IMAGE]:
+    for path in [REFERENCE_IMAGE, _user_reference_image_path()]:
         if path and os.path.exists(path):
             with open(path, "rb") as f:
                 refs.append(base64.b64encode(f.read()).decode())
