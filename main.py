@@ -1309,6 +1309,9 @@ def _run_session(ui, args):
     speak    = result.speak
     listen   = result.listen
 
+    if memorize is not None:
+        ui.set_memorize(memorize)
+
     if memorize is None:
         ui.add_message('sys', '⚠️ Memory backend failed to load — check logs. Running without persistent memory this session.')
 

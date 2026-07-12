@@ -52,7 +52,7 @@ from cognition import CONTEXT_POOL
 from system.log      import get_logger
 from skills.social import run_scheduled_weekly_social
 from system.schedule import DueJob, register_system_handler
-from system.userspace import current_user_id, user_profile_path
+from system.userspace import current_user_id, current_display_name, user_profile_path
 from system import bioclock
 from cognition import reason
 from memory import learn
@@ -135,8 +135,8 @@ def _load_persona() -> str:
         context_blocks.append(user_path.read_text(encoding="utf-8").strip())
     user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
 
-    user_id = current_user_id()
-    return persona.replace("USER_ID_HERE", user_id) + user_block
+    display_name = current_display_name()
+    return persona.replace("USER_ID_HERE", display_name) + user_block
 
 
 def _should_use_local_knowledge(user_input: str) -> bool:

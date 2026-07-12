@@ -160,10 +160,7 @@ def _create_session(user_id, username: str, email: str | None, provider: str) ->
         "created_at": bioclock.local_now(),
         # gate stays closed until they check the box, unless they've already
         # accepted this exact terms version in a previous session
-        "accepted_terms": (
-            _has_accepted_terms(provider, runtime_user_id)
-            or _has_accepted_terms(provider, user_id)
-        ),
+        "accepted_terms": _has_accepted_terms(provider, runtime_user_id),
     }
     return session_id
 
@@ -379,7 +376,7 @@ async def patreon_callback(code: str, state: str | None = None):
 
 @app.get("/api/auth/me")
 async def get_me(session: dict = Depends(require_session)):
-    return {**session, "terms_version_required": TERMS_VERSION}
+    return {**session, "terms_version_required": TERMS_VERSION, "ai_name": os.getenv("AI_NAME", "Aiko")}
 
 
 @app.post("/api/auth/accept-terms")

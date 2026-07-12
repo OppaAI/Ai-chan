@@ -38,7 +38,7 @@ from pathlib import Path
 import websockets
 
 from system.config import load_config
-from system.userspace import reset_current_user_id, set_current_user_id
+from system.userspace import reset_current_user_id, set_current_user_id, set_current_display_name
 load_config()
 from websockets.server import serve as ws_serve
 
@@ -140,6 +140,10 @@ class AikoWeb:
         self._ts       = time.time()
         self._lock     = threading.Lock()
 
+        # current authenticated user — set by _ws_handler, consumed by get_input()
+        self._current_user_id: str = "guest"
+        self._current_display_name: str = "Guest"
+
         # input queue — browser posts here, get_input() reads here
         self._input_q: queue.Queue[str] = queue.Queue()
 
@@ -151,6 +155,9 @@ class AikoWeb:
         # connected browser websocket clients
         self._clients: set = set()
         self._clients_lock = threading.Lock()
+
+        # memory backend (injected after boot by _run_session)
+        self._memorize = None
 
         # streaming state
         self._streaming   = ""
@@ -176,6 +183,10 @@ class AikoWeb:
         interface.webui.auth.aiko_web_instance = self
 
         self._start_servers()
+
+    def set_memorize(self, memorize) -> None:
+        """Inject the memory backend (called from _run_session after boot)."""
+        self._memorize = memorize
 
     # ------------------------------------------------------------------
     # server lifecycle
@@ -265,7 +276,14 @@ class AikoWeb:
             await ws.close(code=1008)
             return
 
-        user_context_token = set_current_user_id(str(session["user_id"]))
+        uid = str(session["user_id"])
+        self._current_user_id = uid
+        self._current_display_name = str(session.get("username", "")) or uid
+        user_context_token = set_current_user_id(uid)
+        set_current_display_name(self._current_display_name)
+        os.environ["AIKO_USER_ID"] = uid
+        if self._memorize:
+            self._memorize.switch_user(uid)
         await ws.accept()
 
         with self._clients_lock:
@@ -296,7 +314,14 @@ class AikoWeb:
                     if mtype == "user_input":
                         text = (msg.get("text") or "").strip()
                         if text:
-                            set_current_user_id(str(session["user_id"]))
+                            uid = str(session["user_id"])
+                            self._current_user_id = uid
+                            self._current_display_name = str(session.get("username", "")) or uid
+                            set_current_user_id(uid)
+                            set_current_display_name(self._current_display_name)
+                            os.environ["AIKO_USER_ID"] = uid
+                            if self._memorize:
+                                self._memorize.switch_user(uid)
                             self._input_q.put(text)
 
                     elif mtype == "vad":
@@ -533,7 +558,10 @@ class AikoWeb:
         idle_ticks = 0
         while True:
             try:
-                return self._input_q.get(timeout=1.0)
+                text = self._input_q.get(timeout=1.0)
+                set_current_user_id(self._current_user_id)
+                set_current_display_name(self._current_display_name)
+                return text
             except queue.Empty:
                 idle_ticks += 1
                 if idle_ticks % 10 == 0:    # vitals every ~10 s when idle
@@ -597,6 +625,9 @@ class AikoWeb:
             self._broadcast({"type": "voice", "status": status})
 
         def _run() -> None:
+            set_current_user_id(self._current_user_id)
+            set_current_display_name(self._current_display_name)
+            os.environ["AIKO_USER_ID"] = self._current_user_id
             result_holder[0] = listen.listen(
                 status_callback=_status_cb,
                 speak=speak,
