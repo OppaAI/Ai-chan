@@ -553,7 +553,15 @@ function connectWS() {
     let msg;
     try { msg = JSON.parse(e.data); } catch (_) { return; }
 
-    if (!chatPhaseActive && ['chat', 'token', 'vitals', 'voice', 'mic'].includes(msg.type)) {
+    // Only real conversation content should force an early switch out of the
+    // splash screen (this fallback exists for a browser reconnecting mid-chat
+    // after boot already completed, since no further 'phase' broadcast will
+    // ever arrive for that new connection). 'vitals' must NOT be in this list:
+    // spin_loop() broadcasts vitals every ~250ms starting the instant the
+    // browser connects — well before AikoWakeup().boot() has actually finished
+    // loading subsystems — which was hiding the splash almost immediately
+    // while the real multi-minute boot silently continued underneath.
+    if (!chatPhaseActive && ['chat', 'token'].includes(msg.type)) {
       switchToChat();
     }
 
