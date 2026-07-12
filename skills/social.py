@@ -40,7 +40,7 @@ from system.bioclock import get_timezone
 from system.log import get_logger
 from memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
-from cognition.reflect import _generate_image, _load_soul
+from memory.reflect import _generate_image, _load_soul
 
 log = get_logger(__name__)
 

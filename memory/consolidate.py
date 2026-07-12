@@ -8,7 +8,7 @@ most recent full month. Example: on July 1, keep June intact and summarize May.
 
 Scope: this ONLY touches pinned daily-granularity memory (atomic facts tagged
 "[YYYY-MM-DD] ..." rows in memory.db plus "Daily journal of YYYY-MM-DD:" blobs in journal.db written nightly by
-cognition.reflect). Unpinned memory is entirely out of scope here — its lifecycle
+memory.reflect). Unpinned memory is entirely out of scope here — its lifecycle
 is owned by memory.forget's decay scoring, applied nightly via memorize.dream().
 Consolidation never reads, scores, or deletes unpinned rows.
 
@@ -56,7 +56,7 @@ from openai import OpenAI
 from system import bioclock
 from system.log import get_logger
 from system.userspace import current_user_id, user_state_path
-from cognition.reflect import _extract_json_arrays, _salvage_truncated_facts
+from memory.reflect import _extract_json_arrays, _salvage_truncated_facts
 
 log = get_logger(__name__)
 
@@ -79,7 +79,7 @@ LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "minis
 CONSOLIDATION_LLM_TIMEOUT = float(os.getenv("MONTHLY_CONSOLIDATION_LLM_TIMEOUT", os.getenv("LLM_TIMEOUT", "120")))
 CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES", "1").lower() in {"1", "true", "yes", "on"}
 
-# Matches the per-day tag reflect.py pins facts with, e.g. "[2026-05-18] ...".
+# Matches the per-day tag memory/reflect.py pins facts with, e.g. "[2026-05-18] ...".
 # Used to identify which pinned rows belong to daily-granularity memory (the
 # only thing this module ever compresses/deletes) as opposed to any other
 # pinned content (identity facts, standing preferences, etc.) that should
@@ -167,7 +167,7 @@ def _memory_lines(memories: list[dict]) -> str:
     ])
 
 
-# ── monthly fact extraction (mirrors reflect.py's daily fact extraction,
+# ── monthly fact extraction (mirrors memory/reflect.py's daily fact extraction,
 #    applied at month scope instead of day scope) ────────────────────────────
 
 _MONTHLY_FACTS_SYSTEM = textwrap.dedent("""

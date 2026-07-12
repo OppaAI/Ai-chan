@@ -705,7 +705,7 @@ class ScheduleRunner:
 
             yesterday = yesterday_local
 
-            from cognition.reflect import REFLECT_MAX_MEMS
+            from memory.reflect import REFLECT_MAX_MEMS
             memories = self._memorize.get_between(yesterday_query_start, yesterday_query_end)
             log.info("daily_reflect_and_dream: %d memories fetched.", len(memories))
 

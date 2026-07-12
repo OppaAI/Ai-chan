@@ -374,7 +374,7 @@ class AikoThink:
         # here (self._reminders = ScheduleRunner(...); self._reminders.start()).
         # That has been removed — core.wakeup.AikoWakeup.boot() already
         # constructs and starts the single app-wide ScheduleRunner (wired to
-        # memorize/reflect/consolidate as well as this instance's
+        # memorize/reflect/consolidate (now memory/reflect) as well as this instance's
         # handle_scheduled_job), and register_scheduler() makes it
         # discoverable to tools. Having two independent ScheduleRunner
         # threads both reading schedule.json meant every due job — reminders,

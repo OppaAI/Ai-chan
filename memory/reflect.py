@@ -1,5 +1,5 @@
 """
-cognition/reflect.py
+memory/reflect.py
 Aiko's nightly experience-summary writer.
 
 Called after dream() completes at 00:00. Pulls the day's chat turns and
@@ -671,18 +671,11 @@ def generate_and_post(
     date       = date or write_time - timedelta(days=1)
 
     # Extract and deduplicate memory snippets
-    # Filter out already-pinned daily-fact rows (format "[YYYY-MM-DD] ...")
-    # so a prior day's summarized facts, which land inside this day's
-    # get_between() window right at midnight, don't bleed into today's
-    # reflection as if they were fresh raw memories.
-    _date_tag_re = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]")
     snippets: list[str] = []
     seen:     set[str]  = set()
     for m in memories:
         text = (m.get("memory") or m.get("text") or "").strip()
         if not text or text in seen:
-            continue
-        if _date_tag_re.match(text):
             continue
         seen.add(text)
         snippets.append(text)

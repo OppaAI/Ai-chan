@@ -190,7 +190,7 @@ class AikoWakeup:
             log.error("AikoThink failed to boot — deep-study window handlers not registered.")
 
         from system.schedule import ScheduleRunner, register_scheduler, register_system_handler, ensure_workspace_knowledge_job
-        from cognition.reflect import generate_and_post
+        from memory.reflect import generate_and_post
         from memory.consolidate import maybe_run_consolidation
 
         if memorize[0] is None:

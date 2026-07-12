@@ -78,7 +78,7 @@ recency-among-relevant reranking:
     because guaranteeing whole pinned daily-summary blocks a spot
     regardless of score let oversized entries blow the LLM context
     window on recall. Pinned entries are now atomic per-fact rows (see
-    core/reflect.py), so a normal score-based ranking is sufficient.
+    memory/reflect.py), so a normal score-based ranking is sufficient.
 
   Dedup-on-recall: before any of the above, candidates are collapsed by
   normalized memory text. If the same text exists as multiple rows
