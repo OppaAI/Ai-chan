@@ -33,9 +33,10 @@ import os
 import re
 from pathlib import Path
 
-_DEFAULT_USER_ID = "Guest"
+_DEFAULT_USER_ID = "guest"
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 _CURRENT_USER_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("aiko_current_user_id", default=None)
+_CURRENT_DISPLAY_NAME: contextvars.ContextVar[str | None] = contextvars.ContextVar("aiko_current_display_name", default=None)
 
 
 def set_current_user_id(user_id: str | None) -> contextvars.Token[str | None]:
@@ -53,6 +54,21 @@ def current_user_id() -> str:
     return _CURRENT_USER_ID.get() or os.getenv("AIKO_USER_ID") or os.getenv("USER_ID") or _DEFAULT_USER_ID
 
 
+def set_current_display_name(name: str | None) -> contextvars.Token[str | None]:
+    """Set the request-local display name (e.g. GitHub login) and return a token."""
+    return _CURRENT_DISPLAY_NAME.set(name)
+
+
+def reset_current_display_name(token: contextvars.Token[str | None]) -> None:
+    """Reset the display name context var using a token from set_current_display_name()."""
+    _CURRENT_DISPLAY_NAME.reset(token)
+
+
+def current_display_name() -> str:
+    """Return the user's display name (e.g. GitHub login) or fall back to user_id."""
+    return _CURRENT_DISPLAY_NAME.get() or current_user_id()
+
+
 def normalize_user_id(provider: str | None, user_id: object) -> str:
     """Create a filesystem-safe, provider-scoped id for OAuth identities."""
     provider_part = _SAFE_RE.sub("_", str(provider or "local")).strip("._-") or "local"
@@ -63,13 +79,21 @@ def normalize_user_id(provider: str | None, user_id: object) -> str:
 def user_state_dir(user_id: str | None = None) -> Path:
     """Root directory for user-private mutable state.
 
-    Resolves to <USER_STATE_ROOT>/<user_id>, creating it (and locking it
-    down to owner-only access) if it doesn't already exist.
+    Resolves to <USER_STATE_ROOT>/<user_id>. For a real authenticated
+    user_id, creates it (locked to owner-only) if missing. For the guest
+    sentinel (no one authenticated yet), returns the path WITHOUT creating
+    it — callers doing existence checks (e.g. profile lookup) correctly
+    see nothing there, and no stray folder is left on disk before login.
     """
     root_value = os.getenv("USER_STATE_ROOT") or str(Path.home() / ".aiko")
     root = Path(root_value).expanduser()
-    uid = _SAFE_RE.sub("_", user_id or current_user_id()).strip("._-") or _DEFAULT_USER_ID
+    uid = user_id or current_user_id()
+    uid = _SAFE_RE.sub("_", uid).strip("._-") or _DEFAULT_USER_ID
     path = root / uid
+
+    if uid == _DEFAULT_USER_ID:
+        return path  # no mkdir — nothing on disk for an unauthenticated guest
+
     path.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(path, 0o700)

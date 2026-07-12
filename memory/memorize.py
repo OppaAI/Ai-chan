@@ -1125,35 +1125,67 @@ class AikoMemorize:
     """
 
     def __init__(self, silent: bool = False) -> None:
-        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=current_user_id()))
-
-        if not silent:
-            log.info("Opening sqlite-vec memory store...")
-
-        self._mem = _MemoryBackend(
-            db_path=db_path,
-            llm_base_url=os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"),
-            model=os.getenv("EXTRACT_MODEL") or os.getenv("LLM_MODEL", "ministral"),
-            embed_cache=os.getenv("EMBED_CACHE_PATH") or os.getenv("FASTEMBED_CACHE_PATH"),
-        )
-        self._conn = self._mem._conn
+        self._user_id_override = None
+        self._silent = silent
         self._search_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
         self._search_cache_lock = threading.RLock()
+        self._llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
+        self._model = os.getenv("EXTRACT_MODEL") or os.getenv("LLM_MODEL", "ministral")
+        self._embed_cache = os.getenv("EMBED_CACHE_PATH") or os.getenv("FASTEMBED_CACHE_PATH")
 
+        # Use a .pending path for pre-auth boot so user-space dirs are never
+        # created before a real user logs in via the web UI.
+        uid = current_user_id()
+        if uid == "guest":
+            db_path = ":memory:"   # pure in-RAM sqlite — zero disk footprint pre-login
+        else:
+            db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
+        if not silent:
+            log.info("Opening sqlite-vec memory store for %s ...", uid)
+        self._mem = _MemoryBackend(
+            db_path=db_path,
+            llm_base_url=self._llm_base_url,
+            model=self._model,
+            embed_cache=self._embed_cache,
+        )
+        self._conn = self._mem._conn
         self._write_queue: "queue.Queue[tuple]" = queue.Queue()
         self._write_worker = threading.Thread(target=self._write_loop, daemon=True)
         self._write_worker.start()
-
-        # Time-debounced search cache invalidation: on write, only clear the
-        # cache if at least MIN_CLEAR_INTERVAL has elapsed since the last
-        # clear.  Normal conversation (one write per turn, seconds apart)
-        # always sees fresh data.  Rapid-fire writes within the same
-        # debounce window (e.g. bulk import, batch writes) keep the cache
-        # warm — the only acceptable staleness case.
         self._last_cache_clear_time: float = 0.0
-
         if not silent:
             log.info("Ready.")
+
+    def _open(self, uid: str | None = None) -> None:
+        """Open (or reopen) the sqlite-vec store for a given user_id."""
+        uid = uid or self._user_id_override or current_user_id()
+        if uid == "guest":
+            db_path = ":memory:"
+        else:
+            db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
+        if not self._silent:
+            log.info("Opening sqlite-vec memory store for %s ...", uid)
+        self._mem = _MemoryBackend(
+            db_path=db_path,
+            llm_base_url=self._llm_base_url,
+            model=self._model,
+            embed_cache=self._embed_cache,
+        )
+        self._conn = self._mem._conn
+        if not self._silent:
+            log.info("Memory store ready for %s.", uid)
+
+    def switch_user(self, user_id: str) -> None:
+        """Switch to a different user's memory store. Re-opens DB."""
+        self._user_id_override = user_id
+        if self._conn:
+            try:
+                self._conn.execute("PRAGMA optimize")
+                self._conn.commit()
+                self._conn.close()
+            except Exception:
+                pass
+        self._open(user_id)
 
     # ── write ─────────────────────────────────────────────────────────────────
 
