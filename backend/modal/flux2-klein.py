@@ -8,6 +8,8 @@ Supports:
 
 Requires Modal secrets:
   - huggingface-secret (HF_TOKEN)
+
+GPU: A10G (24GB) with NF4-quantized transformer to fit memory budget.
 """
 
 import io
@@ -33,6 +35,7 @@ image = (
         "sentencepiece",
         "Pillow",
         "fastapi[standard]",
+        "bitsandbytes",
     )
     .env({"DIFFUSERS_NO_FLASH_ATTN": "1"})
 )
@@ -45,10 +48,10 @@ app = modal.App("aiko-imagegen", image=image)
 
 # ---------------------------------------------------------------------------
 # one-time weight downloader — run with: modal run flux-klein.py::download_weights
+# No GPU needed here, just downloading files.
 # ---------------------------------------------------------------------------
 @app.function(
     image=image,
-    gpu="H100",
     secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={WEIGHTS_DIR: volume},
     timeout=3600,
@@ -75,7 +78,7 @@ def download_weights():
 # model class
 # ---------------------------------------------------------------------------
 @app.cls(
-    gpu="H100",
+    gpu="A10G",
     secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={WEIGHTS_DIR: volume},
     timeout=120,
@@ -88,7 +91,7 @@ class AikoImageGen:
     def load(self):
         import os
         import torch
-        from diffusers import Flux2KleinPipeline
+        from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel, BitsAndBytesConfig
 
         local_path = f"{WEIGHTS_DIR}/flux2-klein-9b"
         shard_check = f"{local_path}/transformer/diffusion_pytorch_model-00001-of-00002.safetensors"
@@ -107,12 +110,34 @@ class AikoImageGen:
         else:
             print("Weights cached, loading from volume...")
 
+        # NF4-quantize the transformer to fit A10G's 24GB
+        nf4_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+
+        print("Loading NF4-quantized transformer...")
+        transformer = Flux2Transformer2DModel.from_pretrained(
+            local_path,
+            subfolder="transformer",
+            quantization_config=nf4_config,
+            torch_dtype=torch.bfloat16,
+        )
+
+        print("Loading pipeline...")
         self.pipe = Flux2KleinPipeline.from_pretrained(
             local_path,
+            transformer=transformer,
             torch_dtype=torch.bfloat16,
-        ).to("cuda")
+        )
 
-        print("FLUX.2 klein 9B ready.")
+        # enable_model_cpu_offload manages device placement itself —
+        # do NOT also call .to("cuda"), that forces everything onto GPU
+        # eagerly and defeats the offload entirely (this was the OOM cause).
+        self.pipe.enable_model_cpu_offload()
+
+        print("FLUX.2 klein 9B ready (NF4, A10G).")
 
     @modal.method()
     def generate(
@@ -216,4 +241,3 @@ def fastapi_app():
         return {"status": "ok", "model": "FLUX.2-klein-9B"}
 
     return web_app
-    
