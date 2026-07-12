@@ -20,6 +20,17 @@ Environment variables (all optional):
     WEBUI_BROWSER_VAD_GATE — set to "0" to stream raw WebUI PCM for VAD diagnostics
     SSL_CERT    — optional TLS certificate path
     SSL_KEY     — optional TLS private key path
+
+Boot ordering note (login-gated wakeup):
+    AikoWakeup().boot() — which constructs AikoMemorize, seeds schedule.json
+    jobs, and starts the global ScheduleRunner — must never run before a real
+    user is authenticated, since every one of those subsystems resolves paths
+    via system.userspace.current_user_id(). This class exposes
+    wait_for_first_login() so main.py's _run_session() can block until the
+    first authenticated WebSocket session connects (see _ws_handler below)
+    before calling AikoWakeup().boot(). The HTTP server (login page, OAuth
+    flow, static assets) is already serving at this point — only the heavy
+    model/subsystem boot is deferred.
 """
 
 import asyncio
@@ -144,6 +155,12 @@ class AikoWeb:
         self._current_user_id: str = "guest"
         self._current_display_name: str = "Guest"
 
+        # login gate — set the first time a real authenticated WS session
+        # connects, so main.py can defer AikoWakeup().boot() until a real
+        # (non-guest) user_id is known. See wait_for_first_login() below.
+        self._login_event = threading.Event()
+        self._authenticated_uid: str | None = None
+
         # input queue — browser posts here, get_input() reads here
         self._input_q: queue.Queue[str] = queue.Queue()
 
@@ -187,6 +204,22 @@ class AikoWeb:
     def set_memorize(self, memorize) -> None:
         """Inject the memory backend (called from _run_session after boot)."""
         self._memorize = memorize
+
+    def wait_for_first_login(self, timeout: float | None = None) -> str | None:
+        """Block the calling thread until the first authenticated WebSocket
+        session connects, then return that session's real user_id.
+
+        Used by main.py's _run_session() to defer AikoWakeup().boot() (and
+        therefore AikoMemorize construction, schedule.json seeding, and the
+        ScheduleRunner) until a genuine logged-in user_id is known — never
+        the "guest" default. The HTTP server (login page, OAuth flow, static
+        assets) is already reachable while this blocks; only the heavy
+        subsystem boot is gated.
+
+        Returns None if `timeout` is given and no login arrives in time.
+        """
+        self._login_event.wait(timeout)
+        return self._authenticated_uid
 
     # ------------------------------------------------------------------
     # server lifecycle
@@ -277,6 +310,16 @@ class AikoWeb:
             return
 
         uid = str(session["user_id"])
+
+        # Login gate — record the first real authenticated uid so main.py's
+        # wait_for_first_login() can unblock and start AikoWakeup().boot()
+        # with a genuine user_id already in place. Safe to check/set on
+        # every connection; only the first one matters (Event.set() is
+        # idempotent, and later re-logins/reconnects don't rewind boot).
+        if not self._login_event.is_set():
+            self._authenticated_uid = uid
+            self._login_event.set()
+
         self._current_user_id = uid
         self._current_display_name = str(session.get("username", "")) or uid
         user_context_token = set_current_user_id(uid)

@@ -31,6 +31,16 @@ Note: the old curses TUI (tui/tui.py) has been retired in favor of the
 WebUI as the default front end, plus cli/simple_cli.py for quick, no-frills
 local testing. Move tui/tui.py to archive/tui/ in your own checkout —
 nothing here imports curses anymore.
+
+Boot ordering note (login-gated wakeup):
+    For the WebUI path, AikoWakeup().boot() is deferred until the first
+    authenticated browser session connects (see AikoWeb.wait_for_first_login()
+    in interface/webui/webui.py). This guarantees system.userspace.current_user_id()
+    already resolves to a real, logged-in user_id by the time AikoMemorize,
+    schedule.json seeding, and the ScheduleRunner are constructed inside
+    boot() — no subsystem ever touches USER_SPACE_ROOT/guest/ on disk. The
+    CLI path (_run_cli) already resolves a real USER_ID via GitHub OAuth
+    before _run_session() is ever called, so it needs no change here.
 """
 from system.config import load_config
 load_config()
@@ -1222,6 +1232,7 @@ def _run_webui(args):
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
+    print(f"  Waiting for login before waking up subsystems...\n")
     _run_session(ui, args)
 
 
@@ -1287,6 +1298,28 @@ def _run_session(ui, args):
         if now - last_stream_draw >= STREAM_DRAW_INTERVAL:
             ui._draw(buf=[])
             last_stream_draw = now
+
+    # ── login gate (WebUI only) ─────────────────────────────────────────────
+    #
+    # AikoWakeup().boot() constructs AikoMemorize, seeds schedule.json jobs,
+    # and starts the global ScheduleRunner — all of which resolve paths via
+    # system.userspace.current_user_id(). For the WebUI front end, block here
+    # until the first authenticated browser session connects (the HTTP
+    # server/login page is already reachable at this point — see
+    # AikoWeb._start_servers) so current_user_id() resolves to a real,
+    # logged-in user_id everywhere boot() touches disk, instead of the
+    # "guest" default. The CLI path already resolves a real USER_ID via
+    # GitHub OAuth in _run_cli() before this function is ever called, so
+    # wait_for_first_login() simply doesn't exist on AikoSimpleCLI and this
+    # block is skipped there.
+    if hasattr(ui, "wait_for_first_login"):
+        uid = ui.wait_for_first_login()
+        if uid:
+            from system.userspace import set_current_user_id
+            set_current_user_id(uid)
+            log.info("First login received (user_id=%s) — starting subsystem boot.", uid)
+        else:
+            log.warning("wait_for_first_login() returned no uid — proceeding with default identity.")
 
     # ── init spin ─────────────────────────────────────────────────────────────
 

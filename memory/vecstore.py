@@ -185,8 +185,15 @@ def resolve_user_db_path(path_value: str | os.PathLike[str], *, user_id: str | N
     """Resolve an absolute or per-user relative database path.
 
     Relative paths live under <USER_STATE_ROOT>/<user_id>/, matching memory,
-    knowledge, and experience storage conventions.
+    knowledge, and experience storage conventions. ":memory:" is SQLite's
+    special in-memory sentinel — it must pass through untouched, never
+    joined onto a user directory, or it becomes a literal on-disk file
+    named ":memory:" instead of an ephemeral RAM-only database.
     """
+    raw = str(path_value)
+    if raw == ":memory:":
+        return Path(":memory:")
+
     path = Path(path_value).expanduser()
     if path.is_absolute():
         return path
