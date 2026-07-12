@@ -229,13 +229,13 @@ node_modules/
 # Local WebUI development TLS certs
 archive/
 training/
-webui/.cert/
+interface/webui/.cert/
 certs/
 *.pem
 *-key.pem
-webui/static/ort.min.js
-webui/static/ort-wasm-simd-threaded.wasm
-webui/static/ort-wasm-simd-threaded.jsep.wasm
-webui/static/ort-wasm-simd-threaded.jsep.mjs
-webui/static/silero_vad.onnx
-webui/static/silero_vad_op18_ifless.onnx
+interface/webui/static/ort.min.js
+interface/webui/static/ort-wasm-simd-threaded.wasm
+interface/webui/static/ort-wasm-simd-threaded.jsep.wasm
+interface/webui/static/ort-wasm-simd-threaded.jsep.mjs
+interface/webui/static/silero_vad.onnx
+interface/webui/static/silero_vad_op18_ifless.onnx
