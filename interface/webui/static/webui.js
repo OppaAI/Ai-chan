@@ -368,7 +368,7 @@ async function startMic() {
   }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
     micContext = new AudioContext({ sampleRate: 16000 });
     // Resume if suspended (happens when AudioContext is created outside a user
@@ -405,6 +405,7 @@ async function startMic() {
         }
       };
       micSource.connect(micWorklet);
+      micWorklet.connect(micContext.destination);  // required so the audio graph processes real samples
       awok = true;
       console.log('[mic] using AudioWorklet capture');
     } catch (awErr) {
@@ -621,6 +622,10 @@ async function checkAuth() {
       try { data = await res.json(); } catch (_) { /* no body / non-JSON */ }
       // Displayed chat-label username (falls back to 'you' if session has none).
       window.currentUsername = data.username || 'You';
+      const aiNameEl = document.getElementById('vrm-ai-name');
+      if (aiNameEl) aiNameEl.textContent = data.ai_name || 'Aiko';
+      const userNameEl = document.getElementById('vrm-user-name');
+      if (userNameEl) userNameEl.textContent = window.currentUsername;
       hideAuthOverlay();
       // If the backend reports the user hasn't accepted the current terms
       // version, gate on the terms modal before opening the WebSocket.

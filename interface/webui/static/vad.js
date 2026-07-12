@@ -21,6 +21,7 @@
 const VAD_THRESHOLD = 0.5;      // Silero speech probability cutoff (0-1)
 const SILENCE_TIMEOUT = 1200;   // ms of silence before utterance ends
 const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
+const SILERO_FALLBACK_FRAMES = 100;  // frames of sub-threshold prob before falling back to energy VAD
 
 // Energy fallback tunables. Conservative enough to avoid streaming normal room
 // tone, but intentionally simple so missing optional assets do not break input.
@@ -31,6 +32,9 @@ const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
 const ENERGY_START_RMS = 0.008;
 const ENERGY_END_RMS = 0.005;
 const ENERGY_MIN_FRAMES = 2;
+
+// Adaptive noise tracking: running minimum RMS when not speaking, used as end-of-speech floor.
+let _noiseFloor = 0.015;
 
 // -- state --------------------------------------------------------------------
 
@@ -43,6 +47,7 @@ let _silTimer = null;
 let _preBuf = [];     // circular pre-speech context
 let _energyHits = 0;
 let _vadEpoch = 0;
+let _sileroDeadFrames = 0;
 
 // -- init ---------------------------------------------------------------------
 
@@ -63,9 +68,9 @@ async function initVAD() {
     ort.env.wasm.numThreads = 1;   // single-threaded safer on mobile
 
     try {
-        _srTensor = new ort.Tensor('int64', BigInt64Array.from([16000n]), [1]);
+        _srTensor = new ort.Tensor('int64', [16000], [1]);
         _session = await ort.InferenceSession.create('./silero_vad.onnx', {
-            executionProviders: ['wasm'],
+            executionProviders: ['wasm', 'webgl'],
         });
         _vadMode = 'silero';
         _resetState();
@@ -128,11 +133,37 @@ async function processVADFrame(frame, ws, gate = true) {
     if (!_canSend(ws, epoch)) return;
 
     _state = out.stateN;
-    const prob = out.output.data[0];
 
-    // periodic probability log (every ~64 frames ≈ 2s at 32ms/frame)
-    if (Math.floor(Math.random() * 64) === 0) {
-        console.log(`[vad] silero prob=${prob.toFixed(3)}  threshold=${VAD_THRESHOLD}  speaking=${_speaking}`);
+    // Debug: log first and every ~64th frame
+    let min = Infinity, max = -Infinity;
+    for (let i = 0; i < frame.length; i++) {
+        const v = frame[i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+    }
+    const rms = _rms(frame);
+    const prob = out.output.data[0];
+    const outputLen = out.output.data.length;
+    const stateShape = JSON.stringify(out.stateN.dims);
+
+    if (window._vadDbgCount === undefined) window._vadDbgCount = 0;
+    window._vadDbgCount++;
+    if (window._vadDbgCount <= 5 || Math.floor(Math.random() * 64) === 0) {
+        console.log(`[vad] silero prob=${prob.toFixed(6)}  RMS=${rms.toFixed(5)}  min=${min.toFixed(4)}  max=${max.toFixed(4)}  outLen=${outputLen}  stateShape=${stateShape}  threshold=${VAD_THRESHOLD}  speaking=${_speaking}`);
+    }
+
+    // Fallback: if Silero never fires after many frames with real audio, switch to energy VAD
+    if (rms > 0.01) _sileroDeadFrames++;
+    else _sileroDeadFrames = Math.max(0, _sileroDeadFrames - 1);
+    if (_sileroDeadFrames > SILERO_FALLBACK_FRAMES && prob < 0.1) {
+        console.warn(`[vad] Silero stuck at prob=${prob.toFixed(3)} after ${_sileroDeadFrames} non-silent frames — falling back to energy VAD`);
+        _vadMode = 'energy';
+        _session = null;
+        if (!gate) {
+            ws.send(frame.buffer.slice(0));
+        }
+        processEnergyVADFrame(frame, ws, epoch, gate);
+        return;
     }
 
     if (!gate) {
@@ -182,6 +213,12 @@ async function processVADFrame(frame, ws, gate = true) {
     }
 }
 
+function _calcThresholds() {
+    const startThresh = Math.max(ENERGY_START_RMS, _noiseFloor * 2.2);
+    const endThresh = Math.min(_noiseFloor * 1.5, 0.5);
+    return { startThresh, endThresh };
+}
+
 function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
     if (!_canSend(ws, epoch)) return;
     if (!gate) {
@@ -189,12 +226,24 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
     }
     const rms = _rms(frame);
 
-    // Log RMS periodically for diagnostics (every ~64 frames ≈ 2s at 32ms/frame)
-    if (Math.floor(Math.random() * 64) === 0) {
-        console.log(`[vad] energy RMS=${rms.toFixed(5)}  start≥${ENERGY_START_RMS}  end≤${ENERGY_END_RMS}  speaking=${_speaking}`);
+    // Adaptive noise floor: track the minimum RMS when not speaking
+    if (!_speaking) {
+        if (rms < _noiseFloor) {
+            _noiseFloor = rms;
+        } else {
+            // Slowly decay up so we track changes in background noise
+            _noiseFloor += (rms - _noiseFloor) * 0.001;
+        }
     }
 
-    if (!_speaking && rms >= ENERGY_START_RMS) {
+    const { startThresh, endThresh } = _calcThresholds();
+
+    // Log RMS periodically for diagnostics (every ~64 frames ≈ 2s at 32ms/frame)
+    if (Math.floor(Math.random() * 64) === 0) {
+        console.log(`[vad] energy RMS=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}  end≤${endThresh.toFixed(5)}  speaking=${_speaking}`);
+    }
+
+    if (!_speaking && rms >= startThresh) {
         _energyHits++;
         if (_energyHits < ENERGY_MIN_FRAMES) {
             if (gate) _pushPreSpeech(frame);
@@ -224,7 +273,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
             ws.send(frame.buffer.slice(0));
         }
 
-        if (rms > ENERGY_END_RMS) {
+        if (rms > endThresh) {
             if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
             return;
         }

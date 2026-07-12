@@ -231,6 +231,16 @@ body {
   color: var(--mauve);
 }
 
+#vrm-user-line {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+#vrm-user-name {
+  color: var(--text);
+}
+
 #ws-dots {
   position: absolute;
   top: 34px;
