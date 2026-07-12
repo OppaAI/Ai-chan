@@ -1,5 +1,5 @@
 """
-core/consolidate.py
+memory/consolidate.py
 
 Monthly memory consolidation.
 

@@ -1,5 +1,5 @@
 """
-core/schedule.py
+system/schedule.py
 
 Persistent scheduled jobs, reminders, and wake-up alarms for Aiko.
 

@@ -1,5 +1,5 @@
 """
-core/bioclock.py
+system/bioclock.py
 
 Single source of truth for "what time is it right now" across every module
 that needs to reason about dates or wall-clock time — chat/webchat/agentic

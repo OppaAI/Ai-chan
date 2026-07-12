@@ -1,5 +1,5 @@
 """
-core/agentic.py
+skills/agentic.py
 
 Aiko's task-mode loop: tool schemas, ReAct-style dispatch, and final response
 handling. Pure tool implementations stay in core/tools.py; chat facade, TTS,
@@ -103,8 +103,8 @@ AGENT_RESEARCH_MAX_CALLS = int(os.getenv("AGENT_RESEARCH_MAX_CALLS", 1))
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AGENTIC_POLICY_PATHS = (
-    _REPO_ROOT / "persona" / "skills.md",
-    _REPO_ROOT / "persona" / "schedule.md",
+    _REPO_ROOT / "skills" / "skills.md",
+    _REPO_ROOT / "skills" / "schedule.md",
 )
 
 # Agentic policy context is now RAG-selected against the user's request,

@@ -1,24 +1,11 @@
 # Config index
 #
-# core/config.py loads the YAML files listed here, in order.
+# system/config.py loads the YAML files listed here, in order.
 # Put new config YAML files in this list when adding them.
 configs:
-- identity.yaml  # assistant/user names
-- bioclock.yaml  # standard date / wall clock
-- think.yaml  # chat LLM and sampling
-- agentic.yaml  # agent loop and routing
-- wiki.yaml  # human-authored wiki/persona/config/docs RAG sources
-- knowledge.yaml  # learned knowledge vector RAG store
-- experience.yaml  # task experience vector RAG store
-- memorize.yaml  # memory, embeddings, decay, consolidation
-- skills.yaml  # skill registry / capabilities
-- learn.yaml  # quick/deep studying + idle learner tunables
-- speak.yaml  # TTS output
-- listen.yaml  # ASR input, VAD, speaker verification
-- web.yaml  # SearXNG/search
-- ui.yaml  # TUI/WebUI display and ports
-- schedule.yaml  # scheduler paths and system job times
-- proactive.yaml  # proactive idle check-ins
-- reflect.yaml  # reflection publishing
-- social.yaml  # weekly social drafting/posting
-- log.yaml  # logging and health cache
+- cognition.yaml  # LLM, routing, reflection, proactive
+- memory.yaml  # knowledge, learn, episodic memory, experience
+- skills.yaml  # wiki, skillsets, agentic loop, social, web search
+- system.yaml  # identity, timezone, scheduler, logging
+- sensory.yaml  # ASR, VAD, TTS
+- interface.yaml  # ports, WebUI, rendering

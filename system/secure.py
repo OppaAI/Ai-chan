@@ -1,5 +1,5 @@
 """
-core/secure.py
+system/secure.py
 
 Optional at-rest encryption helpers for user-private Aiko state.
 

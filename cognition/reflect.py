@@ -1,5 +1,5 @@
 """
-core/reflect.py
+cognition/reflect.py
 Aiko's nightly experience-summary writer.
 
 Called after dream() completes at 00:00. Pulls the day's chat turns and

@@ -1,5 +1,5 @@
 """
-core/userspace.py
+system/userspace.py
 
 Helpers for per-user runtime paths and identifiers.
 

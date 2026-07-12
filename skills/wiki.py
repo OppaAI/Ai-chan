@@ -1,14 +1,14 @@
 """
-core/wiki.py
+skills/wiki.py
 
 Basic local wiki retrieval for Aiko.
 
 This module indexes durable, human-maintained project knowledge sources:
 
-  - discover_wiki_items()  — scan wiki, skill docs, persona docs, config, docs
+  - discover_wiki_items()  — scan wiki and docs
   - search_wiki()          — find relevant items by keyword or semantic search
-  - wiki_context_for()     — inject operational wiki pages via RAG-style chunking
-  - wiki_knowledge_context_for() — inject all knowledge sources via RAG-style chunking
+  - wiki_context_for()     — inject wiki pages via RAG-style chunking
+  - wiki_knowledge_context_for() — inject wiki + docs via RAG-style chunking
 
 Supports RAG-style chunking and semantic ranking via reason.select_relevant_chunks.
 Designed to avoid injecting secrets and mutable workspace artifacts.
@@ -33,13 +33,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _SOURCE_GLOBS: tuple[tuple[str, str], ...] = (
     ("wiki", "wiki/*.md"),
-    ("skill", "skills/skillsets/*.md"),
-    ("skill_config", "skills/*/*.json"),
-    ("persona", "persona/*.md"),
-    ("persona_config", "persona/*.json"),
-    ("config", "config/*.yaml"),
-    ("config", "config/*.json"),
-    ("config", "config/*.toml"),
     ("docs", "*.md"),
     ("docs", "docs/*.md"),
 )

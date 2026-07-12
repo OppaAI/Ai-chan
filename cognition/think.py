@@ -165,7 +165,7 @@ def _play_beep() -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 # load route examples
-_EXAMPLES_PATH = Path(__file__).resolve().parent.parent / "persona" / "router_prompts.json"
+_EXAMPLES_PATH = Path(__file__).resolve().parent / "router_prompts.json"
 
 def _load_route_examples() -> tuple[dict, dict]:
     with open(_EXAMPLES_PATH, encoding="utf-8") as f:

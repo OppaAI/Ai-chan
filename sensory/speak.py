@@ -1,5 +1,5 @@
 """
-core/speak.py
+sensory/speak.py
 
 Aiko's voice output via MioTTS inference server.
 Preset-based voice reference: "jp_female", "en_female", or a custom registered preset.
@@ -11,11 +11,11 @@ Server setup (run separately):
         --llm-model "miotts"
 
 Standalone test:
-    python core/speak.py
-    python core/speak.py "Hello, I'm Aiko!"
-    python core/speak.py --devices
-    python core/speak.py --wait "Block until done."
-    python core/speak.py --synced --wait "Watch the words land with the voice."
+    python sensory/speak.py
+    python sensory/speak.py "Hello, I'm Aiko!"
+    python sensory/speak.py --devices
+    python sensory/speak.py --wait "Block until done."
+    python sensory/speak.py --synced --wait "Watch the words land with the voice."
 """
 
 import base64

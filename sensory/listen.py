@@ -1,5 +1,5 @@
 """
-core/listen.py
+sensory/listen.py
 
 Aiko's speech-to-text input layer.
   - Captures microphone audio with Silero VAD (neural, energy-independent)

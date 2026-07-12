@@ -1,5 +1,5 @@
 """
-core/toolkit/plan.py
+toolkit/plan.py
 
 Planning, note, and workspace file tools.
 

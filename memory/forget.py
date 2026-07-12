@@ -1,5 +1,5 @@
 """
-core/forget.py
+memory/forget.py
 Ebbinghaus-style exponential decay scoring for memory lifecycle management.
 
 Core formula (inspired by the forgetting curve):

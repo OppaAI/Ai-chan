@@ -1,5 +1,5 @@
 """
-core/log.py
+system/log.py
 Central logger for Aiko-chan.
 
 All modules import get_logger() and use it instead of print().

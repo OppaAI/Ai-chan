@@ -8,7 +8,7 @@ tools: search_jobs, dedupe_postings, save_note
 # Job Hunt
 
 Find current job postings for a role, filtered by location, and save a
-structured report. Defaults live in `skills/skillsets/job_hunt.json`.
+structured report. Defaults live in `<user_state>/skillsets/job_hunt.json`.
 Use that file's location when the user does not specify one.
 
 ## Steps
@@ -16,12 +16,12 @@ Use that file's location when the user does not specify one.
 1. Extract the role/query from the user's prompt. Job type should come from
    the prompt when possible (for example full-time, contract, remote, junior).
 2. If the user specified a location, pass it. Otherwise use the configured
-   default location from `job_hunt.json` (`Vancouver, BC, Canada`) rather
+   default location from `<user_state>/skillsets/job_hunt.json` (`Vancouver, BC, Canada`) rather
    than asking.
 3. Call `search_jobs(query, location, max_results, max_age_days, job_type)`.
    This already runs `dedupe_postings` internally - do not call it again.
 4. If zero results: widen `max_age_days` once using
-   `fallback_max_age_days` from `job_hunt.json` before telling the user
+   `fallback_max_age_days` from `<user_state>/skillsets/job_hunt.json` before telling the user
    nothing was found. Do not silently drop the location filter.
 5. Format results as a table: Title, Organization, Employment Type,
    Salary, Location, Experience, Close Date, Posted, URL. Leave blank
@@ -36,8 +36,8 @@ Use that file's location when the user does not specify one.
 - `close_date` is rarely published by these boards; it will usually be
   blank. Do not guess a close date.
 - Default location is Vancouver, BC, Canada with nearby Lower Mainland cities
-  configured as a 50 km practical search radius in `job_hunt.json`.
-- Sources are configured in `job_hunt.json` and default to
+  configured as a 50 km practical search radius in `<user_state>/skillsets/job_hunt.json`.
+- Sources are configured in `<user_state>/skillsets/job_hunt.json` and default to
   Greenhouse/Lever/Ashby/RemoteOK/WeWorkRemotely/Wellfound - chosen
   specifically because they do not block scripted access. Never substitute
   LinkedIn/Indeed/Glassdoor scraping for this workflow unless the tool is

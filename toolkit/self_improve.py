@@ -1,5 +1,5 @@
 """
-core/toolkit/self_improve.py
+toolkit/self_improve.py
 
 Read-only repo inspection tools for Aiko architecture work.
 

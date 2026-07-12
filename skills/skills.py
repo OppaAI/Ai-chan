@@ -1,10 +1,10 @@
 """
-core/skills.py
+skills/skills.py
 
 Skill document helpers and registry for local markdown skill files.
 
-``persona/skills.md`` remains the short human-readable skill index loaded into
-Aiko's base persona. Full repeatable workflows live under ``skills/<id>/`` as
+``skills/skills.md`` remains the short human-readable skill index loaded into
+Aiko's base persona. Full repeatable workflows live under ``skills/skillsets/`` as
 ``<id>.md`` files and optional ``skill.yaml`` metadata.
 
 skill_context_for injects RAG-style excerpts, not whole skill files:
@@ -28,7 +28,7 @@ import numpy as np
 from cognition import reason
 from system.userspace import user_state_dir
 
-DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
+DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "skills.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
 _USER_SKILLSETS_PATH = os.getenv("USER_SKILLSETS_PATH") or str(user_state_dir() / "skillsets")
 
@@ -234,7 +234,7 @@ def _discover_in(root: str | Path) -> list[SkillDoc]:
     if not base.exists():
         return []
     docs: list[SkillDoc] = []
-    for skill_file in sorted(base.glob("skillsets/*.md")):
+    for skill_file in sorted(base.glob("*.md")):
         skill_id = skill_file.parent.name
         try:
             raw = skill_file.read_text(encoding="utf-8", errors="replace")
@@ -255,7 +255,7 @@ def _discover_in(root: str | Path) -> list[SkillDoc]:
 def discover_skill_docs() -> list[SkillDoc]:
     """Discover workflow documents from project and user skillsets."""
     docs: list[SkillDoc] = []
-    for root in (SKILL_ROOT, Path(_USER_SKILLSETS_PATH)):
+    for root in (SKILL_ROOT / "skillsets", Path(_USER_SKILLSETS_PATH)):
         docs.extend(_discover_in(root))
     return docs
 

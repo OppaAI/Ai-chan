@@ -1,5 +1,5 @@
 """
-core/toolkit/research.py
+toolkit/research.py
 
 Web search and page extraction tools.
 

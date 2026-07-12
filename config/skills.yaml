@@ -1,3 +1,17 @@
+# Wiki config
+#
+# Settings for core/wiki.py (wiki/persona/config/docs indexing).
+# Two-stage RAG pattern: semantic-rank WHICH items are candidates, then
+# chunk-rank WHICH PART of each selected item gets injected.
+
+# -- item-level semantic ranking (which wiki/persona/config/docs items are candidates at all) --
+WIKI_SEMANTIC_THRESHOLD: "0.35"  # Min cosine similarity for a wiki item to be considered a candidate match.
+
+# -- chunk-level RAG selection (which part of a selected item gets injected) --
+WIKI_CHUNK_CHARS: "600"  # Chunk size (chars) a matched wiki item's body is split into before relevance scoring. Shared by wiki_context_for.
+WIKI_CHUNKS_PER_ITEM: "3"  # Max relevant chunks kept per matched wiki item.
+WIKI_CHUNK_MIN_SCORE: "0.30"  # Min relevance score to keep a chunk; below this the item falls back to its first chunk.
+
 # Skills config
 #
 # Settings for core/skills.py (skills/<id>/SKILL.md workflow docs).
@@ -14,3 +28,172 @@ SKILL_CHUNK_MIN_SCORE: "0.30"  # Min relevance score to keep a chunk; below this
 
 # -- user skillsets --
 USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <USER_STATE_ROOT>/<user_id>/skillsets/.
+
+# Agentic config
+#
+# Settings for core/agentic.py plus chat-vs-agent routing used by core/think.py.
+# Use this to tune when Aiko enters tool/task mode and how much work one task may do.
+
+# -- Agent loop limits --
+MAX_AGENT_ITER: "8"  # Maximum tool/planning iterations per task; raise for complex tasks, lower for safety.
+AGENT_MAX_TOKENS: "512"  # Max model output tokens per agent step.
+LLM_CTX_SIZE: "12288"  # Local llama-server context ceiling; used directly by agentic.py's context-budget guard now. Keep in sync with the actual llama-server --ctx-size.
+AGENT_CONTEXT_BUDGET_RATIO: "0.65"  # Fraction of LLM_CTX_SIZE the agent prompt (persona+memory+policy+wiki+skill+learned knowledge+experience+tool schemas) is allowed to occupy before blocks start getting dropped.
+AGENT_NOTE_MAX_CHARS: "1500"  # Max characters from notes/files injected into an agent step.
+AGENT_TOOL_RESULT_MAX_CHARS: "3000"  # Max characters retained from one tool result.
+AGENT_MEMORY_DRAIN_TIMEOUT: "0.25"  # Seconds to wait for pending memory writes before an agent task starts.
+MEMORY_AGENT_DRAIN_TIMEOUT: "0.25"  # Legacy alias for AGENT_MEMORY_DRAIN_TIMEOUT; keep same value.
+AGENT_MEMORY_RECALL_LIMIT: "2"  # Number of memories injected into agent context; keep low to save tokens.
+
+# -- Agentic policy RAG (skills.md/schedule.md excerpt selection) --
+AGENTIC_POLICY_CHUNK_CHARS: "600"  # Chunk size (chars) skills.md/schedule.md are split into before relevance scoring.
+AGENTIC_POLICY_CHUNKS_PER_FILE: "4"  # Max relevant chunks kept per policy file.
+AGENTIC_POLICY_CHUNK_MIN_SCORE: "0.25"  # Minimum relevance score to keep a policy chunk; below this the file falls back to its first chunk.
+AGENTIC_POLICY_MAX_CHARS: "3000"  # Hard cap on total policy excerpt chars injected into the agent system prompt, across both files.
+
+# -- Verification and retries --
+AGENT_VERIFY_FINAL: "1"  # Final-answer verifier toggle; options: 1/0, true/false, yes/no, on/off.
+AGENT_VERIFY_LLM: "1"  # Use an LLM call for final verification; options: 1/0, true/false, yes/no, on/off.
+AGENT_MAX_FINAL_REPAIRS: "1"  # Max attempts to repair a final answer that fails verification.
+AGENT_VERIFY_MIN_SCORE: "0.70"  # Minimum verifier score when LLM verification is enabled; range 0.0-1.0.
+AGENT_TOOL_RETRY_BACKOFF: "0.2"  # Seconds to wait before retrying a failed tool call.
+
+# -- Agent tool retry policy --
+AGENT_WEB_TOOL_ATTEMPTS: "2"  # Retry attempts for task-mode deep_search on transient search failure. web_search/web_fetch are chat-only and not agentic tools.
+AGENT_LOCAL_TOOL_ATTEMPTS: "1"  # Retry attempts for save_note/schedule_job/schedule_reminder.
+AGENT_DEEP_RESEARCH_ATTEMPTS: "1"  # Retry attempts for deep_research specifically. Keep at 1 unless you can afford doubling a multi-round research call's cost (search+fetch×rounds + decision/synthesis LLM calls) on a retry.
+
+# -- Agentic history recall (recency + relevance weighted STM) --
+AGENT_HISTORY_CANDIDATE_MULTIPLIER: "3"  # How many past turns (x AGENT_HISTORY_TURNS/CONTEXT_WINDOW_TURNS) are considered as scoring candidates before selecting the final window.
+AGENT_HISTORY_RECENCY_HALFLIFE: "4"  # Turns until a candidate's recency weight halves in the blended recency+relevance score.
+AGENT_HISTORY_ALWAYS_KEEP_RECENT: "2"  # Number of most-recent turns always kept regardless of score, as a continuity floor.
+
+# -- Research call budget --
+AGENT_RESEARCH_MAX_CALLS: "1"  # Max combined deep_search+deep_research calls per agentic workflow. They share one budget so task mode does not repeatedly spend web/research calls in one workflow.
+
+# -- Workspace tool limits --
+MAX_WRITE_CHARS: "20000"  # Max characters allowed when agent saves a note/draft.
+MAX_READ_CHARS: "12000"  # Max characters returned when agent reads a workspace file.
+
+# Social config
+#
+# Settings for core/social.py.
+# Controls weekly social-memory drafting/posting and provider metadata.
+
+# -- Weekly workflow --
+WEEKLY_SOCIAL_ENABLED: "1"  # Enable weekly social job scheduling; options: 1/0, true/false, yes/no, on/off.
+WEEKLY_SOCIAL_AUTODRAFT: "1"  # Create local draft/image bundle automatically; boolean options.
+WEEKLY_SOCIAL_AUTOPOST: "0"  # Post automatically after drafting; boolean options, keep 0 while testing.
+WEEKLY_SOCIAL_WEEKDAY: "sunday"  # Weekday for weekly draft; options: monday..sunday or mon..sun.
+WEEKLY_SOCIAL_TIME: "18:00"  # Local wall-clock time for weekly draft in HH:MM 24-hour format.
+WEEKLY_SOCIAL_PROVIDERS: "x, threads"  # Comma-separated provider list; options currently include x, threads.
+WEEKLY_SOCIAL_MAX_CHARS: "260"  # Max post length; keep <= 260 for X with room for metadata/links.
+SOCIAL_ROOT: ""  # Optional override; blank uses per-user <workspace>/social/weekly.
+WEEKLY_SOCIAL_IMAGE_URL: ""  # Optional fallback public image URL for Threads when no local draft image exists; local images upload to ImgBB.
+
+# -- X relay metadata --
+TWITTER_RELAY_BASE_URL: "https://api.aisa.one/apis/v1/twitter"  # AIsa Twitter/X relay base URL.
+TWITTER_RELAY_TIMEOUT: "30"  # Seconds before AIsa relay calls time out.
+
+# -- Threads metadata --
+THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # ISO UTC expiry timestamp for long-lived Threads token; blank if unknown.
+THREADS_REFRESH_WINDOW_DAYS: "55"  # Refresh Threads token when this many days or fewer remain.
+THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Official Threads API base URL.
+THREADS_TOPIC_TAG: "AI Threads"  # Optional Threads topic tag attached above the post; blank disables it.
+THREADS_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Threads media container create and publish.
+IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB draft image upload calls time out.
+
+# Web config
+#
+# Settings for core/toolkit/researcher.py and semantic web-search triggering.
+# Controls local SearXNG endpoint and how many search results the agent consumes.
+
+# -- SearXNG --
+SEARXNG_URL: "http://localhost:8888"  # Base URL for self-hosted SearXNG instance.
+SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from chat; higher means fewer searches.
+SEARXNG_MAX_RESULTS: "3"  # Max results per SearXNG call. Shared by web_search (snippet-only) and BOTH deep_search's and deep_research's underlying search calls.
+
+# -- deep_search (direct single-pass search + fetch) --
+# These are deep_search()'s OWN defaults — used when something calls
+# deep_search() directly (e.g. a fast, wide, shallow lookup). They are fully
+# independent of deep_research's per-round tunables below; changing one does
+# not change the other. deep_search NEVER uses Crawl4AI, robots gating, or
+# sitemap expansion — those are deep_research-only, by design, to keep this
+# the fast path.
+DEEP_SEARCH_NUM_SEARCHES: "7"  # How many SearXNG pages to pull CONCURRENTLY for the SAME query and merge/dedup by URL, widening one-pass coverage without an LLM rewriting the query.
+DEEP_SEARCH_NUM_FETCHES: "0"  # How many (deduped) results to actually fetch full page text for. Set to 0 for snippet-only "search, don't fetch" passes.
+DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before condensing, for deep_search's own fetches only. deep_research now has its own DEEP_RESEARCH_MAX_CHARS_PER_PAGE below instead of inheriting this.
+DEEP_SEARCH_MAX_WORKERS: "8"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on AuRoRA (Jetson, limited cores) vs AIVA if contention shows up. Shared by deep_search and deep_research.
+
+# -- deep_research (multi-round adaptive research, accuracy-first) --
+# deep_research calls deep_search's internal impl once per round, but uses
+# ITS OWN search/fetch breadth per round rather than inheriting
+# DEEP_SEARCH_NUM_SEARCHES/NUM_FETCHES above. This lets you tune "how wide
+# is one direct deep_search() call" completely separately from "how wide
+# is one round of a multi-round deep_research() dig." Can also be
+# overridden per-call via deep_research(query, num_searches=..., num_fetches=...).
+#
+# Latency is intentionally secondary here — deep_search is the fast path,
+# deep_research is the trusted-KB/self-study path. Tuned wider than
+# deep_search on purpose.
+DEEP_RESEARCH_NUM_SEARCHES: "5"  # SearXNG pages pulled per deep_research round.
+DEEP_RESEARCH_NUM_FETCHES: "3"  # Pages fetched per deep_research round. Bumped from 2 — more corroborating sources per round means the agreement bonus below has more to work with.
+DEEP_RESEARCH_MAX_CHARS_PER_PAGE: "3500"  # Per-page fetched text cap for deep_research's fetches specifically. No longer inherits DEEP_SEARCH_MAX_CHARS_PER_PAGE — Crawl4AI's markdown output tends to run longer than trafilatura's plain extraction, so this got its own higher budget.
+DEEP_RESEARCH_MAX_ROUNDS: "5"  # Hard ceiling on search+fetch rounds. Lower this on AuRoRA (Jetson) vs AIVA (dual 3060) if latency matters more than thoroughness. Each round now also does a Crawl4AI batch fetch + sitemap check, so a full 5-round dig is meaningfully heavier than before — watch this against AGENT_RESEARCH_MAX_CALLS in agentic.py, which still caps deep_research to 1 call per agentic workflow regardless of this setting.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "8000"  # How much CONDENSED (not raw) accumulated evidence the continue/refine decision call sees. Bumped from 6000 alongside the wider per-round fetch count.
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "12000"  # How much condensed accumulated evidence the final synthesis call sees. Bumped from 8000 for the same reason.
+DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for the continue/refine decision call.
+DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "700"  # Token budget for the final synthesis call. Bumped slightly from 600 to give room for the corroborated-vs-single-source framing the synthesis prompt now asks for.
+
+# -- in-memory evidence condensation (embedding-based relevance filtering) --
+# deep_search keeps its own knobs below unchanged. deep_research now uses
+# the separate RESEARCH_CONDENSE_* knobs further down instead — a wider net
+# and a lower score bar, because the corroboration bonus promotes
+# borderline chunks that get independently confirmed by a second domain, so
+# a stricter min-score up front would throw those away before they ever got
+# the chance to be corroborated.
+CONDENSE_CHUNK_CHARS: "500"  # Chunk size (chars) fetched pages are split into before scoring. Shared by deep_search and deep_research.
+CONDENSE_TOP_K: "8"  # Max relevant chunks kept in deep_search's condensed bundle.
+CONDENSE_MIN_SCORE: "0.15"  # Minimum relevance score to keep a chunk in deep_search's condensed bundle. Below this, content is dropped, not truncated-and-kept.
+CONDENSE_MAX_CHUNKS_TO_SCORE: "60"  # Caps embedding latency for deep_search regardless of total fetched volume. Lower on AuRoRA (Jetson) if embedding calls stack up (~200ms each per your harrier embedder benchmarks — 60 chunks ≈ 12s worst case).
+
+# -- deep_research condensation (wider net, corroboration-aware) --
+RESEARCH_CONDENSE_TOP_K: "12"  # Max relevant chunks kept in deep_research's condensed bundle per round — higher than deep_search's 8 since a trusted-KB answer benefits from more corroborating excerpts surviving into synthesis.
+RESEARCH_CONDENSE_MIN_SCORE: "0.12"  # Lower bar than deep_search's 0.15 — borderline chunks get a chance to clear the bar via the corroboration bonus below instead of being dropped outright.
+RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE: "100"  # Same embedding-latency cap as CONDENSE_MAX_CHUNKS_TO_SCORE but sized for deep_research's wider per-round fetch count. On AuRoRA (Jetson), 100 chunks at ~200ms/chunk is ~20s worst case per round — budget accordingly against DEEP_RESEARCH_MAX_ROUNDS above. Drop this first if a full research dig is competing with anything latency-sensitive on the Jetson.
+
+# -- cross-source corroboration ("sources agreement" scoring, deep_research only) --
+# Independent confirmation of the same claim from a SECOND domain boosts
+# that chunk's relevance score; repeats from the same domain don't count.
+# This is separate from the robots.txt crawl-permission check below — this
+# one is about whether multiple independent sources agree on a claim, not
+# whether a source allows itself to be crawled.
+RESEARCH_AGREEMENT_BONUS: "0.12"  # Score added per additional independent corroborating domain (capped at 1.0 total).
+RESEARCH_AGREEMENT_SIMILARITY: "0.5"  # Word-shingle Jaccard similarity threshold above which two chunks from different domains count as corroborating each other. Raise toward 0.7-0.8 if unrelated chunks are getting falsely flagged as agreeing; lower toward 0.3-0.4 if genuinely-corroborating chunks with different phrasing aren't being caught.
+RESEARCH_AGREEMENT_SHINGLE_SIZE: "5"  # Word-shingle length used for the similarity check above.
+
+# -- Crawl4AI (deep_research only, richer page extraction) --
+# Requires `uv pip install crawl4ai` plus `crawl4ai-setup` (installs the
+# Playwright browser binary) on whichever machine runs deep_research. If
+# crawl4ai isn't installed, or RESEARCH_USE_CRAWL4AI is off, deep_research
+# transparently falls back to web_fetch (requests+trafilatura) for every
+# URL — nothing breaks, it just loses the JS-rendering advantage.
+RESEARCH_USE_CRAWL4AI: "1"  # 1 to prefer Crawl4AI's batched Playwright fetch for deep_research; 0 to always use web_fetch instead.
+CRAWL4AI_TIMEOUT_MS: "20000"  # Per-page timeout for Crawl4AI's Playwright load. Consider raising on AuRoRA (Jetson) for cold-start latency on first run.
+CRAWL4AI_MAX_CONCURRENT: "4"  # Max concurrent Playwright pages within one Crawl4AI batch session. Headless Chromium is not light — drop this to 2 on AuRoRA if it's competing with llama-server for RAM during a research round.
+CRAWL4AI_WORD_COUNT_THRESHOLD: "40"  # Minimum word count for Crawl4AI to consider a page block worth keeping, filtering out nav/boilerplate fragments.
+
+# -- robots.txt compliance ("source agreement" to be crawled) + sitemap discovery --
+# deep_research-only. deep_search never checks robots.txt or expands via
+# sitemap — it stays on the fast, minimal-footprint path.
+RESEARCH_RESPECT_ROBOTS: "1"  # 1 to only fetch URLs the source's own robots.txt permits for our user-agent (fails open if robots.txt is unreachable/unparseable, matching standard crawler convention). 0 to disable the check entirely.
+ROBOTS_CACHE_TTL_SECONDS: "3600"  # How long a fetched robots.txt is cached in-process before being re-fetched.
+RESEARCH_SITEMAP_ENABLED: "1"  # 1 to let deep_research widen candidate URLs via sitemap.xml discovery for the top 1-2 domains in each round's search results (useful when one authoritative docs site is worth exploring beyond just the search snippet). 0 to disable.
+RESEARCH_SITEMAP_MAX_URLS: "6"  # Max sitemap-discovered URLs added per round, on top of the normal DEEP_RESEARCH_NUM_FETCHES search-derived URLs.
+RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots.txt/sitemap.xml during discovery.
+
+# -- web_fetch download guard & caching --
+WEB_FETCH_MAX_DOWNLOAD_BYTES: "5_000_000"  # Hard byte cap per fetch; download aborted mid-stream before extraction/truncation, bounding worst-case memory for one fetch.
+WEB_FETCH_TIMEOUT_SECONDS: "8"  # Per-request timeout for web_fetch's underlying HTTP call.
+TOOLS_CACHE_TTL_SECONDS: "900"  # In-process cache lifetime (seconds) for both search results and fetched pages. 15 min default.
+TOOLS_CACHE_MAX_ENTRIES: "256"  # Max entries per cache (search cache and fetch cache each get their own instance of this limit) before oldest entries are evicted.

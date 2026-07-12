@@ -1,5 +1,5 @@
 """
-core/toolkit/organize.py
+toolkit/organize.py
 
 Schedule and reminder tools.
 

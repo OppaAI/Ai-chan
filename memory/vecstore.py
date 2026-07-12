@@ -1,25 +1,153 @@
 """
-memory/memorybank.py
+memory/vecstore.py
 
-Shared database helpers for Aiko's local RAG stores.
+Shared database helpers and text embedder for Aiko's local RAG stores.
 
 Memory, learned knowledge, and experience all use local SQLite/sqlite-vec
 stores, optionally encrypted through system.secure. Keep common connection,
 schema, FTS query, and ranking helpers here so store modules own their domain
 schemas/queries but not repeated database bootstrap code.
+
+The HarrierEmbedder class provides HTTP-based text embeddings via llama-server.
 """
 from __future__ import annotations
 
 import os
 import re
 import sqlite3
+import struct
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator, Iterable
+
+import numpy as np
+import requests
 
 from system.secure import connect_sqlite
 from system.userspace import current_user_id, user_state_path
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Embedder
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_EMBED_BASE_URL   = os.getenv("EMBED_BASE_URL", "http://127.0.0.1:8080")
+_EMBED_MODEL      = os.getenv("EMBED_MODEL", "harrier")
+_EMBED_DIMS       = int(os.getenv("EMBED_DIMS", "640"))
+_BATCH_SIZE       = int(os.getenv("EMBED_BATCH_SIZE", "32"))
+_EMBED_TIMEOUT    = float(os.getenv("EMBED_TIMEOUT_S", "30"))
+_QUERY_INSTRUCT   = os.getenv(
+    "EMBED_QUERY_INSTRUCT",
+    "Retrieve relevant memories that answer the query",
+)
+
+
+class HarrierEmbedder:
+    """
+    HTTP-based text embedder for harrier-oss-v1-270m via llama-server.
+
+    Talks to a running llama-server instance (started with ``embedding = true``,
+    ``pooling-type = last``) over its /embedding endpoint. Connection is lazy —
+    the first call just hits the HTTP endpoint, no local model loading happens
+    in this process.
+    """
+
+    def __init__(
+        self,
+        base_url: str   = _EMBED_BASE_URL,
+        model: str      = _EMBED_MODEL,
+        dims: int       = _EMBED_DIMS,
+        batch_size: int = _BATCH_SIZE,
+        timeout: float  = _EMBED_TIMEOUT,
+    ) -> None:
+        self.base_url   = base_url.rstrip("/")
+        self.model      = model
+        self.dims       = dims
+        self.batch_size = batch_size
+        self.timeout    = timeout
+        self._session   = requests.Session()
+
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=requests.adapters.Retry(
+                total=2,
+                connect=2,
+                read=2,
+                backoff_factor=0.2,
+                status_forcelist=[502, 503, 504],
+                allowed_methods=frozenset(["GET", "POST"]),
+            ),
+        )
+        self._session.mount("http://", adapter)
+        self._session.mount("https://", adapter)
+
+    def _embed_texts(self, texts: list[str]) -> np.ndarray:
+        """
+        Embed a list of raw texts via llama-server's /embedding endpoint.
+        Returns np.ndarray of shape (len(texts), dims), L2-normalised.
+        """
+        resp = self._session.post(
+            f"{self.base_url}/embedding",
+            json={"model": self.model, "content": texts},
+            timeout=self.timeout,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        vecs = []
+        for item in data:
+            emb = item["embedding"]
+            if isinstance(emb[0], list):
+                emb = emb[0]
+            vecs.append(emb)
+
+        arr = np.asarray(vecs, dtype=np.float32)
+
+        norms = np.linalg.norm(arr, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        return arr / norms
+
+    def embed(self, texts: Iterable[str]) -> Generator[np.ndarray, None, None]:
+        """Embed documents (no instruction prefix). Yields one np.ndarray(dim,) per text."""
+        texts = list(texts)
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            vecs  = self._embed_texts(batch)
+            for v in vecs:
+                yield v
+
+    def embed_batch(self, texts: list[str]) -> np.ndarray:
+        """Embed documents and return all vectors as np.ndarray (N, dims)."""
+        all_vecs = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            all_vecs.append(self._embed_texts(batch))
+        return np.vstack(all_vecs)
+
+    def embed_query(self, query: str, instruct: str = _QUERY_INSTRUCT) -> np.ndarray:
+        """
+        Embed a single search query with the instruction prefix.
+        Returns np.ndarray(dims,).
+        """
+        prefixed = f"Instruct: {instruct}\nQuery: {query}"
+        return self._embed_texts([prefixed])[0]
+
+    def embed_queries(self, queries: list[str], instruct: str = _QUERY_INSTRUCT) -> np.ndarray:
+        """Embed multiple search queries with the instruction prefix. Returns np.ndarray (N, dims)."""
+        prefixed = [f"Instruct: {instruct}\nQuery: {q}" for q in queries]
+        return self.embed_batch(prefixed)
+
+    @staticmethod
+    def serialize(vector: np.ndarray) -> bytes:
+        """Serialise a float32 vector for sqlite-vec INSERT."""
+        v = vector.astype(np.float32)
+        return struct.pack(f"{len(v)}f", *v)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Database helpers
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def resolve_user_db_path(path_value: str | os.PathLike[str], *, user_id: str | None = None) -> Path:
     """Resolve an absolute or per-user relative database path.
@@ -31,7 +159,6 @@ def resolve_user_db_path(path_value: str | os.PathLike[str], *, user_id: str | N
     if path.is_absolute():
         return path
     return user_state_path(str(path), user_id)
-
 
 
 def connect_sqlite_db(path: str | os.PathLike[str], *, user_id: str | None = None, busy_timeout_ms: int = 5000) -> sqlite3.Connection:
@@ -49,6 +176,7 @@ def initialize_sqlite_db(path: str | os.PathLike[str], ddl: str, *, user_id: str
     conn.executescript(ddl)
     conn.commit()
     return conn
+
 
 def connect_sqlite_vec(path: str | os.PathLike[str], *, user_id: str | None = None, busy_timeout_ms: int = 5000) -> sqlite3.Connection:
     """Open an optionally encrypted SQLite connection with sqlite-vec loaded."""
@@ -81,7 +209,7 @@ _WORD_RE = re.compile(r"[A-Za-z0-9_./:-]+")
 _STOPWORDS = frozenset({
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
     "do", "does", "did", "how", "what", "who", "when", "where", "why",
-    "we", "you", "i", "he", "she", "they", "this", "that", "these",
+    "we", "you", "i", "he", "she", "it", "they", "this", "that", "these",
     "those", "some", "any", "all", "each", "can", "could", "will",
     "would", "should", "shall", "may", "might", "must", "to", "of", "in",
     "on", "at", "for", "with", "and", "or", "not", "no", "yes", "make",
@@ -125,6 +253,7 @@ def fetch_by_ids(conn: sqlite3.Connection, table: str, ids: set[str], *, id_colu
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(f"SELECT * FROM {table} WHERE {id_column} IN ({placeholders})", list(ids)).fetchall()
     return {str(row[id_column]): row for row in rows}
+
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

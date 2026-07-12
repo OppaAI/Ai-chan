@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Lint Aiko's local wiki and skill knowledge files.
+"""util/lint.py
+
+Lint Aiko's local wiki and skill knowledge files.
 
 This is intentionally dependency-free so it can run before the full runtime
 stack is installed. It checks the human-maintained knowledge layer that Aiko

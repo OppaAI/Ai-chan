@@ -1,5 +1,5 @@
 """
-core/memorize.py
+memory/memorize.py
 Aiko's persistent memory — custom backend via sqlite-vec + HarrierEmbedder (GGUF/llama.cpp).
 Abstracts all memory calls so think.py stays clean.
 
@@ -139,14 +139,14 @@ from pathlib import Path
 from typing import Optional
 
 from system import bioclock
-from memory.data_access import initialize_store_db, resolve_user_db_path
+from memory.vecstore import initialize_store_db, resolve_user_db_path
 from system.userspace import current_user_id, user_state_path
 import sqlite_vec
 from openai import OpenAI
 
 from memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
 from system.log import get_logger
-from memory.embed import HarrierEmbedder
+from memory.vecstore import HarrierEmbedder
 
 log = get_logger(__name__)
 

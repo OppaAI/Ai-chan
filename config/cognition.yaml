@@ -1,0 +1,88 @@
+# Think config
+#
+# Settings consumed mostly by core/think.py and shared LLM callers.
+# Tune local OpenAI-compatible model endpoint, token budgets, and sampling behavior here.
+
+# -- Model endpoint --
+LLM_BASE_URL: "http://localhost:8080/v1"  # OpenAI-compatible chat endpoint, usually llama.cpp /v1 URL.
+LLM_MODEL: "qwen"  # Main chat model id/alias; must match the server model name.
+REFLECT_MODEL: "qwen"  # Model used for reflection/consolidation; often same as LLM_MODEL.
+LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
+
+# -- Token budgets --
+LLM_MAX_TOKENS: "280"  # Base max tokens for normal chat replies.
+BASE_PREDICT: "280"  # Legacy alias for LLM_MAX_TOKENS; keep equal unless old scripts need another value.
+CONTEXT_WINDOW_TURNS: "5"  # Number of recent user+assistant turns sent as short-term context.
+REASONING_SCALE: "3"  # Multiplier applied to LLM_MAX_TOKENS for reasoning mode.
+
+# -- Sampling --
+TEMPERATURE: "0.80"  # Creativity/randomness; common range 0.2-1.0, higher is more varied.
+REPEAT_PENALTY: "1.15"  # Penalty for repeated tokens; common range 1.05-1.25.
+REPEAT_LAST_N: "64"  # Token lookback window for repeat penalty; 0 disables on some backends.
+TOP_P: "0.92"  # Nucleus sampling cutoff; common range 0.8-0.95.
+TOP_K: "50"  # Limits next-token choices to top K; common values 40-100, 0 may disable depending backend.
+
+# Agentic config
+#
+# Settings for core/agentic.py plus chat-vs-agent routing used by core/think.py.
+# Use this to tune when Aiko enters tool/task mode and how much work one task may do.
+
+# -- Routing --
+ROUTE_ENABLED: "1"  # Automatic chat-vs-agent routing toggle; options: 1/0, true/false, yes/no, on/off.
+ROUTE_MODE: "semantic"  # Routing strategy; options: semantic, semantic_only, llm, llm_only, chat/off/disabled.
+ROUTE_AGENTIC_THRESHOLD: "0.65"   # Route to agentic if score > this
+ROUTE_WEBCHAT_THRESHOLD: "0.60"   # Route to webchat if score > this (else localchat)
+ROUTE_LABEL_TOP_K: "3"  # Average each label strongest N examples; higher is smoother but less sharp.
+ROUTE_MIN_GAP: "0.025"  # Required score gap between best and second route labels.
+ROUTER_MODEL: "smollm"  # Small model for LLM routing fallback; only used when ROUTE_MODE needs LLM routing.
+
+# Reflect config
+#
+# Settings for core/reflect.py.
+# Controls Hugo/GitHub destination metadata and optional image generation references.
+
+# -- GitHub/Hugo destination --
+REFLECT_BLOG_POST_ENABLED: "1"  # Toggle daily reflection Hugo/GitHub blog posting; 1=post, 0=generate/pin memory only.
+GITHUB_REPO: "OppaAI/aiko-blog"  # Repository for reflection posts, e.g. owner/repo.
+GITHUB_BRANCH: "main"  # Branch to write reflection posts to.
+HUGO_CONTENT_PATH: "content/posts"  # Path inside repo where markdown posts are written.
+HUGO_IMAGES_PATH: "static/images"  # Path inside repo where generated reflection images are written.
+SOUL_PATH: "persona/soul.md"  # Local persona/soul prompt file used by reflection.
+
+# -- Reflection content --
+REFLECT_MAX_MEMS: "100"  # Maximum memory snippets included in a reflection prompt.
+REFLECT_TAGS: "daily-reflection,ai-journal,aiko"  # Comma-separated Hugo front matter tags.
+REFERENCE_IMAGE: "/home/oppa-ai/.aiko/aiko.png"  # Path or URL to Aiko reference image for image generation/reflection.
+USER_REFERENCE_IMAGE: "/home/oppa-ai/.aiko/OppaAI/profile/user.png"  # Path or URL to user reference image for image generation/reflection.
+
+# Settings for Aiko's proactive idle check-ins.
+#
+# These are intentionally conservative: Aiko may gently reach out when the
+# session has been quiet for a while, but she should not spam, interrupt an
+# active turn, or require any WebUI vision/screen feature.
+
+PROACTIVE_ENABLED: "1"  # Set to 0/false/off to disable idle check-ins.
+PROACTIVE_FIRST_IDLE_MIN_SECONDS: "300"  # Earliest first check-in after user activity; 300 = 5 minutes.
+PROACTIVE_FIRST_IDLE_MAX_SECONDS: "900"  # Latest first check-in after user activity; 900 = 15 minutes.
+PROACTIVE_COOLDOWN_SECONDS: "1800"  # Minimum seconds between proactive check-ins.
+PROACTIVE_MAX_PER_HOUR: "2"  # Hard cap for proactive check-ins in a rolling hour.
+PROACTIVE_REST_AFTER_SECONDS: "3600"  # After this much idle time, Aiko sends one rest note then stays quiet.
+PROACTIVE_USE_LLM: "1"  # Use prompt hints below so the LLM can vary the final wording.
+PROACTIVE_TIMEZONE: ""  # Blank inherits TIMEZONE from config/schedule.yaml; set an IANA timezone to override.
+PROACTIVE_QUIET_WINDOWS:
+  - "00:00-06:00"  # Daily quiet hours.
+PROACTIVE_FOCUS_WINDOWS:
+  - "mon-fri 06:00-19:00"  # Work/focus block.
+  - "sat-sun 06:00-11:00"  # Weekend morning focus block.
+PROACTIVE_SPEAK: "1"  # Speak the check-in aloud when TTS is currently enabled.
+PROACTIVE_REST_MESSAGE: "You've been away for a while so I'll go quiet and rest. Ping me when you need me."
+PROACTIVE_PROMPT_HINTS:
+  - "{user} has not spoken to you for a while. What short gentle thing do you want to say now?"
+  - "{user} has been quiet for a while. Offer company without being needy or disruptive."
+  - "{user} may be focused or away. Say one brief check-in and make it easy to ignore."
+PROACTIVE_REST_PROMPT_HINT: "{user} has not spoken to you for about an hour. Say one short warm line that you are going quiet and resting until they return."
+PROACTIVE_MESSAGES:
+  - "You've been quiet for a bit. Still with me?"
+  - "Checking in. Do you want focus time or should I keep you company?"
+  - "Still here. If you're deep in something I can stay quiet."
+  - "Tiny ping. Need anything or are we in quiet mode?"

@@ -1,5 +1,5 @@
 """
-core/toolkit/job_hunt.py
+toolkit/job_hunt.py
 
 Job hunt: query configured scrape-friendly boards, filter by location +
 recency, and return structured postings.

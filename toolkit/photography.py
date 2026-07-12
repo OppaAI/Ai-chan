@@ -1,5 +1,5 @@
 """
-core/toolkit/photography.py
+toolkit/photography.py
 
 Photo-library tools for Aiko's wildlife/nature/astro workflows.
 

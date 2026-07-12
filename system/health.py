@@ -1,5 +1,5 @@
 """
-core/health.py
+system/health.py
 Live hardware and OS telemetry for Aiko-chan's vitals bar.
 
 Provides:

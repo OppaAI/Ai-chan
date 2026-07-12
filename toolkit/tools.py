@@ -1,5 +1,5 @@
 """
-core/tools.py
+toolkit/tools.py
 
 Compatibility facade for Aiko's autonomous toolkit.
 Keep this file even though implementations live in ``core/toolkit``: it gives

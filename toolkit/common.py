@@ -1,5 +1,5 @@
 """
-core/toolkit/common.py
+toolkit/common.py
 
 Shared helpers for Aiko tool modules.
 

@@ -1,5 +1,5 @@
 """
-core/learn.py
+memory/learn.py
 
 Aiko's two research depths, both operating on a topic YOU (or the idle
 learner loop, or the scheduled deep-study window) hand her — neither depth

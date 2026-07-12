@@ -1,5 +1,5 @@
 """
-core/wakeup.py
+system/wakeup.py
 
 Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
 main.py calls AikoWakeup().boot(...) and receives a BootResult with all live
