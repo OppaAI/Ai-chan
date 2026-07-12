@@ -55,7 +55,7 @@ from system.schedule import DueJob, register_system_handler
 from system.userspace import current_user_id, user_profile_path
 from system import bioclock
 from cognition import reason
-from skills import learn
+from memory import learn
 
 log = get_logger(__name__)
 register_system_handler("weekly_social", run_scheduled_weekly_social)

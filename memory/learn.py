@@ -890,7 +890,7 @@ def register_deep_study_handlers(client=None, model=None, timezone: str | None =
     the four recurring jobs that bound it.
 
         # at startup, after core.schedule's ScheduleRunner exists:
-        from skills import learn
+        from memory import learn
         learn.register_deep_study_handlers(client=llm_client, model=llm_model)
 
     This is now called automatically from system.wakeup.AikoWakeup.boot() —

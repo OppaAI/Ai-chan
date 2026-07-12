@@ -181,7 +181,7 @@ class AikoWakeup:
         # "unregistered handler" and silently never fire. Needs AikoThink's
         # LLM client/model, so it can only happen here, after think boots.
         if think_ref[0] is not None:
-            from skills import learn
+            from memory import learn
             learn.register_deep_study_handlers(
                 client=think_ref[0]._client,
                 model=think_ref[0]._llm_model,
