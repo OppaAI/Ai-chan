@@ -39,7 +39,7 @@ from skills.skills import list_skillsets, load_skillset, load_skills, search_ski
 from skills.wiki import wiki_context_for, wiki_knowledge_context_for
 from skills.capability import match_capabilities, filtered_tool_schemas
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
-from memory import experience
+from skills import experience
 from toolkit.tools import (
     deep_search,
     deep_research,
