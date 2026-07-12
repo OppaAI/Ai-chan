@@ -30,7 +30,6 @@ from system.userspace import user_state_dir
 
 DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "skills.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
-_USER_SKILLSETS_PATH = os.getenv("USER_SKILLSETS_PATH") or str(user_state_dir() / "skillsets")
 
 _STOPWORDS = reason.STOPWORDS
 
@@ -55,6 +54,19 @@ class Embedder(Protocol):
 
 _skill_embed_cache: dict[tuple[str, float], np.ndarray] = {}
 _skill_embed_cache_lock = threading.RLock()
+
+def _user_skillsets_path() -> Path:
+    """Resolve the current user's private skillsets folder fresh, per call.
+
+    Must NOT be cached at module-import time — that bakes in whichever
+    user_id happened to be current when skills.py was first imported
+    (almost always "guest", since AikoThink/agentic boot ahead of any real
+    login — same root cause as the persona bug). Resolving here instead
+    means each call sees the real logged-in user's own
+    ~/.aiko/<user_id>/skillsets/ folder.
+    """
+    override = os.getenv("USER_SKILLSETS_PATH")
+    return Path(override) if override else user_state_dir() / "skillsets"
 
 
 def _embed_source_text(doc: "SkillDoc") -> str:
@@ -255,7 +267,7 @@ def _discover_in(root: str | Path) -> list[SkillDoc]:
 def discover_skill_docs() -> list[SkillDoc]:
     """Discover workflow documents from project and user skillsets."""
     docs: list[SkillDoc] = []
-    for root in (SKILL_ROOT / "skillsets", Path(_USER_SKILLSETS_PATH)):
+    for root in (SKILL_ROOT / "skillsets", _user_skillsets_path()):
         docs.extend(_discover_in(root))
     return docs
 

@@ -1047,8 +1047,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     )
 
     agent_system = (
-        f"{owner._persona}\n\n"
-        f"{bioclock.current_datetime_block()}\n\n"
+        f"{owner._current_system_prompt()}\n\n"
+        f"{bioclock.current_datetime_block()}\n\n"        
         f"{agentic_policy_context}\n\n"
         f"{wiki_context}\n\n"
         "[TASK MODE OVERRIDE] The speech style limits in the persona do NOT apply "
@@ -1105,7 +1105,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     ]
     owner.last_prompt_debug = {
         "mode": "agentic",
-        "system_prompt": owner._persona,
+        "system_prompt": owner._current_system_prompt(),
         "memory_prompt": memory_context,
         "web_prompt": "",
         "agentic_prompts": [

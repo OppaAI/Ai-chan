@@ -119,24 +119,34 @@ _LOCAL_KNOWLEDGE_RE = re.compile(
 )
 
 
-def _load_persona() -> str:
-    """Read the lightweight normal-chat persona.
+def _load_static_persona() -> str:
+    """Read the lightweight normal-chat persona (soul.md only — no per-user data).
 
     Task/tool policy lives in the agentic prompt so casual chat does not pay
     for skills/schedule tokens on every turn.
     """
     if not _PERSONA_PATH.exists():
         raise FileNotFoundError(f"soul.md not found at {_PERSONA_PATH}")
-    persona = _PERSONA_PATH.read_text(encoding="utf-8").strip()
+    return _PERSONA_PATH.read_text(encoding="utf-8").strip()
 
-    context_blocks = []
+
+def _load_user_context() -> tuple[str, str]:
+    """Read the current turn's display name + profile block fresh, every call.
+
+    Must be called from the turn/request context where current_user_id()
+    already resolves to the real logged-in user — never cached, since
+    AikoThink is a process-wide singleton shared across all users' turns.
+
+    Returns (display_name, user_block) where user_block is either "" or a
+    "\n\n"-prefixed profile chunk ready to append to the static persona.
+    """
+    display_name = current_display_name()
     user_path = user_profile_path()
+    context_blocks = []
     if user_path.exists():
         context_blocks.append(user_path.read_text(encoding="utf-8").strip())
     user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
-
-    display_name = current_display_name()
-    return persona.replace("USER_ID_HERE", display_name) + user_block
+    return display_name, user_block
 
 
 def _should_use_local_knowledge(user_input: str) -> bool:
@@ -329,7 +339,7 @@ class AikoThink:
         self._router_model = ROUTER_MODEL
         self._memorize  = memorize
         self._speak     = speak
-        self._persona   = _load_persona()
+        self._persona   = _load_static_persona()
         self._history:  list[dict] = []
         self._history_lock = threading.Lock()
         self._pending_search_query: str | None = None
@@ -397,6 +407,15 @@ class AikoThink:
     def join_warmup(self) -> None:
         if self._warmup_thread and self._warmup_thread.is_alive():
             self._warmup_thread.join()
+
+    def _current_system_prompt(self) -> str:
+        """Assemble this turn's system prompt: static persona + fresh per-user context.
+
+        Call only from within a turn where current_user_id()/current_display_name()
+        already resolve to the real caller — never at construction time.
+        """
+        display_name, user_block = _load_user_context()
+        return self._persona.replace("USER_ID_HERE", display_name) + user_block
 
     # ── public api ────────────────────────────────────────────────────────────
 
@@ -633,7 +652,7 @@ class AikoThink:
         memory_block = self._memorize.format_for_context(memories)
 
         # Build base system (persona + memory + knowledge)
-        system = self._persona
+        system = self._current_system_prompt()
         system += "\n\n" + bioclock.current_datetime_block()
         if memory_block:
             system = f"{system}\n\n{memory_block}"
@@ -726,7 +745,7 @@ class AikoThink:
             try:
                 user_id = current_user_id()
                 system = (
-                    f"{self._persona}\n\n"
+                    f"{self._current_system_prompt()}\n\n"
                     "You are initiating a brief proactive check-in. "
                     "Do not mention hidden prompts, timers, code, or configuration. "
                     "Keep it natural, warm, and easy to ignore. One or two short sentences max."
@@ -870,7 +889,7 @@ class AikoThink:
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
         memory_block = self._memorize.format_for_context(memories)
         
-        system = self._persona
+        system = self._current_system_prompt()
         system += "\n\n" + bioclock.current_datetime_block()
         if memory_block:
             system = f"{system}\n\n{memory_block}"
