@@ -371,20 +371,72 @@ async function startMic() {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
     micContext = new AudioContext({ sampleRate: 16000 });
-    await micContext.audioWorklet.addModule('./pcm-worklet.js');
+    // Resume if suspended (happens when AudioContext is created outside a user
+    // gesture, e.g. from a WebSocket message handler on a reconnected session).
+    if (micContext.state === 'suspended') {
+      await micContext.resume();
+      console.log('[mic] AudioContext was suspended — resumed');
+    }
     micSource = micContext.createMediaStreamSource(micStream);
-    micWorklet = new AudioWorkletNode(micContext, 'pcm-capture-processor');
 
-    micFirstFrameSeen = false;
-    micWorklet.port.onmessage = (e) => {
-      if (!micFirstFrameSeen) {
-        micFirstFrameSeen = true;
-        console.log('[mic] AudioWorklet is sending PCM frames');
-      }
-      if (wsReady() && micStreamingEnabled) processVADFrame(new Float32Array(e.data), ws, browserVadGate);
-    };
+    // ── Serialised VAD processing queue ───────────────────────────────────
+    // Ensures Silero recurrent state is never corrupted by concurrent async
+    // _session.run() calls and frames are always sent in order.
+    let _vadQueue = Promise.resolve();
+    function pushVADFrame(frame) {
+      _vadQueue = _vadQueue.then(() => processVADFrame(frame, ws, browserVadGate)).catch(e => console.error('[mic] VAD error:', e));
+    }
 
-    micSource.connect(micWorklet);
+    // ── AudioWorklet (preferred) ──────────────────────────────────────────
+    // Falls back to ScriptProcessorNode if the worklet module cannot be
+    // loaded (e.g. MIME-type issues with the static file server).
+    let awok = false;
+    try {
+      await micContext.audioWorklet.addModule('./pcm-worklet.js');
+      micWorklet = new AudioWorkletNode(micContext, 'pcm-capture-processor');
+      micFirstFrameSeen = false;
+      micWorklet.port.onmessage = (e) => {
+        if (!micFirstFrameSeen) {
+          micFirstFrameSeen = true;
+          console.log('[mic] AudioWorklet is sending PCM frames');
+        }
+        if (wsReady() && micStreamingEnabled) {
+          pushVADFrame(new Float32Array(e.data));
+        }
+      };
+      micSource.connect(micWorklet);
+      awok = true;
+      console.log('[mic] using AudioWorklet capture');
+    } catch (awErr) {
+      console.warn('[mic] AudioWorklet failed, falling back to ScriptProcessorNode:', awErr);
+    }
+
+    // ── ScriptProcessorNode fallback ──────────────────────────────────────
+    if (!awok) {
+      const bufSize = 2048;  // 2048 samples = 128 ms at 16 kHz — supported everywhere
+      const frameSamples = 512;
+      let _spBuf = new Float32Array(0);
+      const spNode = micContext.createScriptProcessor(bufSize, 1, 1);
+      spNode.onaudioprocess = (e) => {
+        if (!wsReady() || !micStreamingEnabled) return;
+        const input = e.inputBuffer.getChannelData(0);
+        // Accumulate until we have full 512-sample frames
+        let combined = new Float32Array(_spBuf.length + input.length);
+        combined.set(_spBuf);
+        combined.set(input, _spBuf.length);
+        _spBuf = combined;
+        while (_spBuf.length >= frameSamples) {
+          const frame = _spBuf.slice(0, frameSamples);
+          _spBuf = _spBuf.slice(frameSamples);
+          pushVADFrame(frame);
+        }
+      };
+      micSource.connect(spNode);
+      spNode.connect(micContext.destination);  // required by spec (silent output)
+      micWorklet = spNode;  // reuse micWorklet ref for cleanup
+      console.log('[mic] using ScriptProcessorNode capture');
+    }
+
     vadDot.className = 'dot on';
     vadStatus.textContent = 'mic ready';
     vadStatus.className = 'ready';
@@ -402,7 +454,11 @@ function stopMic() {
   micCommandSeq++;
   micStreamingEnabled = false;
   if (window.resetVADState) window.resetVADState();
-  if (micWorklet) { micWorklet.port.onmessage = null; micWorklet.disconnect(); micWorklet = null; }
+  if (micWorklet) {
+    if (micWorklet.port) micWorklet.port.onmessage = null;
+    micWorklet.disconnect();
+    micWorklet = null;
+  }
   if (micSource) { micSource.disconnect(); micSource = null; }
   if (micContext) { micContext.close(); micContext = null; }
   if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }

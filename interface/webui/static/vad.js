@@ -24,9 +24,13 @@ const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
 
 // Energy fallback tunables. Conservative enough to avoid streaming normal room
 // tone, but intentionally simple so missing optional assets do not break input.
-const ENERGY_START_RMS = 0.018;
-const ENERGY_END_RMS = 0.010;
-const ENERGY_MIN_FRAMES = 3;
+// NOTE: If you find voice input never transcribes (mic blinks, says "listening"
+// but nothing happens), lower these thresholds. ENERGY_START_RMS=0.018 works for
+// loud speech close to the mic; quieter voices or distant mics may need 0.008.
+// Check the browser console (F12) for "[vad]" RMS logs.
+const ENERGY_START_RMS = 0.008;
+const ENERGY_END_RMS = 0.005;
+const ENERGY_MIN_FRAMES = 2;
 
 // -- state --------------------------------------------------------------------
 
@@ -126,6 +130,11 @@ async function processVADFrame(frame, ws, gate = true) {
     _state = out.stateN;
     const prob = out.output.data[0];
 
+    // periodic probability log (every ~64 frames ≈ 2s at 32ms/frame)
+    if (Math.floor(Math.random() * 64) === 0) {
+        console.log(`[vad] silero prob=${prob.toFixed(3)}  threshold=${VAD_THRESHOLD}  speaking=${_speaking}`);
+    }
+
     if (!gate) {
         ws.send(frame.buffer.slice(0));
     }
@@ -179,6 +188,11 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
         ws.send(frame.buffer.slice(0));
     }
     const rms = _rms(frame);
+
+    // Log RMS periodically for diagnostics (every ~64 frames ≈ 2s at 32ms/frame)
+    if (Math.floor(Math.random() * 64) === 0) {
+        console.log(`[vad] energy RMS=${rms.toFixed(5)}  start≥${ENERGY_START_RMS}  end≤${ENERGY_END_RMS}  speaking=${_speaking}`);
+    }
 
     if (!_speaking && rms >= ENERGY_START_RMS) {
         _energyHits++;
