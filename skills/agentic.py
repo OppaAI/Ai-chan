@@ -118,6 +118,27 @@ _AGENTIC_POLICY_CHUNK_MIN_SCORE = float(os.getenv("AGENTIC_POLICY_CHUNK_MIN_SCOR
 _AGENTIC_POLICY_MAX_CHARS = int(os.getenv("AGENTIC_POLICY_MAX_CHARS", "3000"))
 _AGENTIC_POLICY_INSTRUCT = "Which policy guidance applies to this task?"
 
+# Per-file mtime-keyed cache so skills.md/schedule.md are not re-read from
+# disk on every agentic turn.  File unchanged → same mtime → cache hit.
+# File edited → mtime changes → cache miss → re-read.
+_policy_file_cache: dict[str, dict] = {}  # path -> {"content": str, "mtime": float}
+
+
+def _cached_read_policy(path: Path) -> str:
+    """Read a policy file, cached by mtime.  One stat() call on cache check,
+    zero I/O on hit."""
+    path_str = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return ""
+    cached = _policy_file_cache.get(path_str)
+    if cached is not None and cached["mtime"] == mtime:
+        return cached["content"]
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    _policy_file_cache[path_str] = {"content": content, "mtime": mtime}
+    return content
+
 
 def _agentic_policy_context(user_input: str, embedder=None) -> str:
     """Load only the task policy excerpts relevant to this request, instead
@@ -127,7 +148,7 @@ def _agentic_policy_context(user_input: str, embedder=None) -> str:
     for path in _AGENTIC_POLICY_PATHS:
         if remaining <= 0:
             break
-        text = load_skills(path).strip()
+        text = _cached_read_policy(path).strip()
         if not text:
             continue
         pieces = reason.chunk_text(text, _AGENTIC_POLICY_CHUNK_CHARS)
@@ -225,11 +246,10 @@ def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
     # scoring it here too is a wasted embedding call whose result
     # _enforce_agentic_context_budget never reads (it only consumes the 5
     # budget-block keys: wiki, knowledge, experience, agentic_policy, skill).
-    scores = {
-        key: reason.block_relevance_score(embedder, user_input, text)
-        for key, text in results.items()
-        if key != "wiki_knowledge"
-    }
+    score_keys = [k for k in results if k != "wiki_knowledge"]
+    score_texts = [results[k] for k in score_keys]
+    score_values = reason.batch_block_relevance_scores(embedder, user_input, score_texts)
+    scores = dict(zip(score_keys, score_values))
     results["_scores"] = scores
     return results
 
@@ -260,11 +280,13 @@ def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT
     n = len(candidates)
     embedder = _owner_embedder(owner)
 
+    history_texts = [u_msg["content"] for u_msg, _ in candidates]
+    relevance_scores = reason.batch_block_relevance_scores(embedder, user_input, history_texts)
     scored = []
     for idx, (u_msg, a_msg) in enumerate(candidates):
         turns_ago = n - 1 - idx
         recency_weight = 0.5 ** (turns_ago / AGENT_HISTORY_RECENCY_HALFLIFE)
-        relevance = reason.block_relevance_score(embedder, user_input, u_msg["content"])
+        relevance = relevance_scores[idx]
         scored.append((0.5 * recency_weight + 0.5 * relevance, idx))
 
     keep_idx = set(range(max(0, n - AGENT_HISTORY_ALWAYS_KEEP_RECENT), n))  # continuity floor
@@ -1016,7 +1038,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     skill_context = agentic_ctx["skill"]
     experience_context = agentic_ctx["experience"]
     knowledge_context = f'{agentic_ctx["wiki_knowledge"]}\n\n{knowledge_block}'
-    scores["knowledge"] = reason.block_relevance_score(_embedder, user_input, knowledge_context)
+    scores["knowledge"] = reason.batch_block_relevance_scores(_embedder, user_input, [knowledge_context])[0]
 
     wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,

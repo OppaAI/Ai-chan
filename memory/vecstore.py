@@ -16,6 +16,9 @@ import os
 import re
 import sqlite3
 import struct
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Generator, Iterable
 
@@ -50,7 +53,15 @@ class HarrierEmbedder:
     ``pooling-type = last``) over its /embedding endpoint. Connection is lazy —
     the first call just hits the HTTP endpoint, no local model loading happens
     in this process.
+
+    Includes a small TTL-based LRU cache on _embed_texts so that repeated
+    calls with the same texts (e.g. the same user query embedded by routing,
+    memory search, and knowledge search in a single turn) skip the HTTP
+    round-trip.
     """
+
+    _CACHE_MAX: int = 32
+    _CACHE_TTL: float = 3.0  # seconds
 
     def __init__(
         self,
@@ -66,6 +77,8 @@ class HarrierEmbedder:
         self.batch_size = batch_size
         self.timeout    = timeout
         self._session   = requests.Session()
+        self._cache: OrderedDict[tuple[str, ...], tuple[float, np.ndarray]] = OrderedDict()
+        self._cache_lock = threading.Lock()
 
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=10,
@@ -86,7 +99,19 @@ class HarrierEmbedder:
         """
         Embed a list of raw texts via llama-server's /embedding endpoint.
         Returns np.ndarray of shape (len(texts), dims), L2-normalised.
+
+        Results are cached in a small TTL-based LRU cache keyed by the tuple
+        of input texts, so duplicate calls within _CACHE_TTL seconds skip the
+        HTTP round-trip.
         """
+        key = tuple(texts)
+        now = time.monotonic()
+        with self._cache_lock:
+            cached = self._cache.get(key)
+            if cached is not None and now - cached[0] <= self._CACHE_TTL:
+                self._cache.move_to_end(key)
+                return cached[1]
+
         resp = self._session.post(
             f"{self.base_url}/embedding",
             json={"model": self.model, "content": texts},
@@ -106,7 +131,14 @@ class HarrierEmbedder:
 
         norms = np.linalg.norm(arr, axis=1, keepdims=True)
         norms = np.where(norms == 0, 1.0, norms)
-        return arr / norms
+        result = arr / norms
+
+        with self._cache_lock:
+            self._cache[key] = (now, result)
+            while len(self._cache) > self._CACHE_MAX:
+                self._cache.popitem(last=False)
+
+        return result
 
     def embed(self, texts: Iterable[str]) -> Generator[np.ndarray, None, None]:
         """Embed documents (no instruction prefix). Yields one np.ndarray(dim,) per text."""

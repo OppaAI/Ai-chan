@@ -19,9 +19,12 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import threading
+import time
 import uuid
 import zipfile
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from html import escape
 from pathlib import Path
 from typing import Iterable, Protocol
@@ -52,6 +55,61 @@ KNOWLEDGE_QUERY_INSTRUCT = os.getenv(
 ).strip()
 KNOWLEDGE_WORKSPACE_DIR = os.getenv("KNOWLEDGE_WORKSPACE_DIR", "library").strip().strip("/") or "library"
 
+# ── search cache (mirrors memory/memorize.py's pattern) ─────────────────────
+
+_KNOWLEDGE_SEARCH_CACHE: OrderedDict[
+    tuple[str, str, int], tuple[float, list[dict]]
+] = OrderedDict()
+_KNOWLEDGE_SEARCH_CACHE_LOCK = threading.RLock()
+_KNOWLEDGE_SEARCH_CACHE_TTL: float = 20.0
+_KNOWLEDGE_SEARCH_CACHE_MAX: int = 128
+
+_LAST_KNOWLEDGE_CLEAR_TIME: float = 0.0
+_KNOWLEDGE_MIN_CLEAR_INTERVAL: float = 0.5  # seconds — debounce window
+
+
+def _cache_key(query: str, user_id: str, limit: int) -> tuple[str, str, int]:
+    return (user_id, " ".join((query or "").lower().split()), limit)
+
+
+def _search_cache_get(query: str, user_id: str, limit: int) -> list[dict] | None:
+    key = _cache_key(query, user_id, limit)
+    now = time.monotonic()
+    with _KNOWLEDGE_SEARCH_CACHE_LOCK:
+        cached = _KNOWLEDGE_SEARCH_CACHE.get(key)
+        if cached is not None and now - cached[0] <= _KNOWLEDGE_SEARCH_CACHE_TTL:
+            _KNOWLEDGE_SEARCH_CACHE.move_to_end(key)
+            return [dict(r) for r in cached[1]]
+        if cached:
+            _KNOWLEDGE_SEARCH_CACHE.pop(key, None)
+    return None
+
+
+def _search_cache_set(query: str, user_id: str, limit: int, results: list[dict]) -> None:
+    key = _cache_key(query, user_id, limit)
+    now = time.monotonic()
+    with _KNOWLEDGE_SEARCH_CACHE_LOCK:
+        _KNOWLEDGE_SEARCH_CACHE[key] = (now, [dict(r) for r in results])
+        while len(_KNOWLEDGE_SEARCH_CACHE) > _KNOWLEDGE_SEARCH_CACHE_MAX:
+            _KNOWLEDGE_SEARCH_CACHE.popitem(last=False)
+
+
+def _maybe_clear_knowledge_cache() -> None:
+    """Time-debounced invalidation: clear the cache on write, but only if
+    at least _KNOWLEDGE_MIN_CLEAR_INTERVAL has elapsed since the last clear.
+
+    Knowledge writes are rare (learn/research pipeline). After a write, the
+    user is likely to ask about what was just taught — the debounce ensures
+    the next read always sees fresh data at human-paced gaps, while batch
+    writes within the same window (multiple chunks from one source) keep the
+    cache warm.
+    """
+    global _LAST_KNOWLEDGE_CLEAR_TIME
+    now = time.monotonic()
+    if now - _LAST_KNOWLEDGE_CLEAR_TIME >= _KNOWLEDGE_MIN_CLEAR_INTERVAL:
+        with _KNOWLEDGE_SEARCH_CACHE_LOCK:
+            _KNOWLEDGE_SEARCH_CACHE.clear()
+        _LAST_KNOWLEDGE_CLEAR_TIME = now
 
 
 class Embedder(Protocol):
@@ -290,6 +348,7 @@ def ingest_text(
             if vectors:
                 insert_vector(conn, "learned_chunks_vec", chunk_id, vectors[index])
         conn.commit()
+        _maybe_clear_knowledge_cache()
         return doc_id
     except Exception as exc:
         conn.rollback()
@@ -414,8 +473,15 @@ def knowledge_context_for(
     limit: int = 5,
     max_chars: int | None = None,
     embedder: Embedder | None = None,
+    user_id: str | None = None,
 ) -> str:
-    hits = search_knowledge(query, limit=limit, embedder=embedder)
+    uid = user_id or current_user_id()
+    cached = _search_cache_get(query, uid, limit)
+    if cached is not None:
+        hits = cached
+    else:
+        hits = search_knowledge(query, limit=limit, embedder=embedder, user_id=uid)
+        _search_cache_set(query, uid, limit, hits)
     if not hits:
         return "<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"
     remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
