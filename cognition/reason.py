@@ -68,6 +68,33 @@ def block_relevance_score(embedder, query: str, text: str, instruct: str | None 
     return cosine_similarity(q_vec, b_vec)
 
 
+def batch_block_relevance_scores(
+    embedder, query: str, texts: list[str], instruct: str | None = None,
+) -> list[float]:
+    """Score multiple context blocks against one query in a single batch
+    embedding call. Embeds the query once and all texts in one batch,
+    then returns a list of cosine scores (same order as `texts`).
+
+    Uses embed_queries when available (batched HTTP) instead of N
+    individual embed_query calls, cutting per-block latency from 2 HTTP
+    round-trips to 2 total.
+    """
+    if embedder is None or not query or not texts:
+        return [0.0] * len(texts) if texts else []
+    try:
+        truncated = [t[:1500] for t in texts]
+        all_texts = [query] + truncated
+        batch = embedder.embed_queries(all_texts, instruct=instruct)
+        if batch is None or len(batch) != len(all_texts):
+            return [block_relevance_score(embedder, query, t, instruct=instruct) for t in texts]
+        q_vec = np.asarray(batch[0], dtype=np.float32)
+        b_vecs = np.asarray(batch[1:], dtype=np.float32)
+        scores = batch_cosine_scores(q_vec, b_vecs)
+        return [float(s) for s in scores]
+    except Exception:
+        return [block_relevance_score(embedder, query, t, instruct=instruct) for t in texts]
+
+
 def normalize_rows(matrix: np.ndarray) -> np.ndarray:
     """L2-normalize each row of a 2D array; zero rows are left untouched
     (dividing by 1.0 instead of 0) so a degenerate embedding doesn't NaN

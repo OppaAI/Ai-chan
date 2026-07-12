@@ -101,6 +101,7 @@ _ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
 _ROUTE_INSTRUCT_BINARY = "Does this message ask someone to perform a task or action, or is it just conversation?"
 _ROUTE_INSTRUCT_TOOL   = "This is an autonomous task request. Which work steps are likely needed?"
 _ROUTE_INSTRUCT_SEARCH = "Does answering this require looking up current or external data?"
+_ROUTE_INSTRUCT_TERNARY = "What kind of task or question is this?"  # used by route() for ternary intent routing
 
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
@@ -512,7 +513,7 @@ class AikoThink:
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "disabled"}:
             return "localchat"
     
-        instruct = "What kind of task or question is this?"
+        instruct = _ROUTE_INSTRUCT_TERNARY
         embedder = self._memorize._mem._embedder
         query_vec = embedder.embed_query(user_input, instruct=instruct)
         labels, example_vecs = self._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, instruct)

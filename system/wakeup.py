@@ -69,10 +69,14 @@ def _prewarm_semantic_cache(think) -> None:
         _ROUTE_INSTRUCT_BINARY,
         _ROUTE_INSTRUCT_SEARCH,
         _ROUTE_INSTRUCT_TOOL,
+        _ROUTE_INSTRUCT_TERNARY,
         _ROUTE_TOOL_EXAMPLES,
     )
     try:
-        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
+        # Prewarm the exact cache entries that route() and agentic context
+        # builder will actually hit, so the first turn doesn't pay embed
+        # latency for static exemplars.
+        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)
         think._semantic_example_vectors(_ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
         log.info("[wakeup] Semantic exemplar cache warmed")
     except Exception as e:

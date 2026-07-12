@@ -1144,6 +1144,14 @@ class AikoMemorize:
         self._write_worker = threading.Thread(target=self._write_loop, daemon=True)
         self._write_worker.start()
 
+        # Time-debounced search cache invalidation: on write, only clear the
+        # cache if at least MIN_CLEAR_INTERVAL has elapsed since the last
+        # clear.  Normal conversation (one write per turn, seconds apart)
+        # always sees fresh data.  Rapid-fire writes within the same
+        # debounce window (e.g. bulk import, batch writes) keep the cache
+        # warm — the only acceptable staleness case.
+        self._last_cache_clear_time: float = 0.0
+
         if not silent:
             log.info("Ready.")
 
@@ -1160,7 +1168,7 @@ class AikoMemorize:
             ids     = self._mem.add(messages, user_id=user_id)
             elapsed = time.perf_counter() - t
             if ids:
-                self._clear_search_cache()
+                self._maybe_clear_search_cache()
                 log.info(f"Saved {len(ids)} memories in {elapsed:.2f}s")
             else:
                 log.debug(f"No facts extracted ({elapsed:.2f}s) — nothing saved.")
@@ -1396,9 +1404,25 @@ class AikoMemorize:
         except Exception as e:
             log.warning(f"Access tracking failed for {mem_ids}: {e}")
 
+    MIN_CLEAR_INTERVAL: float = 0.5  # seconds — debounce window for cache invalidation
+
     def _clear_search_cache(self) -> None:
         with self._search_cache_lock:
             self._search_cache.clear()
+
+    def _maybe_clear_search_cache(self) -> None:
+        """Time-debounced cache clearing — invalidate on write, but only if
+        at least MIN_CLEAR_INTERVAL has elapsed since the last clear.
+
+        Normal-paced conversation (one write per turn, seconds between them)
+        always sees fresh data.  Rapid writes within the same debounce window
+        (bulk import, batch writes) keep the cache warm instead of cold-starting
+        on every single write — the only acceptable staleness window.
+        """
+        now = time.monotonic()
+        if now - self._last_cache_clear_time >= self.MIN_CLEAR_INTERVAL:
+            self._clear_search_cache()
+            self._last_cache_clear_time = now
 
     def format_for_context(self, memories: list[dict]) -> Optional[str]:
         """
@@ -1804,7 +1828,7 @@ class AikoMemorize:
         user_id = _default_user_id(user_id)
         mem_id = self._mem.add_raw(memory, user_id=user_id, pinned=pinned)
         if mem_id:
-            self._clear_search_cache()
+            self._maybe_clear_search_cache()
         return mem_id
 
     def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
