@@ -42,6 +42,8 @@ from system.userspace import reset_current_user_id, set_current_user_id
 load_config()
 from websockets.server import serve as ws_serve
 
+from system import bioclock 
+
 log = logging.getLogger(__name__)
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -258,7 +260,7 @@ class AikoWeb:
             return
 
         session = sessions[session_id]
-        if datetime.now() - session["created_at"] > timedelta(days=30):
+        if bioclock.local_now() - session["created_at"] > timedelta(days=30):
             log.warning("[aiko-web] expired WebSocket session")
             await ws.close(code=1008)
             return
