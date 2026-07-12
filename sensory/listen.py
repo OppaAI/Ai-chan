@@ -22,9 +22,9 @@ Dependencies:
 Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     1. Download a speaker embedding model (.onnx) from
        https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models
-       e.g. 3dspeaker_speech_eres2net_base_sv_en_voxceleb_16k.onnx (~28MB)
+       e.g. 3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx (~28MB)
     2. Set SPEAKER_MODEL_PATH in .env to point at it
-    3. Enroll your voice: python enroll_speaker.py
+    3. Enroll your voice: python -m util.enroll_speak
     4. Set SPEAKER_VERIFY_ENABLED=1 in .env
 """
 import onnxruntime as _ort
@@ -34,6 +34,7 @@ if hasattr(_ort, "set_default_logger_severity"):
 
 from huggingface_hub import hf_hub_download
 from silero_vad import load_silero_vad
+from system.userspace import user_state_path
 import json
 import logging
 import numpy as np
@@ -97,7 +98,7 @@ BARGE_IN_ALWAYS_ON     = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "
 SPEAKER_VERIFY_ENABLED   = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 SPEAKER_MODEL_PATH       = os.getenv("SPEAKER_MODEL_PATH", "")            # path to embedding .onnx
 USER_ID                  = os.getenv("USER_ID", "owner")
-SPEAKER_ENROLL_PATH      = os.path.join("user", f"{USER_ID.lower()}.json")
+SPEAKER_ENROLL_PATH      = str(user_state_path("profile/speaker_enrollment.json"))  # resolves to <USER_STATE_ROOT>/<user_id>/profile/
 SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
 SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 
@@ -228,7 +229,7 @@ class AikoListen:
             model=SPEAKER_MODEL_PATH,
             num_threads=SPEAKER_NUM_THREADS,
             debug=False,
-            provider="cpu",
+            provider=ASR_DEVICE,
         )
         self._speaker_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
 
