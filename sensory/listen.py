@@ -202,6 +202,12 @@ class AikoListen:
         self._warmup_thread = threading.Thread(target=self._warmup, daemon=True)
         self._warmup_thread.start()
 
+    def speaker_enroll_path() -> str:
+        """Resolve fresh at call time — NOT cached at import, since import
+        happens at boot before any user is authenticated (current_user_id()
+        would return 'guest' at that point)."""
+        return str(user_state_path("profile/speaker_enrollment.json"))
+
     def load_speaker_id(self) -> None:
         """
         Load the speaker embedding model + enrolled embedding, if speaker
@@ -218,6 +224,7 @@ class AikoListen:
                 f"is missing or invalid ({SPEAKER_MODEL_PATH!r}); verification disabled."
             )
             return
+            enroll_path = speaker_enroll_path()
         if not os.path.isfile(SPEAKER_ENROLL_PATH):
             logging.getLogger(__name__).warning(
                 f"[listen] SPEAKER_VERIFY_ENABLED=1 but no enrollment found at "
