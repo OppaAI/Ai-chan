@@ -1,6 +1,6 @@
 """
 core/memorize.py
-Aiko's persistent memory — custom backend via sqlite-vec + HarrierEmbedder (ONNX) + llama.cpp.
+Aiko's persistent memory — custom backend via sqlite-vec + HarrierEmbedder (GGUF/llama.cpp).
 Abstracts all memory calls so think.py stays clean.
 
 Memory lifecycle:
@@ -99,7 +99,7 @@ Trivial-input skip:
   always searches normally, regardless of what it starts with.
 
 Custom backend (replaces Qdrant + mem0):
-  - _MemoryBackend handles LLM-based fact extraction, ONNX embeddings (HarrierEmbedder),
+  - _MemoryBackend handles LLM-based fact extraction, GGUF embeddings (HarrierEmbedder),
     and direct sqlite-vec upsert/search/delete/scroll.
   - Extraction prompt is tuned for small models: asks for a JSON array of
     atomic facts, strips <think> blocks for CoT models, skips trivial turns.
@@ -122,7 +122,7 @@ Async write queue:
     caller's turn-tracking state directly.
 
 Dependencies:
-  pip install sqlite-vec onnxruntime tokenizers
+  pip install sqlite-vec llama-cpp-python tokenizers
 """
 import json
 import os
@@ -575,7 +575,7 @@ class _MemoryBackend:
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
-        self._embedder = HarrierEmbedder() if embed_cache else HarrierEmbedder()
+        self._embedder = HarrierEmbedder()
         self._conn = self._connect()
         self._apply_schema()
 
@@ -601,7 +601,7 @@ class _MemoryBackend:
         return list(self._embedder.embed([text]))[0].tolist()
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Embed multiple strings in a single batched ONNX call."""
+        """Embed multiple strings in a single batched GGUF call."""
         return self._embedder.embed_batch(texts).tolist()
 
     # ── extraction ────────────────────────────────────────────────────────────
