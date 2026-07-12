@@ -63,7 +63,7 @@ BOOT_LABELS = {
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-ASR_DEVICE      = os.getenv("ASR_DEVICE", "cpu")       # cpu only for now (no CUDA EP on JP7.2)
+ASR_DEVICE      = os.getenv("ASR_DEVICE", "cpu")       # resolved from config/listen.yaml via load_config()
 ASR_LANGUAGE    = os.getenv("ASR_LANGUAGE", "auto")    # auto, zh, en, ja, ko, yue, nospeech
 ASR_NUM_THREADS = int(os.getenv("ASR_NUM_THREADS", "4"))
 

@@ -8,8 +8,6 @@ SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_i
 EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by core/embed.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.
-EMBED_MODEL_FILE: "model_quantized.onnx"  # ONNX model filename for local custom embedder.
-EMBED_MODEL_DATA_FILE: "model_quantized.onnx_data"  # External ONNX data filename; blank if the model has no sidecar data file.
 EMBED_QUERY_INSTRUCT: "Retrieve relevant memories that answer the query"  # Instruction prefix used for query embeddings; memories/documents stay unprefixed.
 EMBED_BATCH_SIZE: "64"  # Embedding batch size for migration/rebuild scripts; lower if memory pressure is high.
 EMBED_TIMEOUT_S: "30"  # Seconds before embedding HTTP calls time out.

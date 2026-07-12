@@ -51,4 +51,4 @@ name = "pypi"
 url = "https://pypi.org/simple/"
 
 [tool.uv.sources]
-onnxruntime-gpu = { path = "onnxruntime_gpu-1.24.4-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'"}
+onnxruntime-gpu = { path = "/home/oppa-ai/wheels/onnxruntime_gpu-1.27.0-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'"}
