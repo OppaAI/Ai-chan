@@ -1,5 +1,5 @@
 """
-core/databank.py
+memory/memorybank.py
 
 Shared database helpers for Aiko's local RAG stores.
 

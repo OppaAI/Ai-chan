@@ -1,10 +1,10 @@
 ---
-id: kb_governance
-name: Knowledge Base Governance
+id: knowledge_policy
+name: Knowledge Policy
 summary: Rules for separating trusted wiki/skills, learned knowledge, memory, and experience.
 status: active
 owner: human
-related: agentic_workflow, runtime_state
+related: operating_procedure, directory_map
 ---
 # Knowledge Base Governance
 

@@ -11,3 +11,6 @@ SKILL_SEMANTIC_THRESHOLD: "0.35"  # Min cosine similarity for a skill to be cons
 SKILL_CHUNK_CHARS: "600"  # Chunk size (chars) a matched SKILL.md is split into before relevance scoring.
 SKILL_CHUNKS_PER_MATCH: "4"  # Max relevant chunks kept per matched skill doc.
 SKILL_CHUNK_MIN_SCORE: "0.30"  # Min relevance score to keep a chunk; below this the skill falls back to its first chunk.
+
+# -- user skillsets --
+USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <USER_STATE_ROOT>/<user_id>/skillsets/.

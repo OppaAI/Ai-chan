@@ -26,9 +26,11 @@ from typing import Protocol
 import numpy as np
 
 from cognition import reason
+from system.userspace import user_state_dir
 
 DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "persona" / "skills.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
+_USER_SKILLSETS_PATH = os.getenv("USER_SKILLSETS_PATH") or str(user_state_dir() / "skillsets")
 
 _STOPWORDS = reason.STOPWORDS
 
@@ -227,8 +229,7 @@ def _split_csv(value: str) -> tuple[str, ...]:
     return tuple(part.strip() for part in value.split(",") if part.strip())
 
 
-def discover_skill_docs(root: str | Path = SKILL_ROOT) -> list[SkillDoc]:
-    """Discover ``skills/skillsets/<id>.md`` workflow documents."""
+def _discover_in(root: str | Path) -> list[SkillDoc]:
     base = Path(root)
     if not base.exists():
         return []
@@ -248,6 +249,14 @@ def discover_skill_docs(root: str | Path = SKILL_ROOT) -> list[SkillDoc]:
             triggers=_split_csv(meta.get("triggers", "")),
             tools=_split_csv(meta.get("tools", "")),
         ))
+    return docs
+
+
+def discover_skill_docs() -> list[SkillDoc]:
+    """Discover workflow documents from project and user skillsets."""
+    docs: list[SkillDoc] = []
+    for root in (SKILL_ROOT, Path(_USER_SKILLSETS_PATH)):
+        docs.extend(_discover_in(root))
     return docs
 
 

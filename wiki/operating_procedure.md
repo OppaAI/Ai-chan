@@ -1,10 +1,10 @@
 ---
-id: agentic_workflow
-name: Agentic Workflow
+id: operating_procedure
+name: Operating Procedure
 summary: Compact operating rules Aiko retrieves before task-mode tool selection.
 status: active
 owner: human
-related: runtime_state, skills
+related: directory_map, skills
 ---
 # Agentic Workflow
 

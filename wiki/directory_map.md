@@ -1,10 +1,10 @@
 ---
-id: runtime_state
-name: Runtime State
+id: directory_map
+name: Directory Map
 summary: Directory and state-file rules that keep mutable runtime artifacts separate from static config.
 status: active
 owner: human
-related: agentic_workflow, schedule
+related: operating_procedure, schedule
 ---
 # Runtime State
 

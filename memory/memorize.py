@@ -139,7 +139,7 @@ from pathlib import Path
 from typing import Optional
 
 from system import bioclock
-from system.databank import initialize_store_db, resolve_user_db_path
+from memory.data_access import initialize_store_db, resolve_user_db_path
 from system.userspace import current_user_id, user_state_path
 import sqlite_vec
 from openai import OpenAI
