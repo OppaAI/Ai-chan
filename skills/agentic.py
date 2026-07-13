@@ -1101,7 +1101,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             final_text = candidate
             break
 
-        for call in msg.tool_calls:
+        for call_idx, call in enumerate(msg.tool_calls):
             name = call.function.name
             try:
                 args = json.loads(call.function.arguments)
@@ -1186,8 +1186,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "role": "tool", "tool_call_id": call.id,
                     "name": name, "content": "Answer submitted.",
                 })
-                if len(batch) > call_idx + 1:
-                    log.warning("[agentic] final_answer arrived mid-batch; dropping %d remaining tool call(s)", len(batch) - call_idx - 1)
+                if len(msg.tool_calls) > call_idx + 1:
+                    log.warning("[agentic] final_answer arrived mid-batch; dropping %d remaining tool call(s)", len(msg.tool_calls) - call_idx - 1)
                 break
 
             result = execute_tool_with_policy(name, args, state, owner=owner)
