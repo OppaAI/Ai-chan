@@ -2,7 +2,12 @@
 sensory/listen.py
 
 Aiko's speech-to-text input layer.
-  - Captures microphone audio with Silero VAD (neural, energy-independent)
+  - Captures microphone audio; Silero VAD (neural) is the single authoritative
+    speech/silence gate for ALL audio sources, local mic or WebUI.
+  - For the WebUI path, the browser only runs a lightweight energy-RMS gate
+    client-side (see static/vad.js) to decide "loud enough to bother sending" —
+    it is NOT a speech/silence judgment. Silero here is what actually decides
+    what is speech, on every chunk, regardless of source.
   - Transcribes via SenseVoice (sherpa-onnx, int8 ONNX) in a background thread
   - Optionally verifies the speaker against one enrolled voice embedding
     (sherpa-onnx SpeakerEmbeddingExtractor) on the same buffered audio, run
@@ -148,15 +153,16 @@ class AikoListen:
     Microphone capture + SenseVoice ASR transcription (+ optional speaker
     verification against one enrolled voice).
     Uses parec (PulseAudio) for mic capture — no PortAudio/sounddevice.
-    Silero VAD gates recording for robust, noise-resilient speech detection.
+    Silero VAD gates recording for robust, noise-resilient speech detection,
+    for every audio source (local mic and WebUI alike).
 
     When chunk_source is provided (WebUI path), the caller may set
-    vad_presegmented=True to indicate that VAD has already been performed
-    client-side (browser Silero WASM). In that case _record() skips the
-    MIN_SPEECH_CHUNKS gate so short utterances ("yes", "はい") are not
-    silently discarded by the server-side VAD minimum. Server-side VAD
-    scoring still runs to handle any stray silence frames that slip through,
-    but it no longer gates on utterance length.
+    vad_presegmented=True to indicate that the browser has already applied a
+    lightweight energy-RMS gate client-side (see static/vad.js) — this is
+    only a "loud enough to send" filter, not a speech/silence decision. Silero
+    still scores every chunk that arrives via chunk_source; vad_presegmented
+    only changes how the *minimum utterance length* gate is interpreted (see
+    _record() docstring).
 
     Staged init:
         listen = AikoListen()    # no heavy loading
@@ -356,12 +362,12 @@ class AikoListen:
             forwarded to _record(). See _record() docstring. None (default)
             preserves the existing local-mic (parec) behavior.
 
-        vad_presegmented: when True, _record() skips the MIN_SPEECH_CHUNKS
-            length gate. Set by the WebUI path (webui.py) when the browser's
-            client-side Silero VAD has already segmented the utterance — avoids
-            silently discarding short valid replies like "yes" or "はい" that
-            pass the browser VAD but fall under the server-side minimum chunk
-            count. Has no effect when chunk_source is None (local mic path).
+        vad_presegmented: when True, the browser has already applied a
+            lightweight energy-RMS gate (static/vad.js) before forwarding
+            chunks — a "loud enough to send" filter, not a speech decision.
+            Silero still scores every chunk in _record() regardless; this
+            flag only affects how the minimum-utterance-length check is
+            applied. See _record() for details.
         """
         if speak is not None and speak.is_playing():
             _cb(status_callback, "__WAITING__")
@@ -449,7 +455,9 @@ class AikoListen:
         vad_presegmented: bool = False,
     ) -> np.ndarray | None:
         """
-        Capture audio until silence after speech detected.
+        Capture audio until silence after speech detected. Silero VAD scores
+        every chunk here, regardless of source — it is the single
+        authoritative speech/silence gate.
 
         chunk_source: optional callable(bytes_per_chunk) -> bytes | None.
             If None (default), audio is captured locally via parec — this is
@@ -458,15 +466,16 @@ class AikoListen:
             the WebUI to feed mic audio streamed in from the browser over the
             WebSocket. Must return exactly `bytes_per_chunk` bytes of
             float32LE PCM, or None to signal end-of-stream (e.g. the browser
-            VAD sentinel b"" was received, or client disconnected).
+            energy-VAD sentinel b"" was received, or client disconnected).
 
-        vad_presegmented: when True, the MIN_SPEECH_CHUNKS gate is skipped.
-            Browser Silero VAD has already filtered silence — only genuine
-            speech frames arrive via chunk_source. Short utterances that the
-            browser VAD accepted must not be re-rejected here on length alone.
-            Server-side VAD scoring still runs per-chunk so any stray silence
-            frames that slip through are handled correctly; only the final
-            utterance-length gate is bypassed.
+        vad_presegmented: when True, chunks arrived after the browser's
+            client-side energy-RMS gate (static/vad.js) — a coarse "loud
+            enough to send" filter, not a speech/silence decision, so Silero
+            still scores every chunk exactly as it does for the local-mic
+            path. The only thing vad_presegmented changes is downstream
+            bookkeeping is identical to the non-presegmented path now that
+            Silero is genuinely gating — kept as a named parameter for
+            clarity and in case source-specific tuning is needed later.
         """
         audio_chunks   = []
         silence_count  = 0
@@ -491,21 +500,15 @@ class AikoListen:
                     raw = proc.stdout.read(bytes_per_chunk)
 
                 if raw is None or len(raw) < bytes_per_chunk:
-                    # None  → browser VAD end-of-utterance sentinel (b"") or timeout
+                    # None  → browser end-of-utterance sentinel (b"") or timeout
                     # short → parec pipe closed / underrun
                     break
 
                 chunk = np.frombuffer(raw, dtype=np.float32).copy()
 
-                if vad_presegmented and use_external:
-                    # Browser VAD has already decided these frames belong to an
-                    # utterance. Do not re-gate them here, or a client/server
-                    # VAD mismatch can silently discard the whole recording.
-                    hearing_speech = True
-                    speech_count += 1
-                    audio_chunks.append(chunk)
-                    continue
-
+                # Silero scores every chunk from every source — the browser's
+                # energy gate (when vad_presegmented) only decided whether to
+                # forward the chunk at all, not whether it's speech.
                 is_speech = self._score_chunk(chunk) >= VAD_THRESHOLD
 
                 if is_speech:
@@ -536,12 +539,10 @@ class AikoListen:
             return None
 
         # ── utterance length gate ─────────────────────────────────────────────
-        # Skip when vad_presegmented=True: the browser's Silero VAD already
-        # confirmed there was real speech before sending frames. Applying the
-        # server-side minimum chunk count here would silently discard short
-        # but valid utterances ("yes", "はい", single-word commands) that the
-        # client VAD correctly identified as speech.
-        if not vad_presegmented and speech_count < MIN_SPEECH_CHUNKS:
+        # Silero has genuinely scored every chunk regardless of source, so
+        # speech_count reflects real detected speech — no reason to bypass
+        # this for the WebUI path anymore.
+        if speech_count < MIN_SPEECH_CHUNKS:
             return None
 
         return np.concatenate(audio_chunks).astype(np.float32)
