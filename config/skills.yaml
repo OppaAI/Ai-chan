@@ -50,7 +50,8 @@ AGENTIC_POLICY_MAX_CHARS: "3000"  # Hard cap on total policy excerpt chars injec
 
 # -- Verification and retries --
 AGENT_VERIFY_FINAL: "1"  # Final-answer verifier toggle; options: 1/0, true/false, yes/no, on/off.
-AGENT_VERIFY_LLM: "0"  # Use an LLM call for final verification; options: 1/0, true/false, yes/no, on/off.
+AGENT_VERIFY_LLM: "1"  # Use an LLM call for final verification; options: 1/0, true/false, yes/no, on/off.
+AGENT_VERIFY_LLM_MODE: "auto" # Skip LLM when deterministic checks are clean, escalate when they flag something; options "always", "auto", "off"
 AGENT_MAX_FINAL_REPAIRS: "1"  # Max attempts to repair a final answer that fails verification.
 AGENT_VERIFY_MIN_SCORE: "0.70"  # Minimum verifier score when LLM verification is enabled; range 0.0-1.0.
 AGENT_TOOL_RETRY_BACKOFF: "0.2"  # Seconds to wait before retrying a failed tool call.
