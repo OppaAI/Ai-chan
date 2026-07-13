@@ -1,4 +1,4 @@
-# Aiko-chan 愛子ちゃん — Development History
+# Aiko-chan アイコちゃん — Development History
 
 Aiko-chan did not begin as a polished AI companion.
 
