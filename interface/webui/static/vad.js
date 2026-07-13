@@ -1,8 +1,9 @@
 /**
  * vad.js
  * Browser-side VAD between pcm-worklet.js and the WebSocket.
- * Silero ONNX is preferred when its browser assets are present. If ONNX Runtime
- * Web or silero_vad.onnx is missing, this falls back to a simple energy gate.
+ * Energy-gate only. Browser VAD is a coarse "is this worth sending" filter;
+ * the backend runs Silero VAD as the authoritative check on whatever this
+ * forwards (see listen.py _record()).
  *
  * Default flow (browser VAD gate on):
  *   pcm-worklet -> Float32Array frame -> processVADFrame(frame, ws, true)
@@ -12,23 +13,19 @@
  *     on end   -> ws.send({type:'vad', event:'end'})
  *
  * Diagnostic flow (browser VAD gate off):
- *   processVADFrame(frame, ws, false) forwards every PCM frame so server-side VAD
- *   can be used to test whether browser VAD is the failing component.
+ *   processVADFrame(frame, ws, false) forwards every PCM frame so server-side
+ *   VAD can be evaluated in isolation.
  */
 
 // -- tunables -----------------------------------------------------------------
 
-const VAD_THRESHOLD = 0.5;      // Silero speech probability cutoff (0-1)
 const SILENCE_TIMEOUT = 1200;   // ms of silence before utterance ends
 const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
-const SILERO_FALLBACK_FRAMES = 100;  // frames of sub-threshold prob before falling back to energy VAD
 
-// Energy fallback tunables. Conservative enough to avoid streaming normal room
-// tone, but intentionally simple so missing optional assets do not break input.
-// NOTE: If you find voice input never transcribes (mic blinks, says "listening"
-// but nothing happens), lower these thresholds. ENERGY_START_RMS=0.018 works for
-// loud speech close to the mic; quieter voices or distant mics may need 0.008.
-// Check the browser console (F12) for "[vad]" RMS logs.
+// Energy VAD tunables — values below are your tuned optimum. Conservative
+// enough to avoid streaming normal room tone.
+// NOTE: If voice input never transcribes (mic blinks, says "listening" but
+// nothing happens), lower ENERGY_START_RMS. Check console for "[vad]" RMS logs.
 const ENERGY_START_RMS = 0.008;
 const ENERGY_END_RMS = 0.005;
 const ENERGY_MIN_FRAMES = 2;
@@ -38,56 +35,21 @@ let _noiseFloor = 0.015;
 
 // -- state --------------------------------------------------------------------
 
-let _session = null;
-let _state = null;   // combined recurrent state tensor [2, 1, 128] (Silero v4+)
-let _srTensor = null;
-let _vadMode = 'energy';
 let _speaking = false;
 let _silTimer = null;
 let _preBuf = [];     // circular pre-speech context
 let _energyHits = 0;
 let _vadEpoch = 0;
-let _sileroDeadFrames = 0;
 
 // -- init ---------------------------------------------------------------------
 
 /**
- * Load the Silero VAD ONNX model from the same static dir as this script.
- * Returns a small status object used by index.html for the visible VAD label.
+ * No model loading needed for energy VAD — kept as an async function so
+ * callers (index.html) that await initVAD() don't need to change.
  */
 async function initVAD() {
     _resetState();
-
-    if (typeof ort === 'undefined') {
-        console.warn('[vad] ONNX Runtime Web missing; using energy VAD fallback');
-        return { mode: _vadMode, ready: true, fallback: true };
-    }
-
-    // Serve WASM files from the same static dir, not CDN -- works offline/LAN.
-    ort.env.wasm.wasmPaths = './';
-    ort.env.wasm.numThreads = 1;   // single-threaded safer on mobile
-
-    try {
-        // IMPORTANT: onnxruntime-web requires int64 tensor data to be a
-        // BigInt64Array, not a plain JS number array. Passing [16000] here
-        // throws inside this try block, which was silently swallowed by the
-        // catch below and made Silero *look* like it never fired — it never
-        // actually finished loading in the first place.
-        _srTensor = new ort.Tensor('int64', BigInt64Array.from([16000n]), [1]);
-        _session = await ort.InferenceSession.create('./silero_vad.onnx', {
-            executionProviders: ['wasm', 'webgl'],
-        });
-        _vadMode = 'silero';
-        _resetState();
-        console.log('[vad] Silero VAD loaded');
-        return { mode: _vadMode, ready: true, fallback: false };
-    } catch (err) {
-        _session = null;
-        _vadMode = 'energy';
-        _resetState();
-        console.warn('[vad] failed to load Silero model; using energy VAD fallback:', err);
-        return { mode: _vadMode, ready: true, fallback: true };
-    }
+    return { mode: 'energy', ready: true, fallback: false };
 }
 
 function resetVADState() {
@@ -96,12 +58,6 @@ function resetVADState() {
 }
 
 function _resetState() {
-    if (typeof ort !== 'undefined') {
-        const zeros = new Float32Array(2 * 1 * 128);
-        _state = new ort.Tensor('float32', zeros, [2, 1, 128]);
-    } else {
-        _state = null;
-    }
     _preBuf = [];
     _speaking = false;
     _energyHits = 0;
@@ -111,9 +67,9 @@ function _resetState() {
 // -- main entry point ---------------------------------------------------------
 
 /**
- * Process one 512-sample Float32Array frame from pcm-worklet.js.
+ * Process one PCM frame from pcm-worklet.js.
  * Sends binary frames + VAD sentinel JSON messages over `ws`.
- * @param {Float32Array} frame  - 512 samples at 16 kHz mono
+ * @param {Float32Array} frame  - PCM samples at 16 kHz mono
  * @param {WebSocket}    ws     - live WebSocket to Jetson
  * @param {boolean}      gate   - true: browser VAD gates network audio;
  *                                false: diagnostic raw PCM passthrough
@@ -121,101 +77,7 @@ function _resetState() {
 async function processVADFrame(frame, ws, gate = true) {
     const epoch = _vadEpoch;
     if (!_canSend(ws, epoch)) return;
-    if (!_session || _vadMode !== 'silero') {
-        processEnergyVADFrame(frame, ws, epoch, gate);
-        return;
-    }
-
-    const input = new ort.Tensor('float32', frame, [1, frame.length]);
-    let out;
-    try {
-        out = await _session.run({ input, sr: _srTensor, state: _state });
-    } catch (err) {
-        console.error('[vad] inference error:', err);
-        return;
-    }
-
-    if (!_canSend(ws, epoch)) return;
-
-    _state = out.stateN;
-
-    // Debug: log first and every ~64th frame
-    let min = Infinity, max = -Infinity;
-    for (let i = 0; i < frame.length; i++) {
-        const v = frame[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
-    }
-    const rms = _rms(frame);
-    const prob = out.output.data[0];
-    const outputLen = out.output.data.length;
-    const stateShape = JSON.stringify(out.stateN.dims);
-
-    if (window._vadDbgCount === undefined) window._vadDbgCount = 0;
-    window._vadDbgCount++;
-    if (window._vadDbgCount <= 5 || Math.floor(Math.random() * 64) === 0) {
-        console.log(`[vad] silero prob=${prob.toFixed(6)}  RMS=${rms.toFixed(5)}  min=${min.toFixed(4)}  max=${max.toFixed(4)}  outLen=${outputLen}  stateShape=${stateShape}  threshold=${VAD_THRESHOLD}  speaking=${_speaking}`);
-    }
-
-    // Fallback: if Silero never fires after many frames with real audio, switch to energy VAD
-    if (rms > 0.01) _sileroDeadFrames++;
-    else _sileroDeadFrames = Math.max(0, _sileroDeadFrames - 1);
-    if (_sileroDeadFrames > SILERO_FALLBACK_FRAMES && prob < 0.1) {
-        console.warn(`[vad] Silero stuck at prob=${prob.toFixed(3)} after ${_sileroDeadFrames} non-silent frames — falling back to energy VAD`);
-        _vadMode = 'energy';
-        _session = null;
-        if (!gate) {
-            ws.send(frame.buffer.slice(0));
-        }
-        processEnergyVADFrame(frame, ws, epoch, gate);
-        return;
-    }
-
-    if (!gate) {
-        ws.send(frame.buffer.slice(0));
-    }
-
-    if (prob >= VAD_THRESHOLD) {
-        if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
-
-        if (!_speaking) {
-            _speaking = true;
-            if (!_canSend(ws, epoch)) return;
-            ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
-            if (gate) {
-                for (const buf of _preBuf) {
-                    if (!_canSend(ws, epoch)) return;
-                    ws.send(buf);
-                }
-            }
-            _preBuf = [];
-        }
-
-        if (gate) {
-            if (!_canSend(ws, epoch)) return;
-            ws.send(frame.buffer.slice(0));
-        }
-    } else {
-        if (_speaking) {
-            if (gate) {
-                if (!_canSend(ws, epoch)) return;
-                ws.send(frame.buffer.slice(0));
-            }
-
-            if (!_silTimer) {
-                _silTimer = setTimeout(() => {
-                    _silTimer = null;
-                    if (!_canSend(ws, epoch)) return;
-                    _speaking = false;
-                    _resetState();
-                    if (!_canSend(ws, epoch)) return;
-                    ws.send(JSON.stringify({ type: 'vad', event: 'end' }));
-                }, SILENCE_TIMEOUT);
-            }
-        } else if (gate) {
-            _pushPreSpeech(frame);
-        }
-    }
+    processEnergyVADFrame(frame, ws, epoch, gate);
 }
 
 function _calcThresholds() {
