@@ -234,6 +234,7 @@ class AikoThink:
         self._speak_lock = threading.Lock()
         self._persona   = _load_static_persona()
         self._history:  list[dict] = []
+        self._history_lock = threading.Lock()
         # Cache of (labels, embedding_matrix) per (example-corpus-id, instruct)
         # pair — built via reason.embed_example_matrix, which always
         # re-embeds; caching the result here avoids paying that cost on
