@@ -1317,6 +1317,9 @@ def _run_session(ui, args):
         if uid:
             from system.userspace import set_current_user_id
             set_current_user_id(uid)
+            # Also set process-global env so boot threads (which don't inherit
+            # contextvars) can resolve the real user_id via current_user_id().
+            os.environ["AIKO_USER_ID"] = uid
             log.info("First login received (user_id=%s) — starting subsystem boot.", uid)
         else:
             log.warning("wait_for_first_login() returned no uid — proceeding with default identity.")

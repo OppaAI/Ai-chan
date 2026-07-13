@@ -312,7 +312,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         return {"ran": False, "reason": "disabled"}
 
     now = now or bioclock.local_now()
-    user_id = user_id or getattr(memorize, "_user_id", None) or current_user_id()
+    user_id = user_id or (memorize.get_user_id() if memorize else None) or current_user_id()
 
     start, end, month_key = target_month_for(now)
     state = _load_state(user_id)

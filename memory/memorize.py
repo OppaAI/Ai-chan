@@ -732,9 +732,9 @@ class _MemoryBackend:
             log.warning(f"Batch embedding failed, aborting write: {e}")
             return []
 
-        for fact, vector in zip(facts, vectors):
-            mem_id = str(uuid.uuid4())
-            try:
+        try:
+            for fact, vector in zip(facts, vectors):
+                mem_id = str(uuid.uuid4())
                 # dedup check — skip if near-identical vector already exists
                 existing = _sqlite_knn_search(
                     self._conn, vector, user_id,
@@ -760,11 +760,13 @@ class _MemoryBackend:
                     (mem_id, sqlite_vec.serialize_float32(vector)),
                 )
 
-                self._conn.commit()
                 ids.append(mem_id)
-            except Exception as e:
-                log.warning(f"Failed to upsert fact {mem_id!r}: {e}")
-                self._conn.rollback()
+
+            self._conn.commit()
+        except Exception as e:
+            log.warning(f"Failed to upsert fact batch: {e}")
+            self._conn.rollback()
+            return []
 
         return ids
 

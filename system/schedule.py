@@ -578,7 +578,7 @@ class ScheduleRunner:
         self._memorize             = memorize
         self._generate_and_post_fn = generate_and_post_fn
         self._consolidate_fn       = consolidate_fn
-        self._user_id              = user_id or getattr(memorize, "_user_id", None) or current_user_id()
+        self._user_id              = user_id or (memorize.get_user_id() if memorize else None) or current_user_id()
         self._wakeup               = threading.Event()
         self._stop                 = threading.Event()
         self._thread: threading.Thread | None = None

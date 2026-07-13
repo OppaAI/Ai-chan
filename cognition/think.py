@@ -339,14 +339,11 @@ class AikoThink:
         self._router_model = ROUTER_MODEL
         self._memorize  = memorize
         self._speak     = speak
-        # Guards self._speak against the toggle-vs-proactive-thread race:
+        # Guards self._speak against the toggle-vs-background-thread race.
         # set_speak() is called from the main thread (main.py's /voice
-        # toggle), while _proactive_tick/_fire_checkin/_fire_rest_message
-        # read self._speak from the background proactive daemon thread.
-        # Readers should snapshot once via _get_speak() rather than reading
-        # self._speak multiple times in the same tick, so a toggle landing
-        # mid-tick can't produce a check-then-use mismatch (stale ref or
-        # a None where a check just above proved truthy).
+        # toggle). Readers snapshot once via _get_speak() rather than
+        # reading self._speak multiple times, so a toggle landing mid-read
+        # can't produce a stale ref or a None-where-truthy mismatch.
         self._speak_lock = threading.Lock()
         self._persona   = _load_static_persona()
         self._history:  list[dict] = []
@@ -370,35 +367,14 @@ class AikoThink:
         )
         self._idle_learner_thread.start()
 
-        # ── proactive idle check-in state machine ──────────────────────────
-        # See _proactive_tick / is_proactive_resting. Drives config/proactive.yaml
-        # (PROACTIVE_ENABLED etc., module-level above). is_proactive_resting()
-        # is the exact signal core.learn.idle_learner_loop waits on before it
-        # will start an autonomous quick_studying pass, so the two idle
-        # systems never compete for the same idle time.
+        # ── rest-signal state for learn.idle_learner_loop ───────────────────
+        # The proactive idle check-in state machine lives in main.py's
+        # ProactiveIdleRunner. That runner sets this flag via
+        # set_proactive_resting() so learn.idle_learner_loop can see when
+        # Aiko is "resting" and pause autonomous study. The flag is cleared
+        # by _note_user_activity() on every normal turn.
         self._proactive_lock = threading.Lock()
         self._proactive_resting = False
-        self._proactive_last_checkin_time: float | None = None
-        self._proactive_checkin_times: list[float] = []  # rolling 1hr window, for MAX_PER_HOUR
-        self._proactive_next_first_delay = random.uniform(
-            PROACTIVE_FIRST_IDLE_MIN_SECONDS, PROACTIVE_FIRST_IDLE_MAX_SECONDS
-        )
-        self._proactive_thread: threading.Thread | None = None
-        if PROACTIVE_ENABLED:
-            self._proactive_thread = threading.Thread(target=self._proactive_loop, daemon=True)
-            self._proactive_thread.start()
-        else:
-            log.info("[proactive] disabled via PROACTIVE_ENABLED — no idle check-ins will run.")
-
-        # NOTE: this class used to also construct its own ScheduleRunner
-        # here (self._reminders = ScheduleRunner(...); self._reminders.start()).
-        # That has been removed — core.wakeup.AikoWakeup.boot() already
-        # constructs and starts the single app-wide ScheduleRunner (wired to
-        # memorize/reflect/consolidate (now memory/reflect) as well as this instance's
-        # handle_scheduled_job), and register_scheduler() makes it
-        # discoverable to tools. Having two independent ScheduleRunner
-        # threads both reading schedule.json meant every due job — reminders,
-        # weekly_social, and the deep-study window jobs — fired twice.
 
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
         self._warmup_thread.start()
@@ -510,22 +486,23 @@ class AikoThink:
         return self._fetch_memory_and_knowledge(user_input)
 
     def _note_user_activity(self) -> None:
-        """Reset the proactive state machine on real user activity: clear
-        the resting flag (so the idle learner stops treating this as rest
-        time) and re-roll the next first-check-in delay so it's measured
-        from this turn, not whenever the last one happened to be."""
+        """Clear the rest flag on real user activity so learn.idle_learner_loop
+        sees Aiko is no longer resting and can resume autonomous study."""
         with self._proactive_lock:
             self._proactive_resting = False
-            self._proactive_next_first_delay = random.uniform(
-                PROACTIVE_FIRST_IDLE_MIN_SECONDS, PROACTIVE_FIRST_IDLE_MAX_SECONDS
-            )
 
     def is_proactive_resting(self) -> bool:
-        """True once Aiko has sent her PROACTIVE_REST_MESSAGE and gone
-        quiet for this idle stretch. This is the exact signal
-        core.learn.idle_learner_loop polls before starting an autonomous
-        quick_studying pass — see that function's docstring for why."""
+        """True when Aiko is resting and should not start autonomous study.
+        Set by set_proactive_resting() (called from main.py's
+        ProactiveIdleRunner) and cleared by _note_user_activity() on
+        every normal turn. Polled by learn.idle_learner_loop."""
         return self._proactive_resting
+
+    def set_proactive_resting(self, resting: bool) -> None:
+        """Set/clear the rest flag for learn.idle_learner_loop.
+        Called from main.py's ProactiveIdleRunner."""
+        with self._proactive_lock:
+            self._proactive_resting = resting
 
     def _route_intent(self, user_input: str) -> str:
         """Ternary routing: single embedding, three-way decision with a
@@ -772,128 +749,6 @@ class AikoThink:
                 self._active_turn.clear()
 
     # ── proactive idle check-in loop ──────────────────────────────────────────
-
-    def _proactive_loop(self) -> None:
-        """Background daemon loop: wakes every PROACTIVE_CHECK_INTERVAL_SECONDS
-        and decides whether to send a check-in, send the one-time rest note,
-        or do nothing. See _proactive_tick for the actual policy."""
-        while True:
-            time.sleep(PROACTIVE_CHECK_INTERVAL_SECONDS)
-            try:
-                self._proactive_tick()
-            except Exception as e:
-                log.error("[proactive] tick failed: %s", e)
-
-    def _proactive_tick(self) -> None:
-        # Never interrupt an in-progress turn, and never talk over TTS
-        # that's already speaking. Snapshot once (see _get_speak) so a
-        # /voice toggle landing mid-tick can't flip self._speak out from
-        # under this check-then-use.
-        if self._active_turn.is_set():
-            return
-        speak = self._get_speak()
-        if speak and speak.is_playing():
-            return
-
-        idle_seconds = time.time() - self._last_chat_time
-        now_local = bioclock.local_now()
-
-        # Quiet windows suppress check-ins outright, regardless of
-        # cooldowns/counters — these are meant as hard "do not disturb"
-        # hours (e.g. overnight).
-        for window in PROACTIVE_QUIET_WINDOWS:
-            if _window_matches(window, now_local):
-                return
-
-        with self._proactive_lock:
-            # Rest phase: once idle has run long enough, send ONE rest
-            # message and then go fully quiet (is_proactive_resting()
-            # becomes True) until the user speaks again (see
-            # _note_user_activity, called from route()).
-            if idle_seconds >= PROACTIVE_REST_AFTER_SECONDS:
-                if not self._proactive_resting:
-                    self._fire_rest_message()
-                return
-
-            if self._proactive_resting:
-                # Shouldn't normally reach here (resting only flips true
-                # once idle_seconds has already crossed REST_AFTER_SECONDS,
-                # and it's reset the moment the user speaks), but guard
-                # against firing a normal check-in mid-rest regardless.
-                return
-
-            if idle_seconds < self._proactive_next_first_delay:
-                return
-
-            if self._proactive_last_checkin_time is not None:
-                if time.time() - self._proactive_last_checkin_time < PROACTIVE_COOLDOWN_SECONDS:
-                    return
-
-            one_hour_ago = time.time() - 3600
-            self._proactive_checkin_times = [t for t in self._proactive_checkin_times if t >= one_hour_ago]
-            if len(self._proactive_checkin_times) >= PROACTIVE_MAX_PER_HOUR:
-                return
-
-            # Focus windows are the OPPOSITE of quiet windows: if any are
-            # configured, check-ins are only permitted while inside one of
-            # them (e.g. "don't ping outside work/focus hours"). If none
-            # are configured, check-ins are allowed any time outside quiet
-            # windows.
-            if PROACTIVE_FOCUS_WINDOWS:
-                in_focus = any(_window_matches(w, now_local) for w in PROACTIVE_FOCUS_WINDOWS)
-                if not in_focus:
-                    return
-
-            self._fire_checkin()
-
-    def _fire_rest_message(self) -> None:
-        """Send the one-time PROACTIVE_REST_MESSAGE and flip resting=True.
-        Called with self._proactive_lock already held."""
-        user_id = current_user_id()
-        hint = PROACTIVE_REST_PROMPT_HINT.replace("{user}", user_id)
-        message = None
-        if PROACTIVE_USE_LLM:
-            try:
-                message = self.proactive_checkin(hint)
-            except Exception as e:
-                log.warning("[proactive] rest message generation failed: %s", e)
-        if not message:
-            message = PROACTIVE_REST_MESSAGE
-
-        log.info("[proactive] going quiet to rest: %s", message)
-        if PROACTIVE_SPEAK:
-            speak = self._get_speak()
-            if speak:
-                speak.speak(message)
-        self._proactive_resting = True
-
-    def _fire_checkin(self) -> None:
-        """Send one ordinary idle check-in. Called with self._proactive_lock
-        already held."""
-        user_id = current_user_id()
-        message = None
-        try:
-            if PROACTIVE_USE_LLM and PROACTIVE_PROMPT_HINTS:
-                hint = random.choice(PROACTIVE_PROMPT_HINTS).replace("{user}", user_id)
-                message = self.proactive_checkin(hint)
-            elif PROACTIVE_MESSAGES:
-                message = random.choice(PROACTIVE_MESSAGES)
-        except Exception as e:
-            log.warning("[proactive] check-in generation failed: %s", e)
-            message = random.choice(PROACTIVE_MESSAGES) if PROACTIVE_MESSAGES else None
-
-        if not message:
-            return
-
-        log.info("[proactive] check-in: %s", message)
-        if PROACTIVE_SPEAK:
-            speak = self._get_speak()
-            if speak:
-                speak.speak(message)
-
-        now_ts = time.time()
-        self._proactive_last_checkin_time = now_ts
-        self._proactive_checkin_times.append(now_ts)
 
     def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None) -> str:
         """Standard chat: local knowledge only (persona + memory + KB)."""
