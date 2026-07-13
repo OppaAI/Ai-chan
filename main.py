@@ -13,7 +13,7 @@ Usage:
 
 Responsibilities:
     - Parse CLI arguments
-    - Delegate subsystem boot to core/wakeup.py
+    - Delegate subsystem boot to system/wakeup.py
     - Drive the UI init phase and transition to active chat
     - Run the main input → inference → render loop
     - Handle commands (/quit, /reset, /memory, /clear, /remember, /think,
@@ -92,7 +92,6 @@ app.include_router(auth_app.router)
 # ── env ───────────────────────────────────────────────────────────────────────
 
 AI_NAME = os.getenv("AI_NAME", "Aiko")
-USER_ID = os.getenv("USER_ID", "")
 STREAM_DRAW_INTERVAL = float(os.getenv("STREAM_DRAW_INTERVAL", "0.05"))
 LATENCY_LOG_ENABLED = os.getenv("LATENCY_LOG", "1").lower() in {"1", "true", "yes", "on"}
 PROACTIVE_ENABLED = os.getenv("PROACTIVE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
@@ -330,7 +329,7 @@ PROACTIVE_REST_PROMPT_HINT = os.getenv(
 
 def _personalize_proactive_text(text: str) -> str:
     """Fill lightweight proactive placeholders from identity config/env."""
-    user = USER_ID or "the user"
+    user = os.environ.get("USER_ID") or os.environ.get("AIKO_USER_ID") or "the user"
     return (
         text.replace("{user}", user)
         .replace("{USER_ID}", user)
@@ -886,13 +885,13 @@ def _match_voice_command(text: str) -> str | None:
 
 # ── agentic status markers ─────────────────────────────────────────────────────
 #
-# core/think.py streams special "__MARKER__" or "__MARKER__:payload" tokens
+# cognition/think.py streams special "__MARKER__" or "__MARKER__:payload" tokens
 # to surface what Aiko is actually doing mid-turn (searching, calling a tool,
 # reasoning) instead of a generic "thinking" spinner. This maps each marker
 # to an icon + label, and _handle_status_marker() renders it as a 'sys'
 # message rather than letting the raw marker leak into the streamed reply.
 #
-# If core/think.py emits additional marker types, add them here rather than
+# If cognition/think.py emits additional marker types, add them here rather than
 # letting them fall through to ui.stream_token() as literal text.
 
 # agentic iteration counter (kept as module-level state since
@@ -1339,7 +1338,7 @@ def _run_session(ui, args):
     speak    = result.speak
     listen   = result.listen
 
-    if memorize is not None:
+    if memorize is not None and hasattr(ui, "set_memorize"):
         ui.set_memorize(memorize)
 
     if memorize is None:

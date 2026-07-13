@@ -167,14 +167,6 @@ def _bounded_lines(items: list[str]) -> str:
     return "\n".join(lines) or "- none"
 
 
-def _memory_lines(memories: list[dict]) -> str:
-    return _bounded_lines([
-        f"- {(m.get('memory') or m.get('text') or '').strip()}"
-        for m in memories
-        if (m.get("memory") or m.get("text") or "").strip()
-    ])
-
-
 # ── monthly fact extraction (mirrors memory/reflect.py's daily fact extraction,
 #    applied at month scope instead of day scope) ────────────────────────────
 

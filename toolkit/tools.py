@@ -2,10 +2,10 @@
 toolkit/tools.py
 
 Compatibility facade for Aiko's autonomous toolkit.
-Keep this file even though implementations live in ``core/toolkit``: it gives
+Keep this file even though implementations live under ``toolkit/``: it gives
 older callers and the agent loop one stable import surface while domain tools
 move into focused modules. New primitive capabilities should be implemented in
-``core/toolkit/<domain>.py`` and re-exported here only when the chat facade or
+``toolkit/<domain>.py`` and re-exported here only when the chat facade or
 agent loop needs them.
 """
 from __future__ import annotations

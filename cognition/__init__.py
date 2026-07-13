@@ -25,5 +25,7 @@ plus headroom for an overlapping second request's smaller 2-way
 pre-intent fetch.
 """
 from concurrent.futures import ThreadPoolExecutor
+import atexit
 
 CONTEXT_POOL = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ctx-fetch")
+atexit.register(CONTEXT_POOL.shutdown, wait=False)

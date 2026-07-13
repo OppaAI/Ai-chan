@@ -9,7 +9,7 @@ per-user keys derived from a server-secret. The key derivation uses HMAC-SHA256
 with a per-user context salt, so the same user always gets the same key without
 storing anything plaintext on disk.
 
-Called by core/memorize.py (via connect_sqlite) and any other module that
+Called by memory/memorize.py (via connect_sqlite) and any other module that
 needs an encrypted SQLite connection for a specific user. The encryption
 setting is global (SQLITE_ENCRYPTION), but each user gets a unique key.
 """
@@ -70,7 +70,7 @@ def connect_sqlite(path: str | os.PathLike[str], *, user_id: str) -> Any:
     try:
         from pysqlcipher3 import dbapi2 as sqlcipher  # type: ignore
     except ImportError as exc:
-        raise RuntimeError(...) from exc
+        raise RuntimeError("pysqlcipher3 is required when SQLITE_ENCRYPTION=1") from exc
 
     raw_key = derive_user_sqlite_key(user_id)
     conn = sqlcipher.connect(str(path), check_same_thread=False)

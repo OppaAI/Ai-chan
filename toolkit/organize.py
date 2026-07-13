@@ -12,7 +12,7 @@ This module provides job scheduling and reminder functionality:
   - list_reminders()     — list all reminders
   - cancel_reminder()    — cancel a reminder
 
-Uses core.schedule for persistent record management.
+Uses system.schedule for persistent record management.
 """
 
 from __future__ import annotations

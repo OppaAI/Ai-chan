@@ -28,7 +28,6 @@ Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     4. Set SPEAKER_VERIFY_ENABLED=1 in .env
 """
 import onnxruntime as _ort
-# listen.py line 31
 if hasattr(_ort, "set_default_logger_severity"):
     _ort.set_default_logger_severity(3)
 

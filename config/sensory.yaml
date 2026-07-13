@@ -1,6 +1,6 @@
 # Listen config
 #
-# Settings for core/listen.py.
+# Settings for sensory/listen.py.
 # Controls ASR model/provider, Silero VAD thresholds, barge-in, and speaker verification.
 
 # -- ASR --
@@ -33,7 +33,7 @@ BARGE_IN_ALWAYS_ON: "0"  # Monitor barge-in outside TTS playback; options: 1/0, 
 
 # Speak config
 #
-# Settings for core/speak.py.
+# Settings for sensory/speak.py.
 # Controls MioTTS synthesis endpoint, voice preset, output device, and text pacing.
 
 # -- MioTTS --

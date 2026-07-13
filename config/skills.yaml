@@ -1,6 +1,6 @@
 # Wiki config
 #
-# Settings for core/wiki.py (wiki/persona/config/docs indexing).
+# Settings for skills/wiki.py (wiki/persona/config/docs indexing).
 # Two-stage RAG pattern: semantic-rank WHICH items are candidates, then
 # chunk-rank WHICH PART of each selected item gets injected.
 
@@ -14,7 +14,7 @@ WIKI_CHUNK_MIN_SCORE: "0.30"  # Min relevance score to keep a chunk; below this 
 
 # Skills config
 #
-# Settings for core/skills.py (skills/<id>/SKILL.md workflow docs).
+# Settings for skills/skills.py (skills/<id>/SKILL.md workflow docs).
 # Two-stage RAG pattern: semantic-rank WHICH skills are candidates, then
 # chunk-rank WHICH PART of each matched SKILL.md gets injected.
 
@@ -31,7 +31,7 @@ USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <US
 
 # Agentic config
 #
-# Settings for core/agentic.py plus chat-vs-agent routing used by core/think.py.
+# Settings for skills/agentic.py plus chat-vs-agent routing used by cognition/think.py.
 # Use this to tune when Aiko enters tool/task mode and how much work one task may do.
 
 # -- Agent loop limits --
@@ -77,7 +77,7 @@ MAX_READ_CHARS: "12000"  # Max characters returned when agent reads a workspace 
 
 # Social config
 #
-# Settings for core/social.py.
+# Settings for skills/social.py.
 # Controls weekly social-memory drafting/posting and provider metadata.
 
 # -- Weekly workflow --
@@ -105,7 +105,7 @@ IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB draft image upload calls time
 
 # Web config
 #
-# Settings for core/toolkit/researcher.py and semantic web-search triggering.
+# Settings for toolkit/research.py and semantic web-search triggering.
 # Controls local SearXNG endpoint and how many search results the agent consumes.
 
 # -- SearXNG --

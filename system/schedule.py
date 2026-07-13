@@ -411,7 +411,7 @@ def cancel_reminder_record(reminder_id: str) -> bool:
 
 # ── deep-study window job seeding ─────────────────────────────────────────────
 # These four jobs bound the wall-clock window in which the deep_studying
-# handlers (registered in core/learn.py — see register_deep_study_handlers)
+# handlers (registered in memory/learn.py — see register_deep_study_handlers)
 # are allowed to run: weekdays 05:00-18:00, weekends 05:00-10:00. They are
 # ordinary handler-based schedule.json jobs, not a new job type — the
 # "window" behavior comes entirely from pairing a *_start job with a
@@ -596,7 +596,7 @@ class ScheduleRunner:
         self._memorize             = memorize
         self._generate_and_post_fn = generate_and_post_fn
         self._consolidate_fn       = consolidate_fn
-        self._user_id              = user_id or (memorize.get_user_id() if memorize else None) or current_user_id()
+        self._user_id              = user_id or (memorize.get_user_id() if memorize and memorize.get_user_id() else None) or current_user_id()
         self._wakeup               = threading.Event()
         self._stop                 = threading.Event()
         self._thread: threading.Thread | None = None
@@ -828,7 +828,10 @@ class ScheduleRunner:
         # fire sequentially — preserves order and avoids concurrent job side effects
         for event in due_events:
             if self._on_due:
-                self._on_due(event)
+                try:
+                    self._on_due(event)
+                except Exception:
+                    log.exception("Scheduled job handler failed for %s", event.get("title", event.get("id", "?")))
 
 
 ReminderScheduler = ScheduleRunner

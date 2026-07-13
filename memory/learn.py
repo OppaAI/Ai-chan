@@ -46,10 +46,10 @@ Also owns:
 Config note: this module's tunables (IDLE_LEARN_SECONDS,
 QUICK_STUDY_MAX_ROUNDS, DEEP_STUDY_MAX_ITERATIONS, etc.) are read from
 os.environ at import time via os.getenv(...). Those values are populated
-from config/learn.yaml by core.config.load_config(). We call load_config()
-explicitly at the top of this module (it's idempotent — see core/config.py's
+from config/learn.yaml by system.config.load_config(). We call load_config()
+explicitly at the top of this module (it's idempotent — see system/config.py's
 _LOADED guard) so learn.yaml's values are honored regardless of what else
-has or hasn't imported core.config yet. Without this, module-level
+has or hasn't imported system.config yet. Without this, module-level
 os.getenv() calls would silently fall back to hardcoded defaults if learn.py
 happened to be imported before whatever else in the app calls load_config().
 
@@ -100,7 +100,7 @@ DEEP_SEARCH_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    """Plain single-pair cosine similarity. core.reason's batched cosine
+    """Plain single-pair cosine similarity. cognition.reason's batched cosine
     helper (reason.batch_cosine_scores) is numpy-oriented for scoring many
     chunks against one query vector at once; deep_studying's distillation
     step scores one (topic_vec, chunk_embedding) pair at a time against
@@ -196,7 +196,7 @@ def idle_learner_loop(owner, check_interval: float = IDLE_LEARNER_CHECK_INTERVAL
     This loop looks for that signal on `owner` in this order:
       1. owner.is_proactive_resting() — a callable, if present.
       2. owner._proactive_resting — a plain bool attribute, if present.
-    AikoThink (core/think.py) now implements is_proactive_resting() as part
+    AikoThink (cognition/think.py) now implements is_proactive_resting() as part
     of its own proactive-checkin state machine, driven by
     config/proactive.yaml. If owner exposes neither, this loop falls back
     to IDLE_LEARN_SECONDS alone so it still degrades to the old
@@ -774,7 +774,7 @@ def deep_studying(
 
 
 # ── scheduled deep-study window ───────────────────────────────────────────────
-# Ties deep_studying into core.schedule's handler-based jobs so it only
+# Ties deep_studying into system.schedule's handler-based jobs so it only
 # runs inside a configured wall-clock window (see
 # schedule.ensure_deep_study_window_jobs: weekdays 05:00-18:00, weekends
 # 05:00-10:00 by default) instead of purely on the idle-learner's own
@@ -889,12 +889,12 @@ def register_deep_study_handlers(client=None, model=None, timezone: str | None =
     window (weekdays 05:00-18:00, weekends 05:00-10:00 by default) and seed
     the four recurring jobs that bound it.
 
-        # at startup, after core.schedule's ScheduleRunner exists:
+        # at startup, after system.schedule's ScheduleRunner exists:
         from memory import learn
         learn.register_deep_study_handlers(client=llm_client, model=llm_model)
 
     This is now called automatically from system.wakeup.AikoWakeup.boot() —
-    see core/wakeup.py — once AikoThink (and therefore its LLM client/model)
+    see system/wakeup.py — once AikoThink (and therefore its LLM client/model)
     exists, so app authors normally don't need to call this by hand.
     """
     from system import schedule as _schedule

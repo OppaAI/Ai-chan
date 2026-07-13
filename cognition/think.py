@@ -25,7 +25,6 @@ Memory + knowledge-base fetch:
 import logging
 import os
 import json
-import random
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -81,7 +80,7 @@ CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 MEMORY_RECALL_LIMIT = int(os.getenv("MEMORY_RECALL_LIMIT", 3))
 KNOWLEDGE_RECALL_LIMIT = int(os.getenv("KNOWLEDGE_RECALL_LIMIT", 3))
 # Minimum recall score (see _MemoryBackend._rank_and_score's final_score in
-# core/memorize.py for the formula) a memory must clear to be included in
+# memory/memorize.py for the formula) a memory must clear to be included in
 # context. Same numeric scale as memorize.py's MEMORY_RECALL_SCORE_THRESHOLD
 # (~0.015) — that constant only decides quick-vs-wide search, this one
 # actually filters weak individual results out of what gets returned.
@@ -205,129 +204,16 @@ def _extract_search_results_block(system_prompt: str) -> str:
 
 
 # ── proactive check-in config (config/proactive.yaml, via os.environ) ─────────
-# core.config.load_config() has already populated these into the process
-# environment by the time this module is imported (see core/wakeup.py /
-# core/learn.py — whichever entrypoint runs first calls it). We just read
+# system.config.load_config() has already populated these into the process
+# environment by the time this module is imported (see system/wakeup.py /
+# memory/learn.py — whichever entrypoint runs first calls it). We just read
 # them here the same way every other module's config block does.
 #
 # Timezone is no longer configured here — every "now"/timezone lookup in
-# this module goes through core.bioclock, the app-wide single source of
+# this module goes through system.bioclock, the app-wide single source of
 # truth (config/bioclock.yaml).
 
-def _bool_env(name: str, default: str) -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
 
-
-def _parse_str_list(raw: str) -> list[str]:
-    """Parse a YAML-list-turned-env-var back into a list of strings.
-
-    core.config may have serialized a YAML list either as a JSON array
-    string (e.g. '["00:00-06:00"]') or, if the YAML loader flattened it
-    some other way, as a comma/newline separated string. Handle both so
-    this doesn't silently break depending on how config.py encodes lists.
-    """
-    if not raw or not raw.strip():
-        return []
-    try:
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return [str(x).strip() for x in parsed if str(x).strip()]
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return [p.strip() for p in re.split(r"[,\n]", raw) if p.strip()]
-
-
-PROACTIVE_ENABLED = _bool_env("PROACTIVE_ENABLED", "1")
-PROACTIVE_FIRST_IDLE_MIN_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MIN_SECONDS", 300))
-PROACTIVE_FIRST_IDLE_MAX_SECONDS = float(os.getenv("PROACTIVE_FIRST_IDLE_MAX_SECONDS", 900))
-PROACTIVE_COOLDOWN_SECONDS = float(os.getenv("PROACTIVE_COOLDOWN_SECONDS", 1800))
-PROACTIVE_MAX_PER_HOUR = int(os.getenv("PROACTIVE_MAX_PER_HOUR", 2))
-PROACTIVE_REST_AFTER_SECONDS = float(os.getenv("PROACTIVE_REST_AFTER_SECONDS", 3600))
-PROACTIVE_USE_LLM = _bool_env("PROACTIVE_USE_LLM", "1")
-PROACTIVE_SPEAK = _bool_env("PROACTIVE_SPEAK", "1")
-PROACTIVE_REST_MESSAGE = os.getenv(
-    "PROACTIVE_REST_MESSAGE",
-    "You've been away for a while so I'll go quiet and rest. Ping me when you need me.",
-)
-PROACTIVE_REST_PROMPT_HINT = os.getenv(
-    "PROACTIVE_REST_PROMPT_HINT",
-    "{user} has not spoken to you for about an hour. Say one short warm line that "
-    "you are going quiet and resting until they return.",
-)
-PROACTIVE_QUIET_WINDOWS = _parse_str_list(os.getenv("PROACTIVE_QUIET_WINDOWS", ""))
-PROACTIVE_FOCUS_WINDOWS = _parse_str_list(os.getenv("PROACTIVE_FOCUS_WINDOWS", ""))
-PROACTIVE_PROMPT_HINTS = _parse_str_list(os.getenv("PROACTIVE_PROMPT_HINTS", ""))
-PROACTIVE_MESSAGES = _parse_str_list(os.getenv("PROACTIVE_MESSAGES", ""))
-# How often the background loop wakes to re-check idle/window conditions.
-# Not itself a proactive.yaml key — deliberately short relative to
-# PROACTIVE_FIRST_IDLE_MIN_SECONDS so a check-in fires close to its target
-# time rather than up to a whole cycle late.
-PROACTIVE_CHECK_INTERVAL_SECONDS = float(os.getenv("PROACTIVE_CHECK_INTERVAL_SECONDS", 60))
-
-_WEEKDAY_INDEX = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
-_TIME_RANGE_RE = re.compile(r"^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$")
-_DAY_RANGE_RE = re.compile(r"^([a-z]{3})-([a-z]{3})$")
-
-
-def _parse_time_range(range_str: str) -> tuple[dt_time, dt_time] | None:
-    match = _TIME_RANGE_RE.match(range_str.strip())
-    if not match:
-        return None
-    h1, m1, h2, m2 = (int(g) for g in match.groups())
-    try:
-        return dt_time(h1, m1), dt_time(h2, m2)
-    except ValueError:
-        return None
-
-
-def _time_in_range(now_t: dt_time, start_t: dt_time, end_t: dt_time) -> bool:
-    if start_t <= end_t:
-        return start_t <= now_t <= end_t
-    return now_t >= start_t or now_t <= end_t  # window wraps past midnight
-
-
-def _window_matches(window_str: str, now_dt: datetime) -> bool:
-    """Match one proactive.yaml window entry against the current time.
-
-    Two shapes are supported:
-      "00:00-06:00"             — daily, any weekday
-      "mon-fri 06:00-19:00"     — restricted to a weekday range
-    A single weekday name ("sat 06:00-11:00") is also accepted.
-    """
-    window_str = window_str.strip()
-    if not window_str:
-        return False
-    parts = window_str.split()
-    if len(parts) == 2:
-        day_part, time_part = parts
-    else:
-        day_part, time_part = None, parts[0]
-
-    time_range = _parse_time_range(time_part)
-    if not time_range:
-        log.warning("[proactive] unparsable window entry, ignoring: %r", window_str)
-        return False
-    if not _time_in_range(now_dt.time(), *time_range):
-        return False
-
-    if day_part:
-        day_part = day_part.lower()
-        range_match = _DAY_RANGE_RE.match(day_part)
-        if range_match:
-            d1, d2 = range_match.groups()
-            if d1 in _WEEKDAY_INDEX and d2 in _WEEKDAY_INDEX:
-                start_idx, end_idx = _WEEKDAY_INDEX[d1], _WEEKDAY_INDEX[d2]
-                today_idx = now_dt.weekday()
-                if start_idx <= end_idx:
-                    return start_idx <= today_idx <= end_idx
-                return today_idx >= start_idx or today_idx <= end_idx
-        elif day_part in _WEEKDAY_INDEX:
-            return now_dt.weekday() == _WEEKDAY_INDEX[day_part]
-        else:
-            log.warning("[proactive] unparsable day range in window entry: %r", window_str)
-            return False
-
-    return True
 
 
 # ── think ─────────────────────────────────────────────────────────────────────
@@ -341,14 +227,11 @@ class AikoThink:
         self._speak     = speak
         # Guards self._speak against the toggle-vs-background-thread race.
         # set_speak() is called from the main thread (main.py's /voice
-        # toggle). Readers snapshot once via _get_speak() rather than
-        # reading self._speak multiple times, so a toggle landing mid-read
-        # can't produce a stale ref or a None-where-truthy mismatch.
+        # toggle). Readers snapshot self._speak under the lock so a toggle
+        # landing mid-read can't produce a stale ref or a None mismatch.
         self._speak_lock = threading.Lock()
         self._persona   = _load_static_persona()
         self._history:  list[dict] = []
-        self._history_lock = threading.Lock()
-        self._pending_search_query: str | None = None
         # Cache of (labels, embedding_matrix) per (example-corpus-id, instruct)
         # pair — built via reason.embed_example_matrix, which always
         # re-embeds; caching the result here avoids paying that cost on
@@ -456,6 +339,7 @@ class AikoThink:
             memories = mem_future.result()
         except Exception as e:
             log.error("Memory search failed: %s", e)
+            know_future.cancel()
             memories = []
 
         if MEMORY_MIN_SCORE > 0:
@@ -510,10 +394,9 @@ class AikoThink:
         agentic (or webchat) just because it happened to be checked first.
 
         The close-vector label-scoring math itself (normalize + batched
-        matmul + top-k mean per label) lives in core.reason; this method
+        matmul + top-k mean per label) lives in cognition.reason; this method
         only owns the routing policy (thresholds, gap, LLM tie-break).
         """
-        self._pending_search_query = None  # reset
     
         if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "disabled"}:
             return "localchat"
@@ -558,7 +441,7 @@ class AikoThink:
         corpus, built via reason.embed_example_matrix. embed_example_matrix
         itself never caches — it always re-embeds — so the caching lives
         here, keyed on corpus identity + instruct string, same as before
-        the math moved to core.reason."""
+        the math moved to cognition.reason."""
         cache_key = (id(examples_by_label), instruct)
         with self._semantic_example_cache_lock:
             cached = self._semantic_example_cache.get(cache_key)
@@ -617,7 +500,7 @@ class AikoThink:
 
 
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None) -> str:
-        """Delegate task-mode execution to core.agentic."""
+        """Delegate task-mode execution to skills.agentic."""
         with self._turn_lock:
             self._last_chat_time = time.time()
             self._active_turn.set()
@@ -844,17 +727,9 @@ class AikoThink:
         with self._speak_lock:
             self._speak = speak
 
-    def _get_speak(self):
-        """Snapshot self._speak under lock. Proactive-thread call sites
-        should call this once per tick and act on the local variable,
-        rather than reading self._speak repeatedly, to avoid a toggle
-        landing between a check and its matching use."""
-        with self._speak_lock:
-            return self._speak
-
     def wait_for_memory(self, timeout: float | None = None) -> bool:
         """Block until AikoMemorize's async write queue drains, or timeout
-        elapses. The queue itself now lives in core.memorize; this is a
+        elapses. The queue itself now lives in memory.memorize; this is a
         thin passthrough kept for call sites that only know about the
         AikoThink instance. No longer called from skills.agentic's turn
         start (see run_agentic_chat) — draining there was removed since
@@ -1010,10 +885,6 @@ class AikoThink:
         log.error(reason)
         return f"[LLM error] {reason}"
 
-    def _is_data_intent(self, user_input: str) -> bool:
-        # routing already set _pending_search_query in _route_intent
-        return self._pending_search_query is not None
-
     def _sanitize_history(self, messages: list[dict]) -> list[dict]:
         if not messages: return []
         sanitized = [messages[0]]
@@ -1025,12 +896,12 @@ class AikoThink:
 
     def _store_async(self, user_input: str, response_text: str) -> None:
         """Queue a fire-and-forget memory write. The actual queue/worker
-        thread now lives on AikoMemorize (core.memorize); this just wires
+        thread now lives on AikoMemorize (memory.memorize); this just wires
         up this instance's idle-tracking callables (is_active_turn /
         idle_since) so the write waits for a genuinely idle window before
         using the shared LLM for fact extraction. Kept as a method (rather
         than inlining self._memorize.queue_write(...) at every call site)
-        because core.agentic's run_agentic_chat also calls
+        because skills.agentic's run_agentic_chat also calls
         owner._store_async(...) directly at the end of the agent loop.
         """
         self._memorize.queue_write(

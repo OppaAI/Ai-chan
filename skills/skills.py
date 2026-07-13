@@ -20,7 +20,6 @@ import json
 import os
 import threading
 from dataclasses import dataclass
-from functools import cache
 from pathlib import Path
 from typing import Protocol
 
@@ -265,7 +264,6 @@ def _discover_in(root: str | Path) -> list[SkillDoc]:
     return docs
 
 
-@cache
 def discover_skill_docs() -> list[SkillDoc]:
     """Discover workflow documents from project and user skillsets."""
     docs: list[SkillDoc] = []

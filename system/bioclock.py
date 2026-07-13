@@ -3,7 +3,7 @@ system/bioclock.py
 
 Single source of truth for "what time is it right now" across every module
 that needs to reason about dates or wall-clock time — chat/webchat/agentic
-system prompts, proactive check-ins, and core/schedule.py's job timing.
+system prompts, proactive check-ins, and system/schedule.py's job timing.
 
 Centralized here so every module resolves timezone the same way instead of
 each rolling its own ZoneInfo lookup with its own fallback quirks. Config

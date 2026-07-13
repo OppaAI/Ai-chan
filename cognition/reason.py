@@ -1,4 +1,4 @@
-"""core/reason.py
+"""cognition/reason.py
 
 Shared numpy-vectorized embedding utilities for semantic retrieval and
 condensation. Centralizes what used to be four separate per-module

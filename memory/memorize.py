@@ -12,7 +12,7 @@ Memory lifecycle:
     memories aren't immediately swept.
   - cleanup() deletes memories below decay threshold, with grace period
     protection for newly created entries.
-  - Decay logic lives in core/forget.py (pure math, no I/O).
+  - Decay logic lives in memory/forget.py (pure math, no I/O).
   - Pinned memories (created via pin()) are permanently immune to decay
     cleanup and dream pruning. The pinned flag lives in the memories table.
 
@@ -136,7 +136,6 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from system import bioclock
 from memory.vecstore import initialize_store_db, resolve_user_db_path
@@ -183,12 +182,12 @@ MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"
 # status a meaningful tiebreaker while staying below a full RRF rank-1 term,
 # so a highly relevant unpinned memory can still beat a barely-relevant
 # pinned one. The hard guarantee for pinned visibility now lives in
-MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01"))
-SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
-SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
+MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.002"))
+MEMORY_SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
+MEMORY_SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
 MEMORY_CONTEXT_TOTAL_CHARS = int(os.getenv("MEMORY_CONTEXT_TOTAL_CHARS", 1200))
-LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
+MEMORY_LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 
 # Recency-among-relevant rerank — candidates clearing this score are
 # reordered by created_at descending among themselves (see module docstring
@@ -270,7 +269,7 @@ def _is_trivial_input(text: str) -> bool:
 # Cosine similarity threshold for near-duplicate detection during dream pass
 # and dedup-on-write. 0.95 on write is tight (near-identical only).
 # 0.92 on dream merge catches slightly more semantic duplicates.
-DREAM_MERGE_THRESHOLD = float(os.getenv("DREAM_MERGE_THRESHOLD", 0.92))
+DREAM_MERGE_THRESHOLD = float(os.getenv("DREAM_MERGE_THRESHOLD", 0.88))
 WRITE_DEDUP_THRESHOLD = float(os.getenv("WRITE_DEDUP_THRESHOLD", 0.95))
 
 # access_count boost applied to salient memories during dream pass.
@@ -343,7 +342,7 @@ Conversation:
 {conversation}"""
 
 
-def _sanitize_fts_query(query: str) -> Optional[str]:
+def _sanitize_fts_query(query: str) -> str | None:
     """
     Strip characters that break FTS5 query parsing.
     FTS5 treats , " ( ) * ^ : - ' as syntax tokens — remove them all.
@@ -416,13 +415,6 @@ END;
 
 
 # ── sqlite payload helpers ────────────────────────────────────────────────────
-
-def _sqlite_get_payload(conn: sqlite3.Connection, mem_id: str) -> dict:
-    """Fetch the full memories row for a single id. Returns {} if not found."""
-    row = conn.execute(
-        "SELECT * FROM memories WHERE id = ?", (mem_id,)
-    ).fetchone()
-    return dict(row) if row else {}
 
 
 def _sqlite_set_payload(
@@ -502,7 +494,7 @@ def _sqlite_knn_search(
     vector: list[float],
     user_id: str,
     limit: int,
-    threshold: Optional[float] = None,
+    threshold: float | None = None,
 ) -> list[sqlite3.Row]:
     """
     KNN cosine search against memories_vec, filtered by user_id.
@@ -597,7 +589,7 @@ class _MemoryBackend:
         db_path:         str,
         llm_base_url:    str,
         model:           str,
-        embed_cache:     Optional[str] = None,
+        embed_cache:     str | None = None,
     ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path  = db_path
@@ -838,7 +830,7 @@ class _MemoryBackend:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    def _fts_pass(self, fts_query: Optional[str], user_id: str, fts_limit: int) -> list[sqlite3.Row]:
+    def _fts_pass(self, fts_query: str | None, user_id: str, fts_limit: int) -> list[sqlite3.Row]:
         """Run one FTS5 BM25 pass. Returns [] if fts_query is None (nothing usable to match)."""
         if fts_query is None:
             return []
@@ -1022,7 +1014,7 @@ class _MemoryBackend:
             results.append(d)
         return results
 
-    def iter_all(self, user_id: str, batch_size: int = LIFECYCLE_BATCH_SIZE):
+    def iter_all(self, user_id: str, batch_size: int = MEMORY_LIFECYCLE_BATCH_SIZE):
         """Yield memory records for a user in rowid order without one giant list."""
         last_rowid = 0
         while True:
@@ -1373,7 +1365,7 @@ class AikoMemorize:
 
         with self._search_cache_lock:
             cached = self._search_cache.get(cache_key)
-            if cached and now_s - cached[0] <= SEARCH_CACHE_TTL:
+            if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
                 self._search_cache.move_to_end(cache_key)
                 results = [dict(r) for r in cached[1]]
                 log.debug("[memory] cache hit, scores=%s", [r.get("_recall_score") for r in results])  # temp
@@ -1387,7 +1379,7 @@ class AikoMemorize:
 
         with self._search_cache_lock:
             self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
-            while len(self._search_cache) > SEARCH_CACHE_SIZE:
+            while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
                 self._search_cache.popitem(last=False)
 
         return results
@@ -1482,7 +1474,7 @@ class AikoMemorize:
             self._clear_search_cache()
             self._last_cache_clear_time = now
 
-    def format_for_context(self, memories: list[dict]) -> Optional[str]:
+    def format_for_context(self, memories: list[dict]) -> str | None:
         """
         Format retrieved memories into a compact string for injection
         into the conversation context. Returns None if nothing to inject.
@@ -1759,8 +1751,8 @@ class AikoMemorize:
         user_id:   str | None = None,
         threshold: float = CLEANUP_THRESHOLD,
         dry_run:   bool  = False,
-        _all_mems: Optional[list[dict]] = None,
-        _pinned_ids: Optional[set[str]] = None,
+        _all_mems: list[dict] | None = None,
+        _pinned_ids: set[str] | None = None,
     ) -> dict:
         """
         Prune decayed memories below threshold score.
@@ -1817,7 +1809,7 @@ class AikoMemorize:
         log.info(f"Cleanup: deleted={len(deleted)}, kept={kept}, failed={len(failed)}")
         return {"deleted": len(deleted), "kept": kept, "failed": len(failed)}
 
-    def _iter_memory_batches(self, user_id: str, batch_size: int = LIFECYCLE_BATCH_SIZE):
+    def _iter_memory_batches(self, user_id: str, batch_size: int = MEMORY_LIFECYCLE_BATCH_SIZE):
         """Yield lifecycle scan batches without retaining the full table."""
         batch: list[dict] = []
         for mem in self._mem.iter_all(user_id=user_id, batch_size=batch_size):
@@ -1831,7 +1823,7 @@ class AikoMemorize:
     def _cleanup_candidates(
         self,
         all_mems: list[dict],
-        _pinned_ids: Optional[set[str]] = None,
+        _pinned_ids: set[str] | None = None,
     ) -> tuple[int, list[dict]]:
         mem_ids     = [str(m.get("id", "")) for m in all_mems if m.get("id")]
         payload_map = self._batch_get_payloads(mem_ids)
@@ -1879,7 +1871,7 @@ class AikoMemorize:
         user_id = _default_user_id(user_id)
         return self._mem.get_all(user_id=user_id)
 
-    def add_raw(self, memory: str, user_id: str | None = None, *, pinned: bool = False, metadata: Optional[dict] = None) -> str | None:
+    def add_raw(self, memory: str, user_id: str | None = None, *, pinned: bool = False, metadata: dict | None = None) -> str | None:
         """Persist one already-curated memory string without LLM extraction."""
         # metadata is accepted for call-site clarity; the current schema stores
         # only the curated text plus pinned flag.
@@ -1917,10 +1909,6 @@ class AikoMemorize:
         """Batch retrieve access_count + last_accessed_at in a single query."""
         return _sqlite_batch_get_payloads(self._conn, mem_ids)
 
-    def _get_vector(self, mem_id: str) -> list[float]:
-        """Retrieve the raw embedding vector for a single memory."""
-        return _sqlite_get_vector(self._conn, mem_id)
-
     def embed_text(self, text: str, *, query: bool = False) -> list[float]:
         """Embed one text string with the configured memory embedding model."""
         return self._mem._embed(text, query=query)
@@ -1930,7 +1918,3 @@ class AikoMemorize:
         if query:
             return self._mem._embedder.embed_queries(texts).tolist()   # applies instruct prefix
         return self._mem._embed_batch(texts)                           # document side — no prefix
-
-    def _is_pinned(self, mem_id: str) -> bool:
-        """Return True if memories.pinned == 1 for this id."""
-        return _sqlite_is_pinned(self._conn, mem_id)

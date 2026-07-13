@@ -130,14 +130,6 @@ class WeekWindow:
         return (self.end - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
-def _timezone(name: str | None = None) -> ZoneInfo:
-    try:
-        return ZoneInfo(name or timezone_name())
-    except ZoneInfoNotFoundError:
-        log.warning("Unknown timezone %s; falling back to UTC", name or timezone_name())
-        return ZoneInfo("UTC")
-
-
 def last_completed_sunday_saturday(now: datetime | None = None, tz_name: str | None = None) -> WeekWindow:
     """Return the most recent fully completed Sunday-Saturday window."""
     tz = get_timezone(tz_name)

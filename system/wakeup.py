@@ -203,7 +203,7 @@ class AikoWakeup:
         # meant two independent daemon threads were both reading and firing
         # the same schedule.json — every due job (reminders, weekly_social,
         # and now the deep_study_start/stop window jobs) would fire twice.
-        # That duplicate construction has been removed from core/think.py;
+        # That duplicate construction has been removed from cognition/think.py;
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
         _scheduler = ScheduleRunner(

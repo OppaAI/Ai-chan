@@ -74,7 +74,7 @@ DEEP_SEARCH_MAX_WORKERS = int(os.getenv("DEEP_SEARCH_MAX_WORKERS", 4))
 # condenses/synthesizes evidence. It has its own fetch knobs so deep_search can
 # stay snippet-only. These are read once as module-level DEFAULTS; deep_research()
 # itself now accepts num_searches/num_fetches/max_chars_per_page as real
-# function args (see below) so a caller — e.g. core.learn.quick_studying —
+# function args (see below) so a caller — e.g. memory.learn.quick_studying —
 # can override per-call instead of only ever getting these env defaults.
 #
 # Tuned for accuracy-over-latency per JJ: more fetches, more rounds, more
@@ -954,7 +954,7 @@ def deep_research(
     module's DEEP_RESEARCH_*/RESEARCH_CONDENSE_* env-backed constants but are
     real function arguments — every round's underlying _deep_search_impl()
     call uses whatever was passed in here, not the module constants
-    directly. This is what lets a caller (e.g. core.learn.quick_studying)
+    directly. This is what lets a caller (e.g. memory.learn.quick_studying)
     override per-call instead of only ever getting the env-var defaults.
     """
     if not query or not query.strip():

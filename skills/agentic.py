@@ -2,8 +2,8 @@
 skills/agentic.py
 
 Aiko's task-mode loop: tool schemas, ReAct-style dispatch, and final response
-handling. Pure tool implementations stay in core/tools.py; chat facade, TTS,
-history, and memory queue ownership stay in core/think.py.
+handling. Pure tool implementations stay in toolkit/; chat facade, TTS,
+history, and memory queue ownership stay in cognition/think.py.
 
 Context fetch shape:
   Memory + knowledge-base (KB) are intent-agnostic — cognition.think.route()
@@ -16,7 +16,7 @@ Context fetch shape:
   they're only useful once intent has actually resolved to "agentic" — so
   they're fetched here, concurrently with each other, via
   _fetch_agentic_only_context(), on the same shared pool
-  (core.concurrency.CONTEXT_POOL).
+  (cognition.CONTEXT_POOL).
 """
 
 from __future__ import annotations
@@ -28,8 +28,6 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-
-import numpy as np
 
 from system.log import get_logger
 from system import bioclock
@@ -77,9 +75,9 @@ AGENT_CONTEXT_BUDGET_RATIO = float(os.getenv("AGENT_CONTEXT_BUDGET_RATIO", 0.65)
 #     not started yet or already finished by the time the next turn's
 #     search() ran — a short drain wait never caught anything real.
 #   - Recall limit removed: memory (and KB) fetch now happens once,
-#     centrally, in core.think._fetch_memory_and_knowledge, shared by all
+#     centrally, in cognition.think._fetch_memory_and_knowledge, shared by all
 #     three chat paths (see MEMORY_RECALL_LIMIT / KNOWLEDGE_RECALL_LIMIT in
-#     core.think). Agentic no longer owns a separate limit knob for the
+#     cognition.think). Agentic no longer owns a separate limit knob for the
 #     same data.
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", 1500))
 AGENT_TOOL_RESULT_MAX_CHARS = int(os.getenv("AGENT_TOOL_RESULT_MAX_CHARS", 3000))
@@ -90,8 +88,8 @@ AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
 
 # Rolling STM window shared across all three chat paths. Mirrors
-# CONTEXT_WINDOW_TURNS in core.think (kept as a distinct name here rather
-# than importing core.think, which already imports core.agentic — that
+# CONTEXT_WINDOW_TURNS in cognition.think (kept as a distinct name here rather
+# than importing cognition.think, which already imports skills.agentic — that
 # would create a circular import).
 AGENT_HISTORY_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
@@ -186,13 +184,6 @@ _COMPACTABLE_MIN_CHARS = 800
 _RESEARCH_TOOLS = {"deep_search", "deep_research"}
 
 
-def _tool(schema: dict):
-    """Decorator used to keep schemas and dispatch handlers in one registry."""
-    def decorator(func):
-        _TOOLS[schema["function"]["name"]] = (schema, func)
-        return func
-    return decorator
-
 
 _TOOLS: dict[str, tuple[dict, object]] = {}
 
@@ -212,7 +203,7 @@ def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
     knowledge RAG), predefined skill workflows, and past-task experience.
 
     These only matter once intent has resolved to "agentic" — unlike
-    memory + KB, which core.think.route() fetches for every path up front,
+    memory + KB, which cognition.think.route() fetches for every path up front,
     before intent is even known. All four reads here are independent
     (separate stores, no shared output), so they run concurrently on the
     same pool and are joined afterward; order of completion is irrelevant.
@@ -918,7 +909,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
 
     mem_kb_future: a concurrent.futures.Future from
     owner._fetch_memory_and_knowledge(user_input), submitted by
-    core.think.route() BEFORE intent was resolved to "agentic" (memory+KB
+    cognition.think.route() BEFORE intent was resolved to "agentic" (memory+KB
     are intent-agnostic, so route() doesn't wait for routing to finish
     before starting them). If this is None (e.g. a scheduled job calling
     agentic_chat() directly, with no prior route() call), the fetch runs
@@ -1195,6 +1186,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "role": "tool", "tool_call_id": call.id,
                     "name": name, "content": "Answer submitted.",
                 })
+                if len(batch) > call_idx + 1:
+                    log.warning("[agentic] final_answer arrived mid-batch; dropping %d remaining tool call(s)", len(batch) - call_idx - 1)
                 break
 
             result = execute_tool_with_policy(name, args, state, owner=owner)

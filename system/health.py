@@ -5,7 +5,7 @@ Live hardware and OS telemetry for Aiko-chan's vitals bar.
 Provides:
     _read_sys_info()  — one-shot startup snapshot (CPU, RAM, storage, OS)
     _ram_used_str()   — live RSS string, excludes reclaimable page cache
-    _db_size_str()    — live Qdrant point count
+    _db_size_str()    — live sqlite-vec memory count
     _fmt_uptime()     — HH:MM:SS formatter
 """
 
@@ -18,7 +18,6 @@ import platform
 import re
 import subprocess
 import time
-import urllib.request
 
 _DB_SIZE_CACHE: tuple[float, str] = (0.0, "? mem")
 _DB_SIZE_TTL = float(os.getenv("DB_SIZE_TTL", "1.0"))
@@ -116,7 +115,7 @@ def _ram_used_str() -> str:
         cached    = vals.get("Cached",       0)
         buffers   = vals.get("Buffers",      0)
         # True process RSS — excludes reclaimable page cache
-        real_used = (total - available - cached - buffers) / 1024 / 1024
+        real_used = (total - available) / 1024 / 1024
         total_gb  = total / 1024 / 1024
         return f"{real_used:.1f}/{total_gb:.1f} GB"
     except Exception:
@@ -138,7 +137,7 @@ def _db_size_str() -> str:
     conn = None
     try:
         import sqlite3, sqlite_vec
-        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory.db", current_user_id()))
+        db_path = os.getenv("SQLITE_MEMORY_PATH") or str(user_state_path("memory/memory.db", current_user_id()))
         conn = sqlite3.connect(db_path)
         conn.enable_load_extension(True)
         sqlite_vec.load(conn)

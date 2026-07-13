@@ -1,8 +1,8 @@
 # Learned knowledge vector-store config
 #
-# Settings for core/knowledge.py, Aiko's machine-writable RAG store for
+# Settings for memory/knowledge.py, Aiko's machine-writable RAG store for
 # durable learned facts, user-ingested document/PDF text, and self-learning
-# research notes. This is separate from core/wiki.py, which indexes
+# research notes. This is separate from skills/wiki.py, which indexes
 # human-authored wiki/skill/persona/config files.
 
 KNOWLEDGE_DB_PATH: "knowledge/knowledge.db"  # Relative paths are stored under the active user's state dir; encrypted when SQLITE_ENCRYPTION=1.
@@ -17,9 +17,9 @@ KNOWLEDGE_QUERY_INSTRUCT: "Retrieve durable learned knowledge relevant to the re
 
 # Learn config
 #
-# Settings for core/learn.py — Aiko's two research depths (quick_studying,
+# Settings for memory/learn.py — Aiko's two research depths (quick_studying,
 # deep_studying) and the idle learner loop that decides when to run them.
-# Both depths sit on top of core/toolkit/researcher.py's primitives
+# Both depths sit on top of toolkit/research.py's primitives
 # (see web.yaml for the shared search/fetch/condense tunables they inherit).
 
 # -- idle learner loop (when Aiko is allowed to self-study at all) --
@@ -58,12 +58,12 @@ DEEP_STUDY_SYNTHESIS_MAX_TOKENS: "900"  # Token budget for the final distillatio
 
 # Memorize config
 #
-# Settings for core/memorize.py, core/embed.py, core/forget.py, and core/consolidate.py.
+# Settings for memory/memorize.py, memory/vecstore.py, memory/forget.py, and memory/consolidate.py.
 # Tune local sqlite memory, embedding model behavior, memory decay, and monthly consolidation here.
 
 # -- Storage and embedding endpoint --
 SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory.db.
-EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by core/embed.py.
+EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by memory/vecstore.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.
 EMBED_QUERY_INSTRUCT: "Retrieve relevant memories that answer the query"  # Instruction prefix used for query embeddings; memories/documents stay unprefixed.
@@ -123,7 +123,7 @@ MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user ~
 
 # Experience vector-store config
 #
-# Settings for core/experience.py, Aiko's machine-written procedural trace of
+# Settings for skills/experience.py, Aiko's machine-written procedural trace of
 # completed agentic tasks. Experience stores sanitized goal -> steps -> outcome
 # records for later RAG recall. It does not use memory forgetting/decay.
 

@@ -34,7 +34,6 @@ Boot ordering note (login-gated wakeup):
 """
 
 import asyncio
-import http.server
 import json
 import logging
 import os
@@ -53,7 +52,7 @@ from system.userspace import reset_current_user_id, set_current_user_id, set_cur
 load_config()
 from websockets.server import serve as ws_serve
 
-from system import bioclock 
+from system import bioclock
 
 log = logging.getLogger(__name__)
 

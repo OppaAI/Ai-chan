@@ -30,17 +30,17 @@ ENV_AGE_PATH: ".env.age"
 
 # Bioclock config
 #
-# Settings for core/bioclock.py — the single source of truth for "now"
+# Settings for system/bioclock.py — the single source of truth for "now"
 # used by every module that reasons about dates or wall-clock time:
 # chat/webchat/agentic system prompts, proactive check-ins, and
-# core/schedule.py's job timing. One timezone, resolved one way, everywhere.
+# system/schedule.py's job timing. One timezone, resolved one way, everywhere.
 TIMEZONE: "America/Vancouver"  # IANA timezone name used everywhere Aiko resolves "now"; examples: America/Vancouver, UTC, Asia/Tokyo.
 
 # Schedule config
 #
-# Settings for core/schedule.py.
+# Settings for system/schedule.py.
 # This config stores scheduler paths and system job times; user-created jobs remain in per-user schedule.json.
-# Timezone now lives in config/bioclock.yaml (core/bioclock.py) — the single
+# Timezone now lives in config/bioclock.yaml (system/bioclock.py) — the single
 # source of truth for "now", used here and everywhere else Aiko needs a clock.
 
 # -- Paths --
@@ -55,7 +55,7 @@ MONTHLY_JOB_MINUTE: "5"  # Local minute for monthly consolidation job; integer 0
 
 # Log config
 #
-# Settings for core/log.py and core/health.py.
+# Settings for system/log.py and system/health.py.
 # Controls rotating log verbosity and small health-cache timing.
 
 # -- Logging --

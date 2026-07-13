@@ -12,7 +12,7 @@ This module provides utilities used across multiple toolkit modules:
   - safe_path()       — path resolution with traversal prevention
   - json_block()      — formatted JSON output for tool results
 
-All functions respect the per-user isolation provided by core/userspace.py.
+All functions respect the per-user isolation provided by system/userspace.py.
 """
 
 from __future__ import annotations

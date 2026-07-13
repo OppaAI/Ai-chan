@@ -40,14 +40,12 @@ Idempotency:
   so a rerun replaces rather than accumulates.
 """
 import base64
-import io
 import json
 import os
 import re
 import textwrap
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 import requests
 from openai import OpenAI
@@ -399,7 +397,7 @@ def _generate_image_prompt(prose: str) -> str:
     return raw.strip('"\'').strip()
 
 
-def _generate_image(prose: str) -> Optional[str]:
+def _generate_image(prose: str) -> str | None:
     """
     Generate a daily reflection image via the Modal FLUX endpoint.
     Returns base64 PNG string, or None on failure.
@@ -457,8 +455,8 @@ def _estimate_read_minutes(text: str) -> int:
 
 def _build_hugo_post(
     prose:      str,
-    feelings:   Optional[str],
-    image_slug: Optional[str],
+    feelings:   str | None,
+    image_slug: str | None,
     date:       datetime,
     write_time: datetime,
     mem_count:  int,
@@ -510,18 +508,10 @@ def _github_headers() -> dict:
     }
 
 
-def _get_file_sha(repo: str, path: str, branch: str) -> Optional[str]:
-    url  = f"{_GITHUB_API}/repos/{repo}/contents/{path}"
-    resp = requests.get(url, headers=_github_headers(), params={"ref": branch}, timeout=15)
-    if resp.status_code == 200:
-        return resp.json().get("sha")
-    return None
-
-
 def _push_post_and_image(
     slug: str,
     content: str,
-    image_b64: Optional[str],
+    image_b64: str | None,
     date: datetime,
 ) -> bool:
     if not GITHUB_TOKEN or not GITHUB_REPO:
@@ -657,7 +647,7 @@ def _delete_existing_daily_pins(memorize, date: datetime, user_id: str | None = 
 
 def generate_and_post(
     memories:   list[dict],
-    date:       Optional[datetime] = None,
+    date:       datetime | None = None,
     dry_run:    bool = False,
     memorize = None,
 ) -> dict:
