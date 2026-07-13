@@ -809,6 +809,7 @@ body {
   letter-spacing: .08em;
   color: var(--mauve);
   min-height: 18px;
+  margin-top: 24px;
 }
 
 .auth-status:empty {
