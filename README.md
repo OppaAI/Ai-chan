@@ -1,4 +1,4 @@
-# Aiko-chan 愛子ちゃん
+# Aiko-chan アイコちゃん
 
 > A local-first AI companion with a curses TUI, optional browser WebUI + VRM avatar, persistent memory, web search, microphone input, and MioTTS voice output.
 > Optimised for constrained hardware — runs on a Jetson Orin Nano with 8GB unified RAM.
