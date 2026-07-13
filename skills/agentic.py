@@ -25,9 +25,11 @@ import json
 import math
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 from system.log import get_logger
 from system import bioclock
@@ -904,6 +906,70 @@ def _enforce_agentic_context_budget(
     return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"]
 
 
+def _stream_agent_message(owner, messages, tools, token_callback):
+    """Stream an agentic LLM call, feeding text tokens to token_callback.
+    Returns (SimpleNamespace, usage) matching the non-streaming shape.
+    """
+    stream = owner._client.chat.completions.create(
+        model=owner._llm_model, messages=messages, tools=tools,
+        tool_choice="auto", stream=True, max_tokens=AGENT_MAX_TOKENS,
+        temperature=0.3,
+    )
+    content_parts = []
+    tc_deltas = {}
+    usage = None
+
+    for chunk in stream:
+        if chunk.usage:
+            usage = chunk.usage
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta.content:
+            content_parts.append(delta.content)
+            if token_callback:
+                token_callback(delta.content)
+        if delta.tool_calls:
+            for tcd in delta.tool_calls:
+                idx = tcd.index
+                if idx not in tc_deltas:
+                    tc_deltas[idx] = SimpleNamespace(
+                        id=tcd.id or "", name="", args=[],
+                    )
+                if tcd.id:
+                    tc_deltas[idx].id = tcd.id
+                if tcd.function:
+                    if tcd.function.name:
+                        tc_deltas[idx].name = tcd.function.name
+                    if tcd.function.arguments:
+                        tc_deltas[idx].args.append(tcd.function.arguments)
+
+    content = "".join(content_parts) if content_parts else None
+    tool_calls = None
+    if tc_deltas:
+        tool_calls = [
+            SimpleNamespace(
+                id=d.id,
+                function=SimpleNamespace(name=d.name, arguments="".join(d.args)),
+            )
+            for d in (tc_deltas[i] for i in sorted(tc_deltas))
+        ]
+
+    def _dump(exclude_none=True):
+        d = {"role": "assistant", "content": content}
+        if tool_calls:
+            d["tool_calls"] = [
+                {"id": tc.id, "type": "function",
+                 "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in tool_calls
+            ]
+        return d
+
+    msg = SimpleNamespace(content=content, tool_calls=tool_calls)
+    msg.model_dump = _dump
+    return msg, usage
+
+
 def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None) -> str:
     """Run task mode using the owning AikoThink instance for model/memory/output.
 
@@ -1053,13 +1119,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             token_callback("__THINKING__\n")
 
         try:
-            resp = owner._client.chat.completions.create(
-                model=owner._llm_model, messages=messages, tools=tools,
-                tool_choice="auto", stream=False, max_tokens=AGENT_MAX_TOKENS,
-                temperature=0.3,
-            )
-            usage = getattr(resp, "usage", None)
-            msg = resp.choices[0].message
+            msg, usage = _stream_agent_message(owner, messages, tools, token_callback)
             last_content = msg.content or ""
             owner.last_usage = {
                 "prompt_messages": list(messages),
@@ -1214,12 +1274,12 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     else:
         exp_verified_ok, exp_score = True, 1.0
 
-    experience.record_experience(
-        owner, user_input, state.steps, final_text,
-        verified_ok=exp_verified_ok,
-        score=exp_score,
-        embedder=_embedder,
-    )
+    threading.Thread(
+        target=experience.record_experience,
+        args=(owner, user_input, state.steps, final_text),
+        kwargs=dict(verified_ok=exp_verified_ok, score=exp_score, embedder=_embedder),
+        daemon=True,
+    ).start()
     owner._emit(final_text, token_callback=token_callback)
 
     with owner._history_lock:
