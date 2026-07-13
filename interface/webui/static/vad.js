@@ -25,7 +25,7 @@ const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
 // Energy VAD tunables — values below are your tuned optimum. Conservative
 // enough to avoid streaming normal room tone.
 // NOTE: If voice input never transcribes (mic blinks, says "listening" but
-// nothing happens), lower ENERGY_START_RMS. Check console for "[vad]" RMS logs.
+// nothing happens), lower ENERGY_START_RMS. Check console for "[vad]" logs.
 const ENERGY_START_RMS = 0.008;
 const ENERGY_END_RMS = 0.005;
 const ENERGY_MIN_FRAMES = 2;
@@ -116,7 +116,8 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
         _energyHits = 0;
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
         if (!_canSend(ws, epoch)) return;
-        console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}`);
+        // Edge-triggered log: one line when speech is detected, not one per frame.
+        console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}`);
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
         if (gate) {
             for (const buf of _preBuf) {
@@ -148,6 +149,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
                 _speaking = false;
                 _energyHits = 0;
                 if (!_canSend(ws, epoch)) return;
+                // Edge-triggered log: one line when speech ends, not one per frame.
                 console.log(`[vad] speech END  floor=${_noiseFloor.toFixed(5)}`);
                 ws.send(JSON.stringify({ type: 'vad', event: 'end' }));
             }, SILENCE_TIMEOUT);
