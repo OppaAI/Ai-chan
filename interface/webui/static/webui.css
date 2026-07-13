@@ -803,6 +803,18 @@ body {
   line-height: 1.5;
 }
 
+.auth-status {
+  display: block;
+  font-size: 15px;
+  letter-spacing: .08em;
+  color: var(--mauve);
+  min-height: 18px;
+}
+
+.auth-status:empty {
+  min-height: 0;
+}
+
 .auth-buttons {
   display: flex;
   flex-direction: column;
@@ -931,15 +943,11 @@ body {
 }
 
 .auth-footer {
-  margin-top: 12px;
+  margin-top: auto;
+  padding-top: 12px;
   font-size: 11px;
   color: var(--dim);
   letter-spacing: .1em;
-}
-
-.auth-status {
-  display: block;
-  height: 16px;
 }
 
 .auth-legal-links,
