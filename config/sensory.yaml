@@ -49,4 +49,4 @@ MIOTTS_PRESENCE_PENALTY: 0.0  # Penalizes tokens already used anywhere in the ou
 MIOTTS_FREQUENCY_PENALTY: 0.0  # Penalizes tokens proportional to how often they've already appeared.
 MIOTTS_BEST_OF_N_ENABLED: true  # Generate multiple candidates and pick the best via ASR error-rate scoring.
 MIOTTS_BEST_OF_N: 2  # Number of candidates to generate per call when best-of-N is enabled.
-KARAOKE_TEXT: "1"  # Pace UI text by TTS audio; options: 1/0, true/false, yes/no, on/off.
+KARAOKE_TEXT: "0"  # Pace UI text by TTS audio; options: 1/0, true/false, yes/no, on/off.
