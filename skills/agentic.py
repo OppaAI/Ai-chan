@@ -21,6 +21,7 @@ Context fetch shape:
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import math
 import os
@@ -1161,17 +1162,20 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             final_text = candidate
             break
 
+        # Phase 1 — pre-process all tool calls (fast, sequential checks)
+        batch_calls: list[tuple[str, str, dict]] = []   # (call_id, name, args)
+        final_answer_data: tuple[str, dict] | None = None  # (call_id, args)
+        trailing_dropped = 0
+
         for call_idx, call in enumerate(msg.tool_calls):
             name = call.function.name
             try:
                 args = json.loads(call.function.arguments)
             except json.JSONDecodeError as e:
-                args = {}
                 result = ToolResult(
-                    ok=False, tool=name, args=args,
+                    ok=False, tool=name, args={},
                     content=f"Invalid JSON arguments: {e}. Reissue this tool call with valid JSON.",
-                    error_type="invalid_json",
-                    retryable=True,
+                    error_type="invalid_json", retryable=True,
                 )
                 state.record(result)
                 messages.append({
@@ -1181,6 +1185,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 continue
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
+
             if name in _RESEARCH_TOOLS and _research_call_count(state) >= AGENT_RESEARCH_MAX_CALLS:
                 result = ToolResult(
                     ok=False, tool=name, args=args,
@@ -1190,8 +1195,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                         "Do not search again; use the evidence already gathered to "
                         "plan, summarize, save, or answer."
                     ),
-                    error_type="research_limit_reached",
-                    retryable=False,
+                    error_type="research_limit_reached", retryable=False,
                 )
                 state.record(result)
                 messages.append({
@@ -1199,6 +1203,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "name": name, "content": result.observation(),
                 })
                 continue
+
             call_key = (name, json.dumps(args, sort_keys=True))
             if name != "final_answer" and call_key in seen_calls:
                 result = ToolResult(
@@ -1207,8 +1212,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                         f"Repeated tool call skipped for {name}. Choose a different "
                         "query/argument/tool, or finalize with a disclosed limitation."
                     ),
-                    error_type="repeated_tool_call",
-                    retryable=True,
+                    error_type="repeated_tool_call", retryable=True,
                 )
                 state.record(result)
                 messages.append({
@@ -1216,45 +1220,69 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "name": name, "content": result.observation(),
                 })
                 continue
+
             if name != "final_answer":
                 seen_calls.add(call_key)
             if token_callback:
                 token_callback(f"__TOOL__:{name}({args})\n")
 
             if name == "final_answer":
-                candidate = args.get("answer", "")
-                if AGENT_VERIFY_FINAL:
-                    verdict = _verify_final_answer(owner, user_input, candidate, state)
-                    last_verdict = verdict
-                    if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
-                        final_repairs += 1
-                        messages.append({
-                            "role": "tool", "tool_call_id": call.id,
-                            "name": name,
-                            "content": json.dumps({
-                                "ok": False,
-                                "error_type": "verification_failed",
-                                "score": verdict.score,
-                                "feedback": verdict.feedback,
-                                "task_ledger": json.loads(state.summary()),
-                                "instruction": "Repair the missing/unsupported parts, then call final_answer again.",
-                            }, ensure_ascii=False, indent=2),
-                        })
-                        continue
-                final_text = candidate
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": "Answer submitted.",
-                })
-                if len(msg.tool_calls) > call_idx + 1:
-                    log.warning("[agentic] final_answer arrived mid-batch; dropping %d remaining tool call(s)", len(msg.tool_calls) - call_idx - 1)
+                final_answer_data = (call.id, args)
+                trailing_dropped = len(msg.tool_calls) - call_idx - 1
                 break
 
-            result = execute_tool_with_policy(name, args, state, owner=owner)
+            batch_calls.append((call.id, name, args))
+
+        # Phase 2 — execute batch tools in parallel, collect in original order
+        if batch_calls:
+            submitted = [
+                (call_id, name, CONTEXT_POOL.submit(
+                    execute_tool_with_policy, name, args, state, owner=owner
+                ))
+                for call_id, name, args in batch_calls
+            ]
+            for call_id, name, future in submitted:
+                try:
+                    result = future.result()
+                except Exception as e:
+                    result = ToolResult(
+                        ok=False, tool=name, args={},
+                        content=f"[tool execution error: {e}]",
+                        error_type="execution_error", retryable=False,
+                    )
+                    state.record(result)
+                messages.append({
+                    "role": "tool", "tool_call_id": call_id,
+                    "name": name, "content": result.observation(),
+                })
+
+        # Phase 3 — handle final_answer on main thread
+        if final_answer_data:
+            call_id, args = final_answer_data
+            candidate = args.get("answer", "")
+            if AGENT_VERIFY_FINAL:
+                verdict = _verify_final_answer(owner, user_input, candidate, state)
+                last_verdict = verdict
+                if not verdict.ok and final_repairs < AGENT_MAX_FINAL_REPAIRS:
+                    final_repairs += 1
+                    messages.append({
+                        "role": "tool", "tool_call_id": call_id,
+                        "name": "final_answer",
+                        "content": json.dumps({
+                            "ok": False, "error_type": "verification_failed",
+                            "score": verdict.score, "feedback": verdict.feedback,
+                            "task_ledger": json.loads(state.summary()),
+                            "instruction": "Repair the missing/unsupported parts, then call final_answer again.",
+                        }, ensure_ascii=False, indent=2),
+                    })
+                    continue
+            final_text = candidate
             messages.append({
-                "role": "tool", "tool_call_id": call.id,
-                "name": name, "content": result.observation(),
+                "role": "tool", "tool_call_id": call_id,
+                "name": "final_answer", "content": "Answer submitted.",
             })
+            if trailing_dropped:
+                log.warning("[agentic] final_answer arrived mid-batch; dropping %d remaining tool call(s)", trailing_dropped)
 
         if final_text:
             break
