@@ -105,11 +105,6 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
 
     const { startThresh, endThresh } = _calcThresholds();
 
-    // Log RMS periodically for diagnostics (every ~64 frames ≈ 2s at 32ms/frame)
-    if (Math.floor(Math.random() * 64) === 0) {
-        console.log(`[vad] energy RMS=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}  end≤${endThresh.toFixed(5)}  speaking=${_speaking}`);
-    }
-
     if (!_speaking && rms >= startThresh) {
         _energyHits++;
         if (_energyHits < ENERGY_MIN_FRAMES) {
@@ -121,6 +116,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
         _energyHits = 0;
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
         if (!_canSend(ws, epoch)) return;
+        console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}`);
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
         if (gate) {
             for (const buf of _preBuf) {
@@ -152,6 +148,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
                 _speaking = false;
                 _energyHits = 0;
                 if (!_canSend(ws, epoch)) return;
+                console.log(`[vad] speech END  floor=${_noiseFloor.toFixed(5)}`);
                 ws.send(JSON.stringify({ type: 'vad', event: 'end' }));
             }, SILENCE_TIMEOUT);
         }
