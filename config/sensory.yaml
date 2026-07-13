@@ -47,6 +47,6 @@ MIOTTS_TOP_P: 1.0  # Nucleus sampling threshold; 1.0 = no truncation of the toke
 MIOTTS_REPETITION_PENALTY: 1.15  # Penalizes repeated/held audio tokens; higher discourages drawn-out trailing vowels.
 MIOTTS_PRESENCE_PENALTY: 0.0  # Penalizes tokens already used anywhere in the output, regardless of frequency.
 MIOTTS_FREQUENCY_PENALTY: 0.0  # Penalizes tokens proportional to how often they've already appeared.
-MIOTTS_BEST_OF_N_ENABLED: true  # Generate multiple candidates and pick the best via ASR error-rate scoring.
+MIOTTS_BEST_OF_N_ENABLED: false  # Generate multiple candidates and pick the best via ASR error-rate scoring.
 MIOTTS_BEST_OF_N: 2  # Number of candidates to generate per call when best-of-N is enabled.
 KARAOKE_TEXT: "0"  # Pace UI text by TTS audio; options: 1/0, true/false, yes/no, on/off.
