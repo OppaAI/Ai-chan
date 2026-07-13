@@ -943,10 +943,13 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
     if _EXTERNAL_ACTION_RE.search(user_input) and not _LOCAL_ARTIFACT_RE.search(stripped):
         issues.append("The answer may imply an unsupported external action instead of a local draft/staged artifact.")
 
-    if issues and not AGENT_VERIFY_LLM:
+    AGENT_VERIFY_LLM_MODE = os.getenv("AGENT_VERIFY_LLM_MODE", "auto")  # "always" | "auto" | "off"
+  
+    if not issues and AGENT_VERIFY_LLM_MODE in ("off", "auto"):
+        return VerificationResult(ok=True, feedback="Deterministic checks passed; LLM verify skipped.", score=1.0)
+    if issues and AGENT_VERIFY_LLM_MODE == "off":
         return VerificationResult(ok=False, feedback="\n".join(issues), score=0.0)
-    if not issues and not AGENT_VERIFY_LLM:
-        return VerificationResult(ok=True, feedback="Verified by deterministic checks.", score=1.0)
+
 
     deterministic_note = f"\n\nDeterministic checks flagged (weigh, don't auto-fail): {'; '.join(issues)}" if issues else ""
 
