@@ -64,49 +64,12 @@ function tickClock() {
 tickClock();
 setInterval(tickClock, 1000);
 
-async function assetExists(src) {
-  try {
-    const res = await fetch(src, { method: 'HEAD', cache: 'no-store' });
-    return res.ok;
-  } catch (_) {
-    return false;
-  }
-}
-
-async function loadOptionalScript(src) {
-  if (!await assetExists(src)) return false;
-
-  return new Promise((resolve) => {
-    const script = document.createElement('script');
-    script.src = src;
-    script.onload = () => resolve(true);
-    script.onerror = () => resolve(false);
-    document.head.appendChild(script);
-  });
-}
-
-async function loadOptionalOrt() {
-  const required = [
-    './ort.min.js',
-    './silero_vad.onnx',
-    './ort-wasm-simd-threaded.jsep.mjs',
-    './ort-wasm-simd-threaded.jsep.wasm',
-  ];
-  for (const asset of required) {
-    if (!await assetExists(asset)) {
-      console.warn(`[vad] ${asset} missing; using energy VAD fallback`);
-      return false;
-    }
-  }
-  return loadOptionalScript('./ort.min.js');
-}
-
 // ── VAD init ──────────────────────────────────────────────────────────────
-// initVAD() is defined in vad.js. ONNX Runtime is optional: when any ORT
-// sidecar is absent, vad.js falls back to a simple local energy gate.
-loadOptionalOrt().then(() => initVAD()).then((status) => {
+// Browser runs a lightweight energy-RMS gate (vad.js) only — no model to load.
+// Backend Silero VAD is the authoritative speech/silence check.
+initVAD().then((status) => {
   vadDot.className = 'dot on';
-  vadStatus.textContent = status?.fallback ? 'vad fallback' : 'vad ready';
+  vadStatus.textContent = 'vad ready';
   vadStatus.className = 'ready';
 }).catch(err => {
   vadStatus.textContent = 'vad failed';
@@ -380,8 +343,8 @@ async function startMic() {
     micSource = micContext.createMediaStreamSource(micStream);
 
     // ── Serialised VAD processing queue ───────────────────────────────────
-    // Ensures Silero recurrent state is never corrupted by concurrent async
-    // _session.run() calls and frames are always sent in order.
+    // Energy VAD is synchronous math, but keeping this queue ensures frames
+    // are always sent to the server in strict arrival order.
     let _vadQueue = Promise.resolve();
     function pushVADFrame(frame) {
       _vadQueue = _vadQueue.then(() => processVADFrame(frame, ws, browserVadGate)).catch(e => console.error('[mic] VAD error:', e));
