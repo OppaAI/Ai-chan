@@ -68,7 +68,12 @@ async function initVAD() {
     ort.env.wasm.numThreads = 1;   // single-threaded safer on mobile
 
     try {
-        _srTensor = new ort.Tensor('int64', [16000], [1]);
+        // IMPORTANT: onnxruntime-web requires int64 tensor data to be a
+        // BigInt64Array, not a plain JS number array. Passing [16000] here
+        // throws inside this try block, which was silently swallowed by the
+        // catch below and made Silero *look* like it never fired — it never
+        // actually finished loading in the first place.
+        _srTensor = new ort.Tensor('int64', BigInt64Array.from([16000n]), [1]);
         _session = await ort.InferenceSession.create('./silero_vad.onnx', {
             executionProviders: ['wasm', 'webgl'],
         });
