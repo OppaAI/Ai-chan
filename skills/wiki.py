@@ -330,3 +330,72 @@ def wiki_context_for(
     if not chunks:
         return "<wiki_context>\nNo operational wiki pages found.\n</wiki_context>"
     return "<wiki_context>\n" + "\n\n".join(chunks) + "\n</wiki_context>"
+
+
+def wiki_agentic_contexts_for(
+    query: str,
+    embedder: "Embedder | None" = None,
+    wiki_limit: int = 1,
+    knowledge_limit: int = 2,
+    wiki_max_chars: int = 1500,
+    knowledge_max_chars: int = 2500,
+) -> tuple[str, str]:
+    """Return BOTH the operational wiki page block and the wiki knowledge
+    block from a SINGLE search_wiki call (same corpus, same query).
+
+    Previously _fetch_agentic_only_context fired wiki_context_for
+    (kind="wiki") and wiki_knowledge_context_for (all kinds) as two
+    separate search_wiki calls against the same store with the same
+    query — so the query was embedded twice per agentic turn (plus
+    each block's own excerpt pass). One unified search + partition
+    avoids the duplicate embedding while keeping the two distinct
+    blocks (wiki_context / wiki_knowledge_context) the prompt expects.
+    """
+    selected = search_wiki(query, limit=wiki_limit + knowledge_limit, embedder=embedder)
+    wiki_items = [it for it in selected if it.kind == "wiki"]
+    knowledge_items = [it for it in selected if it.kind != "wiki"]
+
+    wiki_chunks: list[str] = []
+    remaining = wiki_max_chars
+    for item in wiki_items[:wiki_limit]:
+        if remaining <= 0:
+            break
+        excerpt = _relevant_excerpt(item, query, embedder, remaining)
+        if not excerpt:
+            continue
+        wiki_chunks.append(f'<wiki_page id="{_attr(item.path.stem)}">\n{excerpt}\n</wiki_page>')
+        remaining -= len(excerpt)
+
+    knowledge_chunks: list[str] = []
+    remaining = knowledge_max_chars
+    for item in knowledge_items[:knowledge_limit]:
+        if remaining <= 0:
+            break
+        excerpt = _relevant_excerpt(item, query, embedder, remaining)
+        if not excerpt:
+            continue
+        meta = item.as_dict()
+        attrs = (
+            f'id="{_attr(meta["id"])}" '
+            f'kind="{_attr(meta["kind"])}" '
+            f'path="{_attr(meta["path"])}" '
+            f'title="{_attr(meta["title"])}" '
+            f'updated_at="{_attr(meta["updated_at"])}"'
+        )
+        knowledge_chunks.append(
+            f"<wiki_knowledge_item {attrs}>\n"
+            f"tags: {', '.join(meta['tags'])}\n\n{excerpt}\n</wiki_knowledge_item>"
+        )
+        remaining -= len(excerpt)
+
+    wiki_block = (
+        "<wiki_context>\n" + "\n\n".join(wiki_chunks) + "\n</wiki_context>"
+        if wiki_chunks else
+        "<wiki_context>\nNo operational wiki pages found.\n</wiki_context>"
+    )
+    knowledge_block = (
+        "<wiki_knowledge_context>\n" + "\n\n".join(knowledge_chunks) + "\n</wiki_knowledge_context>"
+        if knowledge_chunks else
+        "<wiki_knowledge_context>\nNo matching local knowledge found.\n</wiki_knowledge_context>"
+    )
+    return wiki_block, knowledge_block

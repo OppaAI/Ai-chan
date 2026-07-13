@@ -39,7 +39,7 @@ from system import bioclock
 from cognition import reason
 from cognition import CONTEXT_POOL
 from skills.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
-from skills.wiki import wiki_context_for, wiki_knowledge_context_for
+from skills.wiki import wiki_agentic_contexts_for
 from skills.capability import match_capabilities, filtered_tool_schemas
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from skills import experience
@@ -277,15 +277,17 @@ def _fetch_agentic_only_context(user_input: str, embedder, query_vector: np.ndar
     """
     futures = {
         "agentic_policy": CONTEXT_POOL.submit(_agentic_policy_context, user_input, embedder=embedder),
-        "wiki": CONTEXT_POOL.submit(wiki_context_for, user_input, limit=1, max_chars=1500, embedder=embedder),
-        "wiki_knowledge": CONTEXT_POOL.submit(wiki_knowledge_context_for, user_input, limit=2, max_chars=2500, embedder=embedder),
+        "wiki": CONTEXT_POOL.submit(wiki_agentic_contexts_for, user_input, embedder=embedder),
         "skill": CONTEXT_POOL.submit(skill_context_for, user_input, limit=2, max_chars=3000, embedder=embedder),
         "experience": CONTEXT_POOL.submit(experience.experience_context_for, user_input, limit=3, embedder=embedder),
     }
+    # "wiki" returns a (wiki_block, knowledge_block) tuple; both come
+    # from a SINGLE search_wiki call (see wiki_agentic_contexts_for) instead
+    # of the old two-call path that embedded the same query twice.
     fallbacks = {
         "agentic_policy": "<agentic_policy_context>\nLookup failed.\n</agentic_policy_context>",
-        "wiki": "<wiki_context>\nLookup failed.\n</wiki_context>",
-        "wiki_knowledge": "<wiki_knowledge_context>\nLookup failed.\n</wiki_knowledge_context>",
+        "wiki": ("<wiki_context>\nLookup failed.\n</wiki_context>",
+                "<wiki_knowledge_context>\nLookup failed.\n</wiki_knowledge_context>"),
         "skill": "<skill_context>\nLookup failed.\n</skill_context>",
         "experience": "<experience_context>\nLookup failed.\n</experience_context>",
     }
@@ -296,6 +298,9 @@ def _fetch_agentic_only_context(user_input: str, embedder, query_vector: np.ndar
         except Exception as e:
             log.error("[agentic] context fetch '%s' failed: %s", key, e)
             results[key] = fallbacks[key]
+    wiki_block, knowledge_block = results.pop("wiki")
+    results["wiki"] = wiki_block
+    results["wiki_knowledge"] = knowledge_block
     # wiki_knowledge is folded into knowledge_context downstream in
     # run_agentic_chat and scored there (combined with knowledge_block) —
     # scoring it here too is a wasted embedding call whose result
