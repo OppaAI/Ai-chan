@@ -75,6 +75,12 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL    = os.getenv("LLM_MODEL",    "ministral")
 ROUTER_MODEL = os.getenv("ROUTER_MODEL", LLM_MODEL)
 LLM_TIMEOUT  = float(os.getenv("LLM_TIMEOUT", 120))
+# Stop sequences sent on every LLM call. Model-specific — only the real
+# EOS matters; the third legacy token ([INST], raw instruct formatting)
+# is never emitted in chat-completions mode and was dead weight. Default
+# keeps the two common EOS tokens and drops [INST]; override per model
+# via LLM_STOP_SEQUENCES (comma-separated) if a different EOS is needed.
+LLM_STOP_SEQUENCES = [s.strip() for s in os.getenv("LLM_STOP_SEQUENCES", "</s>,<|im_end|>").split(",") if s.strip()]
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
 # Shared default recall/knowledge depth across all three chat paths
@@ -836,7 +842,7 @@ class AikoThink:
                 max_tokens=max_tokens,
                 temperature=float(os.getenv("TEMPERATURE", 0.72)),
                 top_p=float(os.getenv("TOP_P", 0.90)),
-                stop=["<|im_end|>", "</s>", "[INST]"],
+                stop=LLM_STOP_SEQUENCES,
                 timeout=LLM_TIMEOUT,
                 extra_body={
                     "repeat_penalty": float(os.getenv("REPEAT_PENALTY", 1.15)),
@@ -892,7 +898,7 @@ class AikoThink:
                 max_tokens=max_tokens,
                 temperature=float(os.getenv("TEMPERATURE", 0.72)),
                 top_p=float(os.getenv("TOP_P", 0.90)),
-                stop=["<|im_end|>", "</s>", "[INST]"],
+                stop=LLM_STOP_SEQUENCES,
                 timeout=LLM_TIMEOUT,
             )
             text = (resp.choices[0].message.content or "").strip()

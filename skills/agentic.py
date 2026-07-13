@@ -509,11 +509,11 @@ def _reg_no_handler(name, desc, props=None, required=None):
     schema = _f(name, desc, props, required)
     _TOOL_DEFS.append((schema, None))
 
-_reg_no_handler("deep_search", "In agentic task mode: snippet-only web search as ONE support step inside a larger workflow, where research itself is not the deliverable. Use this when the task needs current web result snippets/URLs to decide the next step. It does not fetch full pages; use deep_research for heavy source reading, synthesis, or self-learning.",
+_reg_no_handler("deep_search", "Web search returning result snippets/URLs only (no full-page fetch). Use for quick discovery or as one step inside a larger workflow.",
     {"query": {"type": "string", "description": "The focused research query to search and fetch."}},
     required=["query"])
 
-_reg_no_handler("deep_research", "In agentic task mode: heavy research/source-reading tool for when the research itself is the deliverable or for deliberate self-learning. It uses search only to discover candidate URLs, then fetches full pages, condenses evidence, optionally iterates/refines, and synthesizes. Costs more than deep_search; do not use for simple snippet lookup.",
+_reg_no_handler("deep_research", "Research tool that fetches and synthesizes full source pages from discovered URLs. Use when the research itself is the deliverable or for self-learning. Costs more than deep_search.",
     {"query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool refines it internally."}},
     required=["query"])
 
@@ -1132,6 +1132,13 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     skill_context = agentic_ctx["skill"]
     experience_context = agentic_ctx["experience"]
     knowledge_context = f'{agentic_ctx["wiki_knowledge"]}\n\n{knowledge_block}'
+    # Don't inject the experience block when it carries no actual
+    # past-task evidence — the empty placeholder ("No similar past
+    # task found." / "Lookup failed.") wastes tokens on every agentic
+    # turn that has no matching history. A real block always contains
+    # at least one <past_task> element.
+    if "<past_task" not in experience_context:
+        experience_context = ""
     scores["knowledge"] = reason.batch_block_relevance_scores(_embedder, user_input, [knowledge_context], query_vector=_query_vec)[0]
 
     wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context, task_mode_guidance = _enforce_agentic_context_budget(
