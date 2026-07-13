@@ -589,11 +589,6 @@ for schema, handler in _TOOL_DEFS:
     name = schema["function"]["name"]
     _TOOLS[name] = (schema, handler)
 
-# Rough fixed schema-token cost injected into EVERY chat.completions.create()
-# call via tools=tools — computed once at import time so the context budget
-# check below accounts for it instead of silently ignoring it.
-_TOOL_SCHEMA_TOKENS_ESTIMATE = max(1, len(json.dumps([s for s, _h in _TOOLS.values()])) // 4)
-
 
 def _required_args_for(name: str) -> list[str]:
     entry = _TOOLS.get(name)
@@ -937,11 +932,16 @@ def _enforce_agentic_context_budget(
     persona, agentic_policy_context, memory_context, user_input,
     wiki_context, skill_context, knowledge_context, experience_context,
     task_mode_context: str = "",
+    tool_schemas: list | None = None,
     scores: dict[str, float] | None = None,
 ) -> tuple[str, str, str, str, str, str]:
     budget = int(LLM_CTX_SIZE * AGENT_CONTEXT_BUDGET_RATIO)
     fixed = persona + memory_context + user_input
-    fixed_tokens = _estimate_tokens(fixed) + _TOOL_SCHEMA_TOKENS_ESTIMATE
+    # Estimate from the ACTUAL filtered tool schemas sent to the LLM this
+    # turn (10-12 after capability match), not the full 25-tool corpus —
+    # over-reserving for every schema starves task-specific context blocks.
+    tool_tokens = _estimate_tokens(json.dumps(tool_schemas or []))
+    fixed_tokens = _estimate_tokens(fixed) + tool_tokens
 
     blocks = {
         "wiki": wiki_context, "knowledge": knowledge_context,
@@ -1097,6 +1097,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
         owner._persona, agentic_policy_context, memory_context, user_input,
         wiki_context, skill_context, knowledge_context, experience_context,
         task_mode_context=TASK_MODE_GUIDANCE,
+        tool_schemas=tools,
         scores=scores,
     )
 
