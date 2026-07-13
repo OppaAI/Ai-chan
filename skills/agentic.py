@@ -313,6 +313,47 @@ AGENT_HISTORY_CANDIDATE_MULTIPLIER = int(os.getenv("AGENT_HISTORY_CANDIDATE_MULT
 AGENT_HISTORY_RECENCY_HALFLIFE = float(os.getenv("AGENT_HISTORY_RECENCY_HALFLIFE", 4))  # turns
 AGENT_HISTORY_ALWAYS_KEEP_RECENT = int(os.getenv("AGENT_HISTORY_ALWAYS_KEEP_RECENT", 2))
 
+# Per-message history embedding cache: each unique historical user message is
+# embedded once and reused across turns. The conversation history is
+# append-only, so an old message's embedding never changes — yet
+# _recent_history_messages scores the full candidate window (24 pairs) every
+# turn just to keep 8, re-paying the embed cost for ~16 already-dropped
+# pairs on EVERY single turn. Keyed by truncated content; capped to bound
+# memory across a long session (overflow just forces a one-time re-embed).
+_history_embed_cache: dict[str, np.ndarray] = {}
+_HISTORY_EMBED_CACHE_MAX = 512
+
+def _history_relevance_scores(embedder, user_input: str, history_texts: list[str], query_vector: np.ndarray | None) -> list[float]:
+    """Score candidate history messages against the current query, embedding
+    only NEW messages and serving prior ones from _history_embed_cache.
+
+    Mirrors reason.batch_block_relevance_scores' default-instruct path but
+    avoids re-embedding the same old turns every turn. If the batch embed
+    fails, falls back to the original full-rescore path for this one call
+    (no caching) rather than risk a dimension mismatch from a partial cache.
+    """
+    truncated = [t[:1500] for t in history_texts]
+    to_embed = [t for t in truncated if t not in _history_embed_cache]
+    if to_embed:
+        new_vecs = reason.embed_batch_or_none(embedder, to_embed)
+        if new_vecs is not None and new_vecs.shape[0] == len(to_embed):
+            for t, v in zip(to_embed, new_vecs):
+                _history_embed_cache[t] = np.asarray(v, dtype=np.float32)
+            if len(_history_embed_cache) > _HISTORY_EMBED_CACHE_MAX:
+                _history_embed_cache.clear()
+        else:
+            return reason.batch_block_relevance_scores(embedder, user_input, history_texts, query_vector=query_vector)
+    b_vecs = np.asarray([_history_embed_cache[t] for t in truncated], dtype=np.float32)
+    if query_vector is not None:
+        q_vec = np.asarray(query_vector, dtype=np.float32)
+    else:
+        try:
+            q_vec = np.asarray(embedder.embed_query(user_input), dtype=np.float32)
+        except Exception:
+            return [0.0] * len(history_texts)
+    scores = reason.batch_cosine_scores(q_vec, b_vecs)
+    return [float(s) for s in scores]
+
 
 def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT_HISTORY_TURNS, query_vector: np.ndarray | None = None) -> list[dict]:
     with owner._history_lock:
@@ -336,7 +377,7 @@ def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT
     embedder = _owner_embedder(owner)
 
     history_texts = [u_msg["content"] for u_msg, _ in candidates]
-    relevance_scores = reason.batch_block_relevance_scores(embedder, user_input, history_texts, query_vector=query_vector)
+    relevance_scores = _history_relevance_scores(embedder, user_input, history_texts, query_vector)
     scored = []
     for idx, (u_msg, a_msg) in enumerate(candidates):
         turns_ago = n - 1 - idx
