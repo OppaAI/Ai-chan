@@ -246,6 +246,7 @@ class AikoThink:
         self._reasoning = False
         self.last_usage: dict = {}
         self.last_prompt_debug: dict = {}
+        self._turn_cached_embeddings: dict[str, np.ndarray] = {}
 
         self._last_chat_time = time.time()
         self._idle_learner_thread = threading.Thread(
@@ -304,7 +305,12 @@ class AikoThink:
             self._active_turn.set()
             self._note_user_activity()
             try:
-                mem_kb_future = CONTEXT_POOL.submit(self._fetch_memory_and_knowledge, user_input)
+                embedder = self._memorize._mem._embedder
+                query_vec = embedder.embed_query(user_input)
+                self._turn_cached_embeddings = {"_default_instruct": query_vec}
+                mem_kb_future = CONTEXT_POOL.submit(
+                    self._fetch_memory_and_knowledge, user_input, query_vec
+                )
 
                 intent = self._route_intent(user_input)
                 log.info("[route] intent=%s", intent)
@@ -320,7 +326,8 @@ class AikoThink:
                 self._active_turn.clear()
 
     def _fetch_memory_and_knowledge(
-        self, user_input: str, mem_limit: int = MEMORY_RECALL_LIMIT, know_limit: int = KNOWLEDGE_RECALL_LIMIT
+        self, user_input: str, query_vector: np.ndarray | None = None,
+        mem_limit: int = MEMORY_RECALL_LIMIT, know_limit: int = KNOWLEDGE_RECALL_LIMIT,
     ) -> tuple[list[dict], str]:
         """Fetch long-term memory + learned-knowledge (KB) concurrently.
 
@@ -331,10 +338,13 @@ class AikoThink:
         Callers that run standalone (e.g. a scheduled agentic job with no
         prior route() call) can call this directly instead.
 
+        query_vector — pre-computed _QUERY_INSTRUCT embedding of user_input,
+        avoids a redundant HTTP call inside _MemoryBackend.search().
+
         Returns (memories, knowledge_block).
         """
         embedder = self._memorize._mem._embedder
-        mem_future = CONTEXT_POOL.submit(self._memorize.search, user_input, limit=mem_limit)
+        mem_future = CONTEXT_POOL.submit(self._memorize.search, user_input, limit=mem_limit, query_vector=query_vector)
         know_future = CONTEXT_POOL.submit(
             knowledge_context_for, user_input, limit=know_limit, max_chars=2000, embedder=embedder
         )
@@ -370,7 +380,7 @@ class AikoThink:
             except Exception as e:
                 log.error("Memory/KB fetch failed: %s", e)
                 return [], "<knowledge_context>\nLookup failed.\n</knowledge_context>"
-        return self._fetch_memory_and_knowledge(user_input)
+        return self._fetch_memory_and_knowledge(user_input, query_vector=self._turn_cached_embeddings.get("_default_instruct"))
 
     def _note_user_activity(self) -> None:
         """Clear the rest flag on real user activity so learn.idle_learner_loop
@@ -508,6 +518,12 @@ class AikoThink:
             self._last_chat_time = time.time()
             self._active_turn.set()
             try:
+                embedder = self._memorize._mem._embedder
+                cap_vec = embedder.embed_query(
+                    user_input,
+                    instruct="Which capability/tool domain applies to this task?",
+                )
+                self._turn_cached_embeddings["_capability_instruct"] = cap_vec
                 return run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
             finally:
                 self._last_chat_time = time.time()
@@ -777,7 +793,7 @@ class AikoThink:
             words = text.split(" ")
             for i, word in enumerate(words):
                 token_callback(word if i == 0 else " " + word)
-                time.sleep(float(os.getenv("EMIT_DELAY", 0.012)))
+                time.sleep(float(os.getenv("EMIT_DELAY", 0.005)))
 
         # TTS runs independently
         if self._speak:

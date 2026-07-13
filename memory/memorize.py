@@ -961,26 +961,29 @@ class _MemoryBackend:
         rest = [mid for mid in scored_ids if mid not in relevant_set]
         return relevant_sorted + rest
 
-    def search(self, query: str, user_id: str, limit: int = 5) -> list[dict]:
+    def search(self, query: str, user_id: str, limit: int = 5, vector: list[float] | None = None) -> list[dict]:
         """
         KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate
         pass, recency-among-relevant reranking, and a pinned-slot reserve.
         See module docstring for the full stage-by-stage description.
 
         1. Embed the query once (_embed) — this is the dominant cost
-           regardless of which pass runs below, so it is never repeated.
+            regardless of which pass runs below, so it is never repeated.
         2. Quick pass: pull QUICK_KNN_LIMIT / QUICK_FTS_LIMIT candidates,
-           dedup + score them. If that already fills `limit` results and the
-           weakest of them clears MEMORY_RECALL_SCORE_THRESHOLD, use it as-is
-           — most turns stop here and never pay for the wider SQL scan.
+            dedup + score them. If that already fills `limit` results and the
+            weakest of them clears MEMORY_RECALL_SCORE_THRESHOLD, use it as-is
+            — most turns stop here and never pay for the wider SQL scan.
         3. Otherwise widen to KNN_LIMIT / FTS_LIMIT and re-rank the larger
-           pool from scratch (rank positions shift when the pool grows, so
-           this is a fresh scoring pass, not a merge with the quick pass).
+            pool from scratch (rank positions shift when the pool grows, so
+            this is a fresh scoring pass, not a merge with the quick pass).
         4. Reorder the resulting candidates by recency-among-relevant.
         5. Apply the pinned-slot reserve as a final guarantee.
         6. Truncate to `limit` and return as payload dicts.
+
+        vector — pre-computed query embedding; skips the _embed HTTP call.
         """
-        vector = self._embed(query, query=True)
+        if vector is None:
+            vector = self._embed(query, query=True)
         fts_query = _sanitize_fts_query(query)
 
         # ── quick pass ──────────────────────────────────────────────────────
@@ -1339,7 +1342,7 @@ class AikoMemorize:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, user_id: str | None = None, limit: int = 5) -> list[dict]:
+    def search(self, query: str, user_id: str | None = None, limit: int = 5, query_vector: list[float] | None = None) -> list[dict]:
         """
         Retrieve top-k memories relevant to the current query.
         Side-effect: increments access_count and updates last_accessed_at
@@ -1351,6 +1354,9 @@ class AikoMemorize:
         choke point every caller (CLI, WebUI, voice, think.py) goes
         through, so the skip applies everywhere without duplication. Any
         message with real content attached always searches normally.
+
+        query_vector — pre-computed _QUERY_INSTRUCT embedding; avoids a
+        redundant HTTP call inside _MemoryBackend.search().
         """
         user_id = _default_user_id(user_id)
         if _is_trivial_input(query or ""):
@@ -1376,7 +1382,7 @@ class AikoMemorize:
             if cached:
                 self._search_cache.pop(cache_key, None)
 
-        results = self._mem.search(query, user_id=user_id, limit=limit)
+        results = self._mem.search(query, user_id=user_id, limit=limit, vector=query_vector)
         self._touch_memories(results)
 
         with self._search_cache_lock:

@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
+
 from system.log import get_logger
 from system import bioclock
 from cognition import reason
@@ -200,7 +202,7 @@ def _owner_embedder(owner):
     return getattr(getattr(getattr(owner, "_memorize", None), "_mem", None), "_embedder", None)
 
 
-def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
+def _fetch_agentic_only_context(user_input: str, embedder, query_vector: np.ndarray | None = None) -> dict:
     """Fetch agentic-specific context blocks concurrently: agentic policy
     (skills.md/schedule.md excerpts), wiki (architecture cards + wiki's own
     knowledge RAG), predefined skill workflows, and past-task experience.
@@ -213,6 +215,9 @@ def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
 
     Per-key try/except means one failed lookup surfaces a fallback block
     instead of sinking the other three.
+
+    query_vector — pre-computed _QUERY_INSTRUCT embedding; avoids redundant
+    embedding in batch_block_relevance_scores.
     """
     futures = {
         "agentic_policy": CONTEXT_POOL.submit(_agentic_policy_context, user_input, embedder=embedder),
@@ -242,7 +247,7 @@ def _fetch_agentic_only_context(user_input: str, embedder) -> dict:
     # budget-block keys: wiki, knowledge, experience, agentic_policy, skill).
     score_keys = [k for k in results if k != "wiki_knowledge"]
     score_texts = [results[k] for k in score_keys]
-    score_values = reason.batch_block_relevance_scores(embedder, user_input, score_texts)
+    score_values = reason.batch_block_relevance_scores(embedder, user_input, score_texts, query_vector=query_vector)
     scores = dict(zip(score_keys, score_values))
     results["_scores"] = scores
     return results
@@ -253,7 +258,7 @@ AGENT_HISTORY_RECENCY_HALFLIFE = float(os.getenv("AGENT_HISTORY_RECENCY_HALFLIFE
 AGENT_HISTORY_ALWAYS_KEEP_RECENT = int(os.getenv("AGENT_HISTORY_ALWAYS_KEEP_RECENT", 2))
 
 
-def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT_HISTORY_TURNS) -> list[dict]:
+def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT_HISTORY_TURNS, query_vector: np.ndarray | None = None) -> list[dict]:
     with owner._history_lock:
         snapshot = list(owner._history)
     if not snapshot:
@@ -275,7 +280,7 @@ def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT
     embedder = _owner_embedder(owner)
 
     history_texts = [u_msg["content"] for u_msg, _ in candidates]
-    relevance_scores = reason.batch_block_relevance_scores(embedder, user_input, history_texts)
+    relevance_scores = reason.batch_block_relevance_scores(embedder, user_input, history_texts, query_vector=query_vector)
     scored = []
     for idx, (u_msg, a_msg) in enumerate(candidates):
         turns_ago = n - 1 - idx
@@ -988,12 +993,19 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # keyword scoring automatically if unavailable.
     _embedder = _owner_embedder(owner)
 
+    # Use pre-computed query embeddings from route() when available,
+    # avoiding redundant HTTP calls across memory search, capability
+    # matching, and batch_block_relevance_scores.
+    _turn_cache = getattr(owner, "_turn_cached_embeddings", {}) or {}
+    _query_vec = _turn_cache.get("_default_instruct")
+    _cap_vec = _turn_cache.get("_capability_instruct")
+
     # Narrow the tool list actually sent to the LLM this turn. Previously
     # every _TOOL_SCHEMAS entry (~20 tools) was sent on every turn regardless
     # of relevance — a real cost for a 3B model's tool-selection accuracy.
     # No match -> filtered_tool_schemas returns everything unchanged, so this
     # can only shrink the list, never regress a turn.
-    _matched_caps = match_capabilities(user_input, embedder=_embedder)
+    _matched_caps = match_capabilities(user_input, embedder=_embedder, query_vector=_cap_vec)
     tools = filtered_tool_schemas(tool_schemas(), _matched_caps)
 
     if mem_kb_future is not None:
@@ -1003,7 +1015,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             log.error("Memory/KB fetch failed: %s", e)
             memories, knowledge_block = [], "<knowledge_context>\nLookup failed.\n</knowledge_context>"
     else:
-        memories, knowledge_block = owner._fetch_memory_and_knowledge(user_input)
+        memories, knowledge_block = owner._fetch_memory_and_knowledge(user_input, query_vector=_query_vec)
 
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
@@ -1011,14 +1023,14 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # Wiki/policy/skill/experience are agentic-only — fetched now,
     # concurrently with each other, since intent has already resolved to
     # "agentic" by the time run_agentic_chat runs.
-    agentic_ctx = _fetch_agentic_only_context(user_input, embedder=_embedder)
+    agentic_ctx = _fetch_agentic_only_context(user_input, embedder=_embedder, query_vector=_query_vec)
     scores = agentic_ctx.pop("_scores", {})
     agentic_policy_context = agentic_ctx["agentic_policy"]
     wiki_context = agentic_ctx["wiki"]
     skill_context = agentic_ctx["skill"]
     experience_context = agentic_ctx["experience"]
     knowledge_context = f'{agentic_ctx["wiki_knowledge"]}\n\n{knowledge_block}'
-    scores["knowledge"] = reason.batch_block_relevance_scores(_embedder, user_input, [knowledge_context])[0]
+    scores["knowledge"] = reason.batch_block_relevance_scores(_embedder, user_input, [knowledge_context], query_vector=_query_vec)[0]
 
     wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,
@@ -1080,7 +1092,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     )
     messages = [
         {"role": "system", "content": agent_system},
-        *_recent_history_messages(owner, user_input),
+        *_recent_history_messages(owner, user_input, query_vector=_query_vec),
         {"role": "user", "content": user_input},
     ]
     owner.last_prompt_debug = {

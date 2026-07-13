@@ -60,8 +60,8 @@ class HarrierEmbedder:
     round-trip.
     """
 
-    _CACHE_MAX: int = 32
-    _CACHE_TTL: float = 3.0  # seconds
+    _CACHE_MAX: int = 256
+    _CACHE_TTL: float = 30.0  # seconds
 
     def __init__(
         self,

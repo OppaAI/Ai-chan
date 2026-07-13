@@ -70,6 +70,7 @@ def block_relevance_score(embedder, query: str, text: str, instruct: str | None 
 
 def batch_block_relevance_scores(
     embedder, query: str, texts: list[str], instruct: str | None = None,
+    query_vector: np.ndarray | None = None,
 ) -> list[float]:
     """Score multiple context blocks against one query in a single batch
     embedding call. Embeds the query once and all texts in one batch,
@@ -78,17 +79,27 @@ def batch_block_relevance_scores(
     Uses embed_queries when available (batched HTTP) instead of N
     individual embed_query calls, cutting per-block latency from 2 HTTP
     round-trips to 2 total.
+
+    query_vector — pre-computed query embedding; when provided the
+    query is not re-embedded (saves one HTTP call per invocation).
     """
     if embedder is None or not query or not texts:
         return [0.0] * len(texts) if texts else []
     try:
         truncated = [t[:1500] for t in texts]
-        all_texts = [query] + truncated
-        batch = embedder.embed_queries(all_texts, instruct=instruct)
-        if batch is None or len(batch) != len(all_texts):
-            return [block_relevance_score(embedder, query, t, instruct=instruct) for t in texts]
-        q_vec = np.asarray(batch[0], dtype=np.float32)
-        b_vecs = np.asarray(batch[1:], dtype=np.float32)
+        if query_vector is not None:
+            q_vec = np.asarray(query_vector, dtype=np.float32)
+            b_vecs = embedder.embed_queries(truncated, instruct=instruct)
+            if b_vecs is None or len(b_vecs) != len(truncated):
+                return [block_relevance_score(embedder, query, t, instruct=instruct) for t in texts]
+            b_vecs = np.asarray(b_vecs, dtype=np.float32)
+        else:
+            all_texts = [query] + truncated
+            batch = embedder.embed_queries(all_texts, instruct=instruct)
+            if batch is None or len(batch) != len(all_texts):
+                return [block_relevance_score(embedder, query, t, instruct=instruct) for t in texts]
+            q_vec = np.asarray(batch[0], dtype=np.float32)
+            b_vecs = np.asarray(batch[1:], dtype=np.float32)
         scores = batch_cosine_scores(q_vec, b_vecs)
         return [float(s) for s in scores]
     except Exception:

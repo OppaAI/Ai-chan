@@ -120,14 +120,22 @@ def _get_trigger_embedding(cap: Capability, embedder: Embedder) -> np.ndarray:
 
 def match_capabilities(
     user_input: str, embedder: Embedder | None = None, threshold: float = _CAPABILITY_THRESHOLD,
+    query_vector: np.ndarray | None = None,
 ) -> list[str]:
     """Return matched capability ids for this turn. Falls back to substring
     match against trigger phrases if no embedder is available or embedding
-    fails — never raises."""
+    fails — never raises.
+
+    query_vector — pre-computed _CAPABILITY_INSTRUCT embedding; skips the
+    redundant embedding HTTP call when provided.
+    """
     if embedder is not None:
         try:
-            query_vec = np.asarray(embedder.embed_query(user_input, instruct=_CAPABILITY_INSTRUCT), dtype=np.float32)
-            query_vec = reason.normalize_vec(query_vec)
+            if query_vector is not None:
+                query_vec = reason.normalize_vec(np.asarray(query_vector, dtype=np.float32))
+            else:
+                query_vec = np.asarray(embedder.embed_query(user_input, instruct=_CAPABILITY_INSTRUCT), dtype=np.float32)
+                query_vec = reason.normalize_vec(query_vec)
             matched = []
             for cap in CAPABILITIES.values():
                 trig_vec = _get_trigger_embedding(cap, embedder)
