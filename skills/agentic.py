@@ -88,6 +88,7 @@ AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", 1500))
 AGENT_TOOL_RESULT_MAX_CHARS = int(os.getenv("AGENT_TOOL_RESULT_MAX_CHARS", 3000))
 AGENT_VERIFY_FINAL = os.getenv("AGENT_VERIFY_FINAL", "1").lower() in {"1", "true", "yes", "on"}
 AGENT_VERIFY_LLM = os.getenv("AGENT_VERIFY_LLM", "1").lower() in {"1", "true", "yes", "on"}
+AGENT_VERIFY_LLM_MODE = os.getenv("AGENT_VERIFY_LLM_MODE", "auto")  # "always" | "auto" | "off"
 AGENT_MAX_FINAL_REPAIRS = int(os.getenv("AGENT_MAX_FINAL_REPAIRS", 2))
 AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
@@ -942,9 +943,7 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
 
     if _EXTERNAL_ACTION_RE.search(user_input) and not _LOCAL_ARTIFACT_RE.search(stripped):
         issues.append("The answer may imply an unsupported external action instead of a local draft/staged artifact.")
-
-    AGENT_VERIFY_LLM_MODE = os.getenv("AGENT_VERIFY_LLM_MODE", "auto")  # "always" | "auto" | "off"
-  
+ 
     if not issues and AGENT_VERIFY_LLM_MODE in ("off", "auto"):
         return VerificationResult(ok=True, feedback="Deterministic checks passed; LLM verify skipped.", score=1.0)
     if issues and AGENT_VERIFY_LLM_MODE == "off":
