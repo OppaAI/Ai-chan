@@ -369,7 +369,7 @@ class AikoWeb:
                             self._input_q.put(text)
 
                     elif mtype == "vad":
-                        # browser Silero VAD sentinels — update voice status display
+                        # browser energy VAD sentinels — update voice status display
                         # and inject end-of-utterance sentinel into the audio queue
                         event = msg.get("event")
                         if event == "start":
