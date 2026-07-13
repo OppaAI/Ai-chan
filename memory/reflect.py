@@ -39,6 +39,8 @@ Idempotency:
   for this date"). Any stale pins for the target date are deleted first,
   so a rerun replaces rather than accumulates.
 """
+from __future__ import annotations
+
 import base64
 import json
 import os

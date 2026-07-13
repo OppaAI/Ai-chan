@@ -17,6 +17,8 @@ field) can pass an explicit override to any function here — the override
 always wins, the config default is only the fallback when none is given.
 """
 
+from __future__ import annotations
+
 import os
 import time
 import threading

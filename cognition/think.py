@@ -22,6 +22,8 @@ Memory + knowledge-base fetch:
   to "agentic".
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import json

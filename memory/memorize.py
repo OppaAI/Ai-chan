@@ -124,6 +124,8 @@ Async write queue:
 Dependencies:
   pip install sqlite-vec llama-cpp-python tokenizers
 """
+from __future__ import annotations
+
 import json
 import os
 from collections import OrderedDict

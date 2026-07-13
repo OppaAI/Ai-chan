@@ -6,6 +6,8 @@ webui/auth.py) and the same allowlist env vars.  No local server needed
 — the device flow shows a code the user enters at github.com/login/device.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import time

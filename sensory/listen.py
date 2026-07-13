@@ -27,6 +27,8 @@ Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     3. Enroll your voice: python -m util.enroll_speak
     4. Set SPEAKER_VERIFY_ENABLED=1 in .env
 """
+from __future__ import annotations
+
 import onnxruntime as _ort
 if hasattr(_ort, "set_default_logger_severity"):
     _ort.set_default_logger_severity(3)

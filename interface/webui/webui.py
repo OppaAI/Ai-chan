@@ -33,6 +33,8 @@ Boot ordering note (login-gated wakeup):
     model/subsystem boot is deferred.
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging

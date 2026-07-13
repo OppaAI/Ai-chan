@@ -13,6 +13,8 @@ This mirrors how biological memory consolidation works:
 
 Called by memorize.py — no I/O, pure math only.
 """
+from __future__ import annotations
+
 from datetime import datetime, timezone
 import os
 

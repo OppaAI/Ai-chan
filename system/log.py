@@ -13,6 +13,8 @@ Usage:
     log.warning("Something looks off.")
     log.error("Something broke.")
 """
+from __future__ import annotations
+
 import logging
 import os
 from logging.handlers import RotatingFileHandler

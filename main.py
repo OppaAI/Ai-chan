@@ -42,6 +42,8 @@ Boot ordering note (login-gated wakeup):
     CLI path (_run_cli) already resolves a real USER_ID via GitHub OAuth
     before _run_session() is ever called, so it needs no change here.
 """
+from __future__ import annotations
+
 from system.config import load_config
 load_config()
 
