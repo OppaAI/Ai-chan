@@ -1172,11 +1172,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     wiki_knowledge_block = _blank_empty_context(agentic_ctx["wiki_knowledge"])
     knowledge_block = _blank_empty_context(knowledge_block)
     knowledge_context = f"{wiki_knowledge_block}\n\n{knowledge_block}" if wiki_knowledge_block else knowledge_block
-    # Don't inject the experience block when it carries no actual
-    # past-task evidence — the empty placeholder ("No similar past
-    # task found." / "Lookup failed.") wastes tokens on every agentic
-    # turn that has no matching history. A real block always contains
-    # at least one <past_task> element.
+    # Safety net: any experience block lacking a real <past_task> element
+    # (e.g. a future placeholder not covered by _EMPTY_CONTEXT_MARKERS)
+    # is dropped rather than injected.
     if "<past_task" not in experience_context:
         experience_context = ""
     scores["knowledge"] = reason.batch_block_relevance_scores(_embedder, user_input, [knowledge_context], query_vector=_query_vec)[0]
