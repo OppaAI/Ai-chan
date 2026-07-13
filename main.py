@@ -479,12 +479,13 @@ class ProactiveIdleRunner:
     quiet until the user returns.
     """
 
-    def __init__(self, ui, speak, speak_enabled_fn, active_turn: threading.Event, generate_fn=None) -> None:
+    def __init__(self, ui, speak, speak_enabled_fn, active_turn: threading.Event, generate_fn=None, on_rest_change=None) -> None:
         self._ui = ui
         self._speak = speak
         self._speak_enabled_fn = speak_enabled_fn
         self._active_turn = active_turn
         self._generate_fn = generate_fn
+        self._on_rest_change = on_rest_change
         self._stop = threading.Event()
         self._wakeup = threading.Event()
         self._lock = threading.Lock()
@@ -514,6 +515,8 @@ class ProactiveIdleRunner:
             self._last_activity = time.monotonic()
             self._next_checkin_after = self._random_first_idle_delay()
             self._resting = False
+        if self._on_rest_change:
+            self._on_rest_change(False)
         self._wakeup.set()
 
     def set_enabled(self, enabled: bool) -> None:
@@ -522,6 +525,8 @@ class ProactiveIdleRunner:
             self._last_activity = time.monotonic()
             self._next_checkin_after = self._random_first_idle_delay()
             self._resting = False
+        if self._on_rest_change:
+            self._on_rest_change(False)
         self._wakeup.set()
 
     def is_enabled(self) -> bool:
@@ -595,6 +600,8 @@ class ProactiveIdleRunner:
             self._last_prompt = now
             if rest:
                 self._resting = True
+                if self._on_rest_change:
+                    self._on_rest_change(True)
             else:
                 idle_for = now - self._last_activity
                 self._next_checkin_after = idle_for + PROACTIVE_COOLDOWN_SECONDS
@@ -1540,6 +1547,7 @@ def _run_session(ui, args):
         speak_enabled_fn=lambda: tts_enabled,
         active_turn=session_active,
         generate_fn=_generate_proactive_checkin,
+        on_rest_change=think.set_proactive_resting,
     )
     proactive.start()
 
