@@ -339,6 +339,15 @@ class AikoThink:
         self._router_model = ROUTER_MODEL
         self._memorize  = memorize
         self._speak     = speak
+        # Guards self._speak against the toggle-vs-proactive-thread race:
+        # set_speak() is called from the main thread (main.py's /voice
+        # toggle), while _proactive_tick/_fire_checkin/_fire_rest_message
+        # read self._speak from the background proactive daemon thread.
+        # Readers should snapshot once via _get_speak() rather than reading
+        # self._speak multiple times in the same tick, so a toggle landing
+        # mid-tick can't produce a check-then-use mismatch (stale ref or
+        # a None where a check just above proved truthy).
+        self._speak_lock = threading.Lock()
         self._persona   = _load_static_persona()
         self._history:  list[dict] = []
         self._history_lock = threading.Lock()
@@ -777,10 +786,13 @@ class AikoThink:
 
     def _proactive_tick(self) -> None:
         # Never interrupt an in-progress turn, and never talk over TTS
-        # that's already speaking.
+        # that's already speaking. Snapshot once (see _get_speak) so a
+        # /voice toggle landing mid-tick can't flip self._speak out from
+        # under this check-then-use.
         if self._active_turn.is_set():
             return
-        if self._speak and self._speak.is_playing():
+        speak = self._get_speak()
+        if speak and speak.is_playing():
             return
 
         idle_seconds = time.time() - self._last_chat_time
@@ -849,8 +861,10 @@ class AikoThink:
             message = PROACTIVE_REST_MESSAGE
 
         log.info("[proactive] going quiet to rest: %s", message)
-        if PROACTIVE_SPEAK and self._speak:
-            self._speak.speak(message)
+        if PROACTIVE_SPEAK:
+            speak = self._get_speak()
+            if speak:
+                speak.speak(message)
         self._proactive_resting = True
 
     def _fire_checkin(self) -> None:
@@ -872,8 +886,10 @@ class AikoThink:
             return
 
         log.info("[proactive] check-in: %s", message)
-        if PROACTIVE_SPEAK and self._speak:
-            self._speak.speak(message)
+        if PROACTIVE_SPEAK:
+            speak = self._get_speak()
+            if speak:
+                speak.speak(message)
 
         now_ts = time.time()
         self._proactive_last_checkin_time = now_ts
@@ -968,7 +984,18 @@ class AikoThink:
         return users[-1], assistants[-1]
 
     def set_reasoning(self, enabled: bool) -> None: self._reasoning = enabled
-    def set_speak(self, speak) -> None: self._speak = speak
+
+    def set_speak(self, speak) -> None:
+        with self._speak_lock:
+            self._speak = speak
+
+    def _get_speak(self):
+        """Snapshot self._speak under lock. Proactive-thread call sites
+        should call this once per tick and act on the local variable,
+        rather than reading self._speak repeatedly, to avoid a toggle
+        landing between a check and its matching use."""
+        with self._speak_lock:
+            return self._speak
 
     def wait_for_memory(self, timeout: float | None = None) -> bool:
         """Block until AikoMemorize's async write queue drains, or timeout
