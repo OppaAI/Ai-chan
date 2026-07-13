@@ -328,6 +328,7 @@ class AikoListen:
         finally:
             try:
                 proc.terminate()
+                proc.wait(timeout=5)
             except Exception:
                 pass
 
@@ -526,6 +527,7 @@ class AikoListen:
             if proc is not None:
                 try:
                     proc.terminate()
+                    proc.wait(timeout=5)
                 except Exception:
                     pass
 

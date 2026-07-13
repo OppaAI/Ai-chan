@@ -133,8 +133,16 @@ def _save_state(state: dict, user_id: str | None = None) -> None:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
+_LLM_CLIENT: OpenAI | None = None
+
+def _get_llm_client() -> OpenAI:
+    global _LLM_CLIENT
+    if _LLM_CLIENT is None:
+        _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=CONSOLIDATION_LLM_TIMEOUT)
+    return _LLM_CLIENT
+
 def _chat(system: str, user: str, max_tokens: int = 900, temperature: float = 0.1) -> str:
-    client = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed", timeout=CONSOLIDATION_LLM_TIMEOUT)
+    client = _get_llm_client()
     resp = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[

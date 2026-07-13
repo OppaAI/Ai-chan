@@ -41,6 +41,7 @@ import re
 import socket
 import time
 import threading
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 
@@ -756,12 +757,13 @@ def condense_evidence(
 
 def _deep_search_impl(
     query: str,
-    num_searches: int,
-    num_fetches: int,
-    max_chars_per_page: int,
-    max_workers: int,
     embedder,
-    exclude_urls: set[str] | None,
+    *,
+    num_searches: int = 1,
+    num_fetches: int = 0,
+    max_chars_per_page: int = 4000,
+    max_workers: int = 3,
+    exclude_urls: set[str] | None = None,
     fetch_fn=web_fetch,
     batch_prefetch_fn=None,
     respect_robots: bool = False,
@@ -900,9 +902,7 @@ def deep_search(
     backwards-compatible escape hatch; keep it 0 for the intended behavior.
     Deliberately never uses Crawl4AI, robots gating, or sitemap expansion —
     those are deep_research-only."""
-    text, _urls = _deep_search_impl(
-        query, num_searches, num_fetches, max_chars_per_page, max_workers, embedder, None,
-    )
+    text, _urls = _deep_search_impl(query, embedder, num_searches=num_searches, num_fetches=num_fetches, max_chars_per_page=max_chars_per_page, max_workers=max_workers)
     return text
 
 
@@ -973,12 +973,12 @@ def deep_research(
         log.info("[deep_research] round %d searching: %s", round_num, current_query)
         round_text, round_urls = _deep_search_impl(
             current_query,
-            num_searches,
-            num_fetches,
-            max_chars_per_page,
-            DEEP_SEARCH_MAX_WORKERS,
             embedder,
-            seen_urls,
+            num_searches=num_searches,
+            num_fetches=num_fetches,
+            max_chars_per_page=max_chars_per_page,
+            max_workers=DEEP_SEARCH_MAX_WORKERS,
+            exclude_urls=seen_urls,
             fetch_fn=fetch_fn,
             batch_prefetch_fn=batch_prefetch_fn,
             respect_robots=respect_robots,

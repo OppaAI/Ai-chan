@@ -281,12 +281,30 @@ def _read_raw(path: Path) -> list[dict]:
 
 
 def _read_all() -> list[dict]:
-    """Read scheduled jobs for the active user."""
-    return _read_raw(schedule_path())
+    """Read scheduled jobs for the active user (cached)."""
+    if _schedule_cache is not None:
+        return _schedule_cache
+    return _read_and_cache()
+
+_schedule_cache: list[dict] | None = None
+_schedule_dirty: bool = True
+
+def _read_and_cache() -> list[dict]:
+    global _schedule_cache, _schedule_dirty
+    data = _read_raw(schedule_path())
+    _schedule_cache = data
+    _schedule_dirty = False
+    return data
+
+def _invalidate_cache() -> None:
+    global _schedule_cache, _schedule_dirty
+    _schedule_cache = None
+    _schedule_dirty = True
 
 
 def _write_all(jobs: list[dict]) -> None:
     """Persist scheduled jobs atomically enough for a single local process."""
+    _invalidate_cache()
     path = schedule_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")

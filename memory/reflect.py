@@ -67,7 +67,13 @@ HUGO_IMAGES_PATH  = os.getenv("HUGO_IMAGES_PATH", "static/images")
 
 LLM_MODEL    = os.getenv("LLM_MODEL", "ministral")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
-_LLM_CLIENT  = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+_LLM_CLIENT: OpenAI | None = None
+
+def _get_llm_client() -> OpenAI:
+    global _LLM_CLIENT
+    if _LLM_CLIENT is None:
+        _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+    return _LLM_CLIENT
 
 SOUL_PATH         = os.getenv("SOUL_PATH", "persona/soul.md")
 
@@ -338,7 +344,7 @@ def _build_reflection_system() -> str:
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
 def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float = 0.75) -> str:
-    resp = _LLM_CLIENT.chat.completions.create(
+    resp = _get_llm_client().chat.completions.create(
         model=LLM_MODEL,
         messages=[
             {"role": "system", "content": system},
@@ -754,11 +760,6 @@ def generate_and_post(
     # before pinning fresh ones, so reruns replace rather than accumulate.
     if memorize is not None:
         _delete_existing_daily_pins(memorize, date, user_id=uid)
-
-    # Step 3b: idempotency guard — remove any stale pins for this date
-    # before pinning fresh ones, so reruns replace rather than accumulate.
-    if memorize is not None:
-        _delete_existing_daily_pins(memorize, date)
 
     # Step 4: extract atomic facts and pin each individually. Replaces the
     # old single-block pin (whole prose paragraph or bullet-list day-record)

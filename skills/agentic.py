@@ -385,237 +385,160 @@ def tool_schemas() -> list[dict]:
     return [schema for schema, _handler in _TOOLS.values()]
 
 
-_TOOL_SCHEMAS = [
-        {"type": "function", "function": {
-            "name": "deep_search",
-            "description": (
-                "In agentic task mode: snippet-only web search as ONE support step inside "
-                "a larger workflow, where research itself is not the deliverable. Use this "
-                "when the task needs current web result snippets/URLs to decide the next "
-                "step. It does not fetch full pages; use deep_research for heavy source "
-                "reading, synthesis, or self-learning."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "The focused research query to search and fetch."}},
-                "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "deep_research",
-            "description": (
-                "In agentic task mode: heavy research/source-reading tool for when the "
-                "research itself is the deliverable or for deliberate self-learning. It "
-                "uses search only to discover candidate URLs, then fetches full pages, "
-                "condenses evidence, optionally iterates/refines, and synthesizes. Costs "
-                "more than deep_search; do not use for simple snippet lookup."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool refines it internally."}},
-                "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "make_plan", "description": "Make plan.",
-            "parameters": {"type": "object", "properties": {
-                "goal": {"type": "string"},
-                "constraints": {"type": "string"},
-                "max_steps": {"type": "integer"}},
-                "required": ["goal"]}}},
-        {"type": "function", "function": {
-            "name": "create_checklist", "description": "Make checklist.",
-            "parameters": {"type": "object", "properties": {
-                "title": {"type": "string"},
-                "items": {"type": "string", "description": "Newline-separated checklist items."}},
-                "required": ["title", "items"]}}},
-        {"type": "function", "function": {
-            "name": "save_note",
-            "description": (
-                "Save a note to a workspace file. "
-                "content MUST be plain text only, under 400 characters. "
-                "No markdown tables, no bullet lists, no backticks, no quotes. "
-                "Write a brief plain-text summary only."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "title": {"type": "string", "description": "Short filename title."},
-                "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."},
-                "folder": {"type": "string", "description": "Subfolder, default: notes"}},
-                "required": ["title", "content"]}}},
-        {"type": "function", "function": {
-            "name": "read_workspace_file", "description": "Read workspace file.",
-            "parameters": {"type": "object", "properties": {
-                "relative_path": {"type": "string"}},
-                "required": ["relative_path"]}}},
-        {"type": "function", "function": {
-            "name": "summarize_task_state", "description": "Summarize task state.",
-            "parameters": {"type": "object", "properties": {
-                "goal": {"type": "string"}, "done": {"type": "string"},
-                "next_action": {"type": "string"}, "risks": {"type": "string"}},
-                "required": ["goal"]}}},
-        {"type": "function", "function": {
-            "name": "schedule_job", "description": "Schedule local job/alarm. HH:MM. Frequencies: once,hourly,daily,weekdays,weekly,biweekly,monthly,custom_weekdays. Supports relative_days for today/tomorrow/day-after-tomorrow offsets.",
-            "parameters": {"type": "object", "properties": {
-                "title": {"type": "string"}, "task": {"type": "string"},
-                "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"},
-                "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]},
-                "timezone": {"type": "string"},
-                "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"},
-                "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"},
-                "action": {"type": "string", "enum": ["announce", "agentic"], "description": "announce only, or agentic to let Aiko perform a local autonomous task"}},
-                "required": ["title", "task", "time_of_day"]}}},
-        {"type": "function", "function": {
-            "name": "list_schedule", "description": "List schedule.",
-            "parameters": {"type": "object", "properties": {
-                "include_disabled": {"type": "boolean"}}}}},
-        {"type": "function", "function": {
-            "name": "cancel_schedule", "description": "Cancel schedule item.",
-            "parameters": {"type": "object", "properties": {
-                "job_id": {"type": "string"}},
-                "required": ["job_id"]}}},
-        {"type": "function", "function": {
-            "name": "schedule_reminder", "description": "Simple once/daily reminder.",
-            "parameters": {"type": "object", "properties": {
-                "title": {"type": "string"}, "message": {"type": "string"},
-                "time_of_day": {"type": "string"},
-                "repeat": {"type": "string", "enum": ["once", "daily"]},
-                "timezone": {"type": "string"}},
-                "required": ["title", "message", "time_of_day"]}}},
-        {"type": "function", "function": {
-            "name": "list_reminders", "description": "List reminders.",
-            "parameters": {"type": "object", "properties": {
-                "include_disabled": {"type": "boolean"}}}}},
-        {"type": "function", "function": {
-            "name": "cancel_reminder", "description": "Cancel reminder by id.",
-            "parameters": {"type": "object", "properties": {
-                "reminder_id": {"type": "string"}},
-                "required": ["reminder_id"]}}},
-        {"type": "function", "function": {
-            "name": "list_skillsets", "description": "List Aiko's predefined local workflow skillsets.",
-            "parameters": {"type": "object", "properties": {}}}},
-        {"type": "function", "function": {
-            "name": "search_skillsets", "description": "Search Aiko's predefined workflow skillsets by task/query.",
-            "parameters": {"type": "object", "properties": {
-                "query": {"type": "string"},
-                "limit": {"type": "integer"}},
-                "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "load_skillset", "description": "Load the full markdown instructions for one predefined skillset by id.",
-            "parameters": {"type": "object", "properties": {
-                "skill_id": {"type": "string"}},
-                "required": ["skill_id"]}}},
-        {"type": "function", "function": {
-            "name": "scan_photo_workspace", "description": "Scan a workspace photo inbox for wildlife/nature/astro image files.",
-            "parameters": {"type": "object", "properties": {
-                "inbox": {"type": "string", "description": "Workspace-relative inbox path, default photos/inbox."},
-                "limit": {"type": "integer"}}}}},
-        {"type": "function", "function": {
-            "name": "propose_photo_ingestion", "description": "Create a safe dry-run ingestion plan for photo files without moving or editing metadata.",
-            "parameters": {"type": "object", "properties": {
-                "inbox": {"type": "string"},
-                "library_root": {"type": "string"},
-                "rating_rule": {"type": "string"}}}}},
-        {"type": "function", "function": {
-            "name": "write_photo_ingestion_report", "description": "Write a photo workflow report under the workspace reports folder.",
-            "parameters": {"type": "object", "properties": {
-                "title": {"type": "string"},
-                "content": {"type": "string"},
-                "report_dir": {"type": "string"}}}}},
-        {"type": "function", "function": {
-            "name": "repo_file_tree", "description": "List repository text files for Aiko architecture/code navigation.",
-            "parameters": {"type": "object", "properties": {
-                "prefix": {"type": "string"},
-                "limit": {"type": "integer"}}}}},
-        {"type": "function", "function": {
-            "name": "repo_read_file", "description": "Read one repository text file for architecture/code work.",
-            "parameters": {"type": "object", "properties": {
-                "relative_path": {"type": "string"},
-                "max_chars": {"type": "integer"}},
-                "required": ["relative_path"]}}},
-        {"type": "function", "function": {
-            "name": "repo_search_text", "description": "Search repository text files with simple substring matching.",
-            "parameters": {"type": "object", "properties": {
-                "query": {"type": "string"},
-                "prefix": {"type": "string"},
-                "limit": {"type": "integer"}},
-                "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "learn_knowledge",
-            "description": (
-                "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). "
-                "Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted "
-                "document text, or after explicit self-learning/research should be retained. "
-                "Do not use for private personal preferences; those belong in memory. Do not use "
-                "for merely saving a human-readable note; use save_note for that."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "title": {"type": "string", "description": "Short title for the learned document or fact set."},
-                "text": {"type": "string", "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."},
-                "relative_path": {"type": "string", "description": "Optional workspace-relative document path to ingest instead of text."},
-                "source": {"type": "string", "description": "Optional source URL/path/context for pasted text."},
-                "kind": {"type": "string", "enum": ["ingested", "self_learned", "study_note"], "description": "Where this knowledge came from."}},
-                "required": ["title"]}}},
-        {"type": "function", "function": {
-            "name": "search_jobs", "description": "Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
-            "parameters": {"type": "object", "properties": {
-                "query": {"type": "string"},
-                "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."},
-                "max_results": {"type": "integer"},
-                "max_age_days": {"type": "integer"},
-                "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
-                "required": ["query"]}}},
-        {"type": "function", "function": {
-            "name": "final_answer", "description": "Final answer.",
-            "parameters": {"type": "object", "properties": {
-                "answer": {"type": "string", "description": "The final answer text."}},
-                "required": ["answer"]}}},
-    ]
+def _f(name, description, properties=None, required=None):
+    """Build an OpenAI tool schema dict."""
+    s = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {"type": "object", "properties": properties or {}},
+        },
+    }
+    if required:
+        s["function"]["parameters"]["required"] = required
+    return s
+
+# ── tool registration ────────────────────────────────────────────────────────
+# Each tool is defined as (schema, handler) in a single place so that
+# parameter names in the schema and the handler never drift apart.
+
+_TOOL_DEFS: list[tuple[dict, object]] = []
+
+def _reg(name, desc, handler, props=None, required=None):
+    schema = _f(name, desc, props, required)
+    _TOOL_DEFS.append((schema, handler))
+
+def _reg_no_handler(name, desc, props=None, required=None):
+    schema = _f(name, desc, props, required)
+    _TOOL_DEFS.append((schema, None))
+
+_reg_no_handler("deep_search", "In agentic task mode: snippet-only web search as ONE support step inside a larger workflow, where research itself is not the deliverable. Use this when the task needs current web result snippets/URLs to decide the next step. It does not fetch full pages; use deep_research for heavy source reading, synthesis, or self-learning.",
+    {"query": {"type": "string", "description": "The focused research query to search and fetch."}},
+    required=["query"])
+
+_reg_no_handler("deep_research", "In agentic task mode: heavy research/source-reading tool for when the research itself is the deliverable or for deliberate self-learning. It uses search only to discover candidate URLs, then fetches full pages, condenses evidence, optionally iterates/refines, and synthesizes. Costs more than deep_search; do not use for simple snippet lookup.",
+    {"query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool refines it internally."}},
+    required=["query"])
+
+_reg("make_plan", "Make plan.",
+    lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
+    {"goal": {"type": "string"}, "constraints": {"type": "string"}, "max_steps": {"type": "integer"}},
+    required=["goal"])
+
+_reg("create_checklist", "Make checklist.",
+    lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
+    {"title": {"type": "string"}, "items": {"type": "string", "description": "Newline-separated checklist items."}},
+    required=["title", "items"])
+
+_reg("save_note", "Save a note to a workspace file. content MUST be plain text only, under 400 characters. No markdown tables, no bullet lists, no backticks, no quotes. Write a brief plain-text summary only.",
+    lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
+    {"title": {"type": "string", "description": "Short filename title."}, "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."}, "folder": {"type": "string", "description": "Subfolder, default: notes"}},
+    required=["title", "content"])
+
+_reg("read_workspace_file", "Read workspace file.",
+    lambda args: read_workspace_file(args.get("relative_path", "")),
+    {"relative_path": {"type": "string"}},
+    required=["relative_path"])
+
+_reg("summarize_task_state", "Summarize task state.",
+    lambda args: summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", "")),
+    {"goal": {"type": "string"}, "done": {"type": "string"}, "next_action": {"type": "string"}, "risks": {"type": "string"}},
+    required=["goal"])
+
+_reg("schedule_job", "Schedule local job/alarm. HH:MM. Frequencies: once,hourly,daily,weekdays,weekly,biweekly,monthly,custom_weekdays. Supports relative_days for today/tomorrow/day-after-tomorrow offsets.",
+    lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"), args.get("relative_days")),
+    {"title": {"type": "string"}, "task": {"type": "string"}, "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"}, "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]}, "timezone": {"type": "string"}, "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"}, "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"}, "action": {"type": "string", "enum": ["announce", "agentic"], "description": "announce only, or agentic to let Aiko perform a local autonomous task"}},
+    required=["title", "task", "time_of_day"])
+
+_reg("list_schedule", "List schedule.",
+    lambda args: list_schedule(bool(args.get("include_disabled", False))),
+    {"include_disabled": {"type": "boolean"}})
+
+_reg("cancel_schedule", "Cancel schedule item.",
+    lambda args: cancel_schedule(args.get("job_id", "")),
+    {"job_id": {"type": "string"}},
+    required=["job_id"])
+
+_reg("schedule_reminder", "Simple once/daily reminder.",
+    lambda args: schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone")),
+    {"title": {"type": "string"}, "message": {"type": "string"}, "time_of_day": {"type": "string"}, "repeat": {"type": "string", "enum": ["once", "daily"]}, "timezone": {"type": "string"}},
+    required=["title", "message", "time_of_day"])
+
+_reg("list_reminders", "List reminders.",
+    lambda args: list_reminders(bool(args.get("include_disabled", False))),
+    {"include_disabled": {"type": "boolean"}})
+
+_reg("cancel_reminder", "Cancel reminder by id.",
+    lambda args: cancel_reminder(args.get("reminder_id", "")),
+    {"reminder_id": {"type": "string"}},
+    required=["reminder_id"])
+
+_reg("list_skillsets", "List Aiko's predefined local workflow skillsets.",
+    lambda args: list_skillsets(),
+    {})
+
+_reg("search_skillsets", "Search Aiko's predefined workflow skillsets by task/query.",
+    lambda args: search_skillsets_json(args.get("query", ""), int(args.get("limit", 3) or 3)),
+    {"query": {"type": "string"}, "limit": {"type": "integer"}},
+    required=["query"])
+
+_reg("load_skillset", "Load the full markdown instructions for one predefined skillset by id.",
+    lambda args: load_skillset(args.get("skill_id", "")),
+    {"skill_id": {"type": "string"}},
+    required=["skill_id"])
+
+_reg("scan_photo_workspace", "Scan a workspace photo inbox for wildlife/nature/astro image files.",
+    lambda args: scan_photo_workspace(args.get("inbox", "photos/inbox"), int(args.get("limit", 100) or 100)),
+    {"inbox": {"type": "string", "description": "Workspace-relative inbox path, default photos/inbox."}, "limit": {"type": "integer"}})
+
+_reg("propose_photo_ingestion", "Create a safe dry-run ingestion plan for photo files without moving or editing metadata.",
+    lambda args: propose_photo_ingestion(args.get("inbox", "photos/inbox"), args.get("library_root", "photos/library"), args.get("rating_rule", "manual-review-first")),
+    {"inbox": {"type": "string"}, "library_root": {"type": "string"}, "rating_rule": {"type": "string"}})
+
+_reg("write_photo_ingestion_report", "Write a photo workflow report under the workspace reports folder.",
+    lambda args: write_photo_ingestion_report(args.get("title", "photo-ingestion"), args.get("content", ""), args.get("report_dir", "photos/reports")),
+    {"title": {"type": "string"}, "content": {"type": "string"}, "report_dir": {"type": "string"}})
+
+_reg("repo_file_tree", "List repository text files for Aiko architecture/code navigation.",
+    lambda args: repo_file_tree(args.get("prefix", ""), int(args.get("limit", 200) or 200)),
+    {"prefix": {"type": "string"}, "limit": {"type": "integer"}})
+
+_reg("repo_read_file", "Read one repository text file for architecture/code work.",
+    lambda args: repo_read_file(args.get("relative_path", ""), int(args.get("max_chars", 20000) or 20000)),
+    {"relative_path": {"type": "string"}, "max_chars": {"type": "integer"}},
+    required=["relative_path"])
+
+_reg("repo_search_text", "Search repository text files with simple substring matching.",
+    lambda args: repo_search_text(args.get("query", ""), args.get("prefix", ""), int(args.get("limit", 50) or 50)),
+    {"query": {"type": "string"}, "prefix": {"type": "string"}, "limit": {"type": "integer"}},
+    required=["query"])
+
+_reg_no_handler("learn_knowledge", "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted document text, or after explicit self-learning/research should be retained. Do not use for private personal preferences; those belong in memory. Do not use for merely saving a human-readable note; use save_note for that.",
+    lambda args: learn_knowledge(args.get("title", ""), args.get("text", ""), args.get("relative_path", ""), args.get("source", ""), args.get("kind", "ingested")),
+    {"title": {"type": "string", "description": "Short title for the learned document or fact set."}, "text": {"type": "string", "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."}, "relative_path": {"type": "string", "description": "Optional workspace-relative document path to ingest instead of text."}, "source": {"type": "string", "description": "Optional source URL/path/context for pasted text."}, "kind": {"type": "string", "enum": ["ingested", "self_learned", "study_note"], "description": "Where this knowledge came from."}},
+    required=["title"])
+
+_reg("search_jobs", "Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
+    lambda args: json.dumps(search_jobs(args.get("query", ""), args.get("location", ""), int(args["max_results"]) if args.get("max_results") not in (None, "") else None, int(args["max_age_days"]) if args.get("max_age_days") not in (None, "") else None, args.get("job_type", "")), ensure_ascii=False),
+    {"query": {"type": "string"}, "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."}, "max_results": {"type": "integer"}, "max_age_days": {"type": "integer"}, "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
+    required=["query"])
+
+_reg("final_answer", "Final answer.",
+    lambda args: final_answer(args.get("answer", "")),
+    {"answer": {"type": "string", "description": "The final answer text."}},
+    required=["answer"])
+
+# ── populate _TOOLS from _TOOL_DEFS ──────────────────────────────────────────
+
+for schema, handler in _TOOL_DEFS:
+    name = schema["function"]["name"]
+    _TOOLS[name] = (schema, handler)
 
 # Rough fixed schema-token cost injected into EVERY chat.completions.create()
 # call via tools=tools — computed once at import time so the context budget
 # check below accounts for it instead of silently ignoring it.
-_TOOL_SCHEMA_TOKENS_ESTIMATE = max(1, len(json.dumps(_TOOL_SCHEMAS)) // 4)
-
-
-def _register_tools() -> None:
-    handlers = {
-        "make_plan": lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
-        "create_checklist": lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
-        "save_note": lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
-        "read_workspace_file": lambda args: read_workspace_file(args.get("relative_path", "")),
-        "summarize_task_state": lambda args: summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", "")),
-        "schedule_job": lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"), args.get("relative_days")),
-        "list_schedule": lambda args: list_schedule(bool(args.get("include_disabled", False))),
-        "cancel_schedule": lambda args: cancel_schedule(args.get("job_id", "")),
-        "schedule_reminder": lambda args: schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone")),
-        "list_reminders": lambda args: list_reminders(bool(args.get("include_disabled", False))),
-        "cancel_reminder": lambda args: cancel_reminder(args.get("reminder_id", "")),
-        "list_skillsets": lambda args: list_skillsets(),
-        "search_skillsets": lambda args: search_skillsets_json(args.get("query", ""), int(args.get("limit", 3) or 3)),
-        "load_skillset": lambda args: load_skillset(args.get("skill_id", "")),
-        "scan_photo_workspace": lambda args: scan_photo_workspace(args.get("inbox", "photos/inbox"), int(args.get("limit", 100) or 100)),
-        "propose_photo_ingestion": lambda args: propose_photo_ingestion(args.get("inbox", "photos/inbox"), args.get("library_root", "photos/library"), args.get("rating_rule", "manual-review-first")),
-        "write_photo_ingestion_report": lambda args: write_photo_ingestion_report(args.get("title", "photo-ingestion"), args.get("content", ""), args.get("report_dir", "photos/reports")),
-        "repo_file_tree": lambda args: repo_file_tree(args.get("prefix", ""), int(args.get("limit", 200) or 200)),
-        "repo_read_file": lambda args: repo_read_file(args.get("relative_path", ""), int(args.get("max_chars", 20000) or 20000)),
-        "repo_search_text": lambda args: repo_search_text(args.get("query", ""), args.get("prefix", ""), int(args.get("limit", 50) or 50)),
-        "search_jobs": lambda args: json.dumps(
-            search_jobs(
-                args.get("query", ""),
-                args.get("location", ""),
-                int(args["max_results"]) if args.get("max_results") not in (None, "") else None,
-                int(args["max_age_days"]) if args.get("max_age_days") not in (None, "") else None,
-                args.get("job_type", ""),
-            ),
-            ensure_ascii=False,
-        ),
-        # deep_search and deep_research are intentionally excluded here: both
-        # now use the owning AikoThink instance's embedder for relevance-
-        # condensed evidence (deep_research also needs the LLM client/model
-        # for its adaptive continue/refine and synthesis steps), and this
-        # registry is built with no owner in scope. Both are special-cased
-        # in dispatch_tool() below instead.
-    }
-    for schema in _TOOL_SCHEMAS:
-        name = schema["function"]["name"]
-        _TOOLS[name] = (schema, handlers.get(name, lambda _args, n=name: f"[unknown tool: {n}]"))
-
-
-_register_tools()
+_TOOL_SCHEMA_TOKENS_ESTIMATE = max(1, len(json.dumps([s for s, _h in _TOOLS.values()])) // 4)
 
 
 def _required_args_for(name: str) -> list[str]:
@@ -729,7 +652,7 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             )
         return json.dumps({"ok": bool(doc_id), "doc_id": doc_id}, ensure_ascii=False)
     entry = _TOOLS.get(name)
-    if not entry:
+    if not entry or entry[1] is None:
         return f"[unknown tool: {name}]"
     if name == "save_note":
         args["content"] = args.get("content", "")[:AGENT_NOTE_MAX_CHARS]

@@ -540,6 +540,38 @@ def _sqlite_knn_search(
     return rows
 
 
+def _first_json_array(raw: str) -> str | None:
+    """Extract the first complete top-level JSON array, correctly handling
+    nested brackets and string escaping. Returns None if no array found."""
+    i, n = 0, len(raw)
+    start = raw.find("[")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for j in range(start, n):
+        ch = raw[j]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    return raw[start:j + 1]
+        i = j
+    return None
+
+
 # ── memory backend ────────────────────────────────────────────────────────────
 
 class _MemoryBackend:
@@ -679,9 +711,9 @@ class _MemoryBackend:
         raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
 
         # take only the first top-level JSON array — model sometimes repeats output
-        match = re.search(r"\[.*?\]", raw, re.DOTALL)
+        match = _first_json_array(raw)
         if match:
-            raw = match.group(0)
+            raw = match
 
         try:
             facts = json.loads(raw)

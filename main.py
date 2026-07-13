@@ -1797,22 +1797,8 @@ def _run_session(ui, args):
                 current_latency["asr_done_at"] = voice_info["asr_done_at"]
 
         if args.debug:
-            # ── pre-turn metrics only (memory search timing / entry count).
-            #    The actual formatted context blocks are shown post-turn
-            #    since that is what the LLM actually sees.
             system_prompt = getattr(think, "_persona", None) or ""
             current_latency["system_prompt_tokens"] = _count_tokens(system_prompt)
-
-            if memorize is not None:
-                hits = memorize.search(user_input)
-                if hits:
-                    mem_texts = [m.get("memory") or m.get("text") or str(m) for m in hits]
-                    mem_toks = [_count_tokens(t) for t in mem_texts]
-                    current_latency["memory_entry_tokens"] = mem_toks
-                    current_latency["memory_entry_count"] = len(mem_texts)
-                else:
-                    current_latency["memory_entry_tokens"] = []
-                    current_latency["memory_entry_count"] = 0
 
         ui.add_message('you', user_input)
         ui.turn_start()
