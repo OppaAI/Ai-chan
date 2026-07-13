@@ -160,6 +160,34 @@ TASK_MODE_GUIDANCE = (
     "generate' — call the tool immediately."
 )
 
+# Placeholder bodies returned by the per-source fetchers when they have no
+# real content. Injecting these XML wrappers every agentic turn wastes
+# tokens for zero information — the model already receives the real blocks
+# (memory / KB / TASK MODE) and the empty wrappers add no signal. We blank
+# any block whose body is one of these "no match" placeholders; genuine
+# "Lookup failed." placeholders (a real error worth surfacing) are kept.
+_EMPTY_CONTEXT_MARKERS = (
+    "No similar past task found.",
+    "No matching task policy found for this request.",
+    "No operational wiki pages found.",
+    "No matching predefined skills found.",
+    "No matching local knowledge found.",
+    "No matching learned knowledge found.",
+    "No relevant memories found.",
+    "Lookup failed.",
+)
+
+
+def _blank_empty_context(block: str) -> str:
+    """Return '' if `block` is an empty "No ... found." placeholder."""
+    if not block:
+        return ""
+    for _marker in _EMPTY_CONTEXT_MARKERS:
+        if _marker in block:
+            return ""
+    return block
+
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AGENTIC_POLICY_PATHS = (
     _REPO_ROOT / "skills" / "skills.md",
@@ -1126,17 +1154,24 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
 
     memory_block = owner._memorize.format_for_context(memories)
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
+    memory_context = _blank_empty_context(memory_context)
 
     # Wiki/policy/skill/experience are agentic-only — fetched now,
     # concurrently with each other, since intent has already resolved to
     # "agentic" by the time run_agentic_chat runs.
     agentic_ctx = _fetch_agentic_only_context(user_input, embedder=_embedder, query_vector=_query_vec)
     scores = agentic_ctx.pop("_scores", {})
-    agentic_policy_context = agentic_ctx["agentic_policy"]
-    wiki_context = agentic_ctx["wiki"]
-    skill_context = agentic_ctx["skill"]
-    experience_context = agentic_ctx["experience"]
-    knowledge_context = f'{agentic_ctx["wiki_knowledge"]}\n\n{knowledge_block}'
+    # Blank empty "No ... found." placeholders (P4-class fix generalized
+    # from experience_context to every agentic block). The budget logic
+    # below then drops these zero-information blocks instead of injecting
+    # their XML wrappers on every turn.
+    agentic_policy_context = _blank_empty_context(agentic_ctx["agentic_policy"])
+    wiki_context = _blank_empty_context(agentic_ctx["wiki"])
+    skill_context = _blank_empty_context(agentic_ctx["skill"])
+    experience_context = _blank_empty_context(agentic_ctx["experience"])
+    wiki_knowledge_block = _blank_empty_context(agentic_ctx["wiki_knowledge"])
+    knowledge_block = _blank_empty_context(knowledge_block)
+    knowledge_context = f"{wiki_knowledge_block}\n\n{knowledge_block}" if wiki_knowledge_block else knowledge_block
     # Don't inject the experience block when it carries no actual
     # past-task evidence — the empty placeholder ("No similar past
     # task found." / "Lookup failed.") wastes tokens on every agentic
