@@ -478,6 +478,10 @@ class AikoSpeak:
 
         The LLM/UI stream still owns text display; this worker only handles
         sentence-level TTS so voice can start before the full answer is done.
+
+        Pipelined synthesis: the next chunk's HTTP call starts in a background
+        thread while the current chunk plays, hiding the HTTP round-trip behind
+        audio playback.
         """
         self._playing.set()
         try:
@@ -490,14 +494,38 @@ class AikoSpeak:
                     if on_word:
                         self._emit_words_timed(chunk, 0.0, on_word)
                     continue
-                for piece in self._chunk_text(clean):
+                pieces = list(self._chunk_text(clean))
+                next_synth = None  # (thread, result_container)
+                for i, piece in enumerate(pieces):
                     if self._stop_flag.is_set():
                         break
-                    wav = self._synthesize(piece)
+
+                    if next_synth is not None:
+                        synth_thread, synth_result = next_synth
+                        synth_thread.join()
+                        wav = synth_result[0] if synth_result else None
+                    else:
+                        wav = self._synthesize(piece)
+
                     if not wav:
                         if on_word:
                             self._emit_words_timed(piece, 0.0, on_word)
+                        next_synth = None
                         continue
+
+                    # Pre-synthesize the next piece while this one plays
+                    has_next = i + 1 < len(pieces)
+                    if has_next:
+                        nr: list = []
+                        nt = threading.Thread(
+                            target=lambda p=pieces[i+1], r=nr: r.append(self._synthesize(p)),
+                            daemon=True,
+                        )
+                        nt.start()
+                        next_synth = (nt, nr)
+                    else:
+                        next_synth = None
+
                     if on_word or self._viseme_sink is not None:
                         duration = self._wav_duration(wav)
                         play_thread = threading.Thread(
