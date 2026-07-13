@@ -97,8 +97,6 @@ BARGE_IN_ALWAYS_ON     = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "
 
 SPEAKER_VERIFY_ENABLED   = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 SPEAKER_MODEL_PATH       = os.getenv("SPEAKER_MODEL_PATH", "")            # path to embedding .onnx
-USER_ID                  = os.getenv("USER_ID", "owner")
-SPEAKER_ENROLL_PATH      = str(user_state_path("profile/speaker_enrollment.json"))  # resolves to <USER_STATE_ROOT>/<user_id>/profile/
 SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
 SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 
@@ -202,6 +200,7 @@ class AikoListen:
         self._warmup_thread = threading.Thread(target=self._warmup, daemon=True)
         self._warmup_thread.start()
 
+    @staticmethod
     def speaker_enroll_path() -> str:
         """Resolve fresh at call time — NOT cached at import, since import
         happens at boot before any user is authenticated (current_user_id()
@@ -224,11 +223,11 @@ class AikoListen:
                 f"is missing or invalid ({SPEAKER_MODEL_PATH!r}); verification disabled."
             )
             return
-            enroll_path = speaker_enroll_path()
-        if not os.path.isfile(SPEAKER_ENROLL_PATH):
+        enroll_path = self.speaker_enroll_path()
+        if not os.path.isfile(enroll_path):
             logging.getLogger(__name__).warning(
                 f"[listen] SPEAKER_VERIFY_ENABLED=1 but no enrollment found at "
-                f"{SPEAKER_ENROLL_PATH!r}; run enroll_speaker.py first. Verification disabled."
+                f"{enroll_path!r}; run enroll_speaker.py first. Verification disabled."
             )
             return
 
@@ -240,7 +239,7 @@ class AikoListen:
         )
         self._speaker_extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config)
 
-        with open(SPEAKER_ENROLL_PATH) as f:
+        with open(enroll_path) as f:
             data = json.load(f)
         self._enrolled_embedding = np.asarray(data["embedding"], dtype=np.float32)
 

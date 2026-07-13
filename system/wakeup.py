@@ -226,7 +226,10 @@ class AikoWakeup:
 
                 register_system_handler(
                     "workspace_knowledge_scan",
-                    lambda _memorize: ingest_workspace_knowledge_folder(embedder=memorize[0]._mem._embedder),
+                    lambda _memorize: ingest_workspace_knowledge_folder(
+                        embedder=_memorize._mem._embedder,
+                        user_id=_memorize.get_user_id(),
+                    ),
                 )
                 ensure_workspace_knowledge_job()
                 _scheduler.notify_new_job()

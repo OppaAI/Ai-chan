@@ -1187,6 +1187,10 @@ class AikoMemorize:
                 pass
         self._open(user_id)
 
+    def get_user_id(self) -> str:
+        """Return the user_id this instance is currently opened for."""
+        return self._user_id_override or self._mem._user_id
+
     # ── write ─────────────────────────────────────────────────────────────────
 
     def add(self, messages: list[dict], user_id: str | None = None) -> bool:
@@ -1266,17 +1270,18 @@ class AikoMemorize:
         state. If either is omitted, the write runs as soon as it's
         dequeued with no idle wait.
         """
-        self._write_queue.put((user_input, response_text, is_active_turn, idle_since))
+        user_id = self.get_user_id()  # resolved here, on the caller's thread — not in _write_loop
+        self._write_queue.put((user_input, response_text, user_id, is_active_turn, idle_since))
 
     def _write_loop(self) -> None:
         while True:
-            user_input, response_text, is_active_turn, idle_since = self._write_queue.get()
+            user_input, response_text, user_id, is_active_turn, idle_since = self._write_queue.get()
             try:
                 self._wait_for_write_window(is_active_turn, idle_since)
                 self.add([
                     {"role": "user", "content": user_input[:500]},
                     {"role": "assistant", "content": response_text[:800]},
-                ])
+                ], user_id=user_id)
             except Exception as e:
                 log.error(f"Async memory write failed: {e}")
             finally:

@@ -615,13 +615,13 @@ def build_daily_journal(snippets: list[str], date: datetime) -> str:
 
 # ── idempotency guard ─────────────────────────────────────────────────────────
 
-def _delete_existing_daily_pins(memorize, date: datetime) -> int:
+def _delete_existing_daily_pins(memorize, date: datetime, user_id: str | None = None) -> int:
     date_str = date.strftime("%Y-%m-%d")
     date_tag = f"[{date_str}]"
     day_record_prefix = _DAY_JOURNAL_PREFIX_TMPL.format(date_str=date_str)
 
     try:
-        all_mems = memorize.get_all()
+        all_mems = memorize.get_all(user_id=user_id)
     except Exception as e:
         log.warning(f"Could not fetch existing memories for date-dedup ({date_str}): {e}")
         return 0
@@ -745,6 +745,16 @@ def generate_and_post(
             "journal_pinned":  False,
         }
 
+    # Resolve the real user_id once, from the memory instance itself —
+    # not from ambient contextvar/env fallback (this job runs on the
+    # scheduler's own background thread, which doesn't inherit either).
+    uid = memorize.get_user_id() if memorize is not None else current_user_id()
+
+    # Step 3b: idempotency guard — remove any stale pins for this date
+    # before pinning fresh ones, so reruns replace rather than accumulate.
+    if memorize is not None:
+        _delete_existing_daily_pins(memorize, date, user_id=uid)
+
     # Step 3b: idempotency guard — remove any stale pins for this date
     # before pinning fresh ones, so reruns replace rather than accumulate.
     if memorize is not None:
@@ -765,7 +775,7 @@ def generate_and_post(
             facts = []
         for fact in facts:
             try:
-                if memorize.add_raw(f"{date_tag} {fact}", pinned=True):
+                if memorize.add_raw(f"{date_tag} {fact}", user_id=uid, pinned=True):
                     pinned_count += 1
             except Exception as e:
                 log.warning(f"Failed to pin fact {fact!r}: {e}")
@@ -779,7 +789,7 @@ def generate_and_post(
     try:
         from memory.journal import pin_daily_journal
         daily_journal = build_daily_journal(snippets, date)
-        journal_pinned = bool(pin_daily_journal(daily_journal, date))
+        journal_pinned = bool(pin_daily_journal(daily_journal, date, user_id=uid))
     except Exception as e:
         log.error(f"Daily journal pin failed: {e}")
 

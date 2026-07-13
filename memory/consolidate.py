@@ -321,7 +321,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
 
     start_utc = start.astimezone(timezone.utc)
     end_utc   = end.astimezone(timezone.utc)
-    all_memories = memorize.get_between(start_utc, end_utc)
+    all_memories = memorize.get_between(start_utc, end_utc, user_id=user_id)
 
     # Scope memory.db to pinned daily-granularity atomic facts only. The large
     # faithful daily blobs moved to journal.db so memory recall is not polluted
@@ -369,7 +369,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     written_ids: list[str] = []
     for fact in final_facts:
         try:
-            mem_id = memorize.add_raw(f"[{month_key}] {fact}", pinned=True)
+            mem_id = memorize.add_raw(f"[{month_key}] {fact}", user_id=user_id, pinned=True)
             if mem_id:
                 facts_written += 1
                 written_ids.append(mem_id)

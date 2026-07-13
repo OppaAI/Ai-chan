@@ -232,6 +232,8 @@ def idle_learner_loop(owner, check_interval: float = IDLE_LEARNER_CHECK_INTERVAL
             continue
 
         log.info("[learner] Aiko is idle and resting. Starting autonomous learning...")
+        study_uid = owner._memorize.get_user_id()
+
         try:
             with owner._history_lock:
                 candidates = [
@@ -832,12 +834,13 @@ class _DeepStudySessionManager:
             log.info("[deep_study_window] starting deep_studying for topic=%r", study_topic)
             try:
                 embedder = getattr(getattr(memorize, "_mem", None), "_embedder", None)
+                study_uid = memorize.get_user_id()
 
                 def _on_distilled(distilled_topic, text, ranked_chunks):
                     memorize.add([
                         {"role": "system", "content": f"[deep-studied:{distilled_topic}]"},
                         {"role": "assistant", "content": text[:4000]},
-                    ])
+                    ], user_id=study_uid)
 
                 distilled = deep_studying(
                     study_topic,
