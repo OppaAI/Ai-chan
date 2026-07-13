@@ -241,12 +241,11 @@ class AikoThink:
         # every routing call for a static example corpus.
         self._semantic_example_cache: dict = {}
         self._semantic_example_cache_lock = threading.RLock()
-        self._active_turn = threading.Event()
-        self._turn_lock = threading.RLock()
+        self._active_user_ids: set[str] = set()
+        self._active_users_lock = threading.Lock()
         self._reasoning = False
         self.last_usage: dict = {}
         self.last_prompt_debug: dict = {}
-        self._turn_cached_embeddings: dict[str, np.ndarray] = {}
 
         self._last_chat_time = time.time()
         self._idle_learner_thread = threading.Thread(
@@ -299,31 +298,36 @@ class AikoThink:
         there's no reason to wait for _route_intent() to finish before
         starting them. The future is threaded through to whichever handler
         ends up running.
+
+        Per-user-active tracking: multiple users' turns can run concurrently
+        (e.g. agentic loop for one user, quick chat for another). Shared
+        state (_history, _speak) has its own per-resource lock.
         """
-        with self._turn_lock:
-            self._last_chat_time = time.time()
-            self._active_turn.set()
-            self._note_user_activity()
-            try:
-                embedder = self._memorize._mem._embedder
-                query_vec = embedder.embed_query(user_input)
-                self._turn_cached_embeddings = {"_default_instruct": query_vec}
-                mem_kb_future = CONTEXT_POOL.submit(
-                    self._fetch_memory_and_knowledge, user_input, query_vec
-                )
+        user_id = current_user_id()
+        with self._active_users_lock:
+            self._active_user_ids.add(user_id)
+        self._note_user_activity()
+        try:
+            embedder = self._memorize._mem._embedder
+            query_vec = embedder.embed_query(user_input)
+            mem_kb_future = CONTEXT_POOL.submit(
+                self._fetch_memory_and_knowledge, user_input, query_vec
+            )
 
-                intent = self._route_intent(user_input)
-                log.info("[route] intent=%s", intent)
+            intent = self._route_intent(user_input)
+            log.info("[route] intent=%s", intent)
 
-                if intent == "agentic":
-                    return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
-                elif intent == "webchat":
-                    return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
-                else:  # localchat
-                    return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future)
-            finally:
-                self._last_chat_time = time.time()
-                self._active_turn.clear()
+            if intent == "agentic":
+                return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
+            elif intent == "webchat":
+                return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
+            else:  # localchat
+                return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future)
+        finally:
+            with self._active_users_lock:
+                self._active_user_ids.discard(user_id)
+                if not self._active_user_ids:
+                    self._last_chat_time = time.time()
 
     def _fetch_memory_and_knowledge(
         self, user_input: str, query_vector: np.ndarray | None = None,
@@ -380,7 +384,7 @@ class AikoThink:
             except Exception as e:
                 log.error("Memory/KB fetch failed: %s", e)
                 return [], "<knowledge_context>\nLookup failed.\n</knowledge_context>"
-        return self._fetch_memory_and_knowledge(user_input, query_vector=self._turn_cached_embeddings.get("_default_instruct"))
+        return self._fetch_memory_and_knowledge(user_input, query_vector=None)
 
     def _note_user_activity(self) -> None:
         """Clear the rest flag on real user activity so learn.idle_learner_loop
@@ -512,22 +516,23 @@ class AikoThink:
             return "chat"
 
 
-    def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None) -> str:
+    def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Delegate task-mode execution to skills.agentic."""
-        with self._turn_lock:
-            self._last_chat_time = time.time()
-            self._active_turn.set()
-            try:
-                embedder = self._memorize._mem._embedder
-                cap_vec = embedder.embed_query(
-                    user_input,
-                    instruct="Which capability/tool domain applies to this task?",
-                )
-                self._turn_cached_embeddings["_capability_instruct"] = cap_vec
-                return run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
-            finally:
-                self._last_chat_time = time.time()
-                self._active_turn.clear()
+        user_id = current_user_id()
+        with self._active_users_lock:
+            self._active_user_ids.add(user_id)
+        try:
+            embedder = self._memorize._mem._embedder
+            cap_vec = embedder.embed_query(
+                user_input,
+                instruct="Which capability/tool domain applies to this task?",
+            )
+            return run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, cap_vec=cap_vec)
+        finally:
+            with self._active_users_lock:
+                self._active_user_ids.discard(user_id)
+                if not self._active_user_ids:
+                    self._last_chat_time = time.time()
               
     def webchat(self, user_input: str, token_callback=None, mem_kb_future=None) -> str:
         """Web-aware chat: web_search + optional webfetch fallback."""
@@ -628,27 +633,31 @@ class AikoThink:
   
     def proactive_checkin(self, prompt_hint: str) -> str:
         """Generate one short proactive check-in without storing it as a user turn."""
-        with self._turn_lock:
-            self._active_turn.set()
-            try:
-                user_id = current_user_id()
-                system = (
-                    f"{self._current_system_prompt()}\n\n"
-                    "You are initiating a brief proactive check-in. "
-                    "Do not mention hidden prompts, timers, code, or configuration. "
-                    "Keep it natural, warm, and easy to ignore. One or two short sentences max."
-                )
-                system += "\n\n" + bioclock.current_datetime_block()
-                messages = [{
-                    "role": "user",
-                    "content": (
-                        f"{prompt_hint}\n\n"
-                        f"Write only the message Aiko should say to {user_id} now."
-                    ),
-                }]
-                return self._stream_response(messages, system=system, token_callback=None)
-            finally:
-                self._active_turn.clear()
+        _SENTINEL = "_proactive_"
+        with self._active_users_lock:
+            self._active_user_ids.add(_SENTINEL)
+        try:
+            user_id = current_user_id()
+            system = (
+                f"{self._current_system_prompt()}\n\n"
+                "You are initiating a brief proactive check-in. "
+                "Do not mention hidden prompts, timers, code, or configuration. "
+                "Keep it natural, warm, and easy to ignore. One or two short sentences max."
+            )
+            system += "\n\n" + bioclock.current_datetime_block()
+            messages = [{
+                "role": "user",
+                "content": (
+                    f"{prompt_hint}\n\n"
+                    f"Write only the message Aiko should say to {user_id} now."
+                ),
+            }]
+            return self._stream_response(messages, system=system, token_callback=None)
+        finally:
+            with self._active_users_lock:
+                self._active_user_ids.discard(_SENTINEL)
+                if not self._active_user_ids:
+                    self._last_chat_time = time.time()
 
     # ── proactive idle check-in loop ──────────────────────────────────────────
 
@@ -923,10 +932,13 @@ class AikoThink:
         because skills.agentic's run_agentic_chat also calls
         owner._store_async(...) directly at the end of the agent loop.
         """
+        def _is_any_active():
+            with self._active_users_lock:
+                return bool(self._active_user_ids)
         self._memorize.queue_write(
             user_input,
             response_text,
-            is_active_turn=self._active_turn.is_set,
+            is_active_turn=_is_any_active,
             idle_since=lambda: self._last_chat_time,
         )
 

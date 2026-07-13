@@ -976,7 +976,7 @@ def _stream_agent_message(owner, messages, tools, token_callback):
     return msg, usage
 
 
-def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None) -> str:
+def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, cap_vec: np.ndarray | None = None) -> str:
     """Run task mode using the owning AikoThink instance for model/memory/output.
 
     mem_kb_future: a concurrent.futures.Future from
@@ -986,6 +986,10 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     before starting them). If this is None (e.g. a scheduled job calling
     agentic_chat() directly, with no prior route() call), the fetch runs
     here instead.
+
+    query_vec — pre-computed _QUERY_INSTRUCT embedding of user_input.
+    cap_vec  — pre-computed _CAPABILITY_INSTRUCT embedding of user_input.
+    Both avoid redundant HTTP calls when provided.
     """
     # Reuse the same HarrierEmbedder instance already warm for memory search
     # and intent routing for every RAG-selection call below (agentic policy,
@@ -993,12 +997,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # keyword scoring automatically if unavailable.
     _embedder = _owner_embedder(owner)
 
-    # Use pre-computed query embeddings from route() when available,
-    # avoiding redundant HTTP calls across memory search, capability
-    # matching, and batch_block_relevance_scores.
-    _turn_cache = getattr(owner, "_turn_cached_embeddings", {}) or {}
-    _query_vec = _turn_cache.get("_default_instruct")
-    _cap_vec = _turn_cache.get("_capability_instruct")
+    _query_vec = query_vec
+    _cap_vec = cap_vec
 
     # Narrow the tool list actually sent to the LLM this turn. Previously
     # every _TOOL_SCHEMAS entry (~20 tools) was sent on every turn regardless
