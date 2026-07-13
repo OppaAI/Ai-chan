@@ -1,6 +1,7 @@
 # Multi-user testing plan
 
-This is the simple `$5 Patreon tester` isolation model for Aiko. OAuth is the source of identity; `persona/identity.md` remains Aiko's identity only and is no longer a user identity source.
+There may be simple `$5 Patreon tester` isolation model for Aiko just to cover the cost of the front-end/back-end servers.
+OAuth is the source of identity; `persona/identity.md` remains Aiko's identity only and is no longer a user identity source.
 
 ## Current implementation
 
