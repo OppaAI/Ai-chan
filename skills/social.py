@@ -36,7 +36,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import requests
 from openai import OpenAI
 
-from system.bioclock import get_timezone
+from system.bioclock import get_timezone, timezone_name
 from system.log import get_logger
 from memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
@@ -132,9 +132,9 @@ class WeekWindow:
 
 def _timezone(name: str | None = None) -> ZoneInfo:
     try:
-        return ZoneInfo(name or TIMEZONE_NAME)
+        return ZoneInfo(name or timezone_name())
     except ZoneInfoNotFoundError:
-        log.warning("Unknown timezone %s; falling back to UTC", name or TIMEZONE_NAME)
+        log.warning("Unknown timezone %s; falling back to UTC", name or timezone_name())
         return ZoneInfo("UTC")
 
 
@@ -362,11 +362,11 @@ def _post_x_via_aisa(text: str, image_path: Path | None) -> dict[str, Any]:
     files = None
     if image_path and image_path.exists():
         mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
-        files = {"media_files": (image_path.name, image_path.open("rb"), mime)}
+        image_bytes = image_path.read_bytes()
+        files = {"media_files": (image_path.name, image_bytes, mime)}
     try:
         if files:
             resp = requests.post(f"{base_url}/post_twitter", headers=headers, data=payload, files=files, timeout=timeout)
-            files["media_files"][1].close()
         else:
             resp = requests.post(
                 f"{base_url}/post_twitter",

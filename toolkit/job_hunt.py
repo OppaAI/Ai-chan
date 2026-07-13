@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from system.bioclock import local_now
-from toolkit.research import web_fetch, web_search
+from toolkit.research import web_fetch, _web_search_raw
 
 _RELATIVE_RE = re.compile(
     r"(?P<num>\d+)\s*(?P<unit>hour|day|week|month)s?\s+ago", re.IGNORECASE
@@ -169,20 +169,21 @@ def search_jobs(
     for site in sites:
         for search_location in search_locations:
             search_query = " ".join(part for part in [str(site), query, job_type, search_location] if part)
-            for result in web_search(search_query):
+            raw_results, _err = _web_search_raw(search_query, MAX_RESULTS)
+            for result in (raw_results or []):
                 url = result.get("url", "")
                 if not url or url in seen_urls:
                     continue
                 seen_urls.add(url)
 
-                snippet = result.get("snippet", "") or ""
+                snippet = result.get("content", "") or result.get("snippet", "") or ""
                 title = result.get("title", "Unknown title")
                 blob = f"{title} {snippet}"
 
                 if not _location_matches(search_location, blob, aliases):
                     try:
                         page = web_fetch(url)
-                        page_text = page.get("text", "")[:1500]
+                        page_text = page[:1500]
                     except Exception:
                         page_text = ""
                     if not _location_matches(search_location, page_text, aliases):

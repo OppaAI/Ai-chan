@@ -515,7 +515,6 @@ _reg("repo_search_text", "Search repository text files with simple substring mat
     required=["query"])
 
 _reg_no_handler("learn_knowledge", "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted document text, or after explicit self-learning/research should be retained. Do not use for private personal preferences; those belong in memory. Do not use for merely saving a human-readable note; use save_note for that.",
-    lambda args: learn_knowledge(args.get("title", ""), args.get("text", ""), args.get("relative_path", ""), args.get("source", ""), args.get("kind", "ingested")),
     {"title": {"type": "string", "description": "Short title for the learned document or fact set."}, "text": {"type": "string", "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."}, "relative_path": {"type": "string", "description": "Optional workspace-relative document path to ingest instead of text."}, "source": {"type": "string", "description": "Optional source URL/path/context for pasted text."}, "kind": {"type": "string", "enum": ["ingested", "self_learned", "study_note"], "description": "Where this knowledge came from."}},
     required=["title"])
 

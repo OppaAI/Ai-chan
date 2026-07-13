@@ -259,19 +259,6 @@ def _log_ctx(logger, label: str, tok: int, latency_ms: float,
                 label, latency_ms, tok, preview)
 
 
-def _box_text(text: str, color: str, width: int = 66) -> str:
-    """Wrap `text` in a simple ASCII box, colored with `color`."""
-    inner = max(20, width - 4)
-    lines = textwrap.wrap(text, inner) or [""]
-    top = "┌" + "─" * (inner + 2) + "┐"
-    bot = "└" + "─" * (inner + 2) + "┘"
-    body = "\n".join(f"│ {ln.ljust(inner)} │" for ln in lines)
-    block = f"{top}\n{body}\n{bot}"
-    if not _COLOR_ENABLED:
-        return block
-    return f"{color}{block}\033[0m"
-
-
 def _count_tokens(text: str) -> int:
     """
     Best-effort token count via the local LLM server's /tokenize endpoint
@@ -1620,13 +1607,13 @@ def _run_session(ui, args):
                     ui.add_message('sys', 'Memory backend unavailable.')
                 else:
                     all_mem = memorize.get_all()
-                if not all_mem:
-                    ui.add_message('sys', 'No memories stored yet.')
-                else:
-                    ui.add_message('sys', f'{len(all_mem)} memories stored:')
-                    for i, m in enumerate(all_mem, 1):
-                        ui.add_message('sys',
-                            f'  {i:02d}. {m.get("memory") or m.get("text") or m}')
+                    if not all_mem:
+                        ui.add_message('sys', 'No memories stored yet.')
+                    else:
+                        ui.add_message('sys', f'{len(all_mem)} memories stored:')
+                        for i, m in enumerate(all_mem, 1):
+                            ui.add_message('sys',
+                                f'  {i:02d}. {m.get("memory") or m.get("text") or m}')
 
             elif cmd == '/clear':
                 if memorize is None:

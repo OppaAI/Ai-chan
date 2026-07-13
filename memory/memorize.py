@@ -203,8 +203,6 @@ MEMORY_RECENCY_RERANK_THRESHOLD = float(os.getenv("MEMORY_RECENCY_RERANK_THRESHO
 MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
 MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 
-USER_ID = current_user_id  # Backward-compatible callable alias; resolve at call time.
-
 
 def _default_user_id(user_id: str | None = None) -> str:
     return user_id or current_user_id()
@@ -609,22 +607,11 @@ class _MemoryBackend:
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
         self._embedder = HarrierEmbedder()
         self._conn = self._connect()
-        self._apply_schema()
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
 
-    def _apply_schema(self) -> None:
-        # Schema is applied by databank.initialize_store_db().
-        pass
-
     # ── embedding ─────────────────────────────────────────────────────────────
-
-    def _format_query_text(self, text: str) -> str:
-        """Apply query-side instruction prefix for instruct embedding models."""
-        if not EMBED_QUERY_INSTRUCT:
-            return text
-        return f"Instruct: {EMBED_QUERY_INSTRUCT}\nQuery: {text}"
 
     def _embed(self, text: str, *, query: bool = False) -> list[float]:
         """Embed a single string with HarrierEmbedder. Returns a plain float list."""

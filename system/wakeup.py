@@ -66,8 +66,6 @@ def _prewarm_semantic_cache(think) -> None:
     """Embed route and search exemplars at boot so first-turn latency is cold-free."""
     from cognition.think import (
         _ROUTE_TERNARY_EXAMPLES,
-        _ROUTE_INSTRUCT_BINARY,
-        _ROUTE_INSTRUCT_SEARCH,
         _ROUTE_INSTRUCT_TOOL,
         _ROUTE_INSTRUCT_TERNARY,
         _ROUTE_TOOL_EXAMPLES,

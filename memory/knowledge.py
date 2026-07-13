@@ -28,7 +28,6 @@ from collections import OrderedDict
 from html import escape
 from pathlib import Path
 from typing import Iterable, Protocol
-import xml.etree.ElementTree as ET
 from defusedxml import ElementTree as DET
 
 from system.config import load_config
