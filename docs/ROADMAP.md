@@ -1,5 +1,5 @@
 [← Back to README](../README.md)
-# Aiko-chan 愛子ちゃん — Roadmap
+# Aiko-chan アイコちゃん — Roadmap
 
 Aiko-chan is built in phases. Each phase is a self-contained capability layer that runs on top of the previous one. Phases are shipped when stable, not on a fixed schedule.
 
