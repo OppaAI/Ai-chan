@@ -104,6 +104,62 @@ AGENT_HISTORY_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 # spending web/research calls after enough evidence or snippets were gathered.
 AGENT_RESEARCH_MAX_CALLS = int(os.getenv("AGENT_RESEARCH_MAX_CALLS", 1))
 
+# TASK MODE instruction split into a small always-kept CORE (operationally
+# essential rules) and a larger GUIDANCE portion that is droppable under
+# context-budget pressure. Previously the whole ~950-char block was baked
+# into every agentic turn and could never be shed, starving task-specific
+# data (memory/wiki/skill) once the budget was exceeded.
+TASK_MODE_CORE = (
+    "[TASK MODE] You MUST use tools to complete tasks. Call tools first, "
+    "speak after. Never describe or simulate tool results — always call the "
+    "actual tool. Do not call final_answer until all needed tool calls are "
+    "complete. Keep reasoning private; never write tool names or JSON in "
+    "your spoken answer."
+)
+TASK_MODE_GUIDANCE = (
+    "[TASK MODE OVERRIDE] The speech style limits in the persona do NOT apply "
+    "in task mode. Do not summarize in 1-2 sentences. Output length is "
+    "irrelevant until final_answer is reached.\n\n"
+    "Treat agentic work as a sequence of steps, not one category: plan/decide "
+    "when useful, research with deep_search for snippet-only discovery/support "
+    "inside a workflow, or deep_research for fetched source reading, synthesis, "
+    "and self-learning, inspect repository files for coding or architecture "
+    "work, schedule with schedule_job or schedule_reminder when requested, and "
+    "write or save the result when the user asks for an artifact. Research "
+    "tasks should normally end in a written summary/report, even if the user "
+    "only asked you to look something up, unless they explicitly ask you not "
+    "to write it down. If the user asks you to save, write, schedule, or "
+    "search: call the tool first, then confirm with final_answer. "
+    "Tool observations are structured JSON. If ok=false, do not pretend the "
+    "action succeeded: retry with corrected arguments, choose another tool or "
+    "query, or clearly disclose the limitation in the final answer. "
+    f"deep_search/deep_research together may be used at most {AGENT_RESEARCH_MAX_CALLS} "
+    "time(s) per agentic workflow. After research returns, read its evidence "
+    "and continue with the next productive step (plan, summarize, save, or "
+    "answer) instead of searching again. In task mode, do not use "
+    "web_search/web_fetch directly; deep_search is snippet-only and "
+    "deep_research is for fetched evidence. When writing notes after research: "
+    "cross-check any hardware specs, commands, or version numbers against "
+    "fetched page content only — never state technical facts from memory "
+    "alone. If a fact cannot be confirmed from fetched content, omit it or "
+    "flag it as unverified. If a research tool result explicitly says no "
+    "relevant content was found, disclose that gap plainly in the final answer "
+    "instead of guessing or filling it in from memory. "
+    "Use <skill_context>, <knowledge_context>, and <experience_context> when "
+    "they match the task. For repeatable workflows, prefer predefined skill "
+    "workflow, learned knowledge, wiki operating cards, and successful similar "
+    "past experience over inventing a new process. When a recalled <past_task> "
+    "has outcome=\"failed\" or outcome=\"partial\", or a low verifier_score, "
+    "treat its steps as a cautionary trace of what went wrong, not a template "
+    "to follow — do not repeat the same tool/argument choices that led to "
+    "that failure. Only reuse the tool sequence from a <past_task> with "
+    "outcome=\"ok\" as a positive template. If no matching skill exists, "
+    "continue with generic tools. CRITICAL: When asked to save a file, call "
+    "save_note BEFORE writing any content in chat. Do not describe what you "
+    "will save — just save it. Never say 'I'll now open a file' or 'I'll "
+    "generate' — call the tool immediately."
+)
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AGENTIC_POLICY_PATHS = (
     _REPO_ROOT / "skills" / "skills.md",
@@ -880,8 +936,9 @@ def _estimate_tokens(text: str) -> int:
 def _enforce_agentic_context_budget(
     persona, agentic_policy_context, memory_context, user_input,
     wiki_context, skill_context, knowledge_context, experience_context,
+    task_mode_context: str = "",
     scores: dict[str, float] | None = None,
-) -> tuple[str, str, str, str, str]:
+) -> tuple[str, str, str, str, str, str]:
     budget = int(LLM_CTX_SIZE * AGENT_CONTEXT_BUDGET_RATIO)
     fixed = persona + memory_context + user_input
     fixed_tokens = _estimate_tokens(fixed) + _TOOL_SCHEMA_TOKENS_ESTIMATE
@@ -889,12 +946,16 @@ def _enforce_agentic_context_budget(
     blocks = {
         "wiki": wiki_context, "knowledge": knowledge_context,
         "experience": experience_context, "agentic_policy": agentic_policy_context,
-        "skill": skill_context,
+        "skill": skill_context, "task_mode": task_mode_context,
     }
     scores = scores or {}
+    # task_mode guidance has no task-specific relevance score; treat it as
+    # neutral so it sheds after clearly-irrelevant blocks (low score) but
+    # before valuable task-specific data (high score).
+    scores.setdefault("task_mode", 0.0)
     # fallback tie-break preserves your original weakest-first order when
     # scores are missing or tied
-    fallback_rank = {"experience": 0, "wiki": 1, "knowledge": 2, "agentic_policy": 3, "skill": 4}
+    fallback_rank = {"experience": 0, "wiki": 1, "knowledge": 2, "agentic_policy": 3, "skill": 4, "task_mode": 5}
     remaining = set(blocks)
 
     while remaining:
@@ -909,7 +970,7 @@ def _enforce_agentic_context_budget(
         blocks[victim] = f"<{victim}_context>\nOmitted this turn — context budget exceeded.\n</{victim}_context>"
         remaining.discard(victim)
 
-    return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"]
+    return blocks["wiki"], blocks["skill"], blocks["knowledge"], blocks["agentic_policy"], blocks["experience"], blocks["task_mode"]
 
 
 def _stream_agent_message(owner, messages, tools, token_callback):
@@ -1032,63 +1093,26 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     knowledge_context = f'{agentic_ctx["wiki_knowledge"]}\n\n{knowledge_block}'
     scores["knowledge"] = reason.batch_block_relevance_scores(_embedder, user_input, [knowledge_context], query_vector=_query_vec)[0]
 
-    wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context = _enforce_agentic_context_budget(
+    wiki_context, skill_context, knowledge_context, agentic_policy_context, experience_context, task_mode_guidance = _enforce_agentic_context_budget(
         owner._persona, agentic_policy_context, memory_context, user_input,
         wiki_context, skill_context, knowledge_context, experience_context,
+        task_mode_context=TASK_MODE_GUIDANCE,
         scores=scores,
     )
 
+    # Core task-mode rules are always kept (small, operationally essential);
+    # the verbose guidance is droppable under context-budget pressure.
     agent_system = (
         f"{owner._current_system_prompt()}\n\n"
         f"{bioclock.current_datetime_block()}\n\n"        
         f"{agentic_policy_context}\n\n"
         f"{wiki_context}\n\n"
-        "[TASK MODE OVERRIDE] The speech style limits in the persona do NOT apply "
-        "in task mode. Do not summarize in 1-2 sentences. Call tools first, speak after. "
-        "Output length is irrelevant until final_answer is reached.\n\n"
+        f"{TASK_MODE_CORE}\n\n"
         f"{memory_context}\n\n"
         f"{skill_context}\n\n"
         f"{knowledge_context}\n\n"
         f"{experience_context}\n\n"
-        "[TASK MODE] You MUST use tools to complete tasks. Treat agentic work as "
-        "a sequence of steps, not one category: plan/decide when useful, research "
-        "with deep_search for snippet-only discovery/support inside a workflow, "
-        "or deep_research for fetched source reading, synthesis, and self-learning, "
-        "inspect repository files for coding or architecture work, schedule with "
-        "schedule_job or schedule_reminder when requested, and write or save the "
-        "result when the user asks for an artifact. Research tasks should normally "
-        "end in a written summary/report, even if the user only asked you to look "
-        "something up, unless they explicitly ask you not to write it down. Never "
-        "describe or simulate tool results in text — always call the actual tool. "
-        "If the user asks you to save, write, schedule, or search: call the tool "
-        "first, then confirm with final_answer. Do not call final_answer until all "
-        "needed tool calls are complete. Keep reasoning private. Never write tool names "
-        "or JSON in your spoken answer — speak naturally after the work is done. "
-        "Tool observations are structured JSON. If ok=false, do not pretend the "
-        "action succeeded: retry with corrected arguments, choose another tool or "
-        "query, or clearly disclose the limitation in the final answer. "
-        f"deep_search/deep_research together may be used at most {AGENT_RESEARCH_MAX_CALLS} "
-        "time(s) per agentic workflow. After research returns, read its evidence and "
-        "continue with the next productive step (plan, summarize, save, or answer) "
-        "instead of searching again. In task mode, do not use web_search/web_fetch directly; "
-        "deep_search is snippet-only and deep_research is for fetched evidence. "
-        "When writing notes after research: cross-check any hardware specs, "
-        "commands, or version numbers against fetched page content only — "
-        "never state technical facts from memory alone. If a fact cannot be "
-        "confirmed from fetched content, omit it or flag it as unverified. "
-        "If a research tool result explicitly says no relevant content was "
-        "found, disclose that gap plainly in the final answer instead of "
-        "guessing or filling it in from memory. "
-        "Use <skill_context>, <knowledge_context>, and <experience_context> when they match the task. "
-        "For repeatable workflows, prefer predefined skill workflow, learned knowledge, wiki operating cards, and successful similar past experience over inventing a new process. "
-        "When a recalled <past_task> has outcome=\"failed\" or outcome=\"partial\", or a low verifier_score, "
-        "treat its steps as a cautionary trace of what went wrong, not a template to follow — do not repeat "
-        "the same tool/argument choices that led to that failure. Only reuse the tool sequence from a "
-        "<past_task> with outcome=\"ok\" as a positive template. "
-        "If no matching skill exists, continue with generic tools. "
-        "CRITICAL: When asked to save a file, call save_note BEFORE writing "
-        "any content in chat. Do not describe what you will save — just save it. "
-        "Never say 'I'll now open a file' or 'I'll generate' — call the tool immediately. "
+        f"{task_mode_guidance}\n\n"
     )
     messages = [
         {"role": "system", "content": agent_system},
@@ -1106,7 +1130,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             {"label": "skill_context", "content": skill_context},
             {"label": "knowledge_context", "content": knowledge_context},
             {"label": "experience_context", "content": experience_context},
-            {"label": "task_mode_system", "content": agent_system},
+            {"label": "task_mode_core", "content": TASK_MODE_CORE},
+            {"label": "task_mode_guidance", "content": task_mode_guidance},
         ],
         "matched_capabilities": _matched_caps,
         "previous_chat_messages": [dict(m) for m in messages[1:-1]],
