@@ -20,8 +20,8 @@ Optional:
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
   IMAGEGEN_URL        — Modal FLUX endpoint
-  REFERENCE_IMAGE — path to Aiko reference PNG (default ~/Aiko-chan/assets/Aiko-chan.png)
-  USER_REFERENCE_IMAGE — path to user reference PNG (default ~/Aiko-chan/assets/<USER_ID>.png)
+  REFERENCE_IMAGE — path to Aiko reference PNG (default <USER_STATE_ROOT>/Aiko-chan.png)
+  USER_REFERENCE_IMAGE — path to user reference PNG (default <USER_STATE_ROOT>/<USER_ID>/user.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
   USER_STATE_ROOT — root directory for user state (default: ~/.aiko)
 
@@ -81,8 +81,10 @@ REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 50))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 REFLECT_BLOG_POST_ENABLED = os.getenv("REFLECT_BLOG_POST_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
+_USER_STATE_ROOT = os.path.expanduser("~/.aiko")
+
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "")
-REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.expanduser("~/Aiko-chan/assets/Aiko-chan.png"))
+REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.join(_USER_STATE_ROOT, "Aiko-chan.png"))
 
 def _user_reference_image_path() -> str:
     """Resolve the current user's reference-image path fresh, per call —
@@ -92,7 +94,11 @@ def _user_reference_image_path() -> str:
     override = os.getenv("USER_REFERENCE_IMAGE")
     if override:
         return override
-    return os.path.expanduser(f"~/Aiko-chan/assets/{current_user_id()}.png")
+    root = os.getenv("USER_STATE_ROOT") or _USER_STATE_ROOT
+    return os.path.join(root, current_user_id(), "user.png")
+
+def _reference_image_path() -> str:
+    return REFERENCE_IMAGE
 
 _GITHUB_API = "https://api.github.com"
 
@@ -382,7 +388,7 @@ def _generate_feelings(prose: str) -> str:
 def _load_reference_images() -> list[str]:
     """Load Aiko and user reference images as base64 strings."""
     refs = []
-    for path in [REFERENCE_IMAGE, _user_reference_image_path()]:
+    for path in [_reference_image_path(), _user_reference_image_path()]:
         if path and os.path.exists(path):
             with open(path, "rb") as f:
                 refs.append(base64.b64encode(f.read()).decode())
