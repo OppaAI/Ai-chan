@@ -293,7 +293,17 @@ class AikoListen:
 
     def stop_barge_in_monitor(self) -> None:
         self._barge_in_active = False
-
+      
+    def trigger_barge_in(self) -> None:
+        """
+        Externally signal a barge-in, bypassing the local-mic Silero monitor.
+        Used by the WebUI path: the browser's own energy-VAD detects speech
+        during TTS playback and reports it over the websocket as a 'barge_in'
+        message — this lets that message interrupt speak.wait_or_barge_in()
+        exactly as if the physical Jetson mic had detected it.
+        """
+        self._barge_in_event.set()
+  
     def _barge_in_loop(self) -> None:
         """Always-on VAD monitor via parec. Pauses while _record() is active."""
         bytes_per_chunk = _CHUNK_SAMPLES_VAD * 4
