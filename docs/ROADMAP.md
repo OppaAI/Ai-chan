@@ -55,22 +55,22 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 **Goal:** A local-first voice loop — listen, detect speech, transcribe, respond, and speak back — that runs on the Jetson with stable memory under ASR + LLM + TTS load.
 
 > **Memory backend migration:** Phase 2 replaced mem0 + Qdrant with a custom
-> sqlite-vec + fastembed backend using local SQLite storage, KNN vector search,
+> sqlite-vec + llama.cpp backend using local SQLite storage, KNN vector search,
 > FTS5 lexical search, and Reciprocal Rank Fusion retrieval.
 > Qdrant caused OOM crashes on the Jetson Orin Nano when ASR, LLM inference,
 > TTS, and memory were active together.
 > The new backend is serverless and keeps memory local — no Qdrant container,
 > no mem0 runtime, and no Docker dependency for memory.
 >
-> **Current embedding note:** Aiko now uses a custom `core/embed.py` ONNX
-> Harrier embedder instead of fastembed. Harrier OSS v1 270M is decoder-only
+> **Current embedding note:** Aiko now uses a custom `cognition/reason.py` ONNX
+> llama.cpp embedder instead of fastembed. Harrier OSS v1 270M is decoder-only
 > and needs last-token pooling, while fastembed custom registration only
 > exposed `PoolingType.MEAN`/CLS-style pooling for this path.
 
 | Feature | Status |
 |---|---|
 | **Memory backend rewrite — sqlite-vec + fastembed (custom, no server)** | ✅ Done |
-| Embedding model migration — BGE v1.5 → Harrier OSS v1 270M fastembed for newer 640d vectors and better expected semantic separation | ✅ Done |
+| Embedding model migration — BGE v1.5 → Harrier OSS v1 270M for newer 640d vectors and better expected semantic separation | ✅ Done |
 | fastembed removal — custom Harrier ONNX embedder with last-token pooling | ✅ Done |
 | KNN + FTS5 + RRF memory retrieval | ✅ Done |
 | Monthly memory consolidation — older full months summarized into pinned durable memories | ✅ Done |
@@ -188,10 +188,10 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 |---|---|---|
 | Routing | Keyword-only (`/web`, `/think`, task keywords) | **Dual-path: fast semantic exemplar routing by default, optional LLM router/fallback for context-heavy cases** |
 | Embeddings | BGE v1.5 (fastembed, 1024d, MEAN pooling) | **Harrier OSS v1 270M (custom ONNX, 640d, last-token pooling, query instructions)** |
-| Embedder | `fastembed` library | **Custom `core/embed.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
-| Tools | Scattered functions | **Focused `core/toolkit/` modules: web, planning, scheduling, photo, architecture** |
-| Skills | N/A | **`skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py`** |
-| Agentic facade | Direct calls | **`core/tools.py` compatibility facade + graph-first executor + ReAct fallback loop** |
+| Embedder | `fastembed` library | **Custom `cognition/reason.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
+| Tools | Scattered functions | **Focused `toolkit/` modules: web, planning, scheduling, photo, architecture** |
+| Skills | N/A | **`skills/skillsets/*.md` workflow registry loaded by `skills/skills.py`** |
+| Agentic facade | Direct calls | **`toolkit/tools.py` compatibility facade + graph-first executor + ReAct fallback loop** |
 
 ---
 

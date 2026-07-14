@@ -43,7 +43,7 @@ from skills.wiki import wiki_agentic_contexts_for
 from skills.capability import match_capabilities, filtered_tool_schemas
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from skills import experience
-from skills import graph_agent
+from skills import schema
 from toolkit.tools import (
     deep_search,
     deep_research,
@@ -622,11 +622,11 @@ _reg("load_skillset", "Load the full markdown instructions for one predefined sk
     required=["skill_id"])
 
 _reg("list_master_plans", "List graph/master-plan workflows available to the model-free graph executor.",
-    lambda args: graph_agent.list_master_plans_json(),
+    lambda args: schema.list_master_plans_json(),
     {})
 
 _reg("run_master_plan", "Run a saved graph/master-plan workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",
-    lambda args: graph_agent.run_master_plan_json(args.get("task", ""), cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None),
+    lambda args: schema.run_master_plan_json(args.get("task", ""), cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None),
     {"task": {"type": "string", "description": "The task prompt to match against graph master plans."}, "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."}},
     required=["task"])
 
@@ -1162,19 +1162,35 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # ReAct loop once; the normal experience recorder below then captures the
     # successful sequence for later promotion into the graph master plan.
     if AGENT_EXECUTOR_MODE in {"graph", "hybrid"}:
-        graph_result = graph_agent.run_graph_agent(user_input, cap_ids=_matched_caps)
+        graph_result = schema.run_schema_agent(user_input, cap_ids=_matched_caps)
         if graph_result is not None:
+            _graph_ok = not any(not r.ok for r in graph_result.results)
             threading.Thread(
                 target=experience.record_experience,
                 args=(owner, user_input, graph_result.steps, graph_result.final_answer),
-                kwargs=dict(verified_ok=not any(not r.ok for r in graph_result.results), score=1.0, embedder=_embedder),
+                kwargs=dict(verified_ok=_graph_ok, score=1.0 if _graph_ok else 0.0, embedder=_embedder),
                 daemon=True,
             ).start()
+            graph_payload = {
+                "id": graph_result.graph.id,
+                "name": graph_result.graph.name,
+                "goal": graph_result.graph.goal,
+                "source": graph_result.graph.source,
+                "nodes": [n.__dict__ for n in graph_result.graph.nodes],
+            }
+            node_payload = [r.__dict__ for r in graph_result.results]
             owner.last_prompt_debug = {
                 "mode": "agentic_graph",
                 "matched_capabilities": _matched_caps,
-                "graph": graph_result.graph.__dict__,
-                "node_results": [r.__dict__ for r in graph_result.results],
+                "graph": graph_payload,
+                "node_results": node_payload,
+            }
+            owner.last_usage = {
+                "prompt_messages": [{"role": "user", "content": user_input}],
+                "completion_text": graph_result.final_answer,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
             }
             owner._emit(graph_result.final_answer, token_callback=token_callback)
             with owner._history_lock:
@@ -1189,6 +1205,17 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 "Run practice.py or switch to AGENT_EXECUTOR_MODE=hybrid to learn it once."
             )
             owner._emit(final_text, token_callback=token_callback)
+            owner.last_usage = {
+                "prompt_messages": [{"role": "user", "content": user_input}],
+                "completion_text": final_text,
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            }
+            with owner._history_lock:
+                owner._history.append({"role": "user", "content": user_input})
+                owner._history.append({"role": "assistant", "content": final_text})
+            owner._store_async(user_input, final_text)
             return final_text
 
     if mem_kb_future is not None:

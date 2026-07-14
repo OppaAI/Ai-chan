@@ -136,12 +136,12 @@ Goal:
 
 Major additions:
 
-- browser WebUI/VRM bridge groundwork under `webui/` and `webui/static/`
+- browser WebUI/VRM bridge groundwork under `webui/` and `interface/webui/static/`
 - OpenAI-compatible local LLM client path for llama.cpp-style servers
 - agentic toolkit focused tool modules
 - agentic tools compatibility facade
-- agentic skill workflow documents under `skills/<skill_id>/SKILL.md`
-- agentic skill discovery and retrieval in `core/skills.py`
+- agentic skill workflow documents under `skills/skillsets/*.md`
+- agentic skill discovery and retrieval in `skills/skills.py`
 - agentic task-mode skill context injection
 - initial `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch` skill projects
 - local scheduling/reminder infrastructure using per-user `schedule.json`
@@ -149,7 +149,7 @@ Major additions:
 - monthly memory consolidation for older full months, using memory facts so the LLM never needs an entire month in one context window
 - routing decision upgrade: keyword-only task detection was replaced by a dual path — fast semantic exemplar routing by default, with optional LLM routing/fallback for context-heavy cases
 - embedding decision upgrade: BGE v1.5 was replaced by Harrier OSS v1 270M because BGE is aging and produced compressed route-example cosine bands, while Harrier gives a newer 640-dimensional retrieval model with query-instruction support and better expected semantic separation
-- embedding implementation upgrade: fastembed was replaced by Aiko's custom `core/embed.py` ONNX Harrier embedder because Harrier is decoder-only and needs last-token pooling; fastembed custom registration exposed `PoolingType.MEAN`/CLS-style pooling for this path
+- embedding implementation upgrade: fastembed was replaced by Aiko's custom `cognition/reason.py` ONNX Harrier embedder because Harrier is decoder-only and needs last-token pooling; fastembed custom registration exposed `PoolingType.MEAN`/CLS-style pooling for this path
 
 Architecture changes in Phase 2.5:
 
@@ -157,16 +157,16 @@ Architecture changes in Phase 2.5:
 |---|---|---|
 | Routing | Keyword-only (`/web`, `/think`, task keywords) | **Dual-path: fast semantic exemplar routing by default, optional LLM router/fallback for context-heavy cases** |
 | Embeddings | BGE v1.5 (fastembed, 1024d, MEAN pooling) | **Harrier OSS v1 270M (custom ONNX, 640d, last-token pooling, query instructions)** |
-| Embedder | `fastembed` library | **Custom `core/embed.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
-| Tools | Scattered functions | **Focused `core/toolkit/` modules: web, planning, scheduling, photo, architecture** |
-| Skills | N/A | **`skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py`** |
-| Agentic facade | Direct calls | **`core/tools.py` compatibility facade + `core/agentic.py` ReAct loop** |
+| Embedder | `fastembed` library | **Custom `cognition/reason.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
+| Tools | Scattered functions | **Focused `toolkit/` modules: web, planning, scheduling, photo, architecture** |
+| Skills | N/A | **`skills/skillsets/*.md` workflow registry loaded by `skills/skills.py`** |
+| Agentic facade | Direct calls | **`toolkit/tools.py` compatibility facade + `skills/agentic.py` ReAct loop** |
 
 Lessons learned:
 
 - Tools are executable abilities; skills are repeatable workflows.
 - Markdown skill files are for humans and prompts; Python toolkit modules are for actions.
-- `core/tools.py` remains useful as a stable public facade even when implementations move into `core/toolkit/`.
+- `toolkit/tools.py` remains useful as a stable public facade even when implementations move into `toolkit/`.
 - The browser WebUI can share the TUI contract, but remote voice-device UX still needs polishing.
 - Environment-variable migrations need docs: `LLM_*` and `ROUTE_*` are now the current names for chat runtime/routing.
 - Aiko now has a graph-first master-plan executor for known workflows and a ReAct fallback for novel workflows. It still does not have a long-running autonomous sub-agent worker runtime with queues/leases/cancellation; graph nodes are lightweight tool tasks inside one orchestrated turn.

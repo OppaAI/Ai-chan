@@ -1,7 +1,7 @@
 [← Back to README](../README.md)
 # Aiko-chan 愛子ちゃん — Installation Guide
 
-This guide installs the current Aiko-chan stack: Python 3.12 + `uv`, SearXNG in Docker, a local OpenAI-compatible LLM endpoint (usually llama.cpp `llama-server`), sqlite-vec memory, MioTTS, SenseVoice ASR, the curses TUI, the optional browser WebUI/VRM frontend, agentic toolkit tools, and skill workflows.
+This guide installs the current Aiko-chan stack: Python 3.12 + `uv`, SearXNG in Docker, a local OpenAI-compatible LLM endpoint (usually llama.cpp `llama-server`), sqlite-vec memory, MioTTS, SenseVoice ASR, the browser WebUI/VRM frontend, agentic toolkit tools, and skill workflows.
 
 ---
 
@@ -79,7 +79,7 @@ cd Aiko-chan
 cp .env.example .env
 ```
 
-The repo contains `docker-compose.yml`, `searxng/` config, Python source, `webui/static/`, skills, persona files, and docs.
+The repo contains `docker-compose.yml`, `searxng/` config, Python source, `interface/webui/static/`, skills, persona files, and docs.
 
 ---
 
@@ -159,8 +159,8 @@ Typical MioTTS flow:
 
 ```bash
 curl http://localhost:8001/health
-uv run python core/speak.py --devices
-uv run python core/speak.py --wait "Hello, I'm Aiko."
+uv run python sensory/speak.py --devices
+uv run python sensory/speak.py --wait "Hello, I'm Aiko."
 ```
 
 If you do not need voice initially, run Aiko with `--text`; TTS and ASR still load so `/voice` and `/listen` can toggle them on later without restarting.
@@ -183,18 +183,12 @@ Non-secret runtime settings live in category YAML files under `config/`:
 
 ```text
 config/index.yaml       # ordered list of YAML files loaded at startup
-config/identity.yaml    # AI_NAME, USER_ID
-config/think.yaml       # core/think.py LLM endpoints, model names, sampling, token limits
-config/skills.yaml      # skills/agentic.py, graph executor, tool schemas, skill/wiki RAG budgets
+config/system.yaml      # identity, logging, userspace, schedule, reflection/social settings
+config/cognition.yaml   # cognition/think.py LLM endpoints, routing, token limits, vector cache
 config/memory.yaml      # memory/memorize.py, embed, forget, experience, consolidation settings
-config/speak.yaml       # core/speak.py MioTTS and karaoke text settings
-config/listen.yaml      # core/listen.py ASR, VAD, speaker verification, barge-in
-config/web.yaml         # core/toolkit/researcher.py SearXNG URL and search limits
-config/ui.yaml          # main/webui/demo UI ports, avatar path, streaming behavior
-config/schedule.yaml    # core/schedule.py timezone, schedule files, job timing
-config/reflect.yaml     # core/reflect.py Hugo/GitHub repo paths and image/reference settings
-config/social.yaml      # core/social.py weekly social draft/post settings
-config/log.yaml         # core/log.py log level and rotation
+config/skills.yaml      # skills/agentic.py, skills/schema.py, tool schemas, skill/wiki RAG budgets
+config/sensory.yaml     # sensory/speak.py and sensory/listen.py voice, ASR, VAD, barge-in
+config/interface.yaml   # WebUI ports, avatar path, streaming behavior
 ```
 
 Environment variables still override YAML at runtime, so one-off shell overrides continue to work.
@@ -209,19 +203,19 @@ uv sync
 
 This installs dependencies from `pyproject.toml`/`uv.lock`, including `openai`, `sqlite-vec`, `onnxruntime-gpu`, `tokenizers`, `sherpa-onnx`, `silero-vad`, `sounddevice`, `soundfile`, `websockets`, `torch`, and `torchaudio`.
 
-For browser frontend asset experiments, the repo also has a `package.json` with `three` and `@pixiv/three-vrm`; the checked-in `webui/static/` files are served directly by Python, so `npm install` is not required for normal runtime.
+For browser frontend asset experiments, the repo also has a `package.json` with `three` and `@pixiv/three-vrm`; the checked-in `interface/webui/static/` files are served directly by Python, so `npm install` is not required for normal runtime.
 
 ---
 
 ## 10. Jetson Orin Nano Notes
 
 - The current `pyproject.toml` uses PyPI dependencies plus an ONNX Runtime CUDA nightly index for `onnxruntime-gpu`.
-- `ASR_DEVICE` lives in `config/listen.yaml`; use `cpu` if CUDA EP availability varies by JetPack/JP version.
+- `ASR_DEVICE` lives in `config/sensory.yaml`; use `cpu` if CUDA EP availability varies by JetPack/JP version.
 - Keep `SQLITE_MEMORY_PATH` and `EMBED_CACHE_PATH` on persistent storage, not `/tmp`.
 - If audio output is silent, inspect devices and set `MIOTTS_DEVICE` or the system default sink:
 
 ```bash
-uv run python core/speak.py --devices
+uv run python sensory/speak.py --devices
 pactl list short sinks
 pactl set-default-sink <sink_name>
 ```
@@ -247,11 +241,11 @@ curl http://localhost:8001/health
 uv run python -c "import sqlite_vec, tokenizers, onnxruntime, sherpa_onnx, silero_vad, sounddevice, websockets; print('OK')"
 
 # Skill registry and agentic tool schemas
-uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"
-uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"
+uv run python -c "from skills.skills import list_skillsets; print(list_skillsets())"
+uv run python -c "from skills.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"
 
 # Memory backend
-uv run python -c "from core.memorize import AikoMemorize; m=AikoMemorize(silent=True); print(m.get_all()[:1])"
+uv run python -c "from memory.memorize import AikoMemorize; m=AikoMemorize(silent=True); print(m.get_all()[:1])"
 ```
 
 ---
@@ -259,11 +253,11 @@ uv run python -c "from core.memorize import AikoMemorize; m=AikoMemorize(silent=
 ## 12. Run Aiko-chan
 
 ```bash
-# Default: curses TUI, full voice if services are available
+# Default: browser WebUI + VRM frontend, full voice if services are available
 uv run python main.py
 
-# Browser WebUI + VRM frontend
-uv run python main.py --webui
+# Simple authenticated local CLI
+uv run python main.py --cli
 
 # Keyboard-first, ASR/TTS loaded but initially toggled off
 uv run python main.py --text

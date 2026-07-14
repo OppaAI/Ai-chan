@@ -29,7 +29,8 @@ import os
 import json
 import warnings
 import hashlib
-import pickle
+
+import numpy as np
 
 warnings.filterwarnings("ignore")
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
@@ -499,7 +500,7 @@ class AikoThink:
         """Return cached route-example vectors.
 
         Hot turns use the in-memory cache. Cold boots can reuse a per-user
-        on-disk pickle keyed by the route examples, instruct string, and
+        on-disk NumPy archive keyed by the route examples, instruct string, and
         embedding backend metadata when ROUTE_VECTOR_CACHE_ENABLED=1. If the
         cache is missing/stale/unreadable, Aiko recomputes and overwrites it.
         """
@@ -514,7 +515,8 @@ class AikoThink:
             if disk_path is not None and disk_path.exists():
                 try:
                     with disk_path.open("rb") as f:
-                        cached = pickle.load(f)
+                        data = np.load(f, allow_pickle=False)
+                        cached = (list(data["labels"].astype(str)), data["vectors"])
                     self._semantic_example_cache[cache_key] = cached
                     return cached
                 except Exception as exc:
@@ -527,7 +529,7 @@ class AikoThink:
                 try:
                     disk_path.parent.mkdir(parents=True, exist_ok=True)
                     with disk_path.open("wb") as f:
-                        pickle.dump(cached, f, protocol=pickle.HIGHEST_PROTOCOL)
+                        np.savez(f, labels=np.asarray(cached[0], dtype=str), vectors=cached[1])
                 except Exception as exc:
                     log.debug("[route] could not write vector cache %s: %s", disk_path, exc)
             return cached
@@ -548,7 +550,7 @@ class AikoThink:
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:24]
             raw_dir = Path(_ROUTE_VECTOR_CACHE_DIR)
             base = raw_dir if raw_dir.is_absolute() else user_state_dir(current_user_id()) / raw_dir
-            return base / f"{digest}.pkl"
+            return base / f"{digest}.npz"
         except Exception:
             return None
 

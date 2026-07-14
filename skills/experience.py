@@ -25,7 +25,7 @@ load_config()
 
 try:
     from memory.vecstore import delete_by_id, initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
-except Exception:  # lightweight practice.py/test environments may not have numpy/sqlite-vec
+except ImportError:  # lightweight practice.py/test environments may not have numpy/sqlite-vec
     from datetime import datetime, timezone
     def utc_now_iso(): return datetime.now(timezone.utc).isoformat()
     def initialize_store_db(path, ddl, user_id=None, vector=True):
