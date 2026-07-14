@@ -28,8 +28,9 @@ TOP_K: "50"  # Limits next-token choices to top K; common values 40-100, 0 may d
 # Use this to tune when Aiko enters tool/task mode and how much work one task may do.
 
 # -- Routing --
+AGENTIC_MODE_ON: 1          # 1/0 — whether "agentic" is a reachable outcome at all, independent of ROUTE_MODE
 ROUTE_ENABLED: "1"  # Automatic chat-vs-agent routing toggle; options: 1/0, true/false, yes/no, on/off.
-ROUTE_MODE: "semantic_only"  # Routing strategy; options: semantic, semantic_only, llm, llm_only, chat/off/disabled.
+ROUTE_MODE: semantic        # semantic | semantic_only | llm | llm_only — picks the classification METHOD only
 ROUTE_AGENTIC_THRESHOLD: "0.65"   # Route to agentic if score > this
 ROUTE_WEBCHAT_THRESHOLD: "0.60"   # Route to webchat if score > this (else localchat)
 ROUTE_LABEL_TOP_K: "3"  # Average each label strongest N examples; higher is smoother but less sharp.
