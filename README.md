@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 ![Status](https://img.shields.io/badge/Status-experimental-orange.svg)
 
-![LLM](https://img.shields.io/badge/Runtime-llama.cpp_OpenAI--compatible-967BB6?logo=ai&logoColor=white)
+![LLM](https://img.shields.io/badge/Runtime-llama.cpp-967BB6?logo=ai&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04_LTS-orange?logo=ubuntu&logoColor=white)
 ![CUDA](https://img.shields.io/badge/CUDA-12.6-76B900?logo=nvidia)
