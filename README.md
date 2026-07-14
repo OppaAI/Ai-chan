@@ -132,7 +132,7 @@ This project currently serves as:
 flowchart TD
     YOU[You] --> UI[UI\nWebUI or CLI]
     UI --> THINK[Think\nllama.cpp/OpenAI-compatible LLM]
-    THINK <-->|async| MEM[Memory\nsqlite-vec + custom Harrier ONNX embedder]
+    THINK <-->|async| MEM[Memory\nsqlite-vec + Harrier llama.cpp server]
     THINK <-->|on demand| SEARCH[Web search\nSearXNG]
     THINK --> SPEAK[Speak\nMioTTS]
     LISTEN["Listen\nSenseVoice (sherpa-onnx) + Silero VAD"] --> THINK
@@ -150,7 +150,7 @@ flowchart TD
 | Interface | browser WebUI in `interface/webui/` by default; simple local CLI via `--cli` |
 | Chat model | llama.cpp or any OpenAI-compatible local server via `openai.OpenAI` |
 | Long-term memory | custom sqlite-vec backend (no server required) |
-| Embeddings | custom ONNX Harrier embedder, `ferrisS/harrier-oss-v1-270m-fastembed` |
+| Embeddings | Harrier llama.cpp, `harrier-oss-v1-270m via llama.cpp server` |
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
 | Web search | local SearXNG instance through `toolkit/research.py` |
 | TTS | external MioTTS HTTP server |
