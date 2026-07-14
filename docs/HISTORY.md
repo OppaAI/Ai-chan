@@ -103,7 +103,10 @@ Major architectural change:
 - mem0 removed
 - Qdrant removed
 - sqlite-vec adopted
-- fastembed adopted
+- fastembed adopted but removed (due to not support last polling of Harrier OSS v1 270M is decoder only)
+- embedder adopted in llama.cpp server
+- TUI ditched in favour of WebUI
+- Simple CLI introduced for debugging purpose
 - custom retrieval pipeline implemented
 
 
