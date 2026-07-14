@@ -73,11 +73,11 @@ This project currently serves as:
 
 ### 🎤 Voice
 - **ASR** — SenseVoice via sherpa-onnx (int8 ONNX, multilingual JP/EN)
-- **VAD** — Silero VAD for voice activity detection
+- **VAD** — Dual energy VAD and Silero VAD for voice activity detection
 - **Microphone** — PulseAudio `parec` capture (local) + browser WebAudio Worklet (WebUI)
 - **Barge-in** — Speak over Aiko mid-response to interrupt
-- **Speaker verification** — Optional sherpa-onnx speaker embeddings for owner-only voice activation
-- **TTS** — MioTTS HTTP server (0.4B Q4KM), bilingual JP/EN, karaoke-style text sanitization
+- **Speaker verification** — Optional ERes2Net via sherpa-onnx speaker embeddings for owner-only voice activation
+- **TTS** — MioTTS via llama.cpp + synthesizer server (0.4B Q4KM), bilingual JP/EN, karaoke-style text sanitization
 - **Staged warmup** — ASR, VAD, TTS, and microphone warmed during boot
 
 ### 🤖 Agentic Skills
@@ -107,7 +107,7 @@ This project currently serves as:
 ### 🎭 WebUI / VRM Frontend (Experimental)
 - **three.js + @pixiv/three-vrm** — Browser-rendered VRM avatar
 - **WebSocket bridge** — Real-time chat, vitals, voice state, expressions, visemes
-- **Browser microphone** — AudioWorklet PCM capture → Silero VAD → backend ASR
+- **Browser microphone** — AudioWorklet PCM capture → dual energy VAD + Silero VAD → backend ASR
 - **Expression system** — Idle, happy, annoyed, flustered, thinking (planned)
 - **Lip-sync** — Viseme-driven from TTS audio (planned)
 
@@ -135,7 +135,7 @@ flowchart TD
     THINK <-->|async| MEM[Memory\nsqlite-vec + Harrier llama.cpp server]
     THINK <-->|on demand| SEARCH[Web search\nSearXNG]
     THINK --> SPEAK[Speak\nMioTTS]
-    LISTEN["Listen\nSenseVoice (sherpa-onnx) + Silero VAD"] --> THINK
+    LISTEN["Listen\nSenseVoice (sherpa-onnx) + dual energy VAD + Silero VAD"] --> THINK
     THINK -.->|nightly| DREAM[Dream\nconsolidation]
     DREAM -.->|optional| REFLECT[Reflect\nHugo + GitHub]
 ```
@@ -313,7 +313,7 @@ Key architectural decisions:
 - Entry point is `main.py`, not `cli.py` anymore.
 - LLM runtime is now an OpenAI-compatible endpoint (`LLM_BASE_URL`/`LLM_MODEL`), usually llama.cpp `llama-server`; older Ollama-specific settings are archived/outdated.
 - TTS runtime is MioTTS server with 0.4B Q4KM model (Tried XTTS with CoquiTTS, Kokoro and RealtimeTTS, PocketTTS but removed due to Jetson OOM/latency/quality tradeoffs).
-- ASR runtime is SenseVoice via sherpa-onnx with Silero VAD. (Tried ReazonSpeech K2 and faster-whisper but removed due to English capability and RAM usage tradeoffs respectively)
+- ASR runtime is SenseVoice via sherpa-onnx + dual energy VAD + Silero VAD. (Tried ReazonSpeech K2 and faster-whisper but removed due to English capability and RAM usage tradeoffs respectively)
 - Reflection publishing fails safely if `GITHUB_TOKEN` or `GITHUB_REPO` are missing.
 - Multi-user isolation uses per-user directories under `~/.aiko/<user_id>/` with optional SQLCipher encryption.
 - WebUI VRM frontend is experimental; remote voice device polish is ongoing.
