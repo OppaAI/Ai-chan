@@ -161,6 +161,7 @@ class AikoWeb:
         # (non-guest) user_id is known. See wait_for_first_login() below.
         self._login_event = threading.Event()
         self._authenticated_uid: str | None = None
+        self._authenticated_display_name: str | None = None
 
         # input queue — browser posts here, get_input() reads here
         self._input_q: queue.Queue[str] = queue.Queue()
@@ -317,12 +318,13 @@ class AikoWeb:
         # with a genuine user_id already in place. Safe to check/set on
         # every connection; only the first one matters (Event.set() is
         # idempotent, and later re-logins/reconnects don't rewind boot).
-        if not self._login_event.is_set():
-            self._authenticated_uid = uid
-            self._login_event.set()
-
         self._current_user_id = uid
         self._current_display_name = str(session.get("username", "")) or uid
+
+        if not self._login_event.is_set():
+            self._authenticated_uid = uid
+            self._authenticated_display_name = self._current_display_name
+            self._login_event.set()
         user_context_token = set_current_user_id(uid)
         set_current_display_name(self._current_display_name)
         os.environ["AIKO_USER_ID"] = uid
