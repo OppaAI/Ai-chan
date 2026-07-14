@@ -280,10 +280,13 @@ async function enqueueTtsAudio(arrayBuffer) {
   if (!ttsPlaying) playNextTts();
 }
 
+let ttsCurrentSource = null;
+
 async function playNextTts() {
   const buf = ttsQueue.shift();
-  if (!buf) { ttsPlaying = false; return; }
+  if (!buf) { ttsPlaying = false; window.aikoIsSpeaking = false; return; }
   ttsPlaying = true;
+  window.aikoIsSpeaking = true;          // exposed for vad.js to read
   try {
     const ctx = getTtsContext();
     const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
@@ -292,6 +295,7 @@ async function playNextTts() {
     src.buffer = audioBuffer;
     src.connect(analyser);
     src.onended = playNextTts;
+    ttsCurrentSource = src;
     src.start();
     startMouthAnalyserLoop();
   } catch (err) {
@@ -299,6 +303,17 @@ async function playNextTts() {
     playNextTts();
   }
 }
+
+function stopTtsPlayback() {
+  ttsQueue = [];
+  if (ttsCurrentSource) {
+    try { ttsCurrentSource.onended = null; ttsCurrentSource.stop(); } catch (e) {}
+    ttsCurrentSource = null;
+  }
+  ttsPlaying = false;
+  window.aikoIsSpeaking = false;
+}
+window.stopTtsPlayback = stopTtsPlayback;
 
 // ── mic capture ───────────────────────────────────────────────────────────
 // Opened/closed by server mic.start / mic.stop messages.
@@ -331,7 +346,7 @@ async function startMic() {
   }
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
     });
     micContext = new AudioContext({ sampleRate: 16000 });
     // Resume if suspended (happens when AudioContext is created outside a user
