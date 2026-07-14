@@ -100,7 +100,7 @@ This project currently serves as:
 
 ### 👥 Multi-User Support (Experimental)
 - **OAuth identity** — Provider-scoped user IDs (`github_123`, `patreon_456`)
-- **Per-user isolation** — `~/.aiko/<user_id>/{memory.db, schedule.json, workspace/, user.md}`
+- **Per-user isolation** — `~/.aiko/<user_id>/{memory.db, schedule.json, workspace/, user}`
 - **SQLCipher encryption** — Per-user encrypted databases with server-secret derived keys
 - **Workspace isolation** — Per-user workspaces, future Google Drive mount support
 
@@ -121,7 +121,6 @@ This project currently serves as:
 | [docs/HISTORY.md](docs/HISTORY.md) | How Aiko evolved from a chatbot into a companion |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Detailed phase-by-phase feature roadmap |
 | [docs/TESTS.md](docs/TESTS.md) | Manual smoke-test checklist for each phase |
-| [docs/DEBUG_AUDIO.md](docs/DEBUG_AUDIO.md) | Step-by-step voice pipeline debugging checklist |
 | [docs/MULTI_USER.md](docs/MULTI_USER.md) | Multi-user isolation, encryption, and deployment notes |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime architecture, module boundaries, and data flows |
 
