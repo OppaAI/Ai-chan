@@ -111,11 +111,24 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
             if (gate) _pushPreSpeech(frame);
             return;
         }
-
+    
         _speaking = true;
         _energyHits = 0;
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
         if (!_canSend(ws, epoch)) return;
+    
+        // Barge-in: cut Aiko's audio locally with zero network round-trip,
+        // then tell the backend separately so it aborts generation/synthesis
+        // instead of continuing to stream chunks that would just refill the
+        // queue we already cleared.
+        if (window.aikoIsSpeaking) {
+            if (window.stopTtsPlayback) window.stopTtsPlayback();
+            ws.send(JSON.stringify({ type: 'barge_in' }));
+        }
+    
+        console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}`);
+        ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
+    
         // Edge-triggered log: one line when speech is detected, not one per frame.
         console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}`);
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
