@@ -76,7 +76,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Monthly memory consolidation — older full months summarized into pinned durable memories | ✅ Done |
 | Microphone capture via PulseAudio `parec` | ✅ Done |
 | ASR via SenseVoice + sherpa-onnx | ✅ Done |
-| Voice Activity Detection via Silero VAD | ✅ Done |
+| Voice Activity Detection via dual energy VAD + Silero VAD | ✅ Done |
 | Interactive Talk mode — local/TUI hands-free conversation | ✅ Done |
 | Spoken command aliases in ASR mode | ✅ Done |
 | Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — testing ongoing |
@@ -98,7 +98,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | TTS | XTTSv2 via CoquiTTS, RealtimeTTS | ❌Removed | A bit obsolete due to depreciation in dependencies; Much slower to inference |
 | TTS | Kokoro, RealtimeTTS | ❌Removed | Slightly robotic voice quality; Japanese voice speaking English non-understandable |
 | TTS | PocketTTS, RealtimeTTS | ❌Removed | A bit too heavy in RAM usage in Jetson Orin Nano |
-| ASR | SenseVoice via sherpa-onnx + Silero VAD | ✅Active | CPU-friendly int8 ONNX path with multilingual support and stable VAD gating |
+| ASR | SenseVoice via sherpa-onnx + dual energy VAD + Silero VAD | ✅Active | CPU-friendly int8 ONNX path with multilingual support and stable VAD gating |
 | ASR | faster-whisper prototype | ❌Removed | Useful prototype, but heavier and less aligned with current Jetson constraints |
 | ASR | ReazonSpeech K2 | ❌Removed | Good for Japanese only; Cannot understand English too well |
 
