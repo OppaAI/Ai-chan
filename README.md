@@ -71,7 +71,7 @@ This project currently serves as:
 - **`/web <query>` command** — Grounded answers with source citations
 - **Deep research tool** — Multi-step search, fetch, and synthesis for agentic tasks
 
-### 🎤 Voice (Phase 2 — ✅ Done)
+### 🎤 Voice
 - **ASR** — SenseVoice via sherpa-onnx (int8 ONNX, multilingual JP/EN)
 - **VAD** — Silero VAD for voice activity detection
 - **Microphone** — PulseAudio `parec` capture (local) + browser WebAudio Worklet (WebUI)
@@ -80,7 +80,7 @@ This project currently serves as:
 - **TTS** — MioTTS HTTP server (0.4B Q4KM), bilingual JP/EN, karaoke-style text sanitization
 - **Staged warmup** — ASR, VAD, TTS, and microphone warmed during boot
 
-### 🤖 Agentic Skills (Phase 2.5 — ✅ Active)
+### 🤖 Agentic Skills
 - **ReAct task loop** — LLM plans, calls tools, observes, repeats until done
 - **Toolkit modules** — Web search, fetch, planning, scheduling, workspace notes, photo ingestion, repo inspection
 - **Skill registry** — Markdown workflow definitions in `skills/skillsets/*.md`
