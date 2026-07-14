@@ -331,7 +331,7 @@ PROACTIVE_REST_PROMPT_HINT = os.getenv(
 
 def _personalize_proactive_text(text: str) -> str:
     """Fill lightweight proactive placeholders from identity config/env."""
-    user = os.environ.get("USER_ID") or os.environ.get("AIKO_USER_ID") or "the user"
+    user = os.environ.get("AIKO_DISPLAY_NAME") or os.environ.get("AIKO_USER_ID") or "the user"
     return (
         text.replace("{user}", user)
         .replace("{USER_ID}", user)
@@ -1214,8 +1214,11 @@ def _run_cli(args):
                 print("  Authentication failed — exiting.")
                 sys.exit(1)
         gh_user = cli_auth.get_user_id()
-        os.environ["USER_ID"] = gh_user
-        log.info("CLI session as GitHub user %s", gh_user)
+        os.environ["AIKO_USER_ID"] = gh_user
+        os.environ["AIKO_DISPLAY_NAME"] = cli_auth.get_display_name()
+        from system.userspace import set_current_display_name
+        set_current_display_name(cli_auth.get_display_name())
+        log.info("CLI session user_id=%s display=%s", gh_user, cli_auth.get_display_name())
     ui = AikoSimpleCLI(no_voice=args.text, debug=args.debug)
     _run_session(ui, args)
 
@@ -1310,12 +1313,13 @@ def _run_session(ui, args):
     if hasattr(ui, "wait_for_first_login"):
         uid = ui.wait_for_first_login()
         if uid:
-            from system.userspace import set_current_user_id
+            from system.userspace import set_current_user_id, set_current_display_name
             set_current_user_id(uid)
-            # Also set process-global env so boot threads (which don't inherit
-            # contextvars) can resolve the real user_id via current_user_id().
             os.environ["AIKO_USER_ID"] = uid
-            log.info("First login received (user_id=%s) — starting subsystem boot.", uid)
+            display_name = ui.wait_for_first_login_display_name()  # or however you surface it
+            set_current_display_name(display_name)
+            os.environ["AIKO_DISPLAY_NAME"] = display_name
+            log.info("First login received (user_id=%s, display=%s) — starting subsystem boot.", uid, display_name)
         else:
             log.warning("wait_for_first_login() returned no uid — proceeding with default identity.")
 

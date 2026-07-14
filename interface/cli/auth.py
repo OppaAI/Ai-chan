@@ -16,6 +16,7 @@ from pathlib import Path
 import requests
 
 from system.log import get_logger
+from system.userspace import normalize_user_id
 
 log = get_logger(__name__)
 
@@ -84,7 +85,17 @@ class CliAuth:
         return bool(session.get("access_token"))
 
     def get_user_id(self) -> str:
-        """Return the GitHub login for the current session, or 'cli-user'."""
+        """Provider-scoped runtime id (e.g. 'github_123456') for filesystem paths."""
+        session = self.get_stored_session()
+        if session:
+            user = session.get("user", {})
+            uid = user.get("id")
+            if uid:
+                return normalize_user_id("github", uid)
+        return "cli-user"
+
+    def get_display_name(self) -> str:
+        """GitHub login for display/prompt, not filesystem paths."""
         session = self.get_stored_session()
         if session:
             return session.get("user", {}).get("login", "cli-user")

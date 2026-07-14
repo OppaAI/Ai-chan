@@ -375,7 +375,7 @@ def _generate_reflection(snippets: list[str], date: datetime) -> str:
 
 def _generate_feelings(prose: str) -> str:
     """
-    Ask Aiko to reflect honestly on how she feels about OppaAI,
+    Ask Aiko to reflect honestly on how she feels about user,
     based on the day's summary.
     """
     user_id = current_display_name()

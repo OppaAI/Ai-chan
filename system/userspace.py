@@ -51,7 +51,7 @@ def reset_current_user_id(token: contextvars.Token[str | None]) -> None:
 
 def current_user_id() -> str:
     """Return the active runtime user id from OAuth/session or local env."""
-    return _CURRENT_USER_ID.get() or os.getenv("AIKO_USER_ID") or os.getenv("USER_ID") or _DEFAULT_USER_ID
+    return _CURRENT_USER_ID.get() or os.getenv("AIKO_USER_ID") or _DEFAULT_USER_ID
 
 
 def set_current_display_name(name: str | None) -> contextvars.Token[str | None]:
@@ -66,7 +66,7 @@ def reset_current_display_name(token: contextvars.Token[str | None]) -> None:
 
 def current_display_name() -> str:
     """Return the user's display name (e.g. GitHub login) or fall back to user_id."""
-    return _CURRENT_DISPLAY_NAME.get() or current_user_id()
+    return _CURRENT_DISPLAY_NAME.get() or os.getenv("AIKO_DISPLAY_NAME") or current_user_id()
 
 
 def normalize_user_id(provider: str | None, user_id: object) -> str:

@@ -141,7 +141,7 @@ from pathlib import Path
 
 from system import bioclock
 from memory.vecstore import initialize_store_db, resolve_user_db_path
-from system.userspace import current_user_id, user_state_path
+from system.userspace import current_display_name, current_user_id, user_state_path
 import sqlite_vec
 from openai import OpenAI
 
@@ -322,12 +322,12 @@ _HEDGE_RE = re.compile(
 
 # Extraction prompt — temperature 0.0, explicit only-stated-facts rule.
 _EXTRACT_PROMPT = """\
-Extract memorable facts about Oppa from this conversation.
-Oppa is the user (he/him). You are Aiko, the assistant.
+Extract memorable facts about {user_name} from this conversation.
+{user_name} is the user (he/him). You are Aiko, the assistant.
 
 Rules:
-- Only include facts Oppa stated explicitly. Never infer or assume.
-- Write facts as short, direct statements in third person about Oppa.
+- Only include facts {user_name} stated explicitly. Never infer or assume.
+- Write facts as short, direct statements in third person about {user_name}.
 - No facts about Aiko's behavior, feelings, or responses.
 - No uncertain language: never use might, probably, seems, maybe, perhaps, appears.
 - If nothing is worth remembering, return: []
@@ -335,10 +335,10 @@ Rules:
 Return ONLY a JSON array of short strings. No markdown. No explanation.
 
 Good examples:
-["Oppa's birthday is June 3", "Oppa is building a robot called GRACE", "Oppa joined the Hugging Face Hackathon", "Oppa lost his wallet", "Oppa has a deadline on Friday", "Oppa dislikes mushrooms"]
+["{user_name}'s birthday is June 3", "{user_name} is building a robot called GRACE", "{user_name} joined the Hugging Face Hackathon", "{user_name} lost his wallet", "{user_name} has a deadline on Friday", "{user_name} dislikes mushrooms"]
 
 Bad examples (do not produce these):
-["Oppa might like cats", "It seems Oppa is tired", "Aiko should remember this"]
+["{user_name} might like cats", "It seems {user_name} is tired", "Aiko should remember this"]
 
 Conversation:
 {conversation}"""
@@ -629,7 +629,7 @@ class _MemoryBackend:
         )
         return total >= _EXTRACT_MIN_CHARS
 
-    def _extract_facts(self, messages: list[dict]) -> list[str]:
+    def _extract_facts(self, messages: list[dict], display_name: str | None = None) -> list[str]:
         """
         Send conversation to the OpenAI-compatible local LLM and parse the returned JSON fact array.
 
@@ -663,12 +663,14 @@ class _MemoryBackend:
         if total < _EXTRACT_MIN_CHARS:
             return []
 
+        user_name = (display_name or current_display_name()).strip()
         convo = "\n".join(
-            f"{m['role'].upper()}: {m['content'].strip()}"
+            f"{user_name}: {m['content'].strip()}" if m["role"] == "user"
+            else f"Aiko: {m['content'].strip()}"
             for m in clean_messages
         )
 
-        prompt = _EXTRACT_PROMPT.format(conversation=convo)
+        prompt = _EXTRACT_PROMPT.format(conversation=convo, user_name=user_name)
 
         try:
             resp = self._client.chat.completions.create(
@@ -718,7 +720,7 @@ class _MemoryBackend:
 
     # ── write ─────────────────────────────────────────────────────────────────
 
-    def add(self, messages: list[dict], user_id: str) -> list[str]:
+    def add(self, messages: list[dict], user_id: str, display_name: str | None = None) -> list[str]:
         """
         Extract facts and persist each as a row in memories + memories_vec.
 
@@ -732,7 +734,7 @@ class _MemoryBackend:
 
         Returns list of new memory IDs. Empty list if nothing extracted.
         """
-        facts = self._extract_facts(messages)
+        facts = self._extract_facts(messages, display_name=display_name)
         if not facts:
             return []
 
@@ -1211,7 +1213,7 @@ class AikoMemorize:
 
     # ── write ─────────────────────────────────────────────────────────────────
 
-    def add(self, messages: list[dict], user_id: str | None = None) -> bool:
+    def add(self, messages: list[dict], user_id: str | None = None, display_name: str | None = None) -> bool:
         """
         Store a conversation turn into long-term memory.
         Returns True on success, False on failure.
@@ -1219,7 +1221,7 @@ class AikoMemorize:
         try:
             user_id = _default_user_id(user_id)
             t       = time.perf_counter()
-            ids     = self._mem.add(messages, user_id=user_id)
+            ids     = self._mem.add(messages, user_id=user_id, display_name=display_name)
             elapsed = time.perf_counter() - t
             if ids:
                 self._maybe_clear_search_cache()
@@ -1231,7 +1233,7 @@ class AikoMemorize:
             log.error(f"Save failed: {e}")
             return False
 
-    def pin(self, messages: list[dict], user_id: str | None = None) -> bool:
+    def pin(self, messages: list[dict], user_id: str | None = None, display_name: str | None = None) -> bool:
         """
         Store messages and immediately mark all resulting memories as pinned.
         Pinned memories are immune to cleanup, dream pruning, and merge losses.
@@ -1239,7 +1241,7 @@ class AikoMemorize:
         """
         try:
             user_id = _default_user_id(user_id)
-            ids = self._mem.add(messages, user_id=user_id)
+            ids = self._mem.add(messages, user_id=user_id, display_name=display_name)
 
             if not ids:
                 query = "\n".join(
@@ -1289,17 +1291,18 @@ class AikoMemorize:
         dequeued with no idle wait.
         """
         user_id = self.get_user_id()  # resolved here, on the caller's thread — not in _write_loop
-        self._write_queue.put((user_input, response_text, user_id, is_active_turn, idle_since))
+        display_name = current_display_name()
+        self._write_queue.put((user_input, response_text, user_id, display_name, is_active_turn, idle_since))
 
     def _write_loop(self) -> None:
         while True:
-            user_input, response_text, user_id, is_active_turn, idle_since = self._write_queue.get()
+            user_input, response_text, user_id, display_name, is_active_turn, idle_since = self._write_queue.get()
             try:
                 self._wait_for_write_window(is_active_turn, idle_since)
                 self.add([
                     {"role": "user", "content": user_input[:500]},
                     {"role": "assistant", "content": response_text[:800]},
-                ], user_id=user_id)
+                ], user_id=user_id, display_name=display_name)
             except Exception as e:
                 log.error(f"Async memory write failed: {e}")
             finally:

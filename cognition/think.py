@@ -643,7 +643,7 @@ class AikoThink:
         with self._active_users_lock:
             self._active_user_ids.add(_SENTINEL)
         try:
-            user_id = current_user_id()
+            display_name = current_display_name()
             system = (
                 f"{self._current_system_prompt()}\n\n"
                 "You are initiating a brief proactive check-in. "
@@ -655,7 +655,7 @@ class AikoThink:
                 "role": "user",
                 "content": (
                     f"{prompt_hint}\n\n"
-                    f"Write only the message Aiko should say to {user_id} now."
+                    f"Write only the message Aiko should say to {display_name} now."
                 ),
             }]
             return self._stream_response(messages, system=system, token_callback=None)
