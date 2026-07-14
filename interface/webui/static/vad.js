@@ -126,9 +126,6 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
             ws.send(JSON.stringify({ type: 'barge_in' }));
         }
     
-        console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}`);
-        ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
-    
         // Edge-triggered log: one line when speech is detected, not one per frame.
         console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}`);
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
