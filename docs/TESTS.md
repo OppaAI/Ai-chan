@@ -302,6 +302,7 @@ Run before any phase suite.
 - [ ] Asking Aiko to process wildlife photos loads/uses the `wildlife_photo` skill context.
 - [ ] Asking Aiko to inspect her architecture loads/uses the `aiko_architect` skill context.
 - [ ] Asking for Japanese tutoring loads/uses `japanese_tutor`; coding help loads/uses `coding_tutor`.
+- [ ] Asking for aurora forecast/watch loads/uses `aurora_forecast_watch` skill context.
 - [ ] Skill search returns relevant snippets without dumping entire unrelated skill files.
 - [ ] Missing/corrupt `SKILL.md` files are reported gracefully and do not break unrelated skills.
 - [ ] Skill instructions do not override safety boundaries for filesystem paths, external actions, or final-answer honesty.
@@ -315,6 +316,8 @@ Run before any phase suite.
 - [ ] Final-answer verification catches unsupported claims, failed tool actions, and missing artifact paths.
 - [ ] If verification fails, repair attempts are bounded by `AGENT_MAX_FINAL_REPAIRS` and disclose unresolved limitations.
 - [ ] The final answer clearly distinguishes completed actions, failed actions, saved files, scheduled jobs, and recommendations.
+- [ ] Semantic exemplar routing (default) correctly classifies task vs chat intent without LLM calls.
+- [ ] Optional LLM router fallback activates for ambiguous/context-heavy cases when enabled.
 
 ### 2.5.4 Web and fetch tools
 
@@ -362,7 +365,42 @@ Run before any phase suite.
 - [ ] Binary files, huge files, and missing files return controlled errors.
 - [ ] Architecture questions cite actual repo files/tool evidence rather than guessing from memory.
 
-### 2.5.9 Agent stress, concurrency, and recovery
+### 2.5.9 Dual-path routing verification
+
+- [ ] Semantic exemplar routing correctly identifies "search for X" → web_search tool.
+- [ ] Semantic exemplar routing correctly identifies "schedule a reminder" → scheduling tools.
+- [ ] Semantic exemplar routing correctly identifies "analyze my code" → repo tools.
+- [ ] Semantic exemplar routing correctly identifies "help me with Japanese" → skill context retrieval.
+- [ ] Ambiguous queries like "I need to organize my photos" fall back to LLM router when enabled.
+- [ ] Routing latency: semantic path < 50ms, LLM fallback < 500ms on Jetson.
+
+### 2.5.10 Monthly consolidation
+
+- [ ] `uv run python -c "from core.experience import consolidate_month; print(consolidate_month(dry_run=True))"` completes without error.
+- [ ] Older full months are summarized into pinned durable memories.
+- [ ] Consolidation uses memory facts, not full chat history, to fit context window.
+- [ ] Pinned monthly summaries persist across restarts and appear in `/memory`.
+
+### 2.5.11 Embedding model migration (Harrier OSS v1 270M)
+
+- [ ] Custom `core/embed.py` ONNX Harrier embedder loads without fastembed dependency.
+- [ ] Embeddings are 640-dimensional (not 1024d BGE).
+- [ ] Last-token pooling is used (not MEAN/CLS pooling).
+- [ ] Query instruction prefix is applied for retrieval queries.
+- [ ] Vector similarity search returns semantically relevant results for paraphrased queries.
+- [ ] FTS5 lexical search still returns exact-term matches.
+- [ ] RRF fusion ranks exact relevant memories above unrelated recent memories.
+
+### 2.5.12 Dual-path routing verification
+
+- [ ] Semantic exemplar routing correctly identifies "search for X" → web_search tool.
+- [ ] Semantic exemplar routing correctly identifies "schedule a reminder" → scheduling tools.
+- [ ] Semantic exemplar routing correctly identifies "analyze my code" → repo tools.
+- [ ] Semantic exemplar routing correctly identifies "help me with Japanese" → skill context retrieval.
+- [ ] Ambiguous queries like "I need to organize my photos" fall back to LLM router when enabled.
+- [ ] Routing latency: semantic path < 50ms, LLM fallback < 500ms on Jetson.
+
+### 2.5.13 Agent stress, concurrency, and recovery
 
 - [ ] Run 25 mixed agent tasks in one session: web research, note save, schedule create/cancel, photo scan, repo search, and architecture explanation.
 - [ ] Run concurrent user interruptions or rapid follow-up requests during an agent task; behavior is documented and does not corrupt tool state.

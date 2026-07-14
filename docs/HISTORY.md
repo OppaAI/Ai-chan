@@ -147,6 +147,17 @@ Major additions:
 - embedding decision upgrade: BGE v1.5 was replaced by Harrier OSS v1 270M because BGE is aging and produced compressed route-example cosine bands, while Harrier gives a newer 640-dimensional retrieval model with query-instruction support and better expected semantic separation
 - embedding implementation upgrade: fastembed was replaced by Aiko's custom `core/embed.py` ONNX Harrier embedder because Harrier is decoder-only and needs last-token pooling; fastembed custom registration exposed `PoolingType.MEAN`/CLS-style pooling for this path
 
+Architecture changes in Phase 2.5:
+
+| Component | Before | After |
+|---|---|---|
+| Routing | Keyword-only (`/web`, `/think`, task keywords) | **Dual-path: fast semantic exemplar routing by default, optional LLM router/fallback for context-heavy cases** |
+| Embeddings | BGE v1.5 (fastembed, 1024d, MEAN pooling) | **Harrier OSS v1 270M (custom ONNX, 640d, last-token pooling, query instructions)** |
+| Embedder | `fastembed` library | **Custom `core/embed.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
+| Tools | Scattered functions | **Focused `core/toolkit/` modules: web, planning, scheduling, photo, architecture** |
+| Skills | N/A | **`skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py`** |
+| Agentic facade | Direct calls | **`core/tools.py` compatibility facade + `core/agentic.py` ReAct loop** |
+
 Lessons learned:
 
 - Tools are executable abilities; skills are repeatable workflows.

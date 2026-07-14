@@ -10,8 +10,9 @@ OAuth is the source of identity; `persona/identity.md` remains Aiko's identity o
   - `user.md` for the user's editable bio/profile.
   - `memory.db` for that user's sqlite-vec memory store.
   - `monthly_consolidation_state.jsonl` for that user's monthly consolidation state.
-  - `schedule.json` for that user's scheduled jobs/reminders.
+  - `schedule.json` for that user's scheduled jobs/reminders (agentic scheduling).
   - `workspace/` for that user's notes and tool artifacts; this can later be redirected to a mounted/synced Google Drive workspace via `WORKSPACE_ROOT`.
+  - `skills/` for that user's skill workflow state (future per-user skill customization).
 - Existing env overrides still work for local/owner operation; leave YAML path overrides blank for per-user defaults:
   - `USER_ID` or `AIKO_USER_ID`
   - `SQLITE_MEMORY_PATH`
@@ -59,6 +60,7 @@ No agentic-tool changes are required just to move Aiko's writable workspace late
 - Monthly consolidation state.
 - Schedule/reminder state, workspace files, generated reports, and photo inboxes.
 - User profile/bio markdown.
+- Agentic skill workflow state and per-user skill customizations (future).
 - Any future upload/cache directory that can contain private user content.
 
 Global config YAML should stay owner-controlled for the `$5` tier. User-tunable settings can be added later for higher tiers by layering a per-user settings file over the global config.

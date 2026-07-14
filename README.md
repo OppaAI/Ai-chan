@@ -4,12 +4,11 @@
 > Optimised for constrained hardware — runs on a Jetson Orin Nano with 8GB unified RAM.
 
 **Author:** [OppaAI](https://github.com/OppaAI) · Beautiful British Columbia, Canada
- 
+
 [![Repo](https://img.shields.io/badge/Repo-OppaAI%2FAiko--chan-967BB6?logo=github&logoColor=white)](https://github.com/OppaAI/Aiko-chan)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 ![Status](https://img.shields.io/badge/Status-experimental-orange.svg)
 
- 
 ![LLM](https://img.shields.io/badge/Runtime-llama.cpp_OpenAI--compatible-967BB6?logo=ai&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white)
 ![Ubuntu](https://img.shields.io/badge/Ubuntu-24.04_LTS-orange?logo=ubuntu&logoColor=white)
@@ -18,16 +17,16 @@
 ---
 
 ## Status
+
 Phase 2 voice is implemented, and Phase 2.5 agentic workflows are now active. The default launch path is still the curses TUI; the browser WebUI/VRM frontend is available with `--webui` and includes a WebSocket bridge for chat, vitals, voice status, expression, viseme, and browser microphone events.
 
 ASR and TTS run through the local machine by default. WebUI microphone streaming exists in the frontend/backend bridge, but full remote voice-device polish is still experimental.
 
-> Known Issues:
+> **Known Issues:**
 > - TTS via MioTTS sometimes cannot inference proper voice output due to memory constraint (MioTTS and embedding models are still tuned for Jetson memory pressure; Harrier replaced BGE for better semantic separation at 640d)
 > - Time latency between ASR voice input ends to beginning of TTS voice output are still over 5 sec for normal chats. Need to figure out how to do proper synchronized text and speech streaming to save a couple seconds.
 > - ASR may have transcribing errors that output wrong text or even wrong language, especially when accent is present in speaker's voice or when using low quality microphone.
 > - Barge-in haven't been fully tested and may cause some runtime issues that needed to conduct more testing and debugging.
-
 
 ---
 
@@ -36,16 +35,81 @@ ASR and TTS run through the local machine by default. WebUI microphone streaming
 > Click the following image to watch on YouTube ▶
 
 [![Watch the demo](https://img.youtube.com/vi/9ZkuYCL6vP0/maxresdefault.jpg)](https://youtu.be/SKvZQcFN6vo)
- 
+
 ---
 
 ## Purpose
+
 This project currently serves as:
 
 - a local AI companion chatbot with persistent memory, web search, TTS, ASR, a terminal UI, and an optional browser WebUI/VRM avatar;
 - a stress test for running a full conversational stack on constrained hardware such as an 8 GB VRAM GPU or Jetson Orin Nano;
 - a precursor and testing sandbox for the larger Grace / AuRoRA project;
 - an experimental playground for memory decay, nightly consolidation, daily reflection publishing, agentic tools, scheduled reminders, and workflow skills.
+
+---
+
+## Features
+
+### 💬 Conversational Core
+- **Local-first LLM** — OpenAI-compatible endpoint (llama.cpp `llama-server` recommended), runs entirely on your hardware
+- **Curses TUI** — Full-screen cyberpunk terminal interface with streaming tokens, status panels, and command palette
+- **Browser WebUI (optional)** — Modern web interface with VRM avatar, WebSocket bridge, browser microphone streaming
+- **Persona system** — Rich personality defined in `persona/soul.md` with identity, skills, and user profile
+
+### 🧠 Persistent Memory
+- **sqlite-vec + custom Harrier ONNX embedder** — Serverless vector store, no Qdrant/mem0 required
+- **Hybrid retrieval** — KNN vector + FTS5 lexical + Reciprocal Rank Fusion
+- **Ebbinghaus-style decay** — Memories fade naturally unless pinned
+- **Pinned memories** — `/remember` command makes memories decay-proof
+- **Nightly dream consolidation** — Midnight `dream()` merges near-duplicates, prunes decayed memories, pins daily summaries
+- **Monthly consolidation** — Older full months summarized into durable pinned memories
+- **Encrypted storage option** — SQLCipher via `AIKO_SQLITE_ENCRYPTION=1` for per-user encrypted databases
+
+### 🔍 Web Search & Research
+- **Local SearXNG** — Private web search instance via Docker
+- **`/web <query>` command** — Grounded answers with source citations
+- **Deep research tool** — Multi-step search, fetch, and synthesis for agentic tasks
+
+### 🎤 Voice (Phase 2 — ✅ Done)
+- **ASR** — SenseVoice via sherpa-onnx (int8 ONNX, multilingual JP/EN)
+- **VAD** — Silero VAD for voice activity detection
+- **Microphone** — PulseAudio `parec` capture (local) + browser WebAudio Worklet (WebUI)
+- **Barge-in** — Speak over Aiko mid-response to interrupt
+- **Speaker verification** — Optional sherpa-onnx speaker embeddings for owner-only voice activation
+- **TTS** — MioTTS HTTP server (0.4B Q4KM), bilingual JP/EN, karaoke-style text sanitization
+- **Staged warmup** — ASR, VAD, TTS, and microphone warmed during boot
+
+### 🤖 Agentic Skills (Phase 2.5 — ✅ Active)
+- **ReAct task loop** — LLM plans, calls tools, observes, repeats until done
+- **Toolkit modules** — Web search, fetch, planning, scheduling, workspace notes, photo ingestion, repo inspection
+- **Skill registry** — Markdown workflow definitions in `skills/<id>/SKILL.md`
+- **Skill context injection** — Relevant skill instructions automatically retrieved in agentic mode
+- **Dual-path routing** — Fast semantic exemplar routing (default) + optional LLM router fallback
+- **Final-answer verification** — Self-critique and repair loop for tool outputs
+- **Scheduling & reminders** — Per-user `schedule.json` with cron-like recurrence, due announcements
+- **Workspace tools** — Safe note-taking, file reads, photo scanning under `WORKSPACE_ROOT`
+
+### 🌙 Nightly Dream Pipeline
+- **Midnight scheduler** — Runs automatically at configurable hour
+- **Salient memory boost** — Important memories reinforced
+- **Near-duplicate merging** — Vector similarity deduplication
+- **Decay pruning** — Low-score memories removed
+- **Daily reflection** — Optional Hugo + GitHub Pages blog publishing
+- **Cross-session coherence** — Ongoing improvements to memory continuity
+
+### 👥 Multi-User Support (Experimental)
+- **OAuth identity** — Provider-scoped user IDs (`github_123`, `patreon_456`)
+- **Per-user isolation** — `~/.aiko/<user_id>/{memory.db, schedule.json, workspace/, user.md}`
+- **SQLCipher encryption** — Per-user encrypted databases with server-secret derived keys
+- **Workspace isolation** — Per-user workspaces, future Google Drive mount support
+
+### 🎭 WebUI / VRM Frontend (Experimental)
+- **three.js + @pixiv/three-vrm** — Browser-rendered VRM avatar
+- **WebSocket bridge** — Real-time chat, vitals, voice state, expressions, visemes
+- **Browser microphone** — AudioWorklet PCM capture → Silero VAD → backend ASR
+- **Expression system** — Idle, happy, annoyed, flustered, thinking (planned)
+- **Lip-sync** — Viseme-driven from TTS audio (planned)
 
 ---
 
@@ -57,6 +121,9 @@ This project currently serves as:
 | [docs/HISTORY.md](docs/HISTORY.md) | How Aiko evolved from a chatbot into a companion |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Detailed phase-by-phase feature roadmap |
 | [docs/TESTS.md](docs/TESTS.md) | Manual smoke-test checklist for each phase |
+| [docs/DEBUG_AUDIO.md](docs/DEBUG_AUDIO.md) | Step-by-step voice pipeline debugging checklist |
+| [docs/MULTI_USER.md](docs/MULTI_USER.md) | Multi-user isolation, encryption, and deployment notes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime architecture, module boundaries, and data flows |
 
 ---
 
@@ -93,6 +160,8 @@ flowchart TD
 | Agentic task mode | `core/agentic.py` ReAct loop + `core/tools.py` facade + `core/toolkit/` modules |
 | Skills | `skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py` |
 | Scheduling | local schedule/reminder runner using `~/.aiko/<user_id>/schedule.json` |
+| Multi-user | OAuth provider-scoped IDs, per-user `~/.aiko/<user_id>/` isolation |
+| Encryption | optional SQLCipher via `AIKO_SQLITE_ENCRYPTION=1` |
 
 ---
 
@@ -129,11 +198,11 @@ uv run python main.py --clear-mem # wipe all memories and exit
 | `/memory` | Print all stored memories |
 | `/clear` | Wipe all long-term memories |
 | `/remember` | Pin the last exchange — decay-proof |
-| `/think <question>` | Higher-token reasoning turn; suppresses `<think>` scratchpad |
+| `/think <question>` | Higher-token reasoning turn; suppresses `🤔` scratchpad |
 | `/web <query>` | SearXNG search → grounded answer |
 | `/voice` | Toggle TTS on/off |
 | `/listen` | Toggle ASR on/off |
-| `/proactive` | Toggle proactive idle check-ins on/off; timing, quiet/focus windows, and prompt hints are configured in `config/proactive.yaml` |
+| `/proactive` | Toggle proactive idle check-ins on/off; timing, quiet/focus windows, and prompt hints configured in `config/proactive.yaml` |
 | `/help` | Show the command list |
 
 ---
@@ -187,7 +256,11 @@ Aiko-chan/
 ├── docs/
 │   ├── INSTALL.md
 │   ├── TESTS.md
-│   └── ROADMAP.md
+│   ├── ROADMAP.md
+│   ├── HISTORY.md
+│   ├── DEBUG_AUDIO.md
+│   ├── MULTI_USER.md
+│   └── ARCHITECTURE.md
 ├── assets/
 ├── docker-compose.yml
 ├── pyproject.toml
@@ -216,6 +289,48 @@ Full details → **[docs/ROADMAP.md](docs/ROADMAP.md)**
 
 ---
 
+## Configuration
+
+All non-secret runtime settings live in `config/*.yaml`. Environment variables in `.env` override YAML at runtime.
+
+| Config file | Purpose |
+|---|---|
+| `config/index.yaml` | Ordered list of YAML files loaded at startup |
+| `config/identity.yaml` | `AI_NAME`, `USER_ID` |
+| `config/think.yaml` | LLM endpoints, model names, sampling, token limits |
+| `config/agentic.yaml` | Agentic routing thresholds, tool configs |
+| `config/memorize.py` | Memory, embed, forget, experience, consolidation settings |
+| `config/speak.yaml` | MioTTS and karaoke text settings |
+| `config/listen.yaml` | ASR, VAD, speaker verification, barge-in |
+| `config/web.yaml` | SearXNG URL and search limits |
+| `config/ui.yaml` | UI ports, avatar path, streaming behavior |
+| `config/schedule.yaml` | Timezone, schedule files, job timing |
+| `config/reflect.yaml` | Hugo/GitHub repo paths and image/reference settings |
+| `config/social.yaml` | Weekly social draft/post settings |
+| `config/log.yaml` | Log level and rotation |
+
+---
+
+## Architecture Changes from Previous Phases
+
+| Phase | Before | After |
+|---|---|---|
+| 1 → 1.5 | CLI + Ollama + mem0/Qdrant | Curses TUI + llama.cpp + streaming |
+| 1.5 → 2 | Text-only | Voice loop: SenseVoice + Silero VAD + MioTTS |
+| 2 | mem0 + Qdrant (server, OOM on Jetson) | **sqlite-vec + custom Harrier ONNX (serverless, local)** |
+| 2 | fastembed (BGE v1.5) | **Custom Harrier ONNX embedder (640d, last-token pooling)** |
+| 2 → 2.5 | Chat only | **Agentic ReAct loop + skills + scheduling + toolkit** |
+| 2.5 | Keyword-only routing | **Dual-path: semantic exemplar + optional LLM router** |
+
+Key architectural decisions:
+- **No external memory server** — sqlite-vec runs in-process, zero Docker deps for memory
+- **Harrier over BGE** — Newer 640-dim decoder-only embedder with query instructions, better semantic separation
+- **Custom ONNX embedder** — Harrier needs last-token pooling; fastembed only exposed MEAN/CLS
+- **Tools ≠ Skills** — Tools are executable Python functions; skills are human-readable Markdown workflows
+- **Single agentic loop** — Semantic routing + optional LLM routing + ReAct + skills = one coherent task layer
+
+---
+
 ## Notes
 
 - Memory uses a custom sqlite-vec backend — no Qdrant server or mem0 required. Qdrant + mem0 were dropped in Phase 2 due to OOM issues on the Jetson Orin Nano.
@@ -224,6 +339,8 @@ Full details → **[docs/ROADMAP.md](docs/ROADMAP.md)**
 - TTS runtime is MioTTS server with 0.4B Q4KM model (Tried XTTS with CoquiTTS, Kokoro and RealtimeTTS, PocketTTS but removed due to Jetson OOM/latency/quality tradeoffs).
 - ASR runtime is SenseVoice via sherpa-onnx with Silero VAD. (Tried ReazonSpeech K2 and faster-whisper but removed due to English capability and RAM usage tradeoffs respectively)
 - Reflection publishing fails safely if `GITHUB_TOKEN` or `GITHUB_REPO` are missing.
+- Multi-user isolation uses per-user directories under `~/.aiko/<user_id>/` with optional SQLCipher encryption.
+- WebUI VRM frontend is experimental; remote voice device polish is ongoing.
 
 ---
 

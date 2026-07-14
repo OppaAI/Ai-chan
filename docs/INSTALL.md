@@ -1,7 +1,7 @@
 [← Back to README](../README.md)
 # Aiko-chan 愛子ちゃん — Installation Guide
 
-This guide installs the current Aiko-chan stack: Python 3.12 + `uv`, SearXNG in Docker, a local OpenAI-compatible LLM endpoint (usually llama.cpp `llama-server`), sqlite-vec memory, MioTTS, SenseVoice ASR, the curses TUI, and the optional browser WebUI/VRM frontend.
+This guide installs the current Aiko-chan stack: Python 3.12 + `uv`, SearXNG in Docker, a local OpenAI-compatible LLM endpoint (usually llama.cpp `llama-server`), sqlite-vec memory, MioTTS, SenseVoice ASR, the curses TUI, the optional browser WebUI/VRM frontend, agentic toolkit tools, and skill workflows.
 
 ---
 

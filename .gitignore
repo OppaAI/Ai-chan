@@ -231,6 +231,7 @@ archive/
 training/
 interface/webui/.cert/
 certs/
+needle_onnx_artifacts/
 *.pem
 *-key.pem
 interface/webui/static/ort.min.js

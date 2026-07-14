@@ -47,7 +47,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 ---
 
-## Phase 2 — Voice ⌛
+## Phase 2 — Voice ✅
 ![Phase 2](../assets/phase-2.0.png)
 
 *Make Aiko usable as a voice companion, not just a typed chatbot.*
@@ -62,7 +62,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 > The new backend is serverless and keeps memory local — no Qdrant container,
 > no mem0 runtime, and no Docker dependency for memory.
 >
-> Current embedding note: Aiko now uses a custom `core/embed.py` ONNX
+> **Current embedding note:** Aiko now uses a custom `core/embed.py` ONNX
 > Harrier embedder instead of fastembed. Harrier OSS v1 270M is decoder-only
 > and needs last-token pooling, while fastembed custom registration only
 > exposed `PoolingType.MEAN`/CLS-style pooling for this path.
@@ -79,21 +79,20 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Voice Activity Detection via Silero VAD | ✅ Done |
 | Interactive Talk mode — local/TUI hands-free conversation | ✅ Done |
 | Spoken command aliases in ASR mode | ✅ Done |
-| Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — stress testing onging |
+| Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — stress testing ongoing |
 | Optional owner voice verification via sherpa-onnx speaker embeddings | 🟡 Implemented — threshold tuning ongoing |
 | TTS runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
-| MioTTS HTTP client + local sounddevice playback | 🟡 Implemented — stress testing onging |
+| MioTTS HTTP client + local sounddevice playback | 🟡 Implemented — stress testing ongoing |
 | Remote/browser TTS audio sink for WebUI playback | 🟡 Implemented — remote testing ongoing |
-| Browser/WebUI microphone streaming into ASR/VAD pipeline | 🟡 Implemented — remote testing  ongoing |
+| Browser/WebUI microphone streaming into ASR/VAD pipeline | 🟡 Implemented — remote testing ongoing |
 | Staged TTS/ASR/VAD warmup during boot | ✅ Done |
-| Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Not met — >5s even for short normal chat|
-
+| Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Not met — >5s even for short normal chat |
 
 ### Voice backend trial ledger
 
 | Area | Tried | Current decision | Reason |
 |---|---|---|---|
-| TTS | MioTTS | ✅Active | Best current voice runtime for Aiko's local stack; Able to speak Japanee and English in a same sentence |
+| TTS | MioTTS | ✅Active | Best current voice runtime for Aiko's local stack; Able to speak Japanese and English in a same sentence |
 | TTS | XTTSv2 via CoquiTTS, RealtimeTTS | ❌Removed | A bit obsolete due to depreciation in dependencies; Much slower to inference |
 | TTS | Kokoro, RealtimeTTS | ❌Removed | Slightly robotic voice quality; Japanese voice speaking English non-understandable |
 | TTS | PocketTTS, RealtimeTTS | ❌Removed | A bit too heavy in RAM usage in Jetson Orin Nano |
@@ -157,10 +156,9 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Reply approval modes — manual, trusted-contact, and fully autonomous later | 🔲 Planned |
 | Attachment handling path into Phase 6 multimodal vision | 🔲 Planned |
 
-
 ---
 
-## Phase 2.5 — Agent ⌛
+## Phase 2.5 — Agent ✅
 ![Phase 2.5](../assets/phase-2.5.png)
 
 *Give Aiko a real task layer. Skills describe repeatable workflows; toolkit modules provide safe executable actions.*
@@ -179,6 +177,17 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Safer code-edit/review workflow for self-improvement | 🔲 Planned |
 | Optional MCP wrappers for stable long-running tools | 🔲 Planned |
 | 24/7 worker/watchers for queues and folders | 🔲 Planned |
+
+### Architecture changes in Phase 2.5
+
+| Component | Before | After |
+|---|---|---|
+| Routing | Keyword-only (`/web`, `/think`, task keywords) | **Dual-path: fast semantic exemplar routing by default, optional LLM router/fallback for context-heavy cases** |
+| Embeddings | BGE v1.5 (fastembed, 1024d, MEAN pooling) | **Harrier OSS v1 270M (custom ONNX, 640d, last-token pooling, query instructions)** |
+| Embedder | `fastembed` library | **Custom `core/embed.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
+| Tools | Scattered functions | **Focused `core/toolkit/` modules: web, planning, scheduling, photo, architecture** |
+| Skills | N/A | **`skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py`** |
+| Agentic facade | Direct calls | **`core/tools.py` compatibility facade + `core/agentic.py` ReAct loop** |
 
 ---
 
