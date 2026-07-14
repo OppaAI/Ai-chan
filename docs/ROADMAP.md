@@ -79,7 +79,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Voice Activity Detection via Silero VAD | ✅ Done |
 | Interactive Talk mode — local/TUI hands-free conversation | ✅ Done |
 | Spoken command aliases in ASR mode | ✅ Done |
-| Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — stress testing ongoing |
+| Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — testing ongoing |
 | Optional owner voice verification via sherpa-onnx speaker embeddings | ✅ Done |
 | TTS runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
 | MioTTS HTTP client + local sounddevice playback | ✅ Done (*OOM issue)|
@@ -158,7 +158,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 ---
 
-## Phase 2.5 — Agent ✅
+## Phase 2.5 — Agent ⏳
 ![Phase 2.5](../assets/phase-2.5.png)
 
 *Give Aiko a real task layer. Skills describe repeatable workflows; toolkit modules provide safe executable actions.*
