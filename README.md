@@ -292,7 +292,7 @@ All non-secret runtime settings live in `config/*.yaml`. Environment variables i
 | 1 → 1.5 | CLI + Ollama + mem0/Qdrant | Browser WebUI + llama.cpp + streaming |
 | 1.5 → 2 | Text-only | Voice loop: SenseVoice + Silero VAD + MioTTS |
 | 2 | mem0 + Qdrant (server, OOM on Jetson) | **sqlite-vec + custom Harrier ONNX (serverless, local)** |
-| 2 | fastembed (BGE v1.5) | **Custom Harrier ONNX embedder (640d, last-token pooling)** |
+| 2 | fastembed (BGE v1.5) | **Harrier OSS v1 270M Q8 GGUF embedder (640d, last-token pooling)** |
 | 2 → 2.5 | Chat only | **Agentic ReAct loop + skills + scheduling + toolkit** |
 | 2.5 | Keyword-only routing | **Dual-path: semantic exemplar + optional LLM router** |
 
