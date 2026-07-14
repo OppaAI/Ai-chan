@@ -626,9 +626,6 @@ class AikoThink:
         except Exception as e:
             log.warning("Ternary LLM routing failed: %s", e)
             return "localchat"
-Result:
-ROUTE_MODEAGENTIC_MODE_ON=1AGENTIC_MODE_ON=0semanticagentic/webchat/localchat, ambiguous → binary LLM tie-breakwebchat/localchat only, ambiguous → localchat (no LLM call)semantic_onlyagentic/webchat/localchat, ambiguous → localchatwebchat/localchat only, ambiguous → localchatllmagentic/webchat/localchat, ambiguous → 3-way LLM classifywebchat/localchat only, ambiguous → 2-way LLM classifyllm_onlyevery turn → 3-way LLM classifyevery turn → 2-way LLM classify
-ROUTE_ENABLED=0 still remains the separate, unconditional "disable routing entirely, always localchat" switch — untouched by this change.
   
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Delegate task-mode execution to skills.agentic."""
