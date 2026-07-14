@@ -96,6 +96,7 @@ Major additions:
 - microphone capture via PulseAudio `parec`
 - hands-free interaction
 - barge-in interruption
+- lip-sync to the VRM model with the TTS voice output
 
 Major architectural change:
 
