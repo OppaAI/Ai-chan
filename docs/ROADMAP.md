@@ -80,13 +80,13 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Interactive Talk mode — local/TUI hands-free conversation | ✅ Done |
 | Spoken command aliases in ASR mode | ✅ Done |
 | Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — stress testing ongoing |
-| Optional owner voice verification via sherpa-onnx speaker embeddings | 🟡 Implemented — threshold tuning ongoing |
+| Optional owner voice verification via sherpa-onnx speaker embeddings | ✅ Done |
 | TTS runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
-| MioTTS HTTP client + local sounddevice playback | 🟡 Implemented — stress testing ongoing |
-| Remote/browser TTS audio sink for WebUI playback | 🟡 Implemented — remote testing ongoing |
-| Browser/WebUI microphone streaming into ASR/VAD pipeline | 🟡 Implemented — remote testing ongoing |
+| MioTTS HTTP client + local sounddevice playback | ✅ Done (*OOM issue)|
+| Remote/browser TTS audio sink for WebUI playback | ✅ Done |
+| Browser/WebUI microphone streaming into ASR/VAD pipeline | ✅ Done |
 | Staged TTS/ASR/VAD warmup during boot | ✅ Done |
-| Latency target: < 3 s end-to-end on Jetson Orin Nano | 🔲 Not met — >5s even for short normal chat |
+| Latency target: ~3s end-to-end on Jetson Orin Nano |  ✅ Done (*3-4s for short normal chat)| |
 
 ### Voice backend trial ledger
 
@@ -168,6 +168,9 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Feature | Status |
 |---|---|
 | ReAct-style task loop with tool dispatch | ✅ Done |
+| Semantic Intent Routing for fast delegation | ✅ Done |
+| Sub-agent spawning for parallel workflow | 🔲 Planned |
+| Implement goal-based DAG HTN One-step LLM Agentic architecture | ✅ Done |
 | Persistent schedule jobs with reminder | ✅ Done |
 | Toolkit set Agentic-focused tool modules | ✅ Done |
 | Agentic skill workflow registry | ✅ Done |
