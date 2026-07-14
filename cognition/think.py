@@ -99,16 +99,19 @@ _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280
 _AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
 _REASONING_SCALE = int(os.getenv("REASONING_SCALE", 3))
 _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-# Route task-vs-chat turns semantically by default using the same embedding
-# model as memory/RAG.
-#
-# AGENTIC_MODE_ON gates whether the "agentic" label is even a candidate in
-# ternary routing. When off, the agentic label is dropped from scoring
-# before ranking, so the existing gap/threshold logic degenerates into a
-# plain localchat-vs-webchat decision — webchat routing keeps working
-# normally, only agentic is taken off the table. This is intentionally NOT
-# the same as ROUTE_ENABLED=0 (which forces localchat unconditionally for
-# everything).
+
+# ROUTE_MODE selects the classification METHOD only (see yaml comment for
+# the four options). It does not decide whether agentic is reachable —
+# that's AGENTIC_MODE_ON, applied uniformly below regardless of method.
+_ROUTE_VALID_MODES = {"semantic", "semantic_only", "llm", "llm_only"}
+_ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
+if _ROUTE_MODE not in _ROUTE_VALID_MODES:
+    log.warning("[route] invalid ROUTE_MODE=%r, defaulting to 'semantic'", _ROUTE_MODE)
+    _ROUTE_MODE = "semantic"
+
+# Whether "agentic" is a reachable routing outcome at all. Off = agentic
+# is excluded from scoring AND from any LLM tie-break/classify, in every
+# ROUTE_MODE, so requests degrade to webchat/localchat instead.
 _AGENTIC_MODE_ON = os.getenv("AGENTIC_MODE_ON", "1").lower() in {"1", "true", "yes", "on"}
 
 # Three separate instruct strings, one per embedding context
@@ -426,6 +429,8 @@ class AikoThink:
         The close-vector label-scoring math itself (normalize + batched
         matmul + top-k mean per label) lives in cognition.reason; this method
         only owns the routing policy (thresholds, gap, LLM tie-break).
+        ROUTE_MODE picks the classification method; AGENTIC_MODE_ON gates
+        whether "agentic" can ever be the result, independent of method.
         """
     
         if not _ROUTE_ENABLED:
@@ -438,10 +443,10 @@ class AikoThink:
         scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
 
         if not _AGENTIC_MODE_ON:
-            # Agentic is off the table entirely — remove it before ranking
-            # so gap/threshold math is computed over the remaining labels
-            # only (effectively localchat vs webchat).
-            scores = {k: v for k, v in scores.items() if k != "agentic"}
+            # Remove agentic from consideration before ranking, so the
+            # existing gap/threshold logic naturally degenerates into a
+            # webchat-vs-localchat decision — no separate code path needed.
+            scores.pop("agentic", None)
       
         agentic_score = scores.get("agentic", 0.0)
         webchat_score = scores.get("webchat", 0.0)
@@ -463,13 +468,25 @@ class AikoThink:
         if best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "webchat"
     
-        # Above threshold but too close to call cleanly — don't silently
-        # default into agentic. Ask the LLM to break the tie; anything
-        # that isn't clearly agentic falls back to local chat.
-        if (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold) and gap < _SEMANTIC_ROUTE_MIN_GAP:
-            llm_label = self._classify_agent_intent(user_input)
-            if llm_label == "agentic" and not _AGENTIC_MODE_ON:
+        # Above threshold but too close to call cleanly.
+        ambiguous = (
+            (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold)
+            and gap < _SEMANTIC_ROUTE_MIN_GAP
+        )
+        if ambiguous:
+            if _ROUTE_MODE == "semantic_only":
+                # Deterministic mode: no LLM call on ambiguity.
+                log.debug("[route] semantic_only: ambiguous gap, defaulting localchat")
                 return "localchat"
+            if _ROUTE_MODE == "llm":
+                return self._classify_ternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+            # "semantic" mode's original binary tie-break. If agentic is
+            # off, there's nothing left for this binary check to decide
+            # (it only ever distinguishes agentic vs chat), so skip the
+            # LLM call entirely rather than spend it on a moot question.
+            if not _AGENTIC_MODE_ON:
+                return "localchat"
+            llm_label = self._classify_agent_intent(user_input)
             return "agentic" if llm_label == "agentic" else "localchat"
     
         return "localchat"
@@ -536,7 +553,83 @@ class AikoThink:
             log.warning("Intent routing failed: %s", e)
             return "chat"
 
+    def _classify_ternary_intent_llm(self, user_input: str, allow_agentic: bool = True) -> str:
+        """LLM classify for ROUTE_MODE=llm (ambiguity tie-break) and
+        ROUTE_MODE=llm_only (sole routing decision, every turn).
 
+        allow_agentic=False collapses this to a binary webchat/chat
+        classification — agentic is never offered as a label, so
+        AGENTIC_MODE_ON=0 holds regardless of which ROUTE_MODE is active.
+        """
+        if allow_agentic and _AGENTIC_ROUTE_RE.search(user_input):
+            return "agentic"
+
+        if allow_agentic:
+            labels_line = "Labels: [agentic, webchat, chat]"
+            guidance = (
+                "agentic = the message asks for an action/task (write, save, "
+                "schedule, debug, plan, remind, research-and-report).\n"
+                "webchat = the message needs current/external information "
+                "(news, prices, scores, recent releases, real-time facts) but "
+                "is not itself a task.\n"
+                "chat = casual conversation, opinions, or something answerable "
+                "from general/persona knowledge alone.\n\n"
+                "Message: 'set a reminder for 9pm'\n"
+                "Label: agentic\n\n"
+                "Message: 'debug why asyncio.run() hangs'\n"
+                "Label: agentic\n\n"
+                "Message: 'what's the weather in Vancouver right now'\n"
+                "Label: webchat\n\n"
+                "Message: 'who won the game last night'\n"
+                "Label: webchat\n\n"
+                "Message: 'what do you think about minimalism'\n"
+                "Label: chat\n\n"
+                "Message: 'explain semaphores from memory'\n"
+                "Label: chat\n\n"
+            )
+            valid = {"agentic", "webchat", "chat"}
+        else:
+            labels_line = "Labels: [webchat, chat]"
+            guidance = (
+                "webchat = the message needs current/external information "
+                "(news, prices, scores, recent releases, real-time facts).\n"
+                "chat = casual conversation, opinions, or something answerable "
+                "from general/persona knowledge alone.\n\n"
+                "Message: 'what's the weather in Vancouver right now'\n"
+                "Label: webchat\n\n"
+                "Message: 'who won the game last night'\n"
+                "Label: webchat\n\n"
+                "Message: 'what do you think about minimalism'\n"
+                "Label: chat\n\n"
+                "Message: 'explain semaphores from memory'\n"
+                "Label: chat\n\n"
+            )
+            valid = {"webchat", "chat"}
+
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._router_model,
+                messages=[{"role": "user", "content": (
+                    f"Message: {user_input!r}\n\n"
+                    "Output only the route label. No explanation.\n"
+                    f"{labels_line}\n"
+                    f"{guidance}"
+                    "Label:"
+                )}],
+                stream=False, max_tokens=6, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
+            )
+            label = (resp.choices[0].message.content or "chat").strip().lower()
+            label = re.sub(r"[^a-z_].*$", "", label)
+            if label not in valid:
+                return "localchat"
+            return "localchat" if label == "chat" else label
+        except Exception as e:
+            log.warning("Ternary LLM routing failed: %s", e)
+            return "localchat"
+Result:
+ROUTE_MODEAGENTIC_MODE_ON=1AGENTIC_MODE_ON=0semanticagentic/webchat/localchat, ambiguous → binary LLM tie-breakwebchat/localchat only, ambiguous → localchat (no LLM call)semantic_onlyagentic/webchat/localchat, ambiguous → localchatwebchat/localchat only, ambiguous → localchatllmagentic/webchat/localchat, ambiguous → 3-way LLM classifywebchat/localchat only, ambiguous → 2-way LLM classifyllm_onlyevery turn → 3-way LLM classifyevery turn → 2-way LLM classify
+ROUTE_ENABLED=0 still remains the separate, unconditional "disable routing entirely, always localchat" switch — untouched by this change.
+  
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Delegate task-mode execution to skills.agentic."""
         user_id = current_user_id()
