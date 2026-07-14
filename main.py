@@ -1344,6 +1344,9 @@ def _run_session(ui, args):
     speak    = result.speak
     listen   = result.listen
 
+    if hasattr(ui, "set_voice_backends"):
+        ui.set_voice_backends(speak, listen)
+        
     if memorize is not None and hasattr(ui, "set_memorize"):
         ui.set_memorize(memorize)
 
