@@ -28,6 +28,8 @@ import logging
 import os
 import json
 import warnings
+import hashlib
+import pickle
 
 warnings.filterwarnings("ignore")
 logging.getLogger("phonemizer").setLevel(logging.ERROR)
@@ -53,7 +55,7 @@ from cognition import CONTEXT_POOL
 from system.log      import get_logger
 from skills.social import run_scheduled_weekly_social
 from system.schedule import DueJob, register_system_handler
-from system.userspace import current_user_id, current_display_name, user_profile_path
+from system.userspace import current_user_id, current_display_name, user_profile_path, user_state_dir
 from system import bioclock
 from cognition import reason
 from memory import learn
@@ -122,6 +124,8 @@ _ROUTE_INSTRUCT_TERNARY = "What kind of task or question is this?"  # used by ro
 
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
+_ROUTE_VECTOR_CACHE_ENABLED = os.getenv("ROUTE_VECTOR_CACHE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+_ROUTE_VECTOR_CACHE_DIR = os.getenv("ROUTE_VECTOR_CACHE_DIR", "route_vectors")
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
 _LOCAL_KNOWLEDGE_RE = re.compile(
@@ -492,11 +496,13 @@ class AikoThink:
         return "localchat"
 
     def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], object]:
-        """Return cached (labels, matrix) for a static semantic example
-        corpus, built via reason.embed_example_matrix. embed_example_matrix
-        itself never caches — it always re-embeds — so the caching lives
-        here, keyed on corpus identity + instruct string, same as before
-        the math moved to cognition.reason."""
+        """Return cached route-example vectors.
+
+        Hot turns use the in-memory cache. Cold boots can reuse a per-user
+        on-disk pickle keyed by the route examples, instruct string, and
+        embedding backend metadata when ROUTE_VECTOR_CACHE_ENABLED=1. If the
+        cache is missing/stale/unreadable, Aiko recomputes and overwrites it.
+        """
         cache_key = (id(examples_by_label), instruct)
         with self._semantic_example_cache_lock:
             cached = self._semantic_example_cache.get(cache_key)
@@ -504,10 +510,47 @@ class AikoThink:
                 return cached
 
             embedder = self._memorize._mem._embedder
+            disk_path = self._route_vector_cache_path(examples_by_label, instruct, embedder)
+            if disk_path is not None and disk_path.exists():
+                try:
+                    with disk_path.open("rb") as f:
+                        cached = pickle.load(f)
+                    self._semantic_example_cache[cache_key] = cached
+                    return cached
+                except Exception as exc:
+                    log.debug("[route] ignoring stale vector cache %s: %s", disk_path, exc)
+
             labels, vectors = reason.embed_example_matrix(embedder, examples_by_label, instruct=instruct)
             cached = (labels, vectors)
             self._semantic_example_cache[cache_key] = cached
+            if disk_path is not None:
+                try:
+                    disk_path.parent.mkdir(parents=True, exist_ok=True)
+                    with disk_path.open("wb") as f:
+                        pickle.dump(cached, f, protocol=pickle.HIGHEST_PROTOCOL)
+                except Exception as exc:
+                    log.debug("[route] could not write vector cache %s: %s", disk_path, exc)
             return cached
+
+    def _route_vector_cache_path(self, examples_by_label: dict, instruct: str, embedder) -> Path | None:
+        if not _ROUTE_VECTOR_CACHE_ENABLED:
+            return None
+        try:
+            payload = {
+                "examples": examples_by_label,
+                "instruct": instruct,
+                "embedder": {
+                    "class": type(embedder).__name__,
+                    "model": getattr(embedder, "model", None) or getattr(embedder, "model_name", None) or getattr(embedder, "name", None),
+                    "dims": os.getenv("EMBED_DIMS", ""),
+                },
+            }
+            digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:24]
+            raw_dir = Path(_ROUTE_VECTOR_CACHE_DIR)
+            base = raw_dir if raw_dir.is_absolute() else user_state_dir(current_user_id()) / raw_dir
+            return base / f"{digest}.pkl"
+        except Exception:
+            return None
 
     def _classify_agent_intent(self, user_input: str, skip_regex: bool = False) -> str:
         """Ask the local model for a compact binary route label when semantics are ambiguous."""

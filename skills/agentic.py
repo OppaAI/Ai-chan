@@ -43,6 +43,7 @@ from skills.wiki import wiki_agentic_contexts_for
 from skills.capability import match_capabilities, filtered_tool_schemas
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from skills import experience
+from skills import graph_agent
 from toolkit.tools import (
     deep_search,
     deep_research,
@@ -92,6 +93,8 @@ AGENT_VERIFY_LLM_MODE = os.getenv("AGENT_VERIFY_LLM_MODE", "auto")  # "always" |
 AGENT_MAX_FINAL_REPAIRS = int(os.getenv("AGENT_MAX_FINAL_REPAIRS", 2))
 AGENT_VERIFY_MIN_SCORE = float(os.getenv("AGENT_VERIFY_MIN_SCORE", "0.70"))
 AGENT_TOOL_RETRY_BACKOFF = float(os.getenv("AGENT_TOOL_RETRY_BACKOFF", 0.4))
+AGENT_EXECUTOR_MODE = os.getenv("AGENT_EXECUTOR_MODE", "hybrid").strip().lower()  # react | graph | hybrid
+AGENT_INCLUDE_EXPERIENCE_CONTEXT = os.getenv("AGENT_INCLUDE_EXPERIENCE_CONTEXT", "0").lower() in {"1", "true", "yes", "on"}
 
 # Rolling STM window shared across all three chat paths. Mirrors
 # CONTEXT_WINDOW_TURNS in cognition.think (kept as a distinct name here rather
@@ -308,7 +311,7 @@ def _fetch_agentic_only_context(user_input: str, embedder, query_vector: np.ndar
         "agentic_policy": CONTEXT_POOL.submit(_agentic_policy_context, user_input, embedder=embedder),
         "wiki": CONTEXT_POOL.submit(wiki_agentic_contexts_for, user_input, embedder=embedder),
         "skill": CONTEXT_POOL.submit(skill_context_for, user_input, limit=2, max_chars=3000, embedder=embedder),
-        "experience": CONTEXT_POOL.submit(experience.experience_context_for, user_input, limit=3, embedder=embedder),
+        "experience": CONTEXT_POOL.submit(experience.experience_context_for, user_input, limit=3, embedder=embedder) if AGENT_INCLUDE_EXPERIENCE_CONTEXT else None,
     }
     # "wiki" returns a (wiki_block, knowledge_block) tuple; both come
     # from a SINGLE search_wiki call (see wiki_agentic_contexts_for) instead
@@ -323,7 +326,7 @@ def _fetch_agentic_only_context(user_input: str, embedder, query_vector: np.ndar
     results = {}
     for key, future in futures.items():
         try:
-            results[key] = future.result()
+            results[key] = future.result() if future is not None else ""
         except Exception as e:
             log.error("[agentic] context fetch '%s' failed: %s", key, e)
             results[key] = fallbacks[key]
@@ -617,6 +620,15 @@ _reg("load_skillset", "Load the full markdown instructions for one predefined sk
     lambda args: load_skillset(args.get("skill_id", "")),
     {"skill_id": {"type": "string"}},
     required=["skill_id"])
+
+_reg("list_master_plans", "List graph/master-plan workflows available to the model-free graph executor.",
+    lambda args: graph_agent.list_master_plans_json(),
+    {})
+
+_reg("run_master_plan", "Run a saved graph/master-plan workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",
+    lambda args: graph_agent.run_master_plan_json(args.get("task", ""), cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None),
+    {"task": {"type": "string", "description": "The task prompt to match against graph master plans."}, "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."}},
+    required=["task"])
 
 _reg("scan_photo_workspace", "Scan a workspace photo inbox for wildlife/nature/astro image files.",
     lambda args: scan_photo_workspace(args.get("inbox", "photos/inbox"), int(args.get("limit", 100) or 100)),
@@ -1144,6 +1156,40 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # can only shrink the list, never regress a turn.
     _matched_caps = match_capabilities(user_input, embedder=_embedder, query_vector=_cap_vec)
     tools = filtered_tool_schemas(tool_schemas(), _matched_caps)
+
+    # Graph-first executor: known master-plan workflows can run without an LLM
+    # planning loop. Novel/ambiguous tasks return None and fall back to the
+    # ReAct loop once; the normal experience recorder below then captures the
+    # successful sequence for later promotion into the graph master plan.
+    if AGENT_EXECUTOR_MODE in {"graph", "hybrid"}:
+        graph_result = graph_agent.run_graph_agent(user_input, cap_ids=_matched_caps)
+        if graph_result is not None:
+            threading.Thread(
+                target=experience.record_experience,
+                args=(owner, user_input, graph_result.steps, graph_result.final_answer),
+                kwargs=dict(verified_ok=not any(not r.ok for r in graph_result.results), score=1.0, embedder=_embedder),
+                daemon=True,
+            ).start()
+            owner.last_prompt_debug = {
+                "mode": "agentic_graph",
+                "matched_capabilities": _matched_caps,
+                "graph": graph_result.graph.__dict__,
+                "node_results": [r.__dict__ for r in graph_result.results],
+            }
+            owner._emit(graph_result.final_answer, token_callback=token_callback)
+            with owner._history_lock:
+                owner._history.append({"role": "user", "content": user_input})
+                owner._history.append({"role": "assistant", "content": graph_result.final_answer})
+            owner._store_async(user_input, graph_result.final_answer)
+            return graph_result.final_answer
+        if AGENT_EXECUTOR_MODE == "graph":
+            final_text = (
+                "I could not match this task to a saved master-plan workflow, "
+                "and AGENT_EXECUTOR_MODE=graph disables the ReAct fallback. "
+                "Run practice.py or switch to AGENT_EXECUTOR_MODE=hybrid to learn it once."
+            )
+            owner._emit(final_text, token_callback=token_callback)
+            return final_text
 
     if mem_kb_future is not None:
         try:

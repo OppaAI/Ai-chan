@@ -63,13 +63,15 @@ TOOL_DOMAINS: dict[str, str] = {
     "repo_search_text": "repo",
     "learn_knowledge": "kb",
     "search_jobs": "jobs",
+    "list_master_plans": "graph",
+    "run_master_plan": "graph",
 }
 
 # Always sent regardless of which capability matched — the base loop tools
 # every agentic turn can plausibly need.
 ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "make_plan", "create_checklist", "save_note", "read_workspace_file",
-    "summarize_task_state", "final_answer",
+    "summarize_task_state", "list_master_plans", "run_master_plan", "final_answer",
 })
 
 CAPABILITIES: dict[str, Capability] = {

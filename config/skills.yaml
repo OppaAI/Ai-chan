@@ -34,6 +34,13 @@ USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <US
 # Settings for skills/agentic.py plus chat-vs-agent routing used by cognition/think.py.
 # Use this to tune when Aiko enters tool/task mode and how much work one task may do.
 
+# -- Agent executor mode --
+AGENT_EXECUTOR_MODE: "hybrid"  # react = old ReAct loop only; graph = master-plan DAG only; hybrid = graph first, ReAct fallback once for novel workflows.
+GRAPH_AGENT_ENABLED: "1"  # Enable deterministic graph/master-plan executor for known workflows.
+GRAPH_MASTER_PLAN_PATH: "agentic/master_plans.json"  # Per-user JSON file for practiced/promoted graph workflows.
+GRAPH_MAX_WORKERS: "4"  # Max parallel tool nodes for graph execution.
+AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline master-plan promotion, not prompt context, by default.
+
 # -- Agent loop limits --
 MAX_AGENT_ITER: "6"  # Maximum tool/planning iterations per task; raise for complex tasks, lower for safety.
 AGENT_MAX_TOKENS: "512"  # Max model output tokens per agent step.
