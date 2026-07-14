@@ -62,7 +62,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 > The new backend is serverless and keeps memory local — no Qdrant container,
 > no mem0 runtime, and no Docker dependency for memory.
 >
-> **Current embedding note:** Aiko now uses a custom `core/embed.py` ONNX
+> **Current embedding note:** Aiko now uses a custom `cognition/reason.py` ONNX
 > Harrier embedder instead of fastembed. Harrier OSS v1 270M is decoder-only
 > and needs last-token pooling, while fastembed custom registration only
 > exposed `PoolingType.MEAN`/CLS-style pooling for this path.
@@ -188,10 +188,10 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 |---|---|---|
 | Routing | Keyword-only (`/web`, `/think`, task keywords) | **Dual-path: fast semantic exemplar routing by default, optional LLM router/fallback for context-heavy cases** |
 | Embeddings | BGE v1.5 (fastembed, 1024d, MEAN pooling) | **Harrier OSS v1 270M (custom ONNX, 640d, last-token pooling, query instructions)** |
-| Embedder | `fastembed` library | **Custom `core/embed.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
-| Tools | Scattered functions | **Focused `core/toolkit/` modules: web, planning, scheduling, photo, architecture** |
-| Skills | N/A | **`skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py`** |
-| Agentic facade | Direct calls | **`core/tools.py` compatibility facade + graph-first executor + ReAct fallback loop** |
+| Embedder | `fastembed` library | **Custom `cognition/reason.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
+| Tools | Scattered functions | **Focused `toolkit/` modules: web, planning, scheduling, photo, architecture** |
+| Skills | N/A | **`skills/skillsets/*.md` workflow registry loaded by `skills/skills.py`** |
+| Agentic facade | Direct calls | **`toolkit/tools.py` compatibility facade + graph-first executor + ReAct fallback loop** |
 
 ---
 

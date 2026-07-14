@@ -1,6 +1,6 @@
 # Aiko-chan アイコちゃん
 
-> A local-first AI companion with a curses TUI, optional browser WebUI + VRM avatar, persistent memory, web search, microphone input, and MioTTS voice output.
+> A local-first AI companion with a browser WebUI + VRM avatar, optional simple CLI, persistent memory, web search, microphone input, and MioTTS voice output.
 > Optimised for constrained hardware — runs on a Jetson Orin Nano with 8GB unified RAM.
 
 **Author:** [OppaAI](https://github.com/OppaAI) · Beautiful British Columbia, Canada
@@ -18,7 +18,7 @@
 
 ## Status
 
-Phase 2 voice is implemented, and Phase 2.5 agentic workflows are now active. The default launch path is still the curses TUI; the browser WebUI/VRM frontend is available with `--webui` and includes a WebSocket bridge for chat, vitals, voice status, expression, viseme, and browser microphone events.
+Phase 2 voice is implemented, and Phase 2.5 agentic workflows are now active. The default launch path is the browser WebUI/VRM frontend, including a WebSocket bridge for chat, vitals, voice status, expression, viseme, and browser microphone events. `--cli` remains available for simple local testing.
 
 ASR and TTS run through the local machine by default. WebUI microphone streaming exists in the frontend/backend bridge, but full remote voice-device polish is still experimental.
 
@@ -83,7 +83,7 @@ This project currently serves as:
 ### 🤖 Agentic Skills (Phase 2.5 — ✅ Active)
 - **ReAct task loop** — LLM plans, calls tools, observes, repeats until done
 - **Toolkit modules** — Web search, fetch, planning, scheduling, workspace notes, photo ingestion, repo inspection
-- **Skill registry** — Markdown workflow definitions in `skills/<id>/SKILL.md`
+- **Skill registry** — Markdown workflow definitions in `skills/skillsets/*.md`
 - **Skill context injection** — Relevant skill instructions automatically retrieved in agentic mode
 - **Dual-path routing** — Fast semantic exemplar routing (default) + optional LLM router fallback
 - **Final-answer verification** — Self-critique and repair loop for tool outputs
@@ -131,7 +131,7 @@ This project currently serves as:
 
 ```mermaid
 flowchart TD
-    YOU[You] --> UI[UI\ncurses or WebUI]
+    YOU[You] --> UI[UI\nWebUI or CLI]
     UI --> THINK[Think\nllama.cpp/OpenAI-compatible LLM]
     THINK <-->|async| MEM[Memory\nsqlite-vec + custom Harrier ONNX embedder]
     THINK <-->|on demand| SEARCH[Web search\nSearXNG]
@@ -147,18 +147,18 @@ flowchart TD
 
 | Layer | Implementation |
 |---|---|
-| Entry point | `main.py` (`--tui` default path, `--webui` optional browser mode) |
-| Interface | full-screen curses TUI in `tui/`; optional browser WebUI in `webui/` |
+| Entry point | `main.py` (browser WebUI default, `--cli` optional simple CLI) |
+| Interface | browser WebUI in `interface/webui/` by default; simple local CLI via `--cli` |
 | Chat model | llama.cpp or any OpenAI-compatible local server via `openai.OpenAI` |
 | Long-term memory | custom sqlite-vec backend (no server required) |
 | Embeddings | custom ONNX Harrier embedder, `ferrisS/harrier-oss-v1-270m-fastembed` |
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
-| Web search | local SearXNG instance through `core/toolkit/researcher.py` |
+| Web search | local SearXNG instance through `toolkit/research.py` |
 | TTS | external MioTTS HTTP server |
 | ASR | SenseVoice via sherpa-onnx with Silero VAD |
 | Reflection publishing | optional GitHub REST API + Hugo markdown |
-| Agentic task mode | `core/agentic.py` ReAct loop + `core/tools.py` facade + `core/toolkit/` modules |
-| Skills | `skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py` |
+| Agentic task mode | `skills/agentic.py` ReAct loop + `toolkit/tools.py` facade + `toolkit/` modules |
+| Skills | `skills/skillsets/*.md` workflow registry loaded by `skills/skills.py` |
 | Scheduling | local schedule/reminder runner using `~/.aiko/<user_id>/schedule.json` |
 | Multi-user | OAuth provider-scoped IDs, per-user `~/.aiko/<user_id>/` isolation |
 | Encryption | optional SQLCipher via `AIKO_SQLITE_ENCRYPTION=1` |
@@ -177,12 +177,12 @@ cd Aiko-chan
 cp .env.example .env        # fill secrets only; edit config/*.yaml for settings
 docker compose up -d
 uv sync
-uv run python main.py            # curses TUI, full voice if services are available
+uv run python main.py            # browser WebUI, full voice if services are available
 ```
 
 ```bash
-uv run python main.py --webui    # browser WebUI + VRM frontend
-uv run python main.py --text      # keyboard input, ASR/TTS toggled off but loaded
+uv run python main.py --text      # WebUI keyboard input, ASR/TTS toggled off but loaded
+uv run python main.py --cli       # simple authenticated local CLI
 uv run python main.py --debug     # show memory hits each turn
 uv run python main.py --clear-mem # wipe all memories and exit
 ```
@@ -211,57 +211,38 @@ uv run python main.py --clear-mem # wipe all memories and exit
 
 ```text
 Aiko-chan/
-├── main.py
-├── config/             # category YAML settings; secrets stay in .env
-├── core/
-│   ├── think.py         # OpenAI-compatible chat loop, routing, streaming, scheduler
-│   ├── memorize.py      # sqlite-vec backend, pinned memories, decay
-│   ├── databank.py      # shared SQLite/sqlite-vec helpers for local stores
-│   ├── journal.py       # encrypted daily journal blob store beside memory.db
-│   ├── forget.py        # decay scoring and cleanup gates
-│   ├── dream.py         # midnight consolidation scheduler
-│   ├── experience.py    # consolidate daily experience from memory
-│   ├── reflect.py       # Hugo/GitHub reflection publisher
-│   ├── speak.py         # MioTTS HTTP client
-│   ├── listen.py        # SenseVoice (sherpa-onnx) + Silero VAD
-│   ├── agentic.py       # ReAct task loop and tool dispatch
-│   ├── tools.py         # compatibility facade for toolkit tools
-│   ├── toolkit/         # focused tool modules: web, planning, scheduling, photo, architecture
-│   ├── skills.py        # skill registry and workflow retrieval
-│   ├── schedule.py      # schedule reminders and local scheduled tasks
-│   ├── health.py        # system information
-│   ├── log.py           # rotating log setup
-│   └── silence.py       # stderr suppression
-├── tui/
-│   ├── tui.py           # curses TUI interface
-│   └── identity.py      # ASCII art of TUI interface
-├── webui/
-│   ├── webui.py      # browser UI backend + HTTP/WebSocket bridge
-│   └── static/          # HTML/JS/CSS, VRM avatar, browser audio worklet
-├── persona/
-│   ├── soul.md          # personality, rules, and voice
-│   ├── skills.md        # human-readable skill index
-│   ├── user.md          # user bio and profile
-│   ├── schedule.md      # schedule tasks format policy
-│   └── identity.md      # banner and ASCII art
+├── main.py                 # entry point; WebUI default, --cli for simple local testing
+├── config/                 # category YAML settings; secrets stay in .env
+├── cognition/
+│   ├── think.py            # chat facade, routing, history, scheduled-job callbacks
+│   └── reason.py           # shared embedding/ranking helpers
+├── memory/
+│   ├── memorize.py         # sqlite-vec memory, recall, pinned memories
+│   ├── vecstore.py         # SQLite/sqlite-vec helpers
+│   ├── forget.py           # decay scoring and cleanup gates
+│   ├── consolidate.py      # periodic memory consolidation
+│   ├── journal.py          # encrypted journal blob store
+│   └── reflect.py          # Hugo/GitHub reflection publisher
+├── sensory/
+│   ├── speak.py            # MioTTS HTTP client
+│   └── listen.py           # SenseVoice (sherpa-onnx) + Silero VAD
 ├── skills/
-│   ├── aiko_architect/  # architecture/code workflow skill
-│   ├── aurora_forecast_watch/  # aurora forecast/reminder workflow skill
-│   ├── coding_tutor/    # coding tutorial workflow skill
-│   ├── japanese_tutor/  # Japanese tutorial workflow skill
-│   └── wildlife_photo/  # photo-ingestion workflow skill
-├── searxng/
-│   ├── settings.yml
-│   └── limiter.toml
-├── docs/
-│   ├── INSTALL.md
-│   ├── TESTS.md
-│   ├── ROADMAP.md
-│   ├── HISTORY.md
-│   ├── DEBUG_AUDIO.md
-│   ├── MULTI_USER.md
-│   └── ARCHITECTURE.md
-├── assets/
+│   ├── agentic.py          # ReAct task loop, tool schemas, tool dispatch
+│   ├── schema.py           # graph-first master-plan DAG executor
+│   ├── capability.py       # capability matching for task-mode tool filtering
+│   ├── experience.py       # procedural task-run experience store
+│   ├── skills.py           # skill registry and workflow retrieval
+│   ├── wiki.py             # wiki-card retrieval for task mode
+│   └── skillsets/          # human-readable workflow documents
+├── toolkit/                # executable tools: research, planning, schedule, photo, repo, jobs
+├── system/                 # config, wakeup, schedule runner, logging, userspace
+├── interface/
+│   ├── webui/              # browser WebUI backend + static frontend/VRM bridge
+│   └── cli/                # auth and simple CLI helpers
+├── persona/                # soul/personality and prompt policy files
+├── wiki/                   # trusted local knowledge cards
+├── docs/                   # install, architecture, roadmap, tests, history
+├── assets/                 # images and VRM assets
 ├── docker-compose.yml
 ├── pyproject.toml
 ├── uv.lock
@@ -276,7 +257,7 @@ Aiko-chan/
 | Phase | Name | Status |
 |---|---|---|
 | 1 | Soul — CLI, Ollama, mem0 + Qdrant, SearXNG | ✅ Done |
-| 1.5 | Stream — curses TUI, streaming pipeline, persona, test TTS models | ✅ Done |
+| 1.5 | Stream — streaming pipeline, persona, first UI, test TTS models | ✅ Done |
 | 2 | Voice — SenseVoice ASR, Silero VAD, MioTTS, hands-free talk | ✅ Done |
 | 2.5 | Agent — tool registry, skill workflows, scheduled local tasks | ✅ Active |
 | 3 | Face — VRM avatar, three-vrm, expressions, lip-sync | 🔲 Planned |
@@ -296,18 +277,12 @@ All non-secret runtime settings live in `config/*.yaml`. Environment variables i
 | Config file | Purpose |
 |---|---|
 | `config/index.yaml` | Ordered list of YAML files loaded at startup |
-| `config/identity.yaml` | `AI_NAME`, `USER_ID` |
-| `config/think.yaml` | LLM endpoints, model names, sampling, token limits |
-| `config/agentic.yaml` | Agentic routing thresholds, tool configs |
-| `config/memorize.py` | Memory, embed, forget, experience, consolidation settings |
-| `config/speak.yaml` | MioTTS and karaoke text settings |
-| `config/listen.yaml` | ASR, VAD, speaker verification, barge-in |
-| `config/web.yaml` | SearXNG URL and search limits |
-| `config/ui.yaml` | UI ports, avatar path, streaming behavior |
-| `config/schedule.yaml` | Timezone, schedule files, job timing |
-| `config/reflect.yaml` | Hugo/GitHub repo paths and image/reference settings |
-| `config/social.yaml` | Weekly social draft/post settings |
-| `config/log.yaml` | Log level and rotation |
+| `config/system.yaml` | Identity, logging, userspace, schedule, reflection/social settings |
+| `config/cognition.yaml` | LLM endpoints, routing, token limits, vector-cache settings |
+| `config/memory.yaml` | Memory, embedding, decay, experience, consolidation settings |
+| `config/skills.yaml` | Agentic routing thresholds, tool configs, graph executor settings |
+| `config/sensory.yaml` | MioTTS, ASR, VAD, speaker verification, and barge-in settings |
+| `config/interface.yaml` | WebUI ports, avatar path, streaming behavior |
 
 ---
 
@@ -315,7 +290,7 @@ All non-secret runtime settings live in `config/*.yaml`. Environment variables i
 
 | Phase | Before | After |
 |---|---|---|
-| 1 → 1.5 | CLI + Ollama + mem0/Qdrant | Curses TUI + llama.cpp + streaming |
+| 1 → 1.5 | CLI + Ollama + mem0/Qdrant | Browser WebUI + llama.cpp + streaming |
 | 1.5 → 2 | Text-only | Voice loop: SenseVoice + Silero VAD + MioTTS |
 | 2 | mem0 + Qdrant (server, OOM on Jetson) | **sqlite-vec + custom Harrier ONNX (serverless, local)** |
 | 2 | fastembed (BGE v1.5) | **Custom Harrier ONNX embedder (640d, last-token pooling)** |

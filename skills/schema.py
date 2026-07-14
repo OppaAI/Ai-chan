@@ -1,5 +1,5 @@
 """
-skills/graph_agent.py
+skills/schema.py
 
 Graph-first, mostly model-free agentic executor.
 
@@ -11,10 +11,12 @@ future promotion into the master plan.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import uuid
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +33,9 @@ log = get_logger(__name__)
 GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 GRAPH_MASTER_PLAN_PATH = os.getenv("GRAPH_MASTER_PLAN_PATH", "agentic/master_plans.json")
 GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
+_TOOL_MAP_CACHE: dict[str, Callable[..., Any]] | None = None
+_TOOL_MAP_LOCK = threading.Lock()
+_MASTER_PLAN_WRITE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,24 @@ class GraphRunResult:
             for r in self.results
         ]
 
+
+
+@contextlib.contextmanager
+def _master_plan_write_guard(path: Path):
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    with _MASTER_PLAN_WRITE_LOCK:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock_file:
+            try:
+                import fcntl
+
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except ImportError:
+                yield
 
 def _master_plan_file() -> Path:
     raw = Path(GRAPH_MASTER_PLAN_PATH)
@@ -217,6 +240,17 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None) -> PlanG
 
 
 def _tool_map() -> dict[str, Callable[..., Any]]:
+    global _TOOL_MAP_CACHE
+    if _TOOL_MAP_CACHE is not None:
+        return _TOOL_MAP_CACHE
+    with _TOOL_MAP_LOCK:
+        if _TOOL_MAP_CACHE is not None:
+            return _TOOL_MAP_CACHE
+        _TOOL_MAP_CACHE = _build_tool_map()
+        return _TOOL_MAP_CACHE
+
+
+def _build_tool_map() -> dict[str, Callable[..., Any]]:
     # Import focused toolkit modules lazily so model-free graph planning can be
     # imported/tested without loading optional heavy research dependencies.
     from toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
@@ -285,7 +319,20 @@ def execute_graph(graph: PlanGraph) -> GraphRunResult:
                 stuck = ", ".join(sorted(pending))
                 ordered.append(NodeResult("graph", "graph_executor", False, f"dependency cycle or missing dependency among: {stuck}", error_type="dependency_error"))
                 break
-            future_map = {pool.submit(_run_node, node, graph.goal, results): node for node in ready}
+            runnable, blocked = [], []
+            for node in ready:
+                if all(results[dep].ok for dep in node.depends_on):
+                    runnable.append(node)
+                else:
+                    blocked.append(node)
+            for node in blocked:
+                result = NodeResult(node.id, node.tool, False, "skipped: an upstream dependency failed", error_type="dependency_failed")
+                results[node.id] = result
+                ordered.append(result)
+                pending.pop(node.id, None)
+            if not runnable:
+                continue
+            future_map = {pool.submit(_run_node, node, graph.goal, results): node for node in runnable}
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:
@@ -313,7 +360,7 @@ def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -
     return "\n".join(lines)
 
 
-def run_graph_agent(user_input: str, cap_ids: list[str] | None = None) -> GraphRunResult | None:
+def run_schema_agent(user_input: str, cap_ids: list[str] | None = None) -> GraphRunResult | None:
     graph = plan_from_master(user_input, cap_ids=cap_ids)
     if graph is None:
         return None
@@ -344,7 +391,7 @@ def list_master_plans_json() -> str:
 
 def run_master_plan_json(task: str, cap_ids: list[str] | None = None) -> str:
     """Run the graph executor and return a compact JSON observation."""
-    result = run_graph_agent(task, cap_ids=cap_ids)
+    result = run_schema_agent(task, cap_ids=cap_ids)
     if result is None:
         return json.dumps({
             "ok": False,
@@ -361,6 +408,22 @@ def run_master_plan_json(task: str, cap_ids: list[str] | None = None) -> str:
     }, ensure_ascii=False, indent=2)
 
 
+def _promotion_args_for_step(tool: str, step: dict[str, Any]) -> dict[str, Any]:
+    if tool == "make_plan":
+        return {"goal": "$prompt"}
+    if tool == "create_checklist":
+        return {"title": "$title", "items": "$heuristic_items"}
+    if tool == "save_note":
+        return {"title": "$title", "content": "$prompt", "folder": "notes"}
+    if tool in {"deep_search", "deep_research"}:
+        return {"query": "$prompt"}
+    args_preview = step.get("args_preview") or {}
+    arg_keys = step.get("arg_keys") or sorted((step.get("args") or {}).keys())
+    if isinstance(args_preview, dict) and args_preview:
+        return {str(k): str(v) for k, v in args_preview.items()}
+    return {str(k): "$prompt" for k in arg_keys}
+
+
 def append_master_plan_from_experience(goal: str, steps: list[dict[str, Any]], *, name: str | None = None) -> Path:
     """Promote a practiced or ReAct-discovered tool sequence into user master plans.
 
@@ -373,8 +436,7 @@ def append_master_plan_from_experience(goal: str, steps: list[dict[str, Any]], *
         tool = str(step.get("tool") or "").strip()
         if not tool or tool in {"final_answer", "llm_call"}:
             continue
-        args = {"goal": "$prompt"} if tool == "make_plan" else {"title": "$title", "content": "$prompt", "folder": "notes"} if tool == "save_note" else {"query": "$prompt"} if tool in {"deep_search", "deep_research"} else {}
-        node = {"id": f"step_{idx}", "tool": tool, "args": args}
+        node = {"id": f"step_{idx}", "tool": tool, "args": _promotion_args_for_step(tool, step)}
         if nodes:
             node["depends_on"] = [nodes[-1]["id"]]
         nodes.append(node)
@@ -382,20 +444,22 @@ def append_master_plan_from_experience(goal: str, steps: list[dict[str, Any]], *
         raise ValueError("no promotable tool steps found")
     path = _master_plan_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = []
-    if path.exists():
-        try:
-            existing = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(existing, list):
-                existing = []
-        except Exception:
-            existing = []
-    existing.append({
+    new_plan = {
         "id": f"practiced_{uuid.uuid4().hex[:10]}",
         "name": name or _title(goal),
         "triggers": _heuristic_items(goal)[:4],
         "requires_any": [],
         "nodes": nodes,
-    })
-    path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    }
+    with _master_plan_write_guard(path):
+        existing = []
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(existing, list):
+                    existing = []
+            except Exception:
+                existing = []
+        existing.append(new_plan)
+        path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
     return path

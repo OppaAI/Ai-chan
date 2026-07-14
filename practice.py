@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Practice and promote graph-agent workflows without booting the chat LLM.
+"""Practice and promote schema-driven graph workflows without booting the chat LLM.
 
 Examples:
   uv run python practice.py --task "make a deployment checklist and save it" \
@@ -18,7 +18,7 @@ from typing import Any
 from system.config import load_config
 load_config()
 
-from skills import experience, graph_agent
+from skills import experience, schema
 
 
 def _steps_from_tools(tools: list[str]) -> list[dict[str, Any]]:
@@ -47,7 +47,7 @@ def main() -> int:
     print(f"recorded_experience={exp_id}")
 
     if args.promote:
-        path = graph_agent.append_master_plan_from_experience(args.task, steps, name=args.name)
+        path = schema.append_master_plan_from_experience(args.task, steps, name=args.name)
         print(f"promoted_master_plan={path}")
     return 0
 

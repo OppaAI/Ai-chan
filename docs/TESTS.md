@@ -110,7 +110,7 @@ Run before any phase suite.
 - [ ] `/clear` wipes memories; `/memory` is empty afterward and no stale recall appears in the next turn.
 - [ ] `--clear-mem` wipes memories and exits cleanly without launching the UI.
 - [ ] DB file exists after first write: `ls -lh "$SQLITE_MEMORY_PATH"`.
-- [ ] `uv run python -c "from core.memorize import AikoMemorize; m=AikoMemorize(); print(m.dream(dry_run=True))"` completes without error.
+- [ ] `uv run python -c "from memory.memorize import AikoMemorize; m=AikoMemorize(); print(m.dream(dry_run=True))"` completes without error.
 - [ ] Corrupt/locked DB simulation is handled safely: Aiko reports the memory problem and continues chat if possible, without overwriting unrelated files.
 - [ ] Duplicate memory pressure test: repeat the same fact 20 times; recall does not become dominated by redundant near-identical entries.
 - [ ] Unicode memory test: store Japanese, Korean, emoji, and mixed punctuation; recall and display remain readable.
@@ -148,18 +148,18 @@ Run before any phase suite.
 
 ## Phase 1.5 — Stream
 
-*Curses TUI, shared streaming architecture, browser WebUI bridge, persona display, and MioTTS integration.*
+*Browser WebUI, shared streaming architecture, persona display, and MioTTS integration.*
 
-### 1.5.1 Curses TUI layout and input
+### 1.5.1 WebUI layout and input
 
-- [ ] `uv run python main.py --tui --text` launches the full-screen curses UI and restores the terminal after exit.
-- [ ] Chat panel, architecture/status panels, identity area, and input field render in correct positions at 80x24, 120x40, and a large terminal size.
-- [ ] Terminal resize during generation does not crash or leave garbled output.
+- [ ] `uv run python main.py --text` launches the browser WebUI with keyboard-first input.
+- [ ] Chat panel, status/identity areas, avatar region, and input field render correctly across common browser sizes.
+- [ ] Browser resize during generation does not crash or leave garbled output.
 - [ ] Typing, backspace, paste, Enter submit, arrow/navigation keys, and slash commands work reliably.
 - [ ] `/help` renders the command list without overflowing or breaking subsequent draws.
 - [ ] Rapid input submission while streaming is rejected, queued, or handled predictably; it does not corrupt the active assistant message.
 - [ ] Long assistant messages scroll correctly; the most recent content remains reachable/readable.
-- [ ] ANSI escape sequences or malicious terminal control characters in model output do not damage the terminal.
+- [ ] ANSI escape sequences or malicious control characters in model output are rendered safely.
 
 ### 1.5.2 Streaming pipeline and concurrency
 
@@ -180,10 +180,10 @@ Run before any phase suite.
 
 ### 1.5.4 WebUI / VRM bridge foundation
 
-- [ ] `uv run python main.py --webui --text` prints the browser URL and serves `webui/static/index.html`.
+- [ ] `uv run python main.py --text` prints the browser URL and serves `interface/webui/static/index.html`.
 - [ ] Browser WebSocket connects, receives boot/status events, and sends text chat end-to-end.
 - [ ] Chat messages, streamed tokens, stream commit events, vitals, voice state updates, and errors appear in browser developer tools as expected.
-- [ ] `webui/static/assets/Aiko.vrm` loads or fails with a clear visible error.
+- [ ] `interface/webui/static/assets/Aiko.vrm` loads or fails with a clear visible error.
 - [ ] Browser refresh/reconnect does not crash the Python backend or duplicate stale sessions uncontrollably.
 - [ ] Multiple browser tabs are tested: behavior is documented, and one tab cannot corrupt backend state for another.
 - [ ] Static file path traversal attempts fail; only intended WebUI assets are served.
@@ -194,7 +194,7 @@ Run before any phase suite.
 - [ ] `/voice` toggles TTS on; the next assistant response plays audio.
 - [ ] `/voice` toggles TTS off; later responses do not play audio.
 - [ ] Background TTS warmup reduces first-audio latency; cold and warm timings are recorded.
-- [ ] Audio plays through the intended output device; `python core/speak.py --devices` lists available devices.
+- [ ] Audio plays through the intended output device; `python sensory/speak.py --devices` lists available devices.
 - [ ] `sanitize_for_tts` removes markdown, emoji noise, and unsafe symbols without making ordinary Japanese/English text unintelligible.
 - [ ] Long responses are split and played completely without cutting off mid-sentence.
 - [ ] TTS server unavailable, HTTP error, invalid preset, and invalid device are all surfaced without crashing chat.
@@ -290,8 +290,8 @@ Run before any phase suite.
 
 ### 2.5.1 Tool schema and registry integrity
 
-- [ ] `uv run python -c "from core.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch`.
-- [ ] `uv run python -c "from core.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes web, fetch, planning, workspace, scheduling, skill, photo, and repo tools.
+- [ ] `uv run python -c "from skills.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch`.
+- [ ] `uv run python -c "from skills.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes web, fetch, planning, workspace, scheduling, skill, photo, and repo tools.
 - [ ] Every tool schema has valid JSON-serializable parameters, required fields, and a matching registered handler.
 - [ ] Unknown tool names, malformed JSON arguments, missing required arguments, and type mismatches return structured errors rather than crashing.
 - [ ] Tool observations are truncated by configured limits and do not flood the LLM context.
@@ -304,7 +304,7 @@ Run before any phase suite.
 - [ ] Asking for Japanese tutoring loads/uses `japanese_tutor`; coding help loads/uses `coding_tutor`.
 - [ ] Asking for aurora forecast/watch loads/uses `aurora_forecast_watch` skill context.
 - [ ] Skill search returns relevant snippets without dumping entire unrelated skill files.
-- [ ] Missing/corrupt `SKILL.md` files are reported gracefully and do not break unrelated skills.
+- [ ] Missing/corrupt `skills/skillsets/*.md` files are reported gracefully and do not break unrelated skills.
 - [ ] Skill instructions do not override safety boundaries for filesystem paths, external actions, or final-answer honesty.
 
 ### 2.5.3 Agentic routing, graph executor, and ReAct fallback
@@ -380,14 +380,14 @@ Run before any phase suite.
 
 ### 2.5.10 Monthly consolidation
 
-- [ ] `uv run python -c "from core.experience import consolidate_month; print(consolidate_month(dry_run=True))"` completes without error.
+- [ ] `uv run python -c "from skills.experience import consolidate_month; print(consolidate_month(dry_run=True))"` completes without error.
 - [ ] Older full months are summarized into pinned durable memories.
 - [ ] Consolidation uses memory facts, not full chat history, to fit context window.
 - [ ] Pinned monthly summaries persist across restarts and appear in `/memory`.
 
 ### 2.5.11 Embedding model migration (Harrier OSS v1 270M)
 
-- [ ] Custom `core/embed.py` ONNX Harrier embedder loads without fastembed dependency.
+- [ ] Custom `cognition/reason.py` ONNX Harrier embedder loads without fastembed dependency.
 - [ ] Embeddings are 640-dimensional (not 1024d BGE).
 - [ ] Last-token pooling is used (not MEAN/CLS pooling).
 - [ ] Query instruction prefix is applied for retrieval queries.

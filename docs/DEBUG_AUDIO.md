@@ -68,7 +68,7 @@ const required = [
 - [ ] DevTools → Network tab → filter each filename above → all `200 OK`.
 - ❌ 404 on `pcm-worklet.js` → tunnel/proxy isn't routing static paths correctly
   (check whatever fronts `webui.py`'s HTTP server, e.g. Cloudflare Tunnel/DuckDNS config).
-- ❌ 404 on any ORT/onnx file → files missing from `webui/static/` on the
+- ❌ 404 on any ORT/onnx file → files missing from `interface/webui/static/` on the
   Jetson — copy them there.
 
 ---
@@ -124,7 +124,7 @@ console.log('[mic] streaming enabled, gate=', browserVadGate);
 - ❌ Never fires → the server never sent `{"type":"mic","action":"start"}`.
   This means `main.py`'s agentic loop isn't calling
   `listen.get_voice_input()` / the ASR toggle isn't wired up. **Go check
-  `main.py` and `core/agentic.py`, not the browser**, if this fails.
+  `main.py` and `skills/agentic.py`, not the browser**, if this fails.
 
 ---
 
@@ -252,11 +252,11 @@ log.info("[listen] wrote debug wav, %d samples", len(audio))
 
 ## Step 11 — ASR itself (isolated test, no browser needed)
 
-**File:** run standalone on the Jetson, referencing `core/listen.py`:
+**File:** run standalone on the Jetson, referencing `sensory/listen.py`:
 ```bash
 python3 -c "
 import soundfile as sf
-from core.listen import _load_sense_voice_recognizer, SAMPLE_RATE
+from sensory.listen import _load_sense_voice_recognizer, SAMPLE_RATE
 audio, sr = sf.read('/tmp/debug_utterance.wav', dtype='float32')
 assert sr == SAMPLE_RATE
 model = _load_sense_voice_recognizer()
@@ -268,7 +268,7 @@ print(repr(stream.result.text))
 ```
 
 - ❌ Empty/garbled text on clearly-good audio → check `ASR_LANGUAGE` env var,
-  or delete the HF cache for `ASR_MODEL` (`core/listen.py` config block) and
+  or delete the HF cache for `ASR_MODEL` (`sensory/listen.py` config block) and
   let it re-download — cache may be corrupted/stale.
 
 ---
