@@ -19,11 +19,35 @@ import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from html import escape
+from pathlib import Path
 from system.config import load_config
 load_config()
 
-from cognition import reason
-from memory.vecstore import delete_by_id, initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
+try:
+    from memory.vecstore import delete_by_id, initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
+except Exception:  # lightweight practice.py/test environments may not have numpy/sqlite-vec
+    from datetime import datetime, timezone
+    def utc_now_iso(): return datetime.now(timezone.utc).isoformat()
+    def initialize_store_db(path, ddl, user_id=None, vector=True):
+        from system.userspace import user_state_dir
+        db_path = Path(path)
+        if not db_path.is_absolute():
+            db_path = user_state_dir(user_id) / db_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        # Drop sqlite-vec-only statements for fallback mode.
+        safe = re.sub(r"CREATE VIRTUAL TABLE IF NOT EXISTS experiences_vec USING vec0\([^;]+;", "", ddl, flags=re.S)
+        safe = re.sub(r"DELETE FROM experiences_vec WHERE id = old.id;", "", safe)
+        conn.executescript(safe)
+        return conn
+    def insert_vector(*args, **kwargs): return None
+    def delete_by_id(conn, table, row_id): conn.execute(f"DELETE FROM {table} WHERE id=?", (row_id,))
+    def rank_by_id(rows): return {row["id"]: i for i, row in enumerate(rows)}
+    def rrf_score(eid, *rankings, k=60): return 1.0
+    def user_scoped_vec_knn(*args, **kwargs): return []
+    def user_scoped_fts_search(conn, fts_table, owner_table, owner_alias, query, user_id, limit):
+        return conn.execute(f"SELECT * FROM {owner_table} WHERE user_id=? AND record_text LIKE ? LIMIT ?", (user_id, f"%{query}%", limit)).fetchall()
 from system.log import get_logger
 from system.userspace import current_user_id
 
@@ -112,6 +136,7 @@ class ExperienceStep:
     ok: bool
     error_type: str | None = None
     arg_keys: list[str] = field(default_factory=list)
+    args_preview: dict[str, str] = field(default_factory=dict)
 
 
 def record_experience(owner, goal: str, steps: list[dict], final_answer: str, verified_ok: bool, score: float, embedder=None) -> str | None:
@@ -122,14 +147,20 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
             ok=bool(s.get("ok")),
             error_type=s.get("error_type"),
             arg_keys=sorted((s.get("args") or {}).keys()),
+            args_preview={k: _sanitize(str(v), 120) for k, v in (s.get("args") or {}).items()},
         )
         for s in steps
     ]
     outcome = "ok" if verified_ok else ("partial" if any(s.ok for s in exp_steps) else "failed")
     step_text = ", ".join(f"{s.tool}({'+'.join(s.arg_keys) or '-'})[{'ok' if s.ok else s.error_type or 'fail'}]" for s in exp_steps)
+    args_text = "; ".join(
+        f"{s.tool} args " + json.dumps(s.args_preview, ensure_ascii=False, sort_keys=True)
+        for s in exp_steps if s.args_preview
+    )
     record_text = (
         f"Goal: {_sanitize(goal, 700)}\n"
         f"Steps: {step_text}\n"
+        f"Args: {_sanitize(args_text, 900)}\n"
         f"Outcome: {outcome}\n"
         f"Score: {float(score):.2f}\n"
         f"Result: {_sanitize(final_answer, 300)}"
@@ -245,3 +276,12 @@ def experience_context_for(query: str, limit: int = 3, embedder=None) -> str:
         blocks.append(f'<past_task outcome="{_attr(hit["outcome"])}" verifier_score="{float(hit["score"]):.2f}" recall_score="{hit["recall_score"]:.4f}">\n{body}\n</past_task>')
         remaining -= len(body)
     return "<experience_context>\n" + "\n\n".join(blocks) + "\n</experience_context>"
+
+
+def record_practice_experience(goal: str, steps: list[dict], final_answer: str = "practice workflow", verified_ok: bool = True, score: float = 1.0, embedder=None) -> str | None:
+    """Record an operator-provided practice workflow without booting chat.
+
+    This is used by ``practice.py`` to seed experience/master-plan promotion
+    while testing tiny routing/execution models such as Needle.
+    """
+    return record_experience(None, goal, steps, final_answer, verified_ok, score, embedder=embedder)

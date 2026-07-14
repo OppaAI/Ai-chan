@@ -284,3 +284,45 @@ flowchart TD
 - Tool functions should not read memory directly. The agent loop should retrieve memory and pass relevant context into the LLM.
 - Daily summaries should use both the daily chat-turn log and persistent memory snippets, then pin the factual summary as permanent memory.
 - Daily summaries should preserve important facts such as dates, deadlines, commitments, projects, events, losses, incidents, and goals. Mundane details should be downweighted unless they imply a pattern, risk, or follow-up.
+
+## Graph-First Agentic Executor (Current)
+
+Aiko now has two agentic execution paths:
+
+1. **Graph/master-plan executor** — the default first attempt when `AGENT_EXECUTOR_MODE=hybrid`. It matches the user task against known master-plan workflows, builds a small dependency graph, executes ready tool nodes in parallel, stores node outputs as compact result objects, and synthesizes a deterministic completion message without an LLM planning step.
+2. **ReAct fallback** — used when no graph matches in `hybrid` mode, or when `AGENT_EXECUTOR_MODE=react`. ReAct remains the exploration path for novel, modified, or ambiguous workflows. Successful ReAct traces are recorded to experience so they can be promoted into graph master plans later.
+
+```mermaid
+flowchart TD
+    AgenticInput[Agentic user task] --> Caps[Capability match]
+    Caps --> Mode{AGENT_EXECUTOR_MODE}
+    Mode -->|graph/hybrid| Match[skills.graph_agent.plan_from_master]
+    Match -->|matched| DAG[Execute PlanGraph DAG]
+    DAG --> Ready[Run ready independent nodes in parallel]
+    Ready --> Results[Tuple-like NodeResult objects]
+    Results --> NoLLM[Deterministic no-LLM synthesis]
+    NoLLM --> Exp[Record experience trace]
+    Match -->|no match + hybrid| React[ReAct loop once]
+    Match -->|no match + graph| Refuse[Clear no-master-plan message]
+    React --> Exp
+```
+
+The graph executor is intentionally conservative. It can be autonomous without an LLM **only for workflows whose intent, tool sequence, dependencies, and arguments can be matched or derived from saved master plans**. It is not a general reasoning sub-agent yet. A fully autonomous sub-agent layer would add a long-running worker abstraction around graph nodes: queue, lease/heartbeat, workspace/artifact boundaries, cancellation, retries, and permissions. Those workers can still be model-free if every node uses deterministic tools or a small classifier; they need an LLM only for novel planning, ambiguous argument extraction, or final narrative synthesis.
+
+`skills.graph_agent` can also be called through the agent tool-schema surface via `list_master_plans` and `run_master_plan`. This lets the ReAct fallback inspect or invoke graph workflows explicitly instead of only relying on the pre-ReAct graph-first gate.
+
+## Semantic Vector Cache
+
+Intent-routing examples are still authored as text in `cognition/router_prompts.json`, but their embedding matrix can now be cached on disk with `ROUTE_VECTOR_CACHE_ENABLED=1`. The cache is keyed by the examples, instruct string, embedding backend metadata, and `EMBED_DIMS`. This avoids re-embedding static route examples every cold boot while remaining safe when examples or embedding settings change.
+
+Graph master plans are currently matched by trigger/capability metadata, so there are no graph vectors to precompute yet. If graph matching becomes semantic, the same pattern should be used: stable JSON/YAML plan specs as the source of truth, plus generated vector-cache artifacts that are safe to delete and rebuild.
+
+## Machine-Readable Knowledge Format Guidance
+
+Skill and wiki markdown should stay readable for humans, but the first part of each file should be machine-regular:
+
+- YAML front matter for `id`, `summary`, `triggers`, `tools`, `capabilities`, `inputs`, `outputs`, and `safety` where applicable.
+- Short, action-oriented sections with stable headings such as `When to use`, `Inputs`, `Workflow`, `Tools`, `Outputs`, `Failure handling`, and `Promotion hints`.
+- Avoid burying required tool names or constraints inside prose-only paragraphs.
+
+Do **not** replace wiki/skill markdown with opaque vector blobs. Keep markdown as the trusted source, and treat vectors/caches as derived artifacts.

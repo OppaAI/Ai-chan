@@ -169,7 +169,7 @@ Lessons learned:
 - `core/tools.py` remains useful as a stable public facade even when implementations move into `core/toolkit/`.
 - The browser WebUI can share the TUI contract, but remote voice-device UX still needs polishing.
 - Environment-variable migrations need docs: `LLM_*` and `ROUTE_*` are now the current names for chat runtime/routing.
-- Aiko is still a single orchestrated agentic loop today; semantic routing, optional LLM routing, tools, and skills are components, not separate autonomous agents.
+- Aiko now has a graph-first master-plan executor for known workflows and a ReAct fallback for novel workflows. It still does not have a long-running autonomous sub-agent worker runtime with queues/leases/cancellation; graph nodes are lightweight tool tasks inside one orchestrated turn.
 
 ---
 
@@ -188,3 +188,12 @@ The core philosophy remains unchanged:
 > Simplicity over unnecessary complexity.
 >
 > Build for constrained hardware and everything else becomes easier.
+
+
+## Graph-first agentic executor update
+
+- Added a deterministic graph/master-plan executor for known workflows.
+- Added `AGENT_EXECUTOR_MODE=react|graph|hybrid`; hybrid tries graph first and falls back to ReAct once.
+- Experience is no longer prompt context by default; it is primarily a post-run trace for offline workflow promotion.
+- Added `practice.py` for seeding practiced workflows and promoting them into per-user master plans.
+- Added an on-disk semantic route-vector cache for static intent-routing examples.

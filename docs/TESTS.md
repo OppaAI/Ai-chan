@@ -307,11 +307,15 @@ Run before any phase suite.
 - [ ] Missing/corrupt `SKILL.md` files are reported gracefully and do not break unrelated skills.
 - [ ] Skill instructions do not override safety boundaries for filesystem paths, external actions, or final-answer honesty.
 
-### 2.5.3 Agentic routing and ReAct loop
+### 2.5.3 Agentic routing, graph executor, and ReAct fallback
 
 - [ ] Normal casual chat does not route to agent mode unnecessarily.
 - [ ] Research/planning/workspace/photo/repo tasks route to agent mode when appropriate.
 - [ ] `MAX_AGENT_ITER` stops runaway loops and produces a clear partial/failure final answer.
+- [ ] Graph-mode known workflows run without an LLM planning call and return compact node evidence.
+- [ ] `list_master_plans` and `run_master_plan` appear in `tool_schemas()` and return structured observations.
+- [ ] Hybrid mode falls back to ReAct exactly once when no graph master plan matches.
+- [ ] ReAct fallback records steps, tool names, sanitized args, and outcome into experience for later promotion.
 - [ ] Agent memory recall is bounded by `AGENT_MEMORY_RECALL_LIMIT` and does not drown tool evidence.
 - [ ] Final-answer verification catches unsupported claims, failed tool actions, and missing artifact paths.
 - [ ] If verification fails, repair attempts are bounded by `AGENT_MAX_FINAL_REPAIRS` and disclose unresolved limitations.
@@ -541,3 +545,12 @@ Run after any significant change to confirm nothing regressed.
 - [ ] `--text` and `--debug` flags still work
 - [ ] `docker compose down && docker compose up -d` → SearXNG recovers cleanly (Qdrant no longer required)
 - [ ] `uv sync` completes without dependency conflicts after any `pyproject.toml` change
+
+
+### 2.5.11 Route-vector and graph-plan cache checks
+
+- [ ] With `ROUTE_VECTOR_CACHE_ENABLED=1`, first boot creates per-user route vector cache files under `ROUTE_VECTOR_CACHE_DIR`.
+- [ ] Second boot reuses cached route vectors and does not re-embed unchanged router examples.
+- [ ] Editing `cognition/router_prompts.json`, changing the route instruct string, or changing `EMBED_DIMS` invalidates the old cache key.
+- [ ] Deleting route-vector cache files is safe; Aiko rebuilds them automatically.
+- [ ] Graph master plans remain source JSON/YAML/markdown data; any future graph vector cache is treated as rebuildable derived data.

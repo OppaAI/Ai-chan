@@ -185,8 +185,8 @@ Non-secret runtime settings live in category YAML files under `config/`:
 config/index.yaml       # ordered list of YAML files loaded at startup
 config/identity.yaml    # AI_NAME, USER_ID
 config/think.yaml       # core/think.py LLM endpoints, model names, sampling, token limits
-config/agentic.yaml     # core/agentic.py plus routing thresholds
-config/memorize.yaml    # core/memorize.py, embed, forget, experience, consolidation settings
+config/skills.yaml      # skills/agentic.py, graph executor, tool schemas, skill/wiki RAG budgets
+config/memory.yaml      # memory/memorize.py, embed, forget, experience, consolidation settings
 config/speak.yaml       # core/speak.py MioTTS and karaoke text settings
 config/listen.yaml      # core/listen.py ASR, VAD, speaker verification, barge-in
 config/web.yaml         # core/toolkit/researcher.py SearXNG URL and search limits

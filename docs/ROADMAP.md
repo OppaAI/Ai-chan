@@ -169,7 +169,8 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 |---|---|
 | ReAct-style task loop with tool dispatch | ✅ Done |
 | Semantic Intent Routing for fast delegation | ✅ Done |
-| Sub-agent spawning for parallel workflow | 🔲 Planned |
+| Graph-first master-plan executor with model-free DAG tool nodes | ✅ Done |
+| Autonomous sub-agent worker runtime with queues/leases/cancellation | 🔲 Planned |
 | Implement goal-based DAG HTN One-step LLM Agentic architecture | ✅ Done |
 | Persistent schedule jobs with reminder | ✅ Done |
 | Toolkit set Agentic-focused tool modules | ✅ Done |
@@ -190,7 +191,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Embedder | `fastembed` library | **Custom `core/embed.py` ONNX Harrier embedder** (fastembed only exposed MEAN/CLS pooling) |
 | Tools | Scattered functions | **Focused `core/toolkit/` modules: web, planning, scheduling, photo, architecture** |
 | Skills | N/A | **`skills/<id>/SKILL.md` workflow registry loaded by `core/skills.py`** |
-| Agentic facade | Direct calls | **`core/tools.py` compatibility facade + `core/agentic.py` ReAct loop** |
+| Agentic facade | Direct calls | **`core/tools.py` compatibility facade + graph-first executor + ReAct fallback loop** |
 
 ---
 
