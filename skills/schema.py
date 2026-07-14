@@ -458,8 +458,10 @@ def append_master_plan_from_experience(goal: str, steps: list[dict[str, Any]], *
                 existing = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(existing, list):
                     existing = []
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 existing = []
         existing.append(new_plan)
-        path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path = path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(path)
     return path
