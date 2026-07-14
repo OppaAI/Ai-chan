@@ -98,11 +98,18 @@ MEMORY_MIN_SCORE = float(os.getenv("MEMORY_MIN_SCORE", "0.0"))
 _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
 _AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
 _REASONING_SCALE = int(os.getenv("REASONING_SCALE", 3))
-# Route task-vs-chat turns semantically by default using the same embedding
-# model as memory/RAG. Set ROUTE_MODE=llm to let the local LLM classify
-# instead, or ROUTE_MODE=chat to disable autonomous routing.
 _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-_ROUTE_MODE = os.getenv("ROUTE_MODE", "semantic").strip().lower()
+# Route task-vs-chat turns semantically by default using the same embedding
+# model as memory/RAG.
+#
+# AGENTIC_MODE_ON gates whether the "agentic" label is even a candidate in
+# ternary routing. When off, the agentic label is dropped from scoring
+# before ranking, so the existing gap/threshold logic degenerates into a
+# plain localchat-vs-webchat decision — webchat routing keeps working
+# normally, only agentic is taken off the table. This is intentionally NOT
+# the same as ROUTE_ENABLED=0 (which forces localchat unconditionally for
+# everything).
+_AGENTIC_MODE_ON = os.getenv("AGENTIC_MODE_ON", "1").lower() in {"1", "true", "yes", "on"}
 
 # Three separate instruct strings, one per embedding context
 _ROUTE_INSTRUCT_BINARY = "Does this message ask someone to perform a task or action, or is it just conversation?"
@@ -421,7 +428,7 @@ class AikoThink:
         only owns the routing policy (thresholds, gap, LLM tie-break).
         """
     
-        if not _ROUTE_ENABLED or _ROUTE_MODE in {"0", "off", "false", "disabled"}:
+        if not _ROUTE_ENABLED:
             return "localchat"
     
         instruct = _ROUTE_INSTRUCT_TERNARY
@@ -429,7 +436,13 @@ class AikoThink:
         query_vec = embedder.embed_query(user_input, instruct=instruct)
         labels, example_vecs = self._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, instruct)
         scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
-    
+
+        if not _AGENTIC_MODE_ON:
+            # Agentic is off the table entirely — remove it before ranking
+            # so gap/threshold math is computed over the remaining labels
+            # only (effectively localchat vs webchat).
+            scores = {k: v for k, v in scores.items() if k != "agentic"}
+      
         agentic_score = scores.get("agentic", 0.0)
         webchat_score = scores.get("webchat", 0.0)
     
@@ -455,6 +468,8 @@ class AikoThink:
         # that isn't clearly agentic falls back to local chat.
         if (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold) and gap < _SEMANTIC_ROUTE_MIN_GAP:
             llm_label = self._classify_agent_intent(user_input)
+            if llm_label == "agentic" and not _AGENTIC_MODE_ON:
+                return "localchat"
             return "agentic" if llm_label == "agentic" else "localchat"
     
         return "localchat"
