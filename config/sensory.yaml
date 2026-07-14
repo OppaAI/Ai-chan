@@ -29,7 +29,7 @@ SPEAKER_NUM_THREADS: "1"  # CPU threads for speaker embedding extraction.
 BARGE_IN_THRESHOLD: "0.65"  # Speech probability threshold to interrupt TTS; range 0.0-1.0.
 BARGE_IN_CONFIRM_CHUNKS: "2"  # Consecutive chunks above threshold before barge-in fires.
 BARGE_IN_COOLDOWN_MS: "800"  # Cooldown in milliseconds before another barge-in event can fire.
-BARGE_IN_ALWAYS_ON: "0"  # Monitor barge-in outside TTS playback; options: 1/0, true/false, yes/no, on/off.
+BARGE_IN_ALWAYS_ON: "1"  # Monitor barge-in outside TTS playback; options: 1/0, true/false, yes/no, on/off.
 
 # Speak config
 #
