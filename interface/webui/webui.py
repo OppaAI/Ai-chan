@@ -203,6 +203,12 @@ class AikoWeb:
 
         self._start_servers()
 
+    def set_voice_backends(self, speak, listen) -> None:
+        """Inject speak/listen (called from _run_session after boot) so
+        _ws_handler can act on a browser-reported barge_in message."""
+        self._speak = speak
+        self._listen = listen
+    
     def set_memorize(self, memorize) -> None:
         """Inject the memory backend (called from _run_session after boot)."""
         self._memorize = memorize
@@ -385,7 +391,20 @@ class AikoWeb:
                             self._broadcast({"type": "voice", "status": "transcribing"})
                             if WEBUI_BROWSER_VAD_GATE and self._mic_active.is_set():
                                 self._audio_q.put(b"")  # end-of-utterance sentinel
-
+                                
+                    elif mtype == "barge_in":
+                        # Browser's client-side energy VAD detected speech
+                        # while TTS was playing. Browser already stopped its
+                        # own playback locally (zero round-trip) — this stops
+                        # backend generation/synthesis so it doesn't keep
+                        # producing audio that would just refill the (already
+                        # cleared) client queue, and unblocks listen.py's
+                        # wait_or_barge_in() so the next turn can start.
+                        if self._speak is not None:
+                            self._speak.stop()
+                        if self._listen is not None:
+                            self._listen.trigger_barge_in()
+        
         except Exception as e:
             log.exception("[aiko-web] error in WebSocket loop")
         finally:
