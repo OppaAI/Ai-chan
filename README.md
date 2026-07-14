@@ -153,8 +153,8 @@ flowchart TD
 | Embeddings | Harrier llama.cpp, `harrier-oss-v1-270m via llama.cpp server` |
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
 | Web search | local SearXNG instance through `toolkit/research.py` |
-| TTS | external MioTTS HTTP server |
-| ASR | SenseVoice via sherpa-onnx with Silero VAD |
+| TTS | MioTTS 0.4B via llama.cpp server, external MioCodec synthesizer server |
+| ASR | SenseVoice via sherpa-onnx with Silero VAD and ERes2Net Speaker verification |
 | Reflection publishing | optional GitHub REST API + Hugo markdown |
 | Agentic task mode | `skills/agentic.py` ReAct loop + `toolkit/tools.py` facade + `toolkit/` modules |
 | Skills | `skills/skillsets/*.md` workflow registry loaded by `skills/skills.py` |
@@ -258,7 +258,9 @@ Aiko-chan/
 | 1 | Soul — CLI, Ollama, mem0 + Qdrant, SearXNG | ✅ Done |
 | 1.5 | Stream — streaming pipeline, persona, first UI, test TTS models | ✅ Done |
 | 2 | Voice — SenseVoice ASR, Silero VAD, MioTTS, hands-free talk | ✅ Done |
-| 2.5 | Agent — tool registry, skill workflows, scheduled local tasks | ✅ Active |
+| 2.1 | Social — X, Threads, IG, Discord, Reddit, social media | 🔲 Planned |
+| 2.2 | Message — Email, Telegram, Discord, Slack, messaging services | 🔲 Planned |
+| 2.5 | Agent — tool registry, skill workflows, scheduled local tasks | ⏳ Active |
 | 3 | Face — VRM avatar, three-vrm, expressions, lip-sync | 🔲 Planned |
 | 4 | Presence — emotional state, mood, relationship progression | 🔲 Planned |
 | 5 | Mobile — React Native / Flutter, WAN, push notifications | 🔲 Planned |
