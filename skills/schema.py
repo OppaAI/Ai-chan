@@ -30,9 +30,21 @@ from system.userspace import current_user_id, user_state_dir
 
 log = get_logger(__name__)
 
+
 GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 GRAPH_MASTER_PLAN_PATH = os.getenv("GRAPH_MASTER_PLAN_PATH", "agentic/master_plans.json")
 GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
+
+# Kept in sync with agentic.py's AGENT_NOTE_MAX_CHARS so a note saved via the
+# graph executor can't end up longer than one saved via the ReAct path.
+AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "1500"))
+
+# Tools whose toolkit implementations accept an `embedder` kwarg for
+# semantic scoring. dispatch_tool() in agentic.py passes the shared Harrier
+# embedder for these; the graph executor previously never did, so any
+# RAG-style scoring inside these tools silently degraded to keyword
+# fallback when run through the graph path instead of ReAct.
+_EMBEDDER_AWARE_TOOLS = {"deep_search", "deep_research"}
 _TOOL_MAP_CACHE: dict[str, Callable[..., Any]] | None = None
 _TOOL_MAP_LOCK = threading.Lock()
 _MASTER_PLAN_WRITE_LOCK = threading.Lock()
@@ -143,7 +155,7 @@ def _default_master_plans() -> list[dict[str, Any]]:
             "triggers": ["search", "research", "look up", "find"],
             "requires_any": ["save", "note", "recommendation", "report", "summary"],
             "nodes": [
-                {"id": "search", "tool": "deep_search", "args": {"query": "$prompt", "limit": 5}},
+                {"id": "search", "tool": "deep_search", "args": {"query": "$prompt"}},
                 {"id": "save", "tool": "save_note", "depends_on": ["search"], "args": {"title": "$title", "content": "$result:search", "folder": "notes"}},
             ],
         },
@@ -295,12 +307,16 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     return mapping
 
 
-def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult]) -> NodeResult:
+def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult], embedder=None) -> NodeResult:
     tools = _tool_map()
     fn = tools.get(node.tool)
     args = _substitute(node.args, prompt, results)
     if fn is None:
         return NodeResult(node.id, node.tool, False, f"unknown graph tool: {node.tool}", args=args, error_type="unknown_tool")
+    if node.tool == "save_note":
+        args["content"] = str(args.get("content", ""))[:AGENT_NOTE_MAX_CHARS]
+    if node.tool in _EMBEDDER_AWARE_TOOLS:
+        args["embedder"] = embedder
     try:
         out = fn(**args)
         return NodeResult(node.id, node.tool, True, str(out), args=args)
@@ -308,7 +324,7 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult]) -> No
         return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error")
 
 
-def execute_graph(graph: PlanGraph) -> GraphRunResult:
+def execute_graph(graph: PlanGraph, embedder=None) -> GraphRunResult:
     pending = {node.id: node for node in graph.nodes}
     results: dict[str, NodeResult] = {}
     ordered: list[NodeResult] = []
@@ -332,12 +348,12 @@ def execute_graph(graph: PlanGraph) -> GraphRunResult:
                 pending.pop(node.id, None)
             if not runnable:
                 continue
-            future_map = {pool.submit(_run_node, node, graph.goal, results): node for node in runnable}
+            future_map = {pool.submit(_run_node, node, graph.goal, results, embedder): node for node in runnable}
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:
                     result = fut.result()
-                except Exception as exc:  # defensive; _run_node should catch
+                except Exception as exc:
                     result = NodeResult(node.id, node.tool, False, str(exc), error_type="execution_error")
                 results[node.id] = result
                 ordered.append(result)
@@ -360,11 +376,11 @@ def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -
     return "\n".join(lines)
 
 
-def run_schema_agent(user_input: str, cap_ids: list[str] | None = None) -> GraphRunResult | None:
+def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None) -> GraphRunResult | None:
     graph = plan_from_master(user_input, cap_ids=cap_ids)
     if graph is None:
         return None
-    return execute_graph(graph)
+    return execute_graph(graph, embedder=embedder)
 
 
 def list_master_plans_json() -> str:
@@ -389,9 +405,9 @@ def list_master_plans_json() -> str:
     return json.dumps({"master_plans": rows}, ensure_ascii=False, indent=2)
 
 
-def run_master_plan_json(task: str, cap_ids: list[str] | None = None) -> str:
+def run_master_plan_json(task: str, cap_ids: list[str] | None = None, embedder=None) -> str:
     """Run the graph executor and return a compact JSON observation."""
-    result = run_schema_agent(task, cap_ids=cap_ids)
+    result = run_schema_agent(task, cap_ids=cap_ids, embedder=embedder)
     if result is None:
         return json.dumps({
             "ok": False,
