@@ -87,8 +87,8 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Browser/WebUI microphone streaming into ASR/VAD pipeline | ✅ Done |
 | Staged TTS/ASR/VAD warmup during boot | ✅ Done |
 | Latency target: ~3s end-to-end on Jetson Orin Nano |  ✅ Done (*3-4s for short normal chat)| |
-| Wake word to activate system from Idle Mode |  🔲 Proposed |
-| Trigger phrase (on top of Speaker Verification) to increase security |  🔲 Proposed |
+| Wake word to activate system from Idle Mode | 🟡 Implemented — testing ongoing |
+| Trigger phrase (on top of Speaker Verification) to increase security | 🟡 Implemented — testing ongoing |
 
 ### Voice backend trial ledger
 
