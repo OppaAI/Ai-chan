@@ -40,7 +40,7 @@ Do **not** derive an encryption key from only the OAuth user id. User ids are no
 
 For a simple online tester tier, prefer encrypting the storage layer instead of encrypting individual files in application code:
 
-1. Put `AIKO_USER_STATE_ROOT` on an encrypted persistent volume.
+1. Put `USER_STATE_ROOT` on an encrypted persistent volume.
 2. Restrict permissions to the service account.
 3. Keep each user in a separate directory.
 4. Avoid writing secrets into workspace files.

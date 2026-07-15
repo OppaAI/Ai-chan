@@ -76,6 +76,21 @@ def normalize_user_id(provider: str | None, user_id: object) -> str:
     return f"{provider_part}_{user_part}"
 
 
+def _user_state_root_value() -> str:
+    """Return the configured root for per-user mutable state.
+
+    USER_STATE_ROOT is the canonical name. AIKO_USER_STATE_ROOT and the older
+    USER_SPACE_ROOT are accepted as compatibility aliases so deployments and
+    docs that used those names still point Aiko at the same per-user files.
+    """
+    return (
+        os.getenv("USER_STATE_ROOT")
+        or os.getenv("AIKO_USER_STATE_ROOT")
+        or os.getenv("USER_SPACE_ROOT")
+        or str(Path.home() / ".aiko")
+    )
+
+
 def user_state_dir(user_id: str | None = None) -> Path:
     """Root directory for user-private mutable state.
 
@@ -85,8 +100,7 @@ def user_state_dir(user_id: str | None = None) -> Path:
     it — callers doing existence checks (e.g. profile lookup) correctly
     see nothing there, and no stray folder is left on disk before login.
     """
-    root_value = os.getenv("USER_STATE_ROOT") or str(Path.home() / ".aiko")
-    root = Path(root_value).expanduser()
+    root = Path(_user_state_root_value()).expanduser()
     uid = user_id or current_user_id()
     uid = _SAFE_RE.sub("_", uid).strip("._-") or _DEFAULT_USER_ID
     path = root / uid
