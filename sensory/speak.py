@@ -371,9 +371,13 @@ class AikoSpeak:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        timeout = 60 if MIOTTS_BEST_OF_N_ENABLED else 30
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
+                if "audio" not in body:
+                    log.error(f"[speak] unexpected TTS response keys: {list(body.keys())}")
+                    return None
                 return base64.b64decode(body["audio"])
         except Exception as e:
             log.error(f"[speak] synthesis error: {e}")

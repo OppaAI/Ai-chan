@@ -673,10 +673,10 @@ _reg("final_answer", "Final answer.",
 
 # ── populate _TOOLS from _TOOL_DEFS ──────────────────────────────────────────
 
-for schema, handler in _TOOL_DEFS:
-    name = schema["function"]["name"]
-    _TOOLS[name] = (schema, handler)
-
+for _tool_schema, _tool_handler in _TOOL_DEFS:
+    _tool_name = _tool_schema["function"]["name"]
+    _TOOLS[_tool_name] = (_tool_schema, _tool_handler)
+    
 
 def _required_args_for(name: str) -> list[str]:
     entry = _TOOLS.get(name)
