@@ -36,7 +36,7 @@ BARGE_IN_ALWAYS_ON: "1"  # Monitor barge-in outside TTS playback; options: 1/0, 
 # transcript, since SenseVoice mangles "Aiko" unpredictably (not a normal
 # English word). Blank disables wake-word gating entirely — Aiko responds
 # to every utterance as before.
-WAKE_WORD: "hey aiko"  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
+WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
 WAKE_WORD_ALIASES: "hey iko|hey i"  # "|"-separated extra candidate phrases for observed ASR mishearings, e.g. "hey iko|hey eco|hey ecko".
 WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
 

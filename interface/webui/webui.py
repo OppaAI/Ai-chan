@@ -400,10 +400,16 @@ class AikoWeb:
                         # producing audio that would just refill the (already
                         # cleared) client queue, and unblocks listen.py's
                         # wait_or_barge_in() so the next turn can start.
-                        if self._speak is not None:
-                            self._speak.stop()
+                        #
+                        # trigger_barge_in() MUST fire before speak.stop()
+                        # so wait_or_barge_in() sees the event while
+                        # is_playing() is still True, returns True, and
+                        # listen.py clears the event — otherwise the stale
+                        # event prematurely cuts off the next turn's TTS.
                         if self._listen is not None:
                             self._listen.trigger_barge_in()
+                        if self._speak is not None:
+                            self._speak.stop()
         
         except Exception as e:
             log.exception("[aiko-web] error in WebSocket loop")
