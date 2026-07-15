@@ -45,13 +45,13 @@ For a simple online tester tier, prefer encrypting the storage layer instead of 
 3. Keep each user in a separate directory.
 4. Avoid writing secrets into workspace files.
 
-If the backend runs in Modal, the workspace is server-side unless you explicitly build a client upload/download feature. A browser app cannot silently read arbitrary files from a user's PC; users must upload files through a file picker, and Aiko can only access files that were uploaded to the backend workspace. To let a user take their workspace home, add an authenticated export endpoint that zips only `~/.aiko/<user_id>/workspace/` and streams it to the browser.
+If the backend runs in Modal, the workspace is server-side unless you explicitly build a client upload/download feature. A browser app cannot silently read arbitrary files from a user's PC; users must upload files through a file picker, and Aiko can only access files that were uploaded to the backend workspace. To let a user take their workspace home, add an authenticated export endpoint that zips only `<USER_SPACE_ROOT>/<user_id>/workspace/` and streams it to the browser.
 
 Per-file encryption can come later, but it complicates search, previews, scheduled jobs, and tool access because every tool must decrypt/re-encrypt correctly.
 
 ## Google Drive workspace direction
 
-No agentic-tool changes are required just to move Aiko's writable workspace later. The existing workspace tools already go through `WORKSPACE_ROOT`. When Google Drive/Gmail access is added, initialize or mount/sync the Drive-backed workspace during boot/warmup, then point `WORKSPACE_ROOT` at that mounted directory. Keep private runtime state such as `memory.db`, `schedule.json`, and `monthly_consolidation_state.jsonl` under `~/.aiko/<user_id>/` rather than in Drive unless you explicitly want those files synced.
+No agentic-tool changes are required just to move Aiko's writable workspace later. The existing workspace tools already go through `WORKSPACE_ROOT`. When Google Drive/Gmail access is added, initialize or mount/sync the Drive-backed workspace during boot/warmup, then point `WORKSPACE_ROOT` at that mounted directory. Keep private runtime state such as `memory.db`, `schedule.json`, and `monthly_consolidation_state.jsonl` under `<USER_SPACE_ROOT>/<user_id>/` rather than in Drive unless you explicitly want those files synced.
 
 ## Other per-user state to keep isolated
 
