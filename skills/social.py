@@ -13,6 +13,10 @@ scheduled publisher/drafter that:
   6. optionally posts an approved bundle to configured social providers.
 
 Posting is opt-in. By default the scheduler only creates drafts.
+
+Providers are registered in _PROVIDERS as (text, image_path) -> result dict
+callables, so adding a new platform means writing one _post_<provider>
+function and adding it to the registry; post_draft never needs to change.
 """
 
 from __future__ import annotations
@@ -30,7 +34,7 @@ import webbrowser
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
@@ -108,7 +112,7 @@ Pinned nightly memories and records:
 Choose Aiko's one weekly public memory postcard.
 """
 
-_SAFE_FALLBACK_POST = "This week I kept one small memory from the workshop: Aiko-chan is still becoming more than a chat loop, one reflection at a time. 🌸"
+_SAFE_FALLBACK_POST = "This week I kept one small memory from the workshop: Aiko-chan is still becoming more than a chat loop, one reflection at a time. \U0001f338"
 _SAFE_FALLBACK_IMAGE = "Aiko in a quiet cyberpunk room, looking at a glowing weekly memory postcard on a monitor, warm evening light, anime illustration, no text"
 
 
@@ -215,7 +219,7 @@ def _llm_select(rows: list[dict[str, Any]], window: WeekWindow) -> dict[str, str
 
     post_text = str(data.get("post_text") or _SAFE_FALLBACK_POST).strip()
     if len(post_text) > MAX_POST_CHARS:
-        post_text = post_text[:MAX_POST_CHARS - 1].rstrip() + "…"
+        post_text = post_text[:MAX_POST_CHARS - 1].rstrip() + "\u2026"
 
     return {
         "selected_date": str(data.get("selected_date") or window.display_end),
@@ -268,7 +272,7 @@ def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: d
         encoding="utf-8",
     )
     (draft_dir / "review.md").write_text(
-        f"# Weekly Social Draft — {window.display_start} to {window.display_end}\n\n"
+        f"# Weekly Social Draft \u2014 {window.display_start} to {window.display_end}\n\n"
         f"## Draft post\n\n{choice['post_text']}\n\n"
         f"## Image\n\n{'image.png' if image_generated else 'No image generated.'}\n\n"
         f"## Review checklist\n\n"
@@ -604,21 +608,155 @@ def _post_threads_with_image_upload(text: str, image_path: Path | None, fallback
     return result
 
 
+# ── Bluesky (AT Protocol) ────────────────────────────────────────────────────
+
+def _bluesky_config() -> tuple[str, str, str]:
+    handle = os.getenv("BLUESKY_HANDLE", "").strip()
+    app_password = os.getenv("BLUESKY_APP_PASSWORD", "").strip()
+    base = os.getenv("BLUESKY_API_BASE", "https://bsky.social").rstrip("/")
+    return handle, app_password, base
+
+
+def _post_bluesky(text: str, image_path: Path | None) -> dict[str, Any]:
+    handle, app_password, base = _bluesky_config()
+    if not handle or not app_password:
+        return {"ok": False, "provider": "bluesky", "error": "BLUESKY_HANDLE or BLUESKY_APP_PASSWORD not set"}
+
+    timeout = _int_env("BLUESKY_TIMEOUT", 30)
+    try:
+        session_resp = requests.post(
+            f"{base}/xrpc/com.atproto.server.createSession",
+            json={"identifier": handle, "password": app_password},
+            timeout=timeout,
+        )
+        session_resp.raise_for_status()
+        session = session_resp.json()
+    except Exception as e:
+        return {"ok": False, "provider": "bluesky", "error": f"auth failed: {e}"}
+
+    access_jwt = session.get("accessJwt")
+    did = session.get("did")
+    if not access_jwt or not did:
+        return {"ok": False, "provider": "bluesky", "error": "createSession missing accessJwt/did"}
+
+    embed = None
+    if image_path and image_path.exists():
+        try:
+            mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
+            blob_resp = requests.post(
+                f"{base}/xrpc/com.atproto.repo.uploadBlob",
+                headers={"Authorization": f"Bearer {access_jwt}", "Content-Type": mime},
+                data=image_path.read_bytes(),
+                timeout=timeout,
+            )
+            if 200 <= blob_resp.status_code < 300:
+                blob = blob_resp.json().get("blob")
+                if blob:
+                    embed = {"$type": "app.bsky.embed.images", "images": [{"alt": "", "image": blob}]}
+            else:
+                log.warning("Bluesky blob upload failed: %s %s", blob_resp.status_code, blob_resp.text[:300])
+        except Exception as e:
+            log.warning("Bluesky image upload failed: %s", e)
+
+    record: dict[str, Any] = {
+        "$type": "app.bsky.feed.post",
+        "text": text[:300],
+        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    if embed:
+        record["embed"] = embed
+
+    try:
+        resp = requests.post(
+            f"{base}/xrpc/com.atproto.repo.createRecord",
+            headers={"Authorization": f"Bearer {access_jwt}", "Content-Type": "application/json"},
+            json={"repo": did, "collection": "app.bsky.feed.post", "record": record},
+            timeout=timeout,
+        )
+        ok = 200 <= resp.status_code < 300
+        return {"ok": ok, "provider": "bluesky", "status_code": resp.status_code, "response": resp.text[:2000]}
+    except Exception as e:
+        return {"ok": False, "provider": "bluesky", "error": str(e)}
+
+
+# ── Mastodon ──────────────────────────────────────────────────────────────
+
+def _mastodon_config() -> tuple[str, str]:
+    token = os.getenv("MASTODON_ACCESS_TOKEN", "").strip()
+    base = os.getenv("MASTODON_API_BASE", "").strip().rstrip("/")
+    return token, base
+
+
+def _post_mastodon(text: str, image_path: Path | None) -> dict[str, Any]:
+    token, base = _mastodon_config()
+    if not token or not base:
+        return {"ok": False, "provider": "mastodon", "error": "MASTODON_ACCESS_TOKEN or MASTODON_API_BASE not set"}
+
+    timeout = _int_env("MASTODON_TIMEOUT", 30)
+    headers = {"Authorization": f"Bearer {token}"}
+    media_id = None
+
+    if image_path and image_path.exists():
+        try:
+            mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
+            with open(image_path, "rb") as f:
+                resp = requests.post(
+                    f"{base}/api/v2/media",
+                    headers=headers,
+                    files={"file": (image_path.name, f, mime)},
+                    timeout=timeout,
+                )
+            if 200 <= resp.status_code < 300:
+                media_id = resp.json().get("id")
+            else:
+                log.warning("Mastodon media upload failed: %s %s", resp.status_code, resp.text[:300])
+        except Exception as e:
+            log.warning("Mastodon media upload failed: %s", e)
+
+    form: list[tuple[str, str]] = [("status", text[:500])]
+    if media_id:
+        form.append(("media_ids[]", media_id))
+
+    try:
+        resp = requests.post(
+            f"{base}/api/v1/statuses",
+            headers={**headers, "Idempotency-Key": os.urandom(8).hex()},
+            data=form,
+            timeout=timeout,
+        )
+        ok = 200 <= resp.status_code < 300
+        return {"ok": ok, "provider": "mastodon", "status_code": resp.status_code, "response": resp.text[:2000]}
+    except Exception as e:
+        return {"ok": False, "provider": "mastodon", "error": str(e)}
+
+
+# ── provider registry ────────────────────────────────────────────────────────
+# Add a new platform by writing one _post_<provider>(text, image_path) -> dict
+# function above and registering it here. post_draft never needs to change.
+
+_PROVIDERS: dict[str, Callable[[str, Path | None], dict[str, Any]]] = {
+    "x": _post_x_via_aisa,
+    "threads": lambda text, image_path: _post_threads_with_image_upload(
+        text, image_path, os.getenv("WEEKLY_SOCIAL_IMAGE_URL", "").strip() or None
+    ),
+    "bluesky": _post_bluesky,
+    "mastodon": _post_mastodon,
+}
+
+
 def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Post an already-reviewed weekly draft to configured providers."""
     path = Path(draft_dir).resolve()
     text, image_path, meta = _read_draft(path)
     providers = providers or WEEKLY_PROVIDERS
-    public_image_url = os.getenv("WEEKLY_SOCIAL_IMAGE_URL", "").strip() or None
 
     results = []
     for provider in providers:
-        if provider == "x":
-            results.append(_post_x_via_aisa(text, image_path))
-        elif provider == "threads":
-            results.append(_post_threads_with_image_upload(text, image_path, public_image_url))
-        else:
+        handler = _PROVIDERS.get(provider)
+        if handler is None:
             results.append({"ok": False, "provider": provider, "error": "unsupported provider"})
+            continue
+        results.append(handler(text, image_path))
 
     posted = any(r.get("ok") for r in results)
     post_meta = {
