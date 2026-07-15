@@ -625,9 +625,7 @@ _reg("list_master_plans", "List graph/master-plan workflows available to the mod
     lambda args: schema.list_master_plans_json(),
     {})
 
-_reg("run_master_plan", "Run a saved graph/master-plan workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",
-    lambda args: schema.run_master_plan_json(args.get("task", ""), cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None),
-    {"task": {"type": "string", "description": "The task prompt to match against graph master plans."}, "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."}},
+_reg_no_handler("run_master_plan", "Run a saved graph/master-plan workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",    {"task": {"type": "string", "description": "The task prompt to match against graph master plans."}, "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."}},
     required=["task"])
 
 _reg("scan_photo_workspace", "Scan a workspace photo inbox for wildlife/nature/astro image files.",
@@ -768,6 +766,12 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
     if name == "deep_search":
         return deep_search(
             args.get("query", ""),
+            embedder=_owner_embedder(owner),
+        )
+    if name == "run_master_plan":
+        return schema.run_master_plan_json(
+            args.get("task", ""),
+            cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None,
             embedder=_owner_embedder(owner),
         )
     if name == "learn_knowledge":
@@ -1162,7 +1166,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # ReAct loop once; the normal experience recorder below then captures the
     # successful sequence for later promotion into the graph master plan.
     if AGENT_EXECUTOR_MODE in {"graph", "hybrid"}:
-        graph_result = schema.run_schema_agent(user_input, cap_ids=_matched_caps)
+        graph_result = schema.run_schema_agent(user_input, cap_ids=_matched_caps, embedder=_embedder)
         if graph_result is not None:
             _graph_ok = not any(not r.ok for r in graph_result.results)
             threading.Thread(
