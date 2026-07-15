@@ -6,7 +6,7 @@ OAuth is the source of identity; `persona/identity.md` remains Aiko's identity o
 ## Current implementation
 
 - OAuth sessions store a provider-scoped runtime id, such as `github_123456` or `patreon_987654321`, to avoid collisions between providers.
-- User-private state defaults to `~/.aiko/<user_id>/`:
+- User-private state defaults to `<USER_SPACE_ROOT>/<user_id>/`:
   - `user.md` for the user's editable bio/profile.
   - `memory.db` for that user's sqlite-vec memory store.
   - `monthly_consolidation_state.jsonl` for that user's monthly consolidation state.
@@ -20,7 +20,7 @@ OAuth is the source of identity; `persona/identity.md` remains Aiko's identity o
   - `MONTHLY_CONSOLIDATION_STATE_PATH`
   - `SCHEDULE_PATH`
   - `WORKSPACE_ROOT`
-  - `AIKO_USER_STATE_ROOT`
+  - `USER_STATE_ROOT` (canonical), plus compatibility aliases `AIKO_USER_STATE_ROOT` and `USER_SPACE_ROOT`
 
 ## sqlite-vec per user
 
@@ -34,7 +34,7 @@ Do **not** derive an encryption key from only the OAuth user id. User ids are no
 - public context: `provider:user_id`
 - output: per-user encryption key
 
-`sqlite-vec` itself does not provide encryption with a normal SQLite `PRAGMA`. Aiko now has an optional SQLCipher hook for the memory DB: set `AIKO_SQLITE_ENCRYPTION=1`, install a SQLCipher-capable Python driver such as `pysqlcipher3`, and set `AIKO_DATA_KEY_SECRET` in `.env`, Modal secrets, or another secret manager. Aiko derives a per-user SQLCipher raw key from the server secret plus provider-scoped user id. This keeps latency low because encryption happens at SQLite page I/O, not per vector operation. If SQLCipher is not available in the deployment image, keep using OS/disk encryption, strict filesystem permissions, and per-user files/directories until the image is upgraded.
+`sqlite-vec` itself does not provide encryption with a normal SQLite `PRAGMA`. Aiko now has an optional SQLCipher hook for the memory DB: setQLITE_ENCRYPTION=1`, install a SQLCipher-capable Python driver such as `pysqlcipher3`, and set `AIKO_DATA_KEY_SECRET` in `.env`, Modal secrets, or another secret manager. Aiko derives a per-user SQLCipher raw key from the server secret plus provider-scoped user id. This keeps latency low because encryption happens at SQLite page I/O, not per vector operation. If SQLCipher is not available in the deployment image, keep using OS/disk encryption, strict filesystem permissions, and per-user files/directories until the image is upgraded.
 
 ## Workspace encryption
 
