@@ -339,9 +339,13 @@ def _fetch_agentic_only_context(user_input: str, embedder, query_vector: np.ndar
     # _enforce_agentic_context_budget never reads (it only consumes the 5
     # budget-block keys: wiki, knowledge, experience, agentic_policy, skill).
     score_keys = [k for k in results if k != "wiki_knowledge"]
+    if not AGENT_INCLUDE_EXPERIENCE_CONTEXT:
+        score_keys = [k for k in score_keys if k != "experience"]
     score_texts = [results[k] for k in score_keys]
     score_values = reason.batch_block_relevance_scores(embedder, user_input, score_texts, query_vector=query_vector)
     scores = dict(zip(score_keys, score_values))
+    if not AGENT_INCLUDE_EXPERIENCE_CONTEXT:
+        scores["experience"] = 0.0
     results["_scores"] = scores
     return results
 
@@ -357,18 +361,10 @@ AGENT_HISTORY_ALWAYS_KEEP_RECENT = int(os.getenv("AGENT_HISTORY_ALWAYS_KEEP_RECE
 # turn just to keep 8, re-paying the embed cost for ~16 already-dropped
 # pairs on EVERY single turn. Keyed by truncated content; capped to bound
 # memory across a long session (overflow just forces a one-time re-embed).
-_history_embed_cache: dict[str, np.ndarray] = {}
+_history_embed_cache: "OrderedDict[str, np.ndarray]" = OrderedDict()
 _HISTORY_EMBED_CACHE_MAX = 512
 
 def _history_relevance_scores(embedder, user_input: str, history_texts: list[str], query_vector: np.ndarray | None) -> list[float]:
-    """Score candidate history messages against the current query, embedding
-    only NEW messages and serving prior ones from _history_embed_cache.
-
-    Mirrors reason.batch_block_relevance_scores' default-instruct path but
-    avoids re-embedding the same old turns every turn. If the batch embed
-    fails, falls back to the original full-rescore path for this one call
-    (no caching) rather than risk a dimension mismatch from a partial cache.
-    """
     truncated = [t[:1500] for t in history_texts]
     to_embed = [t for t in truncated if t not in _history_embed_cache]
     if to_embed:
@@ -376,10 +372,16 @@ def _history_relevance_scores(embedder, user_input: str, history_texts: list[str
         if new_vecs is not None and new_vecs.shape[0] == len(to_embed):
             for t, v in zip(to_embed, new_vecs):
                 _history_embed_cache[t] = np.asarray(v, dtype=np.float32)
-            if len(_history_embed_cache) > _HISTORY_EMBED_CACHE_MAX:
-                _history_embed_cache.clear()
+                _history_embed_cache.move_to_end(t)
+            while len(_history_embed_cache) > _HISTORY_EMBED_CACHE_MAX:
+                _history_embed_cache.popitem(last=False)  # evict oldest, not everything
         else:
             return reason.batch_block_relevance_scores(embedder, user_input, history_texts, query_vector=query_vector)
+    # Mark cache hits as recently used too, so eviction stays LRU rather than
+    # pure insertion-order FIFO.
+    for t in truncated:
+        if t in _history_embed_cache:
+            _history_embed_cache.move_to_end(t)
     b_vecs = np.asarray([_history_embed_cache[t] for t in truncated], dtype=np.float32)
     if query_vector is not None:
         q_vec = np.asarray(query_vector, dtype=np.float32)
@@ -1169,40 +1171,102 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
         graph_result = schema.run_schema_agent(user_input, cap_ids=_matched_caps, embedder=_embedder)
         if graph_result is not None:
             _graph_ok = not any(not r.ok for r in graph_result.results)
+
+            # Build a TaskState from the graph's node results so the SAME
+            # final-answer verifier used by ReAct also scrutinizes graph-
+            # executed answers. Previously the graph path never called
+            # _verify_final_answer at all, so a node-level failure or an
+            # answer that quietly omitted a required disclosure could reach
+            # the user with zero scrutiny, unlike every ReAct answer.
+            graph_state = TaskState(goal=user_input)
+            for r in graph_result.results:
+                graph_state.record(ToolResult(
+                    ok=r.ok, tool=r.tool, args=r.args, content=r.content,
+                    error_type=r.error_type, retryable=False, attempts=1,
+                ))
+
+            graph_verdict: VerificationResult | None = None
+            if AGENT_VERIFY_FINAL:
+                graph_verdict = _verify_final_answer(owner, user_input, graph_result.final_answer, graph_state)
+
+            graph_trustworthy = _graph_ok and (graph_verdict is None or graph_verdict.ok)
+
+            if graph_trustworthy:
+                threading.Thread(
+                    target=experience.record_experience,
+                    args=(owner, user_input, graph_result.steps, graph_result.final_answer),
+                    kwargs=dict(verified_ok=True, score=graph_verdict.score if graph_verdict else 1.0, embedder=_embedder),
+                    daemon=True,
+                ).start()
+                graph_payload = {
+                    "id": graph_result.graph.id,
+                    "name": graph_result.graph.name,
+                    "goal": graph_result.graph.goal,
+                    "source": graph_result.graph.source,
+                    "nodes": [n.__dict__ for n in graph_result.graph.nodes],
+                }
+                node_payload = [r.__dict__ for r in graph_result.results]
+                owner.last_prompt_debug = {
+                    "mode": "agentic_graph",
+                    "matched_capabilities": _matched_caps,
+                    "graph": graph_payload,
+                    "node_results": node_payload,
+                }
+                owner.last_usage = {
+                    "prompt_messages": [{"role": "user", "content": user_input}],
+                    "completion_text": graph_result.final_answer,
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                    "total_tokens": None,
+                }
+                owner._emit(graph_result.final_answer, token_callback=token_callback)
+                with owner._history_lock:
+                    owner._history.append({"role": "user", "content": user_input})
+                    owner._history.append({"role": "assistant", "content": graph_result.final_answer})
+                owner._store_async(user_input, graph_result.final_answer)
+                return graph_result.final_answer
+
+            # Graph produced an untrustworthy result (a node failed, and/or
+            # the verifier rejected it). Record it as a failed/partial
+            # experience regardless of what happens next, so this graph
+            # template stops getting reinforced by a result nobody actually
+            # trusted.
+            log.warning(
+                "[agentic] graph result untrustworthy (nodes_ok=%s, verified=%s); "
+                "executor_mode=%s",
+                _graph_ok, graph_verdict.ok if graph_verdict else None, AGENT_EXECUTOR_MODE,
+            )
             threading.Thread(
                 target=experience.record_experience,
                 args=(owner, user_input, graph_result.steps, graph_result.final_answer),
-                kwargs=dict(verified_ok=_graph_ok, score=1.0 if _graph_ok else 0.0, embedder=_embedder),
+                kwargs=dict(verified_ok=False, score=graph_verdict.score if graph_verdict else 0.0, embedder=_embedder),
                 daemon=True,
             ).start()
-            graph_payload = {
-                "id": graph_result.graph.id,
-                "name": graph_result.graph.name,
-                "goal": graph_result.graph.goal,
-                "source": graph_result.graph.source,
-                "nodes": [n.__dict__ for n in graph_result.graph.nodes],
-            }
-            node_payload = [r.__dict__ for r in graph_result.results]
-            owner.last_prompt_debug = {
-                "mode": "agentic_graph",
-                "matched_capabilities": _matched_caps,
-                "graph": graph_payload,
-                "node_results": node_payload,
-            }
-            owner.last_usage = {
-                "prompt_messages": [{"role": "user", "content": user_input}],
-                "completion_text": graph_result.final_answer,
-                "prompt_tokens": None,
-                "completion_tokens": None,
-                "total_tokens": None,
-            }
-            owner._emit(graph_result.final_answer, token_callback=token_callback)
-            with owner._history_lock:
-                owner._history.append({"role": "user", "content": user_input})
-                owner._history.append({"role": "assistant", "content": graph_result.final_answer})
-            owner._store_async(user_input, graph_result.final_answer)
-            return graph_result.final_answer
-        if AGENT_EXECUTOR_MODE == "graph":
+
+            if AGENT_EXECUTOR_MODE == "graph":
+                # No ReAct fallback allowed in pure graph mode; surface the
+                # graph's own (already failure-disclosing) text as before.
+                final_text = graph_result.final_answer
+                owner.last_usage = {
+                    "prompt_messages": [{"role": "user", "content": user_input}],
+                    "completion_text": final_text,
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                    "total_tokens": None,
+                }
+                owner._emit(final_text, token_callback=token_callback)
+                with owner._history_lock:
+                    owner._history.append({"role": "user", "content": user_input})
+                    owner._history.append({"role": "assistant", "content": final_text})
+                owner._store_async(user_input, final_text)
+                return final_text
+            # else: AGENT_EXECUTOR_MODE == "hybrid" — fall through to the
+            # ReAct loop below instead of trusting a graph result that
+            # failed a node or failed verification. This is the actual
+            # "hybrid" fallback the docstring/synthesized text promised but
+            # the old code never performed.
+
+        if graph_result is None and AGENT_EXECUTOR_MODE == "graph":
             final_text = (
                 "I could not match this task to a saved master-plan workflow, "
                 "and AGENT_EXECUTOR_MODE=graph disables the ReAct fallback. "
