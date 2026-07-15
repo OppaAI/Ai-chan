@@ -105,6 +105,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 ---
 
 ## Phase 2.1 — Social 🔲
+![Phase 2.1](../assets/phase-2.1.png)
 
 *Let Aiko introduce herself carefully. Social posting starts supervised, low-volume, and platform-aware before any autonomous public presence.*
 
@@ -140,6 +141,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 ---
 
 ## Phase 2.2 — Message 🔲
+![Phase 2.2](../assets/phase-2.2.png)
 
 *Let trusted people message Aiko through everyday apps without exposing her core runtime directly to the internet.*
 
