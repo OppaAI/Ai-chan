@@ -12,6 +12,9 @@ Aiko's speech-to-text input layer.
   - Optionally verifies the speaker against one enrolled voice embedding
     (sherpa-onnx SpeakerEmbeddingExtractor) on the same buffered audio, run
     in parallel with transcription — see SPEAKER_VERIFY_ENABLED below
+  - Optionally gates responses behind a wake word ("Hey Aiko") and/or a
+    trigger phrase said alongside speaker verification ("Here is Oppa") —
+    see WAKE_WORD / TRIGGER_PHRASE below
   - Exposes listen() (blocking) and listen_async() (callback) for UI
   - Staged init: load_asr() → load_vad() → load_speaker_id() → join_warmup()
     for granular boot progress reporting via wakeup.py
@@ -20,9 +23,11 @@ Aiko's speech-to-text input layer.
     detected during TTS playback, enabling speak.wait_or_barge_in()
 
 Dependencies:
-    pip install sherpa-onnx numpy silero-vad scipy huggingface_hub
+    pip install sherpa-onnx numpy silero-vad scipy huggingface_hub rapidfuzz
     Model: auto-downloaded to HF cache on first use (see ASR_MODEL in .env)
     parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
+    rapidfuzz is optional — falls back to stdlib difflib if not installed,
+    just slower.
 
 Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     1. Download a speaker embedding model (.onnx) from
@@ -31,6 +36,28 @@ Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     2. Set SPEAKER_MODEL_PATH in .env to point at it
     3. Enroll your voice: python -m util.enroll_speak
     4. Set SPEAKER_VERIFY_ENABLED=1 in .env
+
+Wake word / trigger phrase (optional — see config/listen.yaml):
+    WAKE_WORD ("hey aiko" by default off / "" disables): SenseVoice mangles
+    "Aiko" unpredictably since it's not a normal English word, so matching is
+    fuzzy (rapidfuzz ratio) against the leading words of the transcript, not
+    an exact substring check. WAKE_WORD_ALIASES lets you hardcode observed
+    mishearings ("hey iko|hey eco|hey ecko") as extra candidates.
+
+    TRIGGER_PHRASE ("here is oppa" by default off / "" disables) only takes
+    effect when SPEAKER_VERIFY_ENABLED=1. It can follow the wake word
+    ("Hey Aiko here is Oppa ...") or stand alone if WAKE_WORD is unset. When
+    TRIGGER_REQUIRE_SPEAKER_MATCH=1 (default), the phrase alone isn't
+    enough — the cosine-similarity speaker check on that same utterance
+    must also pass.
+
+    Once woken/triggered, Aiko stays "active" (no phrase required) until
+    ACTIVATION_TIMEOUT_S seconds pass with no further utterance, at which
+    point the session goes back to sleep and the configured phrase(s) are
+    required again. Use AikoListen.is_active() to check this from other
+    subsystems (e.g. suppress proactive/unsolicited behavior while asleep),
+    and AikoListen.sleep_now() to force it inactive (e.g. an explicit
+    "go to sleep" command).
 """
 from __future__ import annotations
 
@@ -53,6 +80,12 @@ import threading
 import time
 import torch
 import warnings
+
+try:
+    from rapidfuzz import fuzz as _fuzz
+except ImportError:
+    _fuzz = None
+    import difflib as _difflib
 
 warnings.filterwarnings("ignore")
 logging.getLogger("sherpa_onnx").setLevel(logging.ERROR)
@@ -106,6 +139,23 @@ SPEAKER_MODEL_PATH       = os.getenv("SPEAKER_MODEL_PATH", "")            # path
 SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
 SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 
+# ── wake word / trigger phrase config ────────────────────────────────────────
+# WAKE_WORD: "" disables wake-word gating entirely (Aiko responds to every
+#   utterance, as before). When set, ASR is unreliable on "Aiko" (not a
+#   normal English word) so matching is fuzzy, not exact-substring.
+# TRIGGER_PHRASE: only takes effect when SPEAKER_VERIFY_ENABLED is also on.
+#   "" disables it. Can be said standalone or right after the wake word.
+
+WAKE_WORD             = os.getenv("WAKE_WORD", "").strip().lower()
+WAKE_WORD_ALIASES     = [w.strip().lower() for w in os.getenv("WAKE_WORD_ALIASES", "").split("|") if w.strip()]
+WAKE_FUZZY_THRESHOLD  = float(os.getenv("WAKE_FUZZY_THRESHOLD", "70"))
+
+TRIGGER_PHRASE                = os.getenv("TRIGGER_PHRASE", "").strip().lower()
+TRIGGER_FUZZY_THRESHOLD       = float(os.getenv("TRIGGER_FUZZY_THRESHOLD", "70"))
+TRIGGER_REQUIRE_SPEAKER_MATCH = os.getenv("TRIGGER_REQUIRE_SPEAKER_MATCH", "1").lower() in {"1", "true", "yes", "on"}
+
+ACTIVATION_TIMEOUT_S = float(os.getenv("ACTIVATION_TIMEOUT_S", "30"))
+
 _CHUNK_SAMPLES_VAD = 512                                             # at 16 kHz, ~32 ms
 _MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / CHUNK_DURATION_MS)
 
@@ -146,12 +196,55 @@ def _load_sense_voice_recognizer() -> sherpa_onnx.OfflineRecognizer:
     )
 
 
+# ── wake word / trigger phrase helpers ───────────────────────────────────────
+
+def _ratio(a: str, b: str) -> float:
+    """Fuzzy string similarity, 0-100. rapidfuzz if available, else difflib."""
+    if _fuzz is not None:
+        return _fuzz.ratio(a, b)
+    return _difflib.SequenceMatcher(None, a, b).ratio() * 100.0
+
+
+def _strip_prefix_phrase(text: str, candidates: list[str], threshold: float) -> tuple[bool, str]:
+    """
+    Fuzzy-match any of `candidates` against the leading words of `text` and,
+    on a hit, strip the matched prefix off. ASR is unreliable on words like
+    "Aiko" (not standard English), so this checks a small window of
+    word-counts around each candidate's length rather than requiring an
+    exact substring. Only the front of the utterance is checked — wake
+    words / trigger phrases are always said first, never buried mid-sentence.
+
+    Returns (matched, remainder_text). remainder_text == text unchanged if
+    no match was found.
+    """
+    words = text.split()
+    if not words or not candidates:
+        return False, text
+
+    best_score, best_end = 0.0, 0
+    for phrase in candidates:
+        phrase_words = phrase.split()
+        n = len(phrase_words)
+        if n == 0:
+            continue
+        for span in range(max(1, n - 1), min(len(words), n + 2) + 1):
+            window = " ".join(words[:span])
+            score = _ratio(window, phrase)
+            if score > best_score:
+                best_score, best_end = score, span
+
+    if best_score >= threshold:
+        return True, " ".join(words[best_end:]).strip()
+    return False, text
+
+
 # ── listen ────────────────────────────────────────────────────────────────────
 
 class AikoListen:
     """
     Microphone capture + SenseVoice ASR transcription (+ optional speaker
-    verification against one enrolled voice).
+    verification against one enrolled voice, + optional wake word / trigger
+    phrase gating).
     Uses parec (PulseAudio) for mic capture — no PortAudio/sounddevice.
     Silero VAD gates recording for robust, noise-resilient speech detection,
     for every audio source (local mic and WebUI alike).
@@ -174,6 +267,10 @@ class AikoListen:
     Barge-in monitor (call after join_warmup):
         listen.start_barge_in_monitor()
         Pauses automatically while _record() is active to avoid mic conflicts.
+
+    Wake word / trigger phrase gating (see module docstring for config):
+        listen.is_active()   — True if currently awake/triggered
+        listen.sleep_now()   — force back to asleep (e.g. explicit command)
     """
 
     def __init__(self) -> None:
@@ -195,6 +292,11 @@ class AikoListen:
         self._speaker_extractor: sherpa_onnx.SpeakerEmbeddingExtractor | None = None
         self._enrolled_embedding: np.ndarray | None = None
         self._speaker_lock = threading.Lock()
+
+        # wake word / trigger phrase activation session — 0 / expired means
+        # "asleep", i.e. the configured phrase(s) must be said again.
+        self._activation_lock = threading.Lock()
+        self._active_until: float = 0.0
 
     # ── staged init ───────────────────────────────────────────────────────────
 
@@ -279,6 +381,92 @@ class AikoListen:
         denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1e-8
         score = float(np.dot(a, b) / denom)
         return score >= SPEAKER_VERIFY_THRESHOLD, score
+
+    # ── wake word / trigger phrase activation gate ───────────────────────────
+
+    def gate_enabled(self) -> bool:
+        """True if either wake word or (speaker-verified) trigger phrase
+        gating is configured. Useful for UI to show a sleep/wake indicator
+        only when the feature is actually in use."""
+        return bool(WAKE_WORD) or (bool(TRIGGER_PHRASE) and SPEAKER_VERIFY_ENABLED)
+
+    def is_active(self) -> bool:
+        """
+        True if Aiko is currently awake/triggered (no phrase currently
+        required). Always True if gating isn't configured. Other subsystems
+        — e.g. proactive/unsolicited engagement — should check this before
+        acting, since once the session idles out, proactive behavior should
+        stay quiet until the wake word / trigger phrase is said again.
+        """
+        if not self.gate_enabled():
+            return True
+        with self._activation_lock:
+            return self._active_until > time.monotonic()
+
+    def sleep_now(self) -> None:
+        """Force the activation session inactive immediately — e.g. for an
+        explicit 'go to sleep' voice command."""
+        with self._activation_lock:
+            self._active_until = 0.0
+
+    def _extend_activation(self) -> None:
+        with self._activation_lock:
+            self._active_until = time.monotonic() + ACTIVATION_TIMEOUT_S
+
+    def _apply_activation_gate(self, text: str, verified: bool | None) -> tuple[str | None, dict]:
+        """
+        Enforce wake-word / trigger-phrase gating on a freshly transcribed
+        utterance.
+
+        Returns (command_text, gate_info):
+          - command_text is None            → gate failed; caller must
+            silently drop the utterance (no response, no side effects)
+          - command_text is text w/ any matched wake word / trigger phrase
+            prefix stripped off (unchanged if gating isn't configured, or
+            the session was already active so no phrase check was needed)
+
+        gate_info = {"woke": bool|None, "triggered": bool|None}:
+          None means that particular gate wasn't configured / not evaluated
+          this call (e.g. session was already active, or that feature is
+          off). Useful for logging / UI state.
+        """
+        require_wake    = bool(WAKE_WORD)
+        require_trigger = bool(TRIGGER_PHRASE) and SPEAKER_VERIFY_ENABLED
+        gate_info = {"woke": None, "triggered": None}
+
+        if not require_wake and not require_trigger:
+            return text, gate_info
+
+        if self.is_active():
+            # already awake/triggered — no phrase needed, just keep the
+            # idle clock from expiring
+            self._extend_activation()
+            return text, gate_info
+
+        remainder = text
+
+        if require_wake:
+            matched, remainder = _strip_prefix_phrase(
+                remainder, [WAKE_WORD, *WAKE_WORD_ALIASES], WAKE_FUZZY_THRESHOLD
+            )
+            gate_info["woke"] = matched
+            if not matched:
+                return None, gate_info
+
+        if require_trigger:
+            matched, remainder = _strip_prefix_phrase(
+                remainder, [TRIGGER_PHRASE], TRIGGER_FUZZY_THRESHOLD
+            )
+            gate_info["triggered"] = matched
+            if not matched:
+                return None, gate_info
+            if TRIGGER_REQUIRE_SPEAKER_MATCH and not verified:
+                # phrase alone isn't enough — the voiceprint on this same
+                # utterance must also match the enrolled speaker
+                return None, gate_info
+
+        self._extend_activation()
+        return remainder.strip(), gate_info
 
     # ── barge-in monitor ──────────────────────────────────────────────────────
 
@@ -368,6 +556,16 @@ class AikoListen:
         Verification never blocks or fails transcription — it's metadata
         attached alongside the text, not a gate in front of it.
 
+        info additionally carries "woke" and "triggered" (bool|None each):
+          - None means that gate wasn't configured / not evaluated this call
+            (e.g. the session was already active, so no phrase check ran)
+          - If wake word and/or trigger phrase gating IS configured and the
+            required phrase(s) were not detected, this method returns
+            ("", info) — same shape as "no speech detected" — so callers
+            that already treat empty text as "nothing to do" handle this
+            for free. Any matched wake word / trigger phrase prefix is
+            stripped from the returned text.
+
         chunk_source: optional callable(bytes_per_chunk) -> bytes | None,
             forwarded to _record(). See _record() docstring. None (default)
             preserves the existing local-mic (parec) behavior.
@@ -404,6 +602,8 @@ class AikoListen:
             return "", {
                 "verified": None,
                 "speaker_score": None,
+                "woke": None,
+                "triggered": None,
                 "listen_started_at": listen_started_at,
                 "recording_stopped_at": recording_stopped_at,
             }
@@ -413,6 +613,8 @@ class AikoListen:
         info = {
             "verified": None,
             "speaker_score": None,
+            "woke": None,
+            "triggered": None,
             "listen_started_at": listen_started_at,
             "recording_stopped_at": recording_stopped_at,
         }
@@ -431,8 +633,14 @@ class AikoListen:
         else:
             text = self._transcribe(audio)
 
+        gated_text, gate_info = self._apply_activation_gate(text, info.get("verified"))
+        info["woke"]      = gate_info["woke"]
+        info["triggered"] = gate_info["triggered"]
+
         _cb(status_callback, "__IDLE__")
-        return text, info
+        if gated_text is None:
+            return "", info
+        return gated_text, info
 
     def listen_async(self, on_result, status_callback=None) -> threading.Thread:
         """on_result receives (text, info) — same shape as listen()'s return."""
