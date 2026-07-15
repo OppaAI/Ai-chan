@@ -1,8 +1,8 @@
 # Listen config
 #
 # Settings for sensory/listen.py.
-# Controls ASR model/provider, Silero VAD thresholds, barge-in, and speaker verification.
-
+# Controls ASR model/provider, Silero VAD thresholds, barge-in, speaker
+# verification, and wake word / trigger phrase activation gating.
 # -- ASR --
 ASR_DEVICE: "cuda"  # sherpa-onnx execution provider; options usually cpu or cuda.
 ASR_LANGUAGE: "auto"  # Transcription language; options: auto, en, ja, zh, ko, yue, nospeech.
@@ -31,22 +31,25 @@ BARGE_IN_CONFIRM_CHUNKS: "2"  # Consecutive chunks above threshold before barge-
 BARGE_IN_COOLDOWN_MS: "800"  # Cooldown in milliseconds before another barge-in event can fire.
 BARGE_IN_ALWAYS_ON: "1"  # Monitor barge-in outside TTS playback; options: 1/0, true/false, yes/no, on/off.
 
-# Speak config
-#
-# Settings for sensory/speak.py.
-# Controls MioTTS synthesis endpoint, voice preset, output device, and text pacing.
+# -- Wake word --
+# Fuzzy-matched (not exact substring) against the leading words of each
+# transcript, since SenseVoice mangles "Aiko" unpredictably (not a normal
+# English word). Blank disables wake-word gating entirely — Aiko responds
+# to every utterance as before.
+WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
+WAKE_WORD_ALIASES: ""  # "|"-separated extra candidate phrases for observed ASR mishearings, e.g. "hey iko|hey eco|hey ecko".
+WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
 
-# -- MioTTS --
-MIOTTS_API_URL: "http://localhost:8001"  # MioTTS synthesis API base URL.
-MIOTTS_MODEL: "MioTTS-0.4B-Q4_K_M"  # Display/model label for the TTS model served externally.
-MIOTTS_PRESET: "aiko_flat"  # Voice preset name registered in MioTTS; examples: jp_female, en_female, custom preset.
-MIOTTS_DEVICE: "-1"  # sounddevice output index; -1 means system default.
-MIOTTS_MAX_TOKENS: 300  # Max audio-codec tokens per synthesis call; caps how long a chunk (and any trailing artifact) can run.
-MIOTTS_TEMPERATURE: 0.8  # Sampling temperature for the TTS LLM; lower = more deterministic/stable delivery.
-MIOTTS_TOP_P: 1.0  # Nucleus sampling threshold; 1.0 = no truncation of the token distribution.
-MIOTTS_REPETITION_PENALTY: 1.15  # Penalizes repeated/held audio tokens; higher discourages drawn-out trailing vowels.
-MIOTTS_PRESENCE_PENALTY: 0.0  # Penalizes tokens already used anywhere in the output, regardless of frequency.
-MIOTTS_FREQUENCY_PENALTY: 0.0  # Penalizes tokens proportional to how often they've already appeared.
-MIOTTS_BEST_OF_N_ENABLED: false  # Generate multiple candidates and pick the best via ASR error-rate scoring.
-MIOTTS_BEST_OF_N: 2  # Number of candidates to generate per call when best-of-N is enabled.
-KARAOKE_TEXT: "0"  # Pace UI text by TTS audio; options: 1/0, true/false, yes/no, on/off.
+# -- Trigger phrase --
+# Only takes effect when SPEAKER_VERIFY_ENABLED is also "1". Can be said
+# standalone or right after the wake word, e.g. "Hey Aiko here is Oppa ...".
+# Blank disables trigger-phrase gating.
+TRIGGER_PHRASE: ""  # Phrase required (with speaker verification) to activate Aiko, e.g. "here is oppa". "" disables.
+TRIGGER_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a trigger-phrase hit.
+TRIGGER_REQUIRE_SPEAKER_MATCH: "1"  # Trigger phrase alone isn't enough — cosine-sim speaker check must also pass; options: 1/0, true/false, yes/no, on/off.
+
+# -- Activation session --
+# Once woken/triggered, Aiko stays "active" (no phrase required, proactive
+# behavior allowed) until this many seconds pass with no further utterance.
+# After that she goes back to sleep and requires the configured phrase(s) again.
+ACTIVATION_TIMEOUT_S: "30"  # Idle seconds before requiring wake word / trigger phrase again.
