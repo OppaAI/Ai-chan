@@ -79,7 +79,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Voice Activity Detection via dual energy VAD + Silero VAD | ✅ Done |
 | Interactive Talk mode — local/TUI hands-free conversation | ✅ Done |
 | Spoken command aliases in ASR mode | ✅ Done |
-| Interrupt handling / barge-in — speak over Aiko mid-response | 🟡 Implemented — testing ongoing |
+| Interrupt handling / barge-in — speak over Aiko mid-response | ✅ Done |
 | Optional owner voice verification via sherpa-onnx speaker embeddings | ✅ Done |
 | TTS runtime decision — MioTTS active; Kokoro/RealtimeTTS removed | ✅ Done |
 | MioTTS HTTP client + local sounddevice playback | ✅ Done (*OOM issue)|
@@ -87,8 +87,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Browser/WebUI microphone streaming into ASR/VAD pipeline | ✅ Done |
 | Staged TTS/ASR/VAD warmup during boot | ✅ Done |
 | Latency target: ~3s end-to-end on Jetson Orin Nano |  ✅ Done (*3-4s for short normal chat)| |
-| Wake word to activate system from Idle Mode | 🟡 Implemented — testing ongoing |
-| Trigger phrase (on top of Speaker Verification) to increase security | 🟡 Implemented — testing ongoing |
+| Wake word to activate system from Idle Mode | ✅ Done |
 
 ### Voice backend trial ledger
 
