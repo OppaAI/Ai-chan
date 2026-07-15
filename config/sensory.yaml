@@ -36,8 +36,8 @@ BARGE_IN_ALWAYS_ON: "1"  # Monitor barge-in outside TTS playback; options: 1/0, 
 # transcript, since SenseVoice mangles "Aiko" unpredictably (not a normal
 # English word). Blank disables wake-word gating entirely — Aiko responds
 # to every utterance as before.
-WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
-WAKE_WORD_ALIASES: "hey iko|hey i"  # "|"-separated extra candidate phrases for observed ASR mishearings, e.g. "hey iko|hey eco|hey ecko".
+WAKE_WORD: "hey there"  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
+WAKE_WORD_ALIASES: ""  # "|"-separated extra candidate phrases for observed ASR mishearings, e.g. "hey iko|hey eco|hey ecko".
 WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
 
 # -- Trigger phrase --
@@ -52,7 +52,7 @@ TRIGGER_REQUIRE_SPEAKER_MATCH: "1"  # Trigger phrase alone isn't enough — cosi
 # Once woken/triggered, Aiko stays "active" (no phrase required, proactive
 # behavior allowed) until this many seconds pass with no further utterance.
 # After that she goes back to sleep and requires the configured phrase(s) again.
-ACTIVATION_TIMEOUT_S: "30"  # Idle seconds before requiring wake word / trigger phrase again.
+ACTIVATION_TIMEOUT_S: "3600"  # Idle seconds before requiring wake word / trigger phrase again.
 
 
 # Speak config
@@ -71,6 +71,6 @@ MIOTTS_TOP_P: 1.0  # Nucleus sampling threshold; 1.0 = no truncation of the toke
 MIOTTS_REPETITION_PENALTY: 1.15  # Penalizes repeated/held audio tokens; higher discourages drawn-out trailing vowels.
 MIOTTS_PRESENCE_PENALTY: 0.0  # Penalizes tokens already used anywhere in the output, regardless of frequency.
 MIOTTS_FREQUENCY_PENALTY: 0.0  # Penalizes tokens proportional to how often they've already appeared.
-MIOTTS_BEST_OF_N_ENABLED: true  # Generate multiple candidates and pick the best via ASR error-rate scoring.
+MIOTTS_BEST_OF_N_ENABLED: false  # Generate multiple candidates and pick the best via ASR error-rate scoring.
 MIOTTS_BEST_OF_N: 2  # Number of candidates to generate per call when best-of-N is enabled.
 KARAOKE_TEXT: "0"  # Pace UI text by TTS audio; options: 1/0, true/false, yes/no, on/off.

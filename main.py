@@ -1524,6 +1524,10 @@ def _run_session(ui, args):
 
     def _generate_proactive_checkin(prompt_hint: str) -> str:
         session_active.set()
+        # Keep the activation session alive during proactive — no wake word
+        # needed while Aiko is still engaging with the user.
+        if listen is not None and hasattr(listen, "extend_activation"):
+            listen.extend_activation()
         original_speak = getattr(think, "_speak", None)
         try:
             if not tts_enabled or not PROACTIVE_SPEAK:

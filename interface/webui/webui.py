@@ -168,8 +168,12 @@ class AikoWeb:
 
         # binary mic-audio frames from the browser, consumed by get_voice_input()
         # an empty-bytes sentinel (b"") signals end-of-utterance from browser VAD
-        self._audio_q: queue.Queue[bytes] = queue.Queue()
+        # maxsize=10000 (~20 seconds at 512 frames/s) prevents unbounded growth
+        # since the mic stays open continuously for instant barge-in
+        self._audio_q: queue.Queue[bytes] = queue.Queue(maxsize=10000)
         self._mic_active = threading.Event()
+        self._mic_started: bool = False
+        self._did_barge_in: bool = False
 
         # connected browser websocket clients
         self._clients: set = set()
@@ -349,10 +353,15 @@ class AikoWeb:
                     break
                 raw_bytes = message.get("bytes")
                 if raw_bytes is not None:
-                    # browser mic PCM frame — only buffer during an active voice turn
-                    # so stale/late frames from a previous turn don't pollute the next
+                    # browser mic PCM frame — only buffer during an active voice
+                    # turn so stale/late frames don't pollute the next recording.
+                    # Mic stays open continuously (for instant barge-in), so
+                    # drop frames if queue is full to avoid blocking the handler.
                     if self._mic_active.is_set():
-                        self._audio_q.put(raw_bytes)
+                        try:
+                            self._audio_q.put_nowait(raw_bytes)
+                        except queue.Full:
+                            pass
                     continue
 
                 raw_text = message.get("text")
@@ -406,6 +415,7 @@ class AikoWeb:
                         # is_playing() is still True, returns True, and
                         # listen.py clears the event — otherwise the stale
                         # event prematurely cuts off the next turn's TTS.
+                        self._did_barge_in = True
                         if self._listen is not None:
                             self._listen.trigger_barge_in()
                         if self._speak is not None:
@@ -418,6 +428,10 @@ class AikoWeb:
             with self._clients_lock:
                 self._clients.discard(ws)
             log.info("[aiko-web] browser disconnected (total=%d)", len(self._clients))
+            # reset mic state so a reconnecting browser gets mic:start again
+            if not self._clients:
+                self._mic_started = False
+                self._did_barge_in = False
 
     # ------------------------------------------------------------------
     # broadcast helpers
@@ -645,6 +659,12 @@ class AikoWeb:
         Capture a voice utterance via the browser's microphone and return the
         same (text, info) shape as AikoTUI.get_voice_input().
 
+        The browser mic stays open continuously once started, so the browser
+        VAD can detect speech during TTS playback and send instant barge-in
+        messages (zero round-trip). Between turns, the audio queue is only
+        drained if no barge-in occurred — otherwise the speech frames that
+        triggered the barge-in are preserved for recording.
+
         By default, the browser VAD gates 16 kHz float32 PCM before it enters
         _audio_q, so only browser-detected speech is sent over the network. Set
         WEBUI_BROWSER_VAD_GATE=0 for a diagnostic raw-stream mode that bypasses
@@ -653,12 +673,15 @@ class AikoWeb:
         result_holder = [None]
         done_event    = threading.Event()
 
-        # drain stale frames from any previous turn
-        while True:
-            try:
-                self._audio_q.get_nowait()
-            except queue.Empty:
-                break
+        # If barge-in fired while TTS was playing, the speaker's voice frames
+        # are already in the queue — don't discard them.
+        if not self._did_barge_in:
+            while True:
+                try:
+                    self._audio_q.get_nowait()
+                except queue.Empty:
+                    break
+        self._did_barge_in = False
 
         BYTES_PER_CHUNK = 512 * 4   # 512 float32 samples = 2048 bytes
         FRAME_TIMEOUT_S = 5.0       # browser disconnected / stopped delivering PCM
@@ -711,13 +734,18 @@ class AikoWeb:
             )
             done_event.set()
 
-        self._mic_active.set()
-        self._broadcast({
-            "type": "mic",
-            "action": "start",
-            "bytes_per_chunk": BYTES_PER_CHUNK,
-            "browser_vad_gate": WEBUI_BROWSER_VAD_GATE,
-        })
+        # Keep the browser mic open continuously once started, so the browser
+        # VAD can detect speech during TTS playback for instant barge-in.
+        if not self._mic_started:
+            self._mic_active.set()
+            self._broadcast({
+                "type": "mic",
+                "action": "start",
+                "bytes_per_chunk": BYTES_PER_CHUNK,
+                "browser_vad_gate": WEBUI_BROWSER_VAD_GATE,
+            })
+            self._mic_started = True
+
         threading.Thread(target=_run, daemon=True).start()
 
         text_input = None
@@ -732,10 +760,7 @@ class AikoWeb:
                 except queue.Empty:
                     pass
         finally:
-            self._mic_active.clear()
-            self._broadcast({"type": "mic", "action": "stop"})
-
-        self._broadcast({"type": "voice", "status": "idle"})
+            self._broadcast({"type": "voice", "status": "idle"})
 
         # Check one last time if a text input arrived as we finished
         if text_input is None:
