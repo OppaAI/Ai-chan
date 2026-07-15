@@ -7,7 +7,7 @@ OAuth is the source of identity; `persona/identity.md` remains Aiko's identity o
 
 - OAuth sessions store a provider-scoped runtime id, such as `github_123456` or `patreon_987654321`, to avoid collisions between providers.
 - User-private state defaults to `~/.aiko/<user_id>/`:
-  - `user.md` for the user's editable bio/profile.
+  - `profile/user.md` for the user's editable bio/profile.
   - `memory.db` for that user's sqlite-vec memory store.
   - `monthly_consolidation_state.jsonl` for that user's monthly consolidation state.
   - `schedule.json` for that user's scheduled jobs/reminders (agentic scheduling).
@@ -20,7 +20,7 @@ OAuth is the source of identity; `persona/identity.md` remains Aiko's identity o
   - `MONTHLY_CONSOLIDATION_STATE_PATH`
   - `SCHEDULE_PATH`
   - `WORKSPACE_ROOT`
-  - `AIKO_USER_STATE_ROOT`
+  - `USER_STATE_ROOT` (canonical), plus compatibility aliases `AIKO_USER_STATE_ROOT` and `USER_SPACE_ROOT`
 
 ## sqlite-vec per user
 
@@ -40,7 +40,7 @@ Do **not** derive an encryption key from only the OAuth user id. User ids are no
 
 For a simple online tester tier, prefer encrypting the storage layer instead of encrypting individual files in application code:
 
-1. Put `AIKO_USER_STATE_ROOT` on an encrypted persistent volume.
+1. Put `USER_STATE_ROOT` on an encrypted persistent volume.
 2. Restrict permissions to the service account.
 3. Keep each user in a separate directory.
 4. Avoid writing secrets into workspace files.

@@ -38,7 +38,7 @@ Boot ordering note (login-gated wakeup):
     in interface/webui/webui.py). This guarantees system.userspace.current_user_id()
     already resolves to a real, logged-in user_id by the time AikoMemorize,
     schedule.json seeding, and the ScheduleRunner are constructed inside
-    boot() — no subsystem ever touches USER_SPACE_ROOT/guest/ on disk. The
+    boot() — no subsystem ever touches USER_STATE_ROOT/guest/ on disk. The
     CLI path (_run_cli) already resolves a real USER_ID via GitHub OAuth
     before _run_session() is ever called, so it needs no change here.
 """
