@@ -6,11 +6,13 @@ Photo-library tools for Aiko's wildlife/nature/astro workflows.
 This module provides utilities for managing photo libraries:
 
   - scan_photo_workspace()       — scan inbox for ingestible image files
+  - scan_video_workspace()       — scan inbox for postable video files
   - propose_photo_ingestion()    — suggest photos for library ingestion
   - write_photo_ingestion_report() — generate an ingestion summary report
 
 Supports common RAW formats (CR2, CR3, NEF, ARW, ORF, RW2) and standard
-image formats (JPEG, PNG, TIFF, WebP, HEIC, DNG).
+image formats (JPEG, PNG, TIFF, WebP, HEIC, DNG), plus common video
+containers (MP4, MOV, WebM, MKV, AVI, M4V).
 """
 
 from __future__ import annotations
@@ -24,17 +26,23 @@ from system.bioclock import local_now
 from toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
 DEFAULT_PHOTO_INBOX = "photos/inbox"
+DEFAULT_VIDEO_INBOX = "videos"
 DEFAULT_PHOTO_REPORTS = "photos/reports"
 
 
-def _image_files(root: Path, limit: int | None = None) -> list[Path]:
+def _files_with_extensions(root: Path, extensions: set[str], limit: int | None = None) -> list[Path]:
     if not root.exists():
         return []
-    matches = (p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
+    matches = (p for p in root.rglob("*") if p.is_file() and p.suffix.lower() in extensions)
     if limit is not None:
         matches = islice(matches, limit)
     return list(matches)
+
+
+def _image_files(root: Path, limit: int | None = None) -> list[Path]:
+    return _files_with_extensions(root, IMAGE_EXTENSIONS, limit)
 
 
 def scan_photo_workspace(inbox: str = DEFAULT_PHOTO_INBOX, limit: int = 100) -> str:
@@ -54,6 +62,29 @@ def scan_photo_workspace(inbox: str = DEFAULT_PHOTO_INBOX, limit: int = 100) -> 
         })
     except Exception as e:
         return f"[photo scan failed: {e}]"
+
+
+def scan_video_workspace(inbox: str = DEFAULT_VIDEO_INBOX, limit: int = 100) -> str:
+    """Scan a workspace video inbox for video files Aiko can post.
+
+    No ingestion/rating pipeline for video (unlike scan_photo_workspace) —
+    this just enumerates postable files for skills/photo_social.py's
+    video-posting queue.
+    """
+    try:
+        root = safe_path(inbox)
+        ws_root = workspace_root()
+        files = _files_with_extensions(root, VIDEO_EXTENSIONS, max(1, min(limit, 1000)))
+        by_ext = Counter(p.suffix.lower() for p in files)
+        return json_block("video workspace scan", {
+            "inbox": str(root),
+            "exists": root.exists(),
+            "video_count": len(files),
+            "by_extension": dict(sorted(by_ext.items())),
+            "files": [str(p.relative_to(ws_root)) for p in files[:50]],
+        })
+    except Exception as e:
+        return f"[video scan failed: {e}]"
 
 
 def propose_photo_ingestion(inbox: str = DEFAULT_PHOTO_INBOX, library_root: str = "photos/library", rating_rule: str = "manual-review-first") -> str:
