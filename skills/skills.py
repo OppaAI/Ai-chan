@@ -327,7 +327,7 @@ def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:
     on-demand full loads — not injected automatically into every turn."""
     cleaned = skill_id.strip().replace("/", "").replace("\\", "")
     for doc in discover_skill_docs():
-        if doc.skill_id == cleaned or doc.path.parent.name == cleaned:
+        if doc.skill_id == cleaned:
             try:
                 text = doc.path.read_text(encoding="utf-8", errors="replace")[:max(1, min(max_chars, 50_000))]
             except OSError as e:
