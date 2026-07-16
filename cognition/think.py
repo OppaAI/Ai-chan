@@ -128,27 +128,27 @@ _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 _ROUTE_VECTOR_CACHE_ENABLED = os.getenv("ROUTE_VECTOR_CACHE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 _ROUTE_VECTOR_CACHE_DIR = os.getenv("ROUTE_VECTOR_CACHE_DIR", "route_vectors")
 
-_PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "soul.md"
+_PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "SOUL.md"
 _LOCAL_KNOWLEDGE_RE = re.compile(
     r"\b("
     r"aiko|your architecture|your hardware|your features?|your functions?|"
     r"what can you do|how do you work|how are you built|"
     r"knowledge base|wiki|docs?|readme|roadmap|install|config|"
-    r"soul\.md|user\.md|skills?\.md|schedule\.md|"
+    r"SOUL\.md|USER\.md|SKILLS?\.md|SCHEDULE\.md|"
     r"repo|repository|codebase|local files|your files"
     r")\b",
     re.IGNORECASE,
 )
 
 # ── conditional persona overrides ────────────────────────────────────────────
-# soul.md is now split: soul_core.md is the always-loaded steady-state
+# SOUL.md is the always-loaded steady-state
 # persona; the two override files below are only appended on turns that
 # actually need them (mirrors _LOCAL_KNOWLEDGE_RE / _should_use_local_knowledge
 # just below — same "gate the tokens, don't pay for them every turn" pattern).
 _PERSONA_DIR = _PERSONA_PATH.parent
-_PERSONA_CORE_PATH = _PERSONA_DIR / "soul.md"
-_PERSONA_JP_PATH = _PERSONA_DIR / "japanese_tutor.md"
-_PERSONA_CODE_PATH = _PERSONA_DIR / "coding_tutor.md"
+_PERSONA_CORE_PATH = _PERSONA_DIR / "SOUL.md"
+_PERSONA_JP_PATH = _PERSONA_DIR / "JAPANESE_CHAT.md"
+_PERSONA_CODE_PATH = _PERSONA_DIR / "CODING_CHAT.md"
 
 _JAPANESE_TRIGGER_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
 _CODE_TRIGGER_RE = re.compile(
@@ -160,7 +160,7 @@ _CODE_TRIGGER_RE = re.compile(
 
 
 def _load_static_persona() -> str:
-    """Read the always-loaded persona core (soul_core.md — no per-user data,
+    """Read the always-loaded persona core (SOUL.md — no per-user data,
     no conditional overrides).
 
     Task/tool policy lives in the agentic prompt so casual chat does not pay
@@ -169,7 +169,7 @@ def _load_static_persona() -> str:
     only when triggered — see _current_system_prompt.
     """
     if not _PERSONA_CORE_PATH.exists():
-        raise FileNotFoundError(f"soul_core.md not found at {_PERSONA_CORE_PATH}")
+        raise FileNotFoundError(f"SOUL.md not found at {_PERSONA_CORE_PATH}")
     return _PERSONA_CORE_PATH.read_text(encoding="utf-8").strip()
 
 
@@ -610,7 +610,7 @@ class AikoThink:
                     "Label: agentic\n\n"
                     "Message: 'compare ollama vs llama.cpp and recommend one'\n"
                     "Label: agentic\n\n"
-                    "Message: 'open soul.md and show the persona block'\n"
+                    "Message: 'open SOUL.md and show the persona block'\n"
                     "Label: agentic\n\n"
                     "Message: 'continue working on the reflection script'\n"
                     "Label: agentic\n\n"
