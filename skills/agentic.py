@@ -195,14 +195,14 @@ def _blank_empty_context(block: str) -> str:
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AGENTIC_POLICY_PATHS = (
-    _REPO_ROOT / "skills" / "skills.md",
-    _REPO_ROOT / "skills" / "schedule.md",
+    _REPO_ROOT / "skills" / "SKILLS.md",
+    _REPO_ROOT / "skills" / "SCHEDULE.md",
 )
 
 # Agentic policy context is now RAG-selected against the user's request,
 # not injected whole. It's still bounded by _AGENTIC_POLICY_MAX_CHARS and
 # is also a droppable block in _enforce_agentic_context_budget below, so a
-# growing skills.md/schedule.md can no longer silently blow the fixed
+# growing SKILLS.md/SCHEDULE.md can no longer silently blow the fixed
 # "immovable" portion of the context budget.
 _AGENTIC_POLICY_CHUNK_CHARS = int(os.getenv("AGENTIC_POLICY_CHUNK_CHARS", "600"))
 _AGENTIC_POLICY_CHUNKS_PER_FILE = int(os.getenv("AGENTIC_POLICY_CHUNKS_PER_FILE", "4"))
@@ -210,7 +210,7 @@ _AGENTIC_POLICY_CHUNK_MIN_SCORE = float(os.getenv("AGENTIC_POLICY_CHUNK_MIN_SCOR
 _AGENTIC_POLICY_MAX_CHARS = int(os.getenv("AGENTIC_POLICY_MAX_CHARS", "3000"))
 _AGENTIC_POLICY_INSTRUCT = "Which policy guidance applies to this task?"
 
-# Per-file mtime-keyed cache so skills.md/schedule.md are not re-read from
+# Per-file mtime-keyed cache so SKILLS.md/SCHEDULE.md are not re-read from
 # disk on every agentic turn.  File unchanged → same mtime → cache hit.
 # File edited → mtime changes → cache miss → re-read.
 _policy_file_cache: dict[str, dict] = {}  # path -> {"content": str, "mtime": float}
@@ -234,7 +234,7 @@ def _cached_read_policy(path: Path) -> str:
 
 def _agentic_policy_context(user_input: str, embedder=None) -> str:
     """Load only the task policy excerpts relevant to this request, instead
-    of the entire skills.md/schedule.md files on every task-mode turn."""
+    of the entire SKILLS.md/SCHEDULE.md files on every task-mode turn."""
     blocks: list[str] = []
     remaining = _AGENTIC_POLICY_MAX_CHARS
     for path in _AGENTIC_POLICY_PATHS:
@@ -293,7 +293,7 @@ def _owner_embedder(owner):
 
 def _fetch_agentic_only_context(user_input: str, embedder, query_vector: np.ndarray | None = None) -> dict:
     """Fetch agentic-specific context blocks concurrently: agentic policy
-    (skills.md/schedule.md excerpts), wiki (architecture cards + wiki's own
+    (SKILLS.md/SCHEDULE.md excerpts), wiki (architecture cards + wiki's own
     knowledge RAG), predefined skill workflows, and past-task experience.
 
     These only matter once intent has resolved to "agentic" — unlike
