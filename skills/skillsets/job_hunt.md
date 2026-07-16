@@ -1,5 +1,5 @@
 ---
-id: job_hunt
+id: JOB_HUNT
 name: Job Hunt
 summary: Search configured scrape-friendly job boards for postings matching a role and location, dedupe, and save a structured report.
 triggers: job, jobs, hiring, job posting, job search, find me a job, openings, vacancy
