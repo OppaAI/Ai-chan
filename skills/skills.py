@@ -3,7 +3,7 @@ skills/skills.py
 
 Skill document helpers and registry for local markdown skill files.
 
-``skills/skills.md`` remains the short human-readable skill index loaded into
+``skills/SKILLS.md`` remains the short human-readable skill index loaded into
 Aiko's base persona. Full repeatable workflows live under ``skills/skillsets/`` as
 ``<id>.md`` files and optional ``skill.yaml`` metadata.
 
@@ -28,7 +28,7 @@ import numpy as np
 from cognition import reason
 from system.userspace import user_state_dir
 
-DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "skills.md"
+DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "SKILLS.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
 
 _STOPWORDS = reason.STOPWORDS
