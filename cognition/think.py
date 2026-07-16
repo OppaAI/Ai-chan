@@ -140,16 +140,47 @@ _LOCAL_KNOWLEDGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── conditional persona overrides ────────────────────────────────────────────
+# soul.md is now split: soul_core.md is the always-loaded steady-state
+# persona; the two override files below are only appended on turns that
+# actually need them (mirrors _LOCAL_KNOWLEDGE_RE / _should_use_local_knowledge
+# just below — same "gate the tokens, don't pay for them every turn" pattern).
+_PERSONA_DIR = _PERSONA_PATH.parent
+_PERSONA_CORE_PATH = _PERSONA_DIR / "soul.md"
+_PERSONA_JP_PATH = _PERSONA_DIR / "japanese_tutor.md"
+_PERSONA_CODE_PATH = _PERSONA_DIR / "coding_tutor.md"
+
+_JAPANESE_TRIGGER_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+_CODE_TRIGGER_RE = re.compile(
+    r"\b(debug|traceback|stack trace|error:|exception|refactor|"
+    r"write (a|the) (function|script|class)|fix (this|my) code|"
+    r"walk me through|\.py\b|\.js\b)\b",
+    re.IGNORECASE,
+)
+
 
 def _load_static_persona() -> str:
-    """Read the lightweight normal-chat persona (soul.md only — no per-user data).
+    """Read the always-loaded persona core (soul_core.md — no per-user data,
+    no conditional overrides).
 
     Task/tool policy lives in the agentic prompt so casual chat does not pay
-    for skills/schedule tokens on every turn.
+    for skills/schedule tokens on every turn. Japanese/coding overrides live
+    in separate files and are appended per-turn by _conditional_persona_blocks
+    only when triggered — see _current_system_prompt.
     """
-    if not _PERSONA_PATH.exists():
-        raise FileNotFoundError(f"soul.md not found at {_PERSONA_PATH}")
-    return _PERSONA_PATH.read_text(encoding="utf-8").strip()
+    if not _PERSONA_CORE_PATH.exists():
+        raise FileNotFoundError(f"soul_core.md not found at {_PERSONA_CORE_PATH}")
+    return _PERSONA_CORE_PATH.read_text(encoding="utf-8").strip()
+
+
+def _conditional_persona_blocks(user_input: str) -> str:
+    """Trigger-loaded persona overrides. Only paid for on turns that need them."""
+    blocks = []
+    if _JAPANESE_TRIGGER_RE.search(user_input):
+        blocks.append(_PERSONA_JP_PATH.read_text(encoding="utf-8").strip())
+    if _CODE_TRIGGER_RE.search(user_input):
+        blocks.append(_PERSONA_CODE_PATH.read_text(encoding="utf-8").strip())
+    return ("\n\n" + "\n\n".join(blocks)) if blocks else ""
 
 
 def _load_user_context() -> tuple[str, str]:
@@ -300,15 +331,17 @@ class AikoThink:
         if self._warmup_thread and self._warmup_thread.is_alive():
             self._warmup_thread.join()
 
-    def _current_system_prompt(self) -> str:
-        """Assemble this turn's system prompt: static persona + fresh per-user context.
+    def _current_system_prompt(self, user_input: str = "") -> str:
+        """Assemble this turn's system prompt: static persona core + fresh
+        per-user context + any conditional overrides this input triggers.
 
         Call only from within a turn where current_user_id()/current_display_name()
         already resolve to the real caller — never at construction time.
         """
         display_name, user_block = _load_user_context()
-        return self._persona.replace("USER_ID_HERE", display_name) + user_block
-
+        base = self._persona.replace("USER_ID_HERE", display_name) + user_block
+        return base + _conditional_persona_blocks(user_input)
+  
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
