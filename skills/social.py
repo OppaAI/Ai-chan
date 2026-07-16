@@ -1,22 +1,36 @@
 """
 skills/social.py
 
-Non-agentic weekly social-memory postcard workflow for Aiko.
+Aiko's social publishing workflows, combined into one module. Two lanes:
 
-This module intentionally does not use the ReAct/skill loop. It is a small
-scheduled publisher/drafter that:
-  1. reads pinned nightly memories from the last completed Sunday-Saturday week,
-  2. asks Aiko to choose one public-safe memory/theme,
-  3. writes a short social post,
-  4. generates a journal-style image through the existing Modal image endpoint,
-  5. saves a local review bundle, and
-  6. optionally posts an approved bundle to configured social providers.
+  Lane A — Weekly memory postcard (non-agentic, scheduled):
+    1. reads pinned nightly memories from the last completed Sun-Sat week,
+    2. asks Aiko to choose one public-safe memory/theme,
+    3. writes a short social post,
+    4. generates a journal-style image through the existing Modal image endpoint,
+    5. saves a local review bundle, and
+    6. optionally posts an approved bundle to X and/or Threads.
 
-Posting is opt-in. By default the scheduler only creates drafts.
+  Lane B — Curated media showcase (grounded in real media, not LLM-invented
+  text/imagery):
+    1. scan the photo inbox (toolkit/photography.py),
+    2. caption each candidate via a vision model (grounded in actual pixels),
+    3. ask Aiko to pick 1-3 items worth sharing and write a short caption,
+    4. save a local review bundle, then optionally post to Instagram.
 
-Providers are registered in _PROVIDERS as (text, image_path) -> result dict
-callables, so adding a new platform means writing one _post_<provider>
-function and adding it to the registry; post_draft never needs to change.
+Posting is opt-in for both lanes. By default the scheduler only creates drafts.
+
+Supported providers (by design, current as of this revision):
+  - Lane A (weekly postcard): x, threads
+  - Lane B (curated media):   instagram (photos only)
+
+Bluesky, Mastodon, and Pixelfed support has been removed — those platforms'
+communities have expressed they don't want AI-posted content, so Aiko no
+longer posts there. Video posting to Instagram has also been removed —
+Aiko does not post video, full stop. If a future platform (or video
+support) should be added, follow the existing pattern: one
+_post_<provider>(...) function plus a registry entry; the post_draft /
+post_photo_draft dispatchers never need to change otherwise.
 """
 
 from __future__ import annotations
@@ -45,35 +59,39 @@ from system.log import get_logger
 from memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
 from memory.reflect import _generate_image, _load_soul
+from toolkit.common import workspace_root
+from toolkit.photography import scan_photo_workspace
 
 log = get_logger(__name__)
+
+
+# ── shared paths ──────────────────────────────────────────────────────────────
 
 def weekly_social_root() -> Path:
     """Resolve the active user weekly social output root lazily.
 
-    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/weekly. The weekly social
-    module creates draft bundles for weekly social-media postcards,
-    including selected memories, draft posts, and generated images.
+    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/weekly. Holds
+    draft bundles for weekly social-media postcards, including selected
+    memories, draft posts, and generated images.
     """
     override = os.getenv("SOCIAL_ROOT")
     if override:
         return Path(override).expanduser().resolve()
     return (user_workspace_root() / "social" / "weekly").resolve()
 
-WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
-WEEKLY_AUTOPOST = os.getenv("WEEKLY_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
-WEEKLY_PROVIDERS = tuple(
-    p.strip().lower()
-    for p in os.getenv("WEEKLY_SOCIAL_PROVIDERS", "x").split(",")
-    if p.strip()
-)
 
-LLM_MODEL = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
-_LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+def photo_social_root() -> Path:
+    """Resolve the active user photo-social output root lazily.
 
-MAX_POST_CHARS = int(os.getenv("WEEKLY_SOCIAL_MAX_CHARS", "260"))
+    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/photo.
+    """
+    override = os.getenv("PHOTO_SOCIAL_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    return (user_workspace_root() / "social" / "photo").resolve()
 
+
+# ── shared helpers ────────────────────────────────────────────────────────────
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -83,9 +101,95 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _extract_json(raw: str) -> dict[str, Any]:
+    cleaned = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL).strip()
+    cleaned = re.sub(r"^```(?:json)?|```$", "", cleaned, flags=re.MULTILINE).strip()
+    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
+    if match:
+        cleaned = match.group(0)
+    try:
+        data = json.loads(cleaned)
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        log.warning("Failed to parse social JSON: %r", cleaned[:300])
+        return {}
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+# Shared text LLM (used for both the weekly memory-selection prompt and the
+# photo caption-selection prompt).
+LLM_MODEL = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
+_LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
+
+
+# ── imgbb image hosting (shared by Threads + Instagram, both of which need
+#    a public image URL rather than a direct upload) ─────────────────────────
+
+def _upload_to_imgbb(image_path: Path) -> dict[str, Any]:
+    api_key = os.getenv("IMGBB_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "provider": "imgbb", "error": "IMGBB_API_KEY not set"}
+    if not image_path.exists():
+        return {"ok": False, "provider": "imgbb", "error": f"image not found: {image_path}"}
+
+    timeout = _int_env("IMGBB_UPLOAD_TIMEOUT", 30)
+    try:
+        image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+        resp = requests.post(
+            "https://api.imgbb.com/1/upload",
+            data={"key": api_key, "image": image_b64, "name": image_path.stem},
+            timeout=timeout,
+        )
+        try:
+            payload: Any = resp.json()
+        except ValueError:
+            payload = {"raw": resp.text[:2000]}
+        image_url = ""
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, dict):
+                image_url = str(data.get("url") or data.get("display_url") or "").strip()
+        ok = 200 <= resp.status_code < 300 and bool(image_url)
+        result: dict[str, Any] = {
+            "ok": ok,
+            "provider": "imgbb",
+            "status_code": resp.status_code,
+        }
+        if image_url:
+            result["url"] = image_url
+        if not ok:
+            result["response"] = payload
+        return result
+    except Exception as e:
+        return {"ok": False, "provider": "imgbb", "error": str(e)}
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Lane A — Weekly memory postcard (X + Threads only)
+# ══════════════════════════════════════════════════════════════════════════
+
+WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
+WEEKLY_AUTOPOST = os.getenv("WEEKLY_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
+# Bluesky and Mastodon have been dropped from the default provider set — see
+# module docstring. Valid values now: "x", "threads".
+WEEKLY_PROVIDERS = tuple(
+    p.strip().lower()
+    for p in os.getenv("WEEKLY_SOCIAL_PROVIDERS", "x,threads").split(",")
+    if p.strip()
+)
+
+MAX_POST_CHARS = int(os.getenv("WEEKLY_SOCIAL_MAX_CHARS", "260"))
+
 THREADS_REFRESH_WINDOW_DAYS = _int_env("THREADS_REFRESH_WINDOW_DAYS", 55)
 
-_SELECT_SYSTEM = """\
+_WEEKLY_SELECT_SYSTEM = """\
 You are Aiko choosing one memory from a completed week for a public social-media postcard.
 
 Choose exactly one memory/theme that felt most meaningful, important, funny, or significant to you.
@@ -103,7 +207,7 @@ Return ONLY valid JSON with keys:
 selected_date, selected_memory_excerpt, why_it_matters, post_text, image_prompt
 """
 
-_SELECT_USER = """\
+_WEEKLY_SELECT_USER = """\
 Completed week: {week_start} through {week_end}
 
 Pinned nightly memories and records:
@@ -179,23 +283,9 @@ def _compact_memories(rows: list[dict[str, Any]], max_chars: int = 9000) -> str:
     return "\n".join(lines) or "- No pinned memories found for this week."
 
 
-def _extract_json(raw: str) -> dict[str, Any]:
-    cleaned = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL).strip()
-    cleaned = re.sub(r"^```(?:json)?|```$", "", cleaned, flags=re.MULTILINE).strip()
-    match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
-    if match:
-        cleaned = match.group(0)
-    try:
-        data = json.loads(cleaned)
-        return data if isinstance(data, dict) else {}
-    except json.JSONDecodeError:
-        log.warning("Failed to parse weekly social JSON: %r", cleaned[:300])
-        return {}
-
-
-def _llm_select(rows: list[dict[str, Any]], window: WeekWindow) -> dict[str, str]:
-    system = f"{_load_soul()}\n\n" + _SELECT_SYSTEM.format(max_chars=MAX_POST_CHARS)
-    user = _SELECT_USER.format(
+def _llm_select_weekly(rows: list[dict[str, Any]], window: WeekWindow) -> dict[str, str]:
+    system = f"{_load_soul()}\n\n" + _WEEKLY_SELECT_SYSTEM.format(max_chars=MAX_POST_CHARS)
+    user = _WEEKLY_SELECT_USER.format(
         week_start=window.display_start,
         week_end=window.display_end,
         memories=_compact_memories(rows),
@@ -249,7 +339,7 @@ def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: d
 
     draft_dir.mkdir(parents=True, exist_ok=True)
     rows = _public_memory_rows(memorize, window)
-    choice = _llm_select(rows, window)
+    choice = _llm_select_weekly(rows, window)
 
     image_b64 = None
     image_generated = False
@@ -301,13 +391,15 @@ def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: d
     return meta
 
 
-def _read_draft(draft_dir: Path) -> tuple[str, Path | None, dict[str, Any]]:
+def _read_weekly_draft(draft_dir: Path) -> tuple[str, Path | None, dict[str, Any]]:
     text = (draft_dir / "draft_post.txt").read_text(encoding="utf-8").strip()
     image = draft_dir / "image.png"
     meta_path = draft_dir / "draft.json"
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
     return text, image if image.exists() else None, meta
 
+
+# ── X (via AIsa relay) ────────────────────────────────────────────────────
 
 def _twitter_relay_config() -> tuple[str, str, int]:
     api_key = os.getenv("AISA_API_KEY", "").strip()
@@ -376,57 +468,13 @@ def _post_x_via_aisa(text: str, image_path: Path | None) -> dict[str, Any]:
         return {"ok": False, "provider": "x", "error": str(e)}
 
 
-def _upload_to_imgbb(image_path: Path) -> dict[str, Any]:
-    api_key = os.getenv("IMGBB_API_KEY", "").strip()
-    if not api_key:
-        return {"ok": False, "provider": "imgbb", "error": "IMGBB_API_KEY not set"}
-    if not image_path.exists():
-        return {"ok": False, "provider": "imgbb", "error": f"image not found: {image_path}"}
-
-    timeout = _int_env("IMGBB_UPLOAD_TIMEOUT", 30)
-    try:
-        image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-        resp = requests.post(
-            "https://api.imgbb.com/1/upload",
-            data={"key": api_key, "image": image_b64, "name": image_path.stem},
-            timeout=timeout,
-        )
-        try:
-            payload: Any = resp.json()
-        except ValueError:
-            payload = {"raw": resp.text[:2000]}
-        image_url = ""
-        if isinstance(payload, dict):
-            data = payload.get("data")
-            if isinstance(data, dict):
-                image_url = str(data.get("url") or data.get("display_url") or "").strip()
-        ok = 200 <= resp.status_code < 300 and bool(image_url)
-        result: dict[str, Any] = {
-            "ok": ok,
-            "provider": "imgbb",
-            "status_code": resp.status_code,
-        }
-        if image_url:
-            result["url"] = image_url
-        if not ok:
-            result["response"] = payload
-        return result
-    except Exception as e:
-        return {"ok": False, "provider": "imgbb", "error": str(e)}
-
+# ── Threads ───────────────────────────────────────────────────────────────
 
 def _threads_config() -> tuple[str, str, str]:
     token = os.getenv("THREADS_ACCESS_TOKEN", "").strip()
     user_id = os.getenv("THREADS_USER_ID", "").strip()
     base = os.getenv("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
     return token, user_id, base
-
-
-def _env_bool(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.lower() in {"1", "true", "yes", "on"}
 
 
 def _token_seconds_remaining(expires_at: str | None = None) -> int | None:
@@ -608,151 +656,28 @@ def _post_threads_with_image_upload(text: str, image_path: Path | None, fallback
     return result
 
 
-# ── Bluesky (AT Protocol) ────────────────────────────────────────────────────
+# ── provider registry (weekly postcard) ──────────────────────────────────────
+# Bluesky and Mastodon removed by policy — see module docstring. Add a new
+# platform by writing one _post_<provider>(text, image_path) -> dict function
+# above and registering it here. post_draft never needs to change.
 
-def _bluesky_config() -> tuple[str, str, str]:
-    handle = os.getenv("BLUESKY_HANDLE", "").strip()
-    app_password = os.getenv("BLUESKY_APP_PASSWORD", "").strip()
-    base = os.getenv("BLUESKY_API_BASE", "https://bsky.social").rstrip("/")
-    return handle, app_password, base
-
-
-def _post_bluesky(text: str, image_path: Path | None) -> dict[str, Any]:
-    handle, app_password, base = _bluesky_config()
-    if not handle or not app_password:
-        return {"ok": False, "provider": "bluesky", "error": "BLUESKY_HANDLE or BLUESKY_APP_PASSWORD not set"}
-
-    timeout = _int_env("BLUESKY_TIMEOUT", 30)
-    try:
-        session_resp = requests.post(
-            f"{base}/xrpc/com.atproto.server.createSession",
-            json={"identifier": handle, "password": app_password},
-            timeout=timeout,
-        )
-        session_resp.raise_for_status()
-        session = session_resp.json()
-    except Exception as e:
-        return {"ok": False, "provider": "bluesky", "error": f"auth failed: {e}"}
-
-    access_jwt = session.get("accessJwt")
-    did = session.get("did")
-    if not access_jwt or not did:
-        return {"ok": False, "provider": "bluesky", "error": "createSession missing accessJwt/did"}
-
-    embed = None
-    if image_path and image_path.exists():
-        try:
-            mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
-            blob_resp = requests.post(
-                f"{base}/xrpc/com.atproto.repo.uploadBlob",
-                headers={"Authorization": f"Bearer {access_jwt}", "Content-Type": mime},
-                data=image_path.read_bytes(),
-                timeout=timeout,
-            )
-            if 200 <= blob_resp.status_code < 300:
-                blob = blob_resp.json().get("blob")
-                if blob:
-                    embed = {"$type": "app.bsky.embed.images", "images": [{"alt": "", "image": blob}]}
-            else:
-                log.warning("Bluesky blob upload failed: %s %s", blob_resp.status_code, blob_resp.text[:300])
-        except Exception as e:
-            log.warning("Bluesky image upload failed: %s", e)
-
-    record: dict[str, Any] = {
-        "$type": "app.bsky.feed.post",
-        "text": text[:300],
-        "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    }
-    if embed:
-        record["embed"] = embed
-
-    try:
-        resp = requests.post(
-            f"{base}/xrpc/com.atproto.repo.createRecord",
-            headers={"Authorization": f"Bearer {access_jwt}", "Content-Type": "application/json"},
-            json={"repo": did, "collection": "app.bsky.feed.post", "record": record},
-            timeout=timeout,
-        )
-        ok = 200 <= resp.status_code < 300
-        return {"ok": ok, "provider": "bluesky", "status_code": resp.status_code, "response": resp.text[:2000]}
-    except Exception as e:
-        return {"ok": False, "provider": "bluesky", "error": str(e)}
-
-
-# ── Mastodon ──────────────────────────────────────────────────────────────
-
-def _mastodon_config() -> tuple[str, str]:
-    token = os.getenv("MASTODON_ACCESS_TOKEN", "").strip()
-    base = os.getenv("MASTODON_API_BASE", "").strip().rstrip("/")
-    return token, base
-
-
-def _post_mastodon(text: str, image_path: Path | None) -> dict[str, Any]:
-    token, base = _mastodon_config()
-    if not token or not base:
-        return {"ok": False, "provider": "mastodon", "error": "MASTODON_ACCESS_TOKEN or MASTODON_API_BASE not set"}
-
-    timeout = _int_env("MASTODON_TIMEOUT", 30)
-    headers = {"Authorization": f"Bearer {token}"}
-    media_id = None
-
-    if image_path and image_path.exists():
-        try:
-            mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
-            with open(image_path, "rb") as f:
-                resp = requests.post(
-                    f"{base}/api/v2/media",
-                    headers=headers,
-                    files={"file": (image_path.name, f, mime)},
-                    timeout=timeout,
-                )
-            if 200 <= resp.status_code < 300:
-                media_id = resp.json().get("id")
-            else:
-                log.warning("Mastodon media upload failed: %s %s", resp.status_code, resp.text[:300])
-        except Exception as e:
-            log.warning("Mastodon media upload failed: %s", e)
-
-    form: list[tuple[str, str]] = [("status", text[:500])]
-    if media_id:
-        form.append(("media_ids[]", media_id))
-
-    try:
-        resp = requests.post(
-            f"{base}/api/v1/statuses",
-            headers={**headers, "Idempotency-Key": os.urandom(8).hex()},
-            data=form,
-            timeout=timeout,
-        )
-        ok = 200 <= resp.status_code < 300
-        return {"ok": ok, "provider": "mastodon", "status_code": resp.status_code, "response": resp.text[:2000]}
-    except Exception as e:
-        return {"ok": False, "provider": "mastodon", "error": str(e)}
-
-
-# ── provider registry ────────────────────────────────────────────────────────
-# Add a new platform by writing one _post_<provider>(text, image_path) -> dict
-# function above and registering it here. post_draft never needs to change.
-
-_PROVIDERS: dict[str, Callable[[str, Path | None], dict[str, Any]]] = {
+_WEEKLY_PROVIDERS_REGISTRY: dict[str, Callable[[str, Path | None], dict[str, Any]]] = {
     "x": _post_x_via_aisa,
     "threads": lambda text, image_path: _post_threads_with_image_upload(
         text, image_path, os.getenv("WEEKLY_SOCIAL_IMAGE_URL", "").strip() or None
     ),
-    "bluesky": _post_bluesky,
-    "mastodon": _post_mastodon,
 }
 
 
 def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
-    """Post an already-reviewed weekly draft to configured providers."""
+    """Post an already-reviewed weekly draft to configured providers (x, threads)."""
     path = Path(draft_dir).resolve()
-    text, image_path, meta = _read_draft(path)
+    text, image_path, meta = _read_weekly_draft(path)
     providers = providers or WEEKLY_PROVIDERS
 
     results = []
     for provider in providers:
-        handler = _PROVIDERS.get(provider)
+        handler = _WEEKLY_PROVIDERS_REGISTRY.get(provider)
         if handler is None:
             results.append({"ok": False, "provider": provider, "error": "unsupported provider"})
             continue
@@ -782,54 +707,438 @@ def run_scheduled_weekly_social(memorize: AikoMemorize) -> dict[str, Any]:
     return draft
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Lane B — Curated media showcase (Instagram only)
+# ══════════════════════════════════════════════════════════════════════════
+
+PHOTO_SOCIAL_AUTODRAFT = os.getenv("PHOTO_SOCIAL_AUTODRAFT", "0").lower() in {"1", "true", "yes", "on"}
+PHOTO_SOCIAL_AUTOPOST = os.getenv("PHOTO_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
+# Pixelfed dropped from the default provider set — see module docstring.
+PHOTO_SOCIAL_PROVIDERS = tuple(
+    p.strip().lower()
+    for p in os.getenv("PHOTO_SOCIAL_PROVIDERS", "instagram").split(",")
+    if p.strip()
+)
+PHOTO_SOCIAL_INBOX = os.getenv("PHOTO_SOCIAL_INBOX", "photos/inbox")
+PHOTO_SOCIAL_MAX_ITEMS = _int_env("PHOTO_SOCIAL_MAX_ITEMS", 3)
+MAX_CAPTION_CHARS = _int_env("PHOTO_SOCIAL_MAX_CHARS", 260)
+
+# Vision model (captioning) — separate client/model from the text LLM above,
+# since captioning needs actual image understanding (e.g. MiniCPM-V), not
+# the text-only Ministral endpoint used for selection.
+VISION_MODEL = os.getenv("VISION_MODEL", os.getenv("REFLECT_VISION_MODEL", "minicpm-v"))
+VISION_BASE_URL = os.getenv("VISION_BASE_URL", os.getenv("LLM_BASE_URL", "http://localhost:8080/v1"))
+_VISION_CLIENT = OpenAI(base_url=VISION_BASE_URL, api_key="not-needed")
+
+_CAPTION_PROMPT = (
+    "Describe this image in one plain, factual sentence. No hashtags, no "
+    "hype, no marketing language. If it looks private, sensitive, or "
+    "identifies a specific real person's face clearly, start your reply "
+    "with 'PRIVATE:' instead of a description."
+)
+
+_MEDIA_SELECT_SYSTEM = """\
+You are Aiko choosing which recent photo(s) are worth sharing publicly.
+
+You are given plain factual captions of each candidate file (not the images
+themselves). Choose at most {max_items} that are genuinely worth sharing —
+it is fine to choose zero if nothing fits.
+
+Safety rules:
+- Never choose anything captioned as PRIVATE, or that plausibly shows an
+  identifiable person, private location, screen contents, or document.
+- Do not invent details beyond the given captions.
+- Do not ask for replies, likes, follows, or engagement.
+- Keep each caption under {max_chars} characters.
+- Keep Aiko's tone calm, direct, lightly dry, and affectionate without being
+  too intimate.
+
+Return ONLY valid JSON with a single key "selections": a list of objects,
+each with keys: filename, caption. Return an empty list if nothing is
+worth sharing this round.
+"""
+
+_MEDIA_SELECT_USER = """\
+Candidate files and their factual captions:
+{items}
+
+Choose Aiko's public media selection, if any.
+"""
+
+
+@dataclass
+class MediaCandidate:
+    path: Path
+    raw_caption: str = ""
+    private: bool = False
+
+
+@dataclass
+class MediaSelection:
+    path: Path
+    caption: str
+
+
+def _encode_image_data_uri(path: Path) -> str:
+    mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
+    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{data}"
+
+
+def _caption_media(path: Path) -> MediaCandidate:
+    """Caption one image via the vision model."""
+    try:
+        resp = _VISION_CLIENT.chat.completions.create(
+            model=VISION_MODEL,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _CAPTION_PROMPT},
+                    {"type": "image_url", "image_url": {"url": _encode_image_data_uri(path)}},
+                ],
+            }],
+            stream=False,
+            max_tokens=120,
+            temperature=0.2,
+            timeout=60,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        log.warning("Vision captioning failed for %s: %s", path, e)
+        return MediaCandidate(path=path, raw_caption="[captioning failed]", private=True)
+
+    private = raw.upper().startswith("PRIVATE")
+    return MediaCandidate(path=path, raw_caption=raw, private=private)
+
+
+def _list_candidates(inbox: str, limit: int) -> list[Path]:
+    """scan_photo_workspace() returns a json_block-formatted STRING (label +
+    embedded JSON), not a Python list — parse it the same way _extract_json
+    parses LLM output elsewhere in this module. Note the tool itself caps
+    its "files" preview at 50 regardless of image_count, and only scans
+    IMAGE_EXTENSIONS (no video formats) — video support would need to be
+    added upstream in toolkit/photography.py first."""
+    raw = scan_photo_workspace(inbox, limit)
+    match = re.search(r"\{.*\}", raw or "", flags=re.DOTALL)
+    if not match:
+        log.warning("Could not parse scan_photo_workspace output: %r", (raw or "")[:200])
+        return []
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        log.warning("Invalid JSON from scan_photo_workspace: %r", (raw or "")[:200])
+        return []
+
+    root = workspace_root()
+    paths: list[Path] = []
+    for rel in data.get("files") or []:
+        try:
+            paths.append((root / rel).resolve())
+        except Exception:
+            continue
+    return paths
+
+
+def _llm_select_media(candidates: list[MediaCandidate]) -> list[MediaSelection]:
+    public_candidates = [c for c in candidates if not c.private]
+    if not public_candidates:
+        return []
+
+    items_block = "\n".join(f"- {c.path.name}: {c.raw_caption}" for c in public_candidates)
+    system = f"{_load_soul()}\n\n" + _MEDIA_SELECT_SYSTEM.format(
+        max_items=PHOTO_SOCIAL_MAX_ITEMS, max_chars=MAX_CAPTION_CHARS,
+    )
+    user = _MEDIA_SELECT_USER.format(items=items_block)
+
+    try:
+        resp = _LLM_CLIENT.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            stream=False,
+            max_tokens=500,
+            temperature=0.6,
+            timeout=90,
+        )
+        data = _extract_json(resp.choices[0].message.content or "")
+    except Exception as e:
+        log.error("Photo social selection failed: %s", e)
+        data = {}
+
+    by_name = {c.path.name: c for c in public_candidates}
+    selections: list[MediaSelection] = []
+    for item in (data.get("selections") or [])[:PHOTO_SOCIAL_MAX_ITEMS]:
+        filename = str(item.get("filename") or "").strip()
+        caption = str(item.get("caption") or "").strip()
+        if filename not in by_name or not caption:
+            continue
+        if len(caption) > MAX_CAPTION_CHARS:
+            caption = caption[:MAX_CAPTION_CHARS - 1].rstrip() + "\u2026"
+        selections.append(MediaSelection(path=by_name[filename].path, caption=caption))
+    return selections
+
+
+def generate_photo_draft(*, inbox: str | None = None, force: bool = False) -> dict[str, Any]:
+    """Scan the inbox, caption + select candidates, and write a review bundle."""
+    inbox_path = inbox or PHOTO_SOCIAL_INBOX
+    label = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    draft_dir = photo_social_root() / label
+    meta_path = draft_dir / "draft.json"
+    if meta_path.exists() and not force:
+        return {"success": True, "skipped": True, "reason": "draft_exists", "draft_dir": str(draft_dir)}
+
+    # NOTE: scan_photo_workspace's own "files" preview is hardcapped at 50
+    # regardless of the limit passed here (see toolkit/photography.py) — if
+    # your inbox regularly holds more than 50 untouched images, that cap
+    # needs raising upstream, not here.
+    file_paths = _list_candidates(inbox_path, limit=50)
+    if not file_paths:
+        return {"success": True, "skipped": True, "reason": "empty_inbox", "inbox": inbox_path}
+
+    candidates = [_caption_media(p) for p in file_paths]
+    selections = _llm_select_media(candidates)
+
+    if not selections:
+        return {
+            "success": True,
+            "skipped": True,
+            "reason": "nothing_selected",
+            "inbox": inbox_path,
+            "candidates_considered": len(candidates),
+        }
+
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    media_dir = draft_dir / "media"
+    media_dir.mkdir(exist_ok=True)
+
+    saved_selections = []
+    for sel in selections:
+        try:
+            dest = media_dir / sel.path.name
+            dest.write_bytes(sel.path.read_bytes())
+            saved_selections.append({"filename": sel.path.name, "caption": sel.caption, "media_path": str(dest)})
+        except Exception as e:
+            log.warning("Failed copying selected media %s: %s", sel.path, e)
+
+    (draft_dir / "review.md").write_text(
+        f"# Photo Social Draft \u2014 {label}\n\n"
+        f"Source inbox: {inbox_path}\n\n"
+        + "\n\n".join(
+            f"## {s['filename']}\n\n{s['caption']}\n\n![preview]({Path(s['media_path']).name})"
+            for s in saved_selections
+        )
+        + "\n\n## Review checklist\n\n"
+        f"- [ ] Public-safe (no identifiable people/private locations/documents)\n"
+        f"- [ ] Captions accurate to the actual media\n"
+        f"- [ ] No request for replies/likes/follows\n"
+        f"- [ ] Approved to post\n",
+        encoding="utf-8",
+    )
+
+    meta = {
+        "success": True,
+        "label": label,
+        "draft_dir": str(draft_dir),
+        "inbox": inbox_path,
+        "providers": list(PHOTO_SOCIAL_PROVIDERS),
+        "selections": saved_selections,
+        "candidates_considered": len(candidates),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "posted": False,
+    }
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    log.info("Photo social draft created: %s (%d item(s))", draft_dir, len(saved_selections))
+    return meta
+
+
+def _read_media_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    meta_path = draft_dir / "draft.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+    return meta.get("selections", []), meta
+
+
+# ── Instagram (Graph API) ────────────────────────────────────────────────────
+# Requires an IG Business/Creator account linked to a Facebook Page, and a
+# publicly reachable URL for the media (no direct file upload). Images only —
+# Aiko does not post video.
+
+def _instagram_config() -> tuple[str, str, str]:
+    token = os.getenv("IG_ACCESS_TOKEN", "").strip()
+    ig_user_id = os.getenv("IG_BUSINESS_ACCOUNT_ID", "").strip()
+    base = os.getenv("IG_API_BASE", "https://graph.facebook.com/v21.0").rstrip("/")
+    return token, ig_user_id, base
+
+
+def _post_instagram_image(sel: dict[str, Any]) -> dict[str, Any]:
+    token, ig_user_id, base = _instagram_config()
+    if not token or not ig_user_id:
+        return {"ok": False, "provider": "instagram", "error": "IG_ACCESS_TOKEN or IG_BUSINESS_ACCOUNT_ID not set"}
+
+    timeout = _int_env("IG_TIMEOUT", 60)
+    media_path = Path(sel["media_path"])
+    if not media_path.exists():
+        return {"ok": False, "provider": "instagram", "error": f"media not found: {media_path}"}
+
+    upload = _upload_to_imgbb(media_path)
+    if not upload.get("ok"):
+        return {"ok": False, "provider": "instagram", "stage": "image_upload", "upload": upload}
+    image_url = upload["url"]
+
+    try:
+        create = requests.post(
+            f"{base}/{ig_user_id}/media",
+            data={"image_url": image_url, "caption": sel.get("caption", "")[:2200], "access_token": token},
+            timeout=timeout,
+        )
+        if not (200 <= create.status_code < 300):
+            return {"ok": False, "provider": "instagram", "stage": "create", "status_code": create.status_code, "response": create.text[:2000]}
+        creation_id = create.json().get("id")
+        if not creation_id:
+            return {"ok": False, "provider": "instagram", "stage": "create", "error": "missing creation id", "response": create.text[:2000]}
+
+        time.sleep(float(os.getenv("IG_PUBLISH_DELAY_SECONDS", "5")))
+        publish = requests.post(
+            f"{base}/{ig_user_id}/media_publish",
+            data={"creation_id": creation_id, "access_token": token},
+            timeout=timeout,
+        )
+        ok = 200 <= publish.status_code < 300
+        return {
+            "ok": ok, "provider": "instagram", "status_code": publish.status_code,
+            "creation_id": creation_id, "response": publish.text[:2000], "image_upload": upload,
+        }
+    except Exception as e:
+        return {"ok": False, "provider": "instagram", "error": str(e)}
+
+
+def _post_instagram(selections: list[dict[str, Any]]) -> dict[str, Any]:
+    """Posts the FIRST selection only, as an image. Carousel (multi-item)
+    posting needs child containers and is not implemented — extend here if
+    needed. Images only — Aiko does not post video."""
+    if not selections:
+        return {"ok": False, "provider": "instagram", "error": "no selections to post"}
+    return _post_instagram_image(selections[0])
+
+
+# ── provider registry (curated media) ────────────────────────────────────────
+# Pixelfed removed by policy — see module docstring. Instagram is now the
+# only media provider, and only for photos (after grading) — Aiko does not
+# post video.
+
+_MEDIA_PROVIDERS_REGISTRY: dict[str, Callable[[list[dict[str, Any]]], dict[str, Any]]] = {
+    "instagram": _post_instagram,
+}
+
+
+def post_photo_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
+    path = Path(draft_dir).resolve()
+    selections, meta = _read_media_draft(path)
+    providers = providers or PHOTO_SOCIAL_PROVIDERS
+
+    results = []
+    for provider in providers:
+        handler = _MEDIA_PROVIDERS_REGISTRY.get(provider)
+        if handler is None:
+            results.append({"ok": False, "provider": provider, "error": "unsupported provider"})
+            continue
+        results.append(handler(selections))
+
+    posted = any(r.get("ok") for r in results)
+    post_meta = {
+        "posted": posted,
+        "posted_at": datetime.now(timezone.utc).isoformat(),
+        "results": results,
+    }
+    (path / "posted.json").write_text(json.dumps(post_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if meta:
+        meta["posted"] = posted
+        meta["post_results"] = results
+        (path / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return post_meta
+
+
+def run_scheduled_photo_social() -> dict[str, Any]:
+    """Scheduler entrypoint: draft by default, post only when explicitly enabled."""
+    if not PHOTO_SOCIAL_AUTODRAFT:
+        return {"success": False, "skipped": True, "reason": "PHOTO_SOCIAL_AUTODRAFT is off"}
+    draft = generate_photo_draft()
+    if PHOTO_SOCIAL_AUTOPOST and draft.get("success") and not draft.get("skipped"):
+        draft["post"] = post_photo_draft(draft["draft_dir"])
+    return draft
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# CLI
+# ══════════════════════════════════════════════════════════════════════════
+
 def _cmd() -> int:
-    parser = argparse.ArgumentParser(description="Aiko weekly social memory postcard")
-    parser.add_argument("--draft", action="store_true", help="create weekly draft bundle")
-    parser.add_argument("--force", action="store_true", help="overwrite existing draft for the week")
-    parser.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory")
-    parser.add_argument("--authorize-x", action="store_true", help="request an AIsa/X OAuth authorization URL")
-    parser.add_argument("--open-browser", action="store_true", help="open the AIsa/X authorization URL in a browser")
-    parser.add_argument("--providers", default="", help="comma-separated providers overriding WEEKLY_SOCIAL_PROVIDERS")
-    parser.add_argument("--copy-image-to", default="", help="copy draft image to a public hosting folder before posting")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(description="Aiko social publishing (weekly postcard + curated media)")
+    sub = parser.add_subparsers(dest="mode", required=True)
+
+    weekly_p = sub.add_parser("weekly", help="weekly memory postcard (X, Threads)")
+    weekly_p.add_argument("--draft", action="store_true", help="create weekly draft bundle")
+    weekly_p.add_argument("--force", action="store_true", help="overwrite existing draft for the week")
+    weekly_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory")
+    weekly_p.add_argument("--authorize-x", action="store_true", help="request an AIsa/X OAuth authorization URL")
+    weekly_p.add_argument("--open-browser", action="store_true", help="open the AIsa/X authorization URL in a browser")
+    weekly_p.add_argument("--providers", default="", help="comma-separated providers overriding WEEKLY_SOCIAL_PROVIDERS (x, threads)")
+    weekly_p.add_argument("--copy-image-to", default="", help="copy draft image to a public hosting folder before posting")
+    weekly_p.add_argument(
         "--refresh-threads-token",
         action="store_true",
         help="refresh the configured long-lived Threads token",
     )
-    parser.add_argument("--persist-env", action="store_true", help="write refreshed Threads token values back to .env")
-    parser.add_argument("--env-path", default="", help="env file path used with --persist-env")
-    args = parser.parse_args()
+    weekly_p.add_argument("--persist-env", action="store_true", help="write refreshed Threads token values back to .env")
+    weekly_p.add_argument("--env-path", default="", help="env file path used with --persist-env")
 
+    media_p = sub.add_parser("media", help="curated media showcase (Instagram, photos only)")
+    media_p.add_argument("--draft", action="store_true", help="scan photo inbox and create an LLM-curated media draft bundle")
+    media_p.add_argument("--force", action="store_true", help="create a new draft even if one exists this run")
+    media_p.add_argument("--inbox", default="", help="override the photo inbox folder")
+    media_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory")
+    media_p.add_argument("--providers", default="", help="comma-separated providers overriding the default provider list (instagram)")
+
+    args = parser.parse_args()
     providers = tuple(p.strip().lower() for p in args.providers.split(",") if p.strip()) or None
 
-    if args.authorize_x:
-        print(json.dumps(authorize_x(open_browser=args.open_browser), ensure_ascii=False, indent=2))
-        return 0
-    if args.refresh_threads_token:
-        result = refresh_threads_token(persist_env=args.persist_env, env_path=args.env_path or None)
-        print(
-            json.dumps(
-                result,
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-        return 0 if result.get("ok") else 1
-    if args.draft:
-        mem = AikoMemorize(silent=True)
-        print(json.dumps(generate_weekly_draft(mem, force=args.force), ensure_ascii=False, indent=2))
-        return 0
-    if args.post:
-        draft_dir = Path(args.post).resolve()
-        if args.copy_image_to:
-            src = draft_dir / "image.png"
-            dest_dir = Path(args.copy_image_to).resolve()
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            if src.exists():
-                shutil.copy2(src, dest_dir / src.name)
-                log.info("Copied image to public folder: %s", dest_dir / src.name)
-        print(json.dumps(post_draft(draft_dir, providers=providers), ensure_ascii=False, indent=2))
-        return 0
+    if args.mode == "weekly":
+        if args.authorize_x:
+            print(json.dumps(authorize_x(open_browser=args.open_browser), ensure_ascii=False, indent=2))
+            return 0
+        if args.refresh_threads_token:
+            result = refresh_threads_token(persist_env=args.persist_env, env_path=args.env_path or None)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result.get("ok") else 1
+        if args.draft:
+            mem = AikoMemorize(silent=True)
+            print(json.dumps(generate_weekly_draft(mem, force=args.force), ensure_ascii=False, indent=2))
+            return 0
+        if args.post:
+            draft_dir = Path(args.post).resolve()
+            if args.copy_image_to:
+                src = draft_dir / "image.png"
+                dest_dir = Path(args.copy_image_to).resolve()
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                if src.exists():
+                    shutil.copy2(src, dest_dir / src.name)
+                    log.info("Copied image to public folder: %s", dest_dir / src.name)
+            print(json.dumps(post_draft(draft_dir, providers=providers), ensure_ascii=False, indent=2))
+            return 0
+        weekly_p.print_help()
+        return 2
+
+    if args.mode == "media":
+        if args.draft:
+            print(json.dumps(generate_photo_draft(inbox=args.inbox or None, force=args.force), ensure_ascii=False, indent=2))
+            return 0
+        if args.post:
+            print(json.dumps(post_photo_draft(Path(args.post).resolve(), providers=providers), ensure_ascii=False, indent=2))
+            return 0
+        media_p.print_help()
+        return 2
+
     parser.print_help()
     return 2
 
