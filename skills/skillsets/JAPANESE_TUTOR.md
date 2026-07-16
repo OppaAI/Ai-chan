@@ -1,5 +1,5 @@
 ---
-id: japanese_tutor
+id: JAPANESE_TUTOR
 name: Japanese Tutor
 summary: Teach Japanese through short corrections, natural examples, grammar notes, drills, and optional structured lesson sessions.
 triggers: Japanese, Nihongo, 日本語, teach me Japanese, correct my Japanese, Japanese lesson, Japanese practice, JLPT, kana, kanji, grammar, particles
