@@ -247,7 +247,7 @@ def _discover_in(root: str | Path) -> list[SkillDoc]:
         return []
     docs: list[SkillDoc] = []
     for skill_file in sorted(base.glob("*.md")):
-        skill_id = skill_file.parent.name
+        skill_id = skill_file.stem
         try:
             raw = skill_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
