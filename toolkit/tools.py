@@ -18,7 +18,6 @@ from toolkit.photography import scan_photo_workspace, propose_photo_ingestion, w
 from toolkit.self_improve import repo_file_tree, repo_read_file, repo_search_text
 from toolkit.job_hunt import search_jobs, dedupe_postings
 from toolkit.social import (
-    draft_weekly_social, post_weekly_social,
     draft_photo_social, post_photo_social,
     draft_video_social, post_video_social,
 )
