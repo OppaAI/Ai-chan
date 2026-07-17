@@ -295,6 +295,20 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("photo tools unavailable for graph executor: %s", exc)
     try:
+        # draft_*/post_* wrappers mirror what skills/agentic.py already
+        # registers for ReAct — see toolkit/social.py's module docstring.
+        # post_photo_social/post_video_social still enforce human approval
+        # internally (SocialApprovalError via _require_approved); adding
+        # them here only lets a matched/promoted master plan reach the same
+        # functions ReAct can already reach, it does not relax that gate.
+        from toolkit.social import draft_photo_social, post_photo_social, draft_video_social, post_video_social
+        mapping.update({
+            "draft_photo_social": draft_photo_social, "post_photo_social": post_photo_social,
+            "draft_video_social": draft_video_social, "post_video_social": post_video_social,
+        })
+    except Exception as exc:
+        log.debug("social tools unavailable for graph executor: %s", exc)
+    try:
         from toolkit.self_improve import repo_file_tree, repo_read_file, repo_search_text
         mapping.update({"repo_file_tree": repo_file_tree, "repo_read_file": repo_read_file, "repo_search_text": repo_search_text})
     except Exception as exc:
