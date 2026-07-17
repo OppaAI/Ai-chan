@@ -169,13 +169,14 @@ def _create_session(user_id, username: str, email: str | None, provider: str) ->
 
 def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
     signed_value = signer.dumps(session_id)
+    is_https = REDIRECT_BASE.startswith("https://")
     response.set_cookie(
         "session_id",
         signed_value,
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=True,  # requires HTTPS — matches your Tailscale Funnel / Cloudflare setup
+        secure=is_https,  # True only when REDIRECT_BASE is HTTPS — avoids cookie rejection on local HTTP
     )
 
 

@@ -70,6 +70,19 @@ SSL_KEY = os.getenv("SSL_KEY", "")
 WEBUI_BROWSER_VAD_GATE = os.getenv("WEBUI_BROWSER_VAD_GATE", "1").lower() in {"1", "true", "yes", "on"}
 
 
+def _load_stored_display_name(uid: str) -> str:
+    """Return a stored display name from the user's state dir, if any."""
+    try:
+        from system.userspace import user_state_dir
+        name_file = user_state_dir(uid) / "cli_name.txt"
+        if name_file.exists():
+            stored = name_file.read_text(encoding="utf-8").strip()
+            if stored:
+                return stored
+    except Exception:
+        pass
+    return ""
+
 
 def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
     """Return a server TLS context when WEBUI_HTTPS is enabled."""
@@ -329,7 +342,11 @@ class AikoWeb:
         # every connection; only the first one matters (Event.set() is
         # idempotent, and later re-logins/reconnects don't rewind boot).
         self._current_user_id = uid
-        self._current_display_name = str(session.get("username", "")) or uid
+
+        # Display name: stored name file > session username (GitHub login) > uid
+        stored_name = _load_stored_display_name(uid)
+        session_name = (session.get("username") or "")
+        self._current_display_name = stored_name or session_name or uid
 
         if not self._login_event.is_set():
             self._authenticated_uid = uid
@@ -378,7 +395,9 @@ class AikoWeb:
                         if text:
                             uid = str(session["user_id"])
                             self._current_user_id = uid
-                            self._current_display_name = str(session.get("username", "")) or uid
+                            stored_name = _load_stored_display_name(uid)
+                            session_name = (session.get("username") or "")
+                            self._current_display_name = stored_name or session_name or uid
                             set_current_user_id(uid)
                             set_current_display_name(self._current_display_name)
                             os.environ["AIKO_USER_ID"] = uid

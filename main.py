@@ -1198,12 +1198,50 @@ def parse_args():
                    help="wipe all stored memories and exit")
     p.add_argument("--logout",   action="store_true",
                    help="clear stored CLI auth token and exit")
+    p.add_argument("--name",     type=str, default="",
+                   help="set your display name for CLI mode (skips GitHub OAuth name)")
     return p.parse_args()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SESSION ORCHESTRATOR
 # ═════════════════════════════════════════════════════════════════════════════
+
+_CLI_NAME_FILE: Path | None = None
+
+
+def _cli_display_name(args) -> str:
+    """Resolve the CLI display name from --name, stored name, or prompt."""
+    if args.name:
+        return args.name.strip()
+    name_path = _cli_name_path()
+    if name_path and name_path.exists():
+        stored = name_path.read_text(encoding="utf-8").strip()
+        if stored:
+            return stored
+    try:
+        raw = input("  What's your name? ").strip()
+        if raw:
+            if name_path:
+                name_path.parent.mkdir(parents=True, exist_ok=True)
+                name_path.write_text(raw, encoding="utf-8")
+            return raw
+    except (EOFError, KeyboardInterrupt):
+        pass
+    return "guest"
+
+
+def _cli_name_path() -> Path | None:
+    global _CLI_NAME_FILE
+    if _CLI_NAME_FILE is not None:
+        return _CLI_NAME_FILE
+    try:
+        from system.userspace import user_state_dir
+        _CLI_NAME_FILE = user_state_dir() / "cli_name.txt"
+    except Exception:
+        _CLI_NAME_FILE = Path.home() / ".aiko_cli_name.txt"
+    return _CLI_NAME_FILE
+
 
 def _run_cli(args):
     """Launch Aiko with the plain no-curses CLI (testing only).
@@ -1221,6 +1259,12 @@ def _run_cli(args):
         from system.userspace import set_current_display_name
         set_current_display_name(cli_auth.get_display_name())
         log.info("CLI session user_id=%s display=%s", gh_user, cli_auth.get_display_name())
+    else:
+        display_name = _cli_display_name(args)
+        os.environ["AIKO_DISPLAY_NAME"] = display_name
+        from system.userspace import set_current_display_name
+        set_current_display_name(display_name)
+        log.info("CLI session display=%s", display_name)
     ui = AikoSimpleCLI(no_voice=args.text, debug=args.debug)
     _run_session(ui, args)
 
