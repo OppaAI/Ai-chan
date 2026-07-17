@@ -65,6 +65,13 @@ TOOL_DOMAINS: dict[str, str] = {
     "search_jobs": "jobs",
     "list_master_plans": "graph",
     "run_master_plan": "graph",
+    # Social posting tools — deliberately capability-gated, never ALWAYS_ON.
+    # Posting is the highest-stakes tool class in the loop, so it gets the
+    # same (not looser) gating as research/scheduling/photo/repo.
+    "draft_photo_social": "social",
+    "post_photo_social": "social",
+    "draft_video_social": "social",
+    "post_video_social": "social",
 }
 
 # Always sent regardless of which capability matched — the base loop tools
@@ -104,6 +111,12 @@ CAPABILITIES: dict[str, Capability] = {
         id="job_hunt",
         triggers=("find jobs", "job search", "job boards"),
         tool_domains=("jobs",),
+    ),
+    "social": Capability(
+        id="social",
+        triggers=("post this on", "share on twitter", "post to instagram",
+                  "publish to youtube", "post to threads", "social media post"),
+        tool_domains=("social",),
     ),
 }
 
