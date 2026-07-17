@@ -46,8 +46,8 @@ MAX_AGENT_ITER: "6"  # Maximum tool/planning iterations per task; raise for comp
 AGENT_MAX_TOKENS: "512"  # Max model output tokens per agent step.
 LLM_CTX_SIZE: "12288"  # Local llama-server context ceiling; used directly by agentic.py's context-budget guard now. Keep in sync with the actual llama-server --ctx-size.
 AGENT_CONTEXT_BUDGET_RATIO: "0.65"  # Fraction of LLM_CTX_SIZE the agent prompt (persona+memory+policy+wiki+skill+learned knowledge+experience+tool schemas) is allowed to occupy before blocks start getting dropped.
-AGENT_NOTE_MAX_CHARS: "1500"  # Max characters from notes/files injected into an agent step.
-AGENT_TOOL_RESULT_MAX_CHARS: "3000"  # Max characters retained from one tool result.
+AGENT_NOTE_MAX_CHARS: "5000"  # Max characters from notes/files injected into an agent step.
+AGENT_TOOL_RESULT_MAX_CHARS: "8000"  # Max characters retained from one tool result. Raised so research synthesis output isn't truncated.
 
 # -- Agentic policy RAG (skills.md/schedule.md excerpt selection) --
 AGENTIC_POLICY_CHUNK_CHARS: "600"  # Chunk size (chars) skills.md/schedule.md are split into before relevance scoring.
@@ -77,7 +77,7 @@ AGENT_HISTORY_ALWAYS_KEEP_RECENT: "2"  # Number of most-recent turns always kept
 AGENT_RESEARCH_MAX_CALLS: "1"  # Max combined deep_search+deep_research calls per agentic workflow. They share one budget so task mode does not repeatedly spend web/research calls in one workflow.
 
 # -- Workspace tool limits --
-MAX_WRITE_CHARS: "20000"  # Max characters allowed when agent saves a note/draft.
+MAX_WRITE_CHARS: "50000"  # Max characters allowed when agent saves a note/draft.
 MAX_READ_CHARS: "12000"  # Max characters returned when agent reads a workspace file.
 
 # Social config
@@ -128,7 +128,7 @@ SEARXNG_MAX_RESULTS: "3"  # Max results per SearXNG call. Shared by web_search (
 DEEP_SEARCH_NUM_SEARCHES: "7"  # How many SearXNG pages to pull CONCURRENTLY for the SAME query and merge/dedup by URL, widening one-pass coverage without an LLM rewriting the query.
 DEEP_SEARCH_NUM_FETCHES: "0"  # How many (deduped) results to actually fetch full page text for. Set to 0 for snippet-only "search, don't fetch" passes.
 DEEP_SEARCH_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap before condensing, for deep_search's own fetches only. deep_research now has its own DEEP_RESEARCH_MAX_CHARS_PER_PAGE below instead of inheriting this.
-DEEP_SEARCH_MAX_WORKERS: "8"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on Jetson (limited cores) vs PC if contention shows up. Shared by deep_search and deep_research.
+DEEP_SEARCH_MAX_WORKERS: "4"  # Max concurrent threads for both multi-page search and multi-URL fetch. Lower on Jetson (limited cores) vs PC if contention shows up. Shared by deep_search and deep_research.
 
 # -- deep_research (multi-round adaptive research, accuracy-first) --
 # deep_research calls deep_search's internal impl once per round, but uses
@@ -148,7 +148,7 @@ DEEP_RESEARCH_MAX_ROUNDS: "2"  # Hard ceiling on search+fetch rounds. Lower this
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION: "8000"  # How much CONDENSED (not raw) accumulated evidence the continue/refine decision call sees. Bumped from 6000 alongside the wider per-round fetch count.
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS: "12000"  # How much condensed accumulated evidence the final synthesis call sees. Bumped from 8000 for the same reason.
 DEEP_RESEARCH_DECISION_MAX_TOKENS: "200"  # Token budget for the continue/refine decision call.
-DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "700"  # Token budget for the final synthesis call. Bumped slightly from 600 to give room for the corroborated-vs-single-source framing the synthesis prompt now asks for.
+DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "1500"  # Token budget for the final synthesis call. Raised from 700 so the LLM can produce a real synthesized article rather than a dump of URL snippets.
 
 # -- in-memory evidence condensation (embedding-based relevance filtering) --
 # deep_search keeps its own knobs below unchanged. deep_research now uses
@@ -160,12 +160,12 @@ DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS: "700"  # Token budget for the final synthesi
 CONDENSE_CHUNK_CHARS: "500"  # Chunk size (chars) fetched pages are split into before scoring. Shared by deep_search and deep_research.
 CONDENSE_TOP_K: "8"  # Max relevant chunks kept in deep_search's condensed bundle.
 CONDENSE_MIN_SCORE: "0.15"  # Minimum relevance score to keep a chunk in deep_search's condensed bundle. Below this, content is dropped, not truncated-and-kept.
-CONDENSE_MAX_CHUNKS_TO_SCORE: "60"  # Caps embedding latency for deep_search regardless of total fetched volume. Lower on Jetson if embedding calls stack up (~200ms each per your harrier embedder benchmarks — 60 chunks ≈ 12s worst case).
+CONDENSE_MAX_CHUNKS_TO_SCORE: "30"  # Caps embedding latency for deep_search regardless of total fetched volume. Lower on Jetson if embedding calls stack up (~200ms each per your harrier embedder benchmarks — 30 chunks ≈ 6s worst case).
 
 # -- deep_research condensation (wider net, corroboration-aware) --
 RESEARCH_CONDENSE_TOP_K: "12"  # Max relevant chunks kept in deep_research's condensed bundle per round — higher than deep_search's 8 since a trusted-KB answer benefits from more corroborating excerpts surviving into synthesis.
 RESEARCH_CONDENSE_MIN_SCORE: "0.12"  # Lower bar than deep_search's 0.15 — borderline chunks get a chance to clear the bar via the corroboration bonus below instead of being dropped outright.
-RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE: "60"  # Same embedding-latency cap as CONDENSE_MAX_CHUNKS_TO_SCORE but sized for deep_research's wider per-round fetch count. On Jetson, 100 chunks at ~200ms/chunk is ~20s worst case per round — budget accordingly against DEEP_RESEARCH_MAX_ROUNDS above. Drop this first if a full research dig is competing with anything latency-sensitive on the Jetson.
+RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE: "30"  # Same embedding-latency cap as CONDENSE_MAX_CHUNKS_TO_SCORE but sized for deep_research's wider per-round fetch count. On Jetson, 30 chunks at ~200ms/chunk is ~6s worst case per round.
 
 # -- cross-source corroboration ("sources agreement" scoring, deep_research only) --
 # Independent confirmation of the same claim from a SECOND domain boosts
@@ -183,7 +183,7 @@ RESEARCH_AGREEMENT_SHINGLE_SIZE: "5"  # Word-shingle length used for the similar
 # crawl4ai isn't installed, or RESEARCH_USE_CRAWL4AI is off, deep_research
 # transparently falls back to web_fetch (requests+trafilatura) for every
 # URL — nothing breaks, it just loses the JS-rendering advantage.
-RESEARCH_USE_CRAWL4AI: "1"  # 1 to prefer Crawl4AI's batched Playwright fetch for deep_research; 0 to always use web_fetch instead.
+RESEARCH_USE_CRAWL4AI: "0"  # 0 to always use web_fetch instead of Crawl4AI's Playwright browser. Set 1 only if JS rendering is needed and RAM isn't a concern (Chromium/Playwright uses substantial RAM per page).
 CRAWL4AI_TIMEOUT_MS: "20000"  # Per-page timeout for Crawl4AI's Playwright load. Consider raising on Jetson for cold-start latency on first run.
 CRAWL4AI_MAX_CONCURRENT: "2"  # Max concurrent Playwright pages within one Crawl4AI batch session. Headless Chromium is not light — drop this to 2 on Jetson if it's competing with llama-server for RAM during a research round.
 CRAWL4AI_WORD_COUNT_THRESHOLD: "40"  # Minimum word count for Crawl4AI to consider a page block worth keeping, filtering out nav/boilerplate fragments.
@@ -201,4 +201,4 @@ RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots
 WEB_FETCH_MAX_DOWNLOAD_BYTES: "5_000_000"  # Hard byte cap per fetch; download aborted mid-stream before extraction/truncation, bounding worst-case memory for one fetch.
 WEB_FETCH_TIMEOUT_SECONDS: "8"  # Per-request timeout for web_fetch's underlying HTTP call.
 TOOLS_CACHE_TTL_SECONDS: "900"  # In-process cache lifetime (seconds) for both search results and fetched pages. 15 min default.
-TOOLS_CACHE_MAX_ENTRIES: "256"  # Max entries per cache (search cache and fetch cache each get their own instance of this limit) before oldest entries are evicted.
+TOOLS_CACHE_MAX_ENTRIES: "128"  # Max entries per cache (search cache and fetch cache each get their own instance of this limit) before oldest entries are evicted.

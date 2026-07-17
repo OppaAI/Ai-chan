@@ -26,7 +26,7 @@ from typing import Any
 
 from system.userspace import user_workspace_root
 
-MAX_WRITE_CHARS = int(os.getenv("MAX_WRITE_CHARS", 20_000))
+MAX_WRITE_CHARS = int(os.getenv("MAX_WRITE_CHARS", 50_000))
 MAX_READ_CHARS = int(os.getenv("MAX_READ_CHARS", 12_000))
 
 

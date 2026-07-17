@@ -37,7 +37,7 @@ GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
 
 # Kept in sync with agentic.py's AGENT_NOTE_MAX_CHARS so a note saved via the
 # graph executor can't end up longer than one saved via the ReAct path.
-AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "1500"))
+AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "5000"))
 
 # Tools whose toolkit implementations accept an `embedder` kwarg for
 # semantic scoring. dispatch_tool() in agentic.py passes the shared Harrier
