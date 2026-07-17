@@ -65,6 +65,8 @@ from agentic.tools import (
     repo_file_tree,
     repo_read_file,
     repo_search_text,
+    read_paper_url,
+    write_report,
     search_jobs,
     draft_photo_social,
     post_photo_social,
@@ -588,6 +590,28 @@ _reg("save_note", "Save a note to a workspace file. content MUST be plain text o
     {"title": {"type": "string", "description": "Short filename title."}, "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."}, "folder": {"type": "string", "description": "Subfolder, default: notes"}},
     required=["title", "content"])
 
+_reg("read_paper_url",
+    "Fetch and extract text from one EXACT URL (a specific paper/article the "
+    "user pointed at) — no search involved, unlike deep_search/deep_research. "
+    "Pass `query` to get the content condensed to the most relevant excerpts "
+    "instead of just the opening section.",
+    lambda args: read_paper_url(args.get("url", ""), args.get("query", ""), embedder=_owner_embedder(_CURRENT_OWNER), max_chars=int(args.get("max_chars", 40000) or 40000)),
+    {"url": {"type": "string"}, "query": {"type": "string"}, "max_chars": {"type": "integer"}},
+    required=["url"])
+
+_reg_no_handler("write_report",
+    "Write (or append a section to) one polished long-form markdown report "
+    "under the workspace reports folder. Use for a single coherent "
+    "deliverable — architecture review, paper comparison, improvement "
+    "proposal — not short scratch notes (save_note) or retrievable knowledge "
+    "(learn_knowledge). For arxiv_style, call once per section across "
+    "multiple turns with append=true, using the same title each time.",
+    {"title": {"type": "string"}, "content": {"type": "string"},
+     "report_dir": {"type": "string"}, "arxiv_style": {"type": "boolean"},
+     "section": {"type": "string", "description": "abstract|introduction|related_work|architecture|discussion|limitations|conclusion|references"},
+     "append": {"type": "boolean"}},
+    required=["title"])
+
 _reg("read_workspace_file", "Read workspace file.",
     lambda args: read_workspace_file(args.get("relative_path", "")),
     {"relative_path": {"type": "string"}},
@@ -834,6 +858,18 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
                 embedder=_owner_embedder(owner),
             )
         return json.dumps({"ok": bool(doc_id), "doc_id": doc_id}, ensure_ascii=False)
+    if name == "read_paper_url":
+        return read_paper_url(
+            args.get("url", ""), args.get("query", ""),
+            embedder=_owner_embedder(owner),
+            max_chars=int(args.get("max_chars", 40000) or 40000),
+        )
+    if name == "write_report":
+        return write_report(
+            args.get("title", "Aiko report"), args.get("content", ""),
+            args.get("report_dir", "reports"), bool(args.get("arxiv_style", False)),
+            args.get("section", ""), bool(args.get("append", False)),
+        )
     entry = _TOOLS.get(name)
     if not entry or entry[1] is None:
         return f"[unknown tool: {name}]"
