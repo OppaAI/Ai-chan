@@ -474,28 +474,8 @@ def ensure_workspace_knowledge_job(timezone: str | None = None) -> None:
 # Both run_scheduled_photo_social() and run_scheduled_video_social() take no
 # arguments, but register_system_handler's calling convention always passes
 # one positional arg (memorize), so the registered handler needs a one-line
-# wrapper to absorb it, e.g.:
-#
-#   from functools import partial
-#   from toolkit.social import (
-#       run_scheduled_weekly_social, run_scheduled_photo_social, run_scheduled_video_social,
-#   )
-#   from system.schedule import (
-#       register_system_handler,
-#       ensure_weekly_social_job, ensure_photo_social_job, ensure_video_social_job,
-#   )
-#
-#   register_system_handler("weekly_social", run_scheduled_weekly_social)  # signature already matches fn(memorize)
-#   register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
-#   register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
-#
-#   ensure_weekly_social_job()
-#   ensure_photo_social_job()
-#   ensure_video_social_job()
-#
-# Call the three register_system_handler(...) lines and the three
-# ensure_*_job() calls once at app startup, alongside wherever
-# deep_study/workspace_knowledge handlers are already registered.
+# wrapper to absorb it — see register_social_handlers() below, which does
+# the registration and seeding described in this comment automatically.
 
 WEEKLY_SOCIAL_JOB_TITLE = "weekly_social_post"
 # Runs once per week, the morning after a Sun-Sat window closes. The handler
@@ -569,6 +549,42 @@ def ensure_video_social_job(timezone: str | None = None) -> None:
         interval_seconds=max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS),
     )
     log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
+
+
+def register_social_handlers(timezone: str | None = None) -> None:
+    """Register the weekly/photo/video social handlers and seed their jobs.
+
+    This is the concrete version of the pattern this module's module-level
+    comment used to only describe in prose: it registers all three social
+    handlers with register_system_handler() and then seeds all three jobs
+    via ensure_weekly_social_job / ensure_photo_social_job /
+    ensure_video_social_job. Safe to call on every app startup — handler
+    registration is just a dict update, and each ensure_*_job() call is
+    already idempotent by title.
+
+    Call this once at startup, alongside wherever deep_study/workspace
+    knowledge handlers are already registered (see
+    memory.learn.register_deep_study_handlers and
+    ensure_workspace_knowledge_job for the equivalent pattern). Imported
+    lazily so schedule.py doesn't take a hard, always-on dependency on
+    toolkit.social (and its heavier deps like the vision/LLM clients,
+    requests, OpenAI client, etc.) at module import time.
+    """
+    from toolkit.social import (
+        run_scheduled_weekly_social,
+        run_scheduled_photo_social,
+        run_scheduled_video_social,
+    )
+
+    register_system_handler("weekly_social", run_scheduled_weekly_social)  # signature already matches fn(memorize)
+    register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
+    register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
+
+    ensure_weekly_social_job(timezone)
+    ensure_photo_social_job(timezone)
+    ensure_video_social_job(timezone)
+
+    log.info("Registered social handlers (weekly_social, photo_social, video_social) and seeded their jobs.")
 
 
 def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
