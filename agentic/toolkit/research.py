@@ -339,6 +339,41 @@ def web_fetch(
     return result
 
 
+def read_paper_url(
+    url: str,
+    query: str = "",
+    embedder=None,
+    max_chars: int = 40000,
+    condense_top_k: int = 12,
+) -> str:
+    """Fetch one EXACT URL — no search involved — for reading a specific
+    paper/document the user already chose. Distinct from deep_research,
+    which discovers URLs via search and may or may not land on the exact
+    page given.
+
+    Caveat: extraction is trafilatura, built for HTML article pages. Many
+    paper links are raw PDFs (arxiv.org/pdf/...) and will likely return
+    little or no text. Prefer the HTML/abstract page (arxiv.org/abs/... or
+    an arXiv HTML rendering) over a direct PDF link where available.
+
+    Without `query`: returns the first max_chars of extracted text — which
+    will then be hard-truncated again to AGENT_TOOL_RESULT_MAX_CHARS (8000
+    chars) once wrapped as a tool observation, so a long paper effectively
+    gets reduced to its opening section only.
+
+    With `query`: text is chunked and relevance-scored the same way
+    deep_research condenses evidence, so what survives the 8000-char
+    observation limit is the material most relevant to the task at hand,
+    not just whatever came first in the document.
+    """
+    text = web_fetch(url, max_chars=max_chars, max_download_bytes=15_000_000)
+    if text.startswith("[fetch failed"):
+        return text
+    if not query:
+        return f"[Fetched paper content — {url}]\n\n{text}"
+    condensed = condense_evidence([(url, text)], query, embedder=embedder, top_k=condense_top_k)
+    return f"[Fetched paper content — {url}, condensed for: {query}]\n\n{condensed}"
+  
 # ── robots.txt compliance ("source agreement" to be crawled) ────────────────
 
 def _get_robot_parser(origin: str) -> RobotFileParser:
