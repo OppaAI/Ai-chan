@@ -684,15 +684,6 @@ _reg("search_jobs", "Search configured job boards for a role. If location is omi
     {"query": {"type": "string"}, "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."}, "max_results": {"type": "integer"}, "max_age_days": {"type": "integer"}, "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
     required=["query"])
 
-_reg("draft_weekly_social", "Create a weekly memory-postcard draft (for X and/or Threads) from this week's pinned memories, for human review. Does NOT post anything. Use only for the weekly memory-postcard workflow, not general photo/video posting.",
-    lambda args: draft_weekly_social(force=bool(args.get("force", False))),
-    {"force": {"type": "boolean", "description": "Overwrite an existing draft already created for this week."}})
-
-_reg("post_weekly_social", "Post an ALREADY HUMAN-APPROVED weekly memory-postcard draft to X and/or Threads. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
-    lambda args: post_weekly_social(args.get("draft_dir", ""), providers=args.get("providers") or None),
-    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_weekly_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["x", "threads"]}, "description": "Optional subset of providers to post to; defaults to the draft's configured providers."}},
-    required=["draft_dir"])
-
 _reg("draft_photo_social", "Scan the photo inbox, caption and curate candidates, and create an Instagram photo draft bundle for human review. Does NOT post anything.",
     lambda args: draft_photo_social(inbox=args.get("inbox") or None, force=bool(args.get("force", False))),
     {"inbox": {"type": "string", "description": "Optional workspace-relative photo inbox override."}, "force": {"type": "boolean", "description": "Create a new draft even if one already exists for this run."}})
