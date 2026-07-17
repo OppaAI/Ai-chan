@@ -8,7 +8,7 @@ environment. All user-specific data is stored under <USER_STATE_ROOT>/<user_id>/
 subdirectories:
 
   memory/         — SQLite memory DB, embeddings, consolidation state
-  profile/        — user.md profile/bio markdown  
+  profile/        — USER.md profile/bio markdown  
   workspace/      — user workspace (code, projects)
   social/weekly/  — weekly social draft bundles (images, posts)
   logs/           — per-user log files
@@ -18,7 +18,7 @@ Key functions:
   - user_state_dir()      — resolve <USER_STATE_ROOT>/<user_id> for a user
   - user_state_path()     — resolve a file path under user state
   - user_workspace_root() — resolve workspace root for a user
-  - user_profile_path()   — resolve profile path (defaults to profile/user.md)
+  - user_profile_path()   — resolve profile path (defaults to profile/USER.md)
   - set_current_user_id() / reset_current_user_id() — per-request user context
 
 The multi-user design allows running multiple Aiko instances (e.g., for
@@ -130,10 +130,10 @@ def user_workspace_root(user_id: str | None = None) -> Path:
 def user_profile_path(user_id: str | None = None) -> Path:
     """Per-user editable profile/bio markdown path.
 
-    Defaults to <USER_STATE_ROOT>/<user_id>/profile/user.md. The profile stores
+    Defaults to <USER_STATE_ROOT>/<user_id>/profile/USER.md. The profile stores
     user-provided biographical information, preferences, and identity
     details that Aiko can use to personalize responses.
     """
     if os.getenv("USER_PROFILE_PATH"):
         return Path(os.environ["USER_PROFILE_PATH"]).expanduser().resolve()
-    return user_state_path("profile/user.md", user_id).resolve()
+    return user_state_path("profile/USER.md", user_id).resolve()

@@ -37,7 +37,7 @@ USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <US
 # -- Agent executor mode --
 AGENT_EXECUTOR_MODE: "hybrid"  # react = old ReAct loop only; graph = master-plan DAG only; hybrid = graph first, ReAct fallback once for novel workflows.
 GRAPH_AGENT_ENABLED: "1"  # Enable deterministic graph/master-plan executor for known workflows.
-GRAPH_MASTER_PLAN_PATH: "agentic/master_plans.json"  # Per-user JSON file for practiced/promoted graph workflows.
+GRAPH_AGENT_ROUTINE_PATH: "skills/routine.json"  # Per-user JSON file for practiced/promoted graph workflows.
 GRAPH_MAX_WORKERS: "4"  # Max parallel tool nodes for graph execution.
 AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline master-plan promotion, not prompt context, by default.
 

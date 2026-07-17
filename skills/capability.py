@@ -65,6 +65,23 @@ TOOL_DOMAINS: dict[str, str] = {
     "search_jobs": "jobs",
     "list_master_plans": "graph",
     "run_master_plan": "graph",
+    # Social posting tools — deliberately capability-gated, never ALWAYS_ON.
+    # Posting is the highest-stakes tool class in the loop, so it gets the
+    # same (not looser) gating as research/scheduling/photo/repo.
+    #
+    # Lane A (weekly postcard) is intentionally NOT exposed here — it is
+    # non-agentic by design (see toolkit/social.py docstring): the scheduler
+    # drives it directly via run_scheduled_weekly_social() on a Sun-Sat
+    # cadence. Posting still requires draft.json["human_approved"] = true
+    # regardless of path (scheduler or agent) — see _require_approved in
+    # toolkit/social.py — but there is no conversational "draft/post the
+    # weekly postcard" action for the agent loop to take, so it's not
+    # registered as a tool. Only the inbox-driven photo/video lanes are
+    # agent-callable.
+    "draft_photo_social": "social",
+    "post_photo_social": "social",
+    "draft_video_social": "social",
+    "post_video_social": "social",
 }
 
 # Always sent regardless of which capability matched — the base loop tools
@@ -104,6 +121,12 @@ CAPABILITIES: dict[str, Capability] = {
         id="job_hunt",
         triggers=("find jobs", "job search", "job boards"),
         tool_domains=("jobs",),
+    ),
+    "social": Capability(
+        id="social",
+        triggers=("post this on", "share on twitter", "post to instagram",
+                  "publish to youtube", "post to threads", "social media post"),
+        tool_domains=("social",),
     ),
 }
 

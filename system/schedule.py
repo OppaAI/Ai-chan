@@ -13,7 +13,10 @@ A scheduled job is a small local record with:
   - handler: optional name of a pre-registered system handler (see
     register_system_handler) to call directly instead of going through
     on_due/chat — used for window-style jobs like the deep_studying
-    start/stop pair (see ensure_deep_study_window_jobs).
+    start/stop pair (see ensure_deep_study_window_jobs), the periodic
+    workspace/knowledge folder scan, and the periodic photo/video social
+    inbox scans (see ensure_workspace_knowledge_job,
+    ensure_photo_social_job, ensure_video_social_job).
 
 The scheduler is deliberately local-first: jobs are stored in JSON under
 WORKSPACE_ROOT and a single daemon thread sleeps until the next due event.
@@ -26,15 +29,22 @@ by the user:
   - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
   - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
 
-Other system-style behaviors (e.g. weekly_social, deep_study_start/stop)
-live entirely in schedule.json as ordinary jobs, but instead of routing
-through on_due/chat, they name a "handler" — a Python callable registered
-once at startup via register_system_handler(). schedule.json can only ever
-select a handler from that pre-registered allowlist; it can never name or
-execute an arbitrary function. This lets timing/enable/disable be fully
-data-driven (edit schedule.json, no code change, no restart needed if the
-caller notifies the scheduler) while the actual behavior each handler runs
-is still something a human explicitly wired up in code.
+Other system-style behaviors (e.g. weekly_social, photo_social, video_social,
+deep_study_start/stop, workspace_knowledge_scan) live entirely in
+schedule.json as ordinary jobs, but instead of routing through on_due/chat,
+they name a "handler" — a Python callable registered once at startup via
+register_system_handler(). schedule.json can only ever select a handler
+from that pre-registered allowlist; it can never name or execute an
+arbitrary function. This lets timing/enable/disable be fully data-driven
+(edit schedule.json, no code change, no restart needed if the caller
+notifies the scheduler) while the actual behavior each handler runs is
+still something a human explicitly wired up in code.
+
+Every registered handler is called as fn(memorize) — see
+register_system_handler — even if the underlying function doesn't need
+memorize (e.g. the photo/video social scans); those handlers just take and
+ignore the argument, same convention as everything else the scheduler
+fires.
 
 Timezone resolution no longer lives here — every "now"/timezone lookup in
 this file goes through system.bioclock, the app-wide single source of truth
@@ -453,6 +463,130 @@ def ensure_workspace_knowledge_job(timezone: str | None = None) -> None:
     log.info("Seeded workspace knowledge scan job every %ss", max(60, WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS))
 
 
+# ── social folder-monitoring job seeding ──────────────────────────────────────
+# Lane A (weekly postcard) is a true weekly cadence job, not a folder scan —
+# see ensure_weekly_social_job below, and toolkit/social.py's module
+# docstring for why it stays out of the agent tool loop entirely.
+#
+# Lanes B/C (photo, video) are folder-drop workflows: there's no fixed
+# cadence to "check the inbox", so — same pattern as
+# ensure_workspace_knowledge_job above — they're seeded as interval jobs.
+# Both run_scheduled_photo_social() and run_scheduled_video_social() take no
+# arguments, but register_system_handler's calling convention always passes
+# one positional arg (memorize), so the registered handler needs a one-line
+# wrapper to absorb it — see register_social_handlers() below, which does
+# the registration and seeding described in this comment automatically.
+
+WEEKLY_SOCIAL_JOB_TITLE = "weekly_social_post"
+# Runs once per week, the morning after a Sun-Sat window closes. The handler
+# itself (run_scheduled_weekly_social) is idempotent per calendar week
+# (generate_weekly_draft skips if a draft already exists), so a slightly
+# early/late fire here is harmless.
+WEEKLY_SOCIAL_TIME_OF_DAY = os.getenv("WEEKLY_SOCIAL_TIME_OF_DAY", "08:00")
+
+PHOTO_SOCIAL_JOB_TITLE = "photo_social_scan"
+PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
+
+VIDEO_SOCIAL_JOB_TITLE = "video_social_scan"
+VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
+
+
+def ensure_weekly_social_job(timezone: str | None = None) -> None:
+    """Idempotently seed the weekly memory-postcard job (Lane A).
+
+    Fires once a week; the handler itself decides which completed Sun-Sat
+    window to draft from (see toolkit.social.last_completed_sunday_saturday),
+    so the exact day/time here just needs to land safely after a week closes
+    — it does not need to be precise.
+    """
+    existing_titles = {job.get("title") for job in _read_all()}
+    if WEEKLY_SOCIAL_JOB_TITLE in existing_titles:
+        return
+    schedule_job_record(
+        title=WEEKLY_SOCIAL_JOB_TITLE,
+        task=WEEKLY_SOCIAL_JOB_TITLE,
+        time_of_day=WEEKLY_SOCIAL_TIME_OF_DAY,
+        frequency="weekly",
+        timezone=timezone,
+        days_of_week=["sun"],
+        action="agentic",
+        handler="weekly_social",
+    )
+    log.info("Seeded weekly social job (Sundays at %s)", WEEKLY_SOCIAL_TIME_OF_DAY)
+
+
+def ensure_photo_social_job(timezone: str | None = None) -> None:
+    """Idempotently seed the photo-inbox scan job (Lane B)."""
+    existing_titles = {job.get("title") for job in _read_all()}
+    if PHOTO_SOCIAL_JOB_TITLE in existing_titles:
+        return
+    schedule_job_record(
+        title=PHOTO_SOCIAL_JOB_TITLE,
+        task="Scan photo inbox for postable content",
+        time_of_day="00:00",
+        frequency="interval",
+        timezone=timezone,
+        action="agentic",
+        handler="photo_social",
+        interval_seconds=max(60, PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS),
+    )
+    log.info("Seeded photo social scan job every %ss", max(60, PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS))
+
+
+def ensure_video_social_job(timezone: str | None = None) -> None:
+    """Idempotently seed the video-inbox scan job (Lane C)."""
+    existing_titles = {job.get("title") for job in _read_all()}
+    if VIDEO_SOCIAL_JOB_TITLE in existing_titles:
+        return
+    schedule_job_record(
+        title=VIDEO_SOCIAL_JOB_TITLE,
+        task="Scan video inbox for a described, not-yet-drafted video",
+        time_of_day="00:00",
+        frequency="interval",
+        timezone=timezone,
+        action="agentic",
+        handler="video_social",
+        interval_seconds=max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS),
+    )
+    log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
+
+
+def register_social_handlers(timezone: str | None = None) -> None:
+    """Register the weekly/photo/video social handlers and seed their jobs.
+
+    This is the concrete version of the pattern this module's module-level
+    comment used to only describe in prose: it registers all three social
+    handlers with register_system_handler() and then seeds all three jobs
+    via ensure_weekly_social_job / ensure_photo_social_job /
+    ensure_video_social_job. Safe to call on every app startup — handler
+    registration is just a dict update, and each ensure_*_job() call is
+    already idempotent by title.
+
+    Call this once at startup, alongside wherever deep_study/workspace
+    knowledge handlers are already registered (see
+    memory.learn.register_deep_study_handlers and
+    ensure_workspace_knowledge_job for the equivalent pattern). Imported
+    lazily so schedule.py doesn't take a hard, always-on dependency on
+    toolkit.social (and its heavier deps like the vision/LLM clients,
+    requests, OpenAI client, etc.) at module import time.
+    """
+    from toolkit.social import (
+        run_scheduled_weekly_social,
+        run_scheduled_photo_social,
+        run_scheduled_video_social,
+    )
+
+    register_system_handler("weekly_social", run_scheduled_weekly_social)  # signature already matches fn(memorize)
+    register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
+    register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
+
+    ensure_weekly_social_job(timezone)
+    ensure_photo_social_job(timezone)
+    ensure_video_social_job(timezone)
+
+    log.info("Registered social handlers (weekly_social, photo_social, video_social) and seeded their jobs.")
+
+
 def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
     """Idempotently seed the four recurring jobs that bound Aiko's
     scheduled deep_studying window (weekdays 05:00-18:00, weekends
@@ -513,11 +647,12 @@ def register_system_handler(name: str, fn: Callable[[Any], Any]) -> None:
 
     `fn` is called as fn(memorize) when a job with matching "handler" fires.
     Call this once at startup for each system-style behavior you want
-    schedule.json to be able to schedule (e.g. weekly_social,
-    deep_study_start/deep_study_stop). If `fn` needs extra context (an LLM
-    client/model, say), bind it in with functools.partial before
-    registering — the scheduler always calls it with exactly one
-    positional arg, memorize.
+    schedule.json to be able to schedule (e.g. weekly_social, photo_social,
+    video_social, deep_study_start/deep_study_stop). If `fn` needs extra
+    context (an LLM client/model, say) or doesn't need memorize at all
+    (e.g. photo_social/video_social), bind or absorb it with
+    functools.partial or a small lambda before registering — the scheduler
+    always calls it with exactly one positional arg, memorize.
     """
     _SYSTEM_HANDLERS[name] = fn
 

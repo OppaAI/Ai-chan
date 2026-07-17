@@ -3,7 +3,7 @@ skills/skills.py
 
 Skill document helpers and registry for local markdown skill files.
 
-``skills/skills.md`` remains the short human-readable skill index loaded into
+``skills/SKILLS.md`` remains the short human-readable skill index loaded into
 Aiko's base persona. Full repeatable workflows live under ``skills/skillsets/`` as
 ``<id>.md`` files and optional ``skill.yaml`` metadata.
 
@@ -28,7 +28,7 @@ import numpy as np
 from cognition import reason
 from system.userspace import user_state_dir
 
-DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "skills.md"
+DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "SKILLS.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
 
 _STOPWORDS = reason.STOPWORDS
@@ -247,7 +247,7 @@ def _discover_in(root: str | Path) -> list[SkillDoc]:
         return []
     docs: list[SkillDoc] = []
     for skill_file in sorted(base.glob("*.md")):
-        skill_id = skill_file.parent.name
+        skill_id = skill_file.stem
         try:
             raw = skill_file.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -327,7 +327,7 @@ def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:
     on-demand full loads — not injected automatically into every turn."""
     cleaned = skill_id.strip().replace("/", "").replace("\\", "")
     for doc in discover_skill_docs():
-        if doc.skill_id == cleaned or doc.path.parent.name == cleaned:
+        if doc.skill_id == cleaned:
             try:
                 text = doc.path.read_text(encoding="utf-8", errors="replace")[:max(1, min(max_chars, 50_000))]
             except OSError as e:
