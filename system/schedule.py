@@ -483,6 +483,8 @@ WEEKLY_SOCIAL_JOB_TITLE = "weekly_social_post"
 # (generate_weekly_draft skips if a draft already exists), so a slightly
 # early/late fire here is harmless.
 WEEKLY_SOCIAL_TIME_OF_DAY = os.getenv("WEEKLY_SOCIAL_TIME_OF_DAY", "08:00")
+WEEKLY_SOCIAL_RETRY_JOB_TITLE = "weekly_social_retry_check"
+WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS = int(os.getenv("WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS", str(30 * 60)))
 
 PHOTO_SOCIAL_JOB_TITLE = "photo_social_scan"
 PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
@@ -513,6 +515,29 @@ def ensure_weekly_social_job(timezone: str | None = None) -> None:
         handler="weekly_social",
     )
     log.info("Seeded weekly social job (Sundays at %s)", WEEKLY_SOCIAL_TIME_OF_DAY)
+
+
+def ensure_weekly_social_retry_job(timezone: str | None = None) -> None:
+    """Idempotently seed the Sunday-bounded retry check for Lane A.
+
+    Fires every WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS regardless of day; the
+    handler itself (retry_weekly_social_if_needed) is what limits action to
+    Sundays, so there's nothing day-specific to seed here.
+    """
+    existing_titles = {job.get("title") for job in _read_all()}
+    if WEEKLY_SOCIAL_RETRY_JOB_TITLE in existing_titles:
+        return
+    schedule_job_record(
+        title=WEEKLY_SOCIAL_RETRY_JOB_TITLE,
+        task="Retry the weekly postcard if it hasn't posted yet (Sundays only)",
+        time_of_day="00:00",
+        frequency="interval",
+        timezone=timezone,
+        action="agentic",
+        handler="weekly_social_retry",
+        interval_seconds=max(60, WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS),
+    )
+    log.info("Seeded weekly social retry-check job every %ss", max(60, WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS))
 
 
 def ensure_photo_social_job(timezone: str | None = None) -> None:
@@ -574,15 +599,18 @@ def register_social_handlers(timezone: str | None = None) -> None:
         run_scheduled_weekly_social,
         run_scheduled_photo_social,
         run_scheduled_video_social,
+        retry_weekly_social_if_needed,
     )
 
-    register_system_handler("weekly_social", run_scheduled_weekly_social)  # signature already matches fn(memorize)
+    register_system_handler("weekly_social", run_scheduled_weekly_social)
     register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
     register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
+    register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
 
     ensure_weekly_social_job(timezone)
     ensure_photo_social_job(timezone)
     ensure_video_social_job(timezone)
+    ensure_weekly_social_retry_job(timezone)
 
     log.info("Registered social handlers (weekly_social, photo_social, video_social) and seeded their jobs.")
 
