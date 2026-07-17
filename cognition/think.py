@@ -54,10 +54,10 @@ from skills.wiki import wiki_knowledge_context_for
 from memory.knowledge import knowledge_context_for
 from cognition import CONTEXT_POOL
 from system.log      import get_logger
-from skills.social import run_scheduled_weekly_social
 from system.schedule import DueJob, register_system_handler
 from system.userspace import current_user_id, current_display_name, user_profile_path, user_state_dir
 from system import bioclock
+from toolkit.social import run_scheduled_weekly_social
 from cognition import reason
 from memory import learn
 

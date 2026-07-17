@@ -220,7 +220,8 @@ def _ctx_line(label: str, tok: int, latency_ms: float, content: str,
 
 
 def _gantt_lines(items: list[tuple[str, float, int, str]],
-                 max_bar: int = 48) -> list[str]:
+                 max_bar: int = 48,
+                 total_time_ms: float | None = None) -> list[str]:
     """Dual-bar chart: left = time latency, right = token proportion + %.
     items: (label, latency_ms, tokens, colour_code)
     """
@@ -243,8 +244,9 @@ def _gantt_lines(items: list[tuple[str, float, int, str]],
                       f" {label:<8} {lat_bar:<{hw}} {lat_ms:+.0f}ms  "
                       f"{tok:>5}tok  {tok_bar:<{hw}} {pct:5.1f}%"))
     total_t = sum(t for _, _, t, _ in items)
+    total_time_str = f" {total_time_ms:+.0f}ms" if total_time_ms is not None else ""
     out.append(_c(_DIM,
-                  f" {'total':<8} {'─' * hw}          "
+                  f" {'total':<8} {'─' * hw}{total_time_str}  "
                   f"{total_t:>5}tok  {'─' * hw} {100:5.1f}%"))
     return out
 
@@ -1945,8 +1947,13 @@ def _run_session(ui, args):
                 for label, lat_ms, tok, content in ctx_entries:
                     if tok > 0:
                         gantt_items.append((label, lat_ms, tok, _ctx_color(label)))
-                for g_line in _gantt_lines(gantt_items):
+                turn_total_ms = _latency_seconds(current_latency, "submitted_at", "turn_done_at")
+                turn_total_ms = (turn_total_ms * 1000) if turn_total_ms is not None else None
+                for g_line in _gantt_lines(gantt_items, total_time_ms=turn_total_ms):
                     ui.add_message('sys', g_line)
+                t_to_a = _latency_seconds(current_latency, "submitted_at", "first_audio_at")
+                if t_to_a is not None:
+                    ui.add_message('sys', _c(_DIM, f"  T→A (submit → first audio): {_fmt_latency(t_to_a)}"))
 
                 # ── log everything ─────────────────────────────────────────
                 _log_ctx(log, "turn", 0, 0, f"mode={current_latency.get('mode','?')} "
