@@ -1,5 +1,5 @@
 """
-skills/social.py
+toolkit/social.py
 
 Aiko's social publishing workflows, combined into one module. Three lanes:
 
@@ -31,6 +31,27 @@ Aiko's social publishing workflows, combined into one module. Three lanes:
 
 Posting is opt-in for all three lanes. By default the scheduler only
 creates drafts.
+
+All three lanes are also reachable via thin draft_*_social / post_*_social
+wrappers defined below, in the "agent-tool wrappers" section — but only the
+photo and video lane wrappers (draft_photo_social, post_photo_social,
+draft_video_social, post_video_social) are actually registered as tools in
+the agent loop (skills/agentic.py). Lane A's draft_weekly_social /
+post_weekly_social are NOT agent-registered: Lane A is scheduler-only by
+design (run_scheduled_weekly_social, on a Sun-Sat cadence), and drafting is
+idempotent per calendar week, so there's no meaningful conversational
+"draft/post the weekly postcard" action for an agent turn to take. The two
+weekly wrapper functions still exist here for manual/CLI-driven use.
+
+Regardless of which path triggers a post — scheduler autopost or the agent
+tool loop — nothing goes out until a human has set
+draft.json["human_approved"] = true. That gate (_require_approved) is
+enforced identically in both places; an env var like *_SOCIAL_AUTOPOST=1
+only controls whether a post is *attempted*, never whether it's *allowed*.
+A model-supplied "confirm: true" tool argument would not be a real safety
+boundary either, since the model fully controls its own tool-call
+arguments — the gate has to live server-side, checking a flag only a human
+review step (CLI/WebUI, outside the conversation) can set.
 
 Supported providers (by design, current as of this revision):
   - Lane A (weekly postcard): x, threads
@@ -144,6 +165,38 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "on"}
+
+
+class SocialApprovalError(Exception):
+    """Raised when something tries to post a draft that has not been through
+    human review. Both the scheduler's auto-post path and the agent-tool
+    post_*_social wrappers go through _require_approved below, so approval
+    is enforced the same way regardless of which path triggered the post —
+    WEEKLY_SOCIAL_AUTOPOST=1 alone is not enough to actually post; a person
+    still has to set draft.json["human_approved"] = true first."""
+
+
+def _require_approved(draft_dir: Path) -> None:
+    """The load-bearing safety gate for every post path (scheduler and
+    agent-tool alike). Raises SocialApprovalError unless draft.json exists
+    and its "human_approved" key is exactly True. This is deliberately the
+    only place that decides whether a post is allowed to go out — no tool
+    schema field, env var, or model-supplied boolean can substitute for it,
+    since both the scheduler config and the model's own tool-call arguments
+    are things this function does not trust on their own.
+    """
+    meta_path = draft_dir / "draft.json"
+    if not meta_path.exists():
+        raise SocialApprovalError(f"no draft found at {draft_dir}")
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise SocialApprovalError(f"could not read draft.json at {draft_dir}: {e}")
+    if meta.get("human_approved") is not True:
+        raise SocialApprovalError(
+            "this draft has not been approved by a person yet — review it "
+            "before posting"
+        )
 
 
 # Shared text LLM (used for both the weekly memory-selection prompt and the
@@ -409,6 +462,7 @@ def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: d
         "image_path": str(image_path) if image_generated else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "posted": False,
+        "human_approved": False,
     }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     log.info("Weekly social draft created: %s", draft_dir)
@@ -722,12 +776,23 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
 
 
 def run_scheduled_weekly_social(memorize: AikoMemorize) -> dict[str, Any]:
-    """Scheduler entrypoint: draft by default, post only when explicitly enabled."""
+    """Scheduler entrypoint: draft by default. Posting requires BOTH
+    WEEKLY_SOCIAL_AUTOPOST=1 AND draft.json["human_approved"] = true —
+    the env var alone only controls whether the scheduler *attempts* a
+    post; a person still has to review and approve the draft first (same
+    gate _require_approved enforces for the agent-tool wrapper), so this
+    can't quietly auto-publish an unreviewed weekly postcard."""
     if not WEEKLY_AUTODRAFT:
         return {"success": False, "skipped": True, "reason": "WEEKLY_SOCIAL_AUTODRAFT is off"}
     draft = generate_weekly_draft(memorize)
     if WEEKLY_AUTOPOST and draft.get("success") and not draft.get("skipped"):
-        draft["post"] = post_draft(draft["draft_dir"])
+        draft_dir = Path(draft["draft_dir"])
+        try:
+            _require_approved(draft_dir)
+        except SocialApprovalError as e:
+            draft["post"] = {"posted": False, "skipped": True, "reason": str(e)}
+        else:
+            draft["post"] = post_draft(draft_dir)
     return draft
 
 
@@ -971,6 +1036,7 @@ def generate_photo_draft(*, inbox: str | None = None, force: bool = False) -> di
         "candidates_considered": len(candidates),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "posted": False,
+        "human_approved": False,
     }
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     log.info("Photo social draft created: %s (%d item(s))", draft_dir, len(saved_selections))
@@ -1084,12 +1150,20 @@ def post_photo_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = 
 
 
 def run_scheduled_photo_social() -> dict[str, Any]:
-    """Scheduler entrypoint: draft by default, post only when explicitly enabled."""
+    """Scheduler entrypoint: draft by default. Posting requires BOTH
+    PHOTO_SOCIAL_AUTOPOST=1 AND draft.json["human_approved"] = true —
+    see run_scheduled_weekly_social for the rationale."""
     if not PHOTO_SOCIAL_AUTODRAFT:
         return {"success": False, "skipped": True, "reason": "PHOTO_SOCIAL_AUTODRAFT is off"}
     draft = generate_photo_draft()
     if PHOTO_SOCIAL_AUTOPOST and draft.get("success") and not draft.get("skipped"):
-        draft["post"] = post_photo_draft(draft["draft_dir"])
+        draft_dir = Path(draft["draft_dir"])
+        try:
+            _require_approved(draft_dir)
+        except SocialApprovalError as e:
+            draft["post"] = {"posted": False, "skipped": True, "reason": str(e)}
+        else:
+            draft["post"] = post_photo_draft(draft_dir)
     return draft
 
 
@@ -1309,6 +1383,7 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
         "selections": selections,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "posted": False,
+        "human_approved": False,
     }
     (draft_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -1504,14 +1579,107 @@ def post_video_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = 
 
 
 def run_scheduled_video_social() -> dict[str, Any]:
-    """Scheduler entrypoint for the video lane: draft (queue) by default,
-    post only when explicitly enabled."""
+    """Scheduler entrypoint for the video lane: draft (queue) by default.
+    Posting requires BOTH VIDEO_SOCIAL_AUTOPOST=1 AND
+    draft.json["human_approved"] = true — see run_scheduled_weekly_social
+    for the rationale."""
     if not VIDEO_SOCIAL_AUTODRAFT:
         return {"success": False, "skipped": True, "reason": "VIDEO_SOCIAL_AUTODRAFT is off"}
     draft = generate_video_draft()
     if VIDEO_SOCIAL_AUTOPOST and draft.get("success") and not draft.get("skipped"):
-        draft["post"] = post_video_draft(draft["draft_dir"])
+        draft_dir = Path(draft["draft_dir"])
+        try:
+            _require_approved(draft_dir)
+        except SocialApprovalError as e:
+            draft["post"] = {"posted": False, "skipped": True, "reason": str(e)}
+        else:
+            draft["post"] = post_video_draft(draft_dir)
     return draft
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Agent-tool wrappers. skills/agentic.py registers four of the wrapper
+# functions below (draft_photo_social, post_photo_social, draft_video_social,
+# post_video_social) — see the module docstring for why Lane A's
+# draft_weekly_social/post_weekly_social are deliberately NOT registered as
+# agent tools even though they're defined here (kept for manual/CLI-driven
+# use). None of these wrapper functions expose AikoMemorize or a raw
+# approval flag to the LLM. draft_dir arguments are always validated to sit
+# inside the matching lane's root before anything is read or written, and
+# post_* wrappers refuse to post unless a human has already set
+# draft.json["human_approved"] = true via the CLI/WebUI review step (see
+# _require_approved above), outside this conversation. That review step is
+# not implemented in this module — it is expected to live in your CLI/WebUI
+# layer and flip the flag after a person reviews review.md.
+# ══════════════════════════════════════════════════════════════════════════
+
+def _resolve_contained_draft_dir(draft_dir: str | Path, allowed_root: Path) -> Path:
+    """Resolve draft_dir and confirm it sits inside allowed_root.
+
+    draft_dir is model-supplied (an LLM tool-call argument), so this guards
+    against path traversal (e.g. "../../../etc" or an absolute path outside
+    the social workspace) before any read/write touches the filesystem.
+    Raises ValueError if the resolved path escapes allowed_root.
+    """
+    root = allowed_root.resolve()
+    candidate = Path(draft_dir).expanduser()
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError(f"draft_dir must be inside {root}, got {resolved}")
+    return resolved
+
+
+def draft_weekly_social(*, force: bool = False) -> dict[str, Any]:
+    """Agent-tool wrapper for Lane A draft generation. Constructs its own
+    AikoMemorize instance so the LLM never sees that dependency directly."""
+    memorize = AikoMemorize(silent=True)
+    return generate_weekly_draft(memorize, force=force)
+
+
+def post_weekly_social(draft_dir: str, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """Agent-tool wrapper for Lane A posting. Refuses unless the draft at
+    draft_dir has already been human-approved outside this conversation."""
+    try:
+        path = _resolve_contained_draft_dir(draft_dir, weekly_social_root())
+        _require_approved(path)
+    except (ValueError, SocialApprovalError) as e:
+        return {"posted": False, "error": str(e)}
+    return post_draft(path, providers=providers)
+
+
+def draft_photo_social(*, inbox: str | None = None, force: bool = False) -> dict[str, Any]:
+    """Agent-tool wrapper for Lane B draft generation."""
+    return generate_photo_draft(inbox=inbox, force=force)
+
+
+def post_photo_social(draft_dir: str, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """Agent-tool wrapper for Lane B posting. Refuses unless the draft at
+    draft_dir has already been human-approved outside this conversation."""
+    try:
+        path = _resolve_contained_draft_dir(draft_dir, photo_social_root())
+        _require_approved(path)
+    except (ValueError, SocialApprovalError) as e:
+        return {"posted": False, "error": str(e)}
+    return post_photo_draft(path, providers=providers)
+
+
+def draft_video_social(*, inbox: str | None = None) -> dict[str, Any]:
+    """Agent-tool wrapper for Lane C draft generation (queues the oldest
+    described video in the inbox)."""
+    return generate_video_draft(inbox=inbox)
+
+
+def post_video_social(draft_dir: str, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """Agent-tool wrapper for Lane C posting. Refuses unless the draft at
+    draft_dir has already been human-approved outside this conversation."""
+    try:
+        path = _resolve_contained_draft_dir(draft_dir, video_social_root())
+        _require_approved(path)
+    except (ValueError, SocialApprovalError) as e:
+        return {"posted": False, "error": str(e)}
+    return post_video_draft(path, providers=providers)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1537,6 +1705,7 @@ def _cmd() -> int:
     )
     weekly_p.add_argument("--persist-env", action="store_true", help="write refreshed Threads token values back to .env")
     weekly_p.add_argument("--env-path", default="", help="env file path used with --persist-env")
+    weekly_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
 
     media_p = sub.add_parser("media", help="curated photo showcase (Instagram) + video queue (YouTube)")
     media_p.add_argument("--draft", action="store_true", help="scan photo inbox and create an LLM-curated photo draft bundle")
@@ -1547,9 +1716,18 @@ def _cmd() -> int:
     media_p.add_argument("--video-inbox", default="", help="override the video inbox folder")
     media_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory (photo or video, auto-detected)")
     media_p.add_argument("--providers", default="", help="comma-separated providers overriding the draft kind's default provider list (instagram / youtube)")
+    media_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
 
     args = parser.parse_args()
     providers = tuple(p.strip().lower() for p in args.providers.split(",") if p.strip()) or None
+
+    def _mark_approved(draft_dir: Path) -> None:
+        meta_path = draft_dir / "draft.json"
+        if not meta_path.exists():
+            return
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["human_approved"] = True
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     if args.mode == "weekly":
         if args.authorize_x:
@@ -1565,6 +1743,8 @@ def _cmd() -> int:
             return 0
         if args.post:
             draft_dir = Path(args.post).resolve()
+            if args.approve:
+                _mark_approved(draft_dir)
             if args.copy_image_to:
                 src = draft_dir / "image.png"
                 dest_dir = Path(args.copy_image_to).resolve()
@@ -1589,6 +1769,8 @@ def _cmd() -> int:
             return 0
         if args.post:
             draft_dir = Path(args.post).resolve()
+            if args.approve:
+                _mark_approved(draft_dir)
             meta_path = draft_dir / "draft.json"
             kind = "video"
             if meta_path.exists():
