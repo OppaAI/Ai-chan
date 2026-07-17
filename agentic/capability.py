@@ -61,6 +61,8 @@ TOOL_DOMAINS: dict[str, str] = {
     "repo_file_tree": "repo",
     "repo_read_file": "repo",
     "repo_search_text": "repo",
+    "read_paper_url": "research",
+    "write_report": "reports",
     "learn_knowledge": "kb",
     "search_jobs": "jobs",
     "list_playbooks": "graph",
@@ -95,7 +97,7 @@ CAPABILITIES: dict[str, Capability] = {
     "research": Capability(
         id="research",
         triggers=("look up", "search the web", "research this", "find out about", "study this"),
-        tool_domains=("research", "kb"),
+        tool_domains=("research", "kb", "reports")),
     ),
     "scheduling": Capability(
         id="scheduling",
@@ -115,7 +117,7 @@ CAPABILITIES: dict[str, Capability] = {
     "repo": Capability(
         id="repo",
         triggers=("inspect the code", "read the repo", "aiko's architecture", "aiko's code"),
-        tool_domains=("repo", "skills"),
+        tool_domains=("repo", "skills", "reports")),
     ),
     "job_hunt": Capability(
         id="job_hunt",
