@@ -173,32 +173,57 @@ def _load_static_persona() -> str:
     return _PERSONA_CORE_PATH.read_text(encoding="utf-8").strip()
 
 
+_persona_jp_cache: str | None = None
+_persona_code_cache: str | None = None
+
+
 def _conditional_persona_blocks(user_input: str) -> str:
     """Trigger-loaded persona overrides. Only paid for on turns that need them."""
+    global _persona_jp_cache, _persona_code_cache
     blocks = []
     if _JAPANESE_TRIGGER_RE.search(user_input):
-        blocks.append(_PERSONA_JP_PATH.read_text(encoding="utf-8").strip())
+        if _persona_jp_cache is None:
+            _persona_jp_cache = _PERSONA_JP_PATH.read_text(encoding="utf-8").strip()
+        blocks.append(_persona_jp_cache)
     if _CODE_TRIGGER_RE.search(user_input):
-        blocks.append(_PERSONA_CODE_PATH.read_text(encoding="utf-8").strip())
+        if _persona_code_cache is None:
+            _persona_code_cache = _PERSONA_CODE_PATH.read_text(encoding="utf-8").strip()
+        blocks.append(_persona_code_cache)
     return ("\n\n" + "\n\n".join(blocks)) if blocks else ""
+
+
+_user_context_cache: dict[str, tuple[float, str]] = {}  # user_id -> (mtime, block)
 
 
 def _load_user_context() -> tuple[str, str]:
     """Read the current turn's display name + profile block fresh, every call.
 
     Must be called from the turn/request context where current_user_id()
-    already resolves to the real logged-in user — never cached, since
-    AikoThink is a process-wide singleton shared across all users' turns.
+    already resolves to the real logged-in user — cached by (user_id, mtime)
+    so repeated turns for the same user don't re-read an unchanged file.
 
     Returns (display_name, user_block) where user_block is either "" or a
     "\n\n"-prefixed profile chunk ready to append to the static persona.
     """
     display_name = current_display_name()
     user_path = user_profile_path()
+    uid = current_user_id()
+    if uid in _user_context_cache:
+        cached_mtime, cached_block = _user_context_cache[uid]
+        try:
+            current_mtime = user_path.stat().st_mtime
+        except OSError:
+            current_mtime = 0.0
+        if current_mtime == cached_mtime:
+            return display_name, cached_block
     context_blocks = []
     if user_path.exists():
         context_blocks.append(user_path.read_text(encoding="utf-8").strip())
     user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
+    try:
+        _user_context_cache[uid] = (user_path.stat().st_mtime, user_block)
+    except OSError:
+        pass
     return display_name, user_block
 
 

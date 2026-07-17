@@ -34,6 +34,7 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import hashlib
+import io
 import ipaddress
 import json
 import os
@@ -311,7 +312,7 @@ def web_fetch(
                 except ValueError:
                     pass
 
-            chunks: list[bytes] = []
+            buf = io.BytesIO()
             total = 0
             for chunk in resp.iter_content(chunk_size=65536):
                 if not chunk:
@@ -319,8 +320,8 @@ def web_fetch(
                 total += len(chunk)
                 if total > max_download_bytes:
                     return "[fetch failed: page exceeded size limit during download]"
-                chunks.append(chunk)
-            downloaded = b"".join(chunks)
+                buf.write(chunk)
+            downloaded = buf.getvalue()
     except requests.exceptions.RequestException as e:
         return f"[fetch failed: {e}]"
 

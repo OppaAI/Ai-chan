@@ -1247,12 +1247,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             graph_trustworthy = _graph_ok and (graph_verdict is None or graph_verdict.ok)
 
             if graph_trustworthy:
-                threading.Thread(
-                    target=experience.record_experience,
-                    args=(owner, user_input, graph_result.steps, graph_result.final_answer),
-                    kwargs=dict(verified_ok=True, score=graph_verdict.score if graph_verdict else 1.0, embedder=_embedder),
-                    daemon=True,
-                ).start()
+                CONTEXT_POOL.submit(
+                    experience.record_experience,
+                    owner, user_input, graph_result.steps, graph_result.final_answer,
+                    verified_ok=True, score=graph_verdict.score if graph_verdict else 1.0, embedder=_embedder,
+                )
                 graph_payload = {
                     "id": graph_result.graph.id,
                     "name": graph_result.graph.name,
@@ -1293,12 +1292,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 "executor_mode=%s",
                 _graph_ok, graph_verdict.ok if graph_verdict else None, AGENT_EXECUTOR_MODE,
             )
-            threading.Thread(
-                target=experience.record_experience,
-                args=(owner, user_input, graph_result.steps, graph_result.final_answer),
-                kwargs=dict(verified_ok=False, score=graph_verdict.score if graph_verdict else 0.0, embedder=_embedder),
-                daemon=True,
-            ).start()
+            CONTEXT_POOL.submit(
+                experience.record_experience,
+                owner, user_input, graph_result.steps, graph_result.final_answer,
+                verified_ok=False, score=graph_verdict.score if graph_verdict else 0.0, embedder=_embedder,
+            )
 
             if AGENT_EXECUTOR_MODE == "graph":
                 # No ReAct fallback allowed in pure graph mode; surface the
@@ -1630,12 +1628,11 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     else:
         exp_verified_ok, exp_score = True, 1.0
 
-    threading.Thread(
-        target=experience.record_experience,
-        args=(owner, user_input, state.steps, final_text),
-        kwargs=dict(verified_ok=exp_verified_ok, score=exp_score, embedder=_embedder),
-        daemon=True,
-    ).start()
+    CONTEXT_POOL.submit(
+        experience.record_experience,
+        owner, user_input, state.steps, final_text,
+        verified_ok=exp_verified_ok, score=exp_score, embedder=_embedder,
+    )
     owner._emit(final_text, token_callback=token_callback)
 
     with owner._history_lock:
