@@ -193,7 +193,7 @@ class AikoWakeup:
         else:
             log.error("AikoThink failed to boot — deep-study window handlers not registered.")
 
-        from system.schedule import ScheduleRunner, register_scheduler, register_system_handler, ensure_workspace_knowledge_job
+        from system.schedule import ScheduleRunner, register_scheduler, register_system_handler, ensure_workspace_knowledge_job, register_social_handlers
         from memory.reflect import generate_and_post
         from memory.consolidate import maybe_run_consolidation
 
@@ -236,6 +236,23 @@ class AikoWakeup:
                 log.info("[wakeup] Workspace knowledge scan schedule ensured")
             except Exception as exc:
                 log.warning("[wakeup] Workspace knowledge scan schedule failed: %s", exc)
+
+        # Schedule-driven social lanes (weekly postcard, photo inbox, video
+        # inbox). register_social_handlers() registers all three handlers
+        # with the system handler registry and idempotently seeds their
+        # schedule.json jobs (see system/schedule.py). Doesn't depend on
+        # memorize[0] the way the workspace-knowledge scan does — the
+        # weekly/photo/video handlers are called with memorize but the
+        # photo/video ones just absorb and ignore it — but this is kept
+        # here, after memory boot, so all "post-scheduler" job seeding
+        # happens in one place and any failure here doesn't affect the
+        # scheduler start above.
+        try:
+            register_social_handlers()
+            _scheduler.notify_new_job()
+            log.info("[wakeup] Social handlers registered and schedules ensured")
+        except Exception as exc:
+            log.warning("[wakeup] Social handler registration failed: %s", exc)
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
