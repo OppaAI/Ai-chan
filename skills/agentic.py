@@ -66,8 +66,6 @@ from toolkit.tools import (
     repo_read_file,
     repo_search_text,
     search_jobs,
-    draft_weekly_social,
-    post_weekly_social,
     draft_photo_social,
     post_photo_social,
     draft_video_social,
@@ -156,8 +154,8 @@ TASK_MODE_GUIDANCE = (
     "flag it as unverified. If a research tool result explicitly says no "
     "relevant content was found, disclose that gap plainly in the final answer "
     "instead of guessing or filling it in from memory. "
-    "Social posting tools (post_weekly_social, post_photo_social, "
-    "post_video_social) will refuse to run on anything not already approved "
+    "Social posting tools (post_photo_social, post_video_social)"
+    "will refuse to run on anything not already approved "
     "by a person outside this conversation, and refuse a second post of the "
     "same draft. Only call a post_* social tool when the user explicitly "
     "asks to publish/post right now — never as an automatic follow-up to "
@@ -287,7 +285,7 @@ _LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|d
 # Tools that can genuinely post to a real public account. When one of these
 # ran and succeeded this turn, an answer describing a real "posted" action
 # is not a hallucinated external action — see _verify_final_answer.
-_SOCIAL_POST_TOOLS = {"post_weekly_social", "post_photo_social", "post_video_social"}
+_SOCIAL_POST_TOOLS = {"post_photo_social", "post_video_social"}
 # Any tool message over this length gets compacted to a preview once a
 # later assistant message has arrived — generalized from a research-only
 # rule to cover every bulky tool (repo_read_file, search_jobs, etc.), since
