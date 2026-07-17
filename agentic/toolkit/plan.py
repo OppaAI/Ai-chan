@@ -20,7 +20,7 @@ import textwrap
 from datetime import datetime
 
 from system.bioclock import local_now
-from toolkit.common import MAX_READ_CHARS, MAX_WRITE_CHARS, json_block, notes_dir, now_stamp, safe_path, slugify
+from agentic.agentic.toolkit.common import MAX_READ_CHARS, MAX_WRITE_CHARS, json_block, notes_dir, now_stamp, safe_path, slugify
 
 
 def make_plan(goal: str, constraints: str = "", max_steps: int = 8) -> str:

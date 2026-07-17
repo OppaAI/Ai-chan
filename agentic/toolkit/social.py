@@ -36,7 +36,7 @@ All three lanes are also reachable via thin draft_*_social / post_*_social
 wrappers defined below, in the "agent-tool wrappers" section — but only the
 photo and video lane wrappers (draft_photo_social, post_photo_social,
 draft_video_social, post_video_social) are actually registered as tools in
-the agent loop (skills/agentic.py). Lane A's draft_weekly_social /
+the agent loop (agentic/agentic.py). Lane A's draft_weekly_social /
 post_weekly_social are NOT agent-registered: Lane A is scheduler-only by
 design (run_scheduled_weekly_social, on a Sun-Sat cadence), and drafting is
 idempotent per calendar week, so there's no meaningful conversational
@@ -93,8 +93,8 @@ from system.log import get_logger
 from memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
 from memory.reflect import _generate_image, _load_soul
-from toolkit.common import workspace_root
-from toolkit.photography import scan_photo_workspace, scan_video_workspace
+from agentic.agentic.toolkit.common import workspace_root
+from agentic.agentic.toolkit.photography import scan_photo_workspace, scan_video_workspace
 
 log = get_logger(__name__)
 
@@ -906,7 +906,7 @@ def _list_candidates(inbox: str, limit: int) -> list[Path]:
     parses LLM output elsewhere in this module. Note the tool itself caps
     its "files" preview at 50 regardless of image_count, and only scans
     IMAGE_EXTENSIONS (no video formats) — video support would need to be
-    added upstream in toolkit/photography.py first."""
+    added upstream in agentic/toolkit/photography.py first."""
     raw = scan_photo_workspace(inbox, limit)
     match = re.search(r"\{.*\}", raw or "", flags=re.DOTALL)
     if not match:
@@ -1598,7 +1598,7 @@ def run_scheduled_video_social() -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Agent-tool wrappers. skills/agentic.py registers four of the wrapper
+# Agent-tool wrappers. agentic/agentic.py registers four of the wrapper
 # functions below (draft_photo_social, post_photo_social, draft_video_social,
 # post_video_social) — see the module docstring for why Lane A's
 # draft_weekly_social/post_weekly_social are deliberately NOT registered as

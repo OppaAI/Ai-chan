@@ -6,7 +6,7 @@ learner loop, or the scheduled deep-study window) hand her — neither depth
 picks its own topic on its own.
 
   - quick_studying: a single interactive-scale research pass. Thin alias
-    over toolkit.research.deep_research — same TTL-cached, in-memory,
+    over agentic.toolkit.research.deep_research — same TTL-cached, in-memory,
     ephemeral behavior you already have. Use this for "look this up for me
     now" and for the idle learner's short-idle-gap top-ups.
 
@@ -54,7 +54,7 @@ os.getenv() calls would silently fall back to hardcoded defaults if learn.py
 happened to be imported before whatever else in the app calls load_config().
 
 This module reads its own tunables directly from os.environ rather than
-importing constants from toolkit.research — it owns its own view of
+importing constants from agentic.agentic.toolkit.research — it owns its own view of
 shared knobs like CONDENSE_CHUNK_CHARS/CONDENSE_MIN_SCORE/search-result-count
 instead of reaching into another module's constants (which would also
 silently go stale if that module's env var name ever changed).
@@ -80,7 +80,7 @@ from system.config import load_config
 load_config()
 
 from cognition import reason
-from toolkit.research import (
+from agentic.agentic.toolkit.research import (
     _ask_llm_json,
     _is_private_or_local_host,
     _web_search_raw,
@@ -93,7 +93,7 @@ from system.log import get_logger
 log = get_logger(__name__)
 
 # Tunables this module owns its own env-backed view of (see module
-# docstring) rather than importing from toolkit.research.
+# docstring) rather than importing from agentic.agentic.toolkit.research.
 CONDENSE_CHUNK_CHARS = int(os.getenv("CONDENSE_CHUNK_CHARS", 500))
 CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
 DEEP_SEARCH_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
@@ -134,7 +134,7 @@ def quick_studying(
     same TTL cache, same in-memory ephemeral scoring, same single-call cost
     model. Named separately so call sites (the idle learner's short-gap
     path, or a direct /research command) read as "which depth am I asking
-    for" rather than exposing toolkit.research internals at every
+    for" rather than exposing agentic.toolkit.research internals at every
     call site.
 
     max_rounds defaults to QUICK_STUDY_MAX_ROUNDS (config/learn.yaml),
@@ -142,7 +142,7 @@ def quick_studying(
     3 regardless of what QUICK_STUDY_MAX_ROUNDS was set to.
 
     num_searches/num_fetches are optional pass-throughs to deep_research's
-    own per-call overrides (see toolkit.research.deep_research).
+    own per-call overrides (see agentic.toolkit.research.deep_research).
     Leave them None to use deep_research's own DEEP_RESEARCH_NUM_SEARCHES/
     DEEP_RESEARCH_NUM_FETCHES env defaults.
     """

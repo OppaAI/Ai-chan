@@ -124,7 +124,7 @@ console.log('[mic] streaming enabled, gate=', browserVadGate);
 - ❌ Never fires → the server never sent `{"type":"mic","action":"start"}`.
   This means `main.py`'s agentic loop isn't calling
   `listen.get_voice_input()` / the ASR toggle isn't wired up. **Go check
-  `main.py` and `skills/agentic.py`, not the browser**, if this fails.
+  `main.py` and `agentic/agentic.py`, not the browser**, if this fails.
 
 ---
 

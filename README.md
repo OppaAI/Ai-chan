@@ -83,7 +83,7 @@ This project currently serves as:
 ### 🤖 Agentic Skills
 - **ReAct task loop** — LLM plans, calls tools, observes, repeats until done
 - **Toolkit modules** — Web search, fetch, planning, scheduling, workspace notes, photo ingestion, repo inspection
-- **Skill registry** — Markdown workflow definitions in `skills/skillsets/*.md`
+- **Skill registry** — Markdown workflow definitions in `agentic/skillsets/*.md`
 - **Skill context injection** — Relevant skill instructions automatically retrieved in agentic mode
 - **Dual-path routing** — Fast semantic exemplar routing (default) + optional LLM router fallback
 - **Final-answer verification** — Self-critique and repair loop for tool outputs
@@ -152,12 +152,12 @@ flowchart TD
 | Long-term memory | custom sqlite-vec backend (no server required) |
 | Embeddings | Harrier llama.cpp, `harrier-oss-v1-270m via llama.cpp server` |
 | Memory lifecycle | Ebbinghaus-style decay, pinned memories, nightly `dream()` consolidation |
-| Web search | local SearXNG instance through `toolkit/research.py` |
+| Web search | local SearXNG instance through `agentic/toolkit/research.py` |
 | TTS | MioTTS 0.4B via llama.cpp server, external MioCodec synthesizer server |
 | ASR | SenseVoice via sherpa-onnx with Silero VAD and ERes2Net Speaker verification |
 | Reflection publishing | optional GitHub REST API + Hugo markdown |
-| Agentic task mode | `skills/agentic.py` ReAct loop + `toolkit/tools.py` facade + `toolkit/` modules |
-| Skills | `skills/skillsets/*.md` workflow registry loaded by `skills/skills.py` |
+| Agentic task mode | `agentic/agentic.py` ReAct loop + `agentic/toolkit/tools.py` facade + `agentic/toolkit/` modules |
+| Skills | `agentic/skillsets/*.md` workflow registry loaded by `agentic/skills.py` |
 | Scheduling | local schedule/reminder runner using `~/.aiko/<user_id>/schedule.json` |
 | Multi-user | OAuth provider-scoped IDs, per-user `~/.aiko/<user_id>/` isolation |
 | Encryption | optional SQLCipher via `AIKO_SQLITE_ENCRYPTION=1` |
@@ -225,15 +225,16 @@ Aiko-chan/
 ├── sensory/
 │   ├── speak.py            # MioTTS HTTP client
 │   └── listen.py           # SenseVoice (sherpa-onnx) + Silero VAD
-├── skills/
+├── agentic/
 │   ├── agentic.py          # ReAct task loop, tool schemas, tool dispatch
 │   ├── schema.py           # graph-first master-plan DAG executor
 │   ├── capability.py       # capability matching for task-mode tool filtering
 │   ├── experience.py       # procedural task-run experience store
 │   ├── skills.py           # skill registry and workflow retrieval
+│   ├── tools.py            # stable facade for pure callable tools
 │   ├── wiki.py             # wiki-card retrieval for task mode
-│   └── skillsets/          # human-readable workflow documents
-├── toolkit/                # executable tools: research, planning, schedule, photo, repo, jobs
+│   ├── skillsets/          # human-readable workflow documents
+│   └── toolkit/            # focused tool implementations: research, planning, schedule, photo, repo, jobs
 ├── system/                 # config, wakeup, schedule runner, logging, userspace
 ├── interface/
 │   ├── webui/              # browser WebUI backend + static frontend/VRM bridge

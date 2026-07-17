@@ -1,5 +1,5 @@
 """
-skills/wiki.py
+agentic/wiki.py
 
 Basic local wiki retrieval for Aiko.
 

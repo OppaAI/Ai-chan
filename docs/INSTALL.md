@@ -186,7 +186,7 @@ config/index.yaml       # ordered list of YAML files loaded at startup
 config/system.yaml      # identity, logging, userspace, schedule, reflection/social settings
 config/cognition.yaml   # cognition/think.py LLM endpoints, routing, token limits, vector cache
 config/memory.yaml      # memory/memorize.py, embed, forget, experience, consolidation settings
-config/skills.yaml      # skills/agentic.py, skills/schema.py, tool schemas, skill/wiki RAG budgets
+config/skills.yaml      # agentic/agentic.py, agentic/schema.py, tool schemas, skill/wiki RAG budgets
 config/sensory.yaml     # sensory/speak.py and sensory/listen.py voice, ASR, VAD, barge-in
 config/interface.yaml   # WebUI ports, avatar path, streaming behavior
 ```
@@ -241,8 +241,8 @@ curl http://localhost:8001/health
 uv run python -c "import sqlite_vec, tokenizers, onnxruntime, sherpa_onnx, silero_vad, sounddevice, websockets; print('OK')"
 
 # Skill registry and agentic tool schemas
-uv run python -c "from skills.skills import list_skillsets; print(list_skillsets())"
-uv run python -c "from skills.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"
+uv run python -c "from agentic.skills import list_skillsets; print(list_skillsets())"
+uv run python -c "from agentic.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"
 
 # Memory backend
 uv run python -c "from memory.memorize import AikoMemorize; m=AikoMemorize(silent=True); print(m.get_all()[:1])"

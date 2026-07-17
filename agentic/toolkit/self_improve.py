@@ -17,7 +17,7 @@ from __future__ import annotations
 from itertools import islice
 from pathlib import Path
 
-from toolkit.common import json_block
+from agentic.agentic.toolkit.common import json_block
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAX_REPO_READ_CHARS = 20_000

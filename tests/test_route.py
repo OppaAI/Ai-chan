@@ -54,7 +54,7 @@ from cognition.think import (
     _ROUTE_INSTRUCT_SEARCH,
     _AGENTIC_ROUTE_RE,
 )
-from skills.agentic import tool_schemas
+from agentic.agentic import tool_schemas
 
 # ── colour helpers ────────────────────────────────────────────────────────────
 
@@ -354,7 +354,7 @@ def _sequence_for_route(route: str, prompt: str) -> list[dict]:
     return sequence or [{"step": 1, "kind": "agentic", "tool": "final_answer", "query": "", "run": "report route decision"}]
 
 def print_sequence(route: str, prompt: str) -> None:
-    print(f"\n{BOLD}▶ dry-run sequence  (from skills.agentic tool schemas){RESET}")
+    print(f"\n{BOLD}▶ dry-run sequence  (from agentic.agentic tool schemas){RESET}")
     print(f"  {'#':>2}  {'kind':<10} {'tool':<22} query/run")
     print(f"  {'-' * 72}")
     for item in _sequence_for_route(route, prompt):

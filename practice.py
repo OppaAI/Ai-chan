@@ -18,7 +18,7 @@ from typing import Any
 from system.config import load_config
 load_config()
 
-from skills import experience, schema
+from agentic import experience, schema
 
 
 def _steps_from_tools(tools: list[str]) -> list[dict[str, Any]]:

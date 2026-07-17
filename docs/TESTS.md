@@ -290,8 +290,8 @@ Run before any phase suite.
 
 ### 2.5.1 Tool schema and registry integrity
 
-- [ ] `uv run python -c "from skills.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch`.
-- [ ] `uv run python -c "from skills.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes web, fetch, planning, workspace, scheduling, skill, photo, and repo tools.
+- [ ] `uv run python -c "from agentic.skills import list_skillsets; print(list_skillsets())"` lists `wildlife_photo`, `aiko_architect`, `coding_tutor`, `japanese_tutor`, and `aurora_forecast_watch`.
+- [ ] `uv run python -c "from agentic.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"` includes web, fetch, planning, workspace, scheduling, skill, photo, and repo tools.
 - [ ] Every tool schema has valid JSON-serializable parameters, required fields, and a matching registered handler.
 - [ ] Unknown tool names, malformed JSON arguments, missing required arguments, and type mismatches return structured errors rather than crashing.
 - [ ] Tool observations are truncated by configured limits and do not flood the LLM context.
@@ -304,7 +304,7 @@ Run before any phase suite.
 - [ ] Asking for Japanese tutoring loads/uses `japanese_tutor`; coding help loads/uses `coding_tutor`.
 - [ ] Asking for aurora forecast/watch loads/uses `aurora_forecast_watch` skill context.
 - [ ] Skill search returns relevant snippets without dumping entire unrelated skill files.
-- [ ] Missing/corrupt `skills/skillsets/*.md` files are reported gracefully and do not break unrelated skills.
+- [ ] Missing/corrupt `agentic/skillsets/*.md` files are reported gracefully and do not break unrelated skills.
 - [ ] Skill instructions do not override safety boundaries for filesystem paths, external actions, or final-answer honesty.
 
 ### 2.5.3 Agentic routing, graph executor, and ReAct fallback
@@ -380,7 +380,7 @@ Run before any phase suite.
 
 ### 2.5.10 Monthly consolidation
 
-- [ ] `uv run python -c "from skills.experience import consolidate_month; print(consolidate_month(dry_run=True))"` completes without error.
+- [ ] `uv run python -c "from agentic.experience import consolidate_month; print(consolidate_month(dry_run=True))"` completes without error.
 - [ ] Older full months are summarized into pinned durable memories.
 - [ ] Consolidation uses memory facts, not full chat history, to fit context window.
 - [ ] Pinned monthly summaries persist across restarts and appear in `/memory`.

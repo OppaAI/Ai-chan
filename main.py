@@ -68,7 +68,7 @@ warnings.filterwarnings("ignore")
 from system.bioclock import local_now
 from system.log import get_logger, silent_stderr
 from system.wakeup import AikoWakeup
-from toolkit.research import web_search
+from agentic.agentic.toolkit.research import web_search
 
 # CLI auth (GitHub device flow) — lazy-imported so it doesn't pull in
 # httpx for users who never use --cli

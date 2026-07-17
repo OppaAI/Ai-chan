@@ -9,10 +9,10 @@ Aiko is organized by runtime responsibility rather than by one monolithic `core/
 - `interface/cli/` contains authentication and helper code for the simple CLI path.
 - `system/wakeup.py` owns parallel subsystem startup and returns a `BootResult` containing thinking, memory, speech, and listening modules.
 - `cognition/think.py` owns the public chat facade: OpenAI-compatible LLM setup, semantic/LLM routing, normal chat, TTS/history glue, scheduled job callbacks, idle learner handoff, and background memory writes.
-- `skills/agentic.py` owns task-mode tool schemas, ReAct loop execution, final-answer verification, and tool dispatch.
-- `skills/schema.py` owns the graph-first master-plan DAG executor.
-- `toolkit/tools.py` is the compatibility facade for executable tools; focused implementations live under `toolkit/`.
-- `skills/skills.py` owns skillset CRUD/search helpers and the `skills/skillsets/` workflow registry used by task mode.
+- `agentic/agentic.py` owns task-mode tool schemas, ReAct loop execution, final-answer verification, and tool dispatch.
+- `agentic/schema.py` owns the graph-first master-plan DAG executor.
+- `agentic/tools.py` is the compatibility facade for executable tools; focused implementations live under `agentic/toolkit/`.
+- `agentic/skills.py` owns skillset CRUD/search helpers and the `agentic/skillsets/` workflow registry used by task mode.
 - `memory/memorize.py` owns persistent memory CRUD, recall, pinning, decay, cleanup, and consolidation hooks.
 - `memory/reflect.py` owns factual daily summary publishing and pinning of generated daily summaries.
 
@@ -26,11 +26,11 @@ system/wakeup.py      boot orchestration and BootResult assembly
 cognition/think.py    chat facade, routing, scheduled callbacks, TTS/history glue
 memory/               memory, journal, consolidation, reflection, sqlite-vec helpers
 sensory/              speech and listening adapters
-toolkit/tools.py      stable facade for pure callable tools
-toolkit/              focused tool implementations; no LLM loop or conversation state
-skills/agentic.py     ReAct loop, tool schemas, dispatch, verification, experience recording
-skills/schema.py      graph-first master-plan DAG executor
-skills/skillsets/     human-readable repeatable workflow documents
+agentic/tools.py      stable facade for pure callable tools
+agentic/toolkit/              focused tool implementations; no LLM loop or conversation state
+agentic/agentic.py     ReAct loop, tool schemas, dispatch, verification, experience recording
+agentic/schema.py      graph-first master-plan DAG executor
+agentic/skillsets/     human-readable repeatable workflow documents
 wiki/                 trusted local knowledge cards
 ```
 
@@ -58,9 +58,9 @@ flowchart TD
     User -->|typed message| Session
     Session -->|turn text| Think
     Think <-->|recall + async writes| Memory
-    Think -->|task route| Agentic[skills.agentic\nReAct task loop]
-    Agentic --> Schema[skills.schema\nmaster-plan DAG executor]
-    Agentic --> Tools[toolkit.tools facade]
+    Think -->|task route| Agentic[agentic.agentic\nReAct task loop]
+    Agentic --> Schema[agentic.schema\nmaster-plan DAG executor]
+    Agentic --> Tools[agentic.tools facade]
     Tools --> Toolkit[toolkit modules]
     Think -->|streamed tokens| Session
     Session -->|draw events| WebUI
@@ -116,8 +116,8 @@ sequenceDiagram
     participant M as main.py session loop
     participant T as cognition.think.AikoThink
     participant Mem as memory.memorize.AikoMemorize
-    participant A as skills.agentic
-    participant G as skills.schema
+    participant A as agentic.agentic
+    participant G as agentic.schema
     participant Tools as toolkit tools
     participant S as sensory.speak.AikoSpeak
 
@@ -179,11 +179,11 @@ flowchart TD
     Search --> LLM
 
     Task --> GraphGate{Graph mode?}
-    GraphGate -->|graph or hybrid| Master[skills.schema plan_from_master]
+    GraphGate -->|graph or hybrid| Master[agentic.schema plan_from_master]
     Master -->|matched| DAG[Execute PlanGraph DAG]
     DAG --> GraphFinal[Deterministic graph answer]
     Master -->|no match and graph| NoMatch[No-master-plan message]
-    Master -->|no match and hybrid| React[skills.agentic ReAct loop]
+    Master -->|no match and hybrid| React[agentic.agentic ReAct loop]
     GraphGate -->|react| React
     React --> ToolCall[Tool call through toolkit]
     ToolCall --> Observation[Structured observation]
@@ -204,11 +204,11 @@ flowchart TD
 ```mermaid
 flowchart TD
     TaskInput[Task-like user request] --> Think[AikoThink.agentic_chat]
-    Think --> Agent[skills.agentic.run_agentic_chat]
+    Think --> Agent[agentic.agentic.run_agentic_chat]
     Agent --> Caps[Capability matching]
     Caps --> Tools[Filtered tool schemas]
     Caps --> Graph{AGENT_EXECUTOR_MODE}
-    Graph -->|graph or hybrid| Schema[skills.schema]
+    Graph -->|graph or hybrid| Schema[agentic.schema]
     Schema -->|master plan matched| DAG[PlanGraph DAG execution]
     DAG --> Ready[Run independent ready nodes in parallel]
     Ready --> NodeResults[NodeResult records]
@@ -237,7 +237,7 @@ flowchart TD
 
 ## Autonomous Sub-Agent Status
 
-Aiko can already run **autonomous graph nodes inside one orchestrated agentic turn**: `skills.schema.execute_graph` finds nodes whose dependencies are satisfied, runs independent ready nodes through a thread pool, marks nodes with failed dependencies as `dependency_failed`, and records the resulting trace. That is useful for deterministic master-plan workflows.
+Aiko can already run **autonomous graph nodes inside one orchestrated agentic turn**: `agentic.schema.execute_graph` finds nodes whose dependencies are satisfied, runs independent ready nodes through a thread pool, marks nodes with failed dependencies as `dependency_failed`, and records the resulting trace. That is useful for deterministic master-plan workflows.
 
 Aiko does **not** yet have a fully independent, long-running autonomous sub-agent runtime. A true sub-agent layer would add durable queues, leases or heartbeats, cancellation, per-agent workspace/artifact boundaries, retry policy, permissions, and observability. The current architecture is compatible with that future layer because graph nodes are already explicit units of work, but today they are lightweight in-process tool tasks rather than separately managed workers.
 
@@ -247,7 +247,7 @@ Aiko does **not** yet have a fully independent, long-running autonomous sub-agen
 - `EMBED_MODEL`, `EMBED_DIMS`, `EMBED_CACHE_PATH`, and `SQLITE_MEMORY_PATH` configure local sqlite-vec memory and the Harrier ONNX embedder.
 - `ROUTE_ENABLED`, `ROUTE_MODE`, and route thresholds are read by `cognition/think.py`.
 - `AGENT_EXECUTOR_MODE` selects `graph`, `hybrid`, or `react` task execution.
-- `GRAPH_MASTER_PLAN_PATH` and `GRAPH_MAX_WORKERS` configure `skills.schema`.
+- `GRAPH_MASTER_PLAN_PATH` and `GRAPH_MAX_WORKERS` configure `agentic.schema`.
 - `ROUTE_VECTOR_CACHE_ENABLED` enables safe `.npz` route-vector cache files.
 - `MIOTTS_API_URL`, `MIOTTS_PRESET`, and `MIOTTS_DEVICE` configure voice output.
 - `ASR_*`, `LISTEN_*`, and `SPEAKER_*` configure SenseVoice, Silero VAD, speaker verification, and barge-in.
@@ -256,7 +256,7 @@ Aiko does **not** yet have a fully independent, long-running autonomous sub-agen
 ## Knowledge Governance
 
 - Wiki cards and skill workflow files are treated as trusted local knowledge only when they include required front matter.
-- Run `python -m util.lint` after changing `wiki/*.md` or `skills/skillsets/*.md` where applicable.
+- Run `python -m util.lint` after changing `wiki/*.md` or `agentic/skillsets/*.md` where applicable.
 - Aiko should draft proposed knowledge updates under `workspace/kb_proposals/` instead of silently rewriting trusted wiki or skill policy.
 
 ## Semantic Vector Cache

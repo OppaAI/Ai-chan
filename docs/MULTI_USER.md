@@ -12,7 +12,7 @@ OAuth is the source of identity; `persona/identity.md` remains Aiko's identity o
   - `monthly_consolidation_state.jsonl` for that user's monthly consolidation state.
   - `schedule.json` for that user's scheduled jobs/reminders (agentic scheduling).
   - `workspace/` for that user's notes and tool artifacts; this can later be redirected to a mounted/synced Google Drive workspace via `WORKSPACE_ROOT`.
-  - `skills/` for that user's skill workflow state (future per-user skill customization).
+  - `agentic/` for that user's skill workflow state (future per-user skill customization).
 - Existing env overrides still work for local/owner operation; leave YAML path overrides blank for per-user defaults:
   - `USER_ID` or `AIKO_USER_ID`
   - `SQLITE_MEMORY_PATH`

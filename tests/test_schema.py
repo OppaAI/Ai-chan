@@ -1,4 +1,4 @@
-from skills import schema
+from agentic import schema
 
 
 def test_master_plan_prefers_checklist_workflow():

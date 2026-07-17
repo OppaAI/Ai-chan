@@ -2,7 +2,7 @@
 #
 # Settings for memory/knowledge.py, Aiko's machine-writable RAG store for
 # durable learned facts, user-ingested document/PDF text, and self-learning
-# research notes. This is separate from skills/wiki.py, which indexes
+# research notes. This is separate from agentic/wiki.py, which indexes
 # human-authored wiki/skill/persona/config files.
 
 KNOWLEDGE_DB_PATH: "knowledge/knowledge.db"  # Relative paths are stored under the active user's state dir; encrypted when SQLITE_ENCRYPTION=1.
@@ -19,7 +19,7 @@ KNOWLEDGE_QUERY_INSTRUCT: "Retrieve durable learned knowledge relevant to the re
 #
 # Settings for memory/learn.py — Aiko's two research depths (quick_studying,
 # deep_studying) and the idle learner loop that decides when to run them.
-# Both depths sit on top of toolkit/research.py's primitives
+# Both depths sit on top of agentic/toolkit/research.py's primitives
 # (see web.yaml for the shared search/fetch/condense tunables they inherit).
 
 # -- idle learner loop (when Aiko is allowed to self-study at all) --
@@ -123,7 +123,7 @@ MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user ~
 
 # Experience vector-store config
 #
-# Settings for skills/experience.py, Aiko's machine-written procedural trace of
+# Settings for agentic/experience.py, Aiko's machine-written procedural trace of
 # completed agentic tasks. Experience stores sanitized goal -> steps -> outcome
 # records for later RAG recall. It does not use memory forgetting/decay.
 

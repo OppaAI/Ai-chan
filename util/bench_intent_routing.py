@@ -3,7 +3,7 @@ bench_intent_routing.py
 
 Compares Needle (Cactus-Compute, 26M, tool-calling specialist) against
 SmolLM2-135M-Instruct (current Aiko-chan router) across four tasks that
-sit in cognition/think.py's routing cascade + skills/agentic.py's
+sit in cognition/think.py's routing cascade + agentic/agentic.py's
 planning/query-gen paths:
 
   1. binary_routing   — agentic vs chat (stage 1 of the 3-stage cascade)
@@ -95,15 +95,15 @@ EMBED_MODEL = "harrier"
 SEMANTIC_GATE_MARGIN = float(os.getenv("SEMANTIC_GATE_MARGIN", "0.08"))
 
 # How many tools the semantic prefilter keeps before handing the narrowed
-# list to Needle for tool_selection. Mirrors skills/capability.py's real
+# list to Needle for tool_selection. Mirrors agentic/capability.py's real
 # production pattern (filter tool schemas before the model sees them) --
 # the point of this benchmark is to check whether a tiny 26M model does
 # better discriminating among a few pre-filtered tools than the full ~9.
 TOOL_SEMANTIC_PREFILTER_K = int(os.getenv("TOOL_SEMANTIC_PREFILTER_K", "3"))
 
 # ── shared: a trimmed, faithful copy of Aiko-chan's real tool surface ──────
-# Names/descriptions mirror skills/agentic.py's _reg(...) calls. Kept as a
-# static list here (rather than importing skills.agentic) so this script
+# Names/descriptions mirror agentic/agentic.py's _reg(...) calls. Kept as a
+# static list here (rather than importing agentic.agentic) so this script
 # has no dependency on the full cognition/toolkit stack and can't
 # accidentally open DB connections or hit the network on import.
 
@@ -265,7 +265,7 @@ class SuiteResult:
 # existing no-full-stack-import property (importing the `cognition` package
 # risks pulling in CONTEXT_POOL / other init-time side effects this script
 # deliberately avoids -- same reasoning as keeping TOOLS_OPENAI as a static
-# trimmed copy above instead of importing skills.agentic).
+# trimmed copy above instead of importing agentic.agentic).
 
 def _normalize_rows(matrix: np.ndarray) -> np.ndarray:
     if matrix.ndim == 1:
@@ -360,7 +360,7 @@ BINARY_SEMANTIC_EXAMPLES: dict[str, list[str]] = {
 
 # One anchor example per tool for the semantic tool router -- reuses each
 # tool's own OpenAI-schema description, matching how a real embedding-based
-# capability filter (skills/capability.py-style) would score a query
+# capability filter (agentic/capability.py-style) would score a query
 # against tool descriptions.
 TOOL_SEMANTIC_EXAMPLES: dict[str, list[str]] = {
     fn["function"]["name"]: [fn["function"]["description"]] for fn in TOOLS_OPENAI
@@ -438,7 +438,7 @@ def semantic_needle_binary_routing(runner, embedder, text: str) -> tuple[str, fl
 def semantic_needle_tool_selection(runner, embedder, text: str) -> tuple[str, float, str]:
     """Hybrid: semantic scoring narrows the tool list to the top
     TOOL_SEMANTIC_PREFILTER_K candidates, then Needle picks the final tool
-    from just that narrowed set -- mirrors skills/capability.py's real
+    from just that narrowed set -- mirrors agentic/capability.py's real
     production pattern of filtering tool schemas before the model sees
     them, testing whether a tiny 26M model discriminates better among a
     handful of pre-filtered tools than the full ~9-tool surface."""

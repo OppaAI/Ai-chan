@@ -3,7 +3,7 @@
 Shared numpy-vectorized embedding utilities for semantic retrieval and
 condensation. Centralizes what used to be four separate per-module
 implementations (tools.py web-evidence condensation, knowledge.py KB
-ranking, skills.py skill ranking, agentic.py policy filtering) into one
+ranking, agentic/skills.py skill ranking, agentic.py policy filtering) into one
 batched-matmul scoring primitive instead of four Python-loop cosine calls.
 
 Also centralizes the close-vector label-scoring primitive used by
@@ -198,7 +198,7 @@ def select_relevant_chunks(
 
     Uses one batched embed call + one vectorized matmul when an embedder is
     available; falls back to per-chunk keyword overlap otherwise. This is
-    what lets knowledge.py/skills.py/agentic.py inject only the relevant
+    what lets knowledge.py, agentic/skills.py, and agentic/agentic.py inject only the relevant
     slice of a document instead of the whole file.
     """
     if not chunks:

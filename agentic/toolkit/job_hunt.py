@@ -10,7 +10,7 @@ from configured job boards:
   - search_jobs()    — search configured job boards with location/type filters
   - dedupe_postings() — collapse near-duplicate listings by URL or similarity
 
-Configuration lives in skills/skillsets/job_hunt.json.
+Configuration lives in agentic/skillsets/job_hunt.json.
 
 Supported boards: Greenhouse, Lever, Ashby, RemoteOK, We Work Remotely, Wellfound.
 """
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from system.bioclock import local_now
-from toolkit.research import MAX_RESULTS, web_fetch, _web_search_raw
+from agentic.agentic.toolkit.research import MAX_RESULTS, web_fetch, _web_search_raw
 
 _RELATIVE_RE = re.compile(
     r"(?P<num>\d+)\s*(?P<unit>hour|day|week|month)s?\s+ago", re.IGNORECASE
@@ -152,7 +152,7 @@ def search_jobs(
     """
     Search configured job boards for `query`.
 
-    Defaults come from `skills/skillsets/job_hunt.json`, including
+    Defaults come from `agentic/skillsets/job_hunt.json`, including
     Vancouver-area location aliases, result count, posting age, and source sites.
     """
     config = _job_config()

@@ -1,5 +1,5 @@
 """
-skills/capability.py
+agentic/capability.py
 
 Capability routing for Aiko's agentic tool loop.
 
@@ -70,11 +70,11 @@ TOOL_DOMAINS: dict[str, str] = {
     # same (not looser) gating as research/scheduling/photo/repo.
     #
     # Lane A (weekly postcard) is intentionally NOT exposed here — it is
-    # non-agentic by design (see toolkit/social.py docstring): the scheduler
+    # non-agentic by design (see agentic/toolkit/social.py docstring): the scheduler
     # drives it directly via run_scheduled_weekly_social() on a Sun-Sat
     # cadence. Posting still requires draft.json["human_approved"] = true
     # regardless of path (scheduler or agent) — see _require_approved in
-    # toolkit/social.py — but there is no conversational "draft/post the
+    # agentic/toolkit/social.py — but there is no conversational "draft/post the
     # weekly postcard" action for the agent loop to take, so it's not
     # registered as a tool. Only the inbox-driven photo/video lanes are
     # agent-callable.

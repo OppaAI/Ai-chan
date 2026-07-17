@@ -6,7 +6,7 @@ Persistent learned knowledge store for Aiko.
 This module is the machine-writable knowledge RAG layer: durable facts,
 excerpts, study notes, and user-approved document/PDF text that Aiko should
 be able to retrieve later. Human-authored wiki/skill/persona/config files live
-in :mod:`skills.wiki`; this module owns the vector/FTS store for learned
+in :mod:`agentic.wiki`; this module owns the vector/FTS store for learned
 knowledge.
 
 Storage mirrors memory's retrieval shape without memory's forgetting lifecycle:

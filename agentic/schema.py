@@ -1,5 +1,5 @@
 """
-skills/schema.py
+agentic/schema.py
 
 Graph-first, mostly model-free agentic executor.
 
@@ -32,7 +32,7 @@ log = get_logger(__name__)
 
 
 GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-GRAPH_AGENT_ROUTINE_PATH = os.getenv("GRAPH_AGENT_ROUTINE_PATH", "skills/routine.json")
+GRAPH_AGENT_ROUTINE_PATH = os.getenv("GRAPH_AGENT_ROUTINE_PATH", "agentic/routine.json")
 GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
 
 # Kept in sync with agentic.py's AGENT_NOTE_MAX_CHARS so a note saved via the
@@ -265,7 +265,7 @@ def _tool_map() -> dict[str, Callable[..., Any]]:
 def _build_tool_map() -> dict[str, Callable[..., Any]]:
     # Import focused toolkit modules lazily so model-free graph planning can be
     # imported/tested without loading optional heavy research dependencies.
-    from toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
+    from agentic.toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
     mapping: dict[str, Callable[..., Any]] = {
         "make_plan": make_plan,
         "create_checklist": create_checklist,
@@ -274,7 +274,7 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
         "summarize_task_state": summarize_task_state,
     }
     try:
-        from toolkit.organize import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
+        from agentic.toolkit.organize import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
         mapping.update({
             "schedule_job": schedule_job, "list_schedule": list_schedule, "cancel_schedule": cancel_schedule,
             "schedule_reminder": schedule_reminder, "list_reminders": list_reminders, "cancel_reminder": cancel_reminder,
@@ -282,12 +282,12 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("organize tools unavailable for graph executor: %s", exc)
     try:
-        from toolkit.research import deep_search, deep_research
+        from agentic.agentic.toolkit.research import deep_search, deep_research
         mapping.update({"deep_search": deep_search, "deep_research": deep_research})
     except Exception as exc:
         log.debug("research tools unavailable for graph executor: %s", exc)
     try:
-        from toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
+        from agentic.agentic.toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
         mapping.update({
             "scan_photo_workspace": scan_photo_workspace, "propose_photo_ingestion": propose_photo_ingestion,
             "write_photo_ingestion_report": write_photo_ingestion_report,
@@ -295,13 +295,13 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("photo tools unavailable for graph executor: %s", exc)
     try:
-        # draft_*/post_* wrappers mirror what skills/agentic.py already
-        # registers for ReAct — see toolkit/social.py's module docstring.
+        # draft_*/post_* wrappers mirror what agentic/agentic.py already
+        # registers for ReAct — see agentic/toolkit/social.py's module docstring.
         # post_photo_social/post_video_social still enforce human approval
         # internally (SocialApprovalError via _require_approved); adding
         # them here only lets a matched/promoted master plan reach the same
         # functions ReAct can already reach, it does not relax that gate.
-        from toolkit.social import draft_photo_social, post_photo_social, draft_video_social, post_video_social
+        from agentic.agentic.toolkit.social import draft_photo_social, post_photo_social, draft_video_social, post_video_social
         mapping.update({
             "draft_photo_social": draft_photo_social, "post_photo_social": post_photo_social,
             "draft_video_social": draft_video_social, "post_video_social": post_video_social,
@@ -309,12 +309,12 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("social tools unavailable for graph executor: %s", exc)
     try:
-        from toolkit.self_improve import repo_file_tree, repo_read_file, repo_search_text
+        from agentic.toolkit.self_improve import repo_file_tree, repo_read_file, repo_search_text
         mapping.update({"repo_file_tree": repo_file_tree, "repo_read_file": repo_read_file, "repo_search_text": repo_search_text})
     except Exception as exc:
         log.debug("repo tools unavailable for graph executor: %s", exc)
     try:
-        from toolkit.job_hunt import search_jobs, dedupe_postings
+        from agentic.toolkit.job_hunt import search_jobs, dedupe_postings
         mapping.update({"search_jobs": search_jobs, "dedupe_postings": dedupe_postings})
     except Exception as exc:
         log.debug("job tools unavailable for graph executor: %s", exc)

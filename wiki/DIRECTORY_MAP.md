@@ -13,7 +13,7 @@ Purpose: keep Aiko from mixing user settings, runtime state, and generated work.
 ## Directory Meanings
 
 - `config/`: human-maintained defaults and settings that shape Aiko's behavior.
-- `skills/`: reusable workflows plus skill-specific defaults.
+- `agentic/`: reusable workflows plus skill-specific defaults.
 - `wiki/`: operational routing cards and examples Aiko can retrieve before acting.
 - `workspace/`: Aiko's working area for generated notes, reports, and task artifacts.
 - `logs/`: runtime logs and diagnostics.

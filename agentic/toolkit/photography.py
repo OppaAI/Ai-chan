@@ -23,7 +23,7 @@ from itertools import islice
 from pathlib import Path
 
 from system.bioclock import local_now
-from toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
+from agentic.agentic.toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
@@ -68,7 +68,7 @@ def scan_video_workspace(inbox: str = DEFAULT_VIDEO_INBOX, limit: int = 100) -> 
     """Scan a workspace video inbox for video files Aiko can post.
 
     No ingestion/rating pipeline for video (unlike scan_photo_workspace) —
-    this just enumerates postable files for skills/photo_social.py's
+    this just enumerates postable files for agentic/photo_social.py's
     video-posting queue.
     """
     try:

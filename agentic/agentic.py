@@ -1,8 +1,8 @@
 """
-skills/agentic.py
+agentic/agentic.py
 
 Aiko's task-mode loop: tool schemas, ReAct-style dispatch, and final response
-handling. Pure tool implementations stay in toolkit/; chat facade, TTS,
+handling. Pure tool implementations stay in agentic/toolkit/; chat facade, TTS,
 history, and memory queue ownership stay in cognition/think.py.
 
 Context fetch shape:
@@ -39,13 +39,13 @@ from system.log import get_logger
 from system import bioclock
 from cognition import reason
 from cognition import CONTEXT_POOL
-from skills.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
-from skills.wiki import wiki_agentic_contexts_for
-from skills.capability import match_capabilities, filtered_tool_schemas
+from agentic.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
+from agentic.wiki import wiki_agentic_contexts_for
+from agentic.capability import match_capabilities, filtered_tool_schemas
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
-from skills import experience
-from skills import schema
-from toolkit.tools import (
+from agentic import experience
+from agentic import schema
+from agentic.tools import (
     deep_search,
     deep_research,
     make_plan,
@@ -103,7 +103,7 @@ AGENT_INCLUDE_EXPERIENCE_CONTEXT = os.getenv("AGENT_INCLUDE_EXPERIENCE_CONTEXT",
 
 # Rolling STM window shared across all three chat paths. Mirrors
 # CONTEXT_WINDOW_TURNS in cognition.think (kept as a distinct name here rather
-# than importing cognition.think, which already imports skills.agentic — that
+# than importing cognition.think, which already imports agentic.agentic — that
 # would create a circular import).
 AGENT_HISTORY_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 

@@ -465,7 +465,7 @@ def ensure_workspace_knowledge_job(timezone: str | None = None) -> None:
 
 # ── social folder-monitoring job seeding ──────────────────────────────────────
 # Lane A (weekly postcard) is a true weekly cadence job, not a folder scan —
-# see ensure_weekly_social_job below, and toolkit/social.py's module
+# see ensure_weekly_social_job below, and agentic/toolkit/social.py's module
 # docstring for why it stays out of the agent tool loop entirely.
 #
 # Lanes B/C (photo, video) are folder-drop workflows: there's no fixed
@@ -495,7 +495,7 @@ def ensure_weekly_social_job(timezone: str | None = None) -> None:
     """Idempotently seed the weekly memory-postcard job (Lane A).
 
     Fires once a week; the handler itself decides which completed Sun-Sat
-    window to draft from (see toolkit.social.last_completed_sunday_saturday),
+    window to draft from (see agentic.toolkit.social.last_completed_sunday_saturday),
     so the exact day/time here just needs to land safely after a week closes
     — it does not need to be precise.
     """
@@ -567,10 +567,10 @@ def register_social_handlers(timezone: str | None = None) -> None:
     memory.learn.register_deep_study_handlers and
     ensure_workspace_knowledge_job for the equivalent pattern). Imported
     lazily so schedule.py doesn't take a hard, always-on dependency on
-    toolkit.social (and its heavier deps like the vision/LLM clients,
+    agentic.toolkit.social (and its heavier deps like the vision/LLM clients,
     requests, OpenAI client, etc.) at module import time.
     """
-    from toolkit.social import (
+    from agentic.agentic.toolkit.social import (
         run_scheduled_weekly_social,
         run_scheduled_photo_social,
         run_scheduled_video_social,

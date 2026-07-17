@@ -2,7 +2,7 @@
 cognition/think.py
 
 Aiko's chat facade.
-  - Routes between single-shot chat and the agentic task loop in skills.agentic.
+  - Routes between single-shot chat and the agentic task loop in agentic.agentic.
   - Streams llama.cpp response to console + TTS simultaneously.
   - Queues long-term memory writes (delegated to memory.memorize's async write queue).
   - Owns scheduled-job callbacks and idle learner handoff (delegated to memory.learn).
@@ -18,7 +18,7 @@ Memory + knowledge-base fetch:
   handler ends up running, so the fetch overlaps intent classification
   itself instead of waiting for it to finish first. Wiki/policy/skill/
   experience context is agentic-only and fetched separately, inside
-  skills.agentic.run_agentic_chat, only once intent has actually resolved
+  agentic.agentic.run_agentic_chat, only once intent has actually resolved
   to "agentic".
 """
 
@@ -48,16 +48,16 @@ import unicodedata
 
 from memory.memorize import AikoMemorize
 from sensory.speak    import AikoSpeak
-from toolkit.tools    import web_search_context
-from skills.agentic  import run_agentic_chat
-from skills.wiki import wiki_knowledge_context_for
+from agentic.tools    import web_search_context
+from agentic.agentic  import run_agentic_chat
+from agentic.wiki import wiki_knowledge_context_for
 from memory.knowledge import knowledge_context_for
 from cognition import CONTEXT_POOL
 from system.log      import get_logger
 from system.schedule import DueJob, register_system_handler
 from system.userspace import current_user_id, current_display_name, user_profile_path, user_state_dir
 from system import bioclock
-from toolkit.social import run_scheduled_weekly_social
+from agentic.agentic.toolkit.social import run_scheduled_weekly_social
 from cognition import reason
 from memory import learn
 
@@ -164,7 +164,7 @@ def _load_static_persona() -> str:
     no conditional overrides).
 
     Task/tool policy lives in the agentic prompt so casual chat does not pay
-    for skills/schedule tokens on every turn. Japanese/coding overrides live
+    for agentic/schedule tokens on every turn. Japanese/coding overrides live
     in separate files and are appended per-turn by _conditional_persona_blocks
     only when triggered — see _current_system_prompt.
     """
@@ -706,7 +706,7 @@ class AikoThink:
             return "localchat"
   
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
-        """Delegate task-mode execution to skills.agentic."""
+        """Delegate task-mode execution to agentic.agentic."""
         user_id = current_user_id()
         with self._active_users_lock:
             self._active_user_ids.add(user_id)
@@ -948,7 +948,7 @@ class AikoThink:
         """Block until AikoMemorize's async write queue drains, or timeout
         elapses. The queue itself now lives in memory.memorize; this is a
         thin passthrough kept for call sites that only know about the
-        AikoThink instance. No longer called from skills.agentic's turn
+        AikoThink instance. No longer called from agentic.agentic's turn
         start (see run_agentic_chat) — draining there was removed since
         the write's own idle-grace window plus real turn latency meant it
         rarely caught anything. Still available for any caller that
@@ -1118,7 +1118,7 @@ class AikoThink:
         idle_since) so the write waits for a genuinely idle window before
         using the shared LLM for fact extraction. Kept as a method (rather
         than inlining self._memorize.queue_write(...) at every call site)
-        because skills.agentic's run_agentic_chat also calls
+        because agentic.agentic's run_agentic_chat also calls
         owner._store_async(...) directly at the end of the agent loop.
         """
         def _is_any_active():

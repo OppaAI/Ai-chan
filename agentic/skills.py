@@ -1,10 +1,10 @@
 """
-skills/skills.py
+agentic/skills.py
 
 Skill document helpers and registry for local markdown skill files.
 
-``skills/SKILLS.md`` remains the short human-readable skill index loaded into
-Aiko's base persona. Full repeatable workflows live under ``skills/skillsets/`` as
+``agentic/SKILLS.md`` remains the short human-readable skill index loaded into
+Aiko's base persona. Full repeatable workflows live under ``agentic/skillsets/`` as
 ``<id>.md`` files and optional ``skill.yaml`` metadata.
 
 skill_context_for injects RAG-style excerpts, not whole skill files:
