@@ -66,6 +66,12 @@ from toolkit.tools import (
     repo_read_file,
     repo_search_text,
     search_jobs,
+    draft_weekly_social,
+    post_weekly_social,
+    draft_photo_social,
+    post_photo_social,
+    draft_video_social,
+    post_video_social,
 )
 
 log = get_logger(__name__)
@@ -150,6 +156,14 @@ TASK_MODE_GUIDANCE = (
     "flag it as unverified. If a research tool result explicitly says no "
     "relevant content was found, disclose that gap plainly in the final answer "
     "instead of guessing or filling it in from memory. "
+    "Social posting tools (post_weekly_social, post_photo_social, "
+    "post_video_social) will refuse to run on anything not already approved "
+    "by a person outside this conversation, and refuse a second post of the "
+    "same draft. Only call a post_* social tool when the user explicitly "
+    "asks to publish/post right now — never as an automatic follow-up to "
+    "drafting, and never assume a draft is approved just because it was "
+    "created. If a post_* call comes back ok=false, disclose that plainly; "
+    "do not tell the user something was posted unless the tool result says so. "
     "Use <skill_context>, <knowledge_context>, and <experience_context> when "
     "they match the task. For repeatable workflows, prefer predefined skill "
     "workflow, learned knowledge, wiki operating cards, and successful similar "
@@ -270,6 +284,10 @@ _DISCLOSURE_RE = re.compile(
 )
 _EXTERNAL_ACTION_RE = re.compile(r"\b(send|sent|email|post|posted|buy|bought|book|booked|order|ordered|delete|deleted)\b", re.IGNORECASE)
 _LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|draft|note|workspace)\b", re.IGNORECASE)
+# Tools that can genuinely post to a real public account. When one of these
+# ran and succeeded this turn, an answer describing a real "posted" action
+# is not a hallucinated external action — see _verify_final_answer.
+_SOCIAL_POST_TOOLS = {"post_weekly_social", "post_photo_social", "post_video_social"}
 # Any tool message over this length gets compacted to a preview once a
 # later assistant message has arrived — generalized from a research-only
 # rule to cover every bulky tool (repo_read_file, search_jobs, etc.), since
@@ -666,6 +684,33 @@ _reg("search_jobs", "Search configured job boards for a role. If location is omi
     {"query": {"type": "string"}, "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."}, "max_results": {"type": "integer"}, "max_age_days": {"type": "integer"}, "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
     required=["query"])
 
+_reg("draft_weekly_social", "Create a weekly memory-postcard draft (for X and/or Threads) from this week's pinned memories, for human review. Does NOT post anything. Use only for the weekly memory-postcard workflow, not general photo/video posting.",
+    lambda args: draft_weekly_social(force=bool(args.get("force", False))),
+    {"force": {"type": "boolean", "description": "Overwrite an existing draft already created for this week."}})
+
+_reg("post_weekly_social", "Post an ALREADY HUMAN-APPROVED weekly memory-postcard draft to X and/or Threads. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
+    lambda args: post_weekly_social(args.get("draft_dir", ""), providers=args.get("providers") or None),
+    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_weekly_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["x", "threads"]}, "description": "Optional subset of providers to post to; defaults to the draft's configured providers."}},
+    required=["draft_dir"])
+
+_reg("draft_photo_social", "Scan the photo inbox, caption and curate candidates, and create an Instagram photo draft bundle for human review. Does NOT post anything.",
+    lambda args: draft_photo_social(inbox=args.get("inbox") or None, force=bool(args.get("force", False))),
+    {"inbox": {"type": "string", "description": "Optional workspace-relative photo inbox override."}, "force": {"type": "boolean", "description": "Create a new draft even if one already exists for this run."}})
+
+_reg("post_photo_social", "Post an ALREADY HUMAN-APPROVED photo draft to Instagram. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
+    lambda args: post_photo_social(args.get("draft_dir", ""), providers=args.get("providers") or None),
+    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_photo_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["instagram"]}}},
+    required=["draft_dir"])
+
+_reg("draft_video_social", "Queue the oldest not-yet-drafted video in the video inbox that already has a matching NAME.md description file, polishing it into a YouTube title/description for human review. Does NOT post, and does NOT choose which video — dropping the file with its description IS the selection.",
+    lambda args: draft_video_social(inbox=args.get("inbox") or None),
+    {"inbox": {"type": "string", "description": "Optional workspace-relative video inbox override."}})
+
+_reg("post_video_social", "Post an ALREADY HUMAN-APPROVED video draft to YouTube. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
+    lambda args: post_video_social(args.get("draft_dir", ""), providers=args.get("providers") or None),
+    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_video_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["youtube"]}}},
+    required=["draft_dir"])
+
 _reg("final_answer", "Final answer.",
     lambda args: final_answer(args.get("answer", "")),
     {"answer": {"type": "string", "description": "The final answer text."}},
@@ -724,6 +769,12 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
         return ToolResult(
             ok=False, tool=name, args=args,
             content="Missing required argument: provide text or relative_path with knowledge to store.",
+            error_type="missing_args", retryable=True,
+        )
+    if name in _SOCIAL_POST_TOOLS and not (args.get("draft_dir") or "").strip():
+        return ToolResult(
+            ok=False, tool=name, args=args,
+            content="Missing required argument: draft_dir must be a non-empty path to a review bundle.",
             error_type="missing_args", retryable=True,
         )
 
@@ -825,6 +876,12 @@ def _max_attempts_for(name: str) -> int:
         return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
     if name in {"save_note", "schedule_job", "schedule_reminder"}:
         return max(1, int(os.getenv("AGENT_LOCAL_TOOL_ATTEMPTS", 1)))
+    if name in _SOCIAL_POST_TOOLS:
+        # Posting tools are never worth auto-retrying: a false-negative
+        # retry after a real post would risk a duplicate, and the human-
+        # approval / already-posted checks are deterministic, not
+        # transient failures that retrying would fix.
+        return 1
     return 1
 
 
@@ -960,9 +1017,17 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
         if "scheduled" not in lowered and "reminder" not in lowered and "alarm" not in lowered:
             issues.append("A schedule/reminder tool succeeded, but the final answer does not confirm it.")
 
-    if _EXTERNAL_ACTION_RE.search(user_input) and not _LOCAL_ARTIFACT_RE.search(stripped):
+    # A social post tool actually running and succeeding this turn means a
+    # real external action DID happen — that is not a hallucinated claim,
+    # unlike every other "posted"/"sent"/"ordered" mention this heuristic
+    # exists to catch. Only flag the external-action language when no real
+    # post_* tool ran successfully.
+    posted_for_real = any(
+        step["tool"] in _SOCIAL_POST_TOOLS and step["ok"] for step in state.steps
+    )
+    if _EXTERNAL_ACTION_RE.search(user_input) and not _LOCAL_ARTIFACT_RE.search(stripped) and not posted_for_real:
         issues.append("The answer may imply an unsupported external action instead of a local draft/staged artifact.")
- 
+
     if not issues and AGENT_VERIFY_LLM_MODE in ("off", "auto"):
         return VerificationResult(ok=True, feedback="Deterministic checks passed; LLM verify skipped.", score=1.0)
     if issues and AGENT_VERIFY_LLM_MODE == "off":
