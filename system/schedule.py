@@ -612,7 +612,7 @@ def register_social_handlers(timezone: str | None = None) -> None:
     ensure_video_social_job(timezone)
     ensure_weekly_social_retry_job(timezone)
 
-    log.info("Registered social handlers (weekly_social, photo_social, video_social) and seeded their jobs.")
+    log.info("Registered social handlers (weekly_social, weekly_social_retry, photo_social, video_social) and seeded their jobs.")
 
 
 def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
