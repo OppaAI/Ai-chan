@@ -32,7 +32,7 @@ log = get_logger(__name__)
 
 
 GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-GRAPH_MASTER_PLAN_PATH = os.getenv("GRAPH_MASTER_PLAN_PATH", "agentic/master_plans.json")
+GRAPH_MASTER_PLAN_PATH = os.getenv("GRAPH_MASTER_PLAN_PATH", "skills/master_plans.json")
 GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
 
 # Kept in sync with agentic.py's AGENT_NOTE_MAX_CHARS so a note saved via the
