@@ -3,7 +3,7 @@ id: SELF_IMPROVE
 name: Self-Improvement — Architecture Research and Code Improvement
 summary: Help research, inspect, plan, and safely improve Aiko's own codebase and architecture with repo-reading tools, web research, notes, and explicit review gates.
 triggers: improve Aiko, architecture, refactor, optimize, debug Aiko, implement feature, codebase, tools, skills, memory, agentic
-tools: repo_file_tree, repo_search_text, repo_read_file, deep_search, deep_research, make_plan, create_checklist, save_note, summarize_task_state
+tools: repo_file_tree, repo_search_text, repo_read_file, read_paper_url, deep_search, deep_research, make_plan, create_checklist, save_note, summarize_task_state, write_report
 ---
 # Self-Improvement — Architecture Research and Code Improvement
 
