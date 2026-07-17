@@ -797,6 +797,52 @@ def run_scheduled_weekly_social(memorize: AikoMemorize) -> dict[str, Any]:
     return draft
 
 
+def retry_weekly_social_if_needed(memorize: AikoMemorize) -> dict[str, Any]:
+    """Interval-driven safety net for Lane A (weekly postcard).
+
+    Runs every WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS. On any day other than
+    Sunday it's a one-line no-op — that's the entire "stop checking after
+    Sunday is over" behavior; there's no separate cutoff flag to manage.
+
+    On Sundays it:
+      1. ensures this week's draft exists (generate_weekly_draft() is
+         idempotent per calendar week — skips if draft.json already exists), and
+      2. if the draft hasn't posted yet, autopost is on, and it's now
+         human_approved, tries to post it.
+
+    This covers both a run that failed partway (network/API error) and a
+    run that was simply waiting on human approval that arrived later in
+    the day — either way, the next tick picks it back up. Once Monday
+    arrives, every tick is a no-op until next Sunday.
+    """
+    now = datetime.now(get_timezone())
+    if now.weekday() != 6:  # Monday=0 ... Sunday=6
+        return {"success": True, "skipped": True, "reason": "not_sunday"}
+
+    draft = generate_weekly_draft(memorize)  # idempotent per calendar week
+    if not draft.get("success") or not draft.get("draft_dir"):
+        return draft
+
+    draft_dir = Path(draft["draft_dir"])
+    meta_path = draft_dir / "draft.json"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"success": False, "error": f"could not read draft.json: {e}"}
+
+    if meta.get("posted"):
+        return {"success": True, "already_posted": True, "draft_dir": str(draft_dir)}
+    if not WEEKLY_AUTOPOST:
+        return {"success": True, "skipped": True, "reason": "autopost_disabled", "draft_dir": str(draft_dir)}
+
+    try:
+        _require_approved(draft_dir)
+    except SocialApprovalError as e:
+        return {"success": True, "skipped": True, "reason": str(e), "draft_dir": str(draft_dir)}
+
+    post_result = post_draft(draft_dir)
+    return {"success": bool(post_result.get("posted")), "draft_dir": str(draft_dir), "post": post_result}
+  
 # ══════════════════════════════════════════════════════════════════════════
 # Lane B — Curated photo showcase (Instagram only)
 # ══════════════════════════════════════════════════════════════════════════
