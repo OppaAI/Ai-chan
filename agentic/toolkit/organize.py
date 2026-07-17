@@ -25,7 +25,7 @@ from system.schedule import (
     schedule_job_record,
     schedule_reminder_record,
 )
-from agentic.agentic.toolkit.common import json_block
+from agentic.toolkit.common import json_block
 
 
 def schedule_job(

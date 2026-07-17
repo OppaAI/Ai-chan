@@ -1,7 +1,7 @@
 from agentic import schema
 
 
-def test_master_plan_prefers_checklist_workflow():
+def test_playbook_prefers_checklist_workflow():
     graph = schema.plan_from_master("make a checklist for Needle testing and save it", [])
     assert graph is not None
     assert graph.id == "checklist_and_save"
@@ -39,12 +39,12 @@ def test_dependent_graph_skips_downstream_when_dependency_fails(monkeypatch):
     assert by_id["save"].ok is False
     assert by_id["save"].error_type == "dependency_failed"
 
-def test_schema_observation_lists_master_plans():
-    data = schema.list_master_plans_json()
-    assert "master_plans" in data
+def test_schema_observation_lists_playbooks():
+    data = schema.list_playbooks_json()
+    assert "playbooks" in data
     assert "checklist_and_save" in data
 
 
-def test_run_master_plan_json_reports_no_match():
-    data = schema.run_master_plan_json("zzzz unmatched opaque task")
-    assert "no_matching_master_plan" in data
+def test_run_playbook_json_reports_no_match():
+    data = schema.run_playbook_json("zzzz unmatched opaque task")
+    assert "no_matching_playbook" in data

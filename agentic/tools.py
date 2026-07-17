@@ -11,13 +11,13 @@ agent loop needs them.
 """
 from __future__ import annotations
 
-from agentic.agentic.toolkit.research import web_fetch, deep_search, deep_research, web_search, web_search_context
+from agentic.toolkit.research import web_fetch, deep_search, deep_research, web_search, web_search_context
 from agentic.toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
 from agentic.toolkit.organize import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
-from agentic.agentic.toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
+from agentic.toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
 from agentic.toolkit.self_improve import repo_file_tree, repo_read_file, repo_search_text
 from agentic.toolkit.job_hunt import search_jobs, dedupe_postings
-from agentic.agentic.toolkit.social import (
+from agentic.toolkit.social import (
     draft_photo_social, post_photo_social,
     draft_video_social, post_video_social,
 )

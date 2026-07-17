@@ -313,8 +313,8 @@ Run before any phase suite.
 - [ ] Research/planning/workspace/photo/repo tasks route to agent mode when appropriate.
 - [ ] `MAX_AGENT_ITER` stops runaway loops and produces a clear partial/failure final answer.
 - [ ] Graph-mode known workflows run without an LLM planning call and return compact node evidence.
-- [ ] `list_master_plans` and `run_master_plan` appear in `tool_schemas()` and return structured observations.
-- [ ] Hybrid mode falls back to ReAct exactly once when no graph master plan matches.
+- [ ] `list_playbooks` and `run_playbook` appear in `tool_schemas()` and return structured observations.
+- [ ] Hybrid mode falls back to ReAct exactly once when no graph playbook matches.
 - [ ] ReAct fallback records steps, tool names, sanitized args, and outcome into experience for later promotion.
 - [ ] Agent memory recall is bounded by `AGENT_MEMORY_RECALL_LIMIT` and does not drown tool evidence.
 - [ ] Final-answer verification catches unsupported claims, failed tool actions, and missing artifact paths.
@@ -553,4 +553,4 @@ Run after any significant change to confirm nothing regressed.
 - [ ] Second boot reuses cached route vectors and does not re-embed unchanged router examples.
 - [ ] Editing `cognition/router_prompts.json`, changing the route instruct string, or changing `EMBED_DIMS` invalidates the old cache key.
 - [ ] Deleting route-vector cache files is safe; Aiko rebuilds them automatically.
-- [ ] Graph master plans remain source JSON/YAML/markdown data; any future graph vector cache is treated as rebuildable derived data.
+- [ ] Graph playbooks remain source JSON/YAML/markdown data; any future graph vector cache is treated as rebuildable derived data.

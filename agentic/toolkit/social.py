@@ -93,8 +93,8 @@ from system.log import get_logger
 from memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
 from memory.reflect import _generate_image, _load_soul
-from agentic.agentic.toolkit.common import workspace_root
-from agentic.agentic.toolkit.photography import scan_photo_workspace, scan_video_workspace
+from agentic.toolkit.common import workspace_root
+from agentic.toolkit.photography import scan_photo_workspace, scan_video_workspace
 
 log = get_logger(__name__)
 

@@ -10,7 +10,7 @@ Aiko is organized by runtime responsibility rather than by one monolithic `core/
 - `system/wakeup.py` owns parallel subsystem startup and returns a `BootResult` containing thinking, memory, speech, and listening modules.
 - `cognition/think.py` owns the public chat facade: OpenAI-compatible LLM setup, semantic/LLM routing, normal chat, TTS/history glue, scheduled job callbacks, idle learner handoff, and background memory writes.
 - `agentic/agentic.py` owns task-mode tool schemas, ReAct loop execution, final-answer verification, and tool dispatch.
-- `agentic/schema.py` owns the graph-first master-plan DAG executor.
+- `agentic/schema.py` owns the graph-first playbook DAG executor.
 - `agentic/tools.py` is the compatibility facade for executable tools; focused implementations live under `agentic/toolkit/`.
 - `agentic/skills.py` owns skillset CRUD/search helpers and the `agentic/skillsets/` workflow registry used by task mode.
 - `memory/memorize.py` owns persistent memory CRUD, recall, pinning, decay, cleanup, and consolidation hooks.
@@ -29,7 +29,7 @@ sensory/              speech and listening adapters
 agentic/tools.py      stable facade for pure callable tools
 agentic/toolkit/              focused tool implementations; no LLM loop or conversation state
 agentic/agentic.py     ReAct loop, tool schemas, dispatch, verification, experience recording
-agentic/schema.py      graph-first master-plan DAG executor
+agentic/schema.py      graph-first playbook DAG executor
 agentic/skillsets/     human-readable repeatable workflow documents
 wiki/                 trusted local knowledge cards
 ```
@@ -59,7 +59,7 @@ flowchart TD
     Session -->|turn text| Think
     Think <-->|recall + async writes| Memory
     Think -->|task route| Agentic[agentic.agentic\nReAct task loop]
-    Agentic --> Schema[agentic.schema\nmaster-plan DAG executor]
+    Agentic --> Schema[agentic.schema\nplaybook DAG executor]
     Agentic --> Tools[agentic.tools facade]
     Tools --> Toolkit[toolkit modules]
     Think -->|streamed tokens| Session
@@ -132,7 +132,7 @@ sequenceDiagram
         T->>T: generate response
     else agentic task mode
         T->>A: run_agentic_chat
-        A->>G: try master-plan graph when enabled
+        A->>G: try playbook graph when enabled
         alt graph matched
             G->>Tools: execute ready DAG nodes
             Tools-->>G: node results
@@ -182,7 +182,7 @@ flowchart TD
     GraphGate -->|graph or hybrid| Master[agentic.schema plan_from_master]
     Master -->|matched| DAG[Execute PlanGraph DAG]
     DAG --> GraphFinal[Deterministic graph answer]
-    Master -->|no match and graph| NoMatch[No-master-plan message]
+    Master -->|no match and graph| NoMatch[No-playbook message]
     Master -->|no match and hybrid| React[agentic.agentic ReAct loop]
     GraphGate -->|react| React
     React --> ToolCall[Tool call through toolkit]
@@ -209,7 +209,7 @@ flowchart TD
     Caps --> Tools[Filtered tool schemas]
     Caps --> Graph{AGENT_EXECUTOR_MODE}
     Graph -->|graph or hybrid| Schema[agentic.schema]
-    Schema -->|master plan matched| DAG[PlanGraph DAG execution]
+    Schema -->|playbook matched| DAG[PlanGraph DAG execution]
     DAG --> Ready[Run independent ready nodes in parallel]
     Ready --> NodeResults[NodeResult records]
     NodeResults --> GraphAnswer[Deterministic answer]
@@ -237,7 +237,7 @@ flowchart TD
 
 ## Autonomous Sub-Agent Status
 
-Aiko can already run **autonomous graph nodes inside one orchestrated agentic turn**: `agentic.schema.execute_graph` finds nodes whose dependencies are satisfied, runs independent ready nodes through a thread pool, marks nodes with failed dependencies as `dependency_failed`, and records the resulting trace. That is useful for deterministic master-plan workflows.
+Aiko can already run **autonomous graph nodes inside one orchestrated agentic turn**: `agentic.schema.execute_graph` finds nodes whose dependencies are satisfied, runs independent ready nodes through a thread pool, marks nodes with failed dependencies as `dependency_failed`, and records the resulting trace. That is useful for deterministic playbook workflows.
 
 Aiko does **not** yet have a fully independent, long-running autonomous sub-agent runtime. A true sub-agent layer would add durable queues, leases or heartbeats, cancellation, per-agent workspace/artifact boundaries, retry policy, permissions, and observability. The current architecture is compatible with that future layer because graph nodes are already explicit units of work, but today they are lightweight in-process tool tasks rather than separately managed workers.
 
@@ -247,7 +247,7 @@ Aiko does **not** yet have a fully independent, long-running autonomous sub-agen
 - `EMBED_MODEL`, `EMBED_DIMS`, `EMBED_CACHE_PATH`, and `SQLITE_MEMORY_PATH` configure local sqlite-vec memory and the Harrier ONNX embedder.
 - `ROUTE_ENABLED`, `ROUTE_MODE`, and route thresholds are read by `cognition/think.py`.
 - `AGENT_EXECUTOR_MODE` selects `graph`, `hybrid`, or `react` task execution.
-- `GRAPH_MASTER_PLAN_PATH` and `GRAPH_MAX_WORKERS` configure `agentic.schema`.
+- `GRAPH_playbook_PATH` and `GRAPH_MAX_WORKERS` configure `agentic.schema`.
 - `ROUTE_VECTOR_CACHE_ENABLED` enables safe `.npz` route-vector cache files.
 - `MIOTTS_API_URL`, `MIOTTS_PRESET`, and `MIOTTS_DEVICE` configure voice output.
 - `ASR_*`, `LISTEN_*`, and `SPEAKER_*` configure SenseVoice, Silero VAD, speaker verification, and barge-in.
@@ -263,4 +263,4 @@ Aiko does **not** yet have a fully independent, long-running autonomous sub-agen
 
 Intent-routing examples are authored as text in `cognition/router_prompts.json`, but their embedding matrix can be cached on disk with `ROUTE_VECTOR_CACHE_ENABLED=1`. The cache is keyed by the examples, instruct string, embedding backend metadata, and `EMBED_DIMS`, and is stored as a NumPy `.npz` archive loaded with `allow_pickle=False`.
 
-Graph master plans are currently matched by trigger and capability metadata, so there are no graph vectors to precompute yet. If graph matching becomes semantic, the same pattern should be used: stable JSON/YAML plan specs as the source of truth, plus generated vector-cache artifacts that are safe to delete and rebuild.
+Graph playbooks are currently matched by trigger and capability metadata, so there are no graph vectors to precompute yet. If graph matching becomes semantic, the same pattern should be used: stable JSON/YAML plan specs as the source of truth, plus generated vector-cache artifacts that are safe to delete and rebuild.

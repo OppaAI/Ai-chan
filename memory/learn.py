@@ -54,7 +54,7 @@ os.getenv() calls would silently fall back to hardcoded defaults if learn.py
 happened to be imported before whatever else in the app calls load_config().
 
 This module reads its own tunables directly from os.environ rather than
-importing constants from agentic.agentic.toolkit.research — it owns its own view of
+importing constants from agentic.toolkit.research — it owns its own view of
 shared knobs like CONDENSE_CHUNK_CHARS/CONDENSE_MIN_SCORE/search-result-count
 instead of reaching into another module's constants (which would also
 silently go stale if that module's env var name ever changed).
@@ -80,7 +80,7 @@ from system.config import load_config
 load_config()
 
 from cognition import reason
-from agentic.agentic.toolkit.research import (
+from agentic.toolkit.research import (
     _ask_llm_json,
     _is_private_or_local_host,
     _web_search_raw,
@@ -93,7 +93,7 @@ from system.log import get_logger
 log = get_logger(__name__)
 
 # Tunables this module owns its own env-backed view of (see module
-# docstring) rather than importing from agentic.agentic.toolkit.research.
+# docstring) rather than importing from agentic.toolkit.research.
 CONDENSE_CHUNK_CHARS = int(os.getenv("CONDENSE_CHUNK_CHARS", 500))
 CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
 DEEP_SEARCH_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))

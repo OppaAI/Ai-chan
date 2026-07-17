@@ -570,7 +570,7 @@ def register_social_handlers(timezone: str | None = None) -> None:
     agentic.toolkit.social (and its heavier deps like the vision/LLM clients,
     requests, OpenAI client, etc.) at module import time.
     """
-    from agentic.agentic.toolkit.social import (
+    from agentic.toolkit.social import (
         run_scheduled_weekly_social,
         run_scheduled_photo_social,
         run_scheduled_video_social,

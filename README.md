@@ -227,7 +227,7 @@ Aiko-chan/
 │   └── listen.py           # SenseVoice (sherpa-onnx) + Silero VAD
 ├── agentic/
 │   ├── agentic.py          # ReAct task loop, tool schemas, tool dispatch
-│   ├── schema.py           # graph-first master-plan DAG executor
+│   ├── schema.py           # graph-first playbook DAG executor
 │   ├── capability.py       # capability matching for task-mode tool filtering
 │   ├── experience.py       # procedural task-run experience store
 │   ├── skills.py           # skill registry and workflow retrieval

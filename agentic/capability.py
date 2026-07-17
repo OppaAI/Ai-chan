@@ -63,8 +63,8 @@ TOOL_DOMAINS: dict[str, str] = {
     "repo_search_text": "repo",
     "learn_knowledge": "kb",
     "search_jobs": "jobs",
-    "list_master_plans": "graph",
-    "run_master_plan": "graph",
+    "list_playbooks": "graph",
+    "run_playbook": "graph",
     # Social posting tools — deliberately capability-gated, never ALWAYS_ON.
     # Posting is the highest-stakes tool class in the loop, so it gets the
     # same (not looser) gating as research/scheduling/photo/repo.
@@ -88,7 +88,7 @@ TOOL_DOMAINS: dict[str, str] = {
 # every agentic turn can plausibly need.
 ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "make_plan", "create_checklist", "save_note", "read_workspace_file",
-    "summarize_task_state", "list_master_plans", "run_master_plan", "final_answer",
+    "summarize_task_state", "list_playbooks", "run_playbook", "final_answer",
 })
 
 CAPABILITIES: dict[str, Capability] = {

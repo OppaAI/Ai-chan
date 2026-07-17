@@ -172,7 +172,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 |---|---|
 | ReAct-style task loop with tool dispatch | ✅ Done |
 | Semantic Intent Routing for fast delegation | ✅ Done |
-| Graph-first master-plan executor with model-free DAG tool nodes | ✅ Done |
+| Graph-first playbook executor with model-free DAG tool nodes | ✅ Done |
 | Autonomous sub-agent worker runtime with queues/leases/cancellation | 🔲 Planned |
 | Implement goal-based DAG HTN One-step LLM Agentic architecture | ✅ Done |
 | Persistent schedule jobs with reminder | ✅ Done |

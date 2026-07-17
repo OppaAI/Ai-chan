@@ -26,14 +26,14 @@ def _steps_from_tools(tools: list[str]) -> list[dict[str, Any]]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Seed Aiko experience and master-plan workflows from practice examples.")
+    parser = argparse.ArgumentParser(description="Seed Aiko experience and playbook workflows from practice examples.")
     parser.add_argument("--task", required=True, help="Example task prompt Aiko should learn/practice.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--tools", nargs="+", help="Ordered tool names for the workflow.")
     group.add_argument("--steps", help="JSON list of step objects with tool/ok/args fields.")
     parser.add_argument("--answer", default="practice workflow recorded", help="Outcome excerpt to store with the experience.")
-    parser.add_argument("--promote", action="store_true", help="Append the practiced sequence to the graph master-plan JSON.")
-    parser.add_argument("--name", help="Human-readable name for the promoted master plan.")
+    parser.add_argument("--promote", action="store_true", help="Append the practiced sequence to the graph playbook JSON.")
+    parser.add_argument("--name", help="Human-readable name for the promoted playbook.")
     args = parser.parse_args()
 
     if args.steps:
@@ -47,8 +47,8 @@ def main() -> int:
     print(f"recorded_experience={exp_id}")
 
     if args.promote:
-        path = schema.append_master_plan_from_experience(args.task, steps, name=args.name)
-        print(f"promoted_master_plan={path}")
+        path = schema.append_playbook_from_experience(args.task, steps, name=args.name)
+        print(f"promoted_playbook={path}")
     return 0
 
 

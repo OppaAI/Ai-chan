@@ -35,11 +35,11 @@ USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <US
 # Use this to tune when Aiko enters tool/task mode and how much work one task may do.
 
 # -- Agent executor mode --
-AGENT_EXECUTOR_MODE: "hybrid"  # react = old ReAct loop only; graph = master-plan DAG only; hybrid = graph first, ReAct fallback once for novel workflows.
-GRAPH_AGENT_ENABLED: "1"  # Enable deterministic graph/master-plan executor for known workflows.
-GRAPH_AGENT_ROUTINE_PATH: "agentic/routine.json"  # Per-user JSON file for practiced/promoted graph workflows.
+AGENT_EXECUTOR_MODE: "hybrid"  # react = old ReAct loop only; graph = playbook DAG only; hybrid = graph first, ReAct fallback once for novel workflows.
+GRAPH_AGENT_ENABLED: "1"  # Enable deterministic graph/playbook executor for known workflows.
+GRAPH_AGENT_PLAYBOOK: "agentic/playbook.json"  # Per-user JSON file for practiced/promoted graph workflows.
 GRAPH_MAX_WORKERS: "4"  # Max parallel tool nodes for graph execution.
-AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline master-plan promotion, not prompt context, by default.
+AGENT_INCLUDE_EXPERIENCE_CONTEXT: "0"  # Experience is now used for offline playbook promotion, not prompt context, by default.
 
 # -- Agent loop limits --
 MAX_AGENT_ITER: "6"  # Maximum tool/planning iterations per task; raise for complex tasks, lower for safety.

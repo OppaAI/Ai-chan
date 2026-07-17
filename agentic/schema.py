@@ -4,10 +4,10 @@ agentic/schema.py
 Graph-first, mostly model-free agentic executor.
 
 This module is intentionally conservative: it only handles workflows that can be
-matched to a known master-plan template and whose tool arguments can be derived
+matched to a known playbook template and whose tool arguments can be derived
 from the user's prompt with deterministic heuristics. Novel/ambiguous tasks
 return ``None`` so the normal ReAct loop can run once and record experience for
-future promotion into the master plan.
+future promotion into the playbook.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ log = get_logger(__name__)
 
 
 GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-GRAPH_AGENT_ROUTINE_PATH = os.getenv("GRAPH_AGENT_ROUTINE_PATH", "agentic/routine.json")
+GRAPH_AGENT_PLAYBOOK = os.getenv("GRAPH_AGENT_PLAYBOOK", "agentic/playbook.json")
 GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
 
 # Kept in sync with agentic.py's AGENT_NOTE_MAX_CHARS so a note saved via the
@@ -47,7 +47,7 @@ AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "1500"))
 _EMBEDDER_AWARE_TOOLS = {"deep_search", "deep_research"}
 _TOOL_MAP_CACHE: dict[str, Callable[..., Any]] | None = None
 _TOOL_MAP_LOCK = threading.Lock()
-_MASTER_PLAN_WRITE_LOCK = threading.Lock()
+_PLAYBOOK_WRITE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ class PlanGraph:
     name: str
     goal: str
     nodes: tuple[PlanNode, ...]
-    source: str = "master_plan"
+    source: str = "playbook"
 
 
 @dataclass(frozen=True)
@@ -103,9 +103,9 @@ class GraphRunResult:
 
 
 @contextlib.contextmanager
-def _master_plan_write_guard(path: Path):
+def _playbook_write_guard(path: Path):
     lock_path = path.with_suffix(path.suffix + ".lock")
-    with _MASTER_PLAN_WRITE_LOCK:
+    with _PLAYBOOK_WRITE_LOCK:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock_file:
             try:
@@ -119,14 +119,14 @@ def _master_plan_write_guard(path: Path):
             except ImportError:
                 yield
 
-def _master_plan_file() -> Path:
-    raw = Path(GRAPH_AGENT_ROUTINE_PATH)
+def _playbook_file() -> Path:
+    raw = Path(GRAPH_AGENT_PLAYBOOK)
     if raw.is_absolute():
         return raw
     return user_state_dir(current_user_id()) / raw
 
 
-def _default_master_plans() -> list[dict[str, Any]]:
+def _default_playbooks() -> list[dict[str, Any]]:
     """Built-in starter plans. User-promoted plans are appended on disk."""
     return [
         {
@@ -171,16 +171,16 @@ def _default_master_plans() -> list[dict[str, Any]]:
     ]
 
 
-def load_master_plans() -> list[dict[str, Any]]:
-    path = _master_plan_file()
-    plans = _default_master_plans()
+def load_playbooks() -> list[dict[str, Any]]:
+    path = _playbook_file()
+    plans = _default_playbooks()
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 plans.extend(p for p in data if isinstance(p, dict))
         except Exception as exc:
-            log.warning("failed to load graph master plans from %s: %s", path, exc)
+            log.warning("failed to load graph playbooks from %s: %s", path, exc)
     return plans
 
 
@@ -231,7 +231,7 @@ def _substitute(value: Any, prompt: str, results: dict[str, NodeResult]) -> Any:
 def plan_from_master(user_input: str, cap_ids: list[str] | None = None) -> PlanGraph | None:
     if not GRAPH_AGENT_ENABLED:
         return None
-    plans = load_master_plans()
+    plans = load_playbooks()
     ranked = sorted(((_score_plan(p, user_input, cap_ids), p) for p in plans), key=lambda x: x[0], reverse=True)
     if not ranked or ranked[0][0] <= 0:
         return None
@@ -282,12 +282,12 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("organize tools unavailable for graph executor: %s", exc)
     try:
-        from agentic.agentic.toolkit.research import deep_search, deep_research
+        from agentic.toolkit.research import deep_search, deep_research
         mapping.update({"deep_search": deep_search, "deep_research": deep_research})
     except Exception as exc:
         log.debug("research tools unavailable for graph executor: %s", exc)
     try:
-        from agentic.agentic.toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
+        from agentic.toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
         mapping.update({
             "scan_photo_workspace": scan_photo_workspace, "propose_photo_ingestion": propose_photo_ingestion,
             "write_photo_ingestion_report": write_photo_ingestion_report,
@@ -299,9 +299,9 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
         # registers for ReAct — see agentic/toolkit/social.py's module docstring.
         # post_photo_social/post_video_social still enforce human approval
         # internally (SocialApprovalError via _require_approved); adding
-        # them here only lets a matched/promoted master plan reach the same
+        # them here only lets a matched/promoted playbook reach the same
         # functions ReAct can already reach, it does not relax that gate.
-        from agentic.agentic.toolkit.social import draft_photo_social, post_photo_social, draft_video_social, post_video_social
+        from agentic.toolkit.social import draft_photo_social, post_photo_social, draft_video_social, post_video_social
         mapping.update({
             "draft_photo_social": draft_photo_social, "post_photo_social": post_photo_social,
             "draft_video_social": draft_video_social, "post_video_social": post_video_social,
@@ -397,10 +397,10 @@ def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder
     return execute_graph(graph, embedder=embedder)
 
 
-def list_master_plans_json() -> str:
-    """Return graph master-plan metadata for tool/schema callers."""
+def list_playbooks_json() -> str:
+    """Return graph playbook metadata for tool/schema callers."""
     rows = []
-    for plan in load_master_plans():
+    for plan in load_playbooks():
         rows.append({
             "id": plan.get("id"),
             "name": plan.get("name"),
@@ -416,16 +416,16 @@ def list_master_plans_json() -> str:
                 for n in plan.get("nodes", []) if isinstance(n, dict)
             ],
         })
-    return json.dumps({"master_plans": rows}, ensure_ascii=False, indent=2)
+    return json.dumps({"playbooks": rows}, ensure_ascii=False, indent=2)
 
 
-def run_master_plan_json(task: str, cap_ids: list[str] | None = None, embedder=None) -> str:
+def run_playbook_json(task: str, cap_ids: list[str] | None = None, embedder=None) -> str:
     """Run the graph executor and return a compact JSON observation."""
     result = run_schema_agent(task, cap_ids=cap_ids, embedder=embedder)
     if result is None:
         return json.dumps({
             "ok": False,
-            "error_type": "no_matching_master_plan",
+            "error_type": "no_matching_playbook",
             "task": task,
             "instruction": "Use ReAct once, then record/promote the successful workflow if it should become reusable.",
         }, ensure_ascii=False, indent=2)
@@ -454,8 +454,8 @@ def _promotion_args_for_step(tool: str, step: dict[str, Any]) -> dict[str, Any]:
     return {str(k): "$prompt" for k in arg_keys}
 
 
-def append_master_plan_from_experience(goal: str, steps: list[dict[str, Any]], *, name: str | None = None) -> Path:
-    """Promote a practiced or ReAct-discovered tool sequence into user master plans.
+def append_playbook_from_experience(goal: str, steps: list[dict[str, Any]], *, name: str | None = None) -> Path:
+    """Promote a practiced or ReAct-discovered tool sequence into user playbooks.
 
     Args are stored as sanitized previews by the experience layer, so promoted
     templates intentionally use ``$prompt``/``$title`` placeholders unless the
@@ -472,7 +472,7 @@ def append_master_plan_from_experience(goal: str, steps: list[dict[str, Any]], *
         nodes.append(node)
     if not nodes:
         raise ValueError("no promotable tool steps found")
-    path = _master_plan_file()
+    path = _playbook_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     new_plan = {
         "id": f"practiced_{uuid.uuid4().hex[:10]}",
@@ -481,7 +481,7 @@ def append_master_plan_from_experience(goal: str, steps: list[dict[str, Any]], *
         "requires_any": [],
         "nodes": nodes,
     }
-    with _master_plan_write_guard(path):
+    with _playbook_write_guard(path):
         existing = []
         if path.exists():
             try:

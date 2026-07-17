@@ -640,11 +640,11 @@ _reg("load_skillset", "Load the full markdown instructions for one predefined sk
     {"skill_id": {"type": "string"}},
     required=["skill_id"])
 
-_reg("list_master_plans", "List graph/master-plan workflows available to the model-free graph executor.",
-    lambda args: schema.list_master_plans_json(),
+_reg("list_playbooks", "List graph/playbook workflows available to the model-free graph executor.",
+    lambda args: schema.list_playbooks_json(),
     {})
 
-_reg_no_handler("run_master_plan", "Run a saved graph/master-plan workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",    {"task": {"type": "string", "description": "The task prompt to match against graph master plans."}, "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."}},
+_reg_no_handler("run_playbook", "Run a saved graph/playbook workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",    {"task": {"type": "string", "description": "The task prompt to match against graph playbooks."}, "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."}},
     required=["task"])
 
 _reg("scan_photo_workspace", "Scan a workspace photo inbox for wildlife/nature/astro image files.",
@@ -811,8 +811,8 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("query", ""),
             embedder=_owner_embedder(owner),
         )
-    if name == "run_master_plan":
-        return schema.run_master_plan_json(
+    if name == "run_playbook":
+        return schema.run_playbook_json(
             args.get("task", ""),
             cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None,
             embedder=_owner_embedder(owner),
@@ -1218,10 +1218,10 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     _matched_caps = match_capabilities(user_input, embedder=_embedder, query_vector=_cap_vec)
     tools = filtered_tool_schemas(tool_schemas(), _matched_caps)
 
-    # Graph-first executor: known master-plan workflows can run without an LLM
+    # Graph-first executor: known playbook workflows can run without an LLM
     # planning loop. Novel/ambiguous tasks return None and fall back to the
     # ReAct loop once; the normal experience recorder below then captures the
-    # successful sequence for later promotion into the graph master plan.
+    # successful sequence for later promotion into the graph playbook.
     if AGENT_EXECUTOR_MODE in {"graph", "hybrid"}:
         graph_result = schema.run_schema_agent(user_input, cap_ids=_matched_caps, embedder=_embedder)
         if graph_result is not None:
@@ -1323,7 +1323,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
 
         if graph_result is None and AGENT_EXECUTOR_MODE == "graph":
             final_text = (
-                "I could not match this task to a saved master-plan workflow, "
+                "I could not match this task to a saved playbook workflow, "
                 "and AGENT_EXECUTOR_MODE=graph disables the ReAct fallback. "
                 "Run practice.py or switch to AGENT_EXECUTOR_MODE=hybrid to learn it once."
             )

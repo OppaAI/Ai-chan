@@ -281,7 +281,7 @@ def experience_context_for(query: str, limit: int = 3, embedder=None) -> str:
 def record_practice_experience(goal: str, steps: list[dict], final_answer: str = "practice workflow", verified_ok: bool = True, score: float = 1.0, embedder=None) -> str | None:
     """Record an operator-provided practice workflow without booting chat.
 
-    This is used by ``practice.py`` to seed experience/master-plan promotion
+    This is used by ``practice.py`` to seed experience/playbook promotion
     while testing tiny routing/execution models such as Needle.
     """
     return record_experience(None, goal, steps, final_answer, verified_ok, score, embedder=embedder)

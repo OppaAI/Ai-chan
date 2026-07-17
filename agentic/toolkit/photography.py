@@ -23,7 +23,7 @@ from itertools import islice
 from pathlib import Path
 
 from system.bioclock import local_now
-from agentic.agentic.toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
+from agentic.toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
