@@ -23,12 +23,22 @@ Use this skill when Oppa asks Aiko to research, inspect, design, optimize, refac
    - use `repo_search_text` for symbols/concepts;
    - use `repo_read_file` for relevant files.
 3. If current external facts are needed, use `deep_search` for a single well-scoped question. If the research spans multiple unclear angles, use `deep_research` instead. Prefer official docs or primary sources either way.
-4. Produce a concise implementation plan before any risky action.
+3.5. To read a paper the user pointed at directly, use `read_paper_url` with
+     `query` set to the current architecture-review question — this
+     condenses the fetch to relevant excerpts rather than just the opening
+     section. Only fall back to deep_search/deep_research for open-ended
+     "find a paper about X" requests.
 5. Use notes/checklists/task-state tools to preserve research and decisions under the workspace.
 6. Clearly distinguish:
    - what was verified from files/tool outputs;
    - what is inference;
    - what still needs tests or human approval.
+7. For a written deliverable (architecture review, paper-vs-Aiko comparison,
+   improvement proposal), call `write_report`. For a full paper-style
+   write-up, set arxiv_style=true and call it once per section
+   (abstract → introduction → related_work → architecture → discussion →
+   limitations → conclusion → references) with append=true, since one turn
+   cannot produce the whole document at once.4. Produce a concise implementation plan before any risky action.
 
 ## Current safety boundary
 `repo_file_tree`, `repo_read_file`, and `repo_search_text` are **fully available and must be used freely** — they are read-only and safe to call at any time without restriction.
