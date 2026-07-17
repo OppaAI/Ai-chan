@@ -1278,6 +1278,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 with owner._history_lock:
                     owner._history.append({"role": "user", "content": user_input})
                     owner._history.append({"role": "assistant", "content": graph_result.final_answer})
+                    if len(owner._history) > AGENT_HISTORY_TURNS * 10:
+                        owner._history = owner._history[-(AGENT_HISTORY_TURNS * 10):]
                 owner._store_async(user_input, graph_result.final_answer)
                 return graph_result.final_answer
 
@@ -1313,6 +1315,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 with owner._history_lock:
                     owner._history.append({"role": "user", "content": user_input})
                     owner._history.append({"role": "assistant", "content": final_text})
+                    if len(owner._history) > AGENT_HISTORY_TURNS * 10:
+                        owner._history = owner._history[-(AGENT_HISTORY_TURNS * 10):]
                 owner._store_async(user_input, final_text)
                 return final_text
             # else: AGENT_EXECUTOR_MODE == "hybrid" — fall through to the
@@ -1338,6 +1342,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             with owner._history_lock:
                 owner._history.append({"role": "user", "content": user_input})
                 owner._history.append({"role": "assistant", "content": final_text})
+                if len(owner._history) > AGENT_HISTORY_TURNS * 10:
+                    owner._history = owner._history[-(AGENT_HISTORY_TURNS * 10):]
             owner._store_async(user_input, final_text)
             return final_text
 
@@ -1635,6 +1641,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     with owner._history_lock:
         owner._history.append({"role": "user", "content": user_input})
         owner._history.append({"role": "assistant", "content": final_text})
+        if len(owner._history) > AGENT_HISTORY_TURNS * 10:
+            owner._history = owner._history[-(AGENT_HISTORY_TURNS * 10):]
 
     owner._store_async(user_input, final_text)
     return final_text

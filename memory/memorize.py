@@ -134,6 +134,7 @@ import threading
 import re
 import sqlite3
 import struct
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -150,6 +151,26 @@ from system.log import get_logger
 from memory.vecstore import HarrierEmbedder
 
 log = get_logger(__name__)
+
+_GUEST_DB: "tempfile.NamedTemporaryFile | None" = None
+_GUEST_DB_LOCK = threading.Lock()
+
+
+def _guest_memory_db() -> str:
+    """Return a tempfile-backed path for the guest user's memory DB.
+
+    Unlike ``:memory:`` (which lives entirely in process heap and grows
+    unbounded), a tempfile is paged by the OS and reclaimed on restart.
+    """
+    global _GUEST_DB
+    if _GUEST_DB is not None:
+        return _GUEST_DB.name
+    with _GUEST_DB_LOCK:
+        if _GUEST_DB is not None:
+            return _GUEST_DB.name
+        _GUEST_DB = tempfile.NamedTemporaryFile(suffix=".db", delete=True)
+        return _GUEST_DB.name
+
 
 # ── boot labels ───────────────────────────────────────────────────────────────
 
@@ -1067,17 +1088,19 @@ class _MemoryBackend:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_between(self, start: datetime, end: datetime, user_id: str | None = None) -> list[dict]:
+    def get_between(self, start: datetime, end: datetime, user_id: str | None = None, limit: int = 0) -> list[dict]:
         """Return memories created in [start, end), oldest first."""
         user_id = _default_user_id(user_id)
-        rows = self._conn.execute(
-            """
+        sql = """
             SELECT * FROM memories
             WHERE user_id = ? AND created_at >= ? AND created_at < ?
             ORDER BY created_at ASC
-            """,
-            (user_id, start.isoformat(), end.isoformat()),
-        ).fetchall()
+        """
+        params: list[Any] = [user_id, start.isoformat(), end.isoformat()]
+        if limit > 0:
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
     # ── delete ────────────────────────────────────────────────────────────────
@@ -1090,20 +1113,12 @@ class _MemoryBackend:
 
     def delete_all(self, user_id: str) -> None:
         """Delete every memory for a user from all three tables."""
-        ids = [
-            r["id"] for r in self._conn.execute(
-                "SELECT id FROM memories WHERE user_id = ?", (user_id,)
-            ).fetchall()
-        ]
-        if not ids:
-            return
-        placeholders = ",".join("?" * len(ids))
         self._conn.execute(
-            f"DELETE FROM memories WHERE id IN ({placeholders})", ids
+            "DELETE FROM memories_vec WHERE id IN (SELECT id FROM memories WHERE user_id = ?)",
+            (user_id,),
         )
-        self._conn.execute(
-            f"DELETE FROM memories_vec WHERE id IN ({placeholders})", ids
-        )
+        self._conn.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
+
         self._conn.commit()
 
 
@@ -1157,7 +1172,7 @@ class AikoMemorize:
         # created before a real user logs in via the web UI.
         uid = current_user_id()
         if uid == "guest":
-            db_path = ":memory:"   # pure in-RAM sqlite — zero disk footprint pre-login
+            db_path = _guest_memory_db()   # tempfile-backed to avoid unbounded heap growth
         else:
             db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
         if not silent:
@@ -1180,7 +1195,7 @@ class AikoMemorize:
         """Open (or reopen) the sqlite-vec store for a given user_id."""
         uid = uid or self._user_id_override or current_user_id()
         if uid == "guest":
-            db_path = ":memory:"
+            db_path = _guest_memory_db()
         else:
             db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
         if not self._silent:

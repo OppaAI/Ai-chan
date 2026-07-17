@@ -54,6 +54,7 @@ class Embedder(Protocol):
 
 _skill_embed_cache: dict[tuple[str, float], np.ndarray] = {}
 _skill_embed_cache_lock = threading.RLock()
+_SKILL_EMBED_CACHE_MAX = 256
 
 def _user_skillsets_path() -> Path:
     """Resolve the current user's private skillsets folder fresh, per call.
@@ -87,6 +88,8 @@ def _get_skill_embedding(doc: "SkillDoc", embedder: Embedder) -> np.ndarray:
             return cached
     vector = reason.normalize_vec(np.asarray(embedder.embed_query(_embed_source_text(doc)), dtype=np.float32))
     with _skill_embed_cache_lock:
+        if len(_skill_embed_cache) >= _SKILL_EMBED_CACHE_MAX:
+            _skill_embed_cache.pop(next(iter(_skill_embed_cache)))
         _skill_embed_cache[cache_key] = vector
     return vector
 

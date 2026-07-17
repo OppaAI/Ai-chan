@@ -217,13 +217,15 @@ def _upload_to_imgbb(image_path: Path) -> dict[str, Any]:
         return {"ok": False, "provider": "imgbb", "error": f"image not found: {image_path}"}
 
     timeout = _int_env("IMGBB_UPLOAD_TIMEOUT", 30)
+    mime, _ = mimetypes.guess_type(str(image_path))
     try:
-        image_b64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
-        resp = requests.post(
-            "https://api.imgbb.com/1/upload",
-            data={"key": api_key, "image": image_b64, "name": image_path.stem},
-            timeout=timeout,
-        )
+        with open(image_path, "rb") as f:
+            resp = requests.post(
+                "https://api.imgbb.com/1/upload",
+                data={"key": api_key, "name": image_path.stem},
+                files={"image": (image_path.name, f, mime or "image/jpeg")},
+                timeout=timeout,
+            )
         try:
             payload: Any = resp.json()
         except ValueError:
@@ -528,8 +530,7 @@ def _post_x_via_aisa(text: str, image_path: Path | None) -> dict[str, Any]:
     files = None
     if image_path and image_path.exists():
         mime = mimetypes.guess_type(str(image_path))[0] or "image/png"
-        image_bytes = image_path.read_bytes()
-        files = {"media_files": (image_path.name, image_bytes, mime)}
+        files = {"media_files": (image_path.name, open(image_path, "rb"), mime)}
     try:
         if files:
             resp = requests.post(f"{base_url}/post_twitter", headers=headers, data=payload, files=files, timeout=timeout)
@@ -870,7 +871,8 @@ class MediaSelection:
 
 def _encode_image_data_uri(path: Path) -> str:
     mime = mimetypes.guess_type(str(path))[0] or "image/jpeg"
-    data = base64.b64encode(path.read_bytes()).decode("ascii")
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("ascii")
     return f"data:{mime};base64,{data}"
 
 
@@ -1006,7 +1008,7 @@ def generate_photo_draft(*, inbox: str | None = None, force: bool = False) -> di
     for sel in selections:
         try:
             dest = media_dir / sel.path.name
-            dest.write_bytes(sel.path.read_bytes())
+            shutil.copy2(sel.path, dest)
             saved_selections.append({"filename": sel.path.name, "caption": sel.caption, "media_path": str(dest)})
         except Exception as e:
             log.warning("Failed copying selected media %s: %s", sel.path, e)
@@ -1346,7 +1348,7 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
     media_dir.mkdir(parents=True, exist_ok=True)
 
     dest = media_dir / video_path.name
-    dest.write_bytes(video_path.read_bytes())
+    shutil.copy2(video_path, dest)  # stream via OS, avoids loading entire video into RAM
 
     (draft_dir / "title.txt").write_text(polished["title"] + "\n", encoding="utf-8")
     (draft_dir / "description.txt").write_text(polished["description"].strip() + "\n", encoding="utf-8")
@@ -1518,13 +1520,13 @@ def _post_youtube(sel: dict[str, Any]) -> dict[str, Any]:
         if not upload_url:
             return {"ok": False, "provider": "youtube", "stage": "init", "error": "missing resumable upload Location header"}
 
-        video_bytes = media_path.read_bytes()
-        upload = requests.put(
-            upload_url,
-            headers={"Content-Type": mime},
-            data=video_bytes,
-            timeout=timeout,
-        )
+        with open(media_path, "rb") as f:
+            upload = requests.put(
+                upload_url,
+                headers={"Content-Type": mime},
+                data=f,  # requests streams from the file object
+                timeout=timeout,
+            )
         ok = 200 <= upload.status_code < 300
         try:
             payload = upload.json()

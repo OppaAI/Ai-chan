@@ -131,6 +131,7 @@ CAPABILITIES: dict[str, Capability] = {
 }
 
 _trigger_embed_cache: dict[str, np.ndarray] = {}
+_TRIGGER_EMBED_CACHE_MAX = 256
 
 
 def _get_trigger_embedding(cap: Capability, embedder: Embedder) -> np.ndarray:
@@ -139,6 +140,8 @@ def _get_trigger_embedding(cap: Capability, embedder: Embedder) -> np.ndarray:
         return cached
     text = " | ".join(cap.triggers)
     vec = reason.normalize_vec(np.asarray(embedder.embed_query(text), dtype=np.float32))
+    if len(_trigger_embed_cache) >= _TRIGGER_EMBED_CACHE_MAX:
+        _trigger_embed_cache.pop(next(iter(_trigger_embed_cache)))
     _trigger_embed_cache[cap.id] = vec
     return vec
 

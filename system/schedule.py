@@ -783,7 +783,7 @@ class ScheduleRunner:
             catchup_thread = threading.Thread(
                 target=self._run_daily_reflect_and_dream,
                 name="aiko-schedule-catchup",
-                daemon=False,
+                daemon=True,
             )
             catchup_thread.start()
 

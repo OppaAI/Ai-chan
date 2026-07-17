@@ -65,6 +65,7 @@ class Embedder(Protocol):
 
 _item_embed_cache: dict[tuple[str, str], np.ndarray] = {}
 _item_embed_cache_lock = threading.RLock()
+_ITEM_EMBED_CACHE_MAX = 256
 
 
 def _embed_source_text(item: "WikiItem") -> str:
@@ -84,6 +85,8 @@ def _get_item_embedding(item: "WikiItem", embedder: Embedder) -> np.ndarray:
             return cached
     vector = reason.normalize_vec(np.asarray(embedder.embed_query(_embed_source_text(item)), dtype=np.float32))
     with _item_embed_cache_lock:
+        if len(_item_embed_cache) >= _ITEM_EMBED_CACHE_MAX:
+            _item_embed_cache.pop(next(iter(_item_embed_cache)))
         _item_embed_cache[cache_key] = vector
     return vector
 

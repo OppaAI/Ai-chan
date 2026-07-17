@@ -404,9 +404,14 @@ class _ScratchStore:
             except sqlite3.IntegrityError:
                 pass  # duplicate chunk_hash — already have this exact chunk, skip
 
-    def all_chunks(self) -> list[tuple[str, str, list[float] | None]]:
+    def all_chunks(self, limit: int = 0, desc: bool = False) -> list[tuple[str, str, list[float] | None]]:
+        sql = "SELECT url, chunk, embedding FROM chunks"
+        if desc:
+            sql += " ORDER BY id DESC"
+        if limit > 0:
+            sql += f" LIMIT {limit}"
         with self._lock:
-            rows = self._conn.execute("SELECT url, chunk, embedding FROM chunks").fetchall()
+            rows = self._conn.execute(sql).fetchall()
         out = []
         for url, chunk, embedding_json in rows:
             embedding = json.loads(embedding_json) if embedding_json else None
@@ -736,9 +741,9 @@ def deep_studying(
                 # drained, so seeded breadth always gets explored before
                 # the adaptive loop starts narrowing further.
                 evidence_preview = ""
-                all_chunks = store.all_chunks()
+                all_chunks = store.all_chunks(limit=20, desc=True)
                 if all_chunks:
-                    preview_chunks = [c for _, c, _ in all_chunks[-20:]]
+                    preview_chunks = [c for _, c, _ in all_chunks]
                     evidence_preview = "\n---\n".join(preview_chunks)[:4000]
 
                 decision = _next_subquery(topic, client, model, explored, evidence_preview)
