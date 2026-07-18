@@ -18,6 +18,7 @@ Copy this block into your run notes before executing a phase suite.
 - **LLM server / model:** `LLM_BASE_URL`, `LLM_MODEL`, quantization, context length
 - **Voice stack:** MioTTS URL/preset/device, ASR model, speaker verification state
 - **Memory DB:** `SQLITE_MEMORY_PATH`, DB size before/after, backup path if applicable
+- **Encryption:** `SQLITE_ENCRYPTION` on/off; if on, confirm `DATA_KEY_SECRET`/`SECRET_KEY` source (do not record the secret value itself)
 - **Browser / terminal:** browser version for WebUI; `$TERM`, terminal dimensions for TUI
 - **Network state:** online/offline, SearXNG reachable, HF cache warm/cold
 - **Pass/fail notes:** include exact command output snippets, screenshots, logs, and latency samples
@@ -52,6 +53,8 @@ Run before any phase suite.
 - [ ] Secrets, tokens, absolute private paths, and user-specific data are not printed in normal logs.
 - [ ] `WORKSPACE_ROOT` points to a writable persistent directory and is not `/tmp` unless testing ephemeral behavior.
 - [ ] `SQLITE_MEMORY_PATH` points to persistent storage and the parent directory exists.
+- [ ] If `SQLITE_ENCRYPTION=1`, at least one of `DATA_KEY_SECRET` or `SECRET_KEY` is set and is not a placeholder/empty string.
+- [ ] If `SQLITE_ENCRYPTION` is unset or `0`, confirm this is intentional for tonight's run — not silently defaulted.
 
 ### Service health
 
@@ -61,6 +64,8 @@ Run before any phase suite.
 - [ ] `curl http://localhost:8001/health` returns `{"status":"ok"}` when TTS/voice tests are in scope.
 - [ ] `uv run python -c "import sqlite_vec, tokenizers, onnxruntime, sherpa_onnx, silero_vad; print('OK')"` prints `OK`.
 - [ ] `parec --version` works on the target voice machine; PulseAudio/PipeWire has an active default source.
+- [ ] If `SQLITE_ENCRYPTION=1`: `uv run python -c "import pysqlcipher3; print('OK')"` prints `OK`.
+- [ ] If `SQLITE_ENCRYPTION=1`: `uv run python -c "from system.secure import sqlite_encryption_enabled, derive_user_sqlite_key; print(sqlite_encryption_enabled()); print(derive_user_sqlite_key('test-user'))"` runs without raising and prints a 64-char hex string.
 
 ### Baseline observability
 
@@ -71,14 +76,14 @@ Run before any phase suite.
 
 ### At-rest encryption (`system/secure.py`)
 
-*Optional SQLCipher-backed encryption for user-private SQLite state. Off by default; enabled via `SQLITE_ENCRYPTION=1`.*
+*Optional SQLCipher-backed encryption for user-private SQLite state. Off by default; enabled via `SQLITE_ENCRYPTION=1`. Run this block before Phase 1 memory tests whenever `SQLITE_ENCRYPTION=1` is set — a key-derivation problem here will otherwise masquerade as a Phase 1 memory failure.*
 
-- [ ] With `SQLITE_ENCRYPTION` unset/`0`, `connect_sqlite()` returns a plain `sqlite3.Connection` and behaves identically to direct `sqlite3.connect()` — no pysqlcipher3 import is attempted.
+- [ ] With `SQLITE_ENCRYPTION` unset/`0`, `connect_sqlite()` returns a plain `sqlite3.Connection` and behaves identically to direct `sqlite3.connect()` — no `pysqlcipher3` import is attempted.
 - [ ] With `SQLITE_ENCRYPTION=1` and no `DATA_KEY_SECRET`/`SECRET_KEY` set, `connect_sqlite()` / `derive_user_sqlite_key()` raises a clear `ValueError` at boot rather than silently falling back to plaintext or an empty key.
 - [ ] With `SQLITE_ENCRYPTION=1` and `pysqlcipher3` not installed, `connect_sqlite()` raises `RuntimeError` with an actionable message rather than an unhandled `ImportError`.
 - [ ] `derive_user_sqlite_key(user_id)` is deterministic: calling it twice with the same `user_id` and the same `DATA_KEY_SECRET` returns the identical key.
 - [ ] `derive_user_sqlite_key(user_id)` is user-scoped: two different `user_id` values produce different keys.
-- [ ] **Regression check for the GitHub user ID format change bug**: derive a key using the *current* `current_user_id()` format, confirm it matches the key already in use for an existing encrypted DB created before the format change — or, if the format changed intentionally, confirm there's a documented migration path (re-key or re-derive) rather than a silent lockout.
+- [ ] **Regression check for the GitHub user ID format change bug:** derive a key using the *current* `current_user_id()` format, confirm it matches the key already in use for an existing encrypted DB created before the format change — or, if the format changed intentionally, confirm there's a documented migration path (re-key or re-derive) rather than a silent lockout.
 - [ ] Opening an existing encrypted DB with the *correct* derived key succeeds and `_validate_sqlcipher_connection`'s `SELECT count(*) FROM sqlite_master` returns without error.
 - [ ] Opening an existing encrypted DB with an *incorrect* key fails fast at `_validate_sqlcipher_connection`, not later on first real query — confirm the failure surfaces as a clear boot-time error, not a mysterious later crash mid-conversation.
 - [ ] An encrypted DB file is not readable as plaintext SQLite: `sqlite3 <path> ".tables"` (plain CLI, no SQLCipher) fails or returns garbage rather than showing the schema.
@@ -134,6 +139,18 @@ Run before any phase suite.
 - [ ] Unicode memory test: store Japanese, Korean, emoji, and mixed punctuation; recall and display remain readable.
 - [ ] Privacy check: `/memory` does not expose secrets from environment variables or unrelated workspace files.
 - [ ] If `SQLITE_ENCRYPTION=1` for this run, confirm `memory/memorize.py`'s DB open path goes through `system.secure.connect_sqlite` (not a bare `sqlite3.connect`) — see Pre-flight's At-rest encryption block for the full key-derivation test set.
+
+### 1.4a Trivial-input skip and broad-recall routing (`memory/memorize.py`)
+
+*`_is_trivial_input()` and `_BROAD_RECALL_RE` are choke-point logic — every `search()` call from every input path goes through them before the cache lookup or embedding call, so a bug here silently affects CLI, WebUI, and voice alike.*
+
+- [ ] Pure filler input ("hi", "ok", "thanks", "bye") short-circuits to `[]` without a cache lookup or embedding call — confirm via debug log, not just absence of recall in chat.
+- [ ] Greeting/wellbeing phrases ("how are you", "what's up") are also skipped, not just single-word filler.
+- [ ] A wake-word-only utterance (e.g. "Aiko" alone, matching `AI_NAME`) is treated as trivial.
+- [ ] A mixed input like "hi aiko, what's the weather" is NOT treated as trivial — the non-filler clause forces a normal search.
+- [ ] A ragged multi-clause ASR transcript ("Hi, I. How are you doing.") is correctly classified clause-by-clause per `_CLAUSE_SPLIT_RE`, not rejected wholesale.
+- [ ] Broad-recall phrasing ("what do you remember about me", "anything about Oppa from before") routes to `_recent_or_important_memories()` instead of normal RRF search, and returns pinned-first results.
+- [ ] Broad-recall results are deduplicated by normalized text before the `limit` cutoff is applied — a set of identical pinned daily-record rows doesn't eat multiple result slots.
 
 ### 1.5 Memory retrieval quality and cleanup
 
@@ -219,7 +236,49 @@ Run before any phase suite.
 - [ ] TTS server unavailable, HTTP error, invalid preset, and invalid device are all surfaced without crashing chat.
 - [ ] TTS playback during shutdown stops cleanly and releases the audio device.
 
-### 1.5.6 Phase 1.5 stress and soak
+### 1.5.6 Remote audio sink and local playback suppression (`sensory/speak.py`)
+
+*When a WebUI audio sink is registered and a browser is actively connected, `_play_wav_bytes()` suppresses local sounddevice playback to avoid doubled/phased audio. A bug here means either dead silence or an audible doubled/phased playback artifact, depending on which direction it breaks.*
+
+- [ ] With no audio sink registered (CLI-only session), local playback via sounddevice works normally.
+- [ ] With an audio sink registered but no browser connected (`_has_remote_listener()` returns False), local playback still occurs — the sink alone does not suppress local audio.
+- [ ] With an audio sink registered AND a browser actively connected, local sounddevice playback is suppressed; audio is heard only through the browser, not doubled/phased through both endpoints.
+- [ ] Disconnecting the browser mid-session restores local playback on the next utterance without a restart.
+- [ ] `local_playback = False` (set via `WEBUI_LOCAL_PLAYBACK=0`) always suppresses local audio regardless of remote listener state.
+- [ ] When local playback is suppressed, the blocking-wait-for-WAV-duration path (`_play_wav_bytes`'s `deadline` loop) still respects `stop()` — an interrupted turn doesn't hang waiting out the full clip duration.
+- [ ] `set_audio_sink(None)` correctly removes the sink and restores default local-playback behavior.
+- [ ] Sample-rate resampling for non-native output devices (e.g. USB DAC locked to 48000 Hz) produces audio without pitch/speed distortion.
+
+### 1.5.7 Proactive idle check-in state machine (`main.py`)
+
+*`ProactiveIdleRunner` runs as a background thread independent of the main chat loop. Untested, it can misfire during a live session — interrupting mid-conversation, staying silent when it should check in, or firing during a configured quiet window.*
+
+- [ ] With `PROACTIVE_ENABLED=1` and no user activity, a check-in message appears only after the randomized `PROACTIVE_FIRST_IDLE_MIN/MAX_SECONDS` window elapses — not before.
+- [ ] Any user message (`touch()`) resets the idle timer and clears the "resting" flag; a check-in does not fire immediately after fresh activity.
+- [ ] `PROACTIVE_COOLDOWN_SECONDS` is respected: two check-ins do not fire back-to-back within the cooldown window.
+- [ ] `PROACTIVE_MAX_PER_HOUR` correctly rate-limits check-ins over a rolling hour window — confirm via clock-jumped test or a long soak.
+- [ ] A check-in never fires while `active_turn` is set (mid-conversation) or while `speak.is_playing()` is True.
+- [ ] Configured quiet windows (`PROACTIVE_QUIET_WINDOWS`) and focus windows (`PROACTIVE_FOCUS_WINDOWS`) correctly suppress check-ins during those times — test at least one day-of-week-scoped window (e.g. `mon-fri 06:00-19:00`) and one wraparound window (e.g. `fri-mon 22:00-06:00`).
+- [ ] After `PROACTIVE_REST_AFTER_SECONDS` of continued idle, Aiko sends a single rest message and then goes fully quiet (`_resting = True`) until the next `touch()` — no repeated rest messages.
+- [ ] `set_proactive_resting()` correctly propagates to `cognition.think.AikoThink.is_proactive_resting()`, and `memory.learn.idle_learner_loop` observably pauses autonomous study while resting.
+- [ ] `/proactive` slash command toggles the feature on/off and immediately resets timers.
+- [ ] `PROACTIVE_USE_LLM=1`: check-in and rest messages are generated via `proactive_checkin()` and are not stored as a user turn in memory (verify `/memory` afterward).
+- [ ] `PROACTIVE_USE_LLM=0`: check-in and rest messages fall back to the static `PROACTIVE_MESSAGES` / `PROACTIVE_REST_MESSAGE` pool, cycling through without repeating the same message twice in a row where the pool has more than one entry.
+- [ ] Killing/restarting the LLM server does not crash the proactive thread — a failed `_generate_proactive_checkin` call is caught and logged, not left to propagate.
+
+### 1.5.8 Karaoke typewriter sync (`main.py`)
+
+*Decouples "LLM token arrival" from "UI reveal," pacing displayed text to TTS playback instead of dumping the full reply the instant it streams. Lower risk than the items above — worst case is a UX/timing glitch, not data loss or a hung session — but worth a pass since it touches every turn when enabled.*
+
+- [ ] `KARAOKE_SYNC=1` with TTS on: text reveal visibly lags behind raw token arrival and roughly tracks audio playback pace, not an instant dump.
+- [ ] `KARAOKE_SYNC=1` with TTS off (`/voice` toggled off): typewriter falls back to instant/normal token streaming rather than hanging waiting for an `on_first_audio` that will never fire.
+- [ ] Fallback mode: sentences fed to `feed_sentence()` *before* first audio starts are buffered and released together once `on_first_audio()` fires.
+- [ ] Fallback mode: sentences fed *after* first audio has already started (later chunks of a long reply) are released to the reveal queue immediately, not silently dropped — this was a previously-fixed bug per the code comments, worth confirming it stays fixed.
+- [ ] Interrupting a turn mid-reveal (`/quit`, Ctrl-C) flushes any buffered/queued words to the UI rather than losing the tail of the response.
+- [ ] `/karaoke` slash command toggles the feature and takes effect on the next turn.
+- [ ] `KARAOKE_WPS` changes visibly alter reveal pace when tested at two very different values (e.g. 1.0 vs 5.0).
+
+### 1.5.9 Phase 1.5 stress and soak
 
 - [ ] Run a 60-minute TUI soak with intermittent long responses, `/help`, `/reset`, and window resizing; no terminal corruption or thread leak.
 - [ ] Run a 60-minute WebUI soak with browser refresh every 5 minutes; backend remains responsive.
@@ -291,6 +350,7 @@ Run before any phase suite.
 - [ ] Remote/browser TTS sink plays audio in browser when configured; local sink remains correct otherwise.
 - [ ] Browser reconnect during voice capture stops the old stream cleanly and does not leave dangling capture state.
 - [ ] Network jitter/slow WebSocket does not crash ASR/TTS or corrupt chat turns.
+- [ ] Browser-side energy-RMS gate (`static/vad.js`) is confirmed to be a "loud enough to send" filter only — Silero VAD server-side still scores every chunk regardless of `vad_presegmented`, and this is verified by feeding quiet-but-forwarded audio and confirming Silero (not the browser gate) makes the final speech/silence call.
 
 ### 2.7 Voice stress, safety, and recovery
 
@@ -300,6 +360,33 @@ Run before any phase suite.
 - [ ] Kill MioTTS server mid-session; chat continues text-only or reports TTS unavailable and recovers when server returns.
 - [ ] Unplug/replug microphone or change default source; behavior is documented and does not crash the whole app.
 - [ ] Jetson thermal/power throttling is monitored; voice tests record if latency spikes correlate with throttling.
+
+### 2.8 Wake word / trigger phrase gating (`sensory/listen.py`)
+
+*`WAKE_WORD` gating is a full feature (`_apply_activation_gate`, `is_active`, `sleep_now`, `extend_activation`, `ACTIVATION_TIMEOUT_S`) with real failure modes distinct from ASR quality — if the fuzzy match threshold is off, this looks exactly like "ASR isn't hearing me" and wastes debugging time in the wrong subsystem. Skip this section entirely if `WAKE_WORD` is unset (feature is off by default).*
+
+- [ ] With `WAKE_WORD=""` (default/disabled), `gate_enabled()` returns False and every utterance is processed without requiring a phrase — confirm no regression from gating logic being present but inactive.
+- [ ] With `WAKE_WORD` set (e.g. `"hey aiko"`), an utterance NOT containing the wake phrase while asleep is silently dropped (`listen()` returns `("", info)` with `info["woke"] == False`) — no response, no side effects, no memory write.
+- [ ] An utterance containing the wake phrase clearly (e.g. "Hey Aiko, what time is it") is detected, the matched prefix is stripped, and the remainder ("what time is it") is passed through as the command text.
+- [ ] `WAKE_WORD_ALIASES` (pipe-separated mishearings, e.g. `"hey iko|hey eco|hey ecko"`) are also matched and trigger activation.
+- [ ] Fuzzy matching tolerates minor ASR drift on the wake phrase (test with 3–5 real spoken variations) without false-negatives on clearly-spoken attempts.
+- [ ] `WAKE_FUZZY_THRESHOLD` false-positive check: an unrelated sentence that happens to share some words with the wake phrase does NOT trigger activation — tune and document if false positives occur.
+- [ ] Once activated, Aiko stays "active" (`is_active()` returns True) for `ACTIVATION_TIMEOUT_S` seconds without requiring the phrase again on follow-up utterances.
+- [ ] After `ACTIVATION_TIMEOUT_S` elapses with no further speech, the session goes back to sleep and the wake phrase is required again.
+- [ ] `extend_activation()` is called on every processed utterance while active — confirm a rapid back-and-forth conversation never times out mid-conversation even if individual turns are slow.
+- [ ] `sleep_now()` (explicit "go to sleep" style command) immediately forces the session inactive, and the next utterance requires the wake phrase again.
+- [ ] Speaker-verification info (`info["verified"]`) and wake-word gating are independent — test that a correctly-woken utterance from a non-enrolled/rejected voice is still handled according to whichever policy governs verification, not silently blocked by the gate logic.
+- [ ] Proactive check-ins and scheduled announcements are not blocked by wake-word gating (gating applies to *listen* input, not Aiko-initiated speech) — confirm a proactive message still plays while the session is "asleep."
+
+### 2.9 Voice command fuzzy matching (`main.py`)
+
+*`_match_voice_command()` maps spoken phrases to slash-command equivalents. Lower blast radius than wake-word gating — worst case a phrase silently fails to trigger — but worth a quick pass since it runs on every ASR-mode utterance that doesn't start with `/`.*
+
+- [ ] Each phrase in `_VOICE_COMMANDS` (stop, reset, remember this, show memory, clear memory, mute, toggle listen, help, etc.) correctly maps to its slash command when spoken clearly.
+- [ ] Leading filler ("uh", "um", "okay", "hey aiko") is stripped before matching — confirm "um, forget that" still maps to `/reset`.
+- [ ] Fuzzy matching (0.75 cutoff) catches minor ASR drift on a command phrase without misfiring on unrelated normal conversation containing similar words.
+- [ ] A normal sentence that happens to contain a command-adjacent word (e.g. "I need to remember this meeting" in casual conversation, not meant as a command) is evaluated for false-positive risk — document threshold tuning if it misfires.
+- [ ] Voice command matching only applies in ASR mode and is skipped entirely for typed input starting with `/`.
 
 ---
 
@@ -417,6 +504,19 @@ Run before any phase suite.
 - [ ] Semantic exemplar routing (default) correctly classifies task vs chat intent without LLM calls.
 - [ ] Optional LLM router fallback activates for ambiguous/context-heavy cases when enabled.
 
+### 2.5.3a Route mode variants (`cognition/think.py`)
+
+*Phase 2.5.9/2.5.12 test semantic routing generally, but the distinct `ROUTE_MODE` values and `AGENTIC_MODE_ON` gate each have their own failure modes worth isolating.*
+
+- [ ] `ROUTE_MODE=semantic` (default): ambiguous-gap cases (best label above threshold but gap < `ROUTE_MIN_GAP`) correctly fall through to the binary LLM tie-break (`_classify_agent_intent`), not straight to `localchat`.
+- [ ] `ROUTE_MODE=semantic_only`: ambiguous-gap cases deterministically default to `localchat` with NO LLM call — confirm via log/latency that no router LLM request fires.
+- [ ] `ROUTE_MODE=llm`: ambiguous-gap cases call `_classify_ternary_intent_llm` (three-way agentic/webchat/chat classification), not the binary tie-break.
+- [ ] `ROUTE_MODE=llm_only` behavior is documented/tested if used — confirm it's the sole routing decision every turn, not just on ambiguity (per module comment).
+- [ ] An invalid `ROUTE_MODE` value falls back to `"semantic"` with a logged warning, not a crash.
+- [ ] `AGENTIC_MODE_ON=0`: "agentic" is never a reachable routing outcome in ANY `ROUTE_MODE` — confirm with a clearly task-like prompt ("debug this function") that it still routes to `webchat`/`localchat`, not `agentic`.
+- [ ] `AGENTIC_MODE_ON=0` with `ROUTE_MODE=semantic`: the binary LLM tie-break call is skipped entirely for ambiguous cases (since agentic vs chat is now moot) — confirm no wasted LLM call via log.
+- [ ] Route-example vector cache (`ROUTE_VECTOR_CACHE_ENABLED=1`) produces identical routing decisions whether serving from cache or recomputing fresh — compare a batch of test prompts against both a cold cache and a warm cache.
+
 ### 2.5.4 Web and fetch tools
 
 - [ ] `web_search` handles normal query, no-result query, timeout, and SearXNG unavailable cases.
@@ -498,7 +598,19 @@ Run before any phase suite.
 - [ ] Ambiguous queries like "I need to organize my photos" fall back to LLM router when enabled.
 - [ ] Routing latency: semantic path < 50ms, LLM fallback < 500ms on Jetson.
 
-### 2.5.13 Agent stress, concurrency, and recovery
+### 2.5.13 Async memory write queue idle-grace window (`memory/memorize.py`)
+
+*`queue_write()` / `_wait_for_write_window()` can silently delay a write up to `MEMORY_WRITE_MAX_WAIT` (default 45s) waiting for an idle window before running fact-extraction on the shared LLM. If this stalls or races, a memory write looks "lost" when it's actually just queued — worth distinguishing from a genuine extraction failure.*
+
+- [ ] A write queued with both `is_active_turn` and `idle_since` callables supplied waits until `is_active_turn()` returns False AND `idle_for >= MEMORY_WRITE_IDLE_GRACE` before running — confirm via timestamped log, not just eventual success.
+- [ ] A write queued with either callable omitted runs immediately on dequeue with no idle wait — confirm this documented fallback behavior.
+- [ ] `MEMORY_WRITE_MAX_WAIT` acts as a hard ceiling: if `is_active_turn()` never returns False, the write still runs once the max-wait deadline passes (rather than waiting forever) — but only once `is_active_turn()` is False at that check, per the current implementation; confirm this edge case is understood and not a deadlock risk if turns never truly go idle.
+- [ ] Multiple rapid-fire turns (user chatting quickly) queue multiple writes without the queue growing unbounded or writes executing out of order.
+- [ ] `wait_for_writes(timeout=...)` correctly blocks until the queue drains or returns False on timeout — test both a fast-draining queue and an artificially stalled one.
+- [ ] Shutdown (`_shutdown()` in `main.py`, via `think.wait_for_memory()`) does not lose a write that's still sitting in the idle-grace wait when Ctrl-C/quit is triggered — confirm the write either completes or is explicitly documented as droppable on forced exit.
+- [ ] A write failure inside `_write_loop` (e.g. extraction LLM call fails) is caught and logged without killing the worker thread — confirm subsequent writes still process normally after one failure.
+
+### 2.5.14 Agent stress, concurrency, and recovery
 
 - [ ] Run 25 mixed agent tasks in one session: web research, note save, schedule create/cancel, photo scan, repo search, and architecture explanation.
 - [ ] Run concurrent user interruptions or rapid follow-up requests during an agent task; behavior is documented and does not corrupt tool state.
@@ -512,6 +624,8 @@ Run before any phase suite.
 ## Phase 3 — Face
 
 *VRM/VRoid avatar, three-vrm browser rendering, expressions, lip-sync, WebSocket bridge.*
+
+> **Note:** `sensory/speak.py` already exposes `set_viseme_sink()` / `_emit_viseme()` and a rough phoneme-to-viseme mapper (`_viseme_for_word`), ahead of this phase's UI work. When Phase 3 avatar rendering begins, add coverage for: viseme sink registration/removal, viseme accuracy against known Japanese/English test phrases, and viseme emission staying correctly paced with `_emit_words_timed`'s karaoke timing (shares the same timing math as the Phase 1.5.8 typewriter sync — a bug in one likely affects the other).
 
 ### Avatar Rendering
 
@@ -560,6 +674,8 @@ Run before any phase suite.
 - [ ] Aiko sends a proactive message after the configured inactivity timeout
 - [ ] Proactive message content is contextually relevant (references recent topics)
 - [ ] Proactive messaging does not trigger if the user is actively chatting
+
+> **Note:** the *mechanics* of proactive idle timing, cooldowns, and rest behavior are already covered in Phase 1.5.7 (`main.py`'s `ProactiveIdleRunner`), since that runtime exists ahead of this phase's mood/relationship layer. This section's checks should focus on *content relevance and mood integration* once those land, not re-test the timing state machine.
 
 ---
 
@@ -639,9 +755,10 @@ Run after any significant change to confirm nothing regressed.
 - [ ] `--text` and `--debug` flags still work
 - [ ] `docker compose down && docker compose up -d` → SearXNG recovers cleanly (Qdrant no longer required)
 - [ ] `uv sync` completes without dependency conflicts after any `pyproject.toml` change
+- [ ] If `SQLITE_ENCRYPTION` is toggled as part of the change under test, all Pre-flight encryption checks are re-run, not just assumed still-passing.
 
 
-### 2.5.11 Route-vector and graph-plan cache checks
+### 2.5.15 Route-vector and graph-plan cache checks
 
 - [ ] With `ROUTE_VECTOR_CACHE_ENABLED=1`, first boot creates per-user route vector cache files under `ROUTE_VECTOR_CACHE_DIR`.
 - [ ] Second boot reuses cached route vectors and does not re-embed unchanged router examples.
