@@ -5,8 +5,8 @@
 
 # -- Model endpoint --
 LLM_BASE_URL: "http://localhost:8080/v1"  # OpenAI-compatible chat endpoint, usually llama.cpp /v1 URL.
-LLM_MODEL: "bonsai"  # Main chat model id/alias; must match the server model name.
-REFLECT_MODEL: "bonsai"  # Model used for reflection/consolidation; often same as LLM_MODEL.
+LLM_MODEL: "ministral"  # Main chat model id/alias; must match the server model name.
+REFLECT_MODEL: "ministral"  # Model used for reflection/consolidation; often same as LLM_MODEL.
 LLM_TIMEOUT: "120"  # Seconds before chat/reflection LLM HTTP calls time out.
 
 # -- Token budgets --
