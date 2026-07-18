@@ -42,6 +42,7 @@ from memory.memorize import (
     _normalize_memory_text,
     _first_json_array,
 )
+from system import userspace
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -320,6 +321,119 @@ class TestSearchIntegration:
         backend.add_raw("secret fact about u2", user_id="u2")
         results = backend.search("secret fact", user_id="u1", limit=5)
         assert all("u2" not in r["memory"] for r in results)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# "Does Aiko know who she's talking to" — display_name -> LLM prompt
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _CapturingChatCompletions:
+    """Drop-in replacement for OpenAI().chat.completions that records the
+    prompt it was called with instead of hitting a real llama-server."""
+
+    def __init__(self):
+        self.last_prompt: str | None = None
+
+    def create(self, model, messages, **kwargs):
+        self.last_prompt = messages[0]["content"]
+
+        class _Choice:
+            class message:
+                content = "[]"  # no facts extracted -- we only care about the prompt
+
+        class _Resp:
+            choices = [_Choice()]
+
+        return _Resp()
+
+
+class _CapturingClient:
+    def __init__(self):
+        self.chat = type("chat", (), {})()
+        self.chat.completions = _CapturingChatCompletions()
+
+
+class TestDisplayNamePropagation:
+    """
+    memorize.py's _extract_facts() builds the LLM prompt from
+    `display_name or current_display_name()`. If a caller forgets to pass
+    display_name explicitly, this silently falls back through
+    current_display_name()'s contextvar -> AIKO_DISPLAY_NAME env -> user_id.
+
+    These tests confirm the prompt Aiko actually sends contains the right
+    name in each of those paths, and catches the regression where a
+    background/queued write runs without the per-request contextvar set
+    (e.g. on a different thread) and the LLM ends up being told the wrong
+    name, or just the raw user_id, instead of a real display name.
+    """
+
+    LONG_ENOUGH_MESSAGES = [
+        {"role": "user", "content": "My favorite color is teal and I work night shifts."},
+        {"role": "assistant", "content": "Got it, noted!"},
+    ]
+
+    def test_explicit_display_name_reaches_prompt(self, backend):
+        fake_client = _CapturingClient()
+        backend._client = fake_client
+
+        backend._extract_facts(self.LONG_ENOUGH_MESSAGES, display_name="Oppa")
+
+        prompt = fake_client.chat.completions.last_prompt
+        assert prompt is not None
+        assert "Oppa" in prompt
+
+    def test_falls_back_to_current_display_name_when_not_passed(self, backend, monkeypatch):
+        monkeypatch.setenv("AIKO_DISPLAY_NAME", "ContextUser")
+        fake_client = _CapturingClient()
+        backend._client = fake_client
+
+        backend._extract_facts(self.LONG_ENOUGH_MESSAGES, display_name=None)
+
+        prompt = fake_client.chat.completions.last_prompt
+        assert "ContextUser" in prompt
+
+    def test_regression_background_thread_loses_contextvar(self, backend, monkeypatch):
+        """Reproduces the class of bug implied by 'Aiko doesn't know who
+        she's talking to': a contextvar set on the request thread does NOT
+        automatically propagate to a background worker thread unless it's
+        explicitly captured and passed. If queue_write() resolves
+        display_name on the caller's thread (correct) vs inside the
+        worker's _write_loop (wrong), this test distinguishes the two."""
+        monkeypatch.delenv("AIKO_DISPLAY_NAME", raising=False)
+        token = userspace.set_current_display_name("RequestThreadUser")
+        try:
+            resolved_on_caller_thread = userspace.current_display_name()
+        finally:
+            userspace.reset_current_display_name(token)
+
+        # simulate what a naive worker thread would see: contextvar reset,
+        # no env var -- falls back to bare user_id, which is the bug this
+        # test guards against if display_name isn't captured before queuing
+        resolved_on_worker_thread = userspace.current_display_name()
+
+        assert resolved_on_caller_thread == "RequestThreadUser"
+        assert resolved_on_worker_thread != "RequestThreadUser", (
+            "If this fails, the contextvar leaked across the simulated "
+            "thread boundary in a way real threads wouldn't allow -- "
+            "double check queue_write() captures display_name on the "
+            "CALLER's thread (it does, per its docstring) rather than "
+            "relying on current_display_name() inside _write_loop."
+        )
+
+    def test_missing_display_name_and_no_context_falls_back_to_user_id(self, backend, monkeypatch):
+        """Worst case: nothing set anywhere. Aiko will label facts with the
+        raw user_id (e.g. 'github_12345') instead of a real name -- this is
+        allowed behavior, but should be visible/testable rather than an
+        unnoticed silent default."""
+        monkeypatch.delenv("AIKO_DISPLAY_NAME", raising=False)
+        monkeypatch.setenv("AIKO_USER_ID", "github_98765")
+        fake_client = _CapturingClient()
+        backend._client = fake_client
+
+        backend._extract_facts(self.LONG_ENOUGH_MESSAGES, display_name=None)
+
+        prompt = fake_client.chat.completions.last_prompt
+        assert "github_98765" in prompt  # documents current fallback behavior
 
 
 # ─────────────────────────────────────────────────────────────────────────────
