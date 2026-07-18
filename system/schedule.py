@@ -29,6 +29,26 @@ by the user:
   - daily_reflect_and_dream    fires every day at DAILY_JOB_HOUR:DAILY_JOB_MINUTE (default 00:00)
   - monthly_consolidate        fires on the 1st of each month at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE (default 00:05)
 
+Both hardcoded jobs have startup catch-up logic: if the scheduler process
+was offline/asleep across a scheduled firing, the missed run(s) are
+detected and backfilled once on the next start() call, before the normal
+sleep loop begins.
+
+  - daily_reflect_and_dream: catch-up is detected per-date via
+    _reflection_post_exists() (a live GitHub API check against the Hugo
+    post path), scanned back up to CATCHUP_MAX_LOOKBACK_DAYS days. Every
+    missing date found is backfilled sequentially via
+    _run_catchup_backfill(), oldest first. The dream() consolidation pass
+    only runs on the regular (non-catch-up) nightly call — see the
+    for_date gate in _run_daily_reflect_and_dream — so a multi-day
+    backfill doesn't trigger redundant consolidation passes.
+
+  - monthly_consolidate: catch-up is detected via a small local state file
+    (tasks/monthly_consolidate_state.json under the workspace root)
+    recording the last "YYYY-MM" the job actually completed. If the
+    current month doesn't match on startup and we're not still waiting
+    for this month's scheduled window, one catch-up run fires.
+
 Other system-style behaviors (e.g. weekly_social, photo_social, video_social,
 deep_study_start/stop, workspace_knowledge_scan) live entirely in
 schedule.json as ordinary jobs, but instead of routing through on_due/chat,
@@ -95,6 +115,16 @@ DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
 DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
 MONTHLY_JOB_HOUR   = int(os.getenv("MONTHLY_JOB_HOUR",   "0"))
 MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
+
+# How many days back to scan for missed daily_reflect_and_dream runs on
+# scheduler startup. Bounded so a long outage doesn't trigger an unbounded
+# GitHub API scan or an unbounded backfill run.
+CATCHUP_MAX_LOOKBACK_DAYS = int(os.getenv("CATCHUP_MAX_LOOKBACK_DAYS", "7"))
+
+# Filename for the small local state file tracking the last month
+# monthly_consolidate actually completed. Lives under
+# <workspace_root>/tasks/, alongside schedule.json.
+MONTHLY_CATCHUP_STATE_PATH_NAME = "monthly_consolidate_state.json"
 
 FREQUENCIES = {"once", "interval", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
 RELATIVE_DAY_ALIASES = {
@@ -228,6 +258,40 @@ def _reflection_post_exists(date: datetime) -> bool:
         "Accept": "application/vnd.github+json",
     }, params={"ref": branch}, timeout=10)
     return resp.status_code == 200
+
+
+# ── monthly consolidate catch-up state ────────────────────────────────────────
+# Small local marker (not schedule.json — schedule.json is user job storage)
+# recording the last "YYYY-MM" monthly_consolidate actually completed. There
+# is no external check available for this job (unlike daily reflect's GitHub
+# post existence check), so the scheduler writes this itself on success.
+
+def _monthly_state_path() -> Path:
+    """Resolve the local monthly-consolidate catch-up state file path."""
+    return (workspace_root() / "tasks" / MONTHLY_CATCHUP_STATE_PATH_NAME).resolve()
+
+
+def _read_last_consolidated_month() -> str | None:
+    """Return the last 'YYYY-MM' monthly_consolidate completed, or None."""
+    path = _monthly_state_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("last_run_month")
+    except Exception as e:
+        log.error("Failed reading monthly consolidate state %s: %s", path, e)
+        return None
+
+
+def _write_last_consolidated_month(month_str: str) -> None:
+    """Persist the 'YYYY-MM' that monthly_consolidate just completed for."""
+    path = _monthly_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"last_run_month": month_str}), encoding="utf-8")
+    tmp.replace(path)
+
 
 def calculate_next_due(
     time_of_day: str,
@@ -745,6 +809,17 @@ class ScheduleRunner:
     The thread sleeps until the soonest of all targets, waking early only
     when notify_new_job() is called (e.g. after a new job is registered at
     runtime).
+
+    Startup catch-up:
+      - daily_reflect_and_dream: _missing_reflection_dates() scans back up
+        to CATCHUP_MAX_LOOKBACK_DAYS days via _reflection_post_exists()
+        (live GitHub check) and backfills every missing date found,
+        oldest first, on a background thread started from start().
+      - monthly_consolidate: _monthly_catchup_needed() compares the
+        current "YYYY-MM" against a small local state file
+        (tasks/monthly_consolidate_state.json) recording the last month
+        that actually completed, and fires one catch-up run if they
+        don't match and we're not still waiting on this month's window.
     """
 
     def __init__(
@@ -768,27 +843,68 @@ class ScheduleRunner:
         self._next_daily   = _next_daily_reflect_and_dream()
         self._next_monthly = _next_monthly_consolidate()
 
-        # catch-up flag — checked on start()
-        self._catchup_needed = self._check_catchup()
+        # catch-up state — checked on start()
+        self._catchup_dates = self._missing_reflection_dates()
+        self._monthly_catchup_needed_flag = self._monthly_catchup_needed()
 
+    # ── daily catch-up ────────────────────────────────────────────────────────
 
-    def _check_catchup(self) -> bool:
+    def _missing_reflection_dates(self) -> list[datetime]:
         """
-        Returns True if yesterday's reflection was missed.
-        Missed = next_daily is more than 20 hours away AND no post exists for yesterday.
+        Scan back up to CATCHUP_MAX_LOOKBACK_DAYS from yesterday and return
+        every date (oldest first) with no existing reflection post. Stops
+        scanning further back once it hits a date that DOES have a post, on
+        the assumption that a contiguous run existed before any outage —
+        avoids a full-history GitHub API scan on every startup.
         """
         now = bioclock.local_now()
         hours_until_next = (self._next_daily - now).total_seconds() / 3600
         if hours_until_next < 20:
-            return False  # job fired recently enough, no catchup needed
-        yesterday = (bioclock.utc_now() - timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0,
+            return []  # job fired recently enough, nothing to catch up
+
+        missing: list[datetime] = []
+        for offset in range(1, CATCHUP_MAX_LOOKBACK_DAYS + 1):
+            day = (bioclock.utc_now() - timedelta(days=offset)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            if _reflection_post_exists(day):
+                break
+            missing.append(day)
+
+        if missing:
+            log.info(
+                "Catch-up needed: no reflection post found for %s.",
+                ", ".join(d.strftime("%Y-%m-%d") for d in missing),
+            )
+        return list(reversed(missing))  # oldest first
+
+    # ── monthly catch-up ──────────────────────────────────────────────────────
+
+    def _monthly_catchup_needed(self) -> bool:
+        """
+        True if we're already partway into a new month and the last
+        completed consolidation (per the local state file) doesn't match
+        the current month — i.e. the 1st-of-month window was missed
+        (machine off/asleep at MONTHLY_JOB_HOUR:MONTHLY_JOB_MINUTE on the
+        1st). There's no external check available for this job (unlike
+        daily reflect's GitHub post existence check), so this relies on
+        the scheduler recording its own completions.
+        """
+        now = bioclock.local_now()
+        hours_until_next = (self._next_monthly - now).total_seconds() / 3600
+        if hours_until_next < 20:
+            return False  # job due soon / just ran, nothing to catch up
+
+        current_month = now.strftime("%Y-%m")
+        last_run = _read_last_consolidated_month()
+        if last_run == current_month:
+            return False
+
+        log.info(
+            "Monthly catch-up needed: last consolidation recorded for %s, now in %s.",
+            last_run, current_month,
         )
-        exists = _reflection_post_exists(yesterday)
-        if not exists:
-            log.info("Catch-up needed: no reflection post found for %s.", yesterday.date())
-            return True
-        return False
+        return True
 
     def notify_new_job(self) -> None:
         """Interrupt the sleep early so a newly added job is picked up immediately."""
@@ -806,14 +922,26 @@ class ScheduleRunner:
             DAILY_JOB_HOUR, DAILY_JOB_MINUTE,
             MONTHLY_JOB_HOUR, MONTHLY_JOB_MINUTE,
         )
-        if self._catchup_needed and self._memorize and self._generate_and_post_fn:
-            log.info("Scheduler: running missed daily reflect+dream on startup.")
+        if self._catchup_dates and self._memorize and self._generate_and_post_fn:
+            log.info(
+                "Scheduler: running %d missed daily reflect+dream job(s) on startup.",
+                len(self._catchup_dates),
+            )
             catchup_thread = threading.Thread(
-                target=self._run_daily_reflect_and_dream,
+                target=self._run_catchup_backfill,
                 name="aiko-schedule-catchup",
                 daemon=True,
             )
             catchup_thread.start()
+
+        if self._monthly_catchup_needed_flag and self._memorize and self._consolidate_fn:
+            log.info("Scheduler: running missed monthly_consolidate on startup.")
+            monthly_catchup_thread = threading.Thread(
+                target=self._run_monthly_consolidate,
+                name="aiko-schedule-monthly-catchup",
+                daemon=True,
+            )
+            monthly_catchup_thread.start()
 
     def stop(self) -> None:
         """Request scheduler shutdown."""
@@ -860,13 +988,26 @@ class ScheduleRunner:
 
     # ── system job runners ────────────────────────────────────────────────────
 
-    def _run_daily_reflect_and_dream(self) -> None:
+    def _run_catchup_backfill(self) -> None:
+        """Sequentially backfill every date found missing by
+        _missing_reflection_dates(), oldest first."""
+        for date in self._catchup_dates:
+            self._run_daily_reflect_and_dream(for_date=date)
+
+    def _run_daily_reflect_and_dream(self, for_date: datetime | None = None) -> None:
         """
         Hardcoded nightly job. Not in schedule.json. Not user-modifiable.
 
         Order:
           1. reflect  — LLM summary + image + GitHub push (reads memories before dream prunes)
           2. dream    — sqlite-vec consolidation, boost, merge, prune (no LLM)
+
+        for_date: when set (used by catch-up backfill), generates the
+        reflection for this specific date instead of "yesterday" relative
+        to now. dream() consolidation only runs on the regular (for_date is
+        None) nightly call — running it once per backfilled date during a
+        multi-day catch-up would just repeat the same boost/merge/prune
+        pass redundantly against the same live memory store.
         """
         if not self._memorize or not self._generate_and_post_fn:
             log.warning("daily_reflect_and_dream: memorize or generate_and_post_fn not set — skipping.")
@@ -876,31 +1017,42 @@ class ScheduleRunner:
             log.info("daily_reflect_and_dream: starting.")
 
             now_local = bioclock.local_now()
-            yesterday_local = (now_local - timedelta(days=1)).replace(
+            target_local = for_date or (now_local - timedelta(days=1)).replace(
                 hour=0, minute=0, second=0, microsecond=0,
             )
-            yesterday_end_local = yesterday_local + timedelta(days=1)
+            target_end_local = target_local + timedelta(days=1)
 
-            yesterday_query_start = yesterday_local.astimezone(timezone.utc)
-            yesterday_query_end   = yesterday_end_local.astimezone(timezone.utc)
-
-            yesterday = yesterday_local
+            query_start = target_local.astimezone(timezone.utc)
+            query_end   = target_end_local.astimezone(timezone.utc)
 
             from memory.reflect import REFLECT_MAX_MEMS
-            memories = self._memorize.get_between(yesterday_query_start, yesterday_query_end)
-            log.info("daily_reflect_and_dream: %d memories fetched.", len(memories))
+            memories = self._memorize.get_between(query_start, query_end)
+            log.info(
+                "daily_reflect_and_dream: %d memories fetched for %s.",
+                len(memories), target_local.date(),
+            )
 
-            log.info("daily_reflect_and_dream: running reflect...")
-            self._generate_and_post_fn(
+            log.info("daily_reflect_and_dream: running reflect for %s...", target_local.date())
+            reflect_result = self._generate_and_post_fn(
                 memories[:REFLECT_MAX_MEMS],
-                date=yesterday,
+                date=target_local,
                 memorize=self._memorize,
             )
-            log.info("daily_reflect_and_dream: reflect done.")
+            if isinstance(reflect_result, dict) and not reflect_result.get("success", False):
+                log.error(
+                    "daily_reflect_and_dream: reflect FAILED for %s — error=%s",
+                    target_local.date(), reflect_result.get("error", "unknown"),
+                )
+            else:
+                log.info(
+                    "daily_reflect_and_dream: reflect done for %s — %s",
+                    target_local.date(), reflect_result,
+                )
 
-            log.info("daily_reflect_and_dream: running dream...")
-            result = self._memorize.dream()
-            log.info("daily_reflect_and_dream: dream done — %s", result)
+            if for_date is None:
+                log.info("daily_reflect_and_dream: running dream...")
+                result = self._memorize.dream()
+                log.info("daily_reflect_and_dream: dream done — %s", result)
 
         except Exception as e:
             log.error("daily_reflect_and_dream failed: %s", e)
@@ -909,6 +1061,10 @@ class ScheduleRunner:
         """
         Hardcoded monthly job. Not in schedule.json. Not user-modifiable.
         Delegates entirely to consolidate.maybe_run_consolidation().
+
+        On success, records the completed "YYYY-MM" to a local state file
+        so _monthly_catchup_needed() can detect a missed window on a future
+        startup.
         """
         if not self._memorize or not self._consolidate_fn:
             log.warning("monthly_consolidate: memorize or consolidate_fn not set — skipping.")
@@ -916,8 +1072,10 @@ class ScheduleRunner:
 
         try:
             log.info("monthly_consolidate: starting.")
-            result = self._consolidate_fn(self._memorize, now=bioclock.local_now(), user_id=self._user_id)
+            now = bioclock.local_now()
+            result = self._consolidate_fn(self._memorize, now=now, user_id=self._user_id)
             log.info("monthly_consolidate: done — %s", result)
+            _write_last_consolidated_month(now.strftime("%Y-%m"))
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)
 
