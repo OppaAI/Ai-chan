@@ -108,6 +108,48 @@ THREADS_TOPIC_TAG: "AI Threads"  # Optional Threads topic tag attached above the
 THREADS_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Threads media container create and publish.
 IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB draft image upload calls time out.
 
+# -- Photo social (Lane B — Instagram) --
+PHOTO_SOCIAL_AUTODRAFT: "0"  # Auto-draft from photo inbox; boolean options.
+PHOTO_SOCIAL_AUTOPOST: "0"  # Auto-post after drafting; keep 0 while testing.
+PHOTO_SOCIAL_PROVIDERS: "instagram"  # Comma-separated provider list; currently only instagram.
+PHOTO_SOCIAL_INBOX: "photos/inbox"  # Relative path to the photo inbox under workspace.
+PHOTO_SOCIAL_MAX_ITEMS: "3"  # Max photos selected per draft round.
+PHOTO_SOCIAL_MAX_CHARS: "260"  # Max caption length per selected photo.
+PHOTO_SOCIAL_ROOT: ""  # Optional override; blank uses per-user <workspace>/social/photo.
+PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # How often (seconds) the scheduler scans the photo inbox; 21600 = 6h.
+
+# -- Video social (Lane C — YouTube) --
+VIDEO_SOCIAL_AUTODRAFT: "0"  # Auto-draft from video inbox; boolean options.
+VIDEO_SOCIAL_AUTOPOST: "0"  # Auto-post after drafting; keep 0 while testing.
+VIDEO_SOCIAL_PROVIDERS: "youtube"  # Comma-separated provider list; currently only youtube.
+VIDEO_SOCIAL_INBOX: "videos"  # Relative path to the video inbox under workspace.
+VIDEO_SOCIAL_ROOT: ""  # Optional override; blank uses per-user <workspace>/social/video.
+VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # How often (seconds) the scheduler scans the video inbox; 21600 = 6h.
+
+# -- Social scheduling metadata --
+WEEKLY_SOCIAL_TIME_OF_DAY: "08:00"  # Wall-clock time (HH:MM) for the Sunday weekly-postcard job.
+WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS: "1800"  # Seconds between Sunday retry checks for an unposted draft; 1800 = 30 min.
+
+# -- Instagram API metadata --
+IG_API_BASE: "https://graph.facebook.com/v21.0"  # Facebook Graph API base URL for Instagram.
+IG_TIMEOUT: "60"  # Seconds before Instagram API calls time out.
+IG_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Instagram media container create and publish.
+
+# -- YouTube API metadata --
+YOUTUBE_MAX_TITLE_CHARS: "100"  # Max characters for a YouTube video title.
+YOUTUBE_MAX_DESCRIPTION_CHARS: "5000"  # Max characters for a YouTube video description.
+YOUTUBE_TIMEOUT: "120"  # Seconds before YouTube API calls time out (token refresh + resumable upload).
+YOUTUBE_CATEGORY_ID: "22"  # YouTube category ID; 22 = People & Blogs.
+YOUTUBE_PRIVACY_STATUS: "public"  # Privacy status for uploaded videos; options: public, unlisted, private.
+YOUTUBE_MADE_FOR_KIDS: "false"  # Self-declared made-for-kids flag; boolean options.
+
+# -- Vision model (photo captioning) --
+VISION_MODEL: "minicpm-v"  # Vision model for photo captioning.
+VISION_BASE_URL: ""  # Optional separate endpoint for vision model; blank inherits LLM_BASE_URL.
+
+# -- Workspace knowledge scan --
+WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS: "60"  # How often (seconds) the scheduler scans workspace/knowledge for new RAG documents.
+
 # Web config
 #
 # Settings for agentic/toolkit/research.py and semantic web-search triggering.
