@@ -108,17 +108,19 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 *Let Aiko introduce herself carefully. Social posting starts supervised, low-volume, and platform-aware before any autonomous public presence.*
 
-**Goal:** Give Aiko a safe outbound social layer for publishing introductions, status updates, workspace photos, and longer reflections with explicit owner approval, audit logs, and per-platform tone/risk controls.
+**Goal:** Give Aiko a safe outbound social layer for publishing introductions, status updates, workspace photos, and video, with explicit owner approval, audit logs, and per-platform tone/risk controls.
 
 | Feature | Status |
 |---|---|
-| Social account connector registry — X, Threads, Instagram, Discord, Reddit, Bluesky, Mastodon, Pixelfed | 🔲 Planned |
-| Draft-first posting workflow — Aiko prepares posts, owner approves before publish | 🔲 Planned |
-| Platform policy and community-fit guardrails before posting | 🔲 Planned |
+| Social account connectors — X, Threads, Instagram, YouTube | ✅ Done |
+| Draft-first posting workflow — Aiko prepares posts, owner approves before publish | ✅ Done |
+| Platform-specific safety rules baked into drafting prompts (no private details, no engagement bait, per-platform length limits) | ✅ Done |
+| Workspace photo picker for Instagram (vision-captioned, LLM-selected, public-safe filter) | ✅ Done |
+| YouTube video queue — description-grounded posting, no auto-selection, human writes the source note | ✅ Done |
+| Long-lived token auto-refresh (Threads, Instagram) | ✅ Done |
+| Discord server introduction posting with rate limits and community rules checks | 🔲 Planned |
 | Social identity/persona card for public introductions | 🔲 Planned |
-| Workspace photo picker for future Instagram/Pixelfed posts | 🔲 Planned |
-| Discord and Reddit introduction posting with rate limits and community rules checks | 🔲 Planned |
-| Post history archive with links, timestamps, captions, and used media | 🔲 Planned |
+| Post history archive — consolidated view across drafts (links, timestamps, captions, media) | 🟡 Partial — per-draft `draft.json`/`posted.json` exist; no cross-draft archive view yet |
 | Abuse/spam prevention — cooldowns, blocklists, and no unsolicited mass outreach | 🔲 Planned |
 | Human handoff mode for replies and moderation | 🔲 Planned |
 
@@ -126,14 +128,15 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Platform | Roadmap stance | Reason |
 |---|---|---|
-| X | ✅ Primary experiment | Large public reach, already added, useful for short updates despite higher moderation/reputation risk |
-| Threads | ✅ Primary experiment | Already added, friendlier mainstream short-post channel and a natural Instagram-adjacent path |
-| Instagram | 🔲 Later, photo-gated | Best fit once Aiko can select approved workspace photos and write captions |
-| Discord | ✅ Community introduction channel | Good for controlled server-by-server introductions and future bot-style presence |
-| Reddit | 🟡 Careful experiment | Useful for long introductions, but subreddit rules and anti-promotion norms require strict approval |
-| Bluesky | 🟡 Optional experiment | Good replacement for users avoiding X; likely better for open-web identity if AI disclosure is clear |
-| Mastodon | 🟡 Optional experiment | Federation culture can be skeptical of bots/AI, so use only opt-in instances and explicit labeling |
-| Pixelfed | 🟡 Later, photo-gated | Instagram-like fediverse option, but AI-generated or AI-curated media needs careful labeling and instance fit |
+| X | ✅ Active | Live via AIsa relay; weekly memory postcard lane |
+| Threads | ✅ Active | Live; weekly memory postcard lane, image posting via imgbb |
+| Instagram | ✅ Active | Live; photo-gated curated showcase, images only |
+| YouTube | ✅ Active | Live; video lane, description-grounded — you choose the video, Aiko only polishes the write-up |
+| Discord | 🔲 Planned | Controlled server-by-server introductions; good fit for a bot-style presence in a community you already trust |
+| Bluesky | ❌ Not prioritized | Community has expressed it doesn't want AI-posted content |
+| Mastodon | ❌ Not prioritized | Community has expressed it doesn't want AI-posted content |
+| Pixelfed | ❌ Not prioritized | Community has expressed it doesn't want AI-posted content |
+| Reddit | ❌ Not prioritized | Subreddit rules and anti-promotion norms too heavy for the return; dropped from roadmap |
 | Facebook | ❌ Not prioritized | Older social graph and lower value for Aiko's public identity experiments |
 | Flickr | ❌ Not prioritized | Mostly archival/photo-community use; not a strong discovery channel for Aiko |
 
