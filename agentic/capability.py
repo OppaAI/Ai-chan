@@ -97,7 +97,7 @@ CAPABILITIES: dict[str, Capability] = {
     "research": Capability(
         id="research",
         triggers=("look up", "search the web", "research this", "find out about", "study this"),
-        tool_domains=("research", "kb", "reports")),
+        tool_domains=("research", "kb", "reports"),
     ),
     "scheduling": Capability(
         id="scheduling",
@@ -117,7 +117,7 @@ CAPABILITIES: dict[str, Capability] = {
     "repo": Capability(
         id="repo",
         triggers=("inspect the code", "read the repo", "aiko's architecture", "aiko's code"),
-        tool_domains=("repo", "skills", "reports")),
+        tool_domains=("repo", "skills", "reports"),
     ),
     "job_hunt": Capability(
         id="job_hunt",
