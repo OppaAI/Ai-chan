@@ -65,6 +65,18 @@ there); video instead goes to YouTube via its own lane. If a future platform
 should be added, follow the existing pattern: one _post_<provider>(...)
 function plus a registry entry; the post_draft / post_photo_draft /
 post_video_draft dispatchers never need to change otherwise.
+
+Token refresh, by provider:
+  - Threads: long-lived token, ~60-day life. Refreshed automatically at post
+    time once inside a THREADS_REFRESH_WINDOW_DAYS (default 55) window of
+    expiry — see refresh_threads_token_if_due().
+  - Instagram: long-lived token via graph.instagram.com, same ~60-day life
+    and same pattern — refreshed automatically at post time once inside an
+    IG_REFRESH_WINDOW_DAYS (default 55) window of expiry — see
+    refresh_instagram_token_if_due().
+  - YouTube: refresh token doesn't expire on a fixed schedule, so there's no
+    day-window check — _youtube_access_token() just exchanges it for a fresh
+    short-lived access token on every single post.
 """
 
 from __future__ import annotations
@@ -248,6 +260,57 @@ def _upload_to_imgbb(image_path: Path) -> dict[str, Any]:
         return result
     except Exception as e:
         return {"ok": False, "provider": "imgbb", "error": str(e)}
+
+
+# ── shared long-lived-token refresh helper (Threads + Instagram both use
+#    this same request-once-per-day-window / persist-to-.env shape) ──────────
+
+def _write_env_values(env_path: str | Path, values: Mapping[str, str]) -> None:
+    path = Path(env_path).expanduser().resolve()
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    remaining = dict(values)
+    updated: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            updated.append(line)
+            continue
+        lhs = line.split("=", 1)[0]
+        stripped_lhs = lhs.lstrip()
+        export_prefix = "export " if stripped_lhs.startswith("export ") else ""
+        key = stripped_lhs.removeprefix("export ").strip()
+        if key in remaining:
+            updated.append(f"{export_prefix}{key}={remaining.pop(key)}")
+        else:
+            updated.append(line)
+    for key, value in remaining.items():
+        updated.append(f"{key}={value}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
+            tmp.write("\n".join(updated).rstrip() + "\n")
+        os.replace(tmp_name, path)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+def _token_seconds_remaining(expires_at_env: str) -> int | None:
+    """Generic helper: seconds remaining before a stored *_EXPIRES_AT env
+    var's timestamp. Shared by Threads and Instagram (both store an ISO
+    "<PROVIDER>_ACCESS_TOKEN_EXPIRES_AT" value after a successful refresh)."""
+    raw = os.getenv(expires_at_env, "").strip()
+    if not raw:
+        return None
+    try:
+        expiry = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        log.warning("Invalid %s: %s", expires_at_env, raw)
+        return None
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return int((expiry.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds())
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -556,51 +619,6 @@ def _threads_config() -> tuple[str, str, str]:
     return token, user_id, base
 
 
-def _token_seconds_remaining(expires_at: str | None = None) -> int | None:
-    raw = (expires_at or os.getenv("THREADS_ACCESS_TOKEN_EXPIRES_AT", "")).strip()
-    if not raw:
-        return None
-    try:
-        expiry = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        log.warning("Invalid THREADS_ACCESS_TOKEN_EXPIRES_AT: %s", raw)
-        return None
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=timezone.utc)
-    return int((expiry.astimezone(timezone.utc) - datetime.now(timezone.utc)).total_seconds())
-
-
-def _write_env_values(env_path: str | Path, values: Mapping[str, str]) -> None:
-    path = Path(env_path).expanduser().resolve()
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-    remaining = dict(values)
-    updated: list[str] = []
-    for line in lines:
-        stripped = line.lstrip()
-        if not stripped or stripped.startswith("#") or "=" not in line:
-            updated.append(line)
-            continue
-        lhs = line.split("=", 1)[0]
-        stripped_lhs = lhs.lstrip()
-        export_prefix = "export " if stripped_lhs.startswith("export ") else ""
-        key = stripped_lhs.removeprefix("export ").strip()
-        if key in remaining:
-            updated.append(f"{export_prefix}{key}={remaining.pop(key)}")
-        else:
-            updated.append(line)
-    for key, value in remaining.items():
-        updated.append(f"{key}={value}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent), text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-            tmp.write("\n".join(updated).rstrip() + "\n")
-        os.replace(tmp_name, path)
-    finally:
-        if os.path.exists(tmp_name):
-            os.unlink(tmp_name)
-
-
 def refresh_threads_token(
     *,
     token: str | None = None,
@@ -657,7 +675,7 @@ def refresh_threads_token(
 
 
 def refresh_threads_token_if_due(*, persist_env: bool | None = None) -> dict[str, Any]:
-    seconds_remaining = _token_seconds_remaining()
+    seconds_remaining = _token_seconds_remaining("THREADS_ACCESS_TOKEN_EXPIRES_AT")
     if seconds_remaining is None:
         return {
             "ok": True,
@@ -1097,19 +1115,113 @@ def _read_media_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
     return meta.get("selections", []), meta
 
 
-# ── Instagram (Graph API) ────────────────────────────────────────────────────
-# Requires an IG Business/Creator account linked to a Facebook Page, and a
-# publicly reachable URL for the media (no direct file upload). Images only —
-# Aiko does not post video.
+# ── Instagram (Graph API, Instagram Login variant) ────────────────────────
+# Requires an IG Business/Creator account. Uses graph.instagram.com (not
+# graph.facebook.com — that host/flow is for the legacy Facebook Login
+# variant and is no longer what this integration targets). Images only —
+# Aiko does not post video. No direct file upload; media must be reachable
+# at a public URL (handled via imgbb, same as Threads).
+#
+# Token refresh mirrors Threads: a long-lived IG token is refreshed once
+# it's within IG_REFRESH_WINDOW_DAYS (default 55) of expiring, checked at
+# post time via refresh_instagram_token_if_due().
+
+IG_REFRESH_WINDOW_DAYS = _int_env("IG_REFRESH_WINDOW_DAYS", 55)
+
 
 def _instagram_config() -> tuple[str, str, str]:
     token = os.getenv("IG_ACCESS_TOKEN", "").strip()
     ig_user_id = os.getenv("IG_BUSINESS_ACCOUNT_ID", "").strip()
-    base = os.getenv("IG_API_BASE", "https://graph.facebook.com/v21.0").rstrip("/")
+    base = os.getenv("IG_API_BASE", "https://graph.instagram.com").rstrip("/")
     return token, ig_user_id, base
 
 
+def refresh_instagram_token(
+    *,
+    token: str | None = None,
+    persist_env: bool = False,
+    env_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Refresh an unexpired long-lived Instagram token and optionally
+    persist it to an env file. Same shape as refresh_threads_token, but
+    against graph.instagram.com's ig_refresh_token grant."""
+    current_token = (token or os.getenv("IG_ACCESS_TOKEN", "")).strip()
+    base = os.getenv("IG_API_BASE", "https://graph.instagram.com").rstrip("/")
+    if not current_token:
+        return {"ok": False, "provider": "instagram", "error": "IG_ACCESS_TOKEN not set"}
+
+    try:
+        resp = requests.get(
+            f"{base}/refresh_access_token",
+            params={"grant_type": "ig_refresh_token", "access_token": current_token},
+            timeout=120,
+        )
+        try:
+            payload: Any = resp.json()
+        except ValueError:
+            payload = {"raw": resp.text[:2000]}
+        ok = 200 <= resp.status_code < 300 and isinstance(payload, dict) and bool(payload.get("access_token"))
+        safe_payload = dict(payload) if isinstance(payload, dict) else payload
+        if isinstance(safe_payload, dict) and "access_token" in safe_payload:
+            safe_payload["access_token"] = "[redacted]"
+        result: dict[str, Any] = {
+            "ok": ok,
+            "provider": "instagram",
+            "status_code": resp.status_code,
+            "response": safe_payload,
+        }
+        if not ok:
+            return result
+
+        new_token = str(payload["access_token"])
+        expires_in = int(payload.get("expires_in") or 0)
+        if expires_in > 0:
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            result["expires_at"] = expires_at.isoformat()
+            result["expires_in"] = expires_in
+        if persist_env:
+            values = {"IG_ACCESS_TOKEN": new_token}
+            if result.get("expires_at"):
+                values["IG_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
+            _write_env_values(env_path or ".env", values)
+            result["env_updated"] = str(Path(env_path or ".env").expanduser().resolve())
+        os.environ["IG_ACCESS_TOKEN"] = new_token
+        if result.get("expires_at"):
+            os.environ["IG_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
+        return result
+    except (requests.RequestException, ValueError, OSError) as e:
+        return {"ok": False, "provider": "instagram", "error": str(e)}
+
+
+def refresh_instagram_token_if_due(*, persist_env: bool | None = None) -> dict[str, Any]:
+    seconds_remaining = _token_seconds_remaining("IG_ACCESS_TOKEN_EXPIRES_AT")
+    if seconds_remaining is None:
+        return {
+            "ok": True,
+            "provider": "instagram",
+            "skipped": True,
+            "reason": "expiry_unknown",
+        }
+    threshold_seconds = IG_REFRESH_WINDOW_DAYS * 24 * 60 * 60
+    if seconds_remaining is not None and seconds_remaining > threshold_seconds:
+        return {
+            "ok": True,
+            "provider": "instagram",
+            "skipped": True,
+            "reason": "not_due",
+            "seconds_remaining": seconds_remaining,
+        }
+    should_persist = _env_bool("IG_REFRESH_PERSIST_ENV", False) if persist_env is None else persist_env
+    result = refresh_instagram_token(persist_env=should_persist)
+    result["seconds_remaining_before_refresh"] = seconds_remaining
+    return result
+
+
 def _post_instagram_image(sel: dict[str, Any]) -> dict[str, Any]:
+    refresh_result = refresh_instagram_token_if_due()
+    if not refresh_result.get("ok"):
+        return {"ok": False, "provider": "instagram", "stage": "refresh", "refresh": refresh_result}
+
     token, ig_user_id, base = _instagram_config()
     if not token or not ig_user_id:
         return {"ok": False, "provider": "instagram", "error": "IG_ACCESS_TOKEN or IG_BUSINESS_ACCOUNT_ID not set"}
@@ -1479,6 +1591,10 @@ def _read_video_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
 # gate individual uploads on manual approval. Quota is the real limit:
 # a video insert costs 1600 units against a default 10,000/day quota
 # (~6 uploads/day) until the Cloud project is verified.
+#
+# No day-window refresh check like Threads/Instagram: the refresh token
+# itself doesn't have a fixed expiry, so _youtube_access_token() just
+# exchanges it for a fresh short-lived access token on every post, unconditionally.
 
 def _youtube_config() -> tuple[str, str, str]:
     client_id = os.getenv("YOUTUBE_CLIENT_ID", "").strip()
@@ -1765,6 +1881,13 @@ def _cmd() -> int:
     media_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory (photo or video, auto-detected)")
     media_p.add_argument("--providers", default="", help="comma-separated providers overriding the draft kind's default provider list (instagram / youtube)")
     media_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
+    media_p.add_argument(
+        "--refresh-ig-token",
+        action="store_true",
+        help="refresh the configured long-lived Instagram token",
+    )
+    media_p.add_argument("--persist-env", action="store_true", help="write refreshed Instagram token values back to .env")
+    media_p.add_argument("--env-path", default="", help="env file path used with --persist-env")
 
     args = parser.parse_args()
     providers = tuple(p.strip().lower() for p in args.providers.split(",") if p.strip()) or None
@@ -1806,6 +1929,10 @@ def _cmd() -> int:
         return 2
 
     if args.mode == "media":
+        if args.refresh_ig_token:
+            result = refresh_instagram_token(persist_env=args.persist_env, env_path=args.env_path or None)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result.get("ok") else 1
         if args.draft:
             print(json.dumps(generate_photo_draft(inbox=args.inbox or None, force=args.force), ensure_ascii=False, indent=2))
             return 0
