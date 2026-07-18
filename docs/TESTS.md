@@ -284,6 +284,81 @@ Run before any phase suite.
 
 ---
 
+## Phase 2.1 — Social
+
+*Draft-first social publishing: weekly memory postcard (X/Threads), curated photo showcase (Instagram), and video queue (YouTube). All posting requires human approval regardless of trigger path.*
+
+### 2.1.1 Approval gate integrity (P0 — test this first)
+
+- [ ] A draft with no `draft.json` cannot be posted via any of the three `post_*_draft` functions or CLI `--post`.
+- [ ] A draft with `human_approved` absent, `false`, or any non-`true` value (e.g. `"true"` string, `1`) is refused with `SocialApprovalError`.
+- [ ] Setting `human_approved: true` only via the CLI `--approve` flag or manual `draft.json` edit — never via an agent tool argument — is the only path that allows posting.
+- [ ] `WEEKLY_SOCIAL_AUTOPOST=1` / `PHOTO_SOCIAL_AUTOPOST=1` / `VIDEO_SOCIAL_AUTOPOST=1` alone, without `human_approved: true`, does not post; scheduler run returns a skipped/reason result instead.
+- [ ] Confirm the same `_require_approved` gate is exercised by both the scheduler path and the agent-tool wrapper path (`post_weekly_social`, `post_photo_social`, `post_video_social`) — not two divergent implementations.
+- [ ] A model-supplied tool-call argument resembling `confirm: true` or similar has no effect on approval state.
+
+### 2.1.2 Path traversal / containment
+
+- [ ] `post_weekly_social`, `post_photo_social`, `post_video_social` reject a `draft_dir` argument containing `../` that resolves outside the lane's root.
+- [ ] An absolute `draft_dir` path outside the lane's root (e.g. `/etc`, another user's workspace) is rejected with a clear `ValueError`, not silently redirected.
+- [ ] A `draft_dir` that resolves inside the correct lane root but doesn't exist yet fails cleanly (missing `draft.json`) rather than crashing.
+
+### 2.1.3 Lane A — weekly memory postcard
+
+- [ ] `generate_weekly_draft` is idempotent per calendar week: a second call without `force=True` returns `skipped: draft_exists`.
+- [ ] `last_completed_sunday_saturday` correctly identifies the prior Sun–Sat window across a timezone boundary (test with a non-UTC `bioclock` timezone).
+- [ ] Public-safe memory selection excludes rows not matching pinned/weekly-source patterns; private/non-pinned memories never reach the LLM selection prompt.
+- [ ] LLM selection failure (malformed JSON, timeout) falls back to `_SAFE_FALLBACK_POST` / `_SAFE_FALLBACK_IMAGE` rather than crashing or posting nothing silently.
+- [ ] `post_text` longer than `WEEKLY_SOCIAL_MAX_CHARS` is truncated with an ellipsis, not rejected.
+- [ ] X posting (`_post_x_via_aisa`) succeeds with and without an image attached.
+- [ ] Threads posting succeeds with and without an image; confirm the `time.sleep` delay before publish is respected and container creation/publish are two distinct verified steps.
+- [ ] Threads token refresh: with `THREADS_ACCESS_TOKEN_EXPIRES_AT` inside `THREADS_REFRESH_WINDOW_DAYS`, a post attempt triggers `refresh_threads_token_if_due` and succeeds; outside the window it's skipped (`not_due`).
+- [ ] `retry_weekly_social_if_needed` no-ops on any day other than Sunday.
+- [ ] `retry_weekly_social_if_needed` on Sunday picks up a draft that was approved after an earlier failed/skipped run and posts it without duplicating the post.
+- [ ] `authorize_x` returns a usable OAuth URL and does not leak `AISA_API_KEY` in logs.
+
+### 2.1.4 Lane B — curated photo showcase
+
+- [ ] `scan_photo_workspace` output parsing in `_list_candidates` handles the tool's hardcapped 50-file preview correctly and does not silently drop the rest without surfacing that limit.
+- [ ] A photo captioned `PRIVATE:` by the vision model is excluded from the LLM selection prompt entirely — verify it's never present in `items_block`.
+- [ ] Vision captioning failure for one file marks it `private=True` (fails safe) rather than crashing the whole batch.
+- [ ] LLM selection respects `PHOTO_SOCIAL_MAX_ITEMS`; requesting/receiving more than the cap is truncated.
+- [ ] An empty inbox returns `skipped: empty_inbox` without creating a draft directory.
+- [ ] Zero worthwhile candidates returns `skipped: nothing_selected` without creating a draft directory.
+- [ ] `review.md` correctly links each selected media file's local copy (not the original inbox path).
+- [ ] Instagram posting posts only the first selection when multiple are present; confirm this is documented behavior, not a silent bug, in the review bundle.
+- [ ] Instagram token refresh mirrors the Threads window-check behavior (`IG_REFRESH_WINDOW_DAYS`).
+- [ ] Instagram posting correctly caps `caption` at 2200 chars before submission.
+
+### 2.1.5 Lane C — YouTube video queue
+
+- [ ] A video without a matching `NAME.md` (filename stem, uppercased, `.md`) sibling is left unqueued and reported under `pending_without_description`, not silently skipped.
+- [ ] Video ledger (`_video_ledger.json`) prevents re-drafting the same video across repeated `generate_video_draft` calls.
+- [ ] Corrupt/missing video ledger is treated as empty rather than crashing.
+- [ ] Oldest ready video (by `st_mtime`) is queued first when multiple described videos are pending.
+- [ ] LLM polish never introduces claims, locations, or specs absent from the source `.md` note — spot-check against a note with sparse content.
+- [ ] Empty or filename-fragment-only note produces a minimal title and an honest description rather than invented detail.
+- [ ] Manual edits to `title.txt` / `description.txt` after drafting take effect at post time, overriding the cached `draft.json` values.
+- [ ] `generate_video_drafts` (drain-all) stops correctly when the inbox is exhausted and does not loop indefinitely.
+- [ ] YouTube OAuth refresh-token exchange succeeds on every post call (no day-window skip logic to worry about here — verify it's unconditional).
+- [ ] Resumable upload: init request failure (e.g. bad metadata) is reported with the correct stage (`init`) and does not attempt the PUT.
+- [ ] Resumable upload: missing `Location` header on init is caught explicitly rather than causing a downstream `None` crash.
+- [ ] Quota exhaustion (10,000 units/day, ~6 uploads) produces a clear error rather than a silent failure.
+
+### 2.1.6 Provider registry extensibility
+
+- [ ] Adding a new provider function + registry entry (per module docstring pattern) works without modifying any `post_*_draft` dispatcher.
+- [ ] An unsupported/unregistered provider name in a `providers` argument returns a structured `{"ok": false, "error": "unsupported provider"}` result rather than raising.
+
+### 2.1.7 Stress and regression
+
+- [ ] Run all three lanes' draft generation back-to-back in one session; no shared-state bleed between lane roots (`weekly_social_root`, `photo_social_root`, `video_social_root`).
+- [ ] Kill network mid-post (imgbb upload, Threads/IG/YouTube API call) for each lane; failure is reported per-provider without corrupting `draft.json`.
+- [ ] `posted.json` and `draft.json`'s `post_results` stay consistent after a partial multi-provider post (one provider succeeds, one fails).
+- [ ] Confirm none of the three lanes are reachable as agent tools except `draft_photo_social`, `post_photo_social`, `draft_video_social`, `post_video_social` — Lane A's wrappers must not appear in `tool_schemas()`.
+
+---
+
 ## Phase 2.5 — Agent
 
 *Agentic task loop, toolkit tools, skill registry, final-answer verification, scheduling, and local workspace operations.*
