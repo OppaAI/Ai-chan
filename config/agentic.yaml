@@ -131,7 +131,9 @@ WEEKLY_SOCIAL_TIME_OF_DAY: "08:00"  # Wall-clock time (HH:MM) for the Sunday wee
 WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS: "1800"  # Seconds between Sunday retry checks for an unposted draft; 1800 = 30 min.
 
 # -- Instagram API metadata --
-IG_API_BASE: "https://graph.facebook.com/v21.0"  # Facebook Graph API base URL for Instagram.
+IG_API_BASE: "https://graph.instagram.com"  # Instagram Graph API base URL (Instagram Login flow, not graph.facebook.com).
+IG_ACCESS_TOKEN_EXPIRES_AT: ""  # ISO UTC expiry timestamp for long-lived Instagram token; blank if unknown.
+IG_REFRESH_WINDOW_DAYS: "55"  # Refresh Instagram token when this many days or fewer remain.
 IG_TIMEOUT: "60"  # Seconds before Instagram API calls time out.
 IG_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Instagram media container create and publish.
 
