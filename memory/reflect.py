@@ -20,7 +20,7 @@ Optional:
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
   IMAGEGEN_URL        — Modal FLUX endpoint
-  REFERENCE_IMAGE — path to Aiko reference PNG (default <USER_STATE_ROOT>/Aiko-chan.png)
+  REFERENCE_IMAGE — path to Aiko reference PNG (default <USER_STATE_ROOT>/aiko.png)
   USER_REFERENCE_IMAGE — path to user reference PNG (default <USER_STATE_ROOT>/<USER_ID>/user.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
   USER_STATE_ROOT — root directory for user state (default: ~/.aiko)
@@ -84,7 +84,7 @@ REFLECT_BLOG_POST_ENABLED = os.getenv("REFLECT_BLOG_POST_ENABLED", "1").lower() 
 _USER_STATE_ROOT = os.path.expanduser("~/.aiko")
 
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "")
-REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.join(_USER_STATE_ROOT, "Aiko-chan.png"))
+REFERENCE_IMAGE  = os.getenv("REFERENCE_IMAGE", os.path.join(_USER_STATE_ROOT, "aiko.png"))
 
 def _user_reference_image_path() -> str:
     """Resolve the current user's reference-image path fresh, per call —

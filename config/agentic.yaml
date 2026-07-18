@@ -91,7 +91,7 @@ WEEKLY_SOCIAL_AUTODRAFT: "1"  # Create local draft/image bundle automatically; b
 WEEKLY_SOCIAL_AUTOPOST: "0"  # Post automatically after drafting; boolean options, keep 0 while testing.
 WEEKLY_SOCIAL_WEEKDAY: "sunday"  # Weekday for weekly draft; options: monday..sunday or mon..sun.
 WEEKLY_SOCIAL_TIME: "18:00"  # Local wall-clock time for weekly draft in HH:MM 24-hour format.
-WEEKLY_SOCIAL_PROVIDERS: "x, threads, bluesky, mastodon"  # Comma-separated provider list; options currently include x, threads, bluesky, mastodon.
+WEEKLY_SOCIAL_PROVIDERS: "x, threads"  # Comma-separated provider list; options currently include x, threads, bluesky, mastodon.
 WEEKLY_SOCIAL_MAX_CHARS: "260"  # Max post length; keep <= 260 for X with room for metadata/links.
 SOCIAL_ROOT: ""  # Optional override; blank uses per-user <workspace>/social/weekly.
 WEEKLY_SOCIAL_IMAGE_URL: ""  # Optional fallback public image URL for Threads when no local draft image exists; local images upload to ImgBB.
