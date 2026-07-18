@@ -6,9 +6,13 @@ tests/
     test_memorize.py
     test_userspace.py
     test_secure.py
+  integration/     # pytest, real components wired together, marked @pytest.mark.integration
+    test_multiuser_isolation.py
+  stress/          # pytest, concurrency/load, marked @pytest.mark.stress
+    test_write_queue_stress.py
   perf/            # pytest-benchmark, marked @pytest.mark.perf
     benchmark_memory.py   # includes memory hot-path AND secure.py connection overhead
-pytest.ini          # registers the `perf` marker, scopes default runs to tests/unit/
+pytest.ini          # registers perf/integration/stress markers, scopes default runs to tests/unit/
 eval/
   eval_memory_extraction.py   # standalone script, not pytest -- run directly
   eval_memory_recall.py       # standalone script, not pytest -- run directly
@@ -27,7 +31,29 @@ pytest
 ```
 (picks up `tests/unit/` only, per `pytest.ini`)
 
-**`tests/perf/`** — wall-clock latency, only meaningful against the real
+**`tests/integration/`** — real components wired together (real userspace
+contextvars, real SQLite files, `FakeEmbedder` where a real model isn't
+needed for plumbing correctness). Currently covers multi-user isolation --
+the highest-consequence failure mode for a personal-memory system, since a
+bug here means user A sees user B's memories.
+
+Run with:
+```
+pytest tests/integration -m integration -v
+```
+
+**`tests/stress/`** — concurrency and load, using the real
+`queue.Queue`/worker thread and real SQLite writes, but `FakeEmbedder`/fake
+LLM client so it measures queue/threading behavior rather than model
+latency. Currently covers the async write queue under rapid-fire and
+concurrent access.
+
+Run with:
+```
+pytest tests/stress -m stress -v
+```
+
+ only meaningful against the real
 HarrierEmbedder/Ministral on the actual target device (Jetson Orin Nano).
 Excluded from default `pytest` runs entirely.
 
