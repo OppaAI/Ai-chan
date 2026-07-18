@@ -701,24 +701,23 @@ class _MemoryBackend:
                 max_tokens=_EXTRACT_MAX_TOKENS,
                 temperature=0.0,  # deterministic — reduces hallucinated facts
                 timeout=_EXTRACT_TIMEOUT,
-                stop=["\n\n", "```"],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "facts",
+                        "schema": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
             )
             raw = (resp.choices[0].message.content or "").strip()
         except Exception as e:
             log.warning(f"Extraction LLM call failed: {e}")
             return []
 
-        # strip CoT think blocks before JSON parsing
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
-        # strip accidental markdown fences
-        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-
-        # take only the first top-level JSON array — model sometimes repeats output
-        match = _first_json_array(raw)
-        if match:
-            raw = match
-
+        # Grammar-constrained output: no markdown fences, no repeated arrays,
+        # no <think> preamble possible (schema forces token 0 to be '[').
+        # Parsing is a plain json.loads — the old fence-strip/first-array
+        # salvage logic is no longer needed for this call site.
         try:
             facts = json.loads(raw)
             if isinstance(facts, list):
@@ -726,7 +725,7 @@ class _MemoryBackend:
             else:
                 return []
         except json.JSONDecodeError:
-            log.warning(f"Failed to parse extraction JSON: {raw[:200]!r}")
+            log.warning(f"Failed to parse extraction JSON despite schema constraint: {raw[:200]!r}")
             return []
 
         # drop facts containing hedging/uncertain language (word-boundary match)

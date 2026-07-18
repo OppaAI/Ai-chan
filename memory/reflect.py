@@ -268,9 +268,15 @@ def _generate_daily_facts(
         user=user_prompt,
         max_tokens=1536,
         temperature=0.0,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "daily_facts",
+                "schema": {"type": "array", "items": {"type": "string"}},
+            },
+        },
     )
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-    raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
 
     # Always log the full raw response at debug level so future parse
     # failures can be diagnosed without guessing from a 300-char preview.
@@ -349,7 +355,10 @@ def _build_reflection_system() -> str:
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float = 0.75) -> str:
+def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float = 0.75, response_format: dict | None = None) -> str:
+    kwargs = {}
+    if response_format is not None:
+        kwargs["response_format"] = response_format
     resp = _get_llm_client().chat.completions.create(
         model=LLM_MODEL,
         messages=[
@@ -360,6 +369,7 @@ def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float 
         max_tokens=max_tokens,
         temperature=temperature,
         timeout=120,
+        **kwargs,
     )
     return (resp.choices[0].message.content or "").strip()
 
