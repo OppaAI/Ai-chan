@@ -335,6 +335,7 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult], embed
         out = fn(**args)
         return NodeResult(node.id, node.tool, True, str(out), args=args)
     except Exception as exc:
+        log.exception("Graph node %s (%s) raised unexpectedly", node.id, node.tool)
         return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error")
 
 

@@ -1080,10 +1080,24 @@ def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) 
             stream=False,
             max_tokens=160,
             temperature=0.2,
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "verification",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "pass": {"type": "boolean"},
+                            "score": {"type": "number"},
+                            "feedback": {"type": "string"},
+                        },
+                        "required": ["pass", "score", "feedback"],
+                    },
+                },
+            },
         )
         raw = (resp.choices[0].message.content or "").strip()
-        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-        data = json.loads(match.group(0) if match else raw)
+        data = json.loads(raw)
         ok = _coerce_verifier_bool(data.get("pass"))
         raw_score = data.get("score", 1.0 if ok else 0.0)
         feedback = str(data.get("feedback") or ("Verifier passed." if ok else "Verifier failed."))
