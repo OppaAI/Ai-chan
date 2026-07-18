@@ -69,6 +69,24 @@ Run before any phase suite.
 - [ ] Confirm logs include subsystem boot boundaries for think, memory, speak, listen, and UI.
 - [ ] Confirm Ctrl-C/Ctrl-D cleanly exits, drains memory work, and restores terminal state.
 
+### At-rest encryption (`system/secure.py`)
+
+*Optional SQLCipher-backed encryption for user-private SQLite state. Off by default; enabled via `SQLITE_ENCRYPTION=1`.*
+
+- [ ] With `SQLITE_ENCRYPTION` unset/`0`, `connect_sqlite()` returns a plain `sqlite3.Connection` and behaves identically to direct `sqlite3.connect()` — no pysqlcipher3 import is attempted.
+- [ ] With `SQLITE_ENCRYPTION=1` and no `DATA_KEY_SECRET`/`SECRET_KEY` set, `connect_sqlite()` / `derive_user_sqlite_key()` raises a clear `ValueError` at boot rather than silently falling back to plaintext or an empty key.
+- [ ] With `SQLITE_ENCRYPTION=1` and `pysqlcipher3` not installed, `connect_sqlite()` raises `RuntimeError` with an actionable message rather than an unhandled `ImportError`.
+- [ ] `derive_user_sqlite_key(user_id)` is deterministic: calling it twice with the same `user_id` and the same `DATA_KEY_SECRET` returns the identical key.
+- [ ] `derive_user_sqlite_key(user_id)` is user-scoped: two different `user_id` values produce different keys.
+- [ ] **Regression check for the GitHub user ID format change bug**: derive a key using the *current* `current_user_id()` format, confirm it matches the key already in use for an existing encrypted DB created before the format change — or, if the format changed intentionally, confirm there's a documented migration path (re-key or re-derive) rather than a silent lockout.
+- [ ] Opening an existing encrypted DB with the *correct* derived key succeeds and `_validate_sqlcipher_connection`'s `SELECT count(*) FROM sqlite_master` returns without error.
+- [ ] Opening an existing encrypted DB with an *incorrect* key fails fast at `_validate_sqlcipher_connection`, not later on first real query — confirm the failure surfaces as a clear boot-time error, not a mysterious later crash mid-conversation.
+- [ ] An encrypted DB file is not readable as plaintext SQLite: `sqlite3 <path> ".tables"` (plain CLI, no SQLCipher) fails or returns garbage rather than showing the schema.
+- [ ] `PRAGMA cipher_page_size = 4096` is applied consistently — reopening a DB created by this code with a different page size setting does not silently corrupt reads.
+- [ ] Switching `SQLITE_ENCRYPTION` from `0` to `1` (or vice versa) against an *existing* unencrypted/encrypted DB is documented behavior — confirm it fails loudly (wrong file format) rather than appearing to "work" while actually creating a second shadow DB or silently reading garbage.
+- [ ] `DATA_KEY_SECRET`/`SECRET_KEY` value is never printed in logs, error messages, or debug output (only the *derived per-user key* should ever appear, and only in contexts that already treat it as sensitive).
+- [ ] Concurrent access: two connections opened for the same `user_id` (e.g. `AikoMemorize` main thread + write-queue worker thread — see `memory/memorize.py`'s `_write_loop`) both derive the same key and don't race on `PRAGMA key`.
+
 ---
 
 ## Phase 1 — Soul
@@ -115,6 +133,7 @@ Run before any phase suite.
 - [ ] Duplicate memory pressure test: repeat the same fact 20 times; recall does not become dominated by redundant near-identical entries.
 - [ ] Unicode memory test: store Japanese, Korean, emoji, and mixed punctuation; recall and display remain readable.
 - [ ] Privacy check: `/memory` does not expose secrets from environment variables or unrelated workspace files.
+- [ ] If `SQLITE_ENCRYPTION=1` for this run, confirm `memory/memorize.py`'s DB open path goes through `system.secure.connect_sqlite` (not a bare `sqlite3.connect`) — see Pre-flight's At-rest encryption block for the full key-derivation test set.
 
 ### 1.5 Memory retrieval quality and cleanup
 
