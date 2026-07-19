@@ -181,7 +181,7 @@ def embed_batch_or_none(embedder: Embedder, texts: list[str]) -> np.ndarray | No
             except Exception:
                 continue
     try:
-        vecs = [np.asarray(embedder.embed_query(t), dtype=np.float32) for t in texts]
+        vecs = [cached_embed_query(embedder, t) for t in texts]
         return np.stack(vecs) if vecs else np.empty((0, 0), dtype=np.float32)
     except Exception:
         return None
@@ -234,10 +234,7 @@ def select_relevant_chunks(
 
     if embedder is not None and hasattr(embedder, "embed_query"):
         try:
-            query_vec = (
-                embedder.embed_query(query, instruct=instruct) if instruct
-                else embedder.embed_query(query)
-            )
+            query_vec = cached_embed_query(embedder, query, instruct=instruct or "")
             chunk_vecs = embed_batch_or_none(embedder, chunks)
             if chunk_vecs is not None and chunk_vecs.shape[0] == len(chunks):
                 scores = batch_cosine_scores(query_vec, chunk_vecs)
