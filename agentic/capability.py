@@ -108,7 +108,7 @@ CAPABILITIES: dict[str, Capability] = {
     ),
     "scheduling": Capability(
         id="scheduling",
-        triggers=("schedule this", "remind me", "every morning", "recurring job", "set an alarm"),
+        triggers=("schedule this", "remind me", "every morning", "recurring job", "set an alarm", "schedule a", "schedule "),
         tool_domains=("scheduling",),
     ),
     "kb_proposal": Capability(
@@ -194,7 +194,9 @@ def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[d
     that the old keyword/semantic matching would have handled fine."""
     if not cap_ids:
         return all_schemas
-    domains = {d for cid in cap_ids for d in CAPABILITIES[cid].tool_domains}
+    # Filter out unknown capability IDs to avoid KeyError
+    valid_cap_ids = [cid for cid in cap_ids if cid in CAPABILITIES]
+    domains = {d for cid in valid_cap_ids for d in CAPABILITIES[cid].tool_domains}
     keep = set(ALWAYS_ON_TOOLS)
     for schema in all_schemas:
         name = schema["function"]["name"]
