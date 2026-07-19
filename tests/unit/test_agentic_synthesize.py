@@ -327,7 +327,7 @@ class TestSynthesizeReport:
         client.chat_completions_create = MagicMock(side_effect=Exception("LLM down"))
         embedder = FakeEmbedder()
         result = synthesize_report("evidence", "prompt", client=client, model="m", embedder=embedder)
-        assert "automatic synthesis was unavailable" in result.lower() or "evidence in result
+        assert "automatic synthesis was unavailable" in result.lower() or "evidence" in result.lower()
 
 
 class TestPolishText:
