@@ -99,7 +99,6 @@ KNOWLEDGE_RECALL_LIMIT = int(os.getenv("KNOWLEDGE_RECALL_LIMIT", 3))
 MEMORY_MIN_SCORE = float(os.getenv("MEMORY_MIN_SCORE", "0.0"))
 
 _BASE_PREDICT    = int(os.getenv("LLM_MAX_TOKENS", os.getenv("BASE_PREDICT", 280)))
-_AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", _BASE_PREDICT * 4))
 _REASONING_SCALE = int(os.getenv("REASONING_SCALE", 3))
 _ROUTE_ENABLED = os.getenv("ROUTE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
