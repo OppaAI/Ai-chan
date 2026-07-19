@@ -552,11 +552,11 @@ def _placeholder_extras(prompt: str) -> dict[str, Any]:
         from agentic.toolkit.synthesize import detect_compare, split_subjects
         pair = detect_compare(prompt)
         if pair is not None:
-            out["compare_left"] = pair[0]
-            out["compare_right"] = pair[1]
+            out["$compare_left"] = pair[0]
+            out["$compare_right"] = pair[1]
         subjects = split_subjects(prompt)
         if subjects:
-            out["compare_subjects"] = subjects
+            out["$compare_subjects"] = subjects
     except Exception:
         pass
     return out
@@ -600,7 +600,7 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
     # playbook is compare_and_report, drop it so the wrong playbook
     # doesn't get selected just because "compare" appears in the
     # trigger list as a substring of unrelated text.
-    if plan.get("id") == "compare_and_report" and "compare_subjects" not in extras:
+    if plan.get("id") == "compare_and_report" and "$compare_subjects" not in extras:
         ranked = [(s, p) for s, p in ranked if p is not plan]
         if not ranked or ranked[0][0] <= 0:
             return None
