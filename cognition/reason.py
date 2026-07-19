@@ -18,8 +18,10 @@ additive, never a hard dependency.
 
 from __future__ import annotations
 
+import os
 import re
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+import threading
 from typing import Protocol
 
 import numpy as np
@@ -45,6 +47,32 @@ class Embedder(Protocol):
     def embed_query(self, text: str, instruct: str = "") -> object: ...
     def embed_queries(self, texts: list[str], instruct: str = "") -> object: ...
 
+
+_EMBED_QUERY_CACHE_MAX = int(os.getenv("EMBED_QUERY_CACHE_MAX", "1024"))
+_embed_query_cache: "OrderedDict[tuple[str, str], np.ndarray]" = OrderedDict()
+_embed_query_cache_lock = threading.Lock()
+
+def cached_embed_query(embedder, text: str, instruct: str = "") -> np.ndarray:
+    """Embed one piece of text, reusing a prior vector for the exact same
+    (text, instruct) pair instead of re-embedding. Safe drop-in replacement
+    for embedder.embed_query(text, instruct=instruct) at any call site that
+    might see repeated text (system prompts, persona blocks, recurring
+    queries) across different call sites/modules."""
+    key = (text, instruct)
+    with _embed_query_cache_lock:
+        cached = _embed_query_cache.get(key)
+        if cached is not None:
+            _embed_query_cache.move_to_end(key)
+            return cached
+    vec = np.asarray(embedder.embed_query(text, instruct=instruct), dtype=np.float32)
+    with _embed_query_cache_lock:
+        _embed_query_cache[key] = vec
+        _embed_query_cache.move_to_end(key)
+        while len(_embed_query_cache) > _EMBED_QUERY_CACHE_MAX:
+            _embed_query_cache.popitem(last=False)
+    return vec
+
+
 def cosine_similarity(vec_a, vec_b) -> float:
     a = np.asarray(vec_a, dtype=float)
     b = np.asarray(vec_b, dtype=float)
@@ -61,8 +89,8 @@ def block_relevance_score(embedder, query: str, text: str, instruct: str | None 
     if embedder is None or not query or not text:
         return 0.0
     try:
-        q_vec = embedder.embed_query(query, instruct=instruct)
-        b_vec = embedder.embed_query(text[:1500], instruct=instruct)
+        q_vec = cached_embed_query(embedder, query, instruct=instruct or "")
+        b_vec = cached_embed_query(embedder, text[:1500], instruct=instruct or "")        
     except Exception:
         return 0.0
     return cosine_similarity(q_vec, b_vec)
