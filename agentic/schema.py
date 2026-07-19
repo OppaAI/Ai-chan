@@ -50,15 +50,16 @@ _TOOL_MAP_LOCK = threading.Lock()
 _PLAYBOOK_WRITE_LOCK = threading.Lock()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PlanNode:
     id: str
     tool: str
     args: dict[str, Any]
     depends_on: tuple[str, ...] = ()
+    run_if: dict[str, Any] | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PlanGraph:
     id: str
     name: str
@@ -68,7 +69,7 @@ class PlanGraph:
     _extras: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NodeResult:
     node_id: str
     tool: str
@@ -83,7 +84,7 @@ class NodeResult:
         return f"{self.node_id}:{self.tool}[{status}] {body}".strip()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GraphRunResult:
     graph: PlanGraph
     results: tuple[NodeResult, ...]
@@ -302,13 +303,13 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "nodes": [
                 {"id": "classify", "tool": "synthesize_report",
                  "args": {"evidence": "$prompt", "prompt": "Classify this user request into exactly ONE category: [coding, research, writing, analysis, planning, other]. Return only the category name.", "style": "plain"}},
-                {"id": "route_coding",    "tool": "repo_file_tree",    "depends_on": ["classify"], "args": {"prefix": ""}},
-                {"id": "route_research",  "tool": "deep_research",     "depends_on": ["classify"], "args": {"query": "$prompt"}},
-                {"id": "route_writing",   "tool": "synthesize_report", "depends_on": ["classify"],
+                {"id": "route_coding",    "tool": "repo_file_tree",    "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "coding"}, "args": {"prefix": ""}},
+                {"id": "route_research",  "tool": "deep_research",     "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "research"}, "args": {"query": "$prompt"}},
+                {"id": "route_writing",   "tool": "synthesize_report", "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "writing"},
                  "args": {"evidence": "$prompt", "prompt": "Write a polished response to: $prompt", "style": "professional"}},
-                {"id": "route_analysis",  "tool": "synthesize_report", "depends_on": ["classify"],
+                {"id": "route_analysis",  "tool": "synthesize_report", "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "analysis"},
                  "args": {"evidence": "$prompt", "prompt": "Analyze this request thoroughly: $prompt", "style": "professional"}},
-                {"id": "route_planning",  "tool": "make_plan",         "depends_on": ["classify"], "args": {"goal": "$prompt", "max_steps": 8}},
+                {"id": "route_planning",  "tool": "make_plan",         "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "planning"}, "args": {"goal": "$prompt", "max_steps": 8}},
             ],
         },
         {
@@ -615,7 +616,8 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
             tool=str(raw["tool"]),
             args=dict(raw.get("args") or {}),
             depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
-        ))
+            run_if=dict(raw["run_if"]) if isinstance(raw.get("run_if"), dict) else None,
+        ))        
     if not nodes:
         return None
     graph = PlanGraph(
@@ -759,6 +761,20 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
         return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error")
 
 
+def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
+    if not node.run_if:
+        return True
+    ref = node.run_if.get("node")
+    if ref not in results:
+        return False
+    actual = (results[ref].content or "").strip().lower()
+    if "equals" in node.run_if:
+        return actual == str(node.run_if["equals"]).strip().lower()
+    if "contains" in node.run_if:
+        return str(node.run_if["contains"]).strip().lower() in actual
+    return True
+
+
 def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: str | None = None) -> GraphRunResult:
     pending = {node.id: node for node in graph.nodes}
     results: dict[str, NodeResult] = {}
@@ -771,14 +787,21 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: s
                 stuck = ", ".join(sorted(pending))
                 ordered.append(NodeResult("graph", "graph_executor", False, f"dependency cycle or missing dependency among: {stuck}", error_type="dependency_error"))
                 break
-            runnable, blocked = [], []
+            runnable, blocked, skipped = [], [], []
             for node in ready:
-                if all(results[dep].ok for dep in node.depends_on):
-                    runnable.append(node)
-                else:
+                if not all(results[dep].ok for dep in node.depends_on):
                     blocked.append(node)
+                elif not _run_if_satisfied(node, results):
+                    skipped.append(node)
+                else:
+                    runnable.append(node)
             for node in blocked:
                 result = NodeResult(node.id, node.tool, False, "skipped: an upstream dependency failed", error_type="dependency_failed")
+                results[node.id] = result
+                ordered.append(result)
+                pending.pop(node.id, None)
+            for node in skipped:
+                result = NodeResult(node.id, node.tool, True, "skipped: run_if condition not met", error_type=None)
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
