@@ -67,6 +67,13 @@ TOOL_DOMAINS: dict[str, str] = {
     "search_jobs": "jobs",
     "list_playbooks": "graph",
     "run_playbook": "graph",
+    # Graph-level synthesis/KB tools (new)
+    "kb_search": "kb",
+    "synthesize_report": "reports",
+    "polish_text": "reports",
+    "combine_evidence": "reports",
+    "condense_text": "reports",
+    "learn_report": "kb",
     # Social posting tools — deliberately capability-gated, never ALWAYS_ON.
     # Posting is the highest-stakes tool class in the loop, so it gets the
     # same (not looser) gating as research/scheduling/photo/repo.

@@ -840,6 +840,8 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("task", ""),
             cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None,
             embedder=_owner_embedder(owner),
+            llm_client=owner._client,
+            llm_model=owner._llm_model,
         )
     if name == "learn_knowledge":
         if (args.get("relative_path") or "").strip():
@@ -1273,7 +1275,10 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # ReAct loop once; the normal experience recorder below then captures the
     # successful sequence for later promotion into the graph playbook.
     if AGENT_EXECUTOR_MODE in {"graph", "hybrid"}:
-        graph_result = schema.run_schema_agent(user_input, cap_ids=_matched_caps, embedder=_embedder)
+        graph_result = schema.run_schema_agent(
+            user_input, cap_ids=_matched_caps, embedder=_embedder,
+            llm_client=owner._client, llm_model=owner._llm_model,
+        )
         if graph_result is not None:
             _graph_ok = not any(not r.ok for r in graph_result.results)
 

@@ -65,6 +65,7 @@ class PlanGraph:
     goal: str
     nodes: tuple[PlanNode, ...]
     source: str = "playbook"
+    _extras: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -127,45 +128,120 @@ def _playbook_file() -> Path:
 
 
 def _default_playbooks() -> list[dict[str, Any]]:
-    """Built-in starter plans. User-promoted plans are appended on disk."""
+    """Built-in starter plans. User-promoted plans are appended on disk.
+
+    The graph-first research/report flow that Oppa asked for is structured
+    as four reusable playbooks so the LLM-facing ReAct path doesn't have
+    to invent the same sequence on every prompt:
+
+      - "research_and_report"   (deep_research + KB + synthesize + write_report + learn_knowledge)
+      - "search_kb_and_report"  (deep_search + KB + synthesize + write_report + learn_knowledge)
+      - "compare_and_report"    (two parallel deep_research calls + KB + comparison synthesize + write_report + learn_knowledge)
+      - "checklist_and_save"    (create_checklist + save_note; for explicit checklist asks)
+      - "simple_save_note"      (just save the prompt as a note; for plain scratch saves)
+
+    All of them use a `synthesize_report` graph tool that calls the LLM
+    through the owner-supplied client+model (see ``run_schema_agent``),
+    condense the combined evidence with the shared embedder when it's
+    overlong, and default to a professional/formal tone unless the user
+    prompt explicitly opts out. Comparisons are only produced when the
+    prompt looks like a "A vs B" / "compare A and B" ask; the search
+    playbook skips the comparison node entirely.
+    """
     return [
         {
-            "id": "plan_and_save_note",
-            "name": "Plan and save note",
-            "triggers": ["plan", "make a plan", "outline"],
-            "requires_any": ["save", "note", "document", "write it down"],
+            "id": "research_and_report",
+            "name": "Deep research, combine, synthesize, and write a report",
+            "triggers": [
+                "research", "deep research", "in-depth", "in depth",
+                "comprehensive", "thorough", "exhaustive", "investigate",
+                "study", "analyze", "analysis", "report on", "write a report",
+                "give me a report", "summarize", "summary of", "overview of",
+            ],
+            "requires_any": [],
+            "capabilities": ["research"],
             "nodes": [
-                {"id": "plan", "tool": "make_plan", "args": {"goal": "$prompt", "max_steps": 8}},
-                {"id": "save", "tool": "save_note", "depends_on": ["plan"], "args": {"title": "$title", "content": "$result:plan", "folder": "notes"}},
+                {"id": "web",    "tool": "deep_research", "args": {"query": "$prompt"}},
+                {"id": "kb",     "tool": "kb_search",     "depends_on": ["web"],    "args": {"query": "$prompt"}},
+                {"id": "merge",  "tool": "combine_evidence", "depends_on": ["web", "kb"],
+                 "args": {"parts": ["$result:web", "$result:kb"]}},
+                {"id": "draft",  "tool": "synthesize_report", "depends_on": ["merge"],
+                 "args": {"evidence": "$result:merge", "prompt": "$prompt", "style": "auto"}},
+                {"id": "report", "tool": "write_report", "depends_on": ["draft"],
+                 "args": {"title": "$title", "content": "$result:draft", "report_dir": "reports"}},
+                {"id": "learn",  "tool": "learn_report", "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:draft", "kind": "self_learned"}},
+            ],
+        },
+        {
+            "id": "search_kb_and_report",
+            "name": "Quick search, combine with KB, synthesize, and write a report",
+            "triggers": [
+                "search", "look up", "find", "what is", "what are",
+                "who is", "when did", "where is", "how do", "how to",
+                "quick", "brief on", "tell me about",
+            ],
+            "requires_any": [],
+            "capabilities": ["research"],
+            "nodes": [
+                {"id": "web",    "tool": "deep_search",  "args": {"query": "$prompt"}},
+                {"id": "kb",     "tool": "kb_search",    "depends_on": ["web"],    "args": {"query": "$prompt"}},
+                {"id": "merge",  "tool": "combine_evidence", "depends_on": ["web", "kb"],
+                 "args": {"parts": ["$result:web", "$result:kb"]}},
+                {"id": "draft",  "tool": "synthesize_report", "depends_on": ["merge"],
+                 "args": {"evidence": "$result:merge", "prompt": "$prompt", "style": "auto"}},
+                {"id": "report", "tool": "write_report", "depends_on": ["draft"],
+                 "args": {"title": "$title", "content": "$result:draft", "report_dir": "reports"}},
+                {"id": "learn",  "tool": "learn_report", "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:draft", "kind": "self_learned"}},
+            ],
+        },
+        {
+            "id": "compare_and_report",
+            "name": "Deep research two subjects, combine with KB, synthesize a comparison, and write a report",
+            "triggers": [
+                "compare", "comparison", "vs", "versus", "vs.", "differences between",
+                "difference between", "compared to", "compared with", "contrast",
+                "A vs B", "pros and cons",
+            ],
+            "requires_any": [],
+            "capabilities": ["research"],
+            "nodes": [
+                {"id": "web_a",  "tool": "deep_research", "args": {"query": "$compare_left"}},
+                {"id": "web_b",  "tool": "deep_research", "args": {"query": "$compare_right"}},
+                {"id": "kb",     "tool": "kb_search",     "depends_on": ["web_a", "web_b"],
+                 "args": {"query": "$prompt"}},
+                {"id": "merge",  "tool": "combine_evidence", "depends_on": ["web_a", "web_b", "kb"],
+                 "args": {"parts": ["$result:web_a", "$result:web_b", "$result:kb"],
+                          "separator": "\n\n===\n\n"}},
+                {"id": "draft",  "tool": "synthesize_report", "depends_on": ["merge"],
+                 "args": {"evidence": "$result:merge", "prompt": "$prompt",
+                          "style": "auto", "comparison_subjects": "$compare_subjects"}},
+                {"id": "report", "tool": "write_report", "depends_on": ["draft"],
+                 "args": {"title": "$title", "content": "$result:draft", "report_dir": "reports"}},
+                {"id": "learn",  "tool": "learn_report", "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:draft", "kind": "self_learned"}},
             ],
         },
         {
             "id": "checklist_and_save",
             "name": "Checklist and save note",
-            "triggers": ["checklist", "todo", "to-do", "steps"],
-            "requires_any": ["save", "note", "checklist"],
+            "triggers": ["checklist", "todo", "to-do", "steps to", "how to"],
+            "requires_any": ["save", "note", "checklist", "todo", "list"],
             "nodes": [
                 {"id": "checklist", "tool": "create_checklist", "args": {"title": "$title", "items": "$heuristic_items"}},
-                {"id": "save", "tool": "save_note", "depends_on": ["checklist"], "args": {"title": "$title", "content": "$result:checklist", "folder": "notes"}},
-            ],
-        },
-        {
-            "id": "research_and_save",
-            "name": "Search and save brief note",
-            "triggers": ["search", "research", "look up", "find"],
-            "requires_any": ["save", "note", "recommendation", "report", "summary"],
-            "nodes": [
-                {"id": "search", "tool": "deep_search", "args": {"query": "$prompt"}},
-                {"id": "save", "tool": "save_note", "depends_on": ["search"], "args": {"title": "$title", "content": "$result:search", "folder": "notes"}},
+                {"id": "save",      "tool": "save_note", "depends_on": ["checklist"],
+                 "args": {"title": "$title", "content": "$result:checklist", "folder": "notes"}},
             ],
         },
         {
             "id": "simple_save_note",
             "name": "Save provided text as a note",
-            "triggers": ["save note", "write note", "draft", "note"],
+            "triggers": ["save note", "write note", "draft", "note that", "jot down", "save this"],
             "requires_any": ["save", "note", "draft"],
             "nodes": [
-                {"id": "save", "tool": "save_note", "args": {"title": "$title", "content": "$prompt", "folder": "notes"}},
+                {"id": "save", "tool": "save_note",
+                 "args": {"title": "$title", "content": "$prompt", "folder": "notes"}},
             ],
         },
     ]
@@ -209,7 +285,29 @@ def _heuristic_items(prompt: str) -> list[str]:
     return items[:10] or [prompt.strip()]
 
 
-def _substitute(value: Any, prompt: str, results: dict[str, NodeResult]) -> Any:
+def _placeholder_extras(prompt: str) -> dict[str, Any]:
+    """Compute one-shot placeholder values that aren't per-node:
+    compare subjects (left/right/list). Kept as a function so the same
+    parsing is shared between plan_from_master and _substitute; this
+    also keeps the substitution layer thin.
+    """
+    out: dict[str, Any] = {}
+    try:
+        from agentic.toolkit.synthesize import detect_compare, split_subjects
+        pair = detect_compare(prompt)
+        if pair is not None:
+            out["compare_left"] = pair[0]
+            out["compare_right"] = pair[1]
+        subjects = split_subjects(prompt)
+        if subjects:
+            out["compare_subjects"] = subjects
+    except Exception:
+        pass
+    return out
+
+
+def _substitute(value: Any, prompt: str, results: dict[str, NodeResult],
+                extras: dict[str, Any] | None = None) -> Any:
     if isinstance(value, str):
         if value == "$prompt":
             return prompt
@@ -220,11 +318,13 @@ def _substitute(value: Any, prompt: str, results: dict[str, NodeResult]) -> Any:
         if value.startswith("$result:"):
             node_id = value.split(":", 1)[1]
             return (results.get(node_id).content if results.get(node_id) else "")[:4000]
+        if value.startswith("$") and extras and value in extras:
+            return extras[value]
         return value.replace("$prompt", prompt).replace("$title", _title(prompt))
     if isinstance(value, list):
-        return [_substitute(v, prompt, results) for v in value]
+        return [_substitute(v, prompt, results, extras) for v in value]
     if isinstance(value, dict):
-        return {k: _substitute(v, prompt, results) for k, v in value.items()}
+        return {k: _substitute(v, prompt, results, extras) for k, v in value.items()}
     return value
 
 
@@ -236,6 +336,20 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None) -> PlanG
     if not ranked or ranked[0][0] <= 0:
         return None
     plan = ranked[0][1]
+    # Stash the per-prompt placeholders on the plan for downstream use.
+    # We attach to PlanGraph via a private attribute (frozen dataclass
+    # doesn't allow new fields) — only this module reads it.
+    extras = _placeholder_extras(user_input)
+    # If the user prompt doesn't look like a comparison but the matched
+    # playbook is compare_and_report, drop it so the wrong playbook
+    # doesn't get selected just because "compare" appears in the
+    # trigger list as a substring of unrelated text.
+    if plan.get("id") == "compare_and_report" and "compare_subjects" not in extras:
+        ranked = [(s, p) for s, p in ranked if p is not plan]
+        if not ranked or ranked[0][0] <= 0:
+            return None
+        plan = ranked[0][1]
+        extras = _placeholder_extras(user_input)
     nodes = []
     for raw in plan.get("nodes", []):
         if not isinstance(raw, dict) or not raw.get("id") or not raw.get("tool"):
@@ -248,7 +362,14 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None) -> PlanG
         ))
     if not nodes:
         return None
-    return PlanGraph(id=str(plan.get("id") or uuid.uuid4()), name=str(plan.get("name") or plan.get("id") or "workflow"), goal=user_input, nodes=tuple(nodes))
+    graph = PlanGraph(
+        id=str(plan.get("id") or uuid.uuid4()),
+        name=str(plan.get("name") or plan.get("id") or "workflow"),
+        goal=user_input,
+        nodes=tuple(nodes),
+        _extras=extras,
+    )
+    return graph
 
 
 def _tool_map() -> dict[str, Callable[..., Any]]:
@@ -287,6 +408,36 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("research tools unavailable for graph executor: %s", exc)
     try:
+        # write_report is a long-form markdown writer — formerly ReAct-only
+        # (see agentic/agentic.py:602). Wiring it into the graph tool map
+        # lets the new research/compare playbooks produce a real report
+        # file (was: a snippets dump into save_note) without falling
+        # through to ReAct.
+        from agentic.toolkit.reports import write_report
+        mapping["write_report"] = write_report
+    except Exception as exc:
+        log.debug("reports tool unavailable for graph executor: %s", exc)
+    try:
+        # Graph-level LLM helpers (synthesize, condense, combine, polish)
+        # and the KB + RAG learn wrappers live in agentic/toolkit/synthesize.py.
+        # Without these, the new research/compare playbooks cannot
+        # produce a real synthesized report — they would degrade back to
+        # a raw evidence dump.
+        from agentic.toolkit.synthesize import (
+            synthesize_report, polish_text, combine_evidence,
+            condense_text, kb_search, learn_report,
+        )
+        mapping.update({
+            "synthesize_report": synthesize_report,
+            "polish_text": polish_text,
+            "combine_evidence": combine_evidence,
+            "condense_text": condense_text,
+            "kb_search": kb_search,
+            "learn_report": learn_report,
+        })
+    except Exception as exc:
+        log.debug("synthesize tools unavailable for graph executor: %s", exc)
+    try:
         from agentic.toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
         mapping.update({
             "scan_photo_workspace": scan_photo_workspace, "propose_photo_ingestion": propose_photo_ingestion,
@@ -321,15 +472,28 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     return mapping
 
 
-def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult], embedder=None) -> NodeResult:
+def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
+              embedder=None, llm_client=None, llm_model: str | None = None,
+              extras: dict[str, Any] | None = None) -> NodeResult:
     tools = _tool_map()
     fn = tools.get(node.tool)
-    args = _substitute(node.args, prompt, results)
+    args = _substitute(node.args, prompt, results, extras)
     if fn is None:
         return NodeResult(node.id, node.tool, False, f"unknown graph tool: {node.tool}", args=args, error_type="unknown_tool")
     if node.tool == "save_note":
         args["content"] = str(args.get("content", ""))[:AGENT_NOTE_MAX_CHARS]
+    # Pass embedder to tools that need it for semantic scoring/condensation.
     if node.tool in _EMBEDDER_AWARE_TOOLS:
+        args["embedder"] = embedder
+    # Pass LLM client/model to tools that call the model (synthesize_report,
+    # polish_text, kb_search/learn_report which accept embedder). The
+    # graph executor is the only place that has the owner's client+model
+    # pair; the tool map functions themselves are pure so they don't reach
+    # back into the owner object.
+    if node.tool in {"synthesize_report", "polish_text"}:
+        args["client"] = llm_client
+        args["model"] = llm_model
+    if node.tool in {"kb_search", "learn_report", "condense_text"}:
         args["embedder"] = embedder
     try:
         out = fn(**args)
@@ -339,10 +503,11 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult], embed
         return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error")
 
 
-def execute_graph(graph: PlanGraph, embedder=None) -> GraphRunResult:
+def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: str | None = None) -> GraphRunResult:
     pending = {node.id: node for node in graph.nodes}
     results: dict[str, NodeResult] = {}
     ordered: list[NodeResult] = []
+    extras = getattr(graph, "_extras", {}) or {}
     with ThreadPoolExecutor(max_workers=GRAPH_MAX_WORKERS) as pool:
         while pending:
             ready = [node for node in pending.values() if all(dep in results for dep in node.depends_on)]
@@ -363,7 +528,7 @@ def execute_graph(graph: PlanGraph, embedder=None) -> GraphRunResult:
                 pending.pop(node.id, None)
             if not runnable:
                 continue
-            future_map = {pool.submit(_run_node, node, graph.goal, results, embedder): node for node in runnable}
+            future_map = {pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras): node for node in runnable}
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:
@@ -391,11 +556,12 @@ def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -
     return "\n".join(lines)
 
 
-def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None) -> GraphRunResult | None:
+def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None,
+                     llm_client=None, llm_model: str | None = None) -> GraphRunResult | None:
     graph = plan_from_master(user_input, cap_ids=cap_ids)
     if graph is None:
         return None
-    return execute_graph(graph, embedder=embedder)
+    return execute_graph(graph, embedder=embedder, llm_client=llm_client, llm_model=llm_model)
 
 
 def list_playbooks_json() -> str:
@@ -420,9 +586,11 @@ def list_playbooks_json() -> str:
     return json.dumps({"playbooks": rows}, ensure_ascii=False, indent=2)
 
 
-def run_playbook_json(task: str, cap_ids: list[str] | None = None, embedder=None) -> str:
+def run_playbook_json(task: str, cap_ids: list[str] | None = None, embedder=None,
+                      llm_client=None, llm_model: str | None = None) -> str:
     """Run the graph executor and return a compact JSON observation."""
-    result = run_schema_agent(task, cap_ids=cap_ids, embedder=embedder)
+    result = run_schema_agent(task, cap_ids=cap_ids, embedder=embedder,
+                              llm_client=llm_client, llm_model=llm_model)
     if result is None:
         return json.dumps({
             "ok": False,
@@ -448,6 +616,18 @@ def _promotion_args_for_step(tool: str, step: dict[str, Any]) -> dict[str, Any]:
         return {"title": "$title", "content": "$prompt", "folder": "notes"}
     if tool in {"deep_search", "deep_research"}:
         return {"query": "$prompt"}
+    if tool in {"synthesize_report", "polish_text"}:
+        return {"evidence": "$prompt", "prompt": "$prompt", "style": "auto"}
+    if tool == "combine_evidence":
+        return {"parts": ["$prompt"], "separator": "\n\n---\n\n"}
+    if tool == "condense_text":
+        return {"text": "$prompt", "query": "$prompt"}
+    if tool == "kb_search":
+        return {"query": "$prompt"}
+    if tool == "learn_report":
+        return {"title": "$title", "text": "$prompt"}
+    if tool == "write_report":
+        return {"title": "$title", "content": "$prompt"}
     args_preview = step.get("args_preview") or {}
     arg_keys = step.get("arg_keys") or sorted((step.get("args") or {}).keys())
     if isinstance(args_preview, dict) and args_preview:
