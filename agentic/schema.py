@@ -158,6 +158,12 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "study", "analyze", "analysis", "report on", "write a report",
                 "give me a report", "summarize", "summary of", "overview of",
             ],
+            "semantic_triggers": [
+                "I want a thorough research report on this topic",
+                "Do deep research and write up the findings",
+                "Investigate this comprehensively and give me a detailed report",
+                "Analyze this topic in depth with citations",
+            ],
             "requires_any": [],
             "capabilities": ["research"],
             "nodes": [
@@ -181,6 +187,12 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "who is", "when did", "where is", "how do", "how to",
                 "quick", "brief on", "tell me about",
             ],
+            "semantic_triggers": [
+                "Find information about this topic and summarize it",
+                "Look up what this means and give me a clear answer",
+                "Search for this and write a concise report",
+                "Give me a quick overview with sources",
+            ],
             "requires_any": [],
             "capabilities": ["research"],
             "nodes": [
@@ -203,6 +215,12 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "compare", "comparison", "vs", "versus", "vs.", "differences between",
                 "difference between", "compared to", "compared with", "contrast",
                 "A vs B", "pros and cons",
+            ],
+            "semantic_triggers": [
+                "Compare these two things side by side",
+                "What are the differences between A and B",
+                "Give me a pros and cons comparison of these options",
+                "Contrast these alternatives with a recommendation",
             ],
             "requires_any": [],
             "capabilities": ["research"],
@@ -244,6 +262,218 @@ def _default_playbooks() -> list[dict[str, Any]]:
                  "args": {"title": "$title", "content": "$prompt", "folder": "notes"}},
             ],
         },
+        # ──────────────────────────────────────────────────────────────
+        # Common agentic workflow patterns (Anthropic/Andrew Ng patterns)
+        # ──────────────────────────────────────────────────────────────
+        {
+            "id": "prompt_chaining",
+            "name": "Sequential prompt chaining — each step builds on the previous",
+            "triggers": ["step by step", "in stages", "pipeline", "chain", "sequential"],
+            "requires_any": ["chain", "pipeline", "stages", "steps"],
+            "capabilities": ["reports"],
+            "semantic_triggers": [
+                "break this into sequential steps where each builds on the previous",
+                "run a multi-stage pipeline where output of one feeds the next",
+                "process this in a chain of dependent transformations",
+            ],
+            "nodes": [
+                {"id": "plan",    "tool": "make_plan",          "args": {"goal": "$prompt", "max_steps": 6}},
+                {"id": "step1",   "tool": "synthesize_report",  "depends_on": ["plan"],
+                 "args": {"evidence": "$result:plan", "prompt": "Execute step 1 of the plan: $prompt", "style": "auto"}},
+                {"id": "step2",   "tool": "synthesize_report",  "depends_on": ["step1"],
+                 "args": {"evidence": "$result:step1", "prompt": "Execute step 2 using previous output: $prompt", "style": "auto"}},
+                {"id": "step3",   "tool": "synthesize_report",  "depends_on": ["step2"],
+                 "args": {"evidence": "$result:step2", "prompt": "Execute step 3 using previous output: $prompt", "style": "auto"}},
+                {"id": "report",  "tool": "write_report",       "depends_on": ["step3"],
+                 "args": {"title": "$title", "content": "$result:step3", "report_dir": "reports"}},
+            ],
+        },
+        {
+            "id": "routing_classifier",
+            "name": "Route the task to a specialized handler based on intent classification",
+            "triggers": ["route", "classify", "triage", "dispatch", "which team", "who should handle"],
+            "requires_any": ["route", "classify", "triage", "dispatch"],
+            "capabilities": ["research", "repo"],
+            "semantic_triggers": [
+                "classify this request and route it to the right specialist",
+                "triage this issue and send it to the appropriate handler",
+                "determine what type of task this is and handle it accordingly",
+            ],
+            "nodes": [
+                {"id": "classify", "tool": "synthesize_report",
+                 "args": {"evidence": "$prompt", "prompt": "Classify this user request into exactly ONE category: [coding, research, writing, analysis, planning, other]. Return only the category name.", "style": "plain"}},
+                {"id": "route_coding",    "tool": "repo_file_tree",    "depends_on": ["classify"], "args": {"prefix": ""}},
+                {"id": "route_research",  "tool": "deep_research",     "depends_on": ["classify"], "args": {"query": "$prompt"}},
+                {"id": "route_writing",   "tool": "synthesize_report", "depends_on": ["classify"],
+                 "args": {"evidence": "$prompt", "prompt": "Write a polished response to: $prompt", "style": "professional"}},
+                {"id": "route_analysis",  "tool": "synthesize_report", "depends_on": ["classify"],
+                 "args": {"evidence": "$prompt", "prompt": "Analyze this request thoroughly: $prompt", "style": "professional"}},
+                {"id": "route_planning",  "tool": "make_plan",         "depends_on": ["classify"], "args": {"goal": "$prompt", "max_steps": 8}},
+            ],
+        },
+        {
+            "id": "parallel_fanout_fanin",
+            "name": "Parallel fan-out to multiple researchers, then fan-in synthesis",
+            "triggers": ["parallel", "multiple angles", "comprehensive", "all perspectives", "exhaustive"],
+            "requires_any": ["parallel", "multiple", "comprehensive", "exhaustive", "all sides"],
+            "capabilities": ["research"],
+            "semantic_triggers": [
+                "research this from multiple angles in parallel and synthesize",
+                "run parallel investigations covering all perspectives",
+                "fan out to multiple researchers then combine findings",
+            ],
+            "nodes": [
+                {"id": "plan",      "tool": "make_plan",          "args": {"goal": "$prompt", "max_steps": 5}},
+                {"id": "web_1",     "tool": "deep_research",      "args": {"query": "angle 1: technical deep-dive on $prompt"}},
+                {"id": "web_2",     "tool": "deep_research",      "args": {"query": "angle 2: practical applications of $prompt"}},
+                {"id": "web_3",     "tool": "deep_research",      "args": {"query": "angle 3: limitations and criticisms of $prompt"}},
+                {"id": "kb",        "tool": "kb_search",          "depends_on": ["web_1", "web_2", "web_3"], "args": {"query": "$prompt"}},
+                {"id": "merge",     "tool": "combine_evidence",   "depends_on": ["web_1", "web_2", "web_3", "kb"],
+                 "args": {"parts": ["$result:web_1", "$result:web_2", "$result:web_3", "$result:kb"]}},
+                {"id": "synthesize","tool": "synthesize_report",  "depends_on": ["merge"],
+                 "args": {"evidence": "$result:merge", "prompt": "$prompt", "style": "professional"}},
+                {"id": "report",    "tool": "write_report",       "depends_on": ["synthesize"],
+                 "args": {"title": "$title", "content": "$result:synthesize", "report_dir": "reports"}},
+                {"id": "learn",     "tool": "learn_report",       "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:synthesize", "kind": "self_learned"}},
+            ],
+        },
+        {
+            "id": "orchestrator_workers",
+            "name": "Orchestrator decomposes task, delegates to workers, aggregates results",
+            "triggers": ["orchestrate", "delegate", "break down", "subtasks", "workers", "coordinate"],
+            "requires_any": ["orchestrate", "delegate", "subtasks", "workers", "coordinate"],
+            "capabilities": ["research", "repo"],
+            "semantic_triggers": [
+                "break this complex task into subtasks and delegate each to a specialist",
+                "orchestrate multiple workers to handle different parts of this problem",
+                "coordinate a team of specialized agents to solve this",
+            ],
+            "nodes": [
+                {"id": "decompose", "tool": "make_plan",          "args": {"goal": "$prompt", "max_steps": 8}},
+                {"id": "worker_1",  "tool": "deep_research",      "depends_on": ["decompose"], "args": {"query": "Subtask 1 of: $prompt"}},
+                {"id": "worker_2",  "tool": "repo_search_text",   "depends_on": ["decompose"], "args": {"query": "Subtask 2 of: $prompt", "limit": 20}},
+                {"id": "worker_3",  "tool": "kb_search",          "depends_on": ["decompose"], "args": {"query": "Subtask 3 of: $prompt"}},
+                {"id": "worker_4",  "tool": "synthesize_report",  "depends_on": ["decompose"],
+                 "args": {"evidence": "$prompt", "prompt": "Subtask 4 (synthesis): $prompt", "style": "auto"}},
+                {"id": "aggregate", "tool": "combine_evidence",   "depends_on": ["worker_1", "worker_2", "worker_3", "worker_4"],
+                 "args": {"parts": ["$result:worker_1", "$result:worker_2", "$result:worker_3", "$result:worker_4"]}},
+                {"id": "final",     "tool": "synthesize_report",  "depends_on": ["aggregate"],
+                 "args": {"evidence": "$result:aggregate", "prompt": "Final integrated answer: $prompt", "style": "professional"}},
+                {"id": "report",    "tool": "write_report",       "depends_on": ["final"],
+                 "args": {"title": "$title", "content": "$result:final", "report_dir": "reports"}},
+                {"id": "learn",     "tool": "learn_report",       "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}},
+            ],
+        },
+        {
+            "id": "evaluator_optimizer",
+            "name": "Generate → Evaluate → Refine loop until quality threshold met",
+            "triggers": ["refine", "improve", "iterate", "polish", "quality", "perfect", "best version"],
+            "requires_any": ["refine", "improve", "iterate", "polish", "quality", "best"],
+            "capabilities": ["reports"],
+            "semantic_triggers": [
+                "generate a draft, evaluate it, and keep refining until it is excellent",
+                "iterate on this until the quality is as high as possible",
+                "write, critique, and improve this repeatedly",
+            ],
+            "nodes": [
+                {"id": "draft_1",   "tool": "synthesize_report",
+                 "args": {"evidence": "$prompt", "prompt": "Draft 1: Write a comprehensive answer to: $prompt", "style": "professional"}},
+                {"id": "eval_1",    "tool": "synthesize_report", "depends_on": ["draft_1"],
+                 "args": {"evidence": "$result:draft_1", "prompt": "Critique this draft for accuracy, clarity, completeness. List specific improvements needed.", "style": "plain"}},
+                {"id": "draft_2",   "tool": "synthesize_report", "depends_on": ["draft_1", "eval_1"],
+                 "args": {"evidence": "$result:draft_1\n\nCritique:\n$result:eval_1", "prompt": "Revise draft 1 addressing all critique points. Output improved version.", "style": "professional"}},
+                {"id": "eval_2",    "tool": "synthesize_report", "depends_on": ["draft_2"],
+                 "args": {"evidence": "$result:draft_2", "prompt": "Evaluate if this version is excellent. If not, list remaining issues. If yes, say 'PASS'.", "style": "plain"}},
+                {"id": "draft_3",   "tool": "synthesize_report", "depends_on": ["draft_2", "eval_2"],
+                 "args": {"evidence": "$result:draft_2\n\nEvaluation:\n$result:eval_2", "prompt": "If evaluation was not PASS, do one final revision. Otherwise output the final polished version.", "style": "professional"}},
+                {"id": "report",    "tool": "write_report",      "depends_on": ["draft_3"],
+                 "args": {"title": "$title", "content": "$result:draft_3", "report_dir": "reports"}},
+                {"id": "learn",     "tool": "learn_report",      "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:draft_3", "kind": "self_learned"}},
+            ],
+        },
+        {
+            "id": "reflection_self_critique",
+            "name": "Self-reflection loop — generate, self-critique, revise",
+            "triggers": ["reflect", "self-critique", "critique yourself", "review your work", "check your own"],
+            "requires_any": ["reflect", "critique", "review", "self"],
+            "capabilities": ["reports"],
+            "semantic_triggers": [
+                "generate an answer then reflect on its weaknesses and improve it",
+                "self-critique your response and fix any issues you find",
+                "review your own work for errors before finalizing",
+            ],
+            "nodes": [
+                {"id": "initial",   "tool": "synthesize_report",
+                 "args": {"evidence": "$prompt", "prompt": "Answer thoroughly: $prompt", "style": "professional"}},
+                {"id": "reflect",   "tool": "synthesize_report", "depends_on": ["initial"],
+                 "args": {"evidence": "$result:initial", "prompt": "Critically review your own answer above. Identify: factual errors, missing context, unclear reasoning, unsupported claims, style issues. Be thorough and specific.", "style": "plain"}},
+                {"id": "revised",   "tool": "synthesize_report", "depends_on": ["initial", "reflect"],
+                 "args": {"evidence": "$result:initial\n\nSelf-critique:\n$result:reflect", "prompt": "Produce a corrected, improved version addressing all self-critique points.", "style": "professional"}},
+                {"id": "report",    "tool": "write_report",      "depends_on": ["revised"],
+                 "args": {"title": "$title", "content": "$result:revised", "report_dir": "reports"}},
+                {"id": "learn",     "tool": "learn_report",      "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:revised", "kind": "self_learned"}},
+            ],
+        },
+        {
+            "id": "planning_and_execution",
+            "name": "Plan → Execute steps → Track progress → Final synthesis",
+            "triggers": ["plan and execute", "make a plan then do it", "plan then run", "execute plan"],
+            "requires_any": ["plan", "execute", "run", "do it", "implement"],
+            "capabilities": ["research", "repo"],
+            "semantic_triggers": [
+                "create a detailed plan then execute each step in order",
+                "plan this out thoroughly then carry out the plan",
+                "make a step-by-step plan and follow through on it",
+            ],
+            "nodes": [
+                {"id": "plan",        "tool": "make_plan",          "args": {"goal": "$prompt", "max_steps": 10}},
+                {"id": "save_plan",   "tool": "save_note",          "depends_on": ["plan"], "args": {"title": "$title - plan", "content": "$result:plan", "folder": "notes"}},
+                {"id": "step_1",      "tool": "deep_research",      "depends_on": ["plan"], "args": {"query": "Step 1 execution for: $prompt"}},
+                {"id": "step_2",      "tool": "repo_search_text",   "depends_on": ["plan"], "args": {"query": "Step 2 implementation for: $prompt", "limit": 15}},
+                {"id": "step_3",      "tool": "kb_search",          "depends_on": ["plan"], "args": {"query": "Step 3 knowledge for: $prompt"}},
+                {"id": "step_4",      "tool": "synthesize_report",  "depends_on": ["plan"],
+                 "args": {"evidence": "$prompt", "prompt": "Step 4 (synthesis/decision): $prompt", "style": "auto"}},
+                {"id": "merge",       "tool": "combine_evidence",   "depends_on": ["step_1", "step_2", "step_3", "step_4"],
+                 "args": {"parts": ["$result:step_1", "$result:step_2", "$result:step_3", "$result:step_4"]}},
+                {"id": "final",       "tool": "synthesize_report",  "depends_on": ["merge"],
+                 "args": {"evidence": "$result:merge", "prompt": "Final result of executing the plan: $prompt", "style": "professional"}},
+                {"id": "report",      "tool": "write_report",       "depends_on": ["final"],
+                 "args": {"title": "$title", "content": "$result:final", "report_dir": "reports"}},
+                {"id": "learn",       "tool": "learn_report",       "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}},
+            ],
+        },
+        {
+            "id": "multi_agent_collab",
+            "name": "Multi-role collaboration — researcher, analyst, writer, reviewer",
+            "triggers": ["collaborate", "team", "multi-agent", "roles", "researcher and writer", "analyst and reviewer"],
+            "requires_any": ["collaborate", "team", "roles", "multi-agent"],
+            "capabilities": ["research", "reports"],
+            "semantic_triggers": [
+                "have multiple agents with different roles work together on this",
+                "simulate a team: researcher, analyst, writer, reviewer",
+                "collaborative multi-role approach to this problem",
+            ],
+            "nodes": [
+                {"id": "researcher",  "tool": "deep_research",      "args": {"query": "Researcher role: gather comprehensive evidence on $prompt"}},
+                {"id": "analyst",     "tool": "synthesize_report",  "depends_on": ["researcher"],
+                 "args": {"evidence": "$result:researcher", "prompt": "Analyst role: structure findings, identify patterns, extract key insights from: $prompt", "style": "auto"}},
+                {"id": "writer",      "tool": "synthesize_report",  "depends_on": ["analyst"],
+                 "args": {"evidence": "$result:analyst", "prompt": "Writer role: craft a clear, well-organized report from the analysis: $prompt", "style": "professional"}},
+                {"id": "reviewer",    "tool": "synthesize_report",  "depends_on": ["writer"],
+                 "args": {"evidence": "$result:writer", "prompt": "Reviewer role: check for errors, gaps, clarity issues. Suggest improvements or approve.", "style": "plain"}},
+                {"id": "final",       "tool": "synthesize_report",  "depends_on": ["writer", "reviewer"],
+                 "args": {"evidence": "$result:writer\n\nReview:\n$result:reviewer", "prompt": "Produce the final polished deliverable incorporating reviewer feedback.", "style": "professional"}},
+                {"id": "report",      "tool": "write_report",       "depends_on": ["final"],
+                 "args": {"title": "$title", "content": "$result:final", "report_dir": "reports"}},
+                {"id": "learn",       "tool": "learn_report",       "depends_on": ["report"],
+                 "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}},
+            ],
+        },
     ]
 
 
@@ -260,7 +490,8 @@ def load_playbooks() -> list[dict[str, Any]]:
     return plans
 
 
-def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = None) -> int:
+def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = None,
+                embedder=None) -> int:
     text = prompt.casefold()
     triggers = [str(t).casefold() for t in plan.get("triggers", [])]
     required = [str(t).casefold() for t in plan.get("requires_any", [])]
@@ -270,6 +501,31 @@ def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = N
     domains = set(plan.get("capabilities", []))
     if cap_ids and domains.intersection(cap_ids):
         score += 3
+
+    # Semantic scoring: if the playbook has semantic_triggers and an embedder
+    # is available, score by cosine similarity against the prompt. This
+    # replaces/bypasses the keyword triggers for more robust intent matching.
+    sem_triggers = plan.get("semantic_triggers", [])
+    if embedder is not None and sem_triggers:
+        try:
+            import numpy as np
+            from cognition import reason
+            prompt_vec = reason.normalize_vec(np.asarray(embedder.embed_query(prompt), dtype=np.float32))
+            best = 0.0
+            for st in sem_triggers:
+                st_vec = reason.normalize_vec(np.asarray(embedder.embed_query(st), dtype=np.float32))
+                cos = float(np.dot(prompt_vec, st_vec))
+                if cos > best:
+                    best = cos
+            # Scale: 0.7+ cos = strong match (adds ~5), 0.5+ = moderate (adds ~3)
+            if best >= 0.7:
+                score += 5
+            elif best >= 0.5:
+                score += 3
+            elif best >= 0.35:
+                score += 1
+        except Exception:
+            pass
     return score
 
 
@@ -328,11 +584,11 @@ def _substitute(value: Any, prompt: str, results: dict[str, NodeResult],
     return value
 
 
-def plan_from_master(user_input: str, cap_ids: list[str] | None = None) -> PlanGraph | None:
+def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder=None) -> PlanGraph | None:
     if not GRAPH_AGENT_ENABLED:
         return None
     plans = load_playbooks()
-    ranked = sorted(((_score_plan(p, user_input, cap_ids), p) for p in plans), key=lambda x: x[0], reverse=True)
+    ranked = sorted(((_score_plan(p, user_input, cap_ids, embedder), p) for p in plans), key=lambda x: x[0], reverse=True)
     if not ranked or ranked[0][0] <= 0:
         return None
     plan = ranked[0][1]
@@ -558,7 +814,7 @@ def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -
 
 def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None,
                      llm_client=None, llm_model: str | None = None) -> GraphRunResult | None:
-    graph = plan_from_master(user_input, cap_ids=cap_ids)
+    graph = plan_from_master(user_input, cap_ids=cap_ids, embedder=embedder)
     if graph is None:
         return None
     return execute_graph(graph, embedder=embedder, llm_client=llm_client, llm_model=llm_model)
