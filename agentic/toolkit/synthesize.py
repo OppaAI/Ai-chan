@@ -97,6 +97,24 @@ _STYLE_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+import time
+
+_kb_search_cache: dict[str, tuple[float, str]] = {}
+_KB_CACHE_TTL_SECONDS = 300  # 5 min; tune to taste
+
+def _kb_cache_get(key: str):
+    entry = _kb_search_cache.get(key)
+    if entry is None:
+        return None
+    ts, value = entry
+    if time.time() - ts > _KB_CACHE_TTL_SECONDS:
+        del _kb_search_cache[key]
+        return None
+    return value
+
+def _kb_cache_set(key: str, value: str) -> None:
+    _kb_search_cache[key] = (time.time(), value)
+
 def detect_style(prompt: str) -> str:
     """Return the tone for the synthesized report.
 
@@ -241,9 +259,9 @@ def condense_text(
 def kb_search(
     query: str,
     *,
-    embedder=None,
-    user_id: str | None = None,
-    max_chars: int = 4000,
+    embedder,
+    user_id: str,
+    max_chars: int = ...,
 ) -> str:
     """Search Aiko's learned-knowledge RAG store and return a plain-text
     block (no XML wrapper) suitable for combine_evidence.
@@ -252,23 +270,34 @@ def kb_search(
     the calling node should treat that as a non-fatal empty input, not
     an error.
     """
+    cache_key = f"{query}|{user_id}|{max_chars}"
+    cached = _kb_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     text = (query or "").strip()
     if not text:
         return "[no matching learned knowledge]"
+
     try:
         from memory.knowledge import knowledge_context_for
         ctx = knowledge_context_for(text, limit=5, max_chars=max_chars,
-                                    embedder=embedder, user_id=user_id)
+                                     embedder=embedder, user_id=user_id)
     except Exception as e:
         log.debug("[synthesize.kb_search] failed: %s", e)
         return "[no matching learned knowledge]"
+
     if not ctx or "No matching learned knowledge" in ctx:
-        return "[no matching learned knowledge]"
-    # knowledge_context_for wraps with <knowledge_context> ... </knowledge_context>;
-    # strip the wrapper so the result concatenates cleanly with web evidence.
-    stripped = re.sub(r"^<knowledge_context>\s*|\s*</knowledge_context>\s*$", "",
-                      ctx.strip(), flags=re.DOTALL)
-    return stripped.strip() or "[no matching learned knowledge]"
+        result = "[no matching learned knowledge]"
+    else:
+        # knowledge_context_for wraps with <knowledge_context> ... </knowledge_context>;
+        # strip the wrapper so the result concatenates cleanly with web evidence.
+        stripped = re.sub(r"^<knowledge_context>\s*|\s*</knowledge_context>\s*$", "",
+                          ctx.strip(), flags=re.DOTALL)
+        result = stripped.strip() or "[no matching learned knowledge]"
+
+    _kb_cache_set(cache_key, result)
+    return result
 
 
 def learn_report(

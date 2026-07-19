@@ -12,11 +12,13 @@ future promotion into the playbook.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
 import uuid
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +29,7 @@ load_config()
 
 from system.log import get_logger
 from system.userspace import current_user_id, user_state_dir
+from agentic.checkpoint import save_node_result, load_checkpoint, clear_checkpoint
 
 log = get_logger(__name__)
 
@@ -775,11 +778,23 @@ def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
     return True
 
 
-def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: str | None = None) -> GraphRunResult:
+from agentic.checkpoint import save_node_result, load_checkpoint, clear_checkpoint
+
+def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
+                   llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
     pending = {node.id: node for node in graph.nodes}
     results: dict[str, NodeResult] = {}
     ordered: list[NodeResult] = []
     extras = getattr(graph, "_extras", {}) or {}
+
+    if run_id:
+        for prior in load_checkpoint(run_id, NodeResult):
+            results[prior.node_id] = prior
+            ordered.append(prior)
+            pending.pop(prior.node_id, None)
+
+    seq = len(ordered)
+
     with ThreadPoolExecutor(max_workers=GRAPH_MAX_WORKERS) as pool:
         while pending:
             ready = [node for node in pending.values() if all(dep in results for dep in node.depends_on)]
@@ -800,11 +815,15 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: s
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
+                if run_id:
+                    save_node_result(run_id, seq, result); seq += 1
             for node in skipped:
                 result = NodeResult(node.id, node.tool, True, "skipped: run_if condition not met", error_type=None)
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
+                if run_id:
+                    save_node_result(run_id, seq, result); seq += 1
             if not runnable:
                 continue
             future_map = {pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras): node for node in runnable}
@@ -817,7 +836,12 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: s
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
+                if run_id:
+                    save_node_result(run_id, seq, result); seq += 1
+
     final_answer = _synthesize_without_llm(graph, tuple(ordered))
+    if run_id:
+        clear_checkpoint(run_id)  # clean success — drop the checkpoint
     return GraphRunResult(graph=graph, results=tuple(ordered), final_answer=final_answer)
 
 
@@ -836,11 +860,15 @@ def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -
 
 
 def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None,
-                     llm_client=None, llm_model: str | None = None) -> GraphRunResult | None:
+                     llm_client=None, llm_model: str | None = None,
+                     run_id: str | None = None) -> GraphRunResult | None:
     graph = plan_from_master(user_input, cap_ids=cap_ids, embedder=embedder)
     if graph is None:
         return None
-    return execute_graph(graph, embedder=embedder, llm_client=llm_client, llm_model=llm_model)
+    if run_id is None:
+        run_id = hashlib.sha256(f"{graph.id}|{user_input}".encode()).hexdigest()[:16]
+    return execute_graph(graph, embedder=embedder, llm_client=llm_client,
+                          llm_model=llm_model, run_id=run_id)
 
 
 def list_playbooks_json() -> str:
