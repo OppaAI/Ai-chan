@@ -613,10 +613,11 @@ class _MemoryBackend:
         llm_base_url:    str,
         model:           str,
         embed_cache:     str | None = None,
+        user_id:         str | None = None,   # NEW
     ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path  = db_path
-        self._user_id = current_user_id()
+        self._user_id  = user_id or current_user_id()   # CHANGED
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
@@ -1076,7 +1077,7 @@ class _MemoryBackend:
 
     def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created on or after `since`, newest first."""
-        user_id = _default_user_id(user_id)
+        user_id = user_id or self._user_id
         rows = self._conn.execute(
             """
             SELECT * FROM memories
@@ -1089,7 +1090,7 @@ class _MemoryBackend:
 
     def get_between(self, start: datetime, end: datetime, user_id: str | None = None, limit: int = 0) -> list[dict]:
         """Return memories created in [start, end), oldest first."""
-        user_id = _default_user_id(user_id)
+        user_id = user_id or self._user_id
         sql = """
             SELECT * FROM memories
             WHERE user_id = ? AND created_at >= ? AND created_at < ?
@@ -1181,6 +1182,7 @@ class AikoMemorize:
             llm_base_url=self._llm_base_url,
             model=self._model,
             embed_cache=self._embed_cache,
+            user_id=uid,
         )
         self._conn = self._mem._conn
         self._write_queue: "queue.Queue[tuple]" = queue.Queue()
@@ -1204,6 +1206,7 @@ class AikoMemorize:
             llm_base_url=self._llm_base_url,
             model=self._model,
             embed_cache=self._embed_cache,
+            user_id=uid,
         )
         self._conn = self._mem._conn
         if not self._silent:
@@ -1225,6 +1228,22 @@ class AikoMemorize:
         """Return the user_id this instance is currently opened for."""
         return self._user_id_override or self._mem._user_id
 
+    def _resolve_user_id(self, user_id: str | None = None) -> str:
+        """Resolve the effective user_id for this call.
+
+        An explicit argument always wins. Otherwise, falls back to THIS
+        instance's own bound identity (get_user_id()) — never the ambient
+        contextvar. An AikoMemorize instance is constructed for (or
+        switch_user()'d to) a specific user; calls issued against it from
+        another thread — the scheduler's daemon thread, the async write
+        worker, a standalone script — must resolve against that bound
+        identity, not whatever current_user_id() happens to return in
+        the calling thread's own context (which is usually unset/"guest").
+        This is the fix for the ambient-user-id bug class tracked across
+        memory/ and sensory/.
+        """
+        return user_id or self.get_user_id()
+
     # ── write ─────────────────────────────────────────────────────────────────
 
     def add(self, messages: list[dict], user_id: str | None = None, display_name: str | None = None) -> bool:
@@ -1233,7 +1252,7 @@ class AikoMemorize:
         Returns True on success, False on failure.
         """
         try:
-            user_id = _default_user_id(user_id)
+            user_id = self._resolve_user_id(user_id)
             t       = time.perf_counter()
             ids     = self._mem.add(messages, user_id=user_id, display_name=display_name)
             elapsed = time.perf_counter() - t
@@ -1254,7 +1273,7 @@ class AikoMemorize:
         Returns True on success, False on any failure.
         """
         try:
-            user_id = _default_user_id(user_id)
+            user_id = self._resolve_user_id(user_id)
             ids = self._mem.add(messages, user_id=user_id, display_name=display_name)
 
             if not ids:
@@ -1375,7 +1394,7 @@ class AikoMemorize:
         query_vector — pre-computed _QUERY_INSTRUCT embedding; avoids a
         redundant HTTP call inside _MemoryBackend.search().
         """
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         if _is_trivial_input(query or ""):
             log.debug(f"Skipping search for trivial input: {query!r}")
             return []
@@ -1564,7 +1583,7 @@ class AikoMemorize:
 
         Returns dict: {boosted, merged, pruned, duration_s}
         """
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         t_start = time.perf_counter()
         log.info(f"{'(dry-run) ' if dry_run else ''}Starting consolidation pass...")
 
@@ -1789,7 +1808,7 @@ class AikoMemorize:
 
         Returns dict: {deleted, kept, failed, candidates (dry_run only)}.
         """
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         source = [_all_mems] if _all_mems is not None else self._iter_memory_batches(user_id)
 
         kept = 0
@@ -1893,14 +1912,14 @@ class AikoMemorize:
 
     def get_all(self, user_id: str | None = None) -> list[dict]:
         """Return all stored memories for a user."""
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         return self._mem.get_all(user_id=user_id)
 
     def add_raw(self, memory: str, user_id: str | None = None, *, pinned: bool = False, metadata: dict | None = None) -> str | None:
         """Persist one already-curated memory string without LLM extraction."""
         # metadata is accepted for call-site clarity; the current schema stores
         # only the curated text plus pinned flag.
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         mem_id = self._mem.add_raw(memory, user_id=user_id, pinned=pinned)
         if mem_id:
             self._maybe_clear_search_cache()
@@ -1908,12 +1927,12 @@ class AikoMemorize:
 
     def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created on or after `since`, newest first."""
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         return self._mem.get_since(since, user_id=user_id)
 
     def get_between(self, start: datetime, end: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created in [start, end), oldest first."""
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         return self._mem.get_between(start, end, user_id=user_id)
 
     def delete(self, memory_id: str) -> None:
@@ -1923,7 +1942,7 @@ class AikoMemorize:
 
     def clear(self, user_id: str | None = None) -> None:
         """Wipe all memories for a user. Use carefully."""
-        user_id = _default_user_id(user_id)
+        user_id = self._resolve_user_id(user_id)
         self._mem.delete_all(user_id=user_id)
         self._clear_search_cache()
         log.info(f"Cleared all memories for user '{user_id}'.")

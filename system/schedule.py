@@ -1026,7 +1026,9 @@ class ScheduleRunner:
             query_end   = target_end_local.astimezone(timezone.utc)
 
             from memory.reflect import REFLECT_MAX_MEMS
-            memories = self._memorize.get_between(query_start, query_end)
+            memories = self._memorize.get_between(
+                query_start, query_end, user_id=self._memorize.get_user_id()
+            )            
             log.info(
                 "daily_reflect_and_dream: %d memories fetched for %s.",
                 len(memories), target_local.date(),

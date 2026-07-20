@@ -116,7 +116,8 @@ requires-dist = [
     { name = "sqlite-vec", specifier = ">=0.1.9" },
     { name = "sympy", specifier = ">=1.14.0" },
     { name = "tokenizers", specifier = ">=0.23.1" },
-    { name = "torch", marker = "platform_machine == 'aarch64'", specifier = "==2.10.0", index = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" },
+    { name = "torch", path = "../wheels/torch-2.13.0a0+gitcf30153-cp312-cp312-linux_aarch64.whl" },
+    { name = "torch", marker = "platform_machine == 'aarch64'", path = "../wheels/torch-2.13.0a0+gitcf30153-cp312-cp312-linux_aarch64.whl" },
     { name = "torchaudio", marker = "platform_machine == 'aarch64'", specifier = "==2.10.0", index = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" },
     { name = "torchaudio", marker = "platform_machine == 'x86_64'", specifier = ">=2.11.0" },
     { name = "torchvision", marker = "platform_machine == 'aarch64'", specifier = "==0.25.0", index = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" },
@@ -1404,8 +1405,8 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.10.0"
-source = { registry = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" }
+version = "2.13.0a0+gitcf30153"
+source = { path = "../wheels/torch-2.13.0a0+gitcf30153-cp312-cp312-linux_aarch64.whl" }
 dependencies = [
     { name = "filelock" },
     { name = "fsspec" },
@@ -1416,8 +1417,23 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/c59/7ddc0c1f8de6c/torch-2.10.0-cp312-cp312-linux_aarch64.whl", hash = "sha256:c597ddc0c1f8de6c54fc7c7c09bfe5f70e04a5024383740e99a02eb13498ced5" },
+    { filename = "torch-2.13.0a0+gitcf30153-cp312-cp312-linux_aarch64.whl", hash = "sha256:30ac7b569ad1826aea873cc3d31e234f91d3ff42d15f21128c731d7df8da1ab4" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "filelock" },
+    { name = "fsspec", specifier = ">=0.8.5" },
+    { name = "jinja2" },
+    { name = "networkx", specifier = ">=2.5.1" },
+    { name = "opt-einsum", marker = "extra == 'opt-einsum'", specifier = ">=3.3" },
+    { name = "optree", marker = "extra == 'optree'", specifier = ">=0.13.0" },
+    { name = "pyyaml", marker = "extra == 'pyyaml'" },
+    { name = "setuptools", specifier = ">=77.0.3" },
+    { name = "sympy", specifier = ">=1.13.3" },
+    { name = "typing-extensions", specifier = ">=4.10.0" },
+]
+provides-extras = ["optree", "opt-einsum", "pyyaml"]
 
 [[package]]
 name = "torchaudio"
