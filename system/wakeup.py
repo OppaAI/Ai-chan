@@ -38,13 +38,11 @@ Flow:
                         │
                         ▼
               scheduler setup
-        (deep-study handlers, jobs,
-              social lanes)
+        (deep-study handlers, jobs, social lanes)
                         │
                         ▼
               voice pipeline
-        (TTS warmup → ASR + VAD
-           staged init)
+        (TTS warmup → ASR + VAD staged init)
                         │
                         ▼
               return BootResult
@@ -62,35 +60,32 @@ from __future__ import annotations            # evaluates type annotations later
 
 from dataclasses import dataclass             # for dataclass to hold subsystem references 
 from typing import Callable                   # for define boot functions
-import threading                              # 
+import threading                              # for booting up cognition core and memory system in parallel
 
-# Must run before the system.* imports below: those modules may read secrets
-# from os.environ at their own module level, and load_config() is what
-# decrypts .env.age into os.environ. load_config() is idempotent (guarded
-# by _LOADED), so this is a no-op if main.py already called it first —
-# this is just a safety net for any other entrypoint that imports this
-# module directly.
-
-from system.config import load_config
+# Must run before the system.* imports below — those modules read secrets
+# from os.environ at import time, and this decrypts .env.age into os.environ.
+# Idempotent (guarded by _LOADED), so it's a no-op if main.py already ran it —
+# this is just a safety net for entrypoints that import this module directly.
+from system.config import load_config          # load secrets and configs before everything start (safety net)
 load_config()
 
-from system.log import get_logger
+from system.log import get_logger              # pass the logging to universal logger
 log = get_logger(__name__)
 
-from cognition.think import BOOT_LABELS as _THINK_LABELS
-from memory.memorize import BOOT_LABELS as _MEM_LABELS
-from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS
-from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS
+from cognition.think import BOOT_LABELS as _THINK_LABELS    # for the booting status of cognition core
+from memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting status of memory system
+from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting status of speaking module
+from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
 # ── result container ──────────────────────────────────────────────────────────
 
 @dataclass
 class BootResult:
     """Holds all live subsystem references produced during boot."""
-    think:    object          # AikoThink
-    memorize: object          # AikoMemorize
-    speak:    object          # AikoSpeak
-    listen:   object          # AikoListen
+    think:    object          # AikoThink - cogntiion core
+    memorize: object          # AikoMemorize - memory system
+    speak:    object          # AikoSpeak - speaking module
+    listen:   object          # AikoListen -listening module
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
