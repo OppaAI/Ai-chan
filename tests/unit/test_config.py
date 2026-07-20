@@ -22,6 +22,7 @@ Layers covered:
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 from pathlib import Path
 
@@ -294,7 +295,7 @@ class TestLoadConfigYamlPrecedence:
     def test_yaml_sets_env_var_when_not_already_set(self, fake_root, monkeypatch):
         _write_yaml(fake_root, "a.yaml", "some_key: from_yaml\n")
         load_config()
-        assert os.environ_get_helper("SOME_KEY") == "from_yaml"
+        assert os.environ["SOME_KEY"] == "from_yaml"
 
     def test_real_env_var_wins_over_yaml_without_override(self, fake_root, monkeypatch):
         monkeypatch.setenv("SOME_KEY", "from_real_env")
@@ -441,10 +442,12 @@ class TestLoadConfigSecretsPrecedence:
         testing since it's real code that will run if someone forgets to
         set up .env.age locally."""
         pytest.importorskip("dotenv")
+        state_root = fake_root / "state"
+        monkeypatch.setenv("USER_STATE_ROOT", str(state_root))
         (fake_root / ".env").write_text("DOTENV_FALLBACK_KEY=from_plain_dotenv\n")
         load_config()
         assert os.environ["DOTENV_FALLBACK_KEY"] == "from_plain_dotenv"
-
+        
     def test_no_env_age_and_no_dotenv_does_not_raise(self, fake_root):
         load_config()  # neither .env.age nor .env exists -- should just no-op silently
 
