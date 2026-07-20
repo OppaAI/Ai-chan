@@ -82,7 +82,7 @@ from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting st
 @dataclass
 class BootResult:
     """Holds all live subsystem references produced during boot."""
-    think:    object          # AikoThink - cogntiion core
+    think:    object          # AikoThink - cognition core
     memorize: object          # AikoMemorize - memory system
     speak:    object          # AikoSpeak - speaking module
     listen:   object          # AikoListen -listening module
