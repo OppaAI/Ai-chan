@@ -16,7 +16,7 @@ CONTEXT_WINDOW_TURNS: "5"  # Number of recent user+assistant turns sent as short
 REASONING_SCALE: "3"  # Multiplier applied to LLM_MAX_TOKENS for reasoning mode.
 
 # -- Sampling --
-TEMPERATURE: "0.15"  # Creativity/randomness; common range 0.2-1.0, higher is more varied.
+TEMPERATURE: "0.7"  # Creativity/randomness; common range 0.2-1.0, higher is more varied.
 REPEAT_PENALTY: "1.15"  # Penalty for repeated tokens; common range 1.05-1.25.
 REPEAT_LAST_N: "64"  # Token lookback window for repeat penalty; 0 disables on some backends.
 TOP_P: "0.92"  # Nucleus sampling cutoff; common range 0.8-0.95.

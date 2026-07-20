@@ -35,6 +35,7 @@ from pathlib import Path
 
 _DEFAULT_USER_ID = "guest"
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+_DOTDOT_RE = re.compile(r"\.{2,}")
 _CURRENT_USER_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("aiko_current_user_id", default=None)
 _CURRENT_DISPLAY_NAME: contextvars.ContextVar[str | None] = contextvars.ContextVar("aiko_current_display_name", default=None)
 
@@ -72,7 +73,9 @@ def current_display_name() -> str:
 def normalize_user_id(provider: str | None, user_id: object) -> str:
     """Create a filesystem-safe, provider-scoped id for OAuth identities."""
     provider_part = _SAFE_RE.sub("_", str(provider or "local")).strip("._-") or "local"
+    provider_part = _DOTDOT_RE.sub("_", provider_part)
     user_part = _SAFE_RE.sub("_", str(user_id or _DEFAULT_USER_ID)).strip("._-") or _DEFAULT_USER_ID
+    user_part = _DOTDOT_RE.sub("_", user_part)
     return f"{provider_part}_{user_part}"
 
 
@@ -103,6 +106,7 @@ def user_state_dir(user_id: str | None = None) -> Path:
     root = Path(_user_state_root_value()).expanduser()
     uid = user_id or current_user_id()
     uid = _SAFE_RE.sub("_", uid).strip("._-") or _DEFAULT_USER_ID
+    uid = _DOTDOT_RE.sub("_", uid)
     path = root / uid
 
     if uid == _DEFAULT_USER_ID:
