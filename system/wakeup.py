@@ -93,10 +93,10 @@ class BootResult:
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and search exemplars at boot so first-turn latency is cold-free."""
     from cognition.think import (
-        _ROUTE_TERNARY_EXAMPLES,
-        _ROUTE_INSTRUCT_TOOL,
-        _ROUTE_INSTRUCT_TERNARY,
-        _ROUTE_TOOL_EXAMPLES,
+        _ROUTE_TERNARY_EXAMPLES,            # for top-level 3-way routing decision (agentic / webchat / localchat)
+        _ROUTE_INSTRUCT_TOOL,               # for 
+        _ROUTE_INSTRUCT_TERNARY,            # the instruction strings of the 3-way routing
+        _ROUTE_TOOL_EXAMPLES,               # labeled examples for scoring which agentic tool/capability applies after routed to agentic
     )
     try:
         # Prewarm the exact cache entries that route() and agentic context
