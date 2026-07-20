@@ -6,21 +6,21 @@ main.py calls AikoWakeup().boot(...) and receives a BootResult with all live
 subsystem references; it never needs to know the startup choreography.
 
 Progress is reported through three injected callbacks so wakeup.py stays
-completely TUI-ignorant:
+completely UI-ignorant:
     on_loading(key)  — subsystem is starting
     on_done(key)     — subsystem finished successfully
     on_skip(key)     — subsystem skipped (e.g. text mode)
 
 Each module owns its BOOT_LABELS dict; wakeup collects them and exposes
-ALL_BOOT_LABELS so the TUI can register display text before boot begins.
+ALL_BOOT_LABELS so the UI(CLI/WebUI) can register display text before boot begins.
 
 Usage:
-    tui.register_boot_labels(AikoWakeup.ALL_BOOT_LABELS)
+    ui(cli/webui).register_boot_labels(AikoWakeup.ALL_BOOT_LABELS)
 
     result = AikoWakeup(text_mode=False).boot(
-        on_loading = tui.step_loading,
-        on_done    = tui.step_done,
-        on_skip    = tui.step_skip,
+        on_loading = ui.step_loading,
+        on_done    = ui.step_done,
+        on_skip    = ui.step_skip,
     )
     think    = result.think
     memorize = result.memorize
