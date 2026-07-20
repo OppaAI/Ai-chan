@@ -24,13 +24,45 @@ Usage:
     memorize = result.memorize
     speak    = result.speak
     listen   = result.listen
+
+Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
+
+Flow:
+    ┌── init_think ──┐   ┌── init_memorize ──┐
+    │ boot + warmup  │   │ sqlite-vec+cleanup│   (parallel threads)
+    │ wait mem_ready │   │ set mem_ready     │
+    └───────┬────────┘   └─────────┬─────────┘
+            └───────────┬──────────┘
+                        ▼
+              join both threads
+                        │
+                        ▼
+              scheduler setup
+        (deep-study handlers, jobs,
+              social lanes)
+                        │
+                        ▼
+              voice pipeline
+        (TTS warmup → ASR + VAD
+           staged init)
+                        │
+                        ▼
+              return BootResult
+
+- Parallel phase — init_think and init_memorize run on separate threads at the same time.
+- think boots AikoThink, runs warmup, then blocks on mem_ready.wait() until memory is done.
+- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready.set() in a finally — so think never hangs even if memory boot fails.
+- Join point — main thread waits for both (t1.join(); t2.join()) before continuing.
+- Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
+- Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
+- Returns BootResult with all four live subsystem refs.
 """
 
-from __future__ import annotations
+from __future__ import annotations            # evaluates type annotations later
 
-import threading
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass             # for dataclass to hold subsystem references 
+from typing import Callable                   # for define boot functions
+import threading                              # 
 
 # Must run before the system.* imports below: those modules may read secrets
 # from os.environ at their own module level, and load_config() is what
@@ -38,16 +70,17 @@ from typing import Callable
 # by _LOADED), so this is a no-op if main.py already called it first —
 # this is just a safety net for any other entrypoint that imports this
 # module directly.
+
 from system.config import load_config
 load_config()
 
 from system.log import get_logger
 log = get_logger(__name__)
 
-from cognition.think    import BOOT_LABELS as _THINK_LABELS
+from cognition.think import BOOT_LABELS as _THINK_LABELS
 from memory.memorize import BOOT_LABELS as _MEM_LABELS
-from sensory.speak    import BOOT_LABELS as _SPEAK_LABELS
-from sensory.listen   import BOOT_LABELS as _LISTEN_LABELS
+from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS
+from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS
 
 # ── result container ──────────────────────────────────────────────────────────
 
@@ -128,7 +161,7 @@ class AikoWakeup:
         Returns:
             BootResult with think, memorize, speak, listen references.
         """
-        from system.log import get_logger, silent_stderr
+        from system.log import silent_stderr
         from memory.memorize import AikoMemorize
 
         with silent_stderr():
