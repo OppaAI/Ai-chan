@@ -90,6 +90,7 @@ class BootResult:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+# NOTE: check capability and think which router examples to use and where should prewarm do
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and search exemplars at boot so first-turn latency is cold-free."""
     from cognition.think import (
