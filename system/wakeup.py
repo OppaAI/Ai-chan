@@ -15,8 +15,6 @@ Each module owns its BOOT_LABELS dict; wakeup collects them and exposes
 ALL_BOOT_LABELS so the UI(CLI/WebUI) can register display text before boot begins.
 
 Usage:
-    ui(cli/webui).register_boot_labels(AikoWakeup.ALL_BOOT_LABELS)
-
     result = AikoWakeup(text_mode=False).boot(
         on_loading = ui.step_loading,
         on_done    = ui.step_done,
