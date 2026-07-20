@@ -3,18 +3,19 @@ webui/webui.py
 Aiko-chan's browser-based UI backend — drop-in replacement for AikoTUI.
 
 Responsibilities:
-    - Serve aiko.html + assets from webui/static/ over HTTP(S) (localhost:PORT)
-    - Host a bidirectional WebSocket server (localhost:WS_PORT)
+    - Serve aiko.html + assets from webui/static/ over HTTP(S) (localhost:HTTP_PORT)
+    - Host a bidirectional WebSocket endpoint multiplexed on the same
+      HTTP(S) port via FastAPI/uvicorn (no separate WS listener/port)
     - Expose the same public API as AikoTUI so main.py needs minimal changes:
         add_message / stream_token / stream_commit / turn_start
         step_loading / step_done / step_skip / step_error / status_finish
         get_input / get_voice_input / spin_loop
     - Block get_input() until the browser sends {"type":"user_input","text":"..."}
     - Auto-open the browser on first connection
+    - Expose run_webui(args): the WebUI launcher, called from main.py
 
 Environment variables (all optional):
-    HTTP_PORT   — HTTP port for serving the UI (default 8787)
-    WS_PORT     — WebSocket port                (default 8765)
+    HTTP_PORT   — HTTP(S)/WS port for serving the UI (default 8787)
     NO_BROWSER  — set to "1" to suppress auto-open
     WEBUI_HTTPS — set to "1" to serve HTTPS/WSS for remote browser microphones
     WEBUI_BROWSER_VAD_GATE — set to "0" to stream raw WebUI PCM for VAD diagnostics
@@ -26,8 +27,8 @@ Boot ordering note (login-gated wakeup):
     jobs, and starts the global ScheduleRunner — must never run before a real
     user is authenticated, since every one of those subsystems resolves paths
     via system.userspace.current_user_id(). This class exposes
-    wait_for_first_login() so main.py's _run_session() can block until the
-    first authenticated WebSocket session connects (see _ws_handler below)
+    wait_for_first_login() so system.orchestrate.run_session() can block until
+    the first authenticated WebSocket session connects (see _ws_handler below)
     before calling AikoWakeup().boot(). The HTTP server (login page, OAuth
     flow, static assets) is already serving at this point — only the heavy
     model/subsystem boot is deferred.
@@ -47,12 +48,9 @@ import time
 import webbrowser
 from pathlib import Path
 
-import websockets
-
 from system.config import load_config
 from system.userspace import reset_current_user_id, set_current_user_id, set_current_display_name
 load_config()
-from websockets.server import serve as ws_serve
 
 from system import bioclock
 
@@ -61,7 +59,6 @@ log = logging.getLogger(__name__)
 # ── config ────────────────────────────────────────────────────────────────────
 
 HTTP_PORT  = int(os.getenv("HTTP_PORT", "8787"))
-WS_PORT    = int(os.getenv("WS_PORT",   "8765"))
 STATIC_DIR = Path(__file__).parent / "static"
 NO_BROWSER = os.getenv("NO_BROWSER", "0") == "1"
 WEBUI_HTTPS = os.getenv("WEBUI_HTTPS", "0").lower() in {"1", "true", "yes", "on"}
@@ -153,6 +150,12 @@ class AikoWeb:
     Browser VAD gates WebUI microphone audio by default so silence/private
     background audio is not streamed to the server. For diagnostics, set
     WEBUI_BROWSER_VAD_GATE=0 to stream raw PCM and let server-side VAD segment it.
+
+    NOTE: interface.webui.auth.aiko_web_instance is set to `self` at the end
+    of __init__ as a module-global singleton so auth.py's request handlers
+    can reach the live UI instance. This means only one AikoWeb can exist per
+    process — fine for this app's single-session model, but worth knowing if
+    that ever changes.
     """
 
     # ------------------------------------------------------------------
@@ -192,7 +195,7 @@ class AikoWeb:
         self._clients: set = set()
         self._clients_lock = threading.Lock()
 
-        # memory backend (injected after boot by _run_session)
+        # memory backend (injected after boot by run_session)
         self._memorize = None
 
         # streaming state
@@ -221,22 +224,22 @@ class AikoWeb:
         self._start_servers()
 
     def set_voice_backends(self, speak, listen) -> None:
-        """Inject speak/listen (called from _run_session after boot) so
+        """Inject speak/listen (called from run_session after boot) so
         _ws_handler can act on a browser-reported barge_in message."""
         self._speak = speak
         self._listen = listen
     
     def set_memorize(self, memorize) -> None:
-        """Inject the memory backend (called from _run_session after boot)."""
+        """Inject the memory backend (called from run_session after boot)."""
         self._memorize = memorize
 
     def wait_for_first_login(self, timeout: float | None = None) -> str | None:
         """Block the calling thread until the first authenticated WebSocket
         session connects, then return that session's real user_id.
 
-        Used by main.py's _run_session() to defer AikoWakeup().boot() (and
-        therefore AikoMemorize construction, schedule.json seeding, and the
-        ScheduleRunner) until a genuine logged-in user_id is known — never
+        Used by system.orchestrate.run_session() to defer AikoWakeup().boot()
+        (and therefore AikoMemorize construction, schedule.json seeding, and
+        the ScheduleRunner) until a genuine logged-in user_id is known — never
         the "guest" default. The HTTP server (login page, OAuth flow, static
         assets) is already reachable while this blocks; only the heavy
         subsystem boot is gated.
@@ -280,7 +283,6 @@ class AikoWeb:
 
     def _run_http(self) -> None:
         """Serve the FastAPI app over HTTP or HTTPS via uvicorn."""
-        import asyncio
         import uvicorn
         from interface.webui.auth import app as auth_app
 
@@ -336,11 +338,12 @@ class AikoWeb:
 
         uid = str(session["user_id"])
 
-        # Login gate — record the first real authenticated uid so main.py's
-        # wait_for_first_login() can unblock and start AikoWakeup().boot()
-        # with a genuine user_id already in place. Safe to check/set on
-        # every connection; only the first one matters (Event.set() is
-        # idempotent, and later re-logins/reconnects don't rewind boot).
+        # Login gate — record the first real authenticated uid so
+        # run_session()'s wait_for_first_login() can unblock and start
+        # AikoWakeup().boot() with a genuine user_id already in place. Safe
+        # to check/set on every connection; only the first one matters
+        # (Event.set() is idempotent, and later re-logins/reconnects don't
+        # rewind boot).
         self._current_user_id = uid
 
         # Display name: stored name file > session username (GitHub login) > uid
@@ -809,3 +812,25 @@ class AikoWeb:
 
 
 # HTTP static file handler removed. Serving is done via FastAPI StaticFiles.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ENTRY POINT (called from main.py)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def run_webui(args) -> None:
+    """Launch Aiko with the browser WebUI (default front end).
+
+    Constructs the AikoWeb transport, prints the URL, and hands off to
+    system.orchestrate.run_session() for the shared boot/turn-loop logic
+    (identical code path as the CLI front end from this point on).
+    """
+    from system.orchestrate import run_session
+
+    import socket
+    ui = AikoWeb(no_voice=args.text, debug=args.debug)
+    host_ip = socket.gethostbyname(socket.gethostname())
+    scheme = "https" if WEBUI_HTTPS else "http"
+    print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
+    print(f"  Waiting for login before waking up subsystems...\n")
+    run_session(ui, args)
