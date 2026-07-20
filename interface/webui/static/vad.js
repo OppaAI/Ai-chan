@@ -65,6 +65,7 @@ function _resetState() {
     _preBuf = [];
     _speaking = false;
     _energyHits = 0;
+    _bargeHits = 0;      // NEW
     _lastBargeSent = 0;
     if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
 }
@@ -160,16 +161,25 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
 
         // Barge-in during active speech: user may have been speaking from a
         // previous segment (VAD state didn't reset) or started speaking while
-        // TTS was already playing. The speech-onset barge-in at line 151 only
-        // fires when _speaking transitions false→true, so we need an
-        // additional check here.
+        // TTS was already playing. The speech-onset barge-in above only fires
+        // on the false→true transition, so this handles the ongoing case.
+        // Requires BARGE_IN_CONFIRM_FRAMES consecutive over-threshold frames
+        // (not just one) since a single echo-bleed frame from imperfect AEC
+        // shouldn't be enough to cut Aiko off — real speech sustains, echo
+        // residue tends to be a transient blip.
         if (window.aikoIsSpeaking && rms >= startThresh) {
-            const now = performance.now();
-            if (now - _lastBargeSent > 300) {
-                _lastBargeSent = now;
-                if (window.stopTtsPlayback) window.stopTtsPlayback();
-                ws.send(JSON.stringify({ type: 'barge_in' }));
+            _bargeHits++;
+            if (_bargeHits >= BARGE_IN_CONFIRM_FRAMES) {
+                const now = performance.now();
+                if (now - _lastBargeSent > 300) {
+                    _lastBargeSent = now;
+                    if (window.stopTtsPlayback) window.stopTtsPlayback();
+                    ws.send(JSON.stringify({ type: 'barge_in' }));
+                }
+                _bargeHits = 0;
             }
+        } else {
+            _bargeHits = 0;
         }
 
         if (rms > endThresh) {
