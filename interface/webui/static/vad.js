@@ -41,6 +41,9 @@ let _preBuf = [];     // circular pre-speech context
 let _energyHits = 0;
 let _vadEpoch = 0;
 let _lastBargeSent = 0;   // timestamp of last barge_in sent, for throttling
+let _bargeHits = 0
+
+const BARGE_IN_CONFIRM_FRAMES = 2;
 
 // -- init ---------------------------------------------------------------------
 
