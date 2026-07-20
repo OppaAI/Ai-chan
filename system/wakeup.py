@@ -90,7 +90,29 @@ class BootResult:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-# NOTE: check capability and think which router examples to use and where should prewarm do
+# NOTE: check capability.py vs think.py — which router examples are
+# actually used, and where prewarm should happen.
+#
+# Confirmed so far:
+#   - _ROUTE_TERNARY_EXAMPLES + _ROUTE_INSTRUCT_TERNARY: live, used by
+#     _route_intent(). Prewarm in wakeup.py is correct as-is.
+#   - _ROUTE_TOOL_EXAMPLES + _ROUTE_INSTRUCT_TOOL: defined + prewarmed in
+#     wakeup.py, but NOT scored anywhere in think.py. agentic_chat() uses
+#     capability.py's match_capabilities() instead (separate trigger-based
+#     mechanism, its own _CAPABILITY_INSTRUCT + _trigger_embed_cache).
+#   - STILL NEED TO CHECK: does agentic/agentic.py reference
+#     _ROUTE_TOOL_EXAMPLES or _ROUTE_INSTRUCT_TOOL anywhere? If not,
+#     both are dead -- delete from think.py + router_prompts.json's
+#     "tools" key, simplify _load_route_examples() to ternary-only.
+#
+# If confirmed dead:
+#   1. Delete _ROUTE_TOOL_EXAMPLES / _ROUTE_INSTRUCT_TOOL from think.py
+#   2. Delete "tools" key from router_prompts.json
+#   3. wakeup.py's _prewarm_semantic_cache: replace the tool-examples
+#      prewarm call with one that warms capability.py's real cache --
+#      call _get_trigger_embedding(cap, embedder) for every cap in
+#      CAPABILITIES.values() at boot, since that's the mechanism
+#      agentic_chat() actually hits on the first real turn.
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and search exemplars at boot so first-turn latency is cold-free."""
     from cognition.think import (
