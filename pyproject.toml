@@ -28,10 +28,7 @@ dependencies = [
     "sqlite-vec>=0.1.9",
     "sympy>=1.14.0",
     "tokenizers>=0.23.1",
-    "torch==2.10.0; platform_machine == 'aarch64'",
-    "torchvision==0.25.0; platform_machine == 'aarch64'",
     "torchaudio>=2.11.0; platform_machine == 'x86_64'",
-    "torchaudio==2.10.0; platform_machine == 'aarch64'",
     "trafilatura>=2.1.0",
     "websockets>=16.0",
     "psutil>=7.2.2",
@@ -61,27 +58,15 @@ dependencies = [
     "nvidia-cudss-cu13>=0.8.0.10 ; platform_machine == 'aarch64'",
     "pytest>=9.1.1",
     "torch",
+    "torchvision",
+    "torchaudio",
 ]
-
 [tool.uv]
 environments = [
     "platform_machine == 'aarch64'",
 ]
-
-[[tool.uv.index]]
-name = "jetson-sbsa-cu130"
-url = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple"
-
-[[tool.uv.index]]
-url = "https://download.pytorch.org/whl/cu132"
-default = true
-
-[[tool.uv.index]]
-name = "pypi"
-url = "https://pypi.org/simple/"
-
 [tool.uv.sources]
 onnxruntime-gpu = { path = "/home/oppa-ai/wheels/onnxruntime_gpu-1.27.0-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" }
-torchvision = { index = "jetson-sbsa-cu130", marker = "platform_machine == 'aarch64'" }
-torchaudio = { index = "jetson-sbsa-cu130", marker = "platform_machine == 'aarch64'" }
 torch = { path = "../wheels/torch-2.13.0a0+gitcf30153-cp312-cp312-linux_aarch64.whl" }
+torchvision = { path = "../wheels/torchvision-0.28.0+8fb8771-cp312-cp312-linux_aarch64.whl" }
+torchaudio = { path = "../wheels/torchaudio-2.11.0+34c52a6-cp312-cp312-linux_aarch64.whl" }
