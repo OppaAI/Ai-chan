@@ -285,8 +285,13 @@ def _is_trivial_input(text: str) -> bool:
     for clause in clauses:
         if _name_alt and re.fullmatch(_name_alt, clause, re.IGNORECASE):
             continue
-        if not re.fullmatch(_trivial_alt, clause, re.IGNORECASE):
-            return False
+        if re.fullmatch(_trivial_alt, clause, re.IGNORECASE):
+            continue
+        # stray ASR fragments (bare pronouns/fillers with no verb) carry no
+        # retrievable intent on their own -- e.g. "I" from "Hi, I. How are..."
+        if len(clause.split()) == 1 and len(clause) <= 2:
+            continue
+        return False
     return True
 
 # Cosine similarity threshold for near-duplicate detection during dream pass

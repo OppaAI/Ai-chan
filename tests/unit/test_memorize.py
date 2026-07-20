@@ -268,20 +268,23 @@ class TestRecencyRerank:
 
     def test_below_threshold_keeps_score_order(self, backend):
         conn = backend._conn
-        now = datetime.now(timezone.utc).isoformat()
-        _insert_row(conn, "low_a", "u1", "weak match a", now)
-        _insert_row(conn, "low_b", "u1", "weak match b", now)
+        # backdated far enough that the recency bonus is ~0, isolating the
+        # RRF-rank contribution so the "weak match" premise actually holds
+        old = (datetime.now(timezone.utc) - timedelta(days=400)).isoformat()
+        _insert_row(conn, "low_a", "u1", "weak match a", old)
+        _insert_row(conn, "low_b", "u1", "weak match b", old)
         conn.commit()
 
-        rank_knn = {"low_a": 15, "low_b": 18}
+        # RRF_K=60, threshold=0.012 -> 1/(60+r) must stay under 0.012,
+        # which needs rank > ~43
+        rank_knn = {"low_a": 50, "low_b": 55}
         rank_fts = {}
 
         scored_ids, scores, row_by_id = backend._rank_and_score(rank_knn, rank_fts)
         assert all(s < MEMORY_RECENCY_RERANK_THRESHOLD for s in scores.values())
 
         reordered = backend._apply_recency_rerank(scored_ids, scores, row_by_id)
-        assert reordered == scored_ids  # unchanged when nothing clears the bar
-
+        assert reordered == scored_ids
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Tier 3 — integration against FakeEmbedder (no real LLM/GGUF)
@@ -368,8 +371,8 @@ class TestDisplayNamePropagation:
     """
 
     LONG_ENOUGH_MESSAGES = [
-        {"role": "user", "content": "My favorite color is teal and I work night shifts."},
-        {"role": "assistant", "content": "Got it, noted!"},
+        {"role": "user", "content": "My favorite color is teal, and I work night shifts most weeks at the hospital."},
+        {"role": "assistant", "content": "Got it, I'll remember that about you!"},
     ]
 
     def test_explicit_display_name_reaches_prompt(self, backend):
