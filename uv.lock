@@ -116,8 +116,7 @@ requires-dist = [
     { name = "sqlite-vec", specifier = ">=0.1.9" },
     { name = "sympy", specifier = ">=1.14.0" },
     { name = "tokenizers", specifier = ">=0.23.1" },
-    { name = "torch", marker = "platform_machine == 'aarch64'", specifier = "==2.11.0", index = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" },
-    { name = "torch", marker = "platform_machine == 'x86_64'", specifier = ">=2.12.1" },
+    { name = "torch", marker = "platform_machine == 'aarch64'", specifier = "==2.10.0", index = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" },
     { name = "torchaudio", marker = "platform_machine == 'aarch64'", specifier = "==2.10.0", index = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" },
     { name = "torchaudio", marker = "platform_machine == 'x86_64'", specifier = ">=2.11.0" },
     { name = "torchvision", marker = "platform_machine == 'aarch64'", specifier = "==0.25.0", index = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" },
@@ -1405,7 +1404,7 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.11.0"
+version = "2.10.0"
 source = { registry = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple" }
 dependencies = [
     { name = "filelock" },
@@ -1417,7 +1416,7 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/e85/9c4c1a6c0d966/torch-2.11.0-cp312-cp312-linux_aarch64.whl", hash = "sha256:e859c4c1a6c0d9661262c5c940f7495ba5abaf15243a94cb23f98e27746a4869" },
+    { url = "https://pypi.jetson-ai-lab.io/sbsa/cu130/+f/c59/7ddc0c1f8de6c/torch-2.10.0-cp312-cp312-linux_aarch64.whl", hash = "sha256:c597ddc0c1f8de6c54fc7c7c09bfe5f70e04a5024383740e99a02eb13498ced5" },
 ]
 
 [[package]]

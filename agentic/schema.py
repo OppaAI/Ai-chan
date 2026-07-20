@@ -12,11 +12,13 @@ future promotion into the playbook.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
 import uuid
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +29,7 @@ load_config()
 
 from system.log import get_logger
 from system.userspace import current_user_id, user_state_dir
+from agentic.checkpoint import save_node_result, load_checkpoint, clear_checkpoint
 
 log = get_logger(__name__)
 
@@ -50,15 +53,16 @@ _TOOL_MAP_LOCK = threading.Lock()
 _PLAYBOOK_WRITE_LOCK = threading.Lock()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PlanNode:
     id: str
     tool: str
     args: dict[str, Any]
     depends_on: tuple[str, ...] = ()
+    run_if: dict[str, Any] | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class PlanGraph:
     id: str
     name: str
@@ -68,7 +72,7 @@ class PlanGraph:
     _extras: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NodeResult:
     node_id: str
     tool: str
@@ -83,7 +87,7 @@ class NodeResult:
         return f"{self.node_id}:{self.tool}[{status}] {body}".strip()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class GraphRunResult:
     graph: PlanGraph
     results: tuple[NodeResult, ...]
@@ -302,13 +306,13 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "nodes": [
                 {"id": "classify", "tool": "synthesize_report",
                  "args": {"evidence": "$prompt", "prompt": "Classify this user request into exactly ONE category: [coding, research, writing, analysis, planning, other]. Return only the category name.", "style": "plain"}},
-                {"id": "route_coding",    "tool": "repo_file_tree",    "depends_on": ["classify"], "args": {"prefix": ""}},
-                {"id": "route_research",  "tool": "deep_research",     "depends_on": ["classify"], "args": {"query": "$prompt"}},
-                {"id": "route_writing",   "tool": "synthesize_report", "depends_on": ["classify"],
+                {"id": "route_coding",    "tool": "repo_file_tree",    "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "coding"}, "args": {"prefix": ""}},
+                {"id": "route_research",  "tool": "deep_research",     "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "research"}, "args": {"query": "$prompt"}},
+                {"id": "route_writing",   "tool": "synthesize_report", "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "writing"},
                  "args": {"evidence": "$prompt", "prompt": "Write a polished response to: $prompt", "style": "professional"}},
-                {"id": "route_analysis",  "tool": "synthesize_report", "depends_on": ["classify"],
+                {"id": "route_analysis",  "tool": "synthesize_report", "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "analysis"},
                  "args": {"evidence": "$prompt", "prompt": "Analyze this request thoroughly: $prompt", "style": "professional"}},
-                {"id": "route_planning",  "tool": "make_plan",         "depends_on": ["classify"], "args": {"goal": "$prompt", "max_steps": 8}},
+                {"id": "route_planning",  "tool": "make_plan",         "depends_on": ["classify"], "run_if": {"node": "classify", "equals": "planning"}, "args": {"goal": "$prompt", "max_steps": 8}},
             ],
         },
         {
@@ -615,7 +619,8 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
             tool=str(raw["tool"]),
             args=dict(raw.get("args") or {}),
             depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
-        ))
+            run_if=dict(raw["run_if"]) if isinstance(raw.get("run_if"), dict) else None,
+        ))        
     if not nodes:
         return None
     graph = PlanGraph(
@@ -759,11 +764,37 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
         return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error")
 
 
-def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: str | None = None) -> GraphRunResult:
+def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
+    if not node.run_if:
+        return True
+    ref = node.run_if.get("node")
+    if ref not in results:
+        return False
+    actual = (results[ref].content or "").strip().lower()
+    if "equals" in node.run_if:
+        return actual == str(node.run_if["equals"]).strip().lower()
+    if "contains" in node.run_if:
+        return str(node.run_if["contains"]).strip().lower() in actual
+    return True
+
+
+from agentic.checkpoint import save_node_result, load_checkpoint, clear_checkpoint
+
+def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
+                   llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
     pending = {node.id: node for node in graph.nodes}
     results: dict[str, NodeResult] = {}
     ordered: list[NodeResult] = []
     extras = getattr(graph, "_extras", {}) or {}
+
+    if run_id:
+        for prior in load_checkpoint(run_id, NodeResult):
+            results[prior.node_id] = prior
+            ordered.append(prior)
+            pending.pop(prior.node_id, None)
+
+    seq = len(ordered)
+
     with ThreadPoolExecutor(max_workers=GRAPH_MAX_WORKERS) as pool:
         while pending:
             ready = [node for node in pending.values() if all(dep in results for dep in node.depends_on)]
@@ -771,17 +802,28 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: s
                 stuck = ", ".join(sorted(pending))
                 ordered.append(NodeResult("graph", "graph_executor", False, f"dependency cycle or missing dependency among: {stuck}", error_type="dependency_error"))
                 break
-            runnable, blocked = [], []
+            runnable, blocked, skipped = [], [], []
             for node in ready:
-                if all(results[dep].ok for dep in node.depends_on):
-                    runnable.append(node)
-                else:
+                if not all(results[dep].ok for dep in node.depends_on):
                     blocked.append(node)
+                elif not _run_if_satisfied(node, results):
+                    skipped.append(node)
+                else:
+                    runnable.append(node)
             for node in blocked:
                 result = NodeResult(node.id, node.tool, False, "skipped: an upstream dependency failed", error_type="dependency_failed")
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
+                if run_id:
+                    save_node_result(run_id, seq, result); seq += 1
+            for node in skipped:
+                result = NodeResult(node.id, node.tool, True, "skipped: run_if condition not met", error_type=None)
+                results[node.id] = result
+                ordered.append(result)
+                pending.pop(node.id, None)
+                if run_id:
+                    save_node_result(run_id, seq, result); seq += 1
             if not runnable:
                 continue
             future_map = {pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras): node for node in runnable}
@@ -794,7 +836,12 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None, llm_model: s
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
+                if run_id:
+                    save_node_result(run_id, seq, result); seq += 1
+
     final_answer = _synthesize_without_llm(graph, tuple(ordered))
+    if run_id:
+        clear_checkpoint(run_id)  # clean success — drop the checkpoint
     return GraphRunResult(graph=graph, results=tuple(ordered), final_answer=final_answer)
 
 
@@ -813,11 +860,15 @@ def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -
 
 
 def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None,
-                     llm_client=None, llm_model: str | None = None) -> GraphRunResult | None:
+                     llm_client=None, llm_model: str | None = None,
+                     run_id: str | None = None) -> GraphRunResult | None:
     graph = plan_from_master(user_input, cap_ids=cap_ids, embedder=embedder)
     if graph is None:
         return None
-    return execute_graph(graph, embedder=embedder, llm_client=llm_client, llm_model=llm_model)
+    if run_id is None:
+        run_id = hashlib.sha256(f"{graph.id}|{user_input}".encode()).hexdigest()[:16]
+    return execute_graph(graph, embedder=embedder, llm_client=llm_client,
+                          llm_model=llm_model, run_id=run_id)
 
 
 def list_playbooks_json() -> str:
