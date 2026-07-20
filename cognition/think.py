@@ -117,10 +117,8 @@ if _ROUTE_MODE not in _ROUTE_VALID_MODES:
 _AGENTIC_MODE_ON = os.getenv("AGENTIC_MODE_ON", "1").lower() in {"1", "true", "yes", "on"}
 
 # Three separate instruct strings, one per embedding context
-_ROUTE_INSTRUCT_BINARY = "Does this message ask someone to perform a task or action, or is it just conversation?"
-_ROUTE_INSTRUCT_TOOL   = "This is an autonomous task request. Which work steps are likely needed?"
-_ROUTE_INSTRUCT_SEARCH = "Does answering this require looking up current or external data?"
 _ROUTE_INSTRUCT_TERNARY = "What kind of task or question is this?"  # used by route() for ternary intent routing
+_ROUTE_INSTRUCT_TOOL    = "This is an autonomous task request. Which work steps are likely needed?"
 
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
