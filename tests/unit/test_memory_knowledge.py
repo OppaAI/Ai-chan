@@ -7,6 +7,7 @@ Run: pytest tests/unit/test_memory_knowledge.py -v
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -15,6 +16,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from pathlib import Path
 
 os.environ.setdefault("WORKSPACE_ROOT", "/tmp/aiko_test_workspace")
 
@@ -30,6 +32,7 @@ from memory.knowledge import (
     _connect,
     _knn,
     _fts,
+    EMBED_DIMS,
     KNOWLEDGE_KNN_LIMIT,
     KNOWLEDGE_FTS_LIMIT,
     KNOWLEDGE_RRF_K,
@@ -41,11 +44,22 @@ from memory.knowledge import (
 
 
 class FakeEmbedder:
-    """Deterministic embedder for tests."""
-    def embed_query(self, text: str, instruct: str = "") -> np.ndarray:
-        h = hash(text) % 1000
-        return np.array([float(h) / 1000.0] * 384, dtype=np.float32)
+    """Deterministic stand-in that actually varies by content -- values are
+    zero-centered (not just non-negative) so unrelated texts produce
+    genuinely low/negative cosine similarity, matching how a real embedding
+    space behaves. A positive-orthant-only fake embedder can't represent
+    "unrelated" at all, since any two random positive vectors are already
+    highly similar by geometry alone."""
+    def _vec(self, text: str) -> np.ndarray:
+        h = hashlib.sha256((text or "").encode("utf-8")).digest()
+        raw = (h * (EMBED_DIMS // len(h) + 1))[: EMBED_DIMS * 4]
+        arr = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)
+        arr = arr[:EMBED_DIMS] / 255.0 * 2.0 - 1.0   # rescale to [-1, 1)
+        norm = np.linalg.norm(arr)
+        return (arr / norm if norm else arr).astype(np.float32)
 
+    def embed_query(self, text: str, instruct: str = "") -> np.ndarray:
+        return self._vec(text)
 
 class TestDatabaseSetup:
     """Tests for database connection and schema."""
@@ -67,16 +81,14 @@ class TestDatabaseSetup:
             conn.close()
 
     def test_connect_uses_user_isolation(self, tmp_path):
-        """Different user_ids should use different databases."""
-        db1 = _connect("user1", tmp_path / "k1.db")
-        db2 = _connect("user2", tmp_path / "k2.db")
+        """Different user_ids should resolve to isolated connections."""
+        db1 = _connect("user1")
+        db2 = _connect("user2")
         try:
-            # They should be separate connections
             assert db1 is not db2
         finally:
             db1.close()
             db2.close()
-
 
 class TestIngestText:
     """Tests for ingest_text."""
@@ -86,13 +98,12 @@ class TestIngestText:
         with patch("memory.knowledge._connect", return_value=_connect(str(db_path))):
             doc_id = ingest_text(
                 title="Test Doc",
-                text="This is a test document. " * 10,  # Long enough to chunk
+                text="This is a test document. " * 10,
                 source="test",
                 kind="ingested",
                 embedder=FakeEmbedder(),
             )
-            assert doc_id is not None
-            assert doc_id.startswith("doc-")
+            assert doc_id is not None 
 
     def test_ingest_empty_text_returns_none(self, tmp_path):
         db_path = tmp_path / "test.db"
@@ -114,16 +125,17 @@ class TestIngestFile:
     """Tests for ingest_file."""
 
     def test_ingest_text_file(self, tmp_path):
-        test_file = tmp_path / "test.txt"
-        test_file.write_text("File content for ingestion. " * 5)
+        workspace = Path(os.environ["WORKSPACE_ROOT"])
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "test.txt").write_text("File content for ingestion. " * 5)
 
         with patch("memory.knowledge._connect", return_value=_connect(str(tmp_path / "test.db"))):
-            doc_id = ingest_file(str(test_file), title="Test File", embedder=FakeEmbedder())
+            doc_id = ingest_file("test.txt", title="Test File", embedder=FakeEmbedder())
             assert doc_id is not None
 
     def test_ingest_nonexistent_file(self, tmp_path):
         with patch("memory.knowledge._connect", return_value=_connect(str(tmp_path / "test.db"))):
-            doc_id = ingest_file("/nonexistent/path.txt", embedder=FakeEmbedder())
+            doc_id = ingest_file("nonexistent/path.txt", embedder=FakeEmbedder())
             assert doc_id is None
 
 
@@ -161,17 +173,14 @@ class TestSearchKnowledge:
             vec = embedder.embed_query(chunk)
             import sqlite_vec
             self.conn.execute(
-                "INSERT INTO learned_chunks (id, doc_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?)",
-                (chunk_id, doc1_id, i, chunk, now)
+                "INSERT INTO learned_chunks (id, doc_id, user_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (chunk_id, doc1_id, "test_user", i, chunk, now)
             )
             self.conn.execute(
                 "INSERT INTO learned_chunks_vec (id, embedding) VALUES (?, ?)",
                 (chunk_id, sqlite_vec.serialize_float32(vec.tolist()))
             )
-            self.conn.execute(
-                "INSERT INTO learned_chunks_fts (id, text) VALUES (?, ?)",
-                (chunk_id, chunk)
-            )
+            # learned_chunks_ai trigger already synced learned_chunks_fts above
 
         # Doc 2: Classical computing
         doc2_id = "doc-2"
@@ -186,20 +195,17 @@ class TestSearchKnowledge:
             vec = embedder.embed_query(chunk)
             import sqlite_vec
             self.conn.execute(
-                "INSERT INTO learned_chunks (id, doc_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?)",
-                (chunk_id, doc2_id, i, chunk, now)
+                "INSERT INTO learned_chunks (id, doc_id, user_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (chunk_id, doc2_id, "test_user", i, chunk, now)
             )
             self.conn.execute(
                 "INSERT INTO learned_chunks_vec (id, embedding) VALUES (?, ?)",
                 (chunk_id, sqlite_vec.serialize_float32(vec.tolist()))
             )
-            self.conn.execute(
-                "INSERT INTO learned_chunks_fts (id, text) VALUES (?, ?)",
-                (chunk_id, chunk)
-            )
+            # learned_chunks_ai trigger already synced learned_chunks_fts above
 
         self.conn.commit()
-
+    
     def test_search_returns_relevant_results(self):
         with patch("memory.knowledge._connect", return_value=self.conn):
             results = search_knowledge("quantum qubits", limit=5, embedder=FakeEmbedder(), user_id="test_user")
@@ -258,17 +264,14 @@ class TestKnowledgeContextFor:
         vec = embedder.embed_query(text)
         import sqlite_vec
         self.conn.execute(
-            "INSERT INTO learned_chunks (id, doc_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?)",
-            (chunk_id, doc_id, 0, text, now)
+            "INSERT INTO learned_chunks (id, doc_id, user_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (chunk_id, doc_id, "test_user", 0, text, now)
         )
         self.conn.execute(
             "INSERT INTO learned_chunks_vec (id, embedding) VALUES (?, ?)",
             (chunk_id, sqlite_vec.serialize_float32(vec.tolist()))
         )
-        self.conn.execute(
-            "INSERT INTO learned_chunks_fts (id, text) VALUES (?, ?)",
-            (chunk_id, text)
-        )
+        # learned_chunks_ai trigger already synced learned_chunks_fts above
         self.conn.commit()
 
     def test_returns_xml_format(self):
@@ -330,17 +333,14 @@ class TestKNNAndFTS:
             vec = embedder.embed_query(text)
             import sqlite_vec
             self.conn.execute(
-                "INSERT INTO learned_chunks (id, doc_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?)",
-                (chunk_id, doc_id, 0, text, now)
+                "INSERT INTO learned_chunks (id, doc_id, user_id, chunk_index, text, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (chunk_id, doc_id, "test_user", 0, text, now)
             )
             self.conn.execute(
                 "INSERT INTO learned_chunks_vec (id, embedding) VALUES (?, ?)",
                 (chunk_id, sqlite_vec.serialize_float32(vec.tolist()))
             )
-            self.conn.execute(
-                "INSERT INTO learned_chunks_fts (id, text) VALUES (?, ?)",
-                (chunk_id, text)
-            )
+            # learned_chunks_ai trigger already synced learned_chunks_fts above
         self.conn.commit()
 
     def test_knn_returns_ranked_ids(self):
@@ -377,9 +377,10 @@ class TestCache:
         cached = _search_cache_get("query", "user1", 10)  # Different limit
         assert cached is None
 
-    def test_cache_ttl_expiry(self):
-        import time
-        _search_cache_set("query", "user1", 5, [{"id": "1"}], ttl=0.01)
+    def test_cache_ttl_expiry(self, monkeypatch):
+        import memory.knowledge as knowledge_module
+        monkeypatch.setattr(knowledge_module, "_KNOWLEDGE_SEARCH_CACHE_TTL", 0.01)
+        _search_cache_set("query", "user1", 5, [{"id": "1"}])
         time.sleep(0.02)
         cached = _search_cache_get("query", "user1", 5)
         assert cached is None

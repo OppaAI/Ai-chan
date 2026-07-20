@@ -48,6 +48,7 @@ KNOWLEDGE_FTS_LIMIT = int(os.getenv("KNOWLEDGE_FTS_LIMIT", "20"))
 KNOWLEDGE_RECALL_SCORE_THRESHOLD = float(os.getenv("KNOWLEDGE_RECALL_SCORE_THRESHOLD", "0.012"))
 KNOWLEDGE_CHUNK_CHARS = int(os.getenv("KNOWLEDGE_STORE_CHUNK_CHARS", os.getenv("KNOWLEDGE_CHUNK_CHARS", "900")))
 KNOWLEDGE_CONTEXT_CHARS = int(os.getenv("KNOWLEDGE_CONTEXT_CHARS", "3500"))
+KNOWLEDGE_KNN_MIN_SIMILARITY = float(os.getenv("KNOWLEDGE_KNN_MIN_SIMILARITY", "0.15"))
 KNOWLEDGE_QUERY_INSTRUCT = os.getenv(
     "KNOWLEDGE_QUERY_INSTRUCT",
     "Retrieve durable learned knowledge relevant to the request",
@@ -308,7 +309,11 @@ def ingest_file(
     user_id: str | None = None,
 ) -> str | None:
     """Extract a workspace file and store it in learned knowledge RAG."""
-    text, source = extract_text_from_file(relative_path, user_id=user_id)
+    try:
+        text, source = extract_text_from_file(relative_path, user_id=user_id)
+    except ValueError as exc:
+        log.warning("Failed to extract knowledge file %s: %s", relative_path, exc)
+        return None
     return ingest_text(title or Path(relative_path).stem.replace("_", " ").title(), text, source=source, kind=kind, embedder=embedder, user_id=user_id)
 
 def ingest_text(
@@ -396,7 +401,7 @@ def ingest_workspace_knowledge_folder(*, embedder: Embedder | None = None, user_
 
 
 def _knn(conn: sqlite3.Connection, query: str, embedder: Embedder | None, uid: str, limit: int) -> list[sqlite3.Row]:
-    if embedder is None:
+    if embedder is None or not (query or "").strip():
         return []
     vector = embedder.embed_query(query, instruct=KNOWLEDGE_QUERY_INSTRUCT)
     return user_scoped_vec_knn(
@@ -407,6 +412,7 @@ def _knn(conn: sqlite3.Connection, query: str, embedder: Embedder | None, uid: s
         vector=vector,
         user_id=uid,
         limit=limit,
+        threshold=KNOWLEDGE_KNN_MIN_SIMILARITY,
     )
 
 

@@ -352,8 +352,14 @@ def user_scoped_vec_knn(
     owner_id_column: str = "id",
     vec_id_column: str = "id",
     user_column: str = "user_id",
+    threshold: float | None = None,
 ) -> list[sqlite3.Row]:
-    """Run the common sqlite-vec KNN pattern scoped through an owner table."""
+    """Run the common sqlite-vec KNN pattern scoped through an owner table.
+
+    threshold, if given, is a minimum cosine similarity (0..1) — rows whose
+    distance exceeds (1 - threshold) are excluded, so a lone unrelated
+    candidate can't win purely by being the only thing in the table.
+    """
     vec_table = _ident(vec_table)
     owner_table = _ident(owner_table)
     owner_alias = _ident(owner_alias)
@@ -361,6 +367,22 @@ def user_scoped_vec_knn(
     vec_id_column = _ident(vec_id_column)
     user_column = _ident(user_column)
     blob = sqlite_vec_blob(vector)
+
+    if threshold is not None:
+        dist_ceil = 1.0 - threshold
+        return conn.execute(
+            f"""
+            SELECT v.{vec_id_column} AS id, vec_distance_cosine(v.embedding, ?) AS dist
+            FROM {vec_table} v
+            JOIN {owner_table} {owner_alias} ON {owner_alias}.{owner_id_column} = v.{vec_id_column}
+            WHERE {owner_alias}.{user_column} = ?
+              AND vec_distance_cosine(v.embedding, ?) <= ?
+            ORDER BY dist ASC
+            LIMIT ?
+            """,
+            (blob, user_id, blob, dist_ceil, limit),
+        ).fetchall()
+
     return conn.execute(
         f"""
         SELECT v.{vec_id_column} AS id, vec_distance_cosine(v.embedding, ?) AS dist
