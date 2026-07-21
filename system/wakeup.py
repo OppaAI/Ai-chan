@@ -141,21 +141,19 @@ class AikoWakeup:
     Boots AikoThink and AikoMemorize concurrently, then stages TTS and ASR
     init sequentially with granular progress reporting per step.
     Each subsystem owns its BOOT_LABELS; ALL_BOOT_LABELS merges them all
-    so the TUI can register display text before boot begins.
-
-    Args:
-        text_mode: Legacy flag. The CLI now keeps voice subsystems loadable so /voice and /listen can toggle them at runtime.
+    so the UI can register display text before boot begins.
     """
 
     ALL_BOOT_LABELS: dict[str, str] = {
-        **_THINK_LABELS,
-        **_MEM_LABELS,
-        **_SPEAK_LABELS,
-        **_LISTEN_LABELS,
+        **_THINK_LABELS,            # for register AikoThink status
+        **_MEM_LABELS,              # for register AikoMemorize status 
+        **_SPEAK_LABELS,            # for register AikoSpeak status
+        **_LISTEN_LABELS,           # for register AikoListen status
     }
 
-    def __init__(self, text_mode: bool = False) -> None:
-        self._text_mode = text_mode
+    def __init__(self) -> None:
+        "Placeholder for future use"
+        pass
 
     def boot(
         self,
