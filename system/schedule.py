@@ -857,11 +857,6 @@ class ScheduleRunner:
         the assumption that a contiguous run existed before any outage —
         avoids a full-history GitHub API scan on every startup.
         """
-        now = bioclock.local_now()
-        hours_until_next = (self._next_daily - now).total_seconds() / 3600
-        if hours_until_next < 20:
-            return []  # job fired recently enough, nothing to catch up
-
         missing: list[datetime] = []
         for offset in range(1, CATCHUP_MAX_LOOKBACK_DAYS + 1):
             day = (bioclock.utc_now() - timedelta(days=offset)).replace(

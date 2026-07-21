@@ -33,6 +33,10 @@ def _get_conn() -> sqlite3.Connection:
 
 def save_node_result(run_id: str, seq: int, result) -> None:
     """Persist one NodeResult. Called right after results[node.id] = result."""
+    safe_args = {
+        k: v for k, v in result.args.items()
+        if k not in {"embedder", "client", "model"}
+    }
     with _lock:
         conn = _get_conn()
         try:
@@ -41,7 +45,7 @@ def save_node_result(run_id: str, seq: int, result) -> None:
                 "(run_id, node_id, tool, ok, content, args, error_type, seq) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (run_id, result.node_id, result.tool, int(result.ok),
-                 result.content, json.dumps(result.args), result.error_type, seq),
+                 result.content, json.dumps(safe_args), result.error_type, seq),
             )
             conn.commit()
         finally:
