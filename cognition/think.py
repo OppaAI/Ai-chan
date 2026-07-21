@@ -118,7 +118,6 @@ _AGENTIC_MODE_ON = os.getenv("AGENTIC_MODE_ON", "1").lower() in {"1", "true", "y
 
 # Three separate instruct strings, one per embedding context
 _ROUTE_INSTRUCT_TERNARY = "What kind of task or question is this?"  # used by route() for ternary intent routing
-_ROUTE_INSTRUCT_TOOL    = "This is an autonomous task request. Which work steps are likely needed?"
 
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
@@ -224,6 +223,29 @@ def _load_user_context() -> tuple[str, str]:
     return display_name, user_block
 
 
+_DEBUG_PROMPT_DUMP_PATH = os.getenv("AIKO_DEBUG_PROMPT_DUMP", "/tmp/aiko_last_prompt.txt")
+
+def _dump_full_prompt(debug: dict) -> None:
+    if os.getenv("AIKO_DEBUG_FULL_PROMPT", "1").lower() not in {"1", "true", "yes", "on"}:
+        return
+    try:
+        with open(_DEBUG_PROMPT_DUMP_PATH, "w", encoding="utf-8") as f:
+            f.write(f"=== mode={debug.get('mode')} @ {datetime.now().isoformat()} ===\n\n")
+            f.write("----- SYSTEM PROMPT (full, untruncated) -----\n")
+            f.write(debug.get("system_prompt", "") + "\n\n")
+            f.write("----- MEMORY -----\n")
+            f.write(debug.get("memory_prompt", "") + "\n\n")
+            f.write("----- KNOWLEDGE -----\n")
+            f.write(debug.get("knowledge_prompt", "") + "\n\n")
+            f.write("----- WEB -----\n")
+            f.write(debug.get("web_prompt", "") + "\n\n")
+            f.write("----- PREVIOUS CHAT MESSAGES -----\n")
+            for m in debug.get("previous_chat_messages", []):
+                f.write(f"[{m.get('role')}] {m.get('content')}\n")
+    except Exception:
+        log.exception("Failed to dump full prompt debug")
+        
+
 def _should_use_local_knowledge(user_input: str) -> bool:
     """Return True for normal-chat questions about Aiko's local docs/files.
 
@@ -250,17 +272,15 @@ def _play_beep() -> None:
             log.warning("Beep playback failed: %s", e)
     threading.Thread(target=_run, daemon=True).start()
 
-# load route examples
-_EXAMPLES_PATH = Path(__file__).resolve().parent / "router_prompts.json"
+# load route examples (ternary intent only - tools/capability moved to agentic/router)
+_EXAMPLES_PATH = Path(__file__).resolve().parent.parent / "agentic" / "router" / "intent_prompts.json"
 
-def _load_route_examples() -> tuple[dict, dict]:
+def _load_route_examples() -> dict:
     with open(_EXAMPLES_PATH, encoding="utf-8") as f:
         data = json.load(f)
-    ternary = {k: tuple(v) for k, v in data["ternary"].items()}  # 3 labels
-    tools   = {k: tuple(v) for k, v in data["tools"].items()}
-    return ternary, tools
+    return {k: tuple(v) for k, v in data["ternary"].items()}
 
-_ROUTE_TERNARY_EXAMPLES, _ROUTE_TOOL_EXAMPLES = _load_route_examples()
+_ROUTE_TERNARY_EXAMPLES = _load_route_examples()
 
 _AGENTIC_ROUTE_RE = re.compile(
     r"\b("
@@ -927,7 +947,8 @@ class AikoThink:
             "web_prompt": "",
             "previous_chat_messages": [dict(m) for m in trimmed],
         }
-        
+        _dump_full_prompt(self.last_prompt_debug)
+    
         # Stream response
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
         

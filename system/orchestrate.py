@@ -958,7 +958,7 @@ def run_session(ui, args) -> None:
 
     # ── boot all subsystems via wakeup ────────────────────────────────────────
 
-    result = AikoWakeup(text_mode=False).boot(
+    result = AikoWakeup().boot(
         on_loading = ui.step_loading,
         on_done    = ui.step_done,
         on_skip    = ui.step_skip,
