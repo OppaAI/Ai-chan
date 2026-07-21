@@ -1365,7 +1365,10 @@ def _run_session(ui, args):
             display_name = getattr(ui, "_authenticated_display_name", None) or uid
             set_current_display_name(display_name)
             os.environ["AIKO_DISPLAY_NAME"] = display_name
-            log.info("First login received (user_id=%s, display=%s) — starting subsystem boot.", uid, display_name)            
+            log.info("First login received (user_id=%s, display=%s) — starting subsystem boot.", uid, display_name)
+            # Also set display_name on memorize if it was already created
+            if 'memorize' in locals() and memorize is not None:
+                memorize.set_display_name(display_name)
         else:
             log.warning("wait_for_first_login() returned no uid — proceeding with default identity.")
 
@@ -1389,6 +1392,11 @@ def _run_session(ui, args):
     memorize = result.memorize
     speak    = result.speak
     listen   = result.listen
+
+    # Set display_name on memorize instance for scheduler/background threads
+    if memorize is not None:
+        from system.userspace import current_display_name
+        memorize.set_display_name(current_display_name())
 
     if hasattr(ui, "set_voice_backends"):
         ui.set_voice_backends(speak, listen)

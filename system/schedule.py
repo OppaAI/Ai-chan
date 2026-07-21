@@ -1039,6 +1039,7 @@ class ScheduleRunner:
                 memories[:REFLECT_MAX_MEMS],
                 date=target_local,
                 memorize=self._memorize,
+                display_name=self._memorize.get_display_name() if self._memorize else None,
             )
             if isinstance(reflect_result, dict) and not reflect_result.get("success", False):
                 log.error(

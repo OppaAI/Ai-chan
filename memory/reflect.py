@@ -246,6 +246,7 @@ def _generate_daily_facts(
     snippets: list[str],
     date: datetime,
     _retry: bool = False,
+    display_name: str | None = None,
 ) -> list[str]:
     notes = "\n".join(f"- {s}" for s in snippets[:REFLECT_MAX_MEMS]) or "- none"
     prompt_template = _DAILY_FACTS_PROMPT
@@ -261,7 +262,7 @@ def _generate_daily_facts(
         date_str=date.strftime("%Y-%m-%d"),
         prose=prose,
         notes=notes,
-        USER_ID=current_display_name(),
+        USER_ID=display_name or current_display_name(),
     )
     raw = _llm_chat(
         system="You are a precise fact-extraction assistant.",
@@ -349,8 +350,8 @@ def _load_soul() -> str:
         """).strip()
 
 
-def _build_reflection_system() -> str:
-    unlock = _DAILY_SUMMARY_UNLOCK.format(USER_ID=current_display_name())
+def _build_reflection_system(display_name: str | None = None) -> str:
+    unlock = _DAILY_SUMMARY_UNLOCK.format(USER_ID=display_name or current_display_name())
     return f"{_load_soul()}\n\n{unlock}"
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
@@ -374,21 +375,21 @@ def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float 
     return (resp.choices[0].message.content or "").strip()
 
 
-def _generate_reflection(snippets: list[str], date: datetime) -> str:
+def _generate_reflection(snippets: list[str], date: datetime, display_name: str | None = None) -> str:
     bullet_list = "\n".join(f"- {s}" for s in snippets) or "- No memory snippets available."
     user_prompt = _REFLECTION_USER.format(
         date_str=date.strftime("%Y-%m-%d"),
         snippets=bullet_list,
     )
-    return _llm_chat(_build_reflection_system(), user_prompt, max_tokens=500, temperature=0.85)
+    return _llm_chat(_build_reflection_system(display_name), user_prompt, max_tokens=500, temperature=0.85)
 
 
-def _generate_feelings(prose: str) -> str:
+def _generate_feelings(prose: str, display_name: str | None = None) -> str:
     """
     Ask Aiko to reflect honestly on how she feels about user,
     based on the day's summary.
     """
-    user_id = current_display_name()
+    user_id = display_name or current_display_name()
     system = f"{_load_soul()}\n\n{_FEELINGS_SYSTEM.format(USER_ID=user_id)}"
     user_prompt = _FEELINGS_USER.format(prose=prose[:600], USER_ID=user_id)
     return _llm_chat(system, user_prompt, max_tokens=1024, temperature=0.8)
@@ -668,6 +669,7 @@ def generate_and_post(
     date:       datetime | None = None,
     dry_run:    bool = False,
     memorize = None,
+    display_name: str | None = None,
 ) -> dict:
     """
     Full pipeline:
@@ -675,10 +677,12 @@ def generate_and_post(
       → scene prompt → FLUX image → pin to memory → Hugo post + image → GitHub
 
     Args:
-        memories:   List of memory dicts from AikoMemorize.get_all() or search().
-        date:       UTC datetime for the post (defaults to yesterday UTC).
-        dry_run:    Generate content but skip GitHub push/pin. Logs output instead.
-        memorize:   Optional AikoMemorize instance used to pin the daily summary.
+        memories:      List of memory dicts from AikoMemorize.get_all() or search().
+        date:          UTC datetime for the post (defaults to yesterday UTC).
+        dry_run:       Generate content but skip GitHub push/pin. Logs output instead.
+        memorize:      Optional AikoMemorize instance used to pin the daily summary.
+        display_name:  User's display name for prompts (e.g. "Oppa"). Falls back to
+                       memorize.get_display_name() if memorize provided, else user_id.
 
     Idempotent per date: if pinned entries already exist for this date
     (from a prior run), they are deleted before the new ones are pinned,
@@ -691,6 +695,14 @@ def generate_and_post(
     local_tz   = datetime.now().astimezone().tzinfo
     write_time = datetime.now(local_tz)
     date       = date or write_time - timedelta(days=1)
+
+    # Resolve display_name: use passed value, or fall back to memorize instance,
+    # or last-resort contextvar/env. This runs on the scheduler thread where
+    # contextvar is not set, so we must prioritize the passed value and memorize.
+    if display_name is None and memorize is not None:
+        display_name = memorize.get_display_name()
+    elif display_name is None:
+        display_name = current_display_name()
 
     # Extract and deduplicate memory snippets
     snippets: list[str] = []
@@ -708,7 +720,7 @@ def generate_and_post(
 
     # Step 1: factual prose summary
     try:
-        prose = _generate_reflection(snippets, date)
+        prose = _generate_reflection(snippets, date, display_name)
     except Exception as e:
         log.error(f"Reflection generation failed: {e}")
         return {"success": False, "error": str(e)}
@@ -716,7 +728,7 @@ def generate_and_post(
     # Step 1b: Aiko's feelings about you
     feelings = None
     try:
-        feelings = _generate_feelings(prose)
+        feelings = _generate_feelings(prose, display_name)
         log.info(f"Feelings generated: {feelings[:80]}...")
     except Exception as e:
         log.warning(f"Feelings generation failed: {e}")
@@ -778,7 +790,7 @@ def generate_and_post(
     pinned_count = 0
     if memorize is not None:
         try:
-            facts = _generate_daily_facts(prose, snippets, date)
+            facts = _generate_daily_facts(prose, snippets, date, display_name=display_name)
         except Exception as e:
             log.error(f"Daily fact extraction failed: {e}")
             facts = []

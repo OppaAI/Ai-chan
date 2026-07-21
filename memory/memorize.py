@@ -1167,6 +1167,7 @@ class AikoMemorize:
     def __init__(self, silent: bool = False) -> None:
         self._user_id_override = None
         self._silent = silent
+        self._display_name: str | None = None
         self._search_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
         self._search_cache_lock = threading.RLock()
         self._llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
@@ -1220,6 +1221,7 @@ class AikoMemorize:
     def switch_user(self, user_id: str) -> None:
         """Switch to a different user's memory store. Re-opens DB."""
         self._user_id_override = user_id
+        self._display_name = None
         if self._conn:
             try:
                 self._conn.execute("PRAGMA optimize")
@@ -1232,6 +1234,24 @@ class AikoMemorize:
     def get_user_id(self) -> str:
         """Return the user_id this instance is currently opened for."""
         return self._user_id_override or self._mem._user_id
+
+    def get_display_name(self) -> str:
+        """Return the display name for this user, or fall back to user_id."""
+        if self._display_name:
+            return self._display_name
+        return self.get_user_id()
+
+    def set_display_name(self, name: str) -> None:
+        """Set the display name for this user (e.g. GitHub login)."""
+        self._display_name = name.strip() if name else None
+
+    def set_display_name(self, display_name: str) -> None:
+        """Set the display name for this user (e.g. GitHub login)."""
+        self._display_name = display_name
+
+    def get_display_name(self) -> str:
+        """Return the display name for this user, or fall back to user_id."""
+        return self._display_name or self.get_user_id()
 
     def _resolve_user_id(self, user_id: str | None = None) -> str:
         """Resolve the effective user_id for this call.

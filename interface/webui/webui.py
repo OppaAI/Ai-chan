@@ -358,6 +358,8 @@ class AikoWeb:
         os.environ["AIKO_DISPLAY_NAME"] = self._current_display_name
         if self._memorize:
             self._memorize.switch_user(uid)
+            self._memorize.set_display_name(self._current_display_name)
+            self._memorize.set_display_name(self._current_display_name)
         await ws.accept()
 
         with self._clients_lock:
