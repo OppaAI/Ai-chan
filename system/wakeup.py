@@ -185,6 +185,20 @@ class AikoWakeup:
             try:
                 on_loading('mem_sqlite_vec')
                 memorize[0] = AikoMemorize(silent=True)
+
+                from system.userspace import current_display_name
+                display_name = current_display_name()  # contextvar (empty at boot) -> AIKO_DISPLAY_NAME -> user_id
+                memorize[0] = AikoMemorize(silent=True)
+
+                from system.userspace import current_display_name
+                display_name = current_display_name()
+                memorize[0].set_display_name(display_name)
+                if display_name == memorize[0].get_user_id():
+                    log.warning(
+                        "[wakeup] No cached display name for user_id=%s — memory pins "
+                        "will use raw user_id until the user logs in.",
+                        display_name,
+                    )
                 on_done('mem_sqlite_vec')
                 on_loading('mem_embed')
                 on_done('mem_embed')

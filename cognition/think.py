@@ -214,7 +214,15 @@ def _load_user_context() -> tuple[str, str]:
             return display_name, cached_block
     context_blocks = []
     if user_path.exists():
-        context_blocks.append(user_path.read_text(encoding="utf-8").strip())
+        raw = user_path.read_text(encoding="utf-8").strip()
+        if raw:
+            context_blocks.append(
+                "<user_profile>\n"
+                "Who you are speaking with — authoritative for identity. "
+                "Never claim ignorance of this.\n\n"
+                f"{raw}\n"
+                "</user_profile>"
+            )
     user_block = "\n\n" + "\n\n".join(context_blocks) if context_blocks else ""
     try:
         _user_context_cache[uid] = (user_path.stat().st_mtime, user_block)

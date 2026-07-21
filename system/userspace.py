@@ -29,9 +29,10 @@ state, memories, and configurations.
 from __future__ import annotations
 
 import contextvars
-import os
-import re
+import json
 from pathlib import Path
+import re
+import tempfile
 
 _DEFAULT_USER_ID = "guest"
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -65,9 +66,52 @@ def reset_current_display_name(token: contextvars.Token[str | None]) -> None:
     _CURRENT_DISPLAY_NAME.reset(token)
 
 
+def _display_name_cache_path(user_id: str) -> Path:
+    """Cache of the last-known display name for a user_id, resolved at
+    login. Lives under the user's own state dir (not profile/USER.md,
+    which is user-editable bio content) — this is a runtime bridge value
+    so the scheduler daemon thread and a fresh boot (neither of which has
+    the per-request contextvar) can recover the login-resolved name."""
+    return user_state_path("runtime/display_name.json", user_id)
+
+
+def remember_display_name(user_id: str, display_name: str) -> None:
+    """Cache a display name resolved at login (GitHub/Patreon handle)."""
+    if not display_name:
+        return
+    path = _display_name_cache_path(user_id)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"display_name": display_name}), encoding="utf-8")
+        tmp.replace(path)
+    except OSError as e:
+        import logging
+        logging.getLogger(__name__).warning("Failed to cache display name: %s", e)
+
+
+def _load_cached_display_name(user_id: str) -> str | None:
+    path = _display_name_cache_path(user_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8")).get("display_name")
+    except Exception:
+        return None
+
+
 def current_display_name() -> str:
-    """Return the user's display name (e.g. GitHub login) or fall back to user_id."""
-    return _CURRENT_DISPLAY_NAME.get() or os.getenv("AIKO_DISPLAY_NAME") or current_user_id()
+    """Return the user's display name (e.g. GitHub login).
+    Order: request-local contextvar -> cached login value under
+    USER_STATE_ROOT -> env var -> raw user_id as last resort."""
+    name = _CURRENT_DISPLAY_NAME.get()
+    if name:
+        return name
+    uid = current_user_id()
+    cached = _load_cached_display_name(uid)
+    if cached:
+        return cached
+    return os.getenv("AIKO_DISPLAY_NAME") or uid
 
 
 def normalize_user_id(provider: str | None, user_id: object) -> str:
