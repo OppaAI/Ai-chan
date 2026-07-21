@@ -152,16 +152,16 @@ def fresh_think_instance(tmp_path, monkeypatch):
     per-test cache directory so tests don't interfere with each other or
     with your actual ~/.aiko cache. Skips if AikoThink can't construct in
     this environment (e.g. no GGUF model present).
-
-    NOTE: uses the real user_state_dir()-anchored default, override the
-    env var to redirect it into tmp_path -- if your think.py resolves the
-    cache path some other way, adjust this fixture accordingly.
     """
     monkeypatch.setenv("ROUTE_VECTOR_CACHE_DIR", str(tmp_path / "route_vectors"))
     from cognition.think import AikoThink
+    from memory.memorize import AikoMemorize
     try:
         think = AikoThink(None, speak=None)
         think.join_warmup()
+        # Inject memorize backend so _semantic_example_vectors can access the embedder
+        memorize = AikoMemorize(silent=True)
+        think._memorize = memorize
     except Exception as e:
         pytest.skip(f"Real AikoThink not available in this environment: {e}")
     return think
