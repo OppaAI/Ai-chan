@@ -18,7 +18,9 @@ existing turn.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
+import json
 
 import numpy as np
 
@@ -36,7 +38,7 @@ _CAPABILITY_THRESHOLD = 0.35
 @dataclass(frozen=True)
 class Capability:
     id: str
-    triggers: tuple[str, ...]        # short phrases for semantic/keyword match
+    triggers: tuple[str, ...]        # full example phrases for semantic/keyword match
     tool_domains: tuple[str, ...] = ()
 
 
@@ -100,43 +102,36 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "summarize_task_state", "list_playbooks", "run_playbook", "final_answer",
 })
 
+# Tool domains per capability (maps capability id -> tuple of domains)
+# Kept in Python since these are code-level mappings to TOOL_DOMAINS
+_CAPABILITY_TOOL_DOMAINS: dict[str, tuple[str, ...]] = {
+    "research": ("research", "kb", "reports"),
+    "scheduling": ("scheduling",),
+    "kb_proposal": ("kb", "skills"),
+    "photo": ("photo",),
+    "repo": ("repo", "skills", "reports"),
+    "job_hunt": ("jobs",),
+    "social": ("social",),
+}
+
+
+def _load_capability_triggers() -> dict[str, tuple[str, ...]]:
+    """Load capability triggers from JSON file (full example phrases for embedding)."""
+    path = Path(__file__).resolve().parent / "router" / "capability_prompts.json"
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    return {k: tuple(v) for k, v in data["capabilities"].items()}
+
+
+_TRIGGERS = _load_capability_triggers()
+
 CAPABILITIES: dict[str, Capability] = {
-    "research": Capability(
-        id="research",
-        triggers=("look up", "search the web", "research this", "find out about", "study this"),
-        tool_domains=("research", "kb", "reports"),
-    ),
-    "scheduling": Capability(
-        id="scheduling",
-        triggers=("schedule this", "remind me", "every morning", "recurring job", "set an alarm", "schedule a", "schedule "),
-        tool_domains=("scheduling",),
-    ),
-    "kb_proposal": Capability(
-        id="kb_proposal",
-        triggers=("remember this for later", "store this knowledge", "update the wiki", "propose a change", "learn this"),
-        tool_domains=("kb", "skills"),
-    ),
-    "photo": Capability(
-        id="photo",
-        triggers=("photo ingestion", "import photos", "photo inbox", "photo library"),
-        tool_domains=("photo",),
-    ),
-    "repo": Capability(
-        id="repo",
-        triggers=("inspect the code", "read the repo", "aiko's architecture", "aiko's code"),
-        tool_domains=("repo", "skills", "reports"),
-    ),
-    "job_hunt": Capability(
-        id="job_hunt",
-        triggers=("find jobs", "job search", "job boards"),
-        tool_domains=("jobs",),
-    ),
-    "social": Capability(
-        id="social",
-        triggers=("post this on", "share on twitter", "post to instagram",
-                  "publish to youtube", "post to threads", "social media post"),
-        tool_domains=("social",),
-    ),
+    cap_id: Capability(
+        id=cap_id,
+        triggers=_TRIGGERS[cap_id],
+        tool_domains=_CAPABILITY_TOOL_DOMAINS[cap_id],
+    )
+    for cap_id in _TRIGGERS
 }
 
 _trigger_embed_cache: dict[str, np.ndarray] = {}

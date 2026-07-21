@@ -40,18 +40,10 @@ from cognition.think import (
     LLM_BASE_URL,
     LLM_MODEL,
     ROUTER_MODEL,
-    _ROUTE_BINARY_EXAMPLES,
-    _ROUTE_TOOL_EXAMPLES,
-    _ROUTE_SEARCH_EXAMPLES,
-    _SEMANTIC_ROUTE_THRESHOLD,
-    _SEMANTIC_SEARCH_THRESHOLD,
+    _ROUTE_TERNARY_EXAMPLES,
     _SEMANTIC_ROUTE_MIN_GAP,
-    _SEMANTIC_TOOL_MIN_GAP,
-    _SEMANTIC_SEARCH_MIN_GAP,
     _SEMANTIC_LABEL_TOP_K,
-    _ROUTE_INSTRUCT_BINARY,
-    _ROUTE_INSTRUCT_TOOL,
-    _ROUTE_INSTRUCT_SEARCH,
+    _ROUTE_INSTRUCT_TERNARY,
     _AGENTIC_ROUTE_RE,
 )
 from agentic.agentic import tool_schemas
@@ -183,59 +175,70 @@ def _get_llm_client():
 
 # ── semantic tracer ───────────────────────────────────────────────────────────
 
-def trace_stage(
-    label: str,
-    examples_by_label: dict,
+def trace_ternary_stage(
     user_input: str,
-    threshold: float,
-    min_gap: float,
-    instruct: str,
-) -> tuple[str, float]:
-    scores = think._semantic_all_scores(user_input, examples_by_label, instruct)
-    if not scores:
-        return "chat", 0.0
+    quiet: bool = False,
+) -> tuple[str, dict]:
+    """Trace the ternary intent routing (agentic/webchat/localchat)."""
+    from cognition import reason
+    embedder = think._memorize._mem._embedder
+    query_vec = embedder.embed_query(user_input, instruct=_ROUTE_INSTRUCT_TERNARY)
+    labels, example_vecs = think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)
+    label_scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
+    
+    # Apply agentic mode gate
+    if not _AGENTIC_MODE_ON:
+        label_scores.pop("agentic", None)
+    
+    agentic_score = label_scores.get("agentic", 0.0)
+    webchat_score = label_scores.get("webchat", 0.0)
+    localchat_score = label_scores.get("localchat", 0.0)
+    
+    ranked = sorted(label_scores.items(), key=lambda kv: kv[1], reverse=True)
+    best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
+    gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
+    
+    agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
+    webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+    
+    if not quiet:
+        print(f"\n  {BOLD}Ternary Routing Trace{RESET}")
+        print(f"  {'label':<12} {'score':<8}  bar")
+        print(f"  {'-'*48}")
+        for lbl, sc in ranked:
+            marker = f" {BOLD}← best{RESET}" if lbl == best_label else ""
+            print(f"  {lbl:<12} {score_bar(sc)}{marker}")
+        
+        # Decision logic
+        if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
+            verdict = f"{GREEN}→ AGENTIC{RESET}"
+        elif best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
+            verdict = f"{CYAN}→ WEBCHAT{RESET}"
+        else:
+            ambiguous = (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold) and gap < _SEMANTIC_ROUTE_MIN_GAP
+            if ambiguous:
+                verdict = f"{YELLOW}→ AMBIGUOUS (gap={gap:.3f} < {_SEMANTIC_ROUTE_MIN_GAP}) → LOCALCHAT{RESET}"
+            else:
+                verdict = f"{CYAN}→ LOCALCHAT{RESET}"
+        
+        print(f"\n  threshold_agentic={agentic_threshold}  threshold_webchat={webchat_threshold}  min_gap={_SEMANTIC_ROUTE_MIN_GAP}")
+        print(f"  agentic={agentic_score:.3f}  webchat={webchat_score:.3f}  localchat={localchat_score:.3f}  gap={gap:.3f}  [{verdict}]")
+    
+    return best_label, label_scores
 
-    best_label  = max(scores, key=scores.get)
-    best_score  = scores[best_label]
-    sorted_vals = sorted(scores.values(), reverse=True)
-    gap         = sorted_vals[0] - sorted_vals[1] if len(sorted_vals) > 1 else 1.0
 
-    print(f"\n  {BOLD}{label}{RESET}")
-    print(f"  {'label':<16} {'mean score':<8}  bar")
-    print(f"  {'-'*52}")
-    for lbl, sc in sorted(scores.items(), key=lambda x: -x[1]):
-        marker = f" {BOLD}← best{RESET}" if lbl == best_label else ""
-        print(f"  {lbl:<16} {score_bar(sc)}{marker}")
-
-    verdict = GREEN + "PASS" + RESET if (best_score >= threshold and gap >= min_gap) else RED + "FAIL" + RESET
-    print(f"\n  threshold={threshold}  gap_min={min_gap}  top_k={_SEMANTIC_LABEL_TOP_K}")
-    print(f"  best={best_label}  score={best_score:.3f}  gap={gap:.3f}  [{verdict}]")
-    return best_label, best_score
-
-# ── LLM tracer ────────────────────────────────────────────────────────────────
-
-def _ensure_llm_client() -> bool:
-    if getattr(think, "_client", None) is not None and not isinstance(think._client, MagicMock):
-        return True
-    client = _get_llm_client()
-    if client is None:
-        return False
-    think._client       = client
-    think._router_model = ROUTER_MODEL
-    think._llm_model    = LLM_MODEL
-    return True
-
-def trace_llm_router(user_input: str, result: RouteResult | None = None, quiet: bool = False) -> str | None:
+def trace_llm_fallback(user_input: str, result: RouteResult | None = None, quiet: bool = False) -> str | None:
+    """Trace LLM-based tie-break when semantic scores are ambiguous."""
     if not _ensure_llm_client():
         return None
     if not quiet:
         print(f"\n{BOLD}▶ LLM classifier  (ROUTER_MODEL={ROUTER_MODEL}){RESET}")
     t0 = time.monotonic()
     try:
-        label   = think._classify_agent_intent(user_input)
+        label = think._classify_ternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
         elapsed = time.monotonic() - t0
         if not quiet:
-            color = GREEN if label != "chat" else CYAN
+            color = GREEN if label != "localchat" else CYAN
             print(f"\n  parsed     : {color}{label}{RESET}")
             print(f"  latency    : {elapsed*1000:.0f} ms")
         if result is not None:
@@ -249,29 +252,6 @@ def trace_llm_router(user_input: str, result: RouteResult | None = None, quiet: 
             result.llm_calls += 1
         return None
 
-def trace_llm_search_resolve(user_input: str, result: RouteResult | None = None, quiet: bool = False) -> str | None:
-    if not _ensure_llm_client():
-        return None
-    if not quiet:
-        print(f"\n{BOLD}▶ LLM search query resolver  (_llm_resolve_search_query){RESET}")
-    t0 = time.monotonic()
-    try:
-        query   = think._llm_resolve_search_query(user_input)
-        elapsed = time.monotonic() - t0
-        if not quiet:
-            print(f"\n  query      : {CYAN}{query!r}{RESET}")
-            print(f"  latency    : {elapsed*1000:.0f} ms")
-        if result is not None:
-            result.llm_calls += 1
-        return query
-    except Exception as e:
-        elapsed = time.monotonic() - t0
-        if not quiet:
-            print(f"\n  {RED}LLM call failed ({elapsed*1000:.0f} ms): {e!r}{RESET}")
-        if result is not None:
-            result.llm_calls += 1
-        return None
-
 # -- dry-run execution sequence hints -----------------------------------------
 
 _AGENTIC_TOOL_NAMES = {
@@ -279,79 +259,56 @@ _AGENTIC_TOOL_NAMES = {
     for schema in tool_schemas()
 }
 
-_STEP_TOOLS: dict[str, list[str]] = {
-    "research": ["web_search", "fetch_page", "save_note"],
-    "planning": ["make_plan", "create_checklist"],
-    "writing": ["save_note"],
-    "coding": ["repo_search_text", "repo_read_file", "summarize_task_state"],
-    "decision": ["make_plan", "summarize_task_state"],
-    "schedule": ["schedule_job"],
-    "ongoing": ["summarize_task_state", "repo_file_tree"],
-}
+# ── ternary trace ──────────────────────────────────────────────────────────────
 
-def _clean_query(prompt: str, max_words: int = 9) -> str:
-    words = [
-        w.strip(".,;:!?()[]{}\"'").lower()
-        for w in prompt.split()
-        if w.strip(".,;:!?()[]{}\"'")
-    ]
-    stop = {
-        "a", "an", "and", "are", "as", "at", "be", "can", "for", "from", "has",
-        "how", "i", "if", "in", "is", "it", "me", "my", "of", "on", "or", "the",
-        "then", "this", "to", "what", "when", "whether", "with", "you",
-    }
-    terms = [w for w in words if w not in stop]
-    return " ".join(terms[:max_words]) or prompt[:80]
-
-def _ranked_agentic_steps(prompt: str) -> list[str]:
-    scores = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
-    if not scores:
-        return ["planning"]
-    ranked = [label for label, _score in sorted(scores.items(), key=lambda item: item[1], reverse=True)]
-    selected = [
-        label for label, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
-        if score >= _SEMANTIC_ROUTE_THRESHOLD
-    ]
-    return (selected or ranked)[:10]
-
-def _sequence_for_route(route: str, prompt: str) -> list[dict]:
-    query = _clean_query(prompt)
-    if route == "chat":
-        return [{"step": 1, "kind": "chat", "tool": "chat", "query": "", "run": "answer from existing context"}]
-    if route == "chat+search":
-        return [
-            {"step": 1, "kind": "websearch", "tool": "web_search", "query": query, "run": "retrieve current external facts"},
-            {"step": 2, "kind": "chat", "tool": "chat", "query": prompt, "run": "answer using search context"},
-        ]
-
-    sequence: list[dict] = []
-    seen: set[str] = set()
-    for label in _ranked_agentic_steps(prompt):
-        for tool in _STEP_TOOLS.get(label, []):
-            if tool not in _AGENTIC_TOOL_NAMES or tool in seen:
-                continue
-            seen.add(tool)
-            sequence.append({
-                "step": len(sequence) + 1,
-                "kind": label,
-                "tool": tool,
-                "query": query if tool in {"web_search", "fetch_page", "repo_search_text", "search_skillsets"} else "",
-                "run": "call via core.agentic dispatch",
-            })
-            if len(sequence) >= 10:
-                break
-        if len(sequence) >= 10:
-            break
-
-    if "final_answer" in _AGENTIC_TOOL_NAMES and len(sequence) < 10:
-        sequence.append({
-            "step": len(sequence) + 1,
-            "kind": "final",
-            "tool": "final_answer",
-            "query": "",
-            "run": "report completed work naturally",
-        })
-    return sequence or [{"step": 1, "kind": "agentic", "tool": "final_answer", "query": "", "run": "report route decision"}]
+def trace_ternary(user_input: str) -> tuple[str, dict]:
+    """Trace the ternary intent routing (agentic/webchat/localchat)."""
+    scores = think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)
+    # think._route_intent does the actual classification, but we can trace scores here
+    from cognition import reason
+    embedder = think._memorize._mem._embedder
+    query_vec = embedder.embed_query(user_input, instruct=_ROUTE_INSTRUCT_TERNARY)
+    labels, example_vecs = scores
+    label_scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
+    
+    # Apply agentic mode gate
+    if not _AGENTIC_MODE_ON:
+        label_scores.pop("agentic", None)
+    
+    agentic_score = label_scores.get("agentic", 0.0)
+    webchat_score = label_scores.get("webchat", 0.0)
+    localchat_score = label_scores.get("localchat", 0.0)
+    
+    ranked = sorted(label_scores.items(), key=lambda kv: kv[1], reverse=True)
+    best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
+    gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
+    
+    agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
+    webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+    
+    print(f"\n  {BOLD}Ternary Routing Trace{RESET}")
+    print(f"  {'label':<12} {'score':<8}  bar")
+    print(f"  {'-'*48}")
+    for lbl, sc in ranked:
+        marker = f" {BOLD}← best{RESET}" if lbl == best_label else ""
+        print(f"  {lbl:<12} {score_bar(sc)}{marker}")
+    
+    # Decision logic
+    if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
+        verdict = f"{GREEN}→ AGENTIC{RESET}"
+    elif best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
+        verdict = f"{CYAN}→ WEBCHAT{RESET}"
+    else:
+        ambiguous = (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold) and gap < _SEMANTIC_ROUTE_MIN_GAP
+        if ambiguous:
+            verdict = f"{YELLOW}→ AMBIGUOUS (gap={gap:.3f} < {_SEMANTIC_ROUTE_MIN_GAP}) → LOCALCHAT{RESET}"
+        else:
+            verdict = f"{CYAN}→ LOCALCHAT{RESET}"
+    
+    print(f"\n  threshold_agentic={agentic_threshold}  threshold_webchat={webchat_threshold}  min_gap={_SEMANTIC_ROUTE_MIN_GAP}")
+    print(f"  agentic={agentic_score:.3f}  webchat={webchat_score:.3f}  localchat={localchat_score:.3f}  gap={gap:.3f}  [{verdict}]")
+    
+    return best_label, label_scores
 
 def print_sequence(route: str, prompt: str) -> None:
     print(f"\n{BOLD}▶ dry-run sequence  (from agentic.agentic tool schemas){RESET}")
@@ -366,80 +323,54 @@ def print_sequence(route: str, prompt: str) -> None:
 def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
     """Compute the final route label, printing detail when quiet=False."""
 
-    final_route = "chat"
+    final_route = "localchat"
 
     if _RUN_SEMANTIC:
         if not quiet:
-            print(f"\n{BOLD}▶ Stage 1  chat vs agentic  (semantic){RESET}")
-            trace_stage("binary classifier", _ROUTE_BINARY_EXAMPLES, prompt,
-                        _SEMANTIC_ROUTE_THRESHOLD, _SEMANTIC_ROUTE_MIN_GAP, _ROUTE_INSTRUCT_BINARY)
-
-        scores1 = think._semantic_all_scores(prompt, _ROUTE_BINARY_EXAMPLES, _ROUTE_INSTRUCT_BINARY)
-        sorted1 = sorted(scores1.values(), reverse=True)
-        gap1    = sorted1[0] - sorted1[1] if len(sorted1) > 1 else 1.0
-        best1   = max(scores1, key=scores1.get) if scores1 else "chat"
-        score1  = scores1.get(best1, 0.0)
-
-        is_agentic = best1 == "agentic" and score1 >= _SEMANTIC_ROUTE_THRESHOLD and gap1 >= _SEMANTIC_ROUTE_MIN_GAP
+            print(f"\n{BOLD}▶ Ternary Intent Routing  (semantic){RESET}")
+        
+        best_label, label_scores = trace_ternary_stage(prompt, quiet)
+        
+        agentic_score = label_scores.get("agentic", 0.0)
+        webchat_score = label_scores.get("webchat", 0.0)
+        localchat_score = label_scores.get("localchat", 0.0)
+        
+        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
+        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+        
+        is_agentic = (best_label == "agentic" and 
+                      agentic_score >= agentic_threshold and 
+                      (agentic_score - webchat_score) >= _SEMANTIC_ROUTE_MIN_GAP)
+        is_webchat = (best_label == "webchat" and 
+                      webchat_score >= webchat_threshold and 
+                      (webchat_score - agentic_score) >= _SEMANTIC_ROUTE_MIN_GAP)
+        
+        ambiguous = ((agentic_score >= agentic_threshold or webchat_score >= webchat_threshold)
+                     and abs(agentic_score - webchat_score) < _SEMANTIC_ROUTE_MIN_GAP)
 
         if is_agentic:
-            if not quiet:
-                print(f"\n  {GREEN}→ AGENTIC{RESET}")
-                print(f"\n{BOLD}▶ Stage 2a  likely work steps  (semantic hint only){RESET}")
-                trace_stage("step hints", _ROUTE_TOOL_EXAMPLES, prompt,
-                            _SEMANTIC_ROUTE_THRESHOLD, _SEMANTIC_TOOL_MIN_GAP, _ROUTE_INSTRUCT_TOOL)
-
-            scores2 = think._semantic_all_scores(prompt, _ROUTE_TOOL_EXAMPLES, _ROUTE_INSTRUCT_TOOL)
-            sorted2 = sorted(scores2.values(), reverse=True)
-            gap2    = sorted2[0] - sorted2[1] if len(sorted2) > 1 else 1.0
-            best2   = max(scores2, key=scores2.get) if scores2 else "coding"
-            score2  = scores2.get(best2, 0.0)
-
             final_route = "agentic"
             if not quiet:
-                likely = [
-                    label for label, score in sorted(scores2.items(), key=lambda item: item[1], reverse=True)
-                    if score >= _SEMANTIC_ROUTE_THRESHOLD
-                ]
-                hint = " -> ".join(likely[:4]) if likely else best2
-                print(f"\n  {GREEN}→ ROUTE: agentic_chat  steps≈{hint}{RESET}")
-                print(f"\n  {DIM}(Stage 2a is a hint; agentic.py chooses the actual tool sequence.){RESET}")
-
-
-        else:
+                print(f"\n  {GREEN}→ ROUTE: agentic_chat{RESET}")
+        
+        elif is_webchat:
+            final_route = "webchat"
             if not quiet:
-                print(f"\n  {CYAN}→ CHAT{RESET}")
-                print(f"\n{BOLD}▶ Stage 2b  websearch needed?  (semantic){RESET}")
-                trace_stage("search classifier", _ROUTE_SEARCH_EXAMPLES, prompt,
-                            _SEMANTIC_SEARCH_THRESHOLD, _SEMANTIC_SEARCH_MIN_GAP, _ROUTE_INSTRUCT_SEARCH)
-
-            scores3 = think._semantic_all_scores(prompt, _ROUTE_SEARCH_EXAMPLES, _ROUTE_INSTRUCT_SEARCH)
-            sorted3 = sorted(scores3.values(), reverse=True)
-            gap3    = sorted3[0] - sorted3[1] if len(sorted3) > 1 else 1.0
-            best3   = max(scores3, key=scores3.get) if scores3 else "no"
-            score3  = scores3.get(best3, 0.0)
-
-            needs_search = best3 == "data" and score3 >= _SEMANTIC_SEARCH_THRESHOLD and gap3 >= _SEMANTIC_SEARCH_MIN_GAP
-            ambiguous    = score1 >= _SEMANTIC_ROUTE_THRESHOLD and gap1 < _SEMANTIC_ROUTE_MIN_GAP
-
-            if needs_search:
-                final_route = "chat+search"
-                if not quiet:
-                    print(f"\n  {GREEN}→ ROUTE: chat()  websearch=True  query={prompt!r}{RESET}")
-            elif ambiguous:
-                if not quiet:
-                    print(f"\n  {YELLOW}→ ROUTE: llm_fallback (binary scores too close){RESET}")
-                if _SHOW_LLM_FALLBACK:
-                    llm_label = trace_llm_router(prompt, result, quiet)
-                    final_route = "agentic" if llm_label == "agentic" else "chat"
+                print(f"\n  {CYAN}→ ROUTE: webchat{RESET}")
+        
+        elif ambiguous:
+            if not quiet:
+                print(f"\n  {YELLOW}→ AMBIGUOUS - LLM fallback{RESET}")
+            if _SHOW_LLM_FALLBACK:
+                llm_label = trace_llm_fallback(prompt, result, quiet)
+                final_route = "agentic" if llm_label == "agentic" else "localchat"
             else:
-                final_route = "chat"
-                if not quiet:
-                    print(f"\n  {CYAN}→ ROUTE: chat()  websearch=False{RESET}")
-
-            # search resolver: only in LLM fallback mode, not every chat turn
-            if _SHOW_LLM_FALLBACK and needs_search and _ROUTE_MODE == "llm":
-                trace_llm_search_resolve(prompt, result, quiet)
+                final_route = "localchat"
+        
+        else:
+            final_route = "localchat"
+            if not quiet:
+                print(f"\n  {CYAN}→ ROUTE: localchat{RESET}")
 
     # ── LLM-only mode ────────────────────────────────────────────────────────
     if not _RUN_SEMANTIC:
@@ -451,18 +382,13 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
             if not quiet:
                 print(f"\n  {GREEN}→ ROUTE: agentic_chat  (deterministic task pattern){RESET}")
         else:
-            llm_label = trace_llm_router(prompt, result, quiet)
+            llm_label = trace_llm_fallback(prompt, result, quiet)
         think._history = []
 
         if llm_label == "agentic":
             final_route = "agentic"
         else:
-            # Production routing gates search semantically before resolving a query.
-            if think._needs_websearch(prompt):
-                trace_llm_search_resolve(prompt, result, quiet)
-                final_route = "chat+search"
-            else:
-                final_route = "chat"
+            final_route = "localchat"
 
     return final_route
 

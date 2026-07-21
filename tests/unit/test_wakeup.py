@@ -196,8 +196,7 @@ def _patch_common(monkeypatch, *, think_cls=FakeThink, memorize_cls=FakeMemorize
     # patch them to harmless placeholders so the import inside
     # _prewarm_semantic_cache doesn't need the real module populated.
     import cognition.think as think_module
-    for name in ("_ROUTE_TERNARY_EXAMPLES", "_ROUTE_INSTRUCT_TOOL",
-                 "_ROUTE_INSTRUCT_TERNARY", "_ROUTE_TOOL_EXAMPLES"):
+    for name in ("_ROUTE_TERNARY_EXAMPLES", "_ROUTE_INSTRUCT_TERNARY"):
         monkeypatch.setattr(think_module, name, {}, raising=False)
 
 

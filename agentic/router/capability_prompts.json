@@ -1,0 +1,73 @@
+{
+  "capabilities": {
+    "research": [
+      "research carrot cake recipes and summarize ingredients steps and notes",
+      "search for current documentation fetch the relevant pages and report the findings",
+      "look up the latest release notes compare sources and write a concise summary",
+      "find recent benchmarks for edge LLMs and write down the results",
+      "check whether this library supports the feature now and cite what changed",
+      "investigate this topic online then prepare a short report",
+      "find current facts from external sources before answering",
+      "research options and gather evidence before recommending one",
+      "research the history of this project and report what you find",
+      "find technical documentation and summarize the key concepts",
+      "search for best practices and compile a guide"
+    ],
+    "scheduling": [
+      "schedule a job that checks email every hour and notifies me",
+      "add this recurring task to schedule.json",
+      "remind me tomorrow at 9am",
+      "set an alarm for this time",
+      "create a scheduled agentic task with time task and action",
+      "wake me up at six",
+      "ping me in 45 minutes",
+      "set up an ongoing scheduled check and report what it does",
+      "create a daily reminder for this task",
+      "schedule a weekly check-in",
+      "set up monthly reviews"
+    ],
+    "kb_proposal": [
+      "remember this for later",
+      "store this knowledge for future reference",
+      "update the wiki with this information",
+      "propose a change to the knowledge base",
+      "learn this and save it",
+      "add this to the knowledge base",
+      "save this insight to the wiki",
+      "create a knowledge entry for this"
+    ],
+    "photo": [
+      "import photos from my camera",
+      "scan the photo workspace for new images",
+      "process the photo inbox",
+      "organize my photo library",
+      "ingest photos from the workspace",
+      "generate a photo ingestion report"
+    ],
+    "repo": [
+      "inspect the Aiko source files and explain the architecture",
+      "read the repo and find this function",
+      "search the repository for this function and patch the issue",
+      "open think.py and agentic.py then modify the routing logic",
+      "read the architecture file and explain the flow",
+      "refactor the schedule runner to use asyncio",
+      "debug why this function hangs and add a regression test",
+      "implement this feature with proper error handling and logging",
+      "add unit tests for this functionality",
+      "refactor this code to improve readability"
+    ],
+    "job_hunt": [
+      "find jobs matching my skills",
+      "search job boards for Python developer roles",
+      "look for remote ML engineering positions"
+    ],
+    "social": [
+      "post this on Twitter",
+      "share on Instagram",
+      "publish to YouTube",
+      "post to Threads",
+      "draft a social media post for this photo",
+      "draft a social media post for this video"
+    ]
+  }
+}

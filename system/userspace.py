@@ -31,6 +31,7 @@ from __future__ import annotations
 import contextvars
 import json
 from pathlib import Path
+import os
 import re
 import tempfile
 
