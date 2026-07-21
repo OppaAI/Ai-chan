@@ -77,6 +77,16 @@ from memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting st
 from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting status of speaking module
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
+from memory.memorize import AikoMemorize
+from system.log import silent_stderr
+with silent_stderr():
+    from sensory.speak import AikoSpeak
+    from cognition.think import AikoThink
+from sensory.listen import AikoListen
+from system.schedule import ScheduleRunner, register_scheduler, register_system_handler, ensure_workspace_knowledge_job, register_social_handlers
+from memory.reflect import generate_and_post
+from memory.consolidate import maybe_run_consolidation
+
 # ── result container ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -157,11 +167,6 @@ class AikoWakeup:
             BootResult with think, memorize, speak, listen references.
         """
         from system.log import silent_stderr
-        from memory.memorize import AikoMemorize
-
-        with silent_stderr():
-            from sensory.speak import AikoSpeak
-            from cognition.think import AikoThink
 
         speak     = AikoSpeak(silent=True)
         memorize  = [None]
@@ -184,27 +189,33 @@ class AikoWakeup:
         def init_memorize():
             try:
                 on_loading('mem_sqlite_vec')
-                memorize[0] = AikoMemorize(silent=True)
+                try:
+                    memorize[0] = AikoMemorize(silent=True)
+                    from system.userspace import current_display_name
+                    display_name = current_display_name()  # contextvar (empty at boot) -> AIKO_DISPLAY_NAME -> user_id
+                    memorize[0].set_display_name(display_name)
+                    if display_name == memorize[0].get_user_id():
+                        log.warning(
+                            "[wakeup] No cached display name for user_id=%s — memory pins "
+                            "will use raw user_id until the user logs in.",
+                            display_name,
+                        )
+                    on_done('mem_sqlite_vec')
+                except Exception:
+                    on_skip('mem_sqlite_vec')
+                    raise
 
-                from system.userspace import current_display_name
-                display_name = current_display_name()  # contextvar (empty at boot) -> AIKO_DISPLAY_NAME -> user_id
-                memorize[0] = AikoMemorize(silent=True)
-
-                from system.userspace import current_display_name
-                display_name = current_display_name()
-                memorize[0].set_display_name(display_name)
-                if display_name == memorize[0].get_user_id():
-                    log.warning(
-                        "[wakeup] No cached display name for user_id=%s — memory pins "
-                        "will use raw user_id until the user logs in.",
-                        display_name,
-                    )
-                on_done('mem_sqlite_vec')
                 on_loading('mem_embed')
                 on_done('mem_embed')
+
                 on_loading('mem_cleanup')
-                memorize[0].cleanup()
-                on_done('mem_cleanup')
+                try:
+                    memorize[0].cleanup()
+                    on_done('mem_cleanup')
+                except Exception:
+                    on_skip('mem_cleanup')
+                    raise
+
                 on_loading('mem_ready')
                 on_done('mem_ready')
             except Exception:
@@ -232,10 +243,6 @@ class AikoWakeup:
             )
         else:
             log.error("AikoThink failed to boot — deep-study window handlers not registered.")
-
-        from system.schedule import ScheduleRunner, register_scheduler, register_system_handler, ensure_workspace_knowledge_job, register_social_handlers
-        from memory.reflect import generate_and_post
-        from memory.consolidate import maybe_run_consolidation
 
         if memorize[0] is None:
             log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
@@ -304,7 +311,6 @@ class AikoWakeup:
         on_done('speak_ready')
 
         # ASR — staged so each step reports independently
-        from sensory.listen import AikoListen
         listen = AikoListen()
 
         on_loading('listen_asr')

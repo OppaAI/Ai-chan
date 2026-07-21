@@ -188,7 +188,6 @@ class AikoWeb:
         # since the mic stays open continuously for instant barge-in
         self._audio_q: queue.Queue[bytes] = queue.Queue(maxsize=10000)
         self._mic_active = threading.Event()
-        self._mic_started: bool = False
         self._did_barge_in: bool = False
 
         # connected browser websocket clients
@@ -450,9 +449,7 @@ class AikoWeb:
             with self._clients_lock:
                 self._clients.discard(ws)
             log.info("[aiko-web] browser disconnected (total=%d)", len(self._clients))
-            # reset mic state so a reconnecting browser gets mic:start again
             if not self._clients:
-                self._mic_started = False
                 self._did_barge_in = False
 
     # ------------------------------------------------------------------
@@ -758,15 +755,16 @@ class AikoWeb:
 
         # Keep the browser mic open continuously once started, so the browser
         # VAD can detect speech during TTS playback for instant barge-in.
-        if not self._mic_started:
-            self._mic_active.set()
-            self._broadcast({
-                "type": "mic",
-                "action": "start",
-                "bytes_per_chunk": BYTES_PER_CHUNK,
-                "browser_vad_gate": WEBUI_BROWSER_VAD_GATE,
-            })
-            self._mic_started = True
+        # Always send mic.start — the browser stopMic()/startMic() toggle
+        # resets the pipeline, so subsequent ASR re-activations need a fresh
+        # start signal. The browser's startMic() is idempotent until closed.
+        self._mic_active.set()
+        self._broadcast({
+            "type": "mic",
+            "action": "start",
+            "bytes_per_chunk": BYTES_PER_CHUNK,
+            "browser_vad_gate": WEBUI_BROWSER_VAD_GATE,
+        })
 
         threading.Thread(target=_run, daemon=True).start()
 
