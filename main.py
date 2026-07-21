@@ -20,6 +20,21 @@ system/orchestrate.py:run_session(ui, args) — see that module for the
 actual session orchestration (subsystem boot, main loop, commands,
 proactive idle check-ins, karaoke typewriter, latency/debug accounting).
 
+Flow:
+
+                    parse_args()
+                         │
+        ┌────────────────┼────────────────┬───────────────┐
+        ▼                ▼                ▼               ▼
+   --clear-mem       --logout           --cli          (default)
+        │                │                │               │
+        ▼                ▼                ▼               ▼
+  AikoMemorize()    handle_logout()   run_cli(args)   run_webui(args)
+     .clear()             │                │               │
+        │                 ▼                ▼               ▼
+        ▼              sys.exit(0)   → orchestrate.py  → orchestrate.py
+   sys.exit(0)                          run_session()     run_session()
+
 Front-end imports are deferred into main() rather than done at module load,
 so that --clear-mem and --logout (which don't need FastAPI, uvicorn,
 websockets, or any voice subsystem) stay fast and don't require those
@@ -38,9 +53,9 @@ Removed in this pass (dead code found while splitting main.py up):
     can't verify from here — please check your deploy config before pulling
     this in.
 """
-from __future__ import annotations
+from __future__ import annotations            # evaluates type annotations later
 
-from system.config import load_config
+from system.config import load_config         # load 
 load_config()
 
 import argparse
