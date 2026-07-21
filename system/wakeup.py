@@ -6,71 +6,120 @@ main.py calls AikoWakeup().boot(...) and receives a BootResult with all live
 subsystem references; it never needs to know the startup choreography.
 
 Progress is reported through three injected callbacks so wakeup.py stays
-completely TUI-ignorant:
+completely UI-ignorant:
     on_loading(key)  — subsystem is starting
     on_done(key)     — subsystem finished successfully
     on_skip(key)     — subsystem skipped (e.g. text mode)
 
 Each module owns its BOOT_LABELS dict; wakeup collects them and exposes
-ALL_BOOT_LABELS so the TUI can register display text before boot begins.
+ALL_BOOT_LABELS so the UI(CLI/WebUI) can register display text before boot begins.
 
 Usage:
-    tui.register_boot_labels(AikoWakeup.ALL_BOOT_LABELS)
-
     result = AikoWakeup(text_mode=False).boot(
-        on_loading = tui.step_loading,
-        on_done    = tui.step_done,
-        on_skip    = tui.step_skip,
+        on_loading = ui.step_loading,
+        on_done    = ui.step_done,
+        on_skip    = ui.step_skip,
     )
     think    = result.think
     memorize = result.memorize
     speak    = result.speak
     listen   = result.listen
+
+Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
+
+Flow:
+    ┌── init_think ──┐   ┌── init_memorize ──┐
+    │ boot + warmup  │   │ sqlite-vec+cleanup│   (parallel threads)
+    │ wait mem_ready │   │ set mem_ready     │
+    └───────┬────────┘   └─────────┬─────────┘
+            └───────────┬──────────┘
+                        ▼
+              join both threads
+                        │
+                        ▼
+              scheduler setup
+        (deep-study handlers, jobs, social lanes)
+                        │
+                        ▼
+              voice pipeline
+        (TTS warmup → ASR + VAD staged init)
+                        │
+                        ▼
+              return BootResult
+
+- Parallel phase — init_think and init_memorize run on separate threads at the same time.
+- think boots AikoThink, runs warmup, then blocks on mem_ready.wait() until memory is done.
+- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready.set() in a finally — so think never hangs even if memory boot fails.
+- Join point — main thread waits for both (t1.join(); t2.join()) before continuing.
+- Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
+- Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
+- Returns BootResult with all four live subsystem refs.
 """
 
-from __future__ import annotations
+from __future__ import annotations            # evaluates type annotations later
 
-import threading
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass             # for dataclass to hold subsystem references 
+from typing import Callable                   # for define boot functions
+import threading                              # for booting up cognition core and memory system in parallel
 
-# Must run before the system.* imports below: those modules may read secrets
-# from os.environ at their own module level, and load_config() is what
-# decrypts .env.age into os.environ. load_config() is idempotent (guarded
-# by _LOADED), so this is a no-op if main.py already called it first —
-# this is just a safety net for any other entrypoint that imports this
-# module directly.
-from system.config import load_config
+# Must run before the system.* imports below — those modules read secrets
+# from os.environ at import time, and this decrypts .env.age into os.environ.
+# Idempotent (guarded by _LOADED), so it's a no-op if main.py already ran it —
+# this is just a safety net for entrypoints that import this module directly.
+from system.config import load_config          # load secrets and configs before everything start (safety net)
 load_config()
 
-from system.log import get_logger
+from system.log import get_logger              # pass the logging to universal logger
 log = get_logger(__name__)
 
-from cognition.think    import BOOT_LABELS as _THINK_LABELS
-from memory.memorize import BOOT_LABELS as _MEM_LABELS
-from sensory.speak    import BOOT_LABELS as _SPEAK_LABELS
-from sensory.listen   import BOOT_LABELS as _LISTEN_LABELS
+from cognition.think import BOOT_LABELS as _THINK_LABELS    # for the booting status of cognition core
+from memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting status of memory system
+from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting status of speaking module
+from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
 # ── result container ──────────────────────────────────────────────────────────
 
 @dataclass
 class BootResult:
     """Holds all live subsystem references produced during boot."""
-    think:    object          # AikoThink
-    memorize: object          # AikoMemorize
-    speak:    object          # AikoSpeak
-    listen:   object          # AikoListen
+    think:    object          # AikoThink - cognition core
+    memorize: object          # AikoMemorize - memory system
+    speak:    object          # AikoSpeak - speaking module
+    listen:   object          # AikoListen -listening module
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+# NOTE: check capability.py vs think.py — which router examples are
+# actually used, and where prewarm should happen.
+#
+# Confirmed so far:
+#   - _ROUTE_TERNARY_EXAMPLES + _ROUTE_INSTRUCT_TERNARY: live, used by
+#     _route_intent(). Prewarm in wakeup.py is correct as-is.
+#   - _ROUTE_TOOL_EXAMPLES + _ROUTE_INSTRUCT_TOOL: defined + prewarmed in
+#     wakeup.py, but NOT scored anywhere in think.py. agentic_chat() uses
+#     capability.py's match_capabilities() instead (separate trigger-based
+#     mechanism, its own _CAPABILITY_INSTRUCT + _trigger_embed_cache).
+#   - STILL NEED TO CHECK: does agentic/agentic.py reference
+#     _ROUTE_TOOL_EXAMPLES or _ROUTE_INSTRUCT_TOOL anywhere? If not,
+#     both are dead -- delete from think.py + router_prompts.json's
+#     "tools" key, simplify _load_route_examples() to ternary-only.
+#
+# If confirmed dead:
+#   1. Delete _ROUTE_TOOL_EXAMPLES / _ROUTE_INSTRUCT_TOOL from think.py
+#   2. Delete "tools" key from router_prompts.json
+#   3. wakeup.py's _prewarm_semantic_cache: replace the tool-examples
+#      prewarm call with one that warms capability.py's real cache --
+#      call _get_trigger_embedding(cap, embedder) for every cap in
+#      CAPABILITIES.values() at boot, since that's the mechanism
+#      agentic_chat() actually hits on the first real turn.
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and search exemplars at boot so first-turn latency is cold-free."""
     from cognition.think import (
-        _ROUTE_TERNARY_EXAMPLES,
-        _ROUTE_INSTRUCT_TOOL,
-        _ROUTE_INSTRUCT_TERNARY,
-        _ROUTE_TOOL_EXAMPLES,
+        _ROUTE_TERNARY_EXAMPLES,            # for top-level 3-way routing decision (agentic / webchat / localchat)
+        _ROUTE_INSTRUCT_TOOL,               # for 
+        _ROUTE_INSTRUCT_TERNARY,            # the instruction strings of the 3-way routing
+        _ROUTE_TOOL_EXAMPLES,               # labeled examples for scoring which agentic tool/capability applies after routed to agentic
     )
     try:
         # Prewarm the exact cache entries that route() and agentic context
@@ -92,21 +141,19 @@ class AikoWakeup:
     Boots AikoThink and AikoMemorize concurrently, then stages TTS and ASR
     init sequentially with granular progress reporting per step.
     Each subsystem owns its BOOT_LABELS; ALL_BOOT_LABELS merges them all
-    so the TUI can register display text before boot begins.
-
-    Args:
-        text_mode: Legacy flag. The CLI now keeps voice subsystems loadable so /voice and /listen can toggle them at runtime.
+    so the UI can register display text before boot begins.
     """
 
     ALL_BOOT_LABELS: dict[str, str] = {
-        **_THINK_LABELS,
-        **_MEM_LABELS,
-        **_SPEAK_LABELS,
-        **_LISTEN_LABELS,
+        **_THINK_LABELS,            # for register AikoThink status
+        **_MEM_LABELS,              # for register AikoMemorize status 
+        **_SPEAK_LABELS,            # for register AikoSpeak status
+        **_LISTEN_LABELS,           # for register AikoListen status
     }
 
-    def __init__(self, text_mode: bool = False) -> None:
-        self._text_mode = text_mode
+    def __init__(self) -> None:
+        "Placeholder for future use"
+        pass
 
     def boot(
         self,
@@ -130,7 +177,7 @@ class AikoWakeup:
         Returns:
             BootResult with think, memorize, speak, listen references.
         """
-        from system.log import get_logger, silent_stderr
+        from system.log import silent_stderr
         from memory.memorize import AikoMemorize
 
         with silent_stderr():
