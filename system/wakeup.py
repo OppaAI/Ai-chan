@@ -117,14 +117,14 @@ def _prewarm_semantic_cache(think) -> None:
         think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)
         
         # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
-        from agentic.capability import CAPABILITIES, _get_trigger_embedding
-        embedder = think._memorize._mem._embedder
-        for cap in CAPABILITIES.values():
-            _get_trigger_embedding(cap, embedder)
+        from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
+        embedder = think._memorize._mem._embedder                                      # load the pre-embedded semantic vectors from npz files
+        for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
+            _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
         
-        log.info("[wakeup] Semantic exemplar cache warmed (intent + capabilities)")
-    except Exception as e:
-        log.warning("[wakeup] Semantic exemplar prewarm failed: %s", e)
+        log.info("[wakeup] Semantic exemplar cache warmed (intent + capabilities)")    # log sucess
+    except Exception as e:                                                             # if error,
+        log.warning("[wakeup] Semantic exemplar prewarm failed: %s", e)                # log failure
 
 
 # ── wakeup ────────────────────────────────────────────────────────────────────
