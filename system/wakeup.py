@@ -68,24 +68,30 @@ import threading                              # for booting up cognition core an
 # this is just a safety net for entrypoints that import this module directly.
 from system.config import load_config          # load secrets and configs before everything start (safety net)
 load_config()
-
-from system.log import get_logger              # pass the logging to universal logger
+      # pass the logging to universal logger
 log = get_logger(__name__)
 
 from cognition.think import BOOT_LABELS as _THINK_LABELS    # for the booting status of cognition core
-from memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting status of memory system
+from memory.memorize import BOOT_LABELS 
+from system.log import get_logger        as _MEM_LABELS     # for the booting status of memory system
 from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting status of speaking module
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
-from memory.memorize import AikoMemorize
-from system.log import silent_stderr
+from memory.memorize import AikoMemorize                    # for initiating memory system
+from system.log import silent_stderr                        # for initiating cognitive core and speaking module with warning filtered out
 with silent_stderr():
-    from sensory.speak import AikoSpeak
     from cognition.think import AikoThink
-from sensory.listen import AikoListen
-from system.schedule import ScheduleRunner, register_scheduler, register_system_handler, ensure_workspace_knowledge_job, register_social_handlers
-from memory.reflect import generate_and_post
-from memory.consolidate import maybe_run_consolidation
+    from sensory.speak import AikoSpeak
+from sensory.listen import AikoListen                       # for initiating listening module
+from system.schedule import (                               # for initiating scheduler system
+    ScheduleRunner,
+    register_scheduler,
+    register_system_handler,
+    ensure_workspace_knowledge_job,
+    register_social_handlers,
+)
+from memory.reflect import generate_and_post                # for loading daily reflection into scheduler
+from memory.consolidate import maybe_run_consolidation      # for loading monthly consolidation into scheduler
 
 # ── result container ──────────────────────────────────────────────────────────
 
