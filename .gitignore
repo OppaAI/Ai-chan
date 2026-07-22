@@ -222,6 +222,8 @@ __marimo__/
 *.mp3
 *.mp4
 *.wav
+
+.benchmarks/
 logs/
 models/
 node_modules/onnxruntime_gpu-*.whl
