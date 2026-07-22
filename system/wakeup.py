@@ -170,14 +170,16 @@ class AikoWakeup:
             """memorize_getter is a zero-arg callable so init_think can pull
             the memorize result lazily, after mem_ready fires — avoids needing
             the memorize future to exist before this closure is defined."""
-            on_loading('think_start')                                #
+            on_loading('think_start')                                # announce loading of cognitive module starts
             think = AikoThink(None, speak=speak)
-            on_done('think_start')
-            on_loading('think_warmup')
+            think.start_warmup()                     # NEW — explicit, not constructor side effect
+            on_done('think_start')                                   # announce loading of cognitive module finishes
+            on_loading('think_warmup')                               # announce warmup of cognitive module starts
             think.join_warmup()
-            on_done('think_warmup')
+            on_done('think_warmup')                                  # announce loading of cognitive module finishes
             mem_ready.wait()                                         # hold until memorize is ready
-            think._memorize = memorize_getter()                      # inject memory backend
+            think.set_memorize(memorize_getter())                    # inject memory backend
+            think.start_idle_learner()                # NEW — only now, memory is guaranteed present
             _prewarm_semantic_cache(think)                           # embed exemplars while booting
             return think
     
