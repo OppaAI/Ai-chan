@@ -118,7 +118,7 @@ def _prewarm_semantic_cache(think) -> None:
         
         # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
         from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
-        embedder = think._memorize._mem._embedder                                      # load the pre-embedded semantic vectors from npz files
+        embedder = think._get_memorize()._mem._embedder                                # load the pre-embedded semantic vectors from npz files
         for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
             _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
         
