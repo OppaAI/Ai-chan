@@ -332,8 +332,10 @@ class AikoThink:
         # Guards self._speak against the toggle-vs-background-thread race.
         # set_speak() is called from the main thread (main.py's /voice
         # toggle). Readers snapshot self._speak under the lock so a toggle
-        # landing mid-read can't produce a stale ref or a None mismatch.
+        # landing mid-read can't produce a stale ref or a None mismatch.      
         self._speak_lock = threading.Lock()
+        self._memorize_lock = threading.Lock()
+
         self._persona   = _load_static_persona()
         self._history:  list[dict] = []
         self._history_lock = threading.Lock()
@@ -348,13 +350,11 @@ class AikoThink:
         self._reasoning = False
         self.last_usage: dict = {}
         self.last_prompt_debug: dict = {}
-
         self._last_chat_time = time.time()
-        self._idle_learner_thread = threading.Thread(
-            target=learn.idle_learner_loop, args=(self,), daemon=True
-        )
-        self._idle_learner_thread.start()
-
+      
+        self._idle_learner_thread: threading.Thread | None = None
+        self._warmup_thread: threading.Thread | None = None
+      
         # ── rest-signal state for learn.idle_learner_loop ───────────────────
         # The proactive idle check-in state machine lives in main.py's
         # ProactiveIdleRunner. That runner sets this flag via
@@ -363,9 +363,6 @@ class AikoThink:
         # by _note_user_activity() on every normal turn.
         self._proactive_lock = threading.Lock()
         self._proactive_resting = False
-
-        self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
-        self._warmup_thread.start()
       
     def _warmup_llm(self) -> None:
         try:
