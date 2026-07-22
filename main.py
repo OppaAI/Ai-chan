@@ -20,6 +20,21 @@ system/orchestrate.py:run_session(ui, args) — see that module for the
 actual session orchestration (subsystem boot, main loop, commands,
 proactive idle check-ins, karaoke typewriter, latency/debug accounting).
 
+Flow:
+
+                    parse_args()
+                         │
+        ┌────────────────┼────────────────┬───────────────┐
+        ▼                ▼                ▼               ▼
+   --clear-mem       --logout           --cli          (default)
+        │                │                │               │
+        ▼                ▼                ▼               ▼
+  AikoMemorize()    handle_logout()   run_cli(args)   run_webui(args)
+     .clear()             │                │               │
+        │                 ▼                ▼               ▼
+        ▼              sys.exit(0)   → orchestrate.py  → orchestrate.py
+   sys.exit(0)                          run_session()     run_session()
+
 Front-end imports are deferred into main() rather than done at module load,
 so that --clear-mem and --logout (which don't need FastAPI, uvicorn,
 websockets, or any voice subsystem) stay fast and don't require those
@@ -38,64 +53,62 @@ Removed in this pass (dead code found while splitting main.py up):
     can't verify from here — please check your deploy config before pulling
     this in.
 """
-from __future__ import annotations
+from __future__ import annotations            # evaluates type annotations later
 
-from system.config import load_config
+from system.config import load_config         # load user configs
 load_config()
 
-import argparse
-import sys
-import warnings
-
+import argparse                               # for parsing CLI arguments
+import sys                                    # for assigning exit code
+import warnings                               # for filtering out the warning messages
 warnings.filterwarnings("ignore")
 
-from system.log import get_logger, silent_stderr
-
+from system.log import get_logger, silent_stderr    # assign logging to universal logger
 log = get_logger(__name__)
 
-with silent_stderr():
-    from memory.memorize import AikoMemorize
+#with silent_stderr():                               # load memory system with warning filtered out
+from memory.memorize import AikoMemorize
 
 
 def parse_args():
     """Parse and return the CLI argument namespace for Aiko-chan's launch options."""
-    p = argparse.ArgumentParser(description="Aiko-chan")
-    p.add_argument("--text",      action="store_true",
+    p = argparse.ArgumentParser(description="Aiko-chan")          # create argument object for declaring arguments
+    p.add_argument("--text",      action="store_true",            # text (keyboard) input only
                    help="keyboard input + TTS/ASR initially off; both subsystems still load for /voice and /listen toggles")
-    p.add_argument("--no-asr",    action="store_true",
+    p.add_argument("--no-asr",    action="store_true",            # disable ASR
                    help="keyboard input but keep TTS on; ASR still loads for /listen")
-    p.add_argument("--debug",     action="store_true",
+    p.add_argument("--debug",     action="store_true",            # debug mode
                    help="show memory hits each turn")
-    p.add_argument("--cli",       action="store_true",
+    p.add_argument("--cli",       action="store_true",            # launch in CLI
                    help="use the plain no-curses CLI instead of the WebUI — for local testing only")
-    p.add_argument("--clear-mem", action="store_true",
-                   help="wipe all stored memories and exit")
-    p.add_argument("--logout",   action="store_true",
+    p.add_argument("--clear-mem", action="store_true",            # wipe out all memory and exit
+                   help="WARNING: irreversibly wipes all stored memories, then exits")
+    p.add_argument("--logout",   action="store_true",             # logout the stored user credential
                    help="clear stored CLI auth token and exit")
-    p.add_argument("--name",     type=str, default="",
-                   help="set your display name for CLI mode (skips GitHub OAuth name)")
-    return p.parse_args()
+    p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
+                   help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
+    return p.parse_args()                                         # return namespace of the arguments
 
 
 def main():
     """Primary entry point for the Aiko-chan CLI."""
-    args = parse_args()
+    args = parse_args()                                # assign argument namespace to check which ones are set
 
-    if args.clear_mem:
+    if args.clear_mem:                                 # wipe out all memory and exit
         log.info("Clearing all memories...")
         m = AikoMemorize()
         m.clear()
         sys.exit(0)
 
-    if args.logout:
+    if args.logout:                                     # logout the stored user credential
         from interface.cli.cli import handle_logout
         handle_logout()
         sys.exit(0)
 
-    if args.cli:
+    if args.cli:                                        # launch CLI
         from interface.cli.cli import run_cli
         run_cli(args)
-    else:
+    else:                                               # launch WebUI
         from interface.webui.webui import run_webui
         run_webui(args)
 
