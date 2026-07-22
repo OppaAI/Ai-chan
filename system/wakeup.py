@@ -165,14 +165,15 @@ class AikoWakeup:
         """
         from concurrent.futures import ThreadPoolExecutor            # for managing pool of worker threads
         speak = AikoSpeak(silent=True)                               # construct TTS subsystem object before boot threads start
-        mem_ready = threading.Event()                                # thread-safe boolean flag for blocking until memory system is ready
+        mem_ready_evt  = threading.Event()                          # thread-safe boolean flag for blocking until memory system is ready
     
         # ── parallel boot ─────────────────────────────────────────────────────
     
         def init_think(memorize_getter):
             """memorize_getter is a zero-arg callable so init_think can pull
-            the memorize result lazily, after mem_ready fires — avoids needing
+            the memorize result lazily, after mem_ready_evt fires — avoids needing
             the memorize future to exist before this closure is defined."""
+
             on_loading('think_start')                                # announce loading of cognitive module starts
             think = AikoThink(None, speak=speak)
             think.start_warmup()                     # NEW — explicit, not constructor side effect
@@ -180,10 +181,14 @@ class AikoWakeup:
             on_loading('think_warmup')                               # announce warmup of cognitive module starts
             think.join_warmup()
             on_done('think_warmup')                                  # announce loading of cognitive module finishes
-            mem_ready.wait()                                         # hold until memorize is ready
+            on_loading('think_mem_wait')
+            mem_ready_evt.wait()
+            on_done('think_mem_wait')
             think.set_memorize(memorize_getter())                    # inject memory backend (may be None if memory boot failed)
             think.start_idle_learner()                # no-ops cleanly if memorize is None
+            think.set_memorize(memorize_getter())
             _prewarm_semantic_cache(think)                           # embed exemplars while booting
+            on_done('think_prewarm')
             return think
     
         def init_memorize():
