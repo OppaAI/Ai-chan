@@ -60,14 +60,14 @@ load_config()
 
 import argparse                               # for parsing CLI arguments
 import sys                                    # for assigning exit code
-import warnings                               # for filtering out he warning messages
+import warnings                               # for filtering out the warning messages
 warnings.filterwarnings("ignore")
 
 from system.log import get_logger, silent_stderr    # assign logging to universal logger
 log = get_logger(__name__)
 
-with silent_stderr():                               # load memory system with warning filtered out
-    from memory.memorize import AikoMemorize
+#with silent_stderr():                               # load memory system with warning filtered out
+from memory.memorize import AikoMemorize
 
 
 def parse_args():
