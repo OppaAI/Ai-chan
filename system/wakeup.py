@@ -68,20 +68,20 @@ import threading                              # for booting up cognition core an
 # this is just a safety net for entrypoints that import this module directly.
 from system.config import load_config          # load secrets and configs before everything start (safety net)
 load_config()
-      # pass the logging to universal logger
+
+from system.log import get_logger              # pass the logging to universal logger
 log = get_logger(__name__)
 
 from cognition.think import BOOT_LABELS as _THINK_LABELS    # for the booting status of cognition core
-from memory.memorize import BOOT_LABELS 
-from system.log import get_logger        as _MEM_LABELS     # for the booting status of memory system
+from memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting status of memory system
 from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting status of speaking module
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
 from memory.memorize import AikoMemorize                    # for initiating memory system
-#from system.log import silent_stderr                        # for initiating cognitive core and speaking module with warning filtered out
-with silent_stderr():
-    from cognition.think import AikoThink
-    from sensory.speak import AikoSpeak
+#from system.log import silent_stderr                        # for initiating cognitive core and speaking module /with warning filtered out
+#with silent_stderr():
+from cognition.think import AikoThink
+from sensory.speak import AikoSpeak
 from sensory.listen import AikoListen                       # for initiating listening module
 from system.schedule import (                               # for initiating scheduler system
     ScheduleRunner,
@@ -245,16 +245,16 @@ class AikoWakeup:
         # have a registered handler to call into — otherwise they log
         # "unregistered handler" and silently never fire. Needs AikoThink's
         # LLM client/model, so it can only happen here, after think boots.
-        if think_ref[0] is not None:
+        if think_ref is not None:
             from memory import learn
             learn.register_deep_study_handlers(
-                client=think_ref[0]._client,
-                model=think_ref[0]._llm_model,
+                client=think_ref._client,
+                model=think_ref._llm_model,
             )
         else:
             log.error("AikoThink failed to boot — deep-study window handlers not registered.")
 
-        if memorize[0] is None:
+        if memorize is None:
             log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
 
         # NOTE: this is the ONE ScheduleRunner for the whole app. AikoThink
@@ -266,8 +266,8 @@ class AikoWakeup:
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
         _scheduler = ScheduleRunner(
-            on_due=think_ref[0].handle_scheduled_job if think_ref[0] else None,
-            memorize=memorize[0],
+            on_due=think_ref.handle_scheduled_job if think_ref else None,
+            memorize=memorize,
             generate_and_post_fn=generate_and_post,
             consolidate_fn=maybe_run_consolidation,
         )
@@ -277,7 +277,7 @@ class AikoWakeup:
         # Schedule-driven workspace/knowledge scan. The schedule runner keeps
         # using one sleep-until-next-event loop; the KB scan is represented in
         # schedule.json as a normal interval handler job.
-        if memorize[0] is not None:
+        if memorize is not None:
             try:
                 from memory.knowledge import ingest_workspace_knowledge_folder
 
@@ -298,7 +298,7 @@ class AikoWakeup:
         # inbox). register_social_handlers() registers all three handlers
         # with the system handler registry and idempotently seeds their
         # schedule.json jobs (see system/schedule.py). Doesn't depend on
-        # memorize[0] the way the workspace-knowledge scan does — the
+        # memorize the way the workspace-knowledge scan does — the
         # weekly/photo/video handlers are called with memorize but the
         # photo/video ones just absorb and ignore it — but this is kept
         # here, after memory boot, so all "post-scheduler" job seeding
@@ -340,8 +340,8 @@ class AikoWakeup:
         on_done('listen_ready')
 
         return BootResult(
-            think    = think_ref[0],
-            memorize = memorize[0],
+            think    = think_ref,
+            memorize = memorize,
             speak    = speak,
             listen   = listen,
         )
