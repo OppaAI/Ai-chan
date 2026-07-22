@@ -69,7 +69,6 @@ register_system_handler("weekly_social", run_scheduled_weekly_social)
 BOOT_LABELS = {
     'think_start':  'Loading llama.cpp client + persona...',
     'think_warmup': 'Warming up language model...',
-    'think_reminders': 'Starting reminder scheduler...',
 }
 
 # ── config ────────────────────────────────────────────────────────────────────
