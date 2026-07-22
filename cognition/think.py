@@ -391,6 +391,9 @@ class AikoThink:
         on its first iteration."""
         if self._idle_learner_thread is not None:
             return
+        if self._get_memorize() is None:
+            log.warning("[think] Memory unavailable — idle learner not started.")
+            return
         self._idle_learner_thread = threading.Thread(
             target=learn.idle_learner_loop, args=(self,), daemon=True
         )
@@ -776,7 +779,7 @@ class AikoThink:
         with self._active_users_lock:
             self._active_user_ids.add(user_id)
         try:
-            embedder = self._memorize._mem._embedder
+            embedder = self._get_memorize()._mem._embedder
             cap_vec = embedder.embed_query(
                 user_input,
                 instruct="Which capability/tool domain applies to this task?",
