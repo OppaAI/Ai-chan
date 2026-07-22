@@ -108,6 +108,9 @@ class BootResult:
 
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and capability exemplars at boot so first-turn latency is cold-free."""
+    if think._get_memorize() is None:
+        log.info("[wakeup] Skipping semantic cache prewarm — no memory backend.")
+        return
     from cognition.think import (
         _ROUTE_TERNARY_EXAMPLES,            # for top-level 3-way routing decision (agentic / webchat / localchat)
         _ROUTE_INSTRUCT_TERNARY,            # the instruction strings of the 3-way routing
@@ -178,8 +181,8 @@ class AikoWakeup:
             think.join_warmup()
             on_done('think_warmup')                                  # announce loading of cognitive module finishes
             mem_ready.wait()                                         # hold until memorize is ready
-            think.set_memorize(memorize_getter())                    # inject memory backend
-            think.start_idle_learner()                # NEW — only now, memory is guaranteed present
+            think.set_memorize(memorize_getter())                    # inject memory backend (may be None if memory boot failed)
+            think.start_idle_learner()                # no-ops cleanly if memorize is None
             _prewarm_semantic_cache(think)                           # embed exemplars while booting
             return think
     
