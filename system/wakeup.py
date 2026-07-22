@@ -98,10 +98,10 @@ from memory.consolidate import maybe_run_consolidation      # for loading monthl
 @dataclass
 class BootResult:
     """Holds all live subsystem references produced during boot."""
-    think:    object          # AikoThink - cognition core
-    memorize: object          # AikoMemorize - memory system
-    speak:    object          # AikoSpeak - speaking module
-    listen:   object          # AikoListen -listening module
+    think:    AikoThink              # cognition core
+    memorize: AikoMemorize | None    # memory system
+    speak:    AikoSpeak              # speaking module
+    listen:   AikoListen             # listening module
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -145,10 +145,6 @@ class AikoWakeup:
         **_SPEAK_LABELS,            # for register AikoSpeak status
         **_LISTEN_LABELS,           # for register AikoListen status
     }
-
-    def __init__(self) -> None:
-        "Placeholder for future use"
-        pass
 
     def boot(
         self,
