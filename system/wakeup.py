@@ -160,10 +160,9 @@ class AikoWakeup:
         Barge-in monitor started as the final ASR step so Silero is already
         warm and the VAD thread costs nothing before the first turn.
         """
-        from concurrent.futures import ThreadPoolExecutor
-    
-        speak = AikoSpeak(silent=True)
-        mem_ready = threading.Event()
+        from concurrent.futures import ThreadPoolExecutor            # for managing pool of worker threads
+        speak = AikoSpeak(silent=True)                               # construct TTS subsystem object before boot threads start
+        mem_ready = threading.Event()                                # thread-safe boolean flag for blocking until memory system is ready
     
         # ── parallel boot ─────────────────────────────────────────────────────
     
@@ -171,15 +170,15 @@ class AikoWakeup:
             """memorize_getter is a zero-arg callable so init_think can pull
             the memorize result lazily, after mem_ready fires — avoids needing
             the memorize future to exist before this closure is defined."""
-            on_loading('think_start')
+            on_loading('think_start')                                #
             think = AikoThink(None, speak=speak)
             on_done('think_start')
             on_loading('think_warmup')
             think.join_warmup()
             on_done('think_warmup')
-            mem_ready.wait()                        # hold until memorize is ready
-            think._memorize = memorize_getter()      # inject memory backend
-            _prewarm_semantic_cache(think)            # embed exemplars while booting
+            mem_ready.wait()                                         # hold until memorize is ready
+            think._memorize = memorize_getter()                      # inject memory backend
+            _prewarm_semantic_cache(think)                           # embed exemplars while booting
             return think
     
         def init_memorize():
