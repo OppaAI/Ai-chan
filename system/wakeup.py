@@ -78,7 +78,7 @@ from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting st
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
 from memory.memorize import AikoMemorize                    # for initiating memory system
-from system.log import silent_stderr                        # for initiating cognitive core and speaking module with warning filtered out
+#from system.log import silent_stderr                        # for initiating cognitive core and speaking module with warning filtered out
 with silent_stderr():
     from cognition.think import AikoThink
     from sensory.speak import AikoSpeak
@@ -158,49 +158,43 @@ class AikoWakeup:
     ) -> BootResult:
         """
         Execute full boot sequence and return live subsystem references.
-
+    
         Parallel phase: AikoThink + AikoMemorize boot concurrently.
         Sequential phase: TTS warmup → ASR staged init.
         Barge-in monitor started as the final ASR step so Silero is already
         warm and the VAD thread costs nothing before the first turn.
-
-        Args:
-            on_loading: Called with a progress key when a subsystem starts.
-            on_done:    Called with a progress key when a subsystem finishes.
-            on_skip:    Called with a progress key when a subsystem is skipped.
-
-        Returns:
-            BootResult with think, memorize, speak, listen references.
         """
-        from system.log import silent_stderr
-
-        speak     = AikoSpeak(silent=True)
-        memorize  = [None]
-        think_ref = [None]
+        from concurrent.futures import ThreadPoolExecutor
+    
+        speak = AikoSpeak(silent=True)
         mem_ready = threading.Event()
-
+    
         # ── parallel boot ─────────────────────────────────────────────────────
-
-        def init_think():
+    
+        def init_think(memorize_getter):
+            """memorize_getter is a zero-arg callable so init_think can pull
+            the memorize result lazily, after mem_ready fires — avoids needing
+            the memorize future to exist before this closure is defined."""
             on_loading('think_start')
-            think_ref[0] = AikoThink(None, speak=speak)
+            think = AikoThink(None, speak=speak)
             on_done('think_start')
             on_loading('think_warmup')
-            think_ref[0].join_warmup()
+            think.join_warmup()
             on_done('think_warmup')
             mem_ready.wait()                        # hold until memorize is ready
-            think_ref[0]._memorize = memorize[0]    # inject memory backend
-            _prewarm_semantic_cache(think_ref[0])   # embed exemplars while booting
-
+            think._memorize = memorize_getter()      # inject memory backend
+            _prewarm_semantic_cache(think)            # embed exemplars while booting
+            return think
+    
         def init_memorize():
             try:
                 on_loading('mem_sqlite_vec')
                 try:
-                    memorize[0] = AikoMemorize(silent=True)
+                    memorize = AikoMemorize(silent=True)
                     from system.userspace import current_display_name
-                    display_name = current_display_name()  # contextvar (empty at boot) -> AIKO_DISPLAY_NAME -> user_id
-                    memorize[0].set_display_name(display_name)
-                    if display_name == memorize[0].get_user_id():
+                    display_name = current_display_name()
+                    memorize.set_display_name(display_name)
+                    if display_name == memorize.get_user_id():
                         log.warning(
                             "[wakeup] No cached display name for user_id=%s — memory pins "
                             "will use raw user_id until the user logs in.",
@@ -210,29 +204,39 @@ class AikoWakeup:
                 except Exception:
                     on_skip('mem_sqlite_vec')
                     raise
-
+    
                 on_loading('mem_embed')
                 on_done('mem_embed')
-
+    
                 on_loading('mem_cleanup')
                 try:
-                    memorize[0].cleanup()
+                    memorize.cleanup()
                     on_done('mem_cleanup')
                 except Exception:
                     on_skip('mem_cleanup')
                     raise
-
+    
                 on_loading('mem_ready')
                 on_done('mem_ready')
+                return memorize
             except Exception:
                 log.exception("Memory boot failed — Aiko will run without persistent memory.")
+                return None          # explicit sentinel, not a silent list-slot
             finally:
                 mem_ready.set()
-
-        t1 = threading.Thread(target=init_think,    daemon=True)
-        t2 = threading.Thread(target=init_memorize, daemon=True)
-        t1.start(); t2.start()
-        t1.join();  t2.join()
+    
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            mem_future = ex.submit(init_memorize)
+            think_future = ex.submit(init_think, lambda: mem_future.result())
+            # .result() re-raises any exception the worker thread hit — no
+            # silent None left behind unless init_memorize/init_think decided
+            # to return None deliberately (as init_memorize does above).
+            try:
+                think_ref = think_future.result()
+            except Exception:
+                log.exception("AikoThink failed to boot.")
+                think_ref = None
+            memorize = mem_future.result()   # never raises — already caught internally
 
         # ── wire deep_studying into the scheduler's weekday/weekend window ────
         # Must happen before the ScheduleRunner below starts (or at least
