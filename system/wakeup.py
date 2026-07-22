@@ -95,13 +95,13 @@ from memory.consolidate import maybe_run_consolidation      # for loading monthl
 
 # ── result container ──────────────────────────────────────────────────────────
 
-@dataclass
+@dataclass(slots=True)
 class BootResult:
     """Holds all live subsystem references produced during boot."""
-    think:    AikoThink              # cognition core
-    memorize: AikoMemorize | None    # memory system
-    speak:    AikoSpeak              # speaking module
-    listen:   AikoListen             # listening module
+    think:    AikoThink | None        # cognition core
+    memorize: AikoMemorize | None     # memory system
+    speak:    AikoSpeak               # speaking module
+    listen:   AikoListen              # listening module
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
