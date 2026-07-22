@@ -378,6 +378,24 @@ class AikoThink:
         if self._warmup_thread and self._warmup_thread.is_alive():
             self._warmup_thread.join()
 
+    def start_warmup(self) -> None:
+        """Kick off the LLM warmup call. Call once, right after construction."""
+        if self._warmup_thread is not None:
+            return
+        self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
+        self._warmup_thread.start()
+  
+    def start_idle_learner(self) -> None:
+        """Start the background idle-learning loop. Call only after
+        set_memorize() has been called — the loop reads self._memorize
+        on its first iteration."""
+        if self._idle_learner_thread is not None:
+            return
+        self._idle_learner_thread = threading.Thread(
+            target=learn.idle_learner_loop, args=(self,), daemon=True
+        )
+        self._idle_learner_thread.start()
+  
     def _current_system_prompt(self, user_input: str = "") -> str:
         """Assemble this turn's system prompt: static persona core + fresh
         per-user context + any conditional overrides this input triggers.
@@ -409,7 +427,7 @@ class AikoThink:
             self._active_user_ids.add(user_id)
         self._note_user_activity()
         try:
-            embedder = self._memorize._mem._embedder
+            embedder = self._get_memorize()._mem._embedder
             query_vec = embedder.embed_query(user_input)
             mem_kb_future = CONTEXT_POOL.submit(
                 self._fetch_memory_and_knowledge, user_input, query_vec
@@ -448,8 +466,8 @@ class AikoThink:
 
         Returns (memories, knowledge_block).
         """
-        embedder = self._memorize._mem._embedder
-        mem_future = CONTEXT_POOL.submit(self._memorize.search, user_input, limit=mem_limit, query_vector=query_vector)
+        embedder = self._get_memorize()._mem._embedder
+        mem_future = CONTEXT_POOL.submit(self._get_memorize().search, user_input, limit=mem_limit, query_vector=query_vector)
         know_future = CONTEXT_POOL.submit(
             knowledge_context_for, user_input, limit=know_limit, max_chars=2000, embedder=embedder
         )
@@ -522,7 +540,7 @@ class AikoThink:
             return "localchat"
     
         instruct = _ROUTE_INSTRUCT_TERNARY
-        embedder = self._memorize._mem._embedder
+        embedder = self._get_memorize()._mem._embedder
         query_vec = embedder.embed_query(user_input, instruct=instruct)
         labels, example_vecs = self._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, instruct)
         scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
@@ -590,7 +608,7 @@ class AikoThink:
             if cached is not None:
                 return cached
 
-            embedder = self._memorize._mem._embedder
+            embedder = self._get_memorize()._mem._embedder
             disk_path = self._route_vector_cache_path(examples_by_label, instruct, embedder)
             if disk_path is not None and disk_path.exists():
                 try:
@@ -778,7 +796,7 @@ class AikoThink:
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-        memory_block = self._memorize.format_for_context(memories)
+        memory_block = self._get_memorize().format_for_context(memories)
 
         # Build base system (persona + memory + knowledge)
         system = self._current_system_prompt()
@@ -905,7 +923,7 @@ class AikoThink:
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-        memory_block = self._memorize.format_for_context(memories)
+        memory_block = self._get_memorize().format_for_context(memories)
         
         system = self._current_system_prompt()
         system += "\n\n" + bioclock.current_datetime_block()
@@ -922,7 +940,7 @@ class AikoThink:
             try:
                 wiki_context = wiki_knowledge_context_for(
                     user_input, limit=3, max_chars=3000,
-                    embedder=self._memorize._mem._embedder,
+                    embedder=self._get_memorize()._mem._embedder,
                 )
                 system = f"{system}\n\n{wiki_context}"
             except Exception as e:
@@ -991,7 +1009,16 @@ class AikoThink:
     def set_speak(self, speak) -> None:
         with self._speak_lock:
             self._speak = speak
-
+          
+    def set_memorize(self, memorize) -> None:
+        """Inject the memory backend after boot. Thread-safe against concurrent reads."""
+        with self._memorize_lock:
+            self._memorize = memorize
+    
+    def _get_memorize(self):
+        with self._memorize_lock:
+            return self._memorize
+  
     def wait_for_memory(self, timeout: float | None = None) -> bool:
         """Block until AikoMemorize's async write queue drains, or timeout
         elapses. The queue itself now lives in memory.memorize; this is a
@@ -1002,7 +1029,7 @@ class AikoThink:
         rarely caught anything. Still available for any caller that
         genuinely needs to block until writes are flushed (e.g. shutdown).
         """
-        return self._memorize.wait_for_writes(timeout=timeout)
+        return self._get_memorize().wait_for_writes(timeout=timeout)
 
     def handle_scheduled_job(self, job: DueJob) -> None:
         """Announce or execute a due scheduled job without blocking the scheduler."""
@@ -1165,14 +1192,14 @@ class AikoThink:
         up this instance's idle-tracking callables (is_active_turn /
         idle_since) so the write waits for a genuinely idle window before
         using the shared LLM for fact extraction. Kept as a method (rather
-        than inlining self._memorize.queue_write(...) at every call site)
+        than inlining self._get_memorize().queue_write(...) at every call site)
         because agentic.agentic's run_agentic_chat also calls
         owner._store_async(...) directly at the end of the agent loop.
         """
         def _is_any_active():
             with self._active_users_lock:
                 return bool(self._active_user_ids)
-        self._memorize.queue_write(
+        self._get_memorize().queue_write(
             user_input,
             response_text,
             is_active_turn=_is_any_active,
