@@ -106,6 +106,7 @@ class BootResult:
     speak:    AikoSpeak               # speaking module
     listen:   AikoListen              # listening module
 
+type BootCallback = Callable[[str], None]            # type hint for the subsystem callable and none
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -154,9 +155,9 @@ class AikoWakeup:
 
     def boot(
         self,
-        on_loading: Callable[[str], None],
-        on_done:    Callable[[str], None],
-        on_skip:    Callable[[str], None],
+        on_loading: BootCallback,
+        on_done:    BootCallback,
+        on_skip:    BootCallback,
     ) -> BootResult:
         """
         Execute full boot sequence and return live subsystem references.
@@ -168,7 +169,7 @@ class AikoWakeup:
         """
         from concurrent.futures import ThreadPoolExecutor            # for managing pool of worker threads
         speak = AikoSpeak(silent=True)                               # construct TTS subsystem object before boot threads start
-        mem_ready_evt  = threading.Event()                          # thread-safe boolean flag for blocking until memory system is ready
+        mem_ready_evt  = threading.Event()                           # thread-safe boolean flag for blocking until memory system is ready
     
         # ── parallel boot ─────────────────────────────────────────────────────
     
@@ -235,7 +236,7 @@ class AikoWakeup:
                 log.exception("Memory boot failed — Aiko will run without persistent memory.")
                 return None          # explicit sentinel, not a silent list-slot
             finally:
-                mem_ready_ev.set()
+                mem_ready_evt.set()
     
         with ThreadPoolExecutor(max_workers=2) as ex:
             mem_future = ex.submit(init_memorize)
@@ -243,6 +244,8 @@ class AikoWakeup:
             # .result() re-raises any exception the worker thread hit — no
             # silent None left behind unless init_memorize/init_think decided
             # to return None deliberately (as init_memorize does above).
+            from concurrent.futures import wait
+            done, _ = wait([mem_future, think_future])
             try:
                 think_ref = think_future.result()
             except Exception:
@@ -277,14 +280,14 @@ class AikoWakeup:
         # That duplicate construction has been removed from cognition/think.py;
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
-        _scheduler = ScheduleRunner(
+        scheduler = ScheduleRunner(
             on_due=think_ref.handle_scheduled_job if think_ref else None,
             memorize=memorize,
             generate_and_post_fn=generate_and_post,
             consolidate_fn=maybe_run_consolidation,
         )
-        register_scheduler(_scheduler)  # Allow tools to notify scheduler of new jobs
-        _scheduler.start()
+        register_scheduler(scheduler)  # Allow tools to notify scheduler of new jobs
+        scheduler.start()
 
         # Schedule-driven workspace/knowledge scan. The schedule runner keeps
         # using one sleep-until-next-event loop; the KB scan is represented in
@@ -301,7 +304,7 @@ class AikoWakeup:
                     ),
                 )
                 ensure_workspace_knowledge_job()
-                _scheduler.notify_new_job()
+                scheduler.notify_new_job()
                 log.info("[wakeup] Workspace knowledge scan schedule ensured")
             except Exception as exc:
                 log.warning("[wakeup] Workspace knowledge scan schedule failed: %s", exc)
@@ -318,7 +321,7 @@ class AikoWakeup:
         # scheduler start above.
         try:
             register_social_handlers()
-            _scheduler.notify_new_job()
+            scheduler.notify_new_job()
             log.info("[wakeup] Social handlers registered and schedules ensured")
         except Exception as exc:
             log.warning("[wakeup] Social handler registration failed: %s", exc)
