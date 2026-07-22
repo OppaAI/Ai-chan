@@ -28,28 +28,31 @@ Usage:
 Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
 
 Flow:
-    ┌── init_think ──┐   ┌── init_memorize ──┐
-    │ boot + warmup  │   │ sqlite-vec+cleanup│   (parallel threads)
-    │ wait mem_ready │   │ set mem_ready     │
-    └───────┬────────┘   └─────────┬─────────┘
-            └───────────┬──────────┘
-                        ▼
-              join both threads
-                        │
-                        ▼
-              scheduler setup
-        (deep-study handlers, jobs, social lanes)
-                        │
-                        ▼
-              voice pipeline
-        (TTS warmup → ASR + VAD staged init)
-                        │
-                        ▼
-              return BootResult
+    ┌── init_think ────────────┐   ┌── init_memorize ───┐
+    │ boot + warmup            │   │ sqlite-vec+cleanup │   (parallel threads)
+    │ wait mem_ready_evt       │   │ set mem_ready_evt  │
+    │ set_memorize + idle_lrn  │   └─────────┬──────────┘
+    │ prewarm semantic cache   │             │
+    └───────────┬──────────────┘             │
+                └───────────┬────────────────┘
+                            ▼
+                  join both threads
+                            │
+                            ▼
+                  scheduler setup
+            (deep-study handlers, jobs, social lanes)
+                            │
+                            ▼
+                  voice pipeline
+            (TTS warmup → ASR + VAD staged init)
+                            │
+                            ▼
+                  return BootResult
 
 - Parallel phase — init_think and init_memorize run on separate threads at the same time.
-- think boots AikoThink, runs warmup, then blocks on mem_ready.wait() until memory is done.
-- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready.set() in a finally — so think never hangs even if memory boot fails.
+- think boots AikoThink, runs warmup, then blocks on mem_ready_evt.wait() until memory is done — then injects memory (set_memorize, may be None on failure), 
+  starts the idle learner (no-ops if memory is None), and prewarms the semantic route/capability caches before returning.
+- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready_evt.set() in a finally — so think never hangs even if memory boot fails.
 - Join point — main thread waits for both (t1.join(); t2.join()) before continuing.
 - Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
 - Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
@@ -178,15 +181,19 @@ class AikoWakeup:
             think = AikoThink(None, speak=speak)
             think.start_warmup()                     # NEW — explicit, not constructor side effect
             on_done('think_start')                                   # announce loading of cognitive module finishes
+            
             on_loading('think_warmup')                               # announce warmup of cognitive module starts
             think.join_warmup()
             on_done('think_warmup')                                  # announce loading of cognitive module finishes
+            
             on_loading('think_mem_wait')
             mem_ready_evt.wait()
             on_done('think_mem_wait')
+            
             think.set_memorize(memorize_getter())                    # inject memory backend (may be None if memory boot failed)
             think.start_idle_learner()                # no-ops cleanly if memorize is None
-            think.set_memorize(memorize_getter())
+            
+            on_loading('think_prewarm')
             _prewarm_semantic_cache(think)                           # embed exemplars while booting
             on_done('think_prewarm')
             return think
@@ -228,7 +235,7 @@ class AikoWakeup:
                 log.exception("Memory boot failed — Aiko will run without persistent memory.")
                 return None          # explicit sentinel, not a silent list-slot
             finally:
-                mem_ready.set()
+                mem_ready_ev.set()
     
         with ThreadPoolExecutor(max_workers=2) as ex:
             mem_future = ex.submit(init_memorize)
