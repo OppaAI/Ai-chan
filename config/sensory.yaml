@@ -20,7 +20,7 @@ LISTEN_MAX_SECONDS: "30"  # Hard cap on one recording length in seconds.
 LISTEN_DEVICE: ""  # sounddevice input index; blank means system default.
 
 # -- Speaker verification --
-SPEAKER_VERIFY_ENABLED: "1"  # Enable enrolled-speaker verification; options: 1/0, true/false, yes/no, on/off.
+SPEAKER_VERIFY_ENABLED: "0"  # Enable enrolled-speaker verification; options: 1/0, true/false, yes/no, on/off.
 SPEAKER_MODEL_PATH: "models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"  # Path to sherpa-onnx speaker embedding .onnx model.
 SPEAKER_VERIFY_THRESHOLD: "0.5"  # Cosine similarity cutoff for speaker match; range 0.0-1.0.
 SPEAKER_NUM_THREADS: "1"  # CPU threads for speaker embedding extraction.
