@@ -179,7 +179,7 @@ class AikoWakeup:
             the memorize future to exist before this closure is defined."""
 
             on_loading('think_start')                                # announce loading of cognitive module starts
-            think = AikoThink(None, speak=speak)
+            think = AikoThink(memorize=None, speak=speak)                    
             think.start_warmup()                     # NEW — explicit, not constructor side effect
             on_done('think_start')                                   # announce loading of cognitive module finishes
             
