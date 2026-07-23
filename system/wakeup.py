@@ -237,36 +237,32 @@ class AikoWakeup:
 
         def init_memorize():
             try:
-                memorize = _boot_step('mem_sqlite_vec', lambda: AikoMemorize(silent=True))
+                memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))        # initiate memory system (with logging off to prevent duplicate)
         
                 def _set_display_name():
                     """Pull the cached display name for this user and pin it to the
                     memory backend before any recall happens, so pinned memories are
                     attributed to a human-readable name instead of a raw user_id."""
-                    from system.userspace import current_display_name
-                    display_name = current_display_name()
-                    memorize.set_display_name(display_name)
-                    if display_name == memorize.get_user_id():
+                    from system.userspace import current_display_name                         # access userspace module
+                    display_name = current_display_name()                                     # get the username resolved from OAuth
+                    memorize.set_display_name(display_name)                                   # pass the username to memory system
+                    if display_name == memorize.get_user_id():                                # if the cached username is the same as user id, log warning
                         log.warning(
                             "[wakeup] No cached display name for user_id=%s — memory pins "
                             "will use raw user_id until the user logs in.",
                             display_name,
                         )
         
-                _boot_step('mem_display_name', _set_display_name)   # now reports on_done/on_skip like every other step
+                _boot_step('mem_display_name', _set_display_name)                             # pass the username to memory system
+                _boot_step('mem_cleanup', lambda: memorize.cleanup())                         # prune decayed memories
+                _boot_step('mem_ready')                                                       # mark the memory system ready
         
-                _boot_step('mem_embed')  # marker step, no work
-        
-                _boot_step('mem_cleanup', lambda: memorize.cleanup())
-        
-                _boot_step('mem_ready')
-        
-                return memorize
-            except Exception:
-                log.error("Memory boot failed — Aiko will run without persistent memory.")  # was log.exception; _boot_step already logged the full traceback
-                return None
-            finally:
-                mem_ready_evt.set()
+                return memorize                                                               # return the live AikoMemorize object
+            except Exception:                                                                 # if error, log failure
+                log.error("Memory boot failed — Aiko will run without persistent memory.")    # log Aiko will run without persistent memory
+                return None                                                                   # return None to indicate failure
+            finally:                                                                          # whether success or failure,
+                mem_ready_evt.set()                                                           # set memory ready flag to True to trigger any blocked thread
     
         with ThreadPoolExecutor(max_workers=2) as ex:
             mem_future = ex.submit(init_memorize)
