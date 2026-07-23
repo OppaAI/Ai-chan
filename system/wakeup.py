@@ -237,40 +237,28 @@ class AikoWakeup:
 
         def init_memorize():
             try:
-                on_loading('mem_sqlite_vec')
-                try:
-                    memorize = AikoMemorize(silent=True)
-                    from system.userspace import current_display_name
-                    display_name = current_display_name()
-                    memorize.set_display_name(display_name)
-                    if display_name == memorize.get_user_id():
-                        log.warning(
-                            "[wakeup] No cached display name for user_id=%s — memory pins "
-                            "will use raw user_id until the user logs in.",
-                            display_name,
-                        )
-                    on_done('mem_sqlite_vec')
-                except Exception:
-                    on_skip('mem_sqlite_vec')
-                    raise
-    
-                on_loading('mem_embed')
-                on_done('mem_embed')
-    
-                on_loading('mem_cleanup')
-                try:
-                    memorize.cleanup()
-                    on_done('mem_cleanup')
-                except Exception:
-                    on_skip('mem_cleanup')
-                    raise
-    
-                on_loading('mem_ready')
-                on_done('mem_ready')
+                memorize = _boot_step('mem_sqlite_vec', lambda: AikoMemorize(silent=True))
+                
+                from system.userspace import current_display_name
+                display_name = current_display_name()
+                memorize.set_display_name(display_name)
+                if display_name == memorize.get_user_id():
+                    log.warning(
+                        "[wakeup] No cached display name for user_id=%s — memory pins "
+                        "will use raw user_id until the user logs in.",
+                        display_name,
+                    )
+                
+                _boot_step('mem_embed')  # marker step, no work
+                
+                _boot_step('mem_cleanup', lambda: memorize.cleanup())
+                
+                _boot_step('mem_ready')
+                
                 return memorize
             except Exception:
                 log.exception("Memory boot failed — Aiko will run without persistent memory.")
-                return None          # explicit sentinel, not a silent list-slot
+                return None
             finally:
                 mem_ready_evt.set()
     
