@@ -1243,8 +1243,9 @@ class AikoMemorize:
     def get_display_name(self) -> str:
         """Return the display name for this user, or fall back to user_id."""
         return self._display_name or self.get_user_id()
-        def _resolve_user_id(self, user_id: str | None = None) -> str:
-            """Resolve the effective user_id for this call.
+      
+    def _resolve_user_id(self, user_id: str | None = None) -> str:
+        """Resolve the effective user_id for this call.
 
         An explicit argument always wins. Otherwise, falls back to THIS
         instance's own bound identity (get_user_id()) — never the ambient
