@@ -324,12 +324,13 @@ def _extract_search_results_block(system_prompt: str) -> str:
 # ── think ─────────────────────────────────────────────────────────────────────
 
 class AikoThink:
-    def __init__(self, memorize: AikoMemorize, speak: AikoSpeak | None = None) -> None:
+class AikoThink:
+    def __init__(self) -> None:
         self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
         self._llm_model = LLM_MODEL
         self._router_model = ROUTER_MODEL
-        self._memorize  = memorize
-        self._speak     = speak
+        self._memorize  = None    # injected later via set_memorize() — see system/wakeup.py
+        self._speak     = None    # injected later via set_speak()    — see system/wakeup.py
         # Guards self._speak against the toggle-vs-background-thread race.
         # set_speak() is called from the main thread (main.py's /voice
         # toggle). Readers snapshot self._speak under the lock so a toggle
