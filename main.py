@@ -117,5 +117,5 @@ def main():
         run_webui(args)                                 # launch WebUI with set arguments
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == '__main__':                              # run main only when not imported
+    main()                                              # run main
