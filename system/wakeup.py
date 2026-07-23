@@ -93,22 +93,22 @@ Failure logging policy — one log line per failure, with traceback + context:
       failure into 2-3 near-duplicate log entries.
 """
 
-from __future__ import annotations            # evaluates type annotations later
+from __future__ import annotations                          # evaluates type annotations later
 
-from collections.abc import Callable          # for defining boot functions (not typing.Callable — soft-deprecated since 3.9/PEP 585, this file already requires 3.12+)
-from concurrent.futures import ThreadPoolExecutor  # for parallel subsystem boot (moved to module top — no reason to import mid-function)
-from dataclasses import dataclass             # for dataclass to hold subsystem references 
-from typing import Any                        # Any still lives in typing — collections.abc has no equivalent
-import threading                              # for booting up cognition core and memory system in parallel
+from collections.abc import Callable                        # for defining boot functions
+from concurrent.futures import ThreadPoolExecutor           # for parallel subsystem boot
+from dataclasses import dataclass                           # for dataclass to hold subsystem references 
+from typing import Any                                      # Any still lives in typing — collections.abc has no equivalent
+import threading                                            # for booting up cognition core and memory system in parallel
 
 # Must run before the system.* imports below — those modules read secrets
 # from os.environ at import time, and this decrypts .env.age into os.environ.
 # Idempotent (guarded by _LOADED), so it's a no-op if main.py already ran it —
 # this is just a safety net for entrypoints that import this module directly.
-from system.config import load_config          # load secrets and configs before everything start (safety net)
+from system.config import load_config                       # load secrets and configs before everything start (safety net)
 load_config()
 
-from system.log import get_logger              # pass the logging to universal logger
+from system.log import get_logger                           # pass the logging to universal logger
 log = get_logger(__name__)
 
 from cognition.think import BOOT_LABELS as _THINK_LABELS    # for the booting status of cognition core
@@ -140,12 +140,12 @@ class BootResult:
     subsystem needs to be swapped out later that should go through an explicit
     method on the owning class, not a silent BootResult mutation.
     """
-    think:    AikoThink | None        # cognition core - None if cognitive system boot failed
-    memorize: AikoMemorize | None     # memory system - None if memory system boot failed
-    speak:    AikoSpeak | None        # speaking module — None if TTS boot failed
-    listen:   AikoListen | None       # listening module — None if ASR/VAD boot failed
+    think:    AikoThink | None                              # cognition core - None if cognitive system boot failed
+    memorize: AikoMemorize | None                           # memory system - None if memory system boot failed
+    speak:    AikoSpeak | None                              # speaking module — None if TTS boot failed
+    listen:   AikoListen | None                             # listening module — None if ASR/VAD boot failed
 
-type BootCallback = Callable[[str], None]                    # Callback for boot progress: takes step key (string)
+type BootCallback = Callable[[str], None]                   # Callback for boot progress: takes step key (string)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -186,8 +186,8 @@ def _prewarm_semantic_cache(think) -> None:
             _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
 
         log.info("[wakeup] Semantic exemplar cache warmed (intent + capabilities)")    # log sucess
-    except Exception:                                                                  # if error, log failure — single point, full traceback
-        log.exception("[wakeup] Semantic exemplar prewarm failed")
+    except Exception:                                                                  # if error,
+        log.exception("[wakeup] Semantic exemplar prewarm failed")                     # log failure — single point, full traceback
 
 
 # ── wakeup ────────────────────────────────────────────────────────────────────
@@ -245,16 +245,16 @@ class AikoWakeup:
                 here too was the source of the old double/triple-log-per-failure bug.
             """
             on_loading(key)                                             # annouce boot step starts
-            if fn is None:                                              # marker step — no work, just progress
-                on_done(key)
-                return None
-            try:                                                            # attempt to run boot step
-                result = fn()                                               # call boot step function
-            except Exception:                                              # if error,
-                on_skip(key)                                                # annouce boot step skips
-                raise                                                       # re-raise for the subsystem-level except to log + handle
+            if fn is None:                                              # if marker step — no work, just progress,
+                on_done(key)                                            # annouce the message
+                return None                                             # return None for no results
+            try:                                                        # attempt to run boot step
+                result = fn()                                           # call boot step function
+            except Exception:                                           # if error,
+                on_skip(key)                                            # annouce boot step skips
+                raise                                                   # re-raise for the subsystem-level except to log + handle
             on_done(key)                                                # annouce boot step finishes
-            return result                                               # return reults of boot step function
+            return result                                               # return results of boot step function
 
         def init_think(memorize_getter):
             """memorize_getter is a zero-arg callable so init_think can pull
@@ -297,33 +297,36 @@ class AikoWakeup:
             finally:                                                                          # whether success or failure,
                 mem_ready_evt.set()                                                           # set memory ready flag to True to trigger any blocked thread
 
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            mem_future = ex.submit(init_memorize)
-            think_future = ex.submit(init_think, lambda: mem_future.result())
-            # .result() re-raises any exception the worker thread hit — no
-            # silent None left behind unless init_memorize/init_think decided
-            # to return None deliberately (as init_memorize does above).
-            think_ref: AikoThink | None = None
-            think_exc: BaseException | None = None
-            try:
-                think_ref = think_future.result()
-            except Exception as exc:
-                think_exc = exc   # stash it — logged once, below, chained into the raise instead of re-logged here
-            memorize = mem_future.result()   # init_memorize() always returns (None on failure); exception already handled
+        with ThreadPoolExecutor(max_workers=2) as ex:                                         # start thread pool with 2 worker threads
+            mem_future = ex.submit(init_memorize)                                             # start memory system boots on thread 1
+            think_future = ex.submit(init_think, lambda: mem_future.result())                 # start cognitive core boots on thread 2
+            
+            # memorize's .result() never raises — init_memorize() always returns something
+            # (None on failure, logged internally), so no try/except needed here.
+            # think's .result() DOES re-raise on failure — caught below so we can still
+            # drain mem_future before deciding whether boot failed.
+            think_ref: AikoThink | None = None                                                # initiate AikoThink object
+            think_exc: Exception | None                                                       # hold exception of cognitive core for chaining
+            try:                                                                              # attempt to initiate of cognitive core
+                think_ref = think_future.result()                                             # block until finishes initiation of cognitive core
+            except Exception as exc:                                                          # if error,
+                think_exc = exc                                                               # logged once and chained into the raise later
+            memorize = mem_future.result()                                                    # grab the results of memory system
+            from concurrent.futures import wait, ALL_COMPLETED   # add to top-of-file imports
 
-        if think_ref is None:
-            log.critical(                                                                    # single log point: critical severity + full traceback in one line
+        if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
+            log.critical(                                                                     # single log point: critical severity + full traceback in one line
                 "[wakeup] AikoThink boot failed — cannot continue without cognition core.",
                 exc_info=think_exc,
             )
-            raise RuntimeError("AikoThink boot failed") from think_exc                        # chain so callers/tracebacks still see the root cause
+            raise RuntimeError("AikoThink boot failed") from think_exc                        # chain from previous error point so callers/tracebacks still see the root cause
 
         # speak has no boot-time dependency on think or memorize, and nothing
         # inside init_think touches it — safe to construct after the parallel
         # phase instead of before it. Construction itself is non-fatal, same as
         # TTS warmup below — Aiko can run text-only if AikoSpeak() itself blows up.
-        try:
-            speak = AikoSpeak(silent=True)
+        try:                                                                                  #
+            speak = AikoSpeak(silent=True)                                                    #
         except Exception:
             log.exception("[wakeup] AikoSpeak construction failed — Aiko will run without voice output.")
             speak = None
