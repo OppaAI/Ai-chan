@@ -248,7 +248,6 @@ Aiko does **not** yet have a fully independent, long-running autonomous sub-agen
 - `ROUTE_ENABLED`, `ROUTE_MODE`, and route thresholds are read by `cognition/think.py`.
 - `AGENT_EXECUTOR_MODE` selects `graph`, `hybrid`, or `react` task execution.
 - `GRAPH_playbook_PATH` and `GRAPH_MAX_WORKERS` configure `agentic.schema`.
-- `ROUTE_VECTOR_CACHE_ENABLED` enables safe `.npz` route-vector cache files.
 - `MIOTTS_API_URL`, `MIOTTS_PRESET`, and `MIOTTS_DEVICE` configure voice output.
 - `ASR_*`, `LISTEN_*`, and `SPEAKER_*` configure SenseVoice, Silero VAD, speaker verification, and barge-in.
 - `WORKSPACE_ROOT`, `SCHEDULE_PATH`, and `SCHEDULE_POLL_SECONDS` configure local workspace and scheduled work.
@@ -261,6 +260,6 @@ Aiko does **not** yet have a fully independent, long-running autonomous sub-agen
 
 ## Semantic Vector Cache
 
-Intent-routing examples are authored as text in `cognition/router_prompts.json`, but their embedding matrix can be cached on disk with `ROUTE_VECTOR_CACHE_ENABLED=1`. The cache is keyed by the examples, instruct string, embedding backend metadata, and `EMBED_DIMS`, and is stored as a NumPy `.npz` archive loaded with `allow_pickle=False`.
+Intent-routing examples are authored as text in `cognition/router_prompts.json`, their embedding matrix is cached on disk. The cache is keyed by the examples, instruct string, embedding backend metadata, and `EMBED_DIMS`, and is stored as a NumPy `.npz` archive loaded with `allow_pickle=False`.
 
 Graph playbooks are currently matched by trigger and capability metadata, so there are no graph vectors to precompute yet. If graph matching becomes semantic, the same pattern should be used: stable JSON/YAML plan specs as the source of truth, plus generated vector-cache artifacts that are safe to delete and rebuild.
