@@ -269,20 +269,20 @@ class AikoWakeup:
             finally:                                                                          # whether success or failure,
                 mem_ready_evt.set()                                                           # set memory ready flag to True to trigger any blocked thread
     
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            mem_future = ex.submit(init_memorize)
-            think_future = ex.submit(init_think, lambda: mem_future.result())
+        with ThreadPoolExecutor(max_workers=2) as ex:                                         # start a thread pool with 2 worker threads
+            mem_future = ex.submit(init_memorize)                                             # start memory system boot in thread 1
+            think_future = ex.submit(init_think, lambda: mem_future.result())                 # start cognitive core boot in thread 2
             # .result() re-raises any exception the worker thread hit — no
             # silent None left behind unless init_memorize/init_think decided
             # to return None deliberately (as init_memorize does above).
-            try:
-                think_ref = think_future.result()
-            except Exception:
-                log.exception("AikoThink failed to boot.")
-                think_ref = None
-            memorize = mem_future.result()   # init_memorize() always returns (None on failure); exception already handled
+            try:                                                                              # attempt to initiate of cognitive core 
+                think_ref = think_future.result()                                             # block until finishes initiation of cognitive core
+            except Exception:                                                                 # if error,
+                log.exception("AikoThink failed to boot.")                                    # log failutre
+                think_ref = None                                                              # return None to indicate failure
+            memorize = mem_future.result()                                                    # grab memory system's return value
             
-        if think_ref is None:
+        if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
             log.critical("[wakeup] AikoThink boot failed — cannot continue without cognition core.")
             raise RuntimeError("AikoThink boot failed")
 
