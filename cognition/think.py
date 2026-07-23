@@ -324,7 +324,6 @@ def _extract_search_results_block(system_prompt: str) -> str:
 # ── think ─────────────────────────────────────────────────────────────────────
 
 class AikoThink:
-class AikoThink:
     def __init__(self) -> None:
         self._client    = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
         self._llm_model = LLM_MODEL
