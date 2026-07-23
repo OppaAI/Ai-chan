@@ -1010,7 +1010,10 @@ class AikoThink:
 
     def set_speak(self, speak) -> None:
         with self._speak_lock:
+            old = self._speak
             self._speak = speak
+        if old is not None and old is not speak:
+            old.stop()   # AikoSpeak.stop() is idempotent/safe to call even if already stopped
     
     def _get_speak(self):
         with self._speak_lock:
