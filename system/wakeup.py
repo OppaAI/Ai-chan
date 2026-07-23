@@ -117,7 +117,7 @@ class BootResult:
     speak:    AikoSpeak               # speaking module
     listen:   AikoListen              # listening module
 
-type BootCallback = Callable[[str], None]            # type hint for the subsystem callable and none
+type BootCallback = Callable[[str], None]                    # Callback for boot progress: takes step key (string)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -136,6 +136,9 @@ def _prewarm_semantic_cache(think) -> None:
     On a warm disk cache, this whole call is disk loads only, no
     embedding calls. On a cold cache (first boot, or after a trigger/
     exemplar edit), it pays the full embed cost once and persists it.
+
+    Args:
+       think: AikoThink instance with a booted embedder (via memorize backend).
     """
     if think._get_memorize() is None:
         log.info("[wakeup] Skipping semantic cache prewarm — no memory backend.")
@@ -196,33 +199,42 @@ class AikoWakeup:
         mem_ready_evt  = threading.Event()                           # thread-safe boolean flag for blocking until memory system is ready
     
         # ── parallel boot ─────────────────────────────────────────────────────
-    
+
+        def _boot_step(key: str, fn: Callable[[], None] | None = None) -> Any:
+            """Wrap a boot step with loading/done/skip callbacks.
+            
+            Args:
+                key: Step identifier for callbacks.
+                fn: Callable performing the step work. If None, this is a marker step.
+            
+            Returns:
+                Result of fn(), or None if fn is None.
+            
+            Raises:
+                Re-raises any exception from fn() after calling on_skip().
+            """
+            try:
+                on_loading(key)
+                result = fn() if fn else None
+                on_done(key)
+                return result
+            except Exception as e:
+                log.exception(f"[wakeup] Boot step '{key}' failed: {e}")
+                on_skip(key)
+                raise
+        
         def init_think(memorize_getter):
             """memorize_getter is a zero-arg callable so init_think can pull
             the memorize result lazily, after mem_ready_evt fires — avoids needing
             the memorize future to exist before this closure is defined."""
 
-            on_loading('think_start')                                # announce loading of cognitive core starts
-            think = AikoThink()                                      # initiate cognitive core
-            on_done('think_start')                                   # announce loading of cognitive core finishes
-            
-            on_loading('think_warmup')                               # announce warmup of cognitive core starts
-            think.start_warmup()                                     # start warmup background thread
-            think.join_warmup()                                      # block until warmup thread finishes
-            on_done('think_warmup')                                  # announce loading of cognitive core finishes
-            
-            on_loading('think_mem_wait')                             # announce waiting for memorize thread starts
-            mem_ready_evt.wait()                                     # block until memorize thread finishes
-            on_done('think_mem_wait')                                # announce waiting for memorize thread finishes
-            
-            think.set_memorize(memorize_getter())                    # inject memory backend to cognitive core (or None if memory boot failed)
-            think.start_idle_learner()                               # start idle learner thread; no-ops cleanly if memorize is None
-            
-            on_loading('think_prewarm')
-            _prewarm_semantic_cache(think)                           # embed exemplars while booting
-            on_done('think_prewarm')
-            return think
-    
+            think = _boot_step('think_start', lambda: AikoThink())                            # initiate cognitive core
+            _boot_step('think_warmup', lambda: (think.start_warmup(), think.join_warmup()))   # start warmup background thread
+            _boot_step('think_mem_wait', lambda: mem_ready_evt.wait())                        # block until memorize thread finishes
+            _boot_step('think_inject', lambda: (think.set_memorize(memorize_getter()), think.start_idle_learner()))  # inject memory backend to cognitive core and start idle learner thread (no-ops cleanly if memorize is None)
+            _boot_step('think_prewarm', lambda: _prewarm_semantic_cache(think))               # load embed exemplars while booting
+            return think                                                                      # return the live AutoThink object
+
         def init_memorize():
             try:
                 on_loading('mem_sqlite_vec')
@@ -275,7 +287,11 @@ class AikoWakeup:
             except Exception:
                 log.exception("AikoThink failed to boot.")
                 think_ref = None
-            memorize = mem_future.result()   # never raises — already caught internally
+            memorize = mem_future.result()   # init_memorize() always returns (None on failure); exception already handled
+            
+        if think_ref is None:
+            log.critical("[wakeup] AikoThink boot failed — cannot continue without cognition core.")
+            raise RuntimeError("AikoThink boot failed")
 
         # speak has no boot-time dependency on think or memorize, and nothing
         # inside init_think touches it — safe to construct after the parallel
