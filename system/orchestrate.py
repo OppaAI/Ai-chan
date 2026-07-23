@@ -1574,8 +1574,6 @@ def run_session(ui, args) -> None:
             _log_latency(current_latency)
             ui._draw()
         finally:
-            if not tts_enabled or not PROACTIVE_SPEAK:
-                think.compare_and_set_speak(None, original_speak)
             session_active.clear()
             proactive.touch()
             current_latency = None
