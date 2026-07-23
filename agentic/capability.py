@@ -164,7 +164,6 @@ def _capability_vector_cache_path(cap: Capability, embedder: Embedder) -> Path |
         payload,
         cache_dir_env="CAP_VECTOR_CACHE_DIR",
         default_dir=_CAP_VECTOR_CACHE_DIR_DEFAULT,
-        enabled_env="ROUTE_VECTOR_CACHE_ENABLED",
         per_user=True,
     )
 
