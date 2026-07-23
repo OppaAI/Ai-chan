@@ -122,7 +122,21 @@ type BootCallback = Callable[[str], None]            # type hint for the subsyst
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _prewarm_semantic_cache(think) -> None:
-    """Embed route and capability exemplars at boot so first-turn latency is cold-free."""
+    """Warm both semantic caches used by first-turn routing/capability
+    matching, so the first real user turn never pays an embedding cost.
+
+    Route exemplars (think._semantic_example_vectors): in-memory cache,
+    then per-user on-disk npz cache (cognition.reason.cache_vector_path),
+    then compute+persist if both miss.
+
+    Capability trigger embeddings (agentic.capability._get_trigger_embedding):
+    same three-tier pattern, sharing the same cache_vector_path helper —
+    in-memory dict first, then on-disk npz, then compute+persist.
+
+    On a warm disk cache, this whole call is disk loads only, no
+    embedding calls. On a cold cache (first boot, or after a trigger/
+    exemplar edit), it pays the full embed cost once and persists it.
+    """
     if think._get_memorize() is None:
         log.info("[wakeup] Skipping semantic cache prewarm — no memory backend.")
         return
