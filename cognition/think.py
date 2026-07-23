@@ -637,24 +637,22 @@ class AikoThink:
             return cached
 
     def _route_vector_cache_path(self, examples_by_label: dict, instruct: str, embedder) -> Path | None:
-        if not _ROUTE_VECTOR_CACHE_ENABLED:
-            return None
-        try:
-            payload = {
-                "examples": examples_by_label,
-                "instruct": instruct,
-                "embedder": {
-                    "class": type(embedder).__name__,
-                    "model": getattr(embedder, "model", None) or getattr(embedder, "model_name", None) or getattr(embedder, "name", None),
-                    "dims": os.getenv("EMBED_DIMS", ""),
-                },
-            }
-            digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:24]
-            raw_dir = Path(_ROUTE_VECTOR_CACHE_DIR)
-            base = raw_dir if raw_dir.is_absolute() else user_state_dir(current_user_id()) / raw_dir
-            return base / f"{digest}.npz"
-        except Exception:
-            return None
+        payload = {
+            "examples": examples_by_label,
+            "instruct": instruct,
+            "embedder": {
+                "class": type(embedder).__name__,
+                "model": getattr(embedder, "model", None) or getattr(embedder, "model_name", None) or getattr(embedder, "name", None),
+                "dims": os.getenv("EMBED_DIMS", ""),
+            },
+        }
+        return reason.cache_vector_path(
+            payload,
+            cache_dir_env="ROUTE_VECTOR_CACHE_DIR",
+            default_dir=_ROUTE_VECTOR_CACHE_DIR,
+            enabled_env="ROUTE_VECTOR_CACHE_ENABLED",
+            per_user=True,
+        )
 
     def _classify_agent_intent(self, user_input: str, skip_regex: bool = False) -> str:
         """Ask the local model for a compact binary route label when semantics are ambiguous."""
