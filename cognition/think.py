@@ -790,8 +790,9 @@ class AikoThink:
               
     def webchat(self, user_input: str, token_callback=None, mem_kb_future=None) -> str:
         """Web-aware chat: web_search + optional webfetch fallback."""
-        if self._speak and self._speak.is_playing():
-            self._speak.stop()
+        speak = self._get_speak()
+        if speak and speak.is_playing():
+            speak.stop()
         
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
@@ -917,8 +918,9 @@ class AikoThink:
 
     def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None) -> str:
         """Standard chat: local knowledge only (persona + memory + KB)."""
-        if self._speak and self._speak.is_playing():
-            self._speak.stop()
+        speak = self._get_speak()
+        if speak and speak.is_playing():
+            speak.stop()
         
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
@@ -1009,6 +1011,10 @@ class AikoThink:
     def set_speak(self, speak) -> None:
         with self._speak_lock:
             self._speak = speak
+    
+    def _get_speak(self):
+        with self._speak_lock:
+            return self._speak
           
     def set_memorize(self, memorize) -> None:
         """Inject the memory backend after boot. Thread-safe against concurrent reads."""
@@ -1037,8 +1043,9 @@ class AikoThink:
         log.info("[schedule] due %s action=%s: %s", job.id, job.action, text)
         if job.action == "announce":
             _play_beep()
-            if self._speak:
-                self._speak.speak(text)
+            speak = self._get_speak()
+            if speak:
+                speak.speak(text)
             else:
                 log.info(f"Aiko scheduled job: {text}")
             return
@@ -1060,18 +1067,19 @@ class AikoThink:
 
     def _emit(self, text: str, token_callback=None) -> None:
         if not text: return
-
+    
         # Always drive the TUI callback directly, regardless of TTS
         if token_callback:
             words = text.split(" ")
             for i, word in enumerate(words):
                 token_callback(word if i == 0 else " " + word)
                 time.sleep(float(os.getenv("EMIT_DELAY", 0.005)))
-
+    
         # TTS runs independently
-        if self._speak:
-            self._speak.feed(text)
-            self._speak.play_async()
+        speak = self._get_speak()
+        if speak:
+            speak.feed(text)
+            speak.play_async()
 
     def _stream_response(self, messages: list[dict], system: str = "", token_callback=None) -> str:
         full_response = []
@@ -1084,14 +1092,17 @@ class AikoThink:
             "completion_tokens": None,
             "total_tokens": None,
         }
-
+    
+        speak = self._get_speak()   # single snapshot for this call — avoids a toggle mid-stream
+                                     # producing inconsistent behavior across the checks below
+    
         karaoke_text = bool(
-            self._speak and token_callback and getattr(self._speak, "karaoke_text", False)
+            speak and token_callback and getattr(speak, "karaoke_text", False)
             and not self._reasoning
         )
-        if self._speak:
-            self._speak.start_speech_stream(token_callback if karaoke_text else None)
-
+        if speak:
+            speak.start_speech_stream(token_callback if karaoke_text else None)
+    
         sentence_buffer = ""
         stream_success = False
         try:
@@ -1111,33 +1122,33 @@ class AikoThink:
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
-                
+    
                 if token_callback and token and not karaoke_text:
                     token_callback(token)
-                
+    
                 full_response.append(token)
-                
-                if self._speak and token:
+    
+                if speak and token:
                     sentence_buffer += token
                     sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
                     for sentence in sentences:
-                        self._speak.feed_speech_stream(sentence)
-
+                        speak.feed_speech_stream(sentence)
+    
             text = "".join(full_response).strip()
             if text:
                 self.last_usage["completion_text"] = text
                 stream_success = True
-                if self._speak and sentence_buffer.strip():
-                    self._speak.feed_speech_stream(sentence_buffer)
+                if speak and sentence_buffer.strip():
+                    speak.feed_speech_stream(sentence_buffer)
         except Exception as e:
             log.error(f"LLM stream failed: {e}")
         finally:
-            if self._speak:
-                self._speak.stop_speech_stream()
-
+            if speak:
+                speak.stop_speech_stream()
+    
         if stream_success:
             return text
-
+    
         fallback_text = self._fallback_completion(
             all_messages,
             max_tokens,
