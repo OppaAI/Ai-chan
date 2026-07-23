@@ -1138,14 +1138,19 @@ def run_session(ui, args) -> None:
         session_active.set()
         if listen is not None and hasattr(listen, "extend_activation"):
             listen.extend_activation()
-        original_speak = getattr(think, "_speak", None)
+    
+        original_speak = think._get_speak()
+        muted = not tts_enabled or not PROACTIVE_SPEAK
+        if muted:
+            think.set_speak(None)
         try:
-            if not tts_enabled or not PROACTIVE_SPEAK:
-                think.set_speak(None)
             return think.proactive_checkin(prompt_hint)
         finally:
-            if not tts_enabled or not PROACTIVE_SPEAK:
-                think.set_speak(original_speak)
+            if muted:
+                # Only restore if _speak is still None (nobody, e.g. /voice,
+                # changed it while we were muted). If it changed, leave it —
+                # that change is more recent and should win.
+                think.compare_and_set_speak(None, original_speak)
             session_active.clear()
             if hasattr(think, "_last_chat_time"):
                 think._last_chat_time = time.time()
