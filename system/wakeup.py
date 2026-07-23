@@ -134,7 +134,7 @@ def _prewarm_semantic_cache(think) -> None:
     )
     try:
         # Prewarm intent routing cache
-        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)
+        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)    # prewarm routing cache in designated npz
         
         # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
         from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
@@ -190,16 +190,16 @@ class AikoWakeup:
             the memorize result lazily, after mem_ready_evt fires — avoids needing
             the memorize future to exist before this closure is defined."""
 
-            on_loading('think_start')                                # announce loading of cognitive module starts
-            think = AikoThink()
-            think.start_warmup()                     # NEW — explicit, not constructor side effect
-            on_done('think_start')                                   # announce loading of cognitive module finishes
+            on_loading('think_start')                                # announce loading of cognitive core starts
+            think = AikoThink()                                      # initiate cognitive core
+            on_done('think_start')                                   # announce loading of cognitive core finishes
             
-            on_loading('think_warmup')                               # announce warmup of cognitive module starts
-            think.join_warmup()
-            on_done('think_warmup')                                  # announce loading of cognitive module finishes
+            on_loading('think_warmup')                               # announce warmup of cognitive core starts
+            think.start_warmup()                                     # start warmup background thread
+            think.join_warmup()                                      # block until warmup thread finishes
+            on_done('think_warmup')                                  # announce loading of cognitive core finishes
             
-            on_loading('think_mem_wait')
+            on_loading('think_mem_wait')                             #
             mem_ready_evt.wait()
             on_done('think_mem_wait')
             
