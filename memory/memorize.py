@@ -175,9 +175,8 @@ def _guest_memory_db() -> str:
 # ── boot labels ───────────────────────────────────────────────────────────────
 
 BOOT_LABELS = {
-    'mem_sqlite_vec':    'Opening sqlite-vec memory store...',
+    'mem_embed':         'Opening sqlite-vec store and loading embedder...',
     'mem_display_name':  'Resolving display name...',
-    'mem_embed':         'Preparing embedding backend...',
     'mem_cleanup':       'Running memory cleanup...',
     'mem_ready':         'Memory backend ready',
 }
