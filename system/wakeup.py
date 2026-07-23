@@ -316,7 +316,7 @@ class AikoWakeup:
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
         scheduler = ScheduleRunner(
-            on_due=think_ref.handle_scheduled_job if think_ref else None,
+            on_due=think_ref.handle_scheduled_job,
             memorize=memorize,
             generate_and_post_fn=generate_and_post,
             consolidate_fn=maybe_run_consolidation,
