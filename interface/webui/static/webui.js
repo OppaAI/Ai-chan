@@ -28,6 +28,9 @@ const wsLabel = document.getElementById('ws-label');
 const vadDot = document.getElementById('vad-dot');
 const vadStatus = document.getElementById('vad-status');
 
+const bootProgressFill = document.getElementById('boot-progress-fill');
+const bootProgressMsg = document.getElementById('boot-progress-msg');
+
 const vTok = document.getElementById('v-tok');
 const vToks = document.getElementById('v-toks');
 const vRam = document.getElementById('v-ram');
@@ -77,57 +80,25 @@ initVAD().then((status) => {
 });
 
 // ── step / init tracking ──────────────────────────────────────────────────
-const INIT_LABELS = {
-  think_start: 'Inference Engine',
-  think_warmup: 'Model Warm-up',
-  mem_sqlite_vec: 'Vector Database',
-  mem_embed: 'Embedding Model',
-  mem_cleanup: 'Memory Lifecycle',
-  mem_ready: 'Memory Cortex',
-  speak_miotts: 'TTS Engine',
-  speak_ready: 'Voice Output',
-  speak_skip: 'Voice Output',
-  listen_ready: 'Speech Input',
-  listen_skip: 'Speech Input',
-};
+let bootDone = 0, bootTotal = 0;
+let bootKeys = {};
 
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-let spinFrame = 0;
-setInterval(() => {
-  spinFrame = (spinFrame + 1) % SPINNER_FRAMES.length;
-  document.querySelectorAll('.step-icon.spin').forEach(el => {
-    el.textContent = SPINNER_FRAMES[spinFrame];
-  });
-}, 80);
-
-const stepRows = {};
-let doneCount = 0, totalSteps = 0;
-
-function upsertStep(key, state, detail) {
-  const lbl = INIT_LABELS[key] || key;
-  if (!stepRows[key]) {
-    totalSteps++;
-    const row = document.createElement('div');
-    row.className = 'step-row';
-    row.innerHTML = `
-      <span class="step-icon spin">${SPINNER_FRAMES[0]}</span>
-      <span>
-        <span class="step-label">${lbl}</span>
-        <span class="step-detail"> — ${detail || ''}</span>
-      </span>`;
-    initPanel.insertBefore(row, allOnline);
-    stepRows[key] = { row, icon: row.querySelector('.step-icon'), detail: row.querySelector('.step-detail') };
-  }
-  const { icon, detail: detEl } = stepRows[key];
-  detEl.textContent = detail ? ` — ${detail}` : '';
+function handleStep(msg) {
+  const key = msg.key, state = msg.state;
+  const label = msg.label || key;
   if (state === 'loading') {
-    icon.className = 'step-icon spin';
-    icon.textContent = SPINNER_FRAMES[spinFrame];
-  } else if (state === 'done') { icon.className = 'step-icon ok'; icon.textContent = '✓'; doneCount++; }
-  else if (state === 'skip') { icon.className = 'step-icon skip'; icon.textContent = '–'; doneCount++; }
-  else if (state === 'error') { icon.className = 'step-icon err'; icon.textContent = '✗'; doneCount++; }
-  if (totalSteps > 0 && doneCount >= totalSteps) allOnline.classList.add('show');
-  scrollBottom();
+    bootProgressMsg.textContent = label;
+  } else if (['done', 'skip', 'error'].includes(state)) {
+    if (!bootKeys[key]) {
+      bootKeys[key] = true;
+      bootTotal++;
+    }
+    bootDone++;
+  }
+  const total = bootTotal || 1;
+  const pct = Math.min(100, Math.round(100 * bootDone / total));
+  bootProgressFill.style.width = pct + '%';
+  if (bootTotal > 0 && bootDone >= bootTotal) allOnline.classList.add('show');
 }
 
 // ── phase switch ──────────────────────────────────────────────────────────
@@ -544,7 +515,7 @@ function connectWS() {
     }
 
     switch (msg.type) {
-      case 'step': upsertStep(msg.key, msg.state, msg.detail || ''); break;
+      case 'step': handleStep(msg); break;
       case 'phase': if (msg.value === 'chat') switchToChat(); break;
       case 'chat': addMessage(msg.sender, msg.text); break;
       case 'token': appendToken(msg.text); break;

@@ -379,39 +379,28 @@ body {
   margin-bottom: 6px;
 }
 
-.step-row {
-  display: grid;
-  grid-template-columns: 20px 1fr;
-  gap: 0 8px;
-  font-size: 11px;
-  line-height: 1.7;
-  align-items: baseline;
+.boot-progress-bar {
+  width: 100%;
+  height: 2px;
+  background: var(--dimmer);
+  position: relative;
+  overflow: hidden;
+  margin: 8px 0;
 }
 
-.step-icon {
-  color: var(--dim);
-  text-align: center;
+.boot-progress-fill {
+  height: 100%;
+  background: var(--purple);
+  width: 0%;
+  transition: width .3s;
+  box-shadow: 0 0 8px var(--purple);
 }
 
-.step-icon.ok {
-  color: var(--cyan);
-}
-
-.step-icon.skip {
-  color: var(--dim);
-}
-
-.step-icon.err {
-  color: var(--pink);
-}
-
-.step-label {
-  color: var(--text);
-}
-
-.step-detail {
-  color: var(--dim);
+.boot-progress-msg {
   font-size: 10px;
+  color: var(--dim);
+  letter-spacing: .15em;
+  margin-bottom: 4px;
 }
 
 .all-online {

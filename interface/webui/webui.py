@@ -528,17 +528,30 @@ class AikoWeb:
     # init / boot step API
     # ------------------------------------------------------------------
 
+    _BOOT_LABELS: dict[str, str] | None = None
+
+    @classmethod
+    def _ensure_boot_labels(cls) -> dict[str, str]:
+        if cls._BOOT_LABELS is None:
+            from system.wakeup import AikoWakeup
+            cls._BOOT_LABELS = AikoWakeup.ALL_BOOT_LABELS
+        return cls._BOOT_LABELS
+
     def step_loading(self, key: str, detail: str = "") -> None:
-        self._broadcast({"type": "step", "key": key, "state": "loading", "detail": detail})
+        labels = self._ensure_boot_labels()
+        self._broadcast({"type": "step", "key": key, "state": "loading", "label": labels.get(key, key), "detail": detail})
 
     def step_done(self, key: str, detail: str = "") -> None:
-        self._broadcast({"type": "step", "key": key, "state": "done",    "detail": detail})
+        labels = self._ensure_boot_labels()
+        self._broadcast({"type": "step", "key": key, "state": "done",    "label": labels.get(key, key), "detail": detail})
 
     def step_skip(self, key: str, detail: str = "") -> None:
-        self._broadcast({"type": "step", "key": key, "state": "skip",    "detail": detail})
+        labels = self._ensure_boot_labels()
+        self._broadcast({"type": "step", "key": key, "state": "skip",    "label": labels.get(key, key), "detail": detail})
 
     def step_error(self, key: str, detail: str = "") -> None:
-        self._broadcast({"type": "step", "key": key, "state": "error",   "detail": detail})
+        labels = self._ensure_boot_labels()
+        self._broadcast({"type": "step", "key": key, "state": "error",   "label": labels.get(key, key), "detail": detail})
 
     def status_finish(self) -> None:
         """Transition browser from init phase to chat phase."""

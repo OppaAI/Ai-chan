@@ -33,6 +33,7 @@ from pathlib import Path
 
 from system.log import get_logger
 from system.orchestrate import _c, _CTX_COLORS, _ctx_preview
+from system.wakeup import AikoWakeup
 
 log = get_logger(__name__)
 
@@ -64,14 +65,14 @@ class AikoSimpleCLI:
         self.no_voice = no_voice
         self.debug = debug
         self._chat_started = False
-        self._spin_generation = 0
         self._stats: dict = {"tts_on": not no_voice, "asr_on": not no_voice}
         self._streaming = False
         self._stream_buf: list[str] = []
         self._latency_stats: dict = {}
-        # per-step spinner state for step_loading/step_done/step_skip
-        self._step_stop: threading.Event | None = None
-        self._step_thread: threading.Thread | None = None
+        self._boot_total = len(AikoWakeup.ALL_BOOT_LABELS)
+        self._boot_done = 0
+        self._boot_current = ""
+        self._boot_lock = threading.Lock()
         # per-instance agentic step counter for __THINKING__ rendering
         # (previously a module global in main.py — instance state is
         # cleaner and doesn't leak across AikoSimpleCLI instances)
@@ -79,88 +80,38 @@ class AikoSimpleCLI:
 
     # ── boot / status ────────────────────────────────────────────────────
     def spin_loop(self, stop_event: threading.Event) -> None:
-        frames = "|/-\\"
-        i = 0
         while not stop_event.is_set():
-            print(f"\r  {frames[i % len(frames)]} booting Aiko...", end="", flush=True)
-            i += 1
-            time.sleep(0.15)
-        print("\r" + " " * 40 + "\r", end="", flush=True)
+            stop_event.wait(0.25)
 
-    def _stop_step_spinner(self) -> None:
-        """Stop whatever step spinner is currently running, if any.
-
-        Bumps _spin_generation regardless of whether join() actually caught
-        the thread in time — the generation check inside _spin() is what
-        actually prevents a late/starved wakeup from printing, not the join.
-        The join is just a best-effort tidy-up."""
-        self._spin_generation += 1
-        if self._step_stop is not None:
-            self._step_stop.set()
-            if self._step_thread and self._step_thread.is_alive():
-                self._step_thread.join(timeout=1.0)
-        self._step_stop = None
-        self._step_thread = None
-
-    def step_loading(self, name: str) -> None:
-        """Start an inline spinner for this boot step, on its own line.
-        step_done()/step_skip() replace the spinner with a checkmark/skip
-        icon on that same line rather than printing a new one.
-
-        No-ops once chat has started: post-boot callers (e.g. a per-turn
-        model warm-up) would otherwise spawn a spinner thread that writes
-        raw \\r output concurrently with stream_token()/add_message() from
-        the main thread, garbling the terminal."""
-        if self._chat_started:
-            log.debug(f"step_loading({name!r}) called post-boot — ignoring.")
-            return
-        self._stop_step_spinner()  # safety: end any stray previous spinner
-
-        self._spin_generation += 1
-        my_generation = self._spin_generation
-        self._step_stop = threading.Event()
-        stop_event = self._step_stop
-
-        def _spin():
-            frames = "|/-\\"
-            i = 0
-            while not stop_event.is_set():
-                # Re-check generation on every wake, not just at spawn time.
-                # If this thread got starved of the GIL (heavy embedding/LLM
-                # calls on the main thread) and only gets scheduled again
-                # after status_finish()/a newer step already bumped the
-                # generation, it must not print — otherwise a stale frame
-                # lands mid-turn, well after this step was supposed to be done.
-                if self._spin_generation != my_generation or self._chat_started:
-                    return
-                print(f"\r  {frames[i % len(frames)]} {name}...", end="", flush=True)
-                i += 1
-                time.sleep(0.1)
-
-        self._step_thread = threading.Thread(target=_spin, daemon=True)
-        self._step_thread.start()
-
-    def step_done(self, name: str) -> None:
+    def step_loading(self, key: str) -> None:
         if self._chat_started:
             return
-        self._stop_step_spinner()
-        print(f"\r  ✅ {name} ready" + " " * 20)
+        label = AikoWakeup.ALL_BOOT_LABELS.get(key, key)
+        with self._boot_lock:
+            self._boot_current = label
+            self._render_progress()
 
-    def step_skip(self, name: str) -> None:
+    def step_done(self, key: str) -> None:
         if self._chat_started:
             return
-        self._stop_step_spinner()
-        print(f"\r  ⏭  {name} skipped" + " " * 20)
+        with self._boot_lock:
+            self._boot_done += 1
+            self._render_progress()
+
+    def step_skip(self, key: str) -> None:
+        if self._chat_started:
+            return
+        with self._boot_lock:
+            self._boot_done += 1
+            self._render_progress()
+
+    def _render_progress(self) -> None:
+        pct = int(100 * self._boot_done / (self._boot_total or 1))
+        print(f"\r  [{pct:3d}%] {self._boot_current:<50}", end="", flush=True)
 
     def status_finish(self) -> None:
-        # Some boot steps (e.g. think_warmup) can finish asynchronously
-        # after boot() returns, meaning their step_done()/step_skip() call
-        # lands after chat has already started. If that spinner thread is
-        # still looping when we transition here, kill it now rather than
-        # waiting for its (late) completion callback — otherwise it keeps
-        # printing raw \r frames that collide with stream_token() output.
-        self._stop_step_spinner()
         self._chat_started = True
+        print("\r" + " " * 70 + "\r", end="", flush=True)
         print("\n🌸 Aiko-chan is ready. Type a message, or /help for commands.\n")
 
     # ── rendering ────────────────────────────────────────────────────────
