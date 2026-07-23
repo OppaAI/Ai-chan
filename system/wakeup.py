@@ -213,15 +213,15 @@ class AikoWakeup:
             Raises:
                 Re-raises any exception from fn() after calling on_skip().
             """
-            try:
-                on_loading(key)
-                result = fn() if fn else None
-                on_done(key)
-                return result
-            except Exception as e:
-                log.exception(f"[wakeup] Boot step '{key}' failed: {e}")
-                on_skip(key)
-                raise
+            try:                                                            # attempt to load boot step
+                on_loading(key)                                             # annouce boot step starts
+                result = fn() if fn else None                               # call boot step function if present
+                on_done(key)                                                # annouce boot step finishes
+                return result                                               # return reults of boot step function
+            except Exception as e:                                          # if error,
+                log.exception(f"[wakeup] Boot step '{key}' failed: {e}")    # log failure
+                on_skip(key)                                                # annouce boot step skips
+                raise                                                       # raise runtime error
         
         def init_think(memorize_getter):
             """memorize_getter is a zero-arg callable so init_think can pull
