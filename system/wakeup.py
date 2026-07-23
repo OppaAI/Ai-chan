@@ -94,10 +94,8 @@ from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting st
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
 from memory.memorize import AikoMemorize                    # for initiating memory system
-#from system.log import silent_stderr                        # for initiating cognitive core and speaking module /with warning filtered out
-#with silent_stderr():
-from cognition.think import AikoThink
-from sensory.speak import AikoSpeak
+from cognition.think import AikoThink                       # for initiating cognitive core
+from sensory.speak import AikoSpeak                         # for initiating speaking module
 from sensory.listen import AikoListen                       # for initiating listening module
 from system.schedule import (                               # for initiating scheduler system
     ScheduleRunner,
@@ -199,12 +197,12 @@ class AikoWakeup:
             think.join_warmup()                                      # block until warmup thread finishes
             on_done('think_warmup')                                  # announce loading of cognitive core finishes
             
-            on_loading('think_mem_wait')                             #
-            mem_ready_evt.wait()
-            on_done('think_mem_wait')
+            on_loading('think_mem_wait')                             # announce waiting for memorize thread starts
+            mem_ready_evt.wait()                                     # block until memorize thread finishes
+            on_done('think_mem_wait')                                # announce waiting for memorize thread finishes
             
-            think.set_memorize(memorize_getter())                    # inject memory backend (may be None if memory boot failed)
-            think.start_idle_learner()                # no-ops cleanly if memorize is None
+            think.set_memorize(memorize_getter())                    # inject memory backend to cognitive core (or None if memory boot failed)
+            think.start_idle_learner()                               # start idle learner thread; no-ops cleanly if memorize is None
             
             on_loading('think_prewarm')
             _prewarm_semantic_cache(think)                           # embed exemplars while booting
