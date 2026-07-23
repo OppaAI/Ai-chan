@@ -38,17 +38,22 @@ Flow:
                 └───────────┬────────────────┘
                             ▼
                   join both threads
+                  (raise if think failed; memorize None is OK)
                             │
                             ▼
-              construct speak, think.set_speak(speak)
+                  construct speak (not yet wired to think)
+                            │
+                            ▼
+                  register deep-study handlers
+                  (needs think_ref._client / _llm_model)
                             │
                             ▼
                   scheduler setup
-            (deep-study handlers, jobs, social lanes)
+            (ScheduleRunner.start, workspace-knowledge job, social lanes)
                             │
                             ▼
                   voice pipeline
-            (TTS warmup → ASR + VAD staged init)
+            (TTS warmup → think.set_speak(speak) → ASR + VAD staged init)
                             │
                             ▼
                   return BootResult
