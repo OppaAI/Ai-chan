@@ -515,7 +515,7 @@ Run before any phase suite.
 - [ ] An invalid `ROUTE_MODE` value falls back to `"semantic"` with a logged warning, not a crash.
 - [ ] `AGENTIC_MODE_ON=0`: "agentic" is never a reachable routing outcome in ANY `ROUTE_MODE` — confirm with a clearly task-like prompt ("debug this function") that it still routes to `webchat`/`localchat`, not `agentic`.
 - [ ] `AGENTIC_MODE_ON=0` with `ROUTE_MODE=semantic`: the binary LLM tie-break call is skipped entirely for ambiguous cases (since agentic vs chat is now moot) — confirm no wasted LLM call via log.
-- [ ] Route-example vector cache (`ROUTE_VECTOR_CACHE_ENABLED=1`) produces identical routing decisions whether serving from cache or recomputing fresh — compare a batch of test prompts against both a cold cache and a warm cache.
+- [ ] Route-example vector cache produces identical routing decisions whether serving from cache or recomputing fresh — compare a batch of test prompts against both a cold cache and a warm cache.
 
 ### 2.5.4 Web and fetch tools
 
@@ -760,7 +760,7 @@ Run after any significant change to confirm nothing regressed.
 
 ### 2.5.15 Route-vector and graph-plan cache checks
 
-- [ ] With `ROUTE_VECTOR_CACHE_ENABLED=1`, first boot creates per-user route vector cache files under `ROUTE_VECTOR_CACHE_DIR`.
+- [ ] first boot creates per-user route vector cache files under `ROUTE_VECTOR_CACHE_DIR`.
 - [ ] Second boot reuses cached route vectors and does not re-embed unchanged router examples.
 - [ ] Editing `cognition/router_prompts.json`, changing the route instruct string, or changing `EMBED_DIMS` invalidates the old cache key.
 - [ ] Deleting route-vector cache files is safe; Aiko rebuilds them automatically.
