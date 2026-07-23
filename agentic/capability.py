@@ -147,25 +147,26 @@ _CAP_VECTOR_CACHE_DIR = Path(
     os.environ.get("CAP_VECTOR_CACHE_DIR", "cache/capability_vectors")
 )
 
+_CAP_VECTOR_CACHE_DIR_DEFAULT = "capability_vectors"
+
 
 def _capability_vector_cache_path(cap: Capability, embedder: Embedder) -> Path | None:
-    """Disk path for cap's trigger vector, or None if disk caching is off.
-
-    Keyed on trigger text + embedder identity so an edit to a capability's
-    triggers, or a swap of the embedding model, invalidates just that file
-    instead of silently reusing a stale vector.
-
-    NOTE: assumes `embedder` exposes stable identity attributes (e.g.
-    model_name/dim). Check cognition.think's _route_vector_cache_path for
-    whatever fields it actually keys on and mirror those exactly here —
-    I don't have that function's body, so this is a best-effort match.
-    """
-    if os.environ.get("ROUTE_VECTOR_CACHE_ENABLED") != "1":
-        return None
-    embedder_fingerprint = getattr(embedder, "model_name", "") + ":" + str(getattr(embedder, "dim", ""))
-    key_material = "|".join(cap.triggers) + f"::{embedder_fingerprint}"
-    key_hash = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:16]
-    return _CAP_VECTOR_CACHE_DIR / f"{cap.id}_{key_hash}.npz"
+    payload = {
+        "triggers": list(cap.triggers),
+        "cap_id": cap.id,
+        "embedder": {
+            "class": type(embedder).__name__,
+            "model": getattr(embedder, "model", None) or getattr(embedder, "model_name", None) or getattr(embedder, "name", None),
+            "dims": os.getenv("EMBED_DIMS", ""),
+        },
+    }
+    return reason.cache_vector_path(
+        payload,
+        cache_dir_env="CAP_VECTOR_CACHE_DIR",
+        default_dir=_CAP_VECTOR_CACHE_DIR_DEFAULT,
+        enabled_env="ROUTE_VECTOR_CACHE_ENABLED",
+        per_user=True,
+    )
 
 
 def _get_trigger_embedding(cap: Capability, embedder: Embedder) -> np.ndarray:
