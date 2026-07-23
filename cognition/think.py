@@ -602,8 +602,8 @@ class AikoThink:
 
         Hot turns use the in-memory cache. Cold boots can reuse a per-user
         on-disk NumPy archive keyed by the route examples, instruct string, and
-        embedding backend metadata when ROUTE_VECTOR_CACHE_ENABLED=1. If the
-        cache is missing/stale/unreadable, Aiko recomputes and overwrites it.
+        embedding backend metadata.
+        If the cache is missing/stale/unreadable, Aiko recomputes and overwrites it.
         """
         cache_key = (id(examples_by_label), instruct)
         with self._semantic_example_cache_lock:
@@ -649,7 +649,6 @@ class AikoThink:
             payload,
             cache_dir_env="ROUTE_VECTOR_CACHE_DIR",
             default_dir=_ROUTE_VECTOR_CACHE_DIR,
-            enabled_env="ROUTE_VECTOR_CACHE_ENABLED",
             per_user=True,
         )
 
