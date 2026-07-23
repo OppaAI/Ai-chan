@@ -122,7 +122,6 @@ _ROUTE_INSTRUCT_TERNARY = "What kind of task or question is this?"  # used by ro
 
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
-_ROUTE_VECTOR_CACHE_ENABLED = os.getenv("ROUTE_VECTOR_CACHE_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 _ROUTE_VECTOR_CACHE_DIR = os.getenv("ROUTE_VECTOR_CACHE_DIR", "route_vectors")
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "SOUL.md"
