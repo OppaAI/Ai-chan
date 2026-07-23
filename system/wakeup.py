@@ -112,10 +112,10 @@ from memory.consolidate import maybe_run_consolidation      # for loading monthl
 @dataclass(slots=True)
 class BootResult:
     """Holds all live subsystem references produced during boot."""
-    think:    AikoThink | None        # cognition core
-    memorize: AikoMemorize | None     # memory system
-    speak:    AikoSpeak               # speaking module
-    listen:   AikoListen              # listening module
+    think:    AikoThink | None        # cognition core - None if cognitive system boot failed
+    memorize: AikoMemorize | None     # memory system - None if memory system boot failed
+    speak:    AikoSpeak | None        # speaking module — None if TTS boot failed
+    listen:   AikoListen | None       # listening module — None if ASR/VAD boot failed
 
 type BootCallback = Callable[[str], None]                    # Callback for boot progress: takes step key (string)
 
@@ -359,31 +359,24 @@ class AikoWakeup:
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
-        # TTS
-        on_loading('speak_miotts')
-        speak.warmup()
-        on_done('speak_miotts')
-        on_loading('speak_ready')
-        on_done('speak_ready')
-
-        # ASR — staged so each step reports independently
+        # TTS — non-fatal: Aiko can run text-only if this fails.
+        try:
+            _boot_step('speak_miotts', lambda: speak.warmup())
+            _boot_step('speak_ready')
+        except Exception:
+            log.error("TTS boot failed — Aiko will run without voice output.")
+            speak = None
+        
+        # ASR — staged so each step reports independently; non-fatal.
         listen = AikoListen()
-
-        on_loading('listen_asr')
-        listen.load_asr()
-        on_done('listen_asr')
-
-        on_loading('listen_silero')
-        listen.load_vad()              # also kicks off warmup thread
-        on_done('listen_silero')
-
-        on_loading('listen_warmup')
-        listen.join_warmup()
-        on_done('listen_warmup')
-
-        on_loading('listen_ready')
-        listen.start_barge_in_monitor()   # VAD daemon — costs ~0 CPU at idle
-        on_done('listen_ready')
+        try:
+            _boot_step('listen_asr', lambda: listen.load_asr())
+            _boot_step('listen_silero', lambda: listen.load_vad())          # also kicks off warmup thread
+            _boot_step('listen_warmup', lambda: listen.join_warmup())
+            _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())  # VAD daemon — costs ~0 CPU at idle
+        except Exception:
+            log.error("ASR/VAD boot failed — Aiko will run without voice input.")
+            listen = None
 
         return BootResult(
             think    = think_ref,
