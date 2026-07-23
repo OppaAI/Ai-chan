@@ -75,7 +75,7 @@ Flow:
 from __future__ import annotations            # evaluates type annotations later
 
 from dataclasses import dataclass             # for dataclass to hold subsystem references 
-from typing import Callable                   # for define boot functions
+from typing import Callable, Any              # for defining boot functions
 import threading                              # for booting up cognition core and memory system in parallel
 
 # Must run before the system.* imports below — those modules read secrets
@@ -238,26 +238,32 @@ class AikoWakeup:
         def init_memorize():
             try:
                 memorize = _boot_step('mem_sqlite_vec', lambda: AikoMemorize(silent=True))
-                
-                from system.userspace import current_display_name
-                display_name = current_display_name()
-                memorize.set_display_name(display_name)
-                if display_name == memorize.get_user_id():
-                    log.warning(
-                        "[wakeup] No cached display name for user_id=%s — memory pins "
-                        "will use raw user_id until the user logs in.",
-                        display_name,
-                    )
-                
+        
+                def _set_display_name():
+                    """Pull the cached display name for this user and pin it to the
+                    memory backend before any recall happens, so pinned memories are
+                    attributed to a human-readable name instead of a raw user_id."""
+                    from system.userspace import current_display_name
+                    display_name = current_display_name()
+                    memorize.set_display_name(display_name)
+                    if display_name == memorize.get_user_id():
+                        log.warning(
+                            "[wakeup] No cached display name for user_id=%s — memory pins "
+                            "will use raw user_id until the user logs in.",
+                            display_name,
+                        )
+        
+                _boot_step('mem_display_name', _set_display_name)   # now reports on_done/on_skip like every other step
+        
                 _boot_step('mem_embed')  # marker step, no work
-                
+        
                 _boot_step('mem_cleanup', lambda: memorize.cleanup())
-                
+        
                 _boot_step('mem_ready')
-                
+        
                 return memorize
             except Exception:
-                log.exception("Memory boot failed — Aiko will run without persistent memory.")
+                log.error("Memory boot failed — Aiko will run without persistent memory.")  # was log.exception; _boot_step already logged the full traceback
                 return None
             finally:
                 mem_ready_evt.set()
@@ -268,8 +274,6 @@ class AikoWakeup:
             # .result() re-raises any exception the worker thread hit — no
             # silent None left behind unless init_memorize/init_think decided
             # to return None deliberately (as init_memorize does above).
-            from concurrent.futures import wait
-            done, _ = wait([mem_future, think_future])
             try:
                 think_ref = think_future.result()
             except Exception:
@@ -285,8 +289,7 @@ class AikoWakeup:
         # inside init_think touches it — safe to construct after the parallel
         # phase instead of before it.
         speak = AikoSpeak(silent=True)
-        if think_ref is not None:
-            think_ref.set_speak(speak)
+        think_ref.set_speak(speak)
         
         # ── wire deep_studying into the scheduler's weekday/weekend window ────
         # Must happen before the ScheduleRunner below starts (or at least
@@ -295,14 +298,11 @@ class AikoWakeup:
         # have a registered handler to call into — otherwise they log
         # "unregistered handler" and silently never fire. Needs AikoThink's
         # LLM client/model, so it can only happen here, after think boots.
-        if think_ref is not None:
-            from memory import learn
-            learn.register_deep_study_handlers(
-                client=think_ref._client,
-                model=think_ref._llm_model,
-            )
-        else:
-            log.error("AikoThink failed to boot — deep-study window handlers not registered.")
+        from memory import learn
+        learn.register_deep_study_handlers(
+            client=think_ref._client,
+            model=think_ref._llm_model,
+        )
 
         if memorize is None:
             log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
