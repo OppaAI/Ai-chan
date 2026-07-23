@@ -25,8 +25,6 @@ Usage:
     speak    = result.speak
     listen   = result.listen
 
-Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
-
 Flow:
     ┌── init_think ────────────┐   ┌── init_memorize ───┐
     │ AikoThink() — no args    │   │ sqlite-vec+cleanup │   (parallel threads)
@@ -68,19 +66,39 @@ Flow:
 - memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready_evt.set() in a
   finally — so think never hangs even if memory boot fails.
 - Join point — main thread waits for both think_future/mem_future to finish.
-- speak is constructed and injected via think.set_speak() only after the join — nothing
-  in init_think touches speak during boot, so there's no reason to build it earlier.
-- Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts
-  the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
-- Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD →
-  join warmup → start barge-in monitor).
+- speak is constructed right after the join, but NOT wired into think yet (no
+  think.set_speak() call here) — think doesn't get a live speak reference until the
+  voice pipeline below finishes TTS warmup (or falls back to None on failure). Building
+  it early just means it doesn't have to wait on the sequential scheduler-setup phase.
+- Deep-study handler registration — runs right after the join, before the scheduler
+  starts, because ScheduleRunner needs a handler already registered for the
+  deep_study_start/stop jobs seeded into schedule.json, or they'll fire into a void.
+  Needs think_ref._client / _llm_model, so it can only happen after think boots.
+- Scheduler setup (sequential, single-threaded) — starts the one ScheduleRunner, ensures
+  the workspace-knowledge job, registers social lanes.
+- Voice pipeline (sequential) — TTS warmup, then think_ref.set_speak(speak) (or None),
+  then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
 - Returns BootResult with all four live subsystem refs.
+
+Failure logging policy — one log line per failure, with traceback + context:
+    - _boot_step never logs. It only fires on_skip(key) and re-raises, so the exception
+      propagates to whichever subsystem-level except block is actually equipped to say
+      what failed and what degraded mode results (e.g. "Aiko will run without voice
+      input").
+    - Every subsystem-level except block logs exactly once, with log.exception(...) (or
+      log.critical(..., exc_info=...) for the one fatal case — AikoThink), which already
+      captures the full traceback.
+    - This replaces the old pattern where _boot_step logged a traceback, then the outer
+      except logged a summary (sometimes a third log.critical on top), turning one real
+      failure into 2-3 near-duplicate log entries.
 """
 
 from __future__ import annotations            # evaluates type annotations later
 
+from collections.abc import Callable          # for defining boot functions (not typing.Callable — soft-deprecated since 3.9/PEP 585, this file already requires 3.12+)
+from concurrent.futures import ThreadPoolExecutor  # for parallel subsystem boot (moved to module top — no reason to import mid-function)
 from dataclasses import dataclass             # for dataclass to hold subsystem references 
-from typing import Callable, Any              # for defining boot functions
+from typing import Any                        # Any still lives in typing — collections.abc has no equivalent
 import threading                              # for booting up cognition core and memory system in parallel
 
 # Must run before the system.* imports below — those modules read secrets
@@ -114,9 +132,14 @@ from memory.consolidate import maybe_run_consolidation      # for loading monthl
 
 # ── result container ──────────────────────────────────────────────────────────
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class BootResult:
-    """Holds all live subsystem references produced during boot."""
+    """Holds all live subsystem references produced during boot.
+
+    frozen=True — nothing downstream should be reassigning these refs; if a
+    subsystem needs to be swapped out later that should go through an explicit
+    method on the owning class, not a silent BootResult mutation.
+    """
     think:    AikoThink | None        # cognition core - None if cognitive system boot failed
     memorize: AikoMemorize | None     # memory system - None if memory system boot failed
     speak:    AikoSpeak | None        # speaking module — None if TTS boot failed
@@ -155,16 +178,16 @@ def _prewarm_semantic_cache(think) -> None:
     try:
         # Prewarm intent routing cache
         think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)    # prewarm routing cache in designated npz
-        
+
         # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
         from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
         embedder = think._get_memorize()._mem._embedder                                # load the pre-embedded semantic vectors from npz files
         for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
             _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
-        
+
         log.info("[wakeup] Semantic exemplar cache warmed (intent + capabilities)")    # log sucess
-    except Exception as e:                                                             # if error,
-        log.warning("[wakeup] Semantic exemplar prewarm failed: %s", e)                # log failure
+    except Exception:                                                                  # if error, log failure — single point, full traceback
+        log.exception("[wakeup] Semantic exemplar prewarm failed")
 
 
 # ── wakeup ────────────────────────────────────────────────────────────────────
@@ -194,40 +217,45 @@ class AikoWakeup:
     ) -> BootResult:
         """
         Execute full boot sequence and return live subsystem references.
-    
+
         Parallel phase: AikoThink + AikoMemorize boot concurrently.
         Sequential phase: TTS warmup → ASR staged init.
         Barge-in monitor started as the final ASR step so Silero is already
         warm and the VAD thread costs nothing before the first turn.
         """
-        from concurrent.futures import ThreadPoolExecutor            # for managing pool of worker threads
         mem_ready_evt  = threading.Event()                           # thread-safe boolean flag for blocking until memory system is ready
-    
+
         # ── parallel boot ─────────────────────────────────────────────────────
 
-        def _boot_step(key: str, fn: Callable[[], None] | None = None) -> Any:
+        def _boot_step(key: str, fn: Callable[[], Any] | None = None) -> Any:
             """Wrap a boot step with loading/done/skip callbacks.
-            
+
             Args:
                 key: Step identifier for callbacks.
                 fn: Callable performing the step work. If None, this is a marker step.
-            
+
             Returns:
                 Result of fn(), or None if fn is None.
-            
+
             Raises:
-                Re-raises any exception from fn() after calling on_skip().
+                Re-raises any exception from fn() after calling on_skip(). Deliberately
+                does NOT log here — the caller's except block is the single point that
+                logs (with log.exception / log.critical), since it's the only place that
+                knows which subsystem this is and what degraded mode results. Logging
+                here too was the source of the old double/triple-log-per-failure bug.
             """
-            try:                                                            # attempt to load boot step
-                on_loading(key)                                             # annouce boot step starts
-                result = fn() if fn else None                               # call boot step function if present
-                on_done(key)                                                # annouce boot step finishes
-                return result                                               # return reults of boot step function
-            except Exception as e:                                          # if error,
-                log.exception(f"[wakeup] Boot step '{key}' failed: {e}")    # log failure
+            on_loading(key)                                             # annouce boot step starts
+            if fn is None:                                              # marker step — no work, just progress
+                on_done(key)
+                return None
+            try:                                                            # attempt to run boot step
+                result = fn()                                               # call boot step function
+            except Exception:                                              # if error,
                 on_skip(key)                                                # annouce boot step skips
-                raise                                                       # raise runtime error
-        
+                raise                                                       # re-raise for the subsystem-level except to log + handle
+            on_done(key)                                                # annouce boot step finishes
+            return result                                               # return reults of boot step function
+
         def init_think(memorize_getter):
             """memorize_getter is a zero-arg callable so init_think can pull
             the memorize result lazily, after mem_ready_evt fires — avoids needing
@@ -243,7 +271,7 @@ class AikoWakeup:
         def init_memorize():
             try:
                 memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))        # initiate memory system (with logging off to prevent duplicate)
-        
+
                 def _set_display_name():
                     """Pull the cached display name for this user and pin it to the
                     memory backend before any recall happens, so pinned memories are
@@ -257,41 +285,49 @@ class AikoWakeup:
                             "will use raw user_id until the user logs in.",
                             display_name,
                         )
-        
+
                 _boot_step('mem_display_name', _set_display_name)                             # pass the username to memory system
                 _boot_step('mem_cleanup', lambda: memorize.cleanup())                         # prune decayed memories
                 _boot_step('mem_ready')                                                       # mark the memory system ready
-        
+
                 return memorize                                                               # return the live AikoMemorize object
-            except Exception:                                                                 # if error, log failure
-                log.error("Memory boot failed — Aiko will run without persistent memory.")    # log Aiko will run without persistent memory
+            except Exception:                                                                 # if error, log failure once — single point, full traceback
+                log.exception("[wakeup] Memory boot failed — Aiko will run without persistent memory.")
                 return None                                                                   # return None to indicate failure
             finally:                                                                          # whether success or failure,
                 mem_ready_evt.set()                                                           # set memory ready flag to True to trigger any blocked thread
-    
-        with ThreadPoolExecutor(max_workers=2) as ex:                                         # start a thread pool with 2 worker threads
-            mem_future = ex.submit(init_memorize)                                             # start memory system boot in thread 1
-            think_future = ex.submit(init_think, lambda: mem_future.result())                 # start cognitive core boot in thread 2
+
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            mem_future = ex.submit(init_memorize)
+            think_future = ex.submit(init_think, lambda: mem_future.result())
             # .result() re-raises any exception the worker thread hit — no
             # silent None left behind unless init_memorize/init_think decided
             # to return None deliberately (as init_memorize does above).
-            try:                                                                              # attempt to initiate of cognitive core 
-                think_ref = think_future.result()                                             # block until finishes initiation of cognitive core
-            except Exception:                                                                 # if error,
-                log.exception("AikoThink failed to boot.")                                    # log failutre
-                think_ref = None                                                              # return None to indicate failure
-            memorize = mem_future.result()                                                    # grab memory system's return value
-            
-        if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
-            log.critical("[wakeup] AikoThink boot failed — cannot continue without cognition core.")
-            raise RuntimeError("AikoThink boot failed")
+            think_ref: AikoThink | None = None
+            think_exc: BaseException | None = None
+            try:
+                think_ref = think_future.result()
+            except Exception as exc:
+                think_exc = exc   # stash it — logged once, below, chained into the raise instead of re-logged here
+            memorize = mem_future.result()   # init_memorize() always returns (None on failure); exception already handled
+
+        if think_ref is None:
+            log.critical(                                                                    # single log point: critical severity + full traceback in one line
+                "[wakeup] AikoThink boot failed — cannot continue without cognition core.",
+                exc_info=think_exc,
+            )
+            raise RuntimeError("AikoThink boot failed") from think_exc                        # chain so callers/tracebacks still see the root cause
 
         # speak has no boot-time dependency on think or memorize, and nothing
         # inside init_think touches it — safe to construct after the parallel
-        # phase instead of before it.
-        speak = AikoSpeak(silent=True)
+        # phase instead of before it. Construction itself is non-fatal, same as
+        # TTS warmup below — Aiko can run text-only if AikoSpeak() itself blows up.
+        try:
+            speak = AikoSpeak(silent=True)
+        except Exception:
+            log.exception("[wakeup] AikoSpeak construction failed — Aiko will run without voice output.")
+            speak = None
 
-        
         # ── wire deep_studying into the scheduler's weekday/weekend window ────
         # Must happen before the ScheduleRunner below starts (or at least
         # before its first tick) so the "deep_study_start"/"deep_study_stop"
@@ -306,7 +342,7 @@ class AikoWakeup:
         )
 
         if memorize is None:
-            log.error("Memory boot failed — ScheduleRunner starting without system jobs.")
+            log.warning("[wakeup] Memory boot failed — ScheduleRunner starting without system jobs.")  # warning, not error — Aiko keeps running, just degraded
 
         # NOTE: this is the ONE ScheduleRunner for the whole app. AikoThink
         # used to also construct its own ScheduleRunner in __init__, which
@@ -342,8 +378,8 @@ class AikoWakeup:
                 ensure_workspace_knowledge_job()
                 scheduler.notify_new_job()
                 log.info("[wakeup] Workspace knowledge scan schedule ensured")
-            except Exception as exc:
-                log.warning("[wakeup] Workspace knowledge scan schedule failed: %s", exc)
+            except Exception:
+                log.exception("[wakeup] Workspace knowledge scan schedule failed")
 
         # Schedule-driven social lanes (weekly postcard, photo inbox, video
         # inbox). register_social_handlers() registers all three handlers
@@ -359,31 +395,40 @@ class AikoWakeup:
             register_social_handlers()
             scheduler.notify_new_job()
             log.info("[wakeup] Social handlers registered and schedules ensured")
-        except Exception as exc:
-            log.warning("[wakeup] Social handler registration failed: %s", exc)
+        except Exception:
+            log.exception("[wakeup] Social handler registration failed")
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
-        # TTS — non-fatal: Aiko can run text-only if this fails.
-        try:
-            _boot_step('speak_miotts', lambda: speak.warmup())
-            _boot_step('speak_ready')
-        except Exception:
-            log.error("TTS boot failed — Aiko will run without voice output.")
-            speak = None
+        # TTS — non-fatal: Aiko can run text-only if this fails. Gated on speak
+        # not already being None (construction above may have failed).
+        if speak is not None:
+            try:
+                _boot_step('speak_miotts', lambda: speak.warmup())
+                _boot_step('speak_ready')
+            except Exception:
+                log.exception("[wakeup] TTS boot failed — Aiko will run without voice output.")
+                speak = None
 
         think_ref.set_speak(speak) # wires in speak only once we know if it's live or None
 
-        # ASR — staged so each step reports independently; non-fatal.
-        listen = AikoListen()
+        # ASR — staged so each step reports independently; non-fatal. Construction
+        # wrapped too, same reasoning as AikoSpeak() above.
+        listen: AikoListen | None = None
         try:
-            _boot_step('listen_asr', lambda: listen.load_asr())
-            _boot_step('listen_silero', lambda: listen.load_vad())          # also kicks off warmup thread
-            _boot_step('listen_warmup', lambda: listen.join_warmup())
-            _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())  # VAD daemon — costs ~0 CPU at idle
+            listen = AikoListen()
         except Exception:
-            log.error("ASR/VAD boot failed — Aiko will run without voice input.")
-            listen = None
+            log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")
+
+        if listen is not None:
+            try:
+                _boot_step('listen_asr', lambda: listen.load_asr())
+                _boot_step('listen_silero', lambda: listen.load_vad())          # also kicks off warmup thread
+                _boot_step('listen_warmup', lambda: listen.join_warmup())
+                _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())  # VAD daemon — costs ~0 CPU at idle
+            except Exception:
+                log.exception("[wakeup] ASR/VAD boot failed — Aiko will run without voice input.")
+                listen = None
 
         return BootResult(
             think    = think_ref,
