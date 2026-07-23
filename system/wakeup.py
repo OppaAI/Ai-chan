@@ -285,7 +285,7 @@ class AikoWakeup:
         # inside init_think touches it — safe to construct after the parallel
         # phase instead of before it.
         speak = AikoSpeak(silent=True)
-        think_ref.set_speak(speak)
+
         
         # ── wire deep_studying into the scheduler's weekday/weekend window ────
         # Must happen before the ScheduleRunner below starts (or at least
@@ -366,7 +366,9 @@ class AikoWakeup:
         except Exception:
             log.error("TTS boot failed — Aiko will run without voice output.")
             speak = None
-        
+
+        think_ref.set_speak(speak) # wires in speak only once we know if it's live or None
+
         # ASR — staged so each step reports independently; non-fatal.
         listen = AikoListen()
         try:
