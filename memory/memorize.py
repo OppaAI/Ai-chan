@@ -175,9 +175,10 @@ def _guest_memory_db() -> str:
 # ── boot labels ───────────────────────────────────────────────────────────────
 
 BOOT_LABELS = {
-    'mem_sqlite_vec':  'Opening sqlite-vec memory store...',
-    'mem_cleanup': 'Running memory cleanup...',
-    'mem_ready':   'Memory backend ready',
+    'mem_sqlite_vec':    'Opening sqlite-vec memory store...',
+    'mem_display_name':  'Resolving display name...',
+    'mem_cleanup':       'Running memory cleanup...',
+    'mem_ready':         'Memory backend ready',
 }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -1235,26 +1236,15 @@ class AikoMemorize:
         """Return the user_id this instance is currently opened for."""
         return self._user_id_override or self._mem._user_id
 
-    def get_display_name(self) -> str:
-        """Return the display name for this user, or fall back to user_id."""
-        if self._display_name:
-            return self._display_name
-        return self.get_user_id()
-
     def set_display_name(self, name: str) -> None:
         """Set the display name for this user (e.g. GitHub login)."""
         self._display_name = name.strip() if name else None
-
-    def set_display_name(self, display_name: str) -> None:
-        """Set the display name for this user (e.g. GitHub login)."""
-        self._display_name = display_name
-
+    
     def get_display_name(self) -> str:
         """Return the display name for this user, or fall back to user_id."""
         return self._display_name or self.get_user_id()
-
-    def _resolve_user_id(self, user_id: str | None = None) -> str:
-        """Resolve the effective user_id for this call.
+        def _resolve_user_id(self, user_id: str | None = None) -> str:
+            """Resolve the effective user_id for this call.
 
         An explicit argument always wins. Otherwise, falls back to THIS
         instance's own bound identity (get_user_id()) — never the ambient
