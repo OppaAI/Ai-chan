@@ -28,31 +28,47 @@ Usage:
 Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
 
 Flow:
-    ┌── init_think ──┐   ┌── init_memorize ──┐
-    │ boot + warmup  │   │ sqlite-vec+cleanup│   (parallel threads)
-    │ wait mem_ready │   │ set mem_ready     │
-    └───────┬────────┘   └─────────┬─────────┘
-            └───────────┬──────────┘
-                        ▼
-              join both threads
-                        │
-                        ▼
-              scheduler setup
-        (deep-study handlers, jobs, social lanes)
-                        │
-                        ▼
-              voice pipeline
-        (TTS warmup → ASR + VAD staged init)
-                        │
-                        ▼
-              return BootResult
+    ┌── init_think ────────────┐   ┌── init_memorize ───┐
+    │ AikoThink() — no args    │   │ sqlite-vec+cleanup │   (parallel threads)
+    │ boot + warmup            │   │ set mem_ready_evt  │
+    │ wait mem_ready_evt       │   └─────────┬──────────┘
+    │ set_memorize + idle_lrn  │             │
+    │ prewarm semantic cache   │             │
+    └───────────┬──────────────┘             │
+                └───────────┬────────────────┘
+                            ▼
+                  join both threads
+                            │
+                            ▼
+              construct speak, think.set_speak(speak)
+                            │
+                            ▼
+                  scheduler setup
+            (deep-study handlers, jobs, social lanes)
+                            │
+                            ▼
+                  voice pipeline
+            (TTS warmup → ASR + VAD staged init)
+                            │
+                            ▼
+                  return BootResult
 
 - Parallel phase — init_think and init_memorize run on separate threads at the same time.
-- think boots AikoThink, runs warmup, then blocks on mem_ready.wait() until memory is done.
-- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready.set() in a finally — so think never hangs even if memory boot fails.
-- Join point — main thread waits for both (t1.join(); t2.join()) before continuing.
-- Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
-- Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
+- think is constructed with no arguments; memorize and speak both start as None and are
+  injected later via set_memorize()/set_speak() once each is actually ready.
+- think boots AikoThink, runs warmup, then blocks on mem_ready_evt.wait() until memory is
+  done — then injects memory (set_memorize, may be None on failure), starts the idle
+  learner (no-ops if memory is None), and prewarms the semantic route/capability caches
+  before returning.
+- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready_evt.set() in a
+  finally — so think never hangs even if memory boot fails.
+- Join point — main thread waits for both think_future/mem_future to finish.
+- speak is constructed and injected via think.set_speak() only after the join — nothing
+  in init_think touches speak during boot, so there's no reason to build it earlier.
+- Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts
+  the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
+- Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD →
+  join warmup → start barge-in monitor).
 - Returns BootResult with all four live subsystem refs.
 """
 
@@ -103,22 +119,26 @@ class BootResult:
     speak:    AikoSpeak               # speaking module
     listen:   AikoListen              # listening module
 
+type BootCallback = Callable[[str], None]            # type hint for the subsystem callable and none
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _prewarm_semantic_cache(think) -> None:
     """Embed route and capability exemplars at boot so first-turn latency is cold-free."""
+    if think._get_memorize() is None:
+        log.info("[wakeup] Skipping semantic cache prewarm — no memory backend.")
+        return
     from cognition.think import (
         _ROUTE_TERNARY_EXAMPLES,            # for top-level 3-way routing decision (agentic / webchat / localchat)
         _ROUTE_INSTRUCT_TERNARY,            # the instruction strings of the 3-way routing
     )
     try:
         # Prewarm intent routing cache
-        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)
+        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)    # prewarm routing cache in designated npz
         
         # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
         from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
-        embedder = think._memorize._mem._embedder                                      # load the pre-embedded semantic vectors from npz files
+        embedder = think._get_memorize()._mem._embedder                                # load the pre-embedded semantic vectors from npz files
         for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
             _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
         
@@ -148,9 +168,9 @@ class AikoWakeup:
 
     def boot(
         self,
-        on_loading: Callable[[str], None],
-        on_done:    Callable[[str], None],
-        on_skip:    Callable[[str], None],
+        on_loading: BootCallback,
+        on_done:    BootCallback,
+        on_skip:    BootCallback,
     ) -> BootResult:
         """
         Execute full boot sequence and return live subsystem references.
@@ -160,26 +180,35 @@ class AikoWakeup:
         Barge-in monitor started as the final ASR step so Silero is already
         warm and the VAD thread costs nothing before the first turn.
         """
-        from concurrent.futures import ThreadPoolExecutor
-    
-        speak = AikoSpeak(silent=True)
-        mem_ready = threading.Event()
+        from concurrent.futures import ThreadPoolExecutor            # for managing pool of worker threads
+        mem_ready_evt  = threading.Event()                           # thread-safe boolean flag for blocking until memory system is ready
     
         # ── parallel boot ─────────────────────────────────────────────────────
     
         def init_think(memorize_getter):
             """memorize_getter is a zero-arg callable so init_think can pull
-            the memorize result lazily, after mem_ready fires — avoids needing
+            the memorize result lazily, after mem_ready_evt fires — avoids needing
             the memorize future to exist before this closure is defined."""
-            on_loading('think_start')
-            think = AikoThink(None, speak=speak)
-            on_done('think_start')
-            on_loading('think_warmup')
-            think.join_warmup()
-            on_done('think_warmup')
-            mem_ready.wait()                        # hold until memorize is ready
-            think._memorize = memorize_getter()      # inject memory backend
-            _prewarm_semantic_cache(think)            # embed exemplars while booting
+
+            on_loading('think_start')                                # announce loading of cognitive core starts
+            think = AikoThink()                                      # initiate cognitive core
+            on_done('think_start')                                   # announce loading of cognitive core finishes
+            
+            on_loading('think_warmup')                               # announce warmup of cognitive core starts
+            think.start_warmup()                                     # start warmup background thread
+            think.join_warmup()                                      # block until warmup thread finishes
+            on_done('think_warmup')                                  # announce loading of cognitive core finishes
+            
+            on_loading('think_mem_wait')                             #
+            mem_ready_evt.wait()
+            on_done('think_mem_wait')
+            
+            think.set_memorize(memorize_getter())                    # inject memory backend (may be None if memory boot failed)
+            think.start_idle_learner()                # no-ops cleanly if memorize is None
+            
+            on_loading('think_prewarm')
+            _prewarm_semantic_cache(think)                           # embed exemplars while booting
+            on_done('think_prewarm')
             return think
     
         def init_memorize():
@@ -219,7 +248,7 @@ class AikoWakeup:
                 log.exception("Memory boot failed — Aiko will run without persistent memory.")
                 return None          # explicit sentinel, not a silent list-slot
             finally:
-                mem_ready.set()
+                mem_ready_evt.set()
     
         with ThreadPoolExecutor(max_workers=2) as ex:
             mem_future = ex.submit(init_memorize)
@@ -227,6 +256,8 @@ class AikoWakeup:
             # .result() re-raises any exception the worker thread hit — no
             # silent None left behind unless init_memorize/init_think decided
             # to return None deliberately (as init_memorize does above).
+            from concurrent.futures import wait
+            done, _ = wait([mem_future, think_future])
             try:
                 think_ref = think_future.result()
             except Exception:
@@ -234,6 +265,13 @@ class AikoWakeup:
                 think_ref = None
             memorize = mem_future.result()   # never raises — already caught internally
 
+        # speak has no boot-time dependency on think or memorize, and nothing
+        # inside init_think touches it — safe to construct after the parallel
+        # phase instead of before it.
+        speak = AikoSpeak(silent=True)
+        if think_ref is not None:
+            think_ref.set_speak(speak)
+        
         # ── wire deep_studying into the scheduler's weekday/weekend window ────
         # Must happen before the ScheduleRunner below starts (or at least
         # before its first tick) so the "deep_study_start"/"deep_study_stop"
@@ -261,14 +299,14 @@ class AikoWakeup:
         # That duplicate construction has been removed from cognition/think.py;
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
-        _scheduler = ScheduleRunner(
+        scheduler = ScheduleRunner(
             on_due=think_ref.handle_scheduled_job if think_ref else None,
             memorize=memorize,
             generate_and_post_fn=generate_and_post,
             consolidate_fn=maybe_run_consolidation,
         )
-        register_scheduler(_scheduler)  # Allow tools to notify scheduler of new jobs
-        _scheduler.start()
+        register_scheduler(scheduler)  # Allow tools to notify scheduler of new jobs
+        scheduler.start()
 
         # Schedule-driven workspace/knowledge scan. The schedule runner keeps
         # using one sleep-until-next-event loop; the KB scan is represented in
@@ -285,7 +323,7 @@ class AikoWakeup:
                     ),
                 )
                 ensure_workspace_knowledge_job()
-                _scheduler.notify_new_job()
+                scheduler.notify_new_job()
                 log.info("[wakeup] Workspace knowledge scan schedule ensured")
             except Exception as exc:
                 log.warning("[wakeup] Workspace knowledge scan schedule failed: %s", exc)
@@ -302,7 +340,7 @@ class AikoWakeup:
         # scheduler start above.
         try:
             register_social_handlers()
-            _scheduler.notify_new_job()
+            scheduler.notify_new_job()
             log.info("[wakeup] Social handlers registered and schedules ensured")
         except Exception as exc:
             log.warning("[wakeup] Social handler registration failed: %s", exc)
