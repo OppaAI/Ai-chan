@@ -18,6 +18,8 @@ additive, never a hard dependency.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 from collections import defaultdict, OrderedDict
@@ -316,3 +318,54 @@ def label_scores_topk(
         label: sum(sorted(values, reverse=True)[:k]) / min(k, len(values))
         for label, values in by_label.items()
     }
+
+# ── shared vector-cache path builder ─────────────────────────────────────────
+# Used by both think.py's route-exemplar cache and capability.py's
+# trigger-embedding cache, so the two on-disk caches derive their keys and
+# directory placement identically instead of drifting apart over time.
+
+def cache_vector_path(
+    key_payload: dict,
+    cache_dir_env: str,
+    default_dir: str,
+    enabled_env: str = "ROUTE_VECTOR_CACHE_ENABLED",
+    per_user: bool = True,
+) -> "Path | None":
+    """Return the on-disk path for a cached embedding vector, or None if
+    disk caching is disabled or the path can't be built.
+
+    key_payload — JSON-serializable dict identifying what's being cached
+    (e.g. examples + instruct + embedder identity). Hashed with sha256,
+    sorted keys, so any change to the payload content changes the file.
+
+    cache_dir_env / default_dir — env var name (and its default) that
+    holds the cache subdirectory, e.g. ("ROUTE_VECTOR_CACHE_DIR",
+    "route_vectors") or ("CAP_VECTOR_CACHE_DIR", "capability_vectors").
+
+    enabled_env — env var gating disk caching on/off. Defaults to the
+    same flag think.py already uses, so both caches toggle together
+    unless a caller passes a different name.
+
+    per_user — if True (default, matches think.py's existing behavior),
+    the cache lives under system.userspace.user_state_dir(current_user_id())
+    unless cache_dir_env resolves to an absolute path. Set False for
+    caches that are identical across users (e.g. capability triggers
+    are not user-specific data — consider per_user=False for those if
+    you'd rather share one file across users instead of duplicating it
+    per user_state_dir).
+    """
+    if os.environ.get(enabled_env, "1").lower() not in {"1", "true", "yes", "on"}:
+        return None
+    try:
+        digest = hashlib.sha256(
+            json.dumps(key_payload, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()[:24]
+        raw_dir = Path(os.environ.get(cache_dir_env, default_dir))
+        if per_user and not raw_dir.is_absolute():
+            from system.userspace import current_user_id, user_state_dir
+            base = user_state_dir(current_user_id()) / raw_dir
+        else:
+            base = raw_dir
+        return base / f"{digest}.npz"
+    except Exception:
+        return None
