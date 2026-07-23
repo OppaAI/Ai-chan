@@ -83,7 +83,7 @@ def parse_args():
                    help="use the plain no-curses CLI instead of the WebUI — for local testing only")
     p.add_argument("--clear-mem", action="store_true",            # wipe out all memory and exit
                    help="WARNING: irreversibly wipes all stored memories, then exits")
-    p.add_argument("--logout",   action="store_true",             # logout the stored user credential
+    p.add_argument("--logout",   action="store_true",             # logout user session
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
@@ -92,25 +92,29 @@ def parse_args():
 
 def main():
     """Primary entry point for the Aiko-chan CLI."""
-    args = parse_args()                                # assign argument namespace to check which ones are set
+    args = parse_args()                                 # assign argument namespace to check which ones are set
+    
+    if args.clear_mem:                                  # if clear memory argument set
+        confirm = input("WARNING: This will permanently erase all memories. Continue? [y/N]: ").strip().lower()  # prompt for user confirm memory wiping
+        if confirm != "y":                              # anything other than explicit 'y' aborts
+            log.info("Aborted memory clear.")           # log abort info
+            sys.exit(1)                                 # exit code 1 (aborted, not an error but not success either)
+        log.info("Clearing all memories...")            # log success info
+        mem = AikoMemorize()                            # load memory system
+        mem.clear()                                     # wipe out memory
+        sys.exit(0)                                     # exit code 0
+        
+    if args.logout:                                     # if logout argument set
+        from interface.cli.cli import handle_logout     # load CLI
+        handle_logout()                                 # logout user session
+        sys.exit(0)                                     # exit code 0
 
-    if args.clear_mem:                                 # wipe out all memory and exit
-        log.info("Clearing all memories...")
-        m = AikoMemorize()
-        m.clear()
-        sys.exit(0)
-
-    if args.logout:                                     # logout the stored user credential
-        from interface.cli.cli import handle_logout
-        handle_logout()
-        sys.exit(0)
-
-    if args.cli:                                        # launch CLI
-        from interface.cli.cli import run_cli
-        run_cli(args)
-    else:                                               # launch WebUI
-        from interface.webui.webui import run_webui
-        run_webui(args)
+    if args.cli:                                        # if CLI argument set
+        from interface.cli.cli import run_cli           # load CLI with set arguments
+        run_cli(args)                                   # launch CLI 
+    else:                                               # otherwise,
+        from interface.webui.webui import run_webui     # load WebUI
+        run_webui(args)                                 # launch WebUI with set arguments
 
 
 if __name__ == '__main__':
