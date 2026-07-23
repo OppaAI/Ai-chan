@@ -328,7 +328,6 @@ def cache_vector_path(
     key_payload: dict,
     cache_dir_env: str,
     default_dir: str,
-    enabled_env: str = "ROUTE_VECTOR_CACHE_ENABLED",
     per_user: bool = True,
 ) -> "Path | None":
     """Return the on-disk path for a cached embedding vector, or None if
@@ -342,10 +341,6 @@ def cache_vector_path(
     holds the cache subdirectory, e.g. ("ROUTE_VECTOR_CACHE_DIR",
     "route_vectors") or ("CAP_VECTOR_CACHE_DIR", "capability_vectors").
 
-    enabled_env — env var gating disk caching on/off. Defaults to the
-    same flag think.py already uses, so both caches toggle together
-    unless a caller passes a different name.
-
     per_user — if True (default, matches think.py's existing behavior),
     the cache lives under system.userspace.user_state_dir(current_user_id())
     unless cache_dir_env resolves to an absolute path. Set False for
@@ -354,8 +349,6 @@ def cache_vector_path(
     you'd rather share one file across users instead of duplicating it
     per user_state_dir).
     """
-    if os.environ.get(enabled_env, "1").lower() not in {"1", "true", "yes", "on"}:
-        return None
     try:
         digest = hashlib.sha256(
             json.dumps(key_payload, sort_keys=True, default=str).encode("utf-8")
