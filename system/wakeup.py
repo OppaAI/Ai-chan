@@ -29,14 +29,18 @@ Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequenci
 
 Flow:
     ┌── init_think ────────────┐   ┌── init_memorize ───┐
-    │ boot + warmup            │   │ sqlite-vec+cleanup │   (parallel threads)
-    │ wait mem_ready_evt       │   │ set mem_ready_evt  │
-    │ set_memorize + idle_lrn  │   └─────────┬──────────┘
+    │ AikoThink() — no args    │   │ sqlite-vec+cleanup │   (parallel threads)
+    │ boot + warmup            │   │ set mem_ready_evt  │
+    │ wait mem_ready_evt       │   └─────────┬──────────┘
+    │ set_memorize + idle_lrn  │             │
     │ prewarm semantic cache   │             │
     └───────────┬──────────────┘             │
                 └───────────┬────────────────┘
                             ▼
                   join both threads
+                            │
+                            ▼
+              construct speak, think.set_speak(speak)
                             │
                             ▼
                   scheduler setup
@@ -50,12 +54,21 @@ Flow:
                   return BootResult
 
 - Parallel phase — init_think and init_memorize run on separate threads at the same time.
-- think boots AikoThink, runs warmup, then blocks on mem_ready_evt.wait() until memory is done — then injects memory (set_memorize, may be None on failure), 
-  starts the idle learner (no-ops if memory is None), and prewarms the semantic route/capability caches before returning.
-- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready_evt.set() in a finally — so think never hangs even if memory boot fails.
-- Join point — main thread waits for both (t1.join(); t2.join()) before continuing.
-- Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
-- Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
+- think is constructed with no arguments; memorize and speak both start as None and are
+  injected later via set_memorize()/set_speak() once each is actually ready.
+- think boots AikoThink, runs warmup, then blocks on mem_ready_evt.wait() until memory is
+  done — then injects memory (set_memorize, may be None on failure), starts the idle
+  learner (no-ops if memory is None), and prewarms the semantic route/capability caches
+  before returning.
+- memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready_evt.set() in a
+  finally — so think never hangs even if memory boot fails.
+- Join point — main thread waits for both think_future/mem_future to finish.
+- speak is constructed and injected via think.set_speak() only after the join — nothing
+  in init_think touches speak during boot, so there's no reason to build it earlier.
+- Scheduler setup (sequential, single-threaded) — registers deep-study handlers, starts
+  the one ScheduleRunner, ensures the workspace-knowledge job, registers social lanes.
+- Voice pipeline (sequential) — TTS warmup, then ASR staged init (load model → load VAD →
+  join warmup → start barge-in monitor).
 - Returns BootResult with all four live subsystem refs.
 """
 
@@ -168,7 +181,6 @@ class AikoWakeup:
         warm and the VAD thread costs nothing before the first turn.
         """
         from concurrent.futures import ThreadPoolExecutor            # for managing pool of worker threads
-        speak = AikoSpeak(silent=True)                               # construct TTS subsystem object before boot threads start
         mem_ready_evt  = threading.Event()                           # thread-safe boolean flag for blocking until memory system is ready
     
         # ── parallel boot ─────────────────────────────────────────────────────
@@ -179,7 +191,7 @@ class AikoWakeup:
             the memorize future to exist before this closure is defined."""
 
             on_loading('think_start')                                # announce loading of cognitive module starts
-            think = AikoThink(memorize=None, speak=speak)                    
+            think = AikoThink()
             think.start_warmup()                     # NEW — explicit, not constructor side effect
             on_done('think_start')                                   # announce loading of cognitive module finishes
             
@@ -253,6 +265,13 @@ class AikoWakeup:
                 think_ref = None
             memorize = mem_future.result()   # never raises — already caught internally
 
+        # speak has no boot-time dependency on think or memorize, and nothing
+        # inside init_think touches it — safe to construct after the parallel
+        # phase instead of before it.
+        speak = AikoSpeak(silent=True)
+        if think_ref is not None:
+            think_ref.set_speak(speak)
+        
         # ── wire deep_studying into the scheduler's weekday/weekend window ────
         # Must happen before the ScheduleRunner below starts (or at least
         # before its first tick) so the "deep_study_start"/"deep_study_stop"
