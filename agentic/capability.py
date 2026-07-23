@@ -20,7 +20,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+import hashlib
 import json
+import os
 
 import numpy as np
 
@@ -137,13 +139,64 @@ CAPABILITIES: dict[str, Capability] = {
 _trigger_embed_cache: dict[str, np.ndarray] = {}
 _TRIGGER_EMBED_CACHE_MAX = 256
 
+# On-disk tier, mirroring cognition.think._semantic_example_vectors' route
+# vector cache. Same env flag so both caches turn on/off together; give it
+# its own var (CAP_VECTOR_CACHE_ENABLED) instead if you want to toggle them
+# independently.
+_CAP_VECTOR_CACHE_DIR = Path(
+    os.environ.get("CAP_VECTOR_CACHE_DIR", "cache/capability_vectors")
+)
+
+
+def _capability_vector_cache_path(cap: Capability, embedder: Embedder) -> Path | None:
+    """Disk path for cap's trigger vector, or None if disk caching is off.
+
+    Keyed on trigger text + embedder identity so an edit to a capability's
+    triggers, or a swap of the embedding model, invalidates just that file
+    instead of silently reusing a stale vector.
+
+    NOTE: assumes `embedder` exposes stable identity attributes (e.g.
+    model_name/dim). Check cognition.think's _route_vector_cache_path for
+    whatever fields it actually keys on and mirror those exactly here —
+    I don't have that function's body, so this is a best-effort match.
+    """
+    if os.environ.get("ROUTE_VECTOR_CACHE_ENABLED") != "1":
+        return None
+    embedder_fingerprint = getattr(embedder, "model_name", "") + ":" + str(getattr(embedder, "dim", ""))
+    key_material = "|".join(cap.triggers) + f"::{embedder_fingerprint}"
+    key_hash = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:16]
+    return _CAP_VECTOR_CACHE_DIR / f"{cap.id}_{key_hash}.npz"
+
 
 def _get_trigger_embedding(cap: Capability, embedder: Embedder) -> np.ndarray:
     cached = _trigger_embed_cache.get(cap.id)
     if cached is not None:
         return cached
+
+    disk_path = _capability_vector_cache_path(cap, embedder)
+    if disk_path is not None and disk_path.exists():
+        try:
+            with disk_path.open("rb") as f:
+                data = np.load(f, allow_pickle=False)
+                vec = data["vector"]
+            if len(_trigger_embed_cache) >= _TRIGGER_EMBED_CACHE_MAX:
+                _trigger_embed_cache.pop(next(iter(_trigger_embed_cache)))
+            _trigger_embed_cache[cap.id] = vec
+            return vec
+        except Exception:
+            pass  # fall through to recompute; corrupt/stale cache is not fatal
+
     text = " | ".join(cap.triggers)
     vec = reason.normalize_vec(np.asarray(embedder.embed_query(text), dtype=np.float32))
+
+    if disk_path is not None:
+        try:
+            disk_path.parent.mkdir(parents=True, exist_ok=True)
+            with disk_path.open("wb") as f:
+                np.savez(f, vector=vec)
+        except Exception:
+            pass  # cache write failure shouldn't break the turn
+
     if len(_trigger_embed_cache) >= _TRIGGER_EMBED_CACHE_MAX:
         _trigger_embed_cache.pop(next(iter(_trigger_embed_cache)))
     _trigger_embed_cache[cap.id] = vec
