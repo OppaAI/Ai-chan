@@ -1014,7 +1014,26 @@ class AikoThink:
             self._speak = speak
         if old is not None and old is not speak:
             old.stop()   # AikoSpeak.stop() is idempotent/safe to call even if already stopped
-    
+
+    def compare_and_set_speak(self, expected, new_value) -> bool:
+        """Atomically set _speak to new_value only if it's still `expected`.
+        Used by the proactive-checkin save/mute/restore sequence in
+        orchestrate.py: if a concurrent explicit toggle (e.g. /voice) changed
+        _speak while we were muted for the check-in, that change is more
+        recent and should win — we skip the restore instead of stomping it.
+        Returns True if the swap happened, False if _speak had already moved."""
+        with self._speak_lock:
+            if self._speak is expected:
+                old = self._speak
+                self._speak = new_value
+                swapped = True
+            else:
+                old = None
+                swapped = False
+        if swapped and old is not None and old is not new_value:
+            old.stop()
+        return swapped
+  
     def _get_speak(self):
         with self._speak_lock:
             return self._speak
