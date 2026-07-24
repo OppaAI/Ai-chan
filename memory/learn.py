@@ -901,7 +901,18 @@ def register_deep_study_handlers(client=None, model=None, timezone: str | None =
     This is now called automatically from system.wakeup.AikoWakeup.boot() —
     see system/wakeup.py — once AikoThink (and therefore its LLM client/model)
     exists, so app authors normally don't need to call this by hand.
+
+    NOTE (model-swap possibility): client/model are plain params here by design —
+    this function doesn't assume they're think's. Currently wakeup.py always passes
+    think_ref._client/_llm_model, but deep_studying runs in scheduled off-hours
+    windows where swap time isn't a concern (unlike quick_studying, called from
+    idle_learner_loop on short chat-idle gaps, which should stay on think's
+    already-warm model). An Active/Idle mode split — Idle mode tearing down
+    TTS/ASR/CV/embedder and loading a bigger model for deep_studying + other
+    off-hour autonomous jobs — would plug in here without touching this function;
+    only the wakeup.py call site would need to change.
     """
+
     from system import schedule as _schedule
 
     _schedule.register_system_handler(
