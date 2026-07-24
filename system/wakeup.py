@@ -270,7 +270,7 @@ class AikoWakeup:
 
         def init_memorize():
             try:
-                memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))        # initiate memory system (with logging off to prevent duplicate)
+                memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))         # initiate memory system (with logging off to prevent duplicate)
 
                 def _set_display_name():
                     """Pull the cached display name for this user and pin it to the
@@ -307,7 +307,7 @@ class AikoWakeup:
             # drain mem_future before deciding whether boot failed.
             think_ref: AikoThink | None = None                                                # initiate AikoThink object
             think_exc: Exception | None                                                       # hold exception of cognitive core for chaining
-            try:                                                                              # attempt to initiate of cognitive core
+            try:                                                                              # attempt to initiate cognitive core
                 think_ref = think_future.result()                                             # block until finishes initiation of cognitive core
             except Exception as exc:                                                          # if error,
                 think_exc = exc                                                               # logged once and chained into the raise later
@@ -325,11 +325,11 @@ class AikoWakeup:
         # inside init_think touches it — safe to construct after the parallel
         # phase instead of before it. Construction itself is non-fatal, same as
         # TTS warmup below — Aiko can run text-only if AikoSpeak() itself blows up.
-        try:                                                                                  #
-            speak = AikoSpeak(silent=True)                                                    #
-        except Exception:
-            log.exception("[wakeup] AikoSpeak construction failed — Aiko will run without voice output.")
-            speak = None
+        try:                                                                                  # attempt to initiate speaking module
+            speak = AikoSpeak(silent=True)                                                    # load speaking module with internal logging inhibited
+        except Exception:                                                                     # if error,
+            log.exception("[wakeup] AikoSpeak construction failed — Aiko will run without voice output.")  # log failure
+            speak = None                                                                      # set to None to indicate failure
 
         # ── wire deep_studying into the scheduler's weekday/weekend window ────
         # Must happen before the ScheduleRunner below starts (or at least
