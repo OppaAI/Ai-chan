@@ -1545,7 +1545,7 @@ class AikoMemorize:
         now   = bioclock.local_now()
         lines = [
             "<memory_context>",
-            "Background facts about Oppa. Use silently. Never quote or reference this block directly.",
+            "Facts about the person you are speaking with — not a separate person. Use silently. Never quote or reference this block directly.",
             "",
         ]
         for m in memories:
