@@ -1,18 +1,20 @@
 """
 system/userspace.py
-
+ 
 Helpers for per-user runtime paths and identifiers.
-
+ 
 This module provides utilities for managing per-user state in a multi-user
 environment. All user-specific data is stored under <USER_STATE_ROOT>/<user_id>/ with
 subdirectories:
-
+ 
   memory/         — SQLite memory DB, embeddings, consolidation state
   profile/        — USER.md profile/bio markdown  
   workspace/      — user workspace (code, projects)
   social/weekly/  — weekly social draft bundles (images, posts)
   logs/           — per-user log files
-
+  runtime/        — internal runtime bridge state (e.g. cached display name),
+                    not user-editable — distinct from profile/
+ 
 Key functions:
   - current_user_id()     — get the active user ID from session or env
   - user_state_dir()      — resolve <USER_STATE_ROOT>/<user_id> for a user
@@ -20,18 +22,26 @@ Key functions:
   - user_workspace_root() — resolve workspace root for a user
   - user_profile_path()   — resolve profile path (defaults to profile/USER.md)
   - set_current_user_id() / reset_current_user_id() — per-request user context
-
+  - current_display_name() — resolve display name: contextvar -> cached
+                              login value -> env var -> raw user_id
+  - set_current_display_name() / reset_current_display_name() — per-request
+                              display name context
+  - remember_display_name() — cache a login-resolved display name (e.g.
+                              GitHub/Patreon handle) for later recovery
+  - normalize_user_id()    — build a filesystem-safe, provider-scoped id
+                              for OAuth identities
+ 
 The multi-user design allows running multiple Aiko instances (e.g., for
 different team members) on the same machine, each with their own isolated
 state, memories, and configurations.
 """
 
-from __future__ import annotations
+from __future__ import annotations                        # evaluates type annotations later
 
 import contextvars
 import json
-from pathlib import Path
 import os
+from pathlib import Path
 import re
 import tempfile
 
