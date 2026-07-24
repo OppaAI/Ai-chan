@@ -352,9 +352,9 @@ class AikoWakeup:
         # site — not learn.py itself — is where the alternate client/model gets threaded
         # in; register_deep_study_handlers() already accepts client/model as plain params,
         # so no changes needed there.
-        learn.register_deep_study_handlers(                                                   # register deep-study idle learner to AikoThink object using its model
-            client=think_ref._client,                                                         # the live cognitive core AikoThink instance
-            model=think_ref._llm_model,                                                       # NOTE: switching to Idle mode LLM model after separation of Action vs Idle mode
+        learn.register_deep_study_handlers(                                                   # wire handlers for scheduled deep-study jobs to think's live LLM client/model
+            client=think_ref._client,                                                         # cognitive core's LLM API client
+            model=think_ref._llm_model,                                                       # NOTE: swap target once Action/Idle mode split exists
         )
 
         if memorize is None:                                                                  # if error during memory system boot,
@@ -369,10 +369,10 @@ class AikoWakeup:
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
         scheduler = ScheduleRunner(                                                            # construct a scheduler daemon to fire scheduled jobs
-            on_due=think_ref.handle_scheduled_job,                                             # the live cognitive core AikoThink instance
+            on_due=think_ref.handle_scheduled_job,                                             # callback: hands fired jobs to think for processing
             memorize=memorize,                                                                 # the live memory system AikoMemorize instance
-            generate_and_post_fn=generate_and_post,                                            # daily reflection job every day in midnight
-            consolidate_fn=maybe_run_consolidation,                                            # monthly memory consolidation on the first day every month
+            generate_and_post_fn=generate_and_post,                                            # daily reflection job (see memory/reflect.py for cadence)
+            consolidate_fn=maybe_run_consolidation,                                            # monthly memory consolidation job (see memory/reflect.py for cadence)
         )
         register_scheduler(scheduler)                                                          # allow tools to notify scheduler of new jobs
         scheduler.start()                                                                      # start the scheduler in background thread
@@ -391,7 +391,7 @@ class AikoWakeup:
                         user_id=_memorize.get_user_id(),
                     ),
                 )
-                ensure_workspace_knowledge_job()                                                # seed the above handle function into scheduler entry
+                ensure_workspace_knowledge_job()                                                # seed the job entry of the above function into scheduler
                 scheduler.notify_new_job()                                                      # poke the already-running scheduler to refresh new jobs
                 log.info("[wakeup] Workspace knowledge scan schedule ensured")                  # log success
             except Exception:                                                                   # if error,
