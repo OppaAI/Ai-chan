@@ -446,9 +446,9 @@ class AikoWakeup:
                 log.exception("[wakeup] ASR/VAD boot failed — Aiko will run without voice input.")           # log failure
                 listen = None                                                                                # set handle to None to indicate error
 
-        return BootResult(
-            think    = think_ref,
-            memorize = memorize,
-            speak    = speak,
-            listen   = listen,
+        return BootResult(                                                                        # return the results of the bootup of the 4 modules:
+            think    = think_ref,                                                                 # cognitive core
+            memorize = memorize,                                                                  # memory system
+            speak    = speak,                                                                     # speaking module
+            listen   = listen,                                                                    # listening module
         )
