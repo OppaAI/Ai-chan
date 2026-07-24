@@ -297,7 +297,7 @@ class AikoWakeup:
             finally:                                                                          # whether success or failure,
                 mem_ready_evt.set()                                                           # set memory ready flag to True to trigger any blocked thread
 
-        with ThreadPoolExecutor(max_workers=2) as ex:                                         # start thread pool with 2 worker threads
+        with ThreadPoolExecutor(max_workers=2) as ex:                                         # start thread pool with 2 worker threads (for loading memory system and cognitive core concurrently)
             mem_future = ex.submit(init_memorize)                                             # start memory system boots on thread 1
             think_future = ex.submit(init_think, lambda: mem_future.result())                 # start cognitive core boots on thread 2
             
@@ -325,7 +325,7 @@ class AikoWakeup:
         # inside init_think touches it — safe to construct after the parallel
         # phase instead of before it. Construction itself is non-fatal, same as
         # TTS warmup below — Aiko can run text-only if AikoSpeak() itself blows up.
-        try:                                                                                  # attempt to initiate speaking module
+        try:                                                                                  # attempt to initiate speaking module (sequentially)
             speak = AikoSpeak(silent=True)                                                    # load speaking module with internal logging inhibited
         except Exception:                                                                     # if error,
             log.exception("[wakeup] AikoSpeak construction failed — Aiko will run without voice output.")  # log failure
@@ -338,14 +338,14 @@ class AikoWakeup:
         # have a registered handler to call into — otherwise they log
         # "unregistered handler" and silently never fire. Needs AikoThink's
         # LLM client/model, so it can only happen here, after think boots.
-        from memory import learn
-        learn.register_deep_study_handlers(
-            client=think_ref._client,
-            model=think_ref._llm_model,
+        from memory import learn                                                              # access self-learning module
+        learn.register_deep_study_handlers(                                                   # 
+            client=think_ref._client,                                                         #
+            model=think_ref._llm_model,                                                       #
         )
 
-        if memorize is None:
-            log.warning("[wakeup] Memory boot failed — ScheduleRunner starting without system jobs.")  # warning, not error — Aiko keeps running, just degraded
+        if memorize is None:                                                                  # if error during memory system boot,
+            log.warning("[wakeup] Memory boot failed — ScheduleRunner starting without system jobs.")  # log warning, not error — Aiko keeps running, just degraded
 
         # NOTE: this is the ONE ScheduleRunner for the whole app. AikoThink
         # used to also construct its own ScheduleRunner in __init__, which
