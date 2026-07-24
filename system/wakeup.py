@@ -168,12 +168,12 @@ def _prewarm_semantic_cache(think) -> None:
     Args:
        think: AikoThink instance with a booted embedder (via memorize backend).
     """
-    if think._get_memorize() is None:
+    if think._get_memorize() is None:            # gate to skip semantic cache prewarm if memory system is unavailable
         log.info("[wakeup] Skipping semantic cache prewarm — no memory backend.")
         return
     from cognition.think import (
-        _ROUTE_TERNARY_EXAMPLES,            # for top-level 3-way routing decision (agentic / webchat / localchat)
-        _ROUTE_INSTRUCT_TERNARY,            # the instruction strings of the 3-way routing
+        _ROUTE_TERNARY_EXAMPLES,                # for top-level 3-way routing decision (agentic / webchat / localchat)
+        _ROUTE_INSTRUCT_TERNARY,                # the instruction strings of the 3-way routing
     )
     try:
         # Prewarm intent routing cache
@@ -380,7 +380,7 @@ class AikoWakeup:
         # Schedule-driven workspace/knowledge scan. The schedule runner keeps
         # using one sleep-until-next-event loop; the KB scan is represented in
         # schedule.json as a normal interval handler job.
-        if memorize is not None:                                                               # only access workspace/knowledge base if memory boot succeeded
+        if memorize is not None:                                                               # gate to skip if memory boot failed
             try:                                                                               # attempt to register workspace/knowledge base folder scanning into scheduler
                 from memory.knowledge import ingest_workspace_knowledge_folder                 # access workspace/knowledge base
 
@@ -418,33 +418,33 @@ class AikoWakeup:
 
         # TTS — non-fatal: Aiko can run text-only if this fails. Gated on speak
         # not already being None (construction above may have failed).
-        if speak is not None:                                                                    # 
-            try:
-                _boot_step('speak_miotts', lambda: speak.warmup())
-                _boot_step('speak_ready')
-            except Exception:
-                log.exception("[wakeup] TTS boot failed — Aiko will run without voice output.")
-                speak = None
+        if speak is not None:                                                                    # gate to skip warmup of TTS model if speaking module boot failed
+            try:                                                                                 # attempt the warmup of TTS model
+                _boot_step('speak_miotts', lambda: speak.warmup())                               # load/prime the TTS model
+                _boot_step('speak_ready')                                                        # log success
+            except Exception:                                                                    # if error,
+                log.exception("[wakeup] TTS boot failed — Aiko will run without voice output.")  # log failure
+                speak = None                                                                     # set hand;e to None to indicate eror
 
-        think_ref.set_speak(speak) # wires in speak only once we know if it's live or None
+        think_ref.set_speak(speak)                                                               # wires in speaking module only once if TTS model is known to be live or not
 
         # ASR — staged so each step reports independently; non-fatal. Construction
         # wrapped too, same reasoning as AikoSpeak() above.
-        listen: AikoListen | None = None
-        try:
-            listen = AikoListen()
-        except Exception:
-            log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")
+        listen: AikoListen | None = None                                                                     # initiate listening module handle to None
+        try:                                                                                                 # attempt to load listening module
+            listen = AikoListen()                                                                            # load listening module
+        except Exception:                                                                                    # if error,
+            log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")    # log failure
 
-        if listen is not None:
+        if listen is not None:                                                                               # gate to skip loading of ASR/VAD model if listening module boot failed
             try:
-                _boot_step('listen_asr', lambda: listen.load_asr())
-                _boot_step('listen_silero', lambda: listen.load_vad())          # also kicks off warmup thread
-                _boot_step('listen_warmup', lambda: listen.join_warmup())
-                _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())  # VAD daemon — costs ~0 CPU at idle
-            except Exception:
-                log.exception("[wakeup] ASR/VAD boot failed — Aiko will run without voice input.")
-                listen = None
+                _boot_step('listen_asr', lambda: listen.load_asr())                                          # load ASR model
+                _boot_step('listen_silero', lambda: listen.load_vad())                                       # load VAD module
+                _boot_step('listen_warmup', lambda: listen.join_warmup())                                    # kick off warmup thread
+                _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())                          # load VAD daemon for barge-in monitor — costs ~0 CPU at idle
+            except Exception:                                                                                # if error,
+                log.exception("[wakeup] ASR/VAD boot failed — Aiko will run without voice input.")           # log failure
+                listen = None                                                                                # set handle to None to indicate error
 
         return BootResult(
             think    = think_ref,
