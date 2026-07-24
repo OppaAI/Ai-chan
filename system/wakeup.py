@@ -380,22 +380,22 @@ class AikoWakeup:
         # Schedule-driven workspace/knowledge scan. The schedule runner keeps
         # using one sleep-until-next-event loop; the KB scan is represented in
         # schedule.json as a normal interval handler job.
-        if memorize is not None:
-            try:
-                from memory.knowledge import ingest_workspace_knowledge_folder
+        if memorize is not None:                                                               # only access workspace/knowledge base if memory boot succeeded
+            try:                                                                               # attempt to register workspace/knowledge base folder scanning into scheduler
+                from memory.knowledge import ingest_workspace_knowledge_folder                 # access workspace/knowledge base
 
-                register_system_handler(
+                register_system_handler(                                                       # register the handle function to grab embedder from memory system for converting kb into vectors
                     "workspace_knowledge_scan",
                     lambda _memorize: ingest_workspace_knowledge_folder(
                         embedder=_memorize._mem._embedder,
                         user_id=_memorize.get_user_id(),
                     ),
                 )
-                ensure_workspace_knowledge_job()
-                scheduler.notify_new_job()
-                log.info("[wakeup] Workspace knowledge scan schedule ensured")
-            except Exception:
-                log.exception("[wakeup] Workspace knowledge scan schedule failed")
+                ensure_workspace_knowledge_job()                                                # seed the above handle function into scheduler entry
+                scheduler.notify_new_job()                                                      # poke the already-running scheduler to refresh new jobs
+                log.info("[wakeup] Workspace knowledge scan schedule ensured")                  # log success
+            except Exception:                                                                   # if error,
+                log.exception("[wakeup] Workspace knowledge scan schedule failed")              # log failure
 
         # Schedule-driven social lanes (weekly postcard, photo inbox, video
         # inbox). register_social_handlers() registers all three handlers
@@ -407,18 +407,18 @@ class AikoWakeup:
         # here, after memory boot, so all "post-scheduler" job seeding
         # happens in one place and any failure here doesn't affect the
         # scheduler start above.
-        try:
-            register_social_handlers()
-            scheduler.notify_new_job()
-            log.info("[wakeup] Social handlers registered and schedules ensured")
-        except Exception:
-            log.exception("[wakeup] Social handler registration failed")
+        try:                                                                                     # attempt to register scheduled social lanes (weekly postcards, photo/video inbox monitoring)
+            register_social_handlers()                                                           # register social lanes into scheduler
+            scheduler.notify_new_job()                                                           # poke the already-running scheduler to refresh new jobs
+            log.info("[wakeup] Social handlers registered and schedules ensured")                # log success
+        except Exception:                                                                        # if error,
+            log.exception("[wakeup] Social handler registration failed")                         # log failure
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
         # TTS — non-fatal: Aiko can run text-only if this fails. Gated on speak
         # not already being None (construction above may have failed).
-        if speak is not None:
+        if speak is not None:                                                                    # 
             try:
                 _boot_step('speak_miotts', lambda: speak.warmup())
                 _boot_step('speak_ready')
