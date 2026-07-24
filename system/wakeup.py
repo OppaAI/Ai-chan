@@ -339,6 +339,19 @@ class AikoWakeup:
         # "unregistered handler" and silently never fire. Needs AikoThink's
         # LLM client/model, so it can only happen here, after think boots.
         from memory import learn                                                              # access self-learning module
+
+        # NOTE (model-swap possibility): deep-study handlers are wired to think_ref's
+        # client/model here because that's what's live at boot. quick_studying (in
+        # memory/learn.py's idle_learner_loop) should stay on think's model — it fires
+        # during short chat-idle gaps, so any swap latency would be paid on the interactive
+        # path. deep_studying runs in scheduled off-hours windows (05:00-18:00 weekdays /
+        # 05:00-10:00 weekends by default), which is exactly where an Active/Idle mode
+        # split would pay off: Idle mode could tear down TTS/ASR/CV/(maybe embedder) and
+        # load a bigger, smarter model just for deep_studying + other off-hour autonomous
+        # jobs, then swap back before the window closes. When that mode exists, this call
+        # site — not learn.py itself — is where the alternate client/model gets threaded
+        # in; register_deep_study_handlers() already accepts client/model as plain params,
+        # so no changes needed there.
         learn.register_deep_study_handlers(                                                   # 
             client=think_ref._client,                                                         #
             model=think_ref._llm_model,                                                       #
