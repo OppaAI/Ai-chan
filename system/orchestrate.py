@@ -920,6 +920,15 @@ def run_session(ui, args) -> None:
             return
 
         # ── karaoke reveal path ──────────────────────────────────────────
+        # When speak.karaoke_text is active, speak.py's _emit_words_timed()
+        # already delivers words to this callback paced to the real audio
+        # duration — genuine karaoke sync.  Bypass TypewriterSync entirely
+        # so we don't double-buffer and lose/delay the output.
+        if speak is not None and getattr(speak, "karaoke_text", False) and tts_enabled:
+            ui.stream_token(token)
+            ui._draw(buf=[])
+            return
+
         if KARAOKE_SYNC and tts_enabled and typewriter is not None:
             _sentence_buf.append(token)
             joined = "".join(_sentence_buf)
