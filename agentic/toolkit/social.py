@@ -1853,6 +1853,14 @@ def generate_daily_job_post_draft(*, force: bool = False) -> dict[str, Any]:
 
     today = datetime.now(ZoneInfo(timezone_name())).strftime("%Y-%m-%d")
     posting = _choose_daily_job_post()
+    if posting is None:
+        return {
+            "success": False,
+            "skipped": False,
+            "reason": "no_eligible_posting",
+            "draft_dir": str(draft_dir),
+        }
+
     text = _format_threads_job_post(posting, today)
     draft_dir.mkdir(parents=True, exist_ok=True)
     (draft_dir / "draft_post.txt").write_text(text.strip() + "\n", encoding="utf-8")
@@ -1865,7 +1873,7 @@ def generate_daily_job_post_draft(*, force: bool = False) -> dict[str, Any]:
         "success": True,
         "draft_dir": str(draft_dir),
         "provider": "threads",
-        "posting": posting or {},
+        "posting": posting,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "posted": False,
         "human_approved": False,
@@ -1874,9 +1882,26 @@ def generate_daily_job_post_draft(*, force: bool = False) -> dict[str, Any]:
     return meta
 
 
+def _read_job_post_meta(path: Path) -> dict[str, Any]:
+    meta_path = path / "draft.json"
+    if not meta_path.exists():
+        return {}
+    return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
 def post_job_post_draft(draft_dir: str | Path) -> dict[str, Any]:
     path = Path(draft_dir).resolve()
-    text = (path / "draft_post.txt").read_text(encoding="utf-8").strip()
+    try:
+        _require_approved(path)
+        draft_post_path = path / "draft_post.txt"
+        if not draft_post_path.exists():
+            raise SocialApprovalError(f"missing draft_post.txt at {path}")
+        text = draft_post_path.read_text(encoding="utf-8").strip()
+        if not text:
+            raise SocialApprovalError(f"empty draft_post.txt at {path}")
+    except (SocialApprovalError, OSError) as e:
+        return {"posted": False, "error": str(e)}
+
     result = _post_threads(text, None)
     post_meta = {"posted": bool(result.get("ok")), "posted_at": datetime.now(timezone.utc).isoformat(), "results": [result]}
     (path / "posted.json").write_text(json.dumps(post_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -1893,15 +1918,21 @@ def run_scheduled_daily_job_post_social(_memorize: Any = None) -> dict[str, Any]
     if not JOB_POST_SOCIAL_AUTODRAFT:
         return {"success": False, "skipped": True, "reason": "JOB_POST_SOCIAL_AUTODRAFT is off"}
     draft = generate_daily_job_post_draft()
-    if JOB_POST_SOCIAL_AUTOPOST and draft.get("success") and not draft.get("skipped"):
+    if JOB_POST_SOCIAL_AUTOPOST and draft.get("success"):
         draft_dir = Path(draft["draft_dir"])
         try:
-            _require_approved(draft_dir)
-        except SocialApprovalError as e:
+            meta = _read_job_post_meta(draft_dir)
+        except (OSError, json.JSONDecodeError) as e:
             draft["post"] = {"posted": False, "skipped": True, "reason": str(e)}
         else:
-            draft["post"] = post_job_post_draft(draft_dir)
+            if meta.get("posted") is True:
+                draft["post"] = {"posted": False, "skipped": True, "reason": "already_posted"}
+            elif meta.get("human_approved") is True:
+                draft["post"] = post_job_post_draft(draft_dir)
+            else:
+                draft["post"] = {"posted": False, "skipped": True, "reason": "not_approved"}
     return draft
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Agent-tool wrappers. agentic/agentic.py registers four of the wrapper

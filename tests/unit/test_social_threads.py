@@ -190,3 +190,60 @@ def test_post_job_post_social_requires_job_post_root_and_approval(monkeypatch, t
 
     assert result["posted"] is False
     assert "inside" in result["error"]
+
+
+def test_generate_daily_job_post_draft_reports_no_eligible_posting(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOB_POST_SOCIAL_ROOT", str(tmp_path / "job_posts"))
+    monkeypatch.setattr(social, "_choose_daily_job_post", lambda: None)
+
+    result = social.generate_daily_job_post_draft(force=True)
+
+    assert result["success"] is False
+    assert result["reason"] == "no_eligible_posting"
+    assert not Path(result["draft_dir"]).exists()
+
+
+def test_post_job_post_social_denies_unapproved_draft_inside_root(monkeypatch, tmp_path):
+    root = tmp_path / "job_posts"
+    draft_dir = root / "2026-07-25"
+    draft_dir.mkdir(parents=True)
+    monkeypatch.setenv("JOB_POST_SOCIAL_ROOT", str(root))
+    (draft_dir / "draft.json").write_text('{"human_approved": false}', encoding="utf-8")
+    (draft_dir / "draft_post.txt").write_text("draft", encoding="utf-8")
+
+    result = social.post_job_post_social(str(draft_dir))
+
+    assert result["posted"] is False
+    assert "not been approved" in result["error"]
+
+
+def test_post_job_post_draft_handles_missing_draft_post(monkeypatch, tmp_path):
+    draft_dir = tmp_path / "job_posts" / "2026-07-25"
+    draft_dir.mkdir(parents=True)
+    (draft_dir / "draft.json").write_text('{"human_approved": true}', encoding="utf-8")
+
+    result = social.post_job_post_draft(draft_dir)
+
+    assert result["posted"] is False
+    assert "missing draft_post.txt" in result["error"]
+
+
+def test_scheduled_daily_job_post_autoposts_existing_approved_draft(monkeypatch, tmp_path):
+    root = tmp_path / "job_posts"
+    draft_dir = root / "2026-07-25"
+    draft_dir.mkdir(parents=True)
+    monkeypatch.setenv("JOB_POST_SOCIAL_ROOT", str(root))
+    monkeypatch.setattr(social, "JOB_POST_SOCIAL_AUTOPOST", True)
+    monkeypatch.setattr(social, "generate_daily_job_post_draft", lambda: {
+        "success": True,
+        "skipped": True,
+        "reason": "draft_exists",
+        "draft_dir": str(draft_dir),
+    })
+    (draft_dir / "draft.json").write_text('{"human_approved": true, "posted": false}', encoding="utf-8")
+    (draft_dir / "draft_post.txt").write_text("draft", encoding="utf-8")
+    monkeypatch.setattr(social, "_post_threads", lambda text, image_url: {"ok": True, "provider": "threads"})
+
+    result = social.run_scheduled_daily_job_post_social()
+
+    assert result["post"]["posted"] is True
