@@ -345,7 +345,7 @@ def _load_soul() -> str:
         with open(SOUL_PATH, "r", encoding="utf-8") as f:
             return f.read().strip()
     except FileNotFoundError:
-        log.warning(f"soul.md not found at {SOUL_PATH} — using fallback personality stub.")
+        log.warning(f"SOUL.md not found at {SOUL_PATH} — using fallback personality stub.")
         return textwrap.dedent("""
             You are Aiko — OppaAI's local AI companion.
             You chose to stay with OppaAI, your creator.
