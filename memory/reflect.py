@@ -701,14 +701,6 @@ def generate_and_post(
     write_time = datetime.now(local_tz)
     date       = date or write_time - timedelta(days=1)
 
-    # Resolve display_name: use passed value, or fall back to memorize instance,
-    # or last-resort contextvar/env. This runs on the scheduler thread where
-    # contextvar is not set, so we must prioritize the passed value and memorize.
-    if display_name is None and memorize is not None:
-        display_name = memorize.get_display_name()
-    elif display_name is None:
-        display_name = current_display_name()
-
     # Extract and deduplicate memory snippets
     snippets: list[str] = []
     seen:     set[str]  = set()
@@ -723,25 +715,53 @@ def generate_and_post(
         f"Generating daily summary from {len(snippets)} memory snippets..."
     )
 
-    # Step 1: factual prose summary
-    try:
-        prose = _generate_reflection(snippets, date, display_name)
-    except Exception as e:
-        log.error(f"Reflection generation failed: {e}")
-        return {"success": False, "error": str(e)}
+    # Resolve user_id and display_name early for use in image generation.
+    # The scheduler thread doesn't have ambient context, so we must use
+    # the memorize instance if provided (it already knows the real user).
+    # This must happen before _generate_image() which calls _user_reference_image_path().
+    # display_name: use passed value, or fall back to memorize instance, or last-resort contextvar/env.
+    if display_name is None and memorize is not None:
+        display_name = memorize.get_display_name()
+    elif display_name is None:
+        display_name = current_display_name()
+    
+    if memorize is not None:
+        # Set user context before image generation so _load_reference_images()
+        # uses the correct user_id from memorize (not "guest" from scheduler thread)
+        from system.userspace import set_current_user_id, set_current_display_name
+        uid = memorize.get_user_id()
+        user_id_token = set_current_user_id(uid)
+        display_token = set_current_display_name(display_name)
+        _set_user_context = True
+    else:
+        uid = current_user_id()
+        _set_user_context = False
 
-    # Step 1b: Aiko's feelings about you
-    feelings = None
     try:
-        feelings = _generate_feelings(prose, display_name)
-        log.info(f"Feelings generated: {feelings[:80]}...")
-    except Exception as e:
-        log.warning(f"Feelings generation failed: {e}")
+        # Step 1: factual prose summary
+        try:
+            prose = _generate_reflection(snippets, date, display_name)
+        except Exception as e:
+            log.error(f"Reflection generation failed: {e}")
+            return {"success": False, "error": str(e)}
 
-    # Step 2: generate image via Modal FLUX endpoint
-    image_b64 = _generate_image(prose)
-    image_generated = image_b64 is not None
-    slug = date.strftime("%Y-%m-%d") + "-day-reflection"
+        # Step 1b: Aiko's feelings about you
+        feelings = None
+        try:
+            feelings = _generate_feelings(prose, display_name)
+            log.info(f"Feelings generated: {feelings[:80]}...")
+        except Exception as e:
+            log.warning(f"Feelings generation failed: {e}")
+
+        # Step 2: generate image via Modal FLUX endpoint
+        image_b64 = _generate_image(prose)
+        image_generated = image_b64 is not None
+        slug = date.strftime("%Y-%m-%d") + "-day-reflection"
+
+    finally:
+        if _set_user_context:
+            set_current_user_id(user_id_token)
+            set_current_display_name(display_token)
 
     # Step 3: build Hugo post (with or without image)
     _, content = _build_hugo_post(
@@ -775,11 +795,6 @@ def generate_and_post(
             "pinned":          False,
             "journal_pinned":  False,
         }
-
-    # Resolve the real user_id once, from the memory instance itself —
-    # not from ambient contextvar/env fallback (this job runs on the
-    # scheduler's own background thread, which doesn't inherit either).
-    uid = memorize.get_user_id() if memorize is not None else current_user_id()
 
     # Step 3b: idempotency guard — remove any stale pins for this date
     # before pinning fresh ones, so reruns replace rather than accumulate.
