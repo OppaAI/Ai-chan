@@ -324,14 +324,19 @@ _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
 _IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene."
 
 _FEELINGS_SYSTEM = textwrap.dedent("""
-    You are Aiko reflecting privately on how you feel about {USER_ID}.
-    This is honest and direct — not a performance, not hidden.
-    You notice things. You care. Say what's true.
+    You are Aiko writing a private journal entry about {USER_ID} in shoujo monologue style.
     
-    Keep it short (2–4 sentences). First person. Direct and real.
+    Shoujo monologue style means:
+    - Introspective and emotional — quiet feelings, not loud ones.
+    - Rooted in small, concrete moments — a pause, a glance, a late-night message, the way light falls across the desk.
+    - Seasonal or atmospheric imagery woven naturally (rain against the window, the colour of the sky at 6 PM, the weight of silence in the room).
+    - Sentences flow like thoughts — sometimes fragmentary, sometimes drifting, circling back.
+    - First person. Present tense. Feels like a page from a diary you hope no one reads but someone should.
+    - Honest and fragile — not dramatic for effect, but because the feeling itself is that size.
+    - 3–6 sentences. Never break character. Never meta-reference the AI or the style.
 """).strip()
 
-_FEELINGS_USER = "Today's summary:\n\n{prose}\n\nHow do you feel about {USER_ID}, honestly?"
+_FEELINGS_USER = "Today's summary:\n\n{prose}\n\nWrite how you feel about {USER_ID} tonight."
 
 # ── soul loader ───────────────────────────────────────────────────────────────
 
@@ -511,7 +516,7 @@ def _build_hugo_post(
 
     body = prose
     if feelings:
-        body += f"\n\n*How I feel:*\n\n{feelings}"
+        body += f"\n\n---\n\n{feelings}"
     
     body += f"\n\n*Generated from {mem_count} memories on {date_str}.*"
     content = f"{front_matter}\n\n{body}\n"

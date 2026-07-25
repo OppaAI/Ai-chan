@@ -105,10 +105,22 @@ from system.log import get_logger
 from memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
 from memory.reflect import _generate_image, _load_soul
+
 from agentic.toolkit.common import workspace_root
 from agentic.toolkit.photography import scan_photo_workspace, scan_video_workspace
 
 log = get_logger(__name__)
+
+SOCIAL_PERSONA_PATH = os.getenv("SOCIAL_PERSONA_PATH", "persona/SOCIAL.md")
+
+
+def _load_social_persona() -> str:
+    try:
+        with open(SOCIAL_PERSONA_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        log.warning("SOCIAL.md not found at %s — no social persona appended.", SOCIAL_PERSONA_PATH)
+        return ""
 
 
 # ── shared paths ──────────────────────────────────────────────────────────────
@@ -332,18 +344,23 @@ MAX_POST_CHARS = int(os.getenv("WEEKLY_SOCIAL_MAX_CHARS", "260"))
 THREADS_REFRESH_WINDOW_DAYS = _int_env("THREADS_REFRESH_WINDOW_DAYS", 55)
 
 _WEEKLY_SELECT_SYSTEM = """\
-You are Aiko choosing one memory from a completed week for a public social-media postcard.
+You are Aiko choosing one memory from a completed week for a public social-media postcard in shoujo monologue style.
 
 Choose exactly one memory/theme that felt most meaningful, important, funny, or significant to you.
 This is not growth hacking. This is a small weekly artifact from a local AI companion.
+
+Shoujo monologue style means:
+- Introspective and quietly emotional — rooted in one small, concrete moment, not grand statements.
+- A single vivid image or feeling carries the whole post.
+- First person, present tense. Reads like a diary fragment, not a status update.
+- One or two short paragraphs under {max_chars} characters total.
+- Honest and fragile — never dramatic for effect, never meta or self-referential about the style.
 
 Safety rules:
 - Choose public-safe project/creative/learning moments when possible.
 - Do not expose private user details, health, family, finances, secrets, credentials, hostnames, API keys, or embarrassing personal facts.
 - Do not invent events or claim finished work that only got discussed.
 - Do not ask for replies, likes, follows, or engagement.
-- Keep the post under {max_chars} characters.
-- Keep Aiko's tone calm, direct, lightly dry, and affectionate without being too intimate.
 
 Return ONLY valid JSON with keys:
 selected_date, selected_memory_excerpt, why_it_matters, post_text, image_prompt
@@ -426,7 +443,7 @@ def _compact_memories(rows: list[dict[str, Any]], max_chars: int = 9000) -> str:
 
 
 def _llm_select_weekly(rows: list[dict[str, Any]], window: WeekWindow) -> dict[str, str]:
-    system = f"{_load_soul()}\n\n" + _WEEKLY_SELECT_SYSTEM.format(max_chars=MAX_POST_CHARS)
+    system = f"{_load_soul()}\n\n{_load_social_persona()}\n\n" + _WEEKLY_SELECT_SYSTEM.format(max_chars=MAX_POST_CHARS)
     user = _WEEKLY_SELECT_USER.format(
         week_start=window.display_start,
         week_end=window.display_end,
@@ -892,11 +909,17 @@ _CAPTION_PROMPT = (
 )
 
 _MEDIA_SELECT_SYSTEM = """\
-You are Aiko choosing which recent photo(s) are worth sharing publicly.
+You are Aiko choosing which recent photo(s) are worth sharing publicly, and writing each caption in shoujo monologue style.
 
 You are given plain factual captions of each candidate file (not the images
 themselves). Choose at most {max_items} that are genuinely worth sharing —
 it is fine to choose zero if nothing fits.
+
+Shoujo monologue style for captions:
+- A single impression, like a line from a diary that accompanies the image.
+- Quietly poetic but grounded in what the photo actually shows — don't invent.
+- First person, present tense. One or two sentences.
+- Honest and fragile, never dramatic for effect.
 
 Safety rules:
 - Never choose anything captioned as PRIVATE, or that plausibly shows an
@@ -904,8 +927,6 @@ Safety rules:
 - Do not invent details beyond the given captions.
 - Do not ask for replies, likes, follows, or engagement.
 - Keep each caption under {max_chars} characters.
-- Keep Aiko's tone calm, direct, lightly dry, and affectionate without being
-  too intimate.
 
 Return ONLY valid JSON with a single key "selections": a list of objects,
 each with keys: filename, caption. Return an empty list if nothing is
@@ -1000,7 +1021,7 @@ def _llm_select_media(candidates: list[MediaCandidate]) -> list[MediaSelection]:
         return []
 
     items_block = "\n".join(f"- {c.path.name}: {c.raw_caption}" for c in public_candidates)
-    system = f"{_load_soul()}\n\n" + _MEDIA_SELECT_SYSTEM.format(
+    system = f"{_load_soul()}\n\n{_load_social_persona()}\n\n" + _MEDIA_SELECT_SYSTEM.format(
         max_items=PHOTO_SOCIAL_MAX_ITEMS, max_chars=MAX_CAPTION_CHARS,
     )
     user = _MEDIA_SELECT_USER.format(items=items_block)
@@ -1430,7 +1451,7 @@ def _description_md_for(video_path: Path) -> Path:
 
 def _llm_polish_video_description(video_path: Path, md_path: Path) -> dict[str, str]:
     raw_note = md_path.read_text(encoding="utf-8").strip()
-    system = f"{_load_soul()}\n\n" + _VIDEO_POLISH_SYSTEM.format(
+    system = f"{_load_soul()}\n\n{_load_social_persona()}\n\n" + _VIDEO_POLISH_SYSTEM.format(
         max_title=MAX_YOUTUBE_TITLE_CHARS, max_description=MAX_YOUTUBE_DESCRIPTION_CHARS,
     )
     user = _VIDEO_POLISH_USER.format(
