@@ -98,7 +98,8 @@ def _semantic_rank_skills(
     query: str, docs: list["SkillDoc"], embedder: Embedder, threshold: float,
 ) -> list["SkillDoc"] | None:
     """Rank skills by cosine similarity in one batched numpy matmul.
-    Returns None if embedding fails (caller falls back to keyword scoring)."""
+    Returns None if embedding fails or produces no above-threshold hits so the
+    caller can fall back to deterministic keyword scoring."""
     if not docs:
         return []
     try:
@@ -106,7 +107,8 @@ def _semantic_rank_skills(
         doc_vecs = np.stack([_get_skill_embedding(doc, embedder) for doc in docs])
         scores = reason.batch_cosine_scores(query_vec, doc_vecs)
         order = np.argsort(-scores)
-        return [docs[i] for i in order if scores[i] >= threshold]
+        ranked = [docs[i] for i in order if scores[i] >= threshold]
+        return ranked or None
     except Exception:
         return None
 

@@ -20,8 +20,7 @@ Key functions:
   - user_workspace_root() — resolve workspace root for a user
   - user_profile_path()   — resolve profile path (defaults to profile/USER.md)
   - set_current_user_id() / reset_current_user_id() — per-request user context
-  - current_display_name() — resolve display name: contextvar -> env var
-                              -> raw user_id
+  - current_display_name() — resolve display name: contextvar -> raw user_id
   - set_current_display_name() / reset_current_display_name() — per-request
                               display name context
   - normalize_user_id()    — build a filesystem-safe, provider-scoped id
@@ -73,12 +72,17 @@ def reset_current_display_name(token: contextvars.Token[str | None]) -> None:
 
 def current_display_name() -> str:
     """Return the user's display name (e.g. GitHub login).
-    Order: request-local contextvar -> env var -> raw user_id as last resort."""
+    Order: request-local contextvar -> raw user_id as last resort.
+
+    Display identity is intentionally not read from process-global environment
+    variables because web sessions and worker threads can overlap. Callers that
+    have authenticated session identity should set the contextvar for the
+    current request/thread with set_current_display_name().
+    """
     name = _CURRENT_DISPLAY_NAME.get()
     if name:
         return name
-    uid = current_user_id()
-    return os.getenv("CURRENT_DISPLAY_NAME") or uid
+    return current_user_id()
 
 
 def normalize_user_id(provider: str | None, user_id: object) -> str:
