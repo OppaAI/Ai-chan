@@ -136,6 +136,23 @@ CAPABILITIES: dict[str, Capability] = {
     for cap_id in _TRIGGERS
 }
 
+# High-signal keyword fallback for environments where the embedder is
+# unavailable (tests, degraded boots, or cold startup failures). The old
+# fallback only matched full exemplar phrases, which often missed obvious
+# asks like "remind me at 9" or "inspect this repo" and then sent every
+# tool schema to ReAct. These terms keep common turns narrowed without
+# blocking ambiguous turns: if nothing matches, filtered_tool_schemas() still
+# receives an empty list and returns all tools.
+_CAPABILITY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "research": ("research", "search", "look up", "latest", "current", "source", "cite", "benchmark", "investigate"),
+    "scheduling": ("schedule", "remind", "reminder", "alarm", "wake me", "ping me", "recurring", "daily", "weekly"),
+    "kb_proposal": ("remember this", "store this", "learn this", "knowledge base", "add to wiki", "save this insight"),
+    "photo": ("photo", "photos", "image", "images", "camera", "ingest", "inbox"),
+    "repo": ("repo", "repository", "source file", "codebase", "refactor", "debug", "patch", "implement", "unit test"),
+    "job_hunt": ("job", "jobs", "job boards", "role", "remote", "hiring"),
+    "social": ("instagram", "youtube", "threads", "twitter", "post", "publish", "social"),
+}
+
 _trigger_embed_cache: dict[str, np.ndarray] = {}
 _TRIGGER_EMBED_CACHE_MAX = 256
 
@@ -232,7 +249,10 @@ def match_capabilities(
             pass
 
     folded = user_input.casefold()
-    return [cap.id for cap in CAPABILITIES.values() if any(t in folded for t in cap.triggers)]
+    phrase_matches = [cap.id for cap in CAPABILITIES.values() if any(t in folded for t in cap.triggers)]
+    if phrase_matches:
+        return phrase_matches
+    return [cap_id for cap_id, terms in _CAPABILITY_KEYWORDS.items() if any(term in folded for term in terms)]
 
 
 def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[dict]:

@@ -261,7 +261,7 @@ class TestToolDispatchIntegration:
         owner._memorize._mem._embedder = FakeEmbedder()
 
         with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
-            result = dispatch_tool("deep_research", {"query": "test"}, owner=owner})
+            result = dispatch_tool("deep_research", {"query": "test"}, owner=owner)
             assert "Deep research" in result
 
     def test_deep_search_dispatch(self):

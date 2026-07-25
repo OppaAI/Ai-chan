@@ -320,9 +320,17 @@ def search_skillsets(query: str, limit: int = 3, embedder: Embedder | None = Non
     return [doc for _score, doc in scored[:limit]]
 
 
-def search_skillsets_json(query: str, limit: int = 3) -> str:
-    """Return matching skill workflows as JSON text for agent tools."""
-    return json.dumps({"query": query, "matches": [doc.as_dict() for doc in search_skillsets(query, limit)]}, ensure_ascii=False, indent=2)
+def search_skillsets_json(query: str, limit: int = 3, embedder: Embedder | None = None) -> str:
+    """Return matching skill workflows as JSON text for agent tools.
+
+    Reuse the live embedder when available so explicit skill searches rank the
+    same way automatically injected <skill_context> does, instead of silently
+    degrading to keyword-only matching in the ReAct tool path.
+    """
+    return json.dumps({
+        "query": query,
+        "matches": [doc.as_dict() for doc in search_skillsets(query, limit, embedder=embedder)],
+    }, ensure_ascii=False, indent=2)
 
 
 def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:

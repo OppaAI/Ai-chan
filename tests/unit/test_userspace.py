@@ -40,7 +40,7 @@ from system.userspace import (
 def clean_env(monkeypatch):
     """Make sure no ambient env vars leak between tests."""
     for var in (
-        "AIKO_USER_ID", "AIKO_DISPLAY_NAME", "USER_STATE_ROOT",
+        "AIKO_USER_ID", "CURRENT_DISPLAY_NAME", "USER_STATE_ROOT",
         "AIKO_USER_STATE_ROOT", "USER_SPACE_ROOT", "WORKSPACE_ROOT",
         "USER_PROFILE_PATH",
     ):
@@ -100,11 +100,11 @@ class TestCurrentDisplayName:
 
     def test_env_display_name_overrides_user_id_fallback(self, monkeypatch):
         monkeypatch.setenv("AIKO_USER_ID", "some_user")
-        monkeypatch.setenv("AIKO_DISPLAY_NAME", "Oppa")
+        monkeypatch.setenv("CURRENT_DISPLAY_NAME", "Oppa")
         assert current_display_name() == "Oppa"
 
     def test_contextvar_takes_priority_over_env(self, monkeypatch):
-        monkeypatch.setenv("AIKO_DISPLAY_NAME", "env_name")
+        monkeypatch.setenv("CURRENT_DISPLAY_NAME", "env_name")
         token = set_current_display_name("ctx_name")
         try:
             assert current_display_name() == "ctx_name"

@@ -357,7 +357,7 @@ class AikoWeb:
         user_context_token = set_current_user_id(uid)
         set_current_display_name(self._current_display_name)
         os.environ["AIKO_USER_ID"] = uid
-        os.environ["AIKO_DISPLAY_NAME"] = self._current_display_name
+        os.environ["CURRENT_DISPLAY_NAME"] = self._current_display_name
         if self._memorize:
             self._memorize.switch_user(uid)
         await ws.accept()
@@ -403,7 +403,7 @@ class AikoWeb:
                             set_current_user_id(uid)
                             set_current_display_name(self._current_display_name)
                             os.environ["AIKO_USER_ID"] = uid
-                            os.environ["AIKO_DISPLAY_NAME"] = self._current_display_name
+                            os.environ["CURRENT_DISPLAY_NAME"] = self._current_display_name
                             if self._memorize:
                                 self._memorize.switch_user(uid)
                             self._input_q.put(text)
@@ -756,7 +756,7 @@ class AikoWeb:
             set_current_user_id(self._current_user_id)
             set_current_display_name(self._current_display_name)
             os.environ["AIKO_USER_ID"] = self._current_user_id
-            os.environ["AIKO_DISPLAY_NAME"] = self._current_display_name
+            os.environ["CURRENT_DISPLAY_NAME"] = self._current_display_name
             result_holder[0] = listen.listen(
                 status_callback=_status_cb,
                 speak=speak,
