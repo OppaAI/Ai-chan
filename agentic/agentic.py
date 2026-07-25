@@ -536,6 +536,45 @@ class VerificationResult:
     score: float = 1.0
 
 
+def _run_job_post_playbook(prompt: str = "") -> str:
+    """Run the daily_job_post graph playbook directly by ID."""
+    try:
+        from agentic.schema import load_playbooks, PlanGraph, PlanNode, execute_graph
+        playbooks = load_playbooks()
+        playbook = None
+        for p in playbooks:
+            if p.get("id") == "gen_job_post":
+                playbook = p
+                break
+        if not playbook:
+            return json.dumps({"success": False, "error": "gen_job_post playbook not found"}, ensure_ascii=False)
+
+        nodes = []
+        for raw in playbook.get("nodes", []):
+            if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
+                nodes.append(PlanNode(
+                    id=str(raw["id"]),
+                    tool=str(raw["tool"]),
+                    args=dict(raw.get("args") or {}),
+                    depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
+                ))
+        graph = PlanGraph(
+            id="gen_job_post",
+            name=playbook.get("name", "Job Post"),
+            goal=prompt or "Draft job posts from config",
+            nodes=tuple(nodes),
+        )
+        result = execute_graph(graph)
+        return json.dumps({
+            "success": all(r.ok for r in result.results),
+            "graph_id": result.graph.id,
+            "results": [{"node": r.node_id, "tool": r.tool, "ok": r.ok, "error_type": r.error_type} for r in result.results],
+            "final_answer": result.final_answer,
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+
 def tool_schemas() -> list[dict]:
     """Return OpenAI-compatible tool schemas for autonomous task mode."""
     return [schema for schema, _handler in _TOOLS.values()]
@@ -710,6 +749,10 @@ _reg("search_jobs", "Search configured job boards for a role. If location is omi
 _reg("draft_job_post_social", "Create a Vancouver-area daily job-post draft for Meta Threads review. Does NOT post anything.",
     lambda args: draft_job_post_social(force=bool(args.get("force", False))),
     {"force": {"type": "boolean", "description": "Create a new draft even if one already exists for today."}})
+
+_reg("run_job_post_playbook", "Run the daily job post graph playbook: search jobs, draft posts, save/flag them. Uses config from job_hunt.json. Pass a prompt to override defaults (e.g. location, salary).",
+    lambda args: _run_job_post_playbook(args.get("prompt", "")),
+    {"prompt": {"type": "string", "description": "Optional prompt with overrides like location, salary, categories. Empty = use job_hunt.json defaults."}})
 
 _reg("post_job_post_social", "Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation.",
     lambda args: post_job_post_social(args.get("draft_dir", "")),

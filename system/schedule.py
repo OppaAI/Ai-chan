@@ -602,7 +602,7 @@ VIDEO_SOCIAL_JOB_TITLE = "video_social_scan"
 VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
 
 JOB_POST_SOCIAL_JOB_TITLE = "daily_job_post_social"
-JOB_POST_SOCIAL_TIME_OF_DAY = os.getenv("JOB_POST_SOCIAL_TIME_OF_DAY", "01:00")
+JOB_POST_SOCIAL_TIME_OF_DAY = "23:00"
 
 
 def ensure_weekly_social_job(timezone: str | None = None) -> None:
@@ -697,22 +697,21 @@ def ensure_daily_job_post_social_job(timezone: str | None = None) -> None:
             # change unless it is the former built-in handler format.
             if job.get("handler") == "daily_job_post_social":
                 job.update({
-                    "time_of_day": JOB_POST_SOCIAL_TIME_OF_DAY,
                     "frequency": "daily",
                     "action": "tool",
                     "handler": None,
-                    "tool_call": {"name": "draft_job_post_social", "arguments": {}},
+                    "tool_call": {"name": "run_job_post_playbook", "arguments": {"prompt": ""}},
                 })
                 _write_all(jobs)
             return
     schedule_job_record(
         title=JOB_POST_SOCIAL_JOB_TITLE,
-        task="Draft one recent Vancouver-area job post for Meta Threads review",
+        task="Run the daily job post graph playbook",
         time_of_day=JOB_POST_SOCIAL_TIME_OF_DAY,
         frequency="daily",
         timezone=timezone,
         action="tool",
-        tool_call={"name": "draft_job_post_social", "arguments": {}},
+        tool_call={"name": "run_job_post_playbook", "arguments": {"prompt": ""}},
     )
     log.info("Seeded daily job-post social job at %s", JOB_POST_SOCIAL_TIME_OF_DAY)
 

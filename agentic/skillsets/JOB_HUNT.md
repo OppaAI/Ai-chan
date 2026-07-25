@@ -1,62 +1,113 @@
 ---
 id: JOB_HUNT
 name: Job Hunt
-summary: Search configured scrape-friendly job boards for postings matching a role and location, dedupe, and save a structured report.
-triggers: job, jobs, hiring, job posting, job search, find me a job, openings, vacancy
-tools: search_jobs, dedupe_postings, save_note
+summary: Search configured job boards, filter, format, and save/post job listings through a graph playbook. Each step is a separate node — inspect, modify, or reorder independently.
+triggers: job, jobs, hiring, job posting, job search, find me a job, openings, vacancy, job post, draft job, daily job
+tools: search_searxng, parse_jobs, filter_jobs, format_job_post, dedupe_postings, gen_job_search_plan, execute_job_search_plan, draft_job_posts_from_results, save_or_post_job_drafts, report_job_run
 ---
-# Job Hunt
 
-Find current job postings for a role, filtered by location, and save a
-structured report. Defaults live in `<workspace>/agentic/skillsets/job_hunt.json`.
+# Job Hunt — Graph Playbook
+
+The daily job post workflow runs as a **6-node graph** defined in the `daily_job_post` playbook (`agentic/schema.py`). Each node is a tool registered in the graph executor.
+
+## Graph nodes
+
+```
+plan → search → draft → save → report
+         │
+     (parallel fan-out per query category)
+```
+
+### Node 1 — `gen_job_search_plan`
+Reads `job_hunt.json` config + user prompt, emits a structured plan as JSON.
+
+**Config keys used:**
+- `queries` — list of `{category, query, job_type}` dicts
+- `default_location` — fallback location
+- `min_salary_hourly`, `min_salary_annual` — salary floors
+- `max_age_days` — posting age limit
+- `max_results` — max postings per search
+- `post_template` — format string (see below)
+- `auto_post` — whether to post without human review
+
+**Prompt overrides** (parsed automatically):
+- `in <city>` / `near <city>` / `vicinity of <city>` → location
+- `higher than $X/hr` / `>$X/yr` → salary floor
+- `auto post` / `no review` / `human review` → auto_post flag
+
+### Node 2 — `execute_job_search_plan`
+Takes the plan, searches each query category through SearXNG in parallel (one thread per category), applies configured salary/age/specialty filters, deduplicates, and returns structured results.
+
+Performs fallback to default `JOB_SITES` (Greenhouse/Lever/Ashby/RemoteOK/WeWorkRemotely/Wellfound) when config sites return zero results.
+
+### Node 3 — `draft_job_posts_from_results`
+Formats each valid posting using the configured `post_template`. Template supports these placeholders:
+`{date}`, `{organization}`, `{title}`, `{employment_type}`, `{location}`, `{salary}`, `{experience}`, `{close_date}`, `{url}`
+
+Default template (bilingual Chinese + English):
+```
+Job Post - {date}
+機構：{organization}
+職位：{title}
+類別：{employment_type}
+地區：{location}
+薪金：{salary}
+經驗：{experience}
+截止日期：{close_date}
+
+*請入以下連結參看詳情
+{url}
+```
+
+### Node 4 — `save_or_post_job_drafts`
+Saves each draft under `<job_post_root>/<date>/<category>/` with:
+- `draft_post.txt` — the formatted text
+- `review.md` — human review checklist
+- `draft.json` — metadata (including `human_approved: false`)
+
+If `auto_post` is true, attempts to post to Meta Threads immediately.
+
+### Node 5 — `report_job_run`
+Generates a detailed audit report covering all 4 preceding steps, including errors.
 
 ## Configuration
 
-The `job_hunt.json` config file is looked up in this order:
-
-1. `JOB_HUNT_CONFIG_PATH` environment variable (absolute or relative to workspace)
-2. `<user_state>/skillsets/job_hunt.json` (per-user configuration)
+Config file lookup order:
+1. `JOB_HUNT_CONFIG_PATH` env var
+2. `<user_state>/skillsets/job_hunt.json` (per-user)
 3. `<workspace>/agentic/skillsets/job_hunt.json` (fallback)
 
-You can configure:
-- `default_location` - where to search (default: "San Francisco, CA, USA" for fallback)
-- `nearby_locations` - list of nearby cities to include
-- `radius_km` - search radius around locations
-- `max_results` - max postings per search
-- `max_age_days` - how far back to search (default: 30)
-- `fallback_max_age_days` - fallback search window if no results (default: 60)
-- `job_sites` - which job boards to search
-- `default_job_type` - optional filter (full-time, contract, etc.)
-- `include_remote` - include remote jobs (default: true)
+### Example config in `<user_state>/skillsets/job_hunt.json`
 
-## Steps
+```json
+{
+  "default_location": "Vancouver, BC, Canada",
+  "nearby_locations": ["Burnaby, BC", "Richmond, BC"],
+  "queries": [
+    {"category": "tech", "query": "software engineer developer", "job_type": ""},
+    {"category": "admin", "query": "administrative assistant office", "job_type": ""},
+    {"category": "food_qa", "query": "food quality assurance inspector", "job_type": ""}
+  ],
+  "job_sites": [
+    "site:boards.greenhouse.io",
+    "site:ca.indeed.com"
+  ],
+  "min_salary_hourly": 20,
+  "min_salary_annual": 45000,
+  "max_age_days": 30,
+  "max_results": 30,
+  "include_remote": true,
+  "auto_post": false,
+  "post_template": "Job Post - {date}\n機構：{organization}\n職位：{title}\n..."
+}
+```
 
-1. Extract the role/query from the user's prompt. Job type should come from
-   the prompt when possible (for example full-time, contract, remote, junior).
-2. If the user specified a location, pass it. Otherwise use the configured
-   default location from `<user_state>/skillsets/job_hunt.json` (`Vancouver, BC, Canada`) rather
-   than asking.
-3. Call `search_jobs(query, location, max_results, max_age_days, job_type)`.
-   This already runs `dedupe_postings` internally - do not call it again.
-4. If zero results: widen `max_age_days` once using
-   `fallback_max_age_days` from `<user_state>/skillsets/job_hunt.json` before telling the user
-   nothing was found. Do not silently drop the location filter.
-5. Format results as a table: Title, Organization, Employment Type,
-   Salary, Location, Experience, Close Date, Posted, URL. Leave blank
-   fields as "-", do not invent values.
-6. Save the table with `save_note` (title: "jobs-\u003crole\u003e-\u003clocation\u003e-\u003cdate\u003e").
-7. In `final_answer`, state the count found, the location/date filter
-   used, and the note path. Do not paste the full table into the spoken
-   answer if it's long - summarize top 3-5 and point to the saved note.
+## Primitives (building blocks in `agentic/toolkit/job_hunt.py`)
 
-## Notes
-
-- `close_date` is rarely published by these boards; it will usually be
-  blank. Do not guess a close date.
-- The default location is San Francisco, CA, USA in the fallback config.
-  Your custom config at `<user_state>/skillsets/job_hunt.json` uses Vancouver, BC, Canada.
-- Sources are configured in the config file and default to
-  Greenhouse/Lever/Ashby/RemoteOK/WeWorkRemotely/Wellfound - chosen
-  specifically because they do not block scripted access. Never substitute
-  LinkedIn/Indeed/Glassdoor scraping for this workflow unless the tool is
-  changed to use an approved API or user-provided export.
+| Function | What it does |
+|---|---|
+| `search_searxng(query)` | Bare SearXNG search, returns raw results |
+| `parse_jobs(raw_results, location)` | Parse raw results into structured postings |
+| `filter_jobs(postings, max_age, min_hr, min_yr)` | Filter by age/salary/specialty |
+| `format_job_post(posting, template)` | Format posting as social text |
+| `dedupe_postings(postings)` | Collapse near-duplicates by URL/title |

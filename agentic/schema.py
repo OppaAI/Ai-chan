@@ -477,6 +477,34 @@ def _default_playbooks() -> list[dict[str, Any]]:
                  "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}},
             ],
         },
+        {
+            "id": "gen_job_post",
+            "name": "Search, draft, and save job listings from configured boards",
+            "triggers": [
+                "job post", "post job", "draft job", "job listing",
+                "daily job", "job hunt post", "job posting", "find jobs",
+            ],
+            "semantic_triggers": [
+                "draft a job posting for social media",
+                "search and post jobs",
+                "create job posts from search results",
+                "run the daily job post pipeline",
+            ],
+            "requires_any": ["job", "jobs", "posting", "hiring", "career"],
+            "capabilities": ["research"],
+            "nodes": [
+                {"id": "plan",   "tool": "gen_job_search_plan",   "args": {"prompt": "$prompt", "config_source": ""}},
+                {"id": "search", "tool": "execute_job_search_plan", "depends_on": ["plan"],
+                 "args": {"plan_json": "$result:plan"}},
+                {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search"],
+                 "args": {"results_json": "$result:search", "template": ""}},
+                {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
+                 "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
+                {"id": "report", "tool": "report_job_run", "depends_on": ["save"],
+                 "args": {"plan": "$result:plan", "search": "$result:search",
+                          "draft": "$result:draft", "save": "$result:save"}},
+            ],
+        },
     ]
 
 
@@ -725,8 +753,25 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("repo tools unavailable for graph executor: %s", exc)
     try:
-        from agentic.toolkit.job_hunt import search_jobs, dedupe_postings
-        mapping.update({"search_jobs": search_jobs, "dedupe_postings": dedupe_postings})
+        from agentic.toolkit.job_hunt import (
+            search_searxng, parse_jobs, filter_jobs, format_job_post,
+            search_jobs, dedupe_postings,
+            gen_job_search_plan, execute_job_search_plan,
+            draft_job_posts_from_results, save_or_post_job_drafts, report_job_run,
+        )
+        mapping.update({
+            "search_searxng": search_searxng,
+            "parse_jobs": parse_jobs,
+            "filter_jobs": filter_jobs,
+            "format_job_post": format_job_post,
+            "search_jobs": search_jobs,
+            "dedupe_postings": dedupe_postings,
+            "gen_job_search_plan": gen_job_search_plan,
+            "execute_job_search_plan": execute_job_search_plan,
+            "draft_job_posts_from_results": draft_job_posts_from_results,
+            "save_or_post_job_drafts": save_or_post_job_drafts,
+            "report_job_run": report_job_run,
+        })
     except Exception as exc:
         log.debug("job tools unavailable for graph executor: %s", exc)
     return mapping
