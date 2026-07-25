@@ -23,6 +23,7 @@ from typing import Protocol
 import hashlib
 import json
 import os
+import re
 
 import numpy as np
 
@@ -153,6 +154,33 @@ _CAPABILITY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "social": ("instagram", "youtube", "threads", "twitter", "post", "publish", "social"),
 }
 
+
+_AMBIGUOUS_SINGLE_WORD_KEYWORDS: frozenset[str] = frozenset({
+    # These words frequently appear in unrelated requests (for example
+    # "daily news" or "postmortem notes"). Let stronger phrase or companion
+    # keyword signals route those turns instead of narrowing the tool list on
+    # one broad token.
+    "daily", "weekly", "post", "source", "remote",
+})
+
+
+def _term_matches(text: str, term: str) -> bool:
+    """Return True when a keyword term matches on token/phrase boundaries."""
+    folded_term = term.casefold().strip()
+    if not folded_term:
+        return False
+    if " " not in folded_term and folded_term in _AMBIGUOUS_SINGLE_WORD_KEYWORDS:
+        return False
+    parts = re.findall(r"[\w']+", folded_term)
+    if not parts:
+        return False
+    pattern = r"(?<![\w'])" + r"\W+".join(re.escape(part) for part in parts) + r"(?![\w'])"
+    return re.search(pattern, text) is not None
+
+
+def _capability_text_matches(text: str, terms: tuple[str, ...]) -> bool:
+    return any(_term_matches(text, term) for term in terms)
+
 _trigger_embed_cache: dict[str, np.ndarray] = {}
 _TRIGGER_EMBED_CACHE_MAX = 256
 
@@ -249,10 +277,10 @@ def match_capabilities(
             pass
 
     folded = user_input.casefold()
-    phrase_matches = [cap.id for cap in CAPABILITIES.values() if any(t in folded for t in cap.triggers)]
+    phrase_matches = [cap.id for cap in CAPABILITIES.values() if _capability_text_matches(folded, cap.triggers)]
     if phrase_matches:
         return phrase_matches
-    return [cap_id for cap_id, terms in _CAPABILITY_KEYWORDS.items() if any(term in folded for term in terms)]
+    return [cap_id for cap_id, terms in _CAPABILITY_KEYWORDS.items() if _capability_text_matches(folded, terms)]
 
 
 def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[dict]:

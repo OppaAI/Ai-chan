@@ -98,19 +98,20 @@ class TestCurrentDisplayName:
         monkeypatch.setenv("AIKO_USER_ID", "some_user")
         assert current_display_name() == "some_user"
 
-    def test_env_display_name_overrides_user_id_fallback(self, monkeypatch):
+    def test_env_display_name_does_not_override_user_id_fallback(self, monkeypatch):
         monkeypatch.setenv("AIKO_USER_ID", "some_user")
         monkeypatch.setenv("CURRENT_DISPLAY_NAME", "Oppa")
-        assert current_display_name() == "Oppa"
+        assert current_display_name() == "some_user"
 
     def test_contextvar_takes_priority_over_env(self, monkeypatch):
+        monkeypatch.setenv("AIKO_USER_ID", "some_user")
         monkeypatch.setenv("CURRENT_DISPLAY_NAME", "env_name")
         token = set_current_display_name("ctx_name")
         try:
             assert current_display_name() == "ctx_name"
         finally:
             reset_current_display_name(token)
-        assert current_display_name() == "env_name"
+        assert current_display_name() == "some_user"
 
     def test_reset_does_not_leak_into_next_call(self):
         """Regression guard for the exact bug class implied by 'Aiko doesn't

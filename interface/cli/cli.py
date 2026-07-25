@@ -310,13 +310,11 @@ def run_cli(args) -> None:
                 sys.exit(1)
         gh_user = cli_auth.get_user_id()
         os.environ["AIKO_USER_ID"] = gh_user
-        os.environ["CURRENT_DISPLAY_NAME"] = cli_auth.get_display_name()
         from system.userspace import set_current_display_name
         set_current_display_name(cli_auth.get_display_name())
         log.info("CLI session user_id=%s display=%s", gh_user, cli_auth.get_display_name())
     else:
         display_name = _cli_display_name(args)
-        os.environ["CURRENT_DISPLAY_NAME"] = display_name
         from system.userspace import set_current_display_name
         set_current_display_name(display_name)
         log.info("CLI session display=%s", display_name)

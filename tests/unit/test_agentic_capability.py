@@ -138,6 +138,12 @@ class TestMatchCapabilities:
         # Should still match via keyword fallback
         assert "research" in caps
 
+    def test_keyword_fallback_uses_token_boundaries(self):
+        assert "repo" not in match_capabilities("dispatch the update")
+        assert "social" not in match_capabilities("write a postmortem")
+        assert "scheduling" not in match_capabilities("daily news brief")
+        assert "social" in match_capabilities("publish to instagram")
+
     def test_precomputed_query_vector_used(self):
         """Pre-computed query_vector should be used instead of re-embedding."""
         embedder = FakeEmbedder()

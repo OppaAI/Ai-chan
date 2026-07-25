@@ -49,7 +49,7 @@ import webbrowser
 from pathlib import Path
 
 from system.config import load_config
-from system.userspace import reset_current_user_id, set_current_user_id, set_current_display_name
+from system.userspace import reset_current_display_name, reset_current_user_id, set_current_user_id, set_current_display_name
 load_config()
 
 from system import bioclock
@@ -180,7 +180,7 @@ class AikoWeb:
         self._authenticated_display_name: str | None = None
 
         # input queue — browser posts here, get_input() reads here
-        self._input_q: queue.Queue[str] = queue.Queue()
+        self._input_q: queue.Queue[tuple[str, str, str]] = queue.Queue()
 
         # binary mic-audio frames from the browser, consumed by get_voice_input()
         # an empty-bytes sentinel (b"") signals end-of-utterance from browser VAD
@@ -355,9 +355,8 @@ class AikoWeb:
             self._authenticated_display_name = self._current_display_name
             self._login_event.set()
         user_context_token = set_current_user_id(uid)
-        set_current_display_name(self._current_display_name)
+        display_context_token = set_current_display_name(self._current_display_name)
         os.environ["AIKO_USER_ID"] = uid
-        os.environ["CURRENT_DISPLAY_NAME"] = self._current_display_name
         if self._memorize:
             self._memorize.switch_user(uid)
         await ws.accept()
@@ -403,10 +402,9 @@ class AikoWeb:
                             set_current_user_id(uid)
                             set_current_display_name(self._current_display_name)
                             os.environ["AIKO_USER_ID"] = uid
-                            os.environ["CURRENT_DISPLAY_NAME"] = self._current_display_name
                             if self._memorize:
                                 self._memorize.switch_user(uid)
-                            self._input_q.put(text)
+                            self._input_q.put((text, uid, self._current_display_name))
 
                     elif mtype == "vad":
                         # browser energy VAD sentinels — update voice status display
@@ -445,6 +443,7 @@ class AikoWeb:
         except Exception as e:
             log.exception("[aiko-web] error in WebSocket loop")
         finally:
+            reset_current_display_name(display_context_token)
             reset_current_user_id(user_context_token)
             with self._clients_lock:
                 self._clients.discard(ws)
@@ -677,9 +676,13 @@ class AikoWeb:
         idle_ticks = 0
         while True:
             try:
-                text = self._input_q.get(timeout=1.0)
-                set_current_user_id(self._current_user_id)
-                set_current_display_name(self._current_display_name)
+                item = self._input_q.get(timeout=1.0)
+                if isinstance(item, tuple):
+                    text, uid, display_name = item
+                else:  # Backward compatibility for tests that enqueue raw text.
+                    text, uid, display_name = item, self._current_user_id, self._current_display_name
+                set_current_user_id(uid)
+                set_current_display_name(display_name)
                 return text
             except queue.Empty:
                 idle_ticks += 1
@@ -756,7 +759,6 @@ class AikoWeb:
             set_current_user_id(self._current_user_id)
             set_current_display_name(self._current_display_name)
             os.environ["AIKO_USER_ID"] = self._current_user_id
-            os.environ["CURRENT_DISPLAY_NAME"] = self._current_display_name
             result_holder[0] = listen.listen(
                 status_callback=_status_cb,
                 speak=speak,
@@ -803,6 +805,11 @@ class AikoWeb:
                 pass
 
         if text_input is not None:
+            if isinstance(text_input, tuple):
+                text, uid, display_name = text_input
+                set_current_user_id(uid)
+                set_current_display_name(display_name)
+                return (text, {})
             return (text_input, {})
 
         raw = result_holder[0]
