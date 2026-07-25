@@ -98,7 +98,8 @@ def _semantic_rank_skills(
     query: str, docs: list["SkillDoc"], embedder: Embedder, threshold: float,
 ) -> list["SkillDoc"] | None:
     """Rank skills by cosine similarity in one batched numpy matmul.
-    Returns None if embedding fails (caller falls back to keyword scoring)."""
+    Returns None if embedding fails or produces no above-threshold hits so the
+    caller can fall back to deterministic keyword scoring."""
     if not docs:
         return []
     try:
@@ -106,7 +107,8 @@ def _semantic_rank_skills(
         doc_vecs = np.stack([_get_skill_embedding(doc, embedder) for doc in docs])
         scores = reason.batch_cosine_scores(query_vec, doc_vecs)
         order = np.argsort(-scores)
-        return [docs[i] for i in order if scores[i] >= threshold]
+        ranked = [docs[i] for i in order if scores[i] >= threshold]
+        return ranked or None
     except Exception:
         return None
 
@@ -320,9 +322,17 @@ def search_skillsets(query: str, limit: int = 3, embedder: Embedder | None = Non
     return [doc for _score, doc in scored[:limit]]
 
 
-def search_skillsets_json(query: str, limit: int = 3) -> str:
-    """Return matching skill workflows as JSON text for agent tools."""
-    return json.dumps({"query": query, "matches": [doc.as_dict() for doc in search_skillsets(query, limit)]}, ensure_ascii=False, indent=2)
+def search_skillsets_json(query: str, limit: int = 3, embedder: Embedder | None = None) -> str:
+    """Return matching skill workflows as JSON text for agent tools.
+
+    Reuse the live embedder when available so explicit skill searches rank the
+    same way automatically injected <skill_context> does, instead of silently
+    degrading to keyword-only matching in the ReAct tool path.
+    """
+    return json.dumps({
+        "query": query,
+        "matches": [doc.as_dict() for doc in search_skillsets(query, limit, embedder=embedder)],
+    }, ensure_ascii=False, indent=2)
 
 
 def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:

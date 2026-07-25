@@ -361,7 +361,7 @@ class TestDisplayNamePropagation:
     memorize.py's _extract_facts() builds the LLM prompt from
     `display_name or current_display_name()`. If a caller forgets to pass
     display_name explicitly, this silently falls back through
-    current_display_name()'s contextvar -> AIKO_DISPLAY_NAME env -> user_id.
+    current_display_name()'s contextvar -> CURRENT_DISPLAY_NAME env -> user_id.
 
     These tests confirm the prompt Aiko actually sends contains the right
     name in each of those paths, and catches the regression where a
@@ -386,7 +386,7 @@ class TestDisplayNamePropagation:
         assert "Oppa" in prompt
 
     def test_falls_back_to_current_display_name_when_not_passed(self, backend, monkeypatch):
-        monkeypatch.setenv("AIKO_DISPLAY_NAME", "ContextUser")
+        monkeypatch.setenv("CURRENT_DISPLAY_NAME", "ContextUser")
         fake_client = _CapturingClient()
         backend._client = fake_client
 
@@ -402,7 +402,7 @@ class TestDisplayNamePropagation:
         explicitly captured and passed. If queue_write() resolves
         display_name on the caller's thread (correct) vs inside the
         worker's _write_loop (wrong), this test distinguishes the two."""
-        monkeypatch.delenv("AIKO_DISPLAY_NAME", raising=False)
+        monkeypatch.delenv("CURRENT_DISPLAY_NAME", raising=False)
         token = userspace.set_current_display_name("RequestThreadUser")
         try:
             resolved_on_caller_thread = userspace.current_display_name()
@@ -428,7 +428,7 @@ class TestDisplayNamePropagation:
         raw user_id (e.g. 'github_12345') instead of a real name -- this is
         allowed behavior, but should be visible/testable rather than an
         unnoticed silent default."""
-        monkeypatch.delenv("AIKO_DISPLAY_NAME", raising=False)
+        monkeypatch.delenv("CURRENT_DISPLAY_NAME", raising=False)
         monkeypatch.setenv("AIKO_USER_ID", "github_98765")
         fake_client = _CapturingClient()
         backend._client = fake_client

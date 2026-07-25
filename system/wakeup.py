@@ -168,12 +168,12 @@ def _prewarm_semantic_cache(think) -> None:
     Args:
        think: AikoThink instance with a booted embedder (via memorize backend).
     """
-    if think._get_memorize() is None:
+    if think._get_memorize() is None:            # gate to skip semantic cache prewarm if memory system is unavailable
         log.info("[wakeup] Skipping semantic cache prewarm — no memory backend.")
         return
     from cognition.think import (
-        _ROUTE_TERNARY_EXAMPLES,            # for top-level 3-way routing decision (agentic / webchat / localchat)
-        _ROUTE_INSTRUCT_TERNARY,            # the instruction strings of the 3-way routing
+        _ROUTE_TERNARY_EXAMPLES,                # for top-level 3-way routing decision (agentic / webchat / localchat)
+        _ROUTE_INSTRUCT_TERNARY,                # the instruction strings of the 3-way routing
     )
     try:
         # Prewarm intent routing cache
@@ -273,15 +273,15 @@ class AikoWakeup:
                 memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))         # initiate memory system (with logging off to prevent duplicate)
 
                 def _set_display_name():
-                    """Pull the cached display name for this user and pin it to the
-                    memory backend before any recall happens, so pinned memories are
-                    attributed to a human-readable name instead of a raw user_id."""
+                    """Pin the resolved display name to the memory backend before
+                    any recall happens, so pinned memories can use a
+                    human-readable name instead of a raw user_id."""
                     from system.userspace import current_display_name                         # access userspace module
                     display_name = current_display_name()                                     # get the username resolved from OAuth
                     memorize.set_display_name(display_name)                                   # pass the username to memory system
-                    if display_name == memorize.get_user_id():                                # if the cached username is the same as user id, log warning
+                    if display_name == memorize.get_user_id():                                # if display name fell back to raw user id, log warning
                         log.warning(
-                            "[wakeup] No cached display name for user_id=%s — memory pins "
+                            "[wakeup] No display name for user_id=%s — memory pins "
                             "will use raw user_id until the user logs in.",
                             display_name,
                         )
@@ -312,7 +312,6 @@ class AikoWakeup:
             except Exception as exc:                                                          # if error,
                 think_exc = exc                                                               # logged once and chained into the raise later
             memorize = mem_future.result()                                                    # grab the results of memory system
-            from concurrent.futures import wait, ALL_COMPLETED   # add to top-of-file imports
 
         if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
             log.critical(                                                                     # single log point: critical severity + full traceback in one line
@@ -352,9 +351,9 @@ class AikoWakeup:
         # site — not learn.py itself — is where the alternate client/model gets threaded
         # in; register_deep_study_handlers() already accepts client/model as plain params,
         # so no changes needed there.
-        learn.register_deep_study_handlers(                                                   # 
-            client=think_ref._client,                                                         #
-            model=think_ref._llm_model,                                                       #
+        learn.register_deep_study_handlers(                                                   # wire handlers for scheduled deep-study jobs to think's live LLM client/model
+            client=think_ref._client,                                                         # cognitive core's LLM API client
+            model=think_ref._llm_model,                                                       # NOTE: swap target once Action/Idle mode split exists
         )
 
         if memorize is None:                                                                  # if error during memory system boot,
@@ -368,34 +367,34 @@ class AikoWakeup:
         # That duplicate construction has been removed from cognition/think.py;
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
-        scheduler = ScheduleRunner(
-            on_due=think_ref.handle_scheduled_job,
-            memorize=memorize,
-            generate_and_post_fn=generate_and_post,
-            consolidate_fn=maybe_run_consolidation,
+        scheduler = ScheduleRunner(                                                            # construct a scheduler daemon to fire scheduled jobs
+            on_due=think_ref.handle_scheduled_job,                                             # callback: hands fired jobs to think for processing
+            memorize=memorize,                                                                 # the live memory system AikoMemorize instance
+            generate_and_post_fn=generate_and_post,                                            # daily reflection job (see memory/reflect.py for cadence)
+            consolidate_fn=maybe_run_consolidation,                                            # monthly memory consolidation job (see memory/reflect.py for cadence)
         )
-        register_scheduler(scheduler)  # Allow tools to notify scheduler of new jobs
-        scheduler.start()
+        register_scheduler(scheduler)                                                          # allow tools to notify scheduler of new jobs
+        scheduler.start()                                                                      # start the scheduler in background thread
 
         # Schedule-driven workspace/knowledge scan. The schedule runner keeps
         # using one sleep-until-next-event loop; the KB scan is represented in
         # schedule.json as a normal interval handler job.
-        if memorize is not None:
-            try:
-                from memory.knowledge import ingest_workspace_knowledge_folder
+        if memorize is not None:                                                               # gate to skip if memory boot failed
+            try:                                                                               # attempt to register workspace/knowledge base folder scanning into scheduler
+                from memory.knowledge import ingest_workspace_knowledge_folder                 # access workspace/knowledge base
 
-                register_system_handler(
+                register_system_handler(                                                       # register the handle function to grab embedder from memory system for converting kb into vectors
                     "workspace_knowledge_scan",
                     lambda _memorize: ingest_workspace_knowledge_folder(
                         embedder=_memorize._mem._embedder,
                         user_id=_memorize.get_user_id(),
                     ),
                 )
-                ensure_workspace_knowledge_job()
-                scheduler.notify_new_job()
-                log.info("[wakeup] Workspace knowledge scan schedule ensured")
-            except Exception:
-                log.exception("[wakeup] Workspace knowledge scan schedule failed")
+                ensure_workspace_knowledge_job()                                                # seed the job entry of the above function into scheduler
+                scheduler.notify_new_job()                                                      # poke the already-running scheduler to refresh new jobs
+                log.info("[wakeup] Workspace knowledge scan schedule ensured")                  # log success
+            except Exception:                                                                   # if error,
+                log.exception("[wakeup] Workspace knowledge scan schedule failed")              # log failure
 
         # Schedule-driven social lanes (weekly postcard, photo inbox, video
         # inbox). register_social_handlers() registers all three handlers
@@ -407,48 +406,48 @@ class AikoWakeup:
         # here, after memory boot, so all "post-scheduler" job seeding
         # happens in one place and any failure here doesn't affect the
         # scheduler start above.
-        try:
-            register_social_handlers()
-            scheduler.notify_new_job()
-            log.info("[wakeup] Social handlers registered and schedules ensured")
-        except Exception:
-            log.exception("[wakeup] Social handler registration failed")
+        try:                                                                                     # attempt to register scheduled social lanes (weekly postcards, photo/video inbox monitoring)
+            register_social_handlers()                                                           # register social lanes into scheduler
+            scheduler.notify_new_job()                                                           # poke the already-running scheduler to refresh new jobs
+            log.info("[wakeup] Social handlers registered and schedules ensured")                # log success
+        except Exception:                                                                        # if error,
+            log.exception("[wakeup] Social handler registration failed")                         # log failure
 
         # ── voice subsystems ──────────────────────────────────────────────────
 
         # TTS — non-fatal: Aiko can run text-only if this fails. Gated on speak
         # not already being None (construction above may have failed).
-        if speak is not None:
-            try:
-                _boot_step('speak_miotts', lambda: speak.warmup())
-                _boot_step('speak_ready')
-            except Exception:
-                log.exception("[wakeup] TTS boot failed — Aiko will run without voice output.")
-                speak = None
+        if speak is not None:                                                                    # gate to skip warmup of TTS model if speaking module boot failed
+            try:                                                                                 # attempt the warmup of TTS model
+                _boot_step('speak_miotts', lambda: speak.warmup())                               # load/prime the TTS model
+                _boot_step('speak_ready')                                                        # log success
+            except Exception:                                                                    # if error,
+                log.exception("[wakeup] TTS boot failed — Aiko will run without voice output.")  # log failure
+                speak = None                                                                     # set hand;e to None to indicate eror
 
-        think_ref.set_speak(speak) # wires in speak only once we know if it's live or None
+        think_ref.set_speak(speak)                                                               # wires in speaking module only once if TTS model is known to be live or not
 
         # ASR — staged so each step reports independently; non-fatal. Construction
         # wrapped too, same reasoning as AikoSpeak() above.
-        listen: AikoListen | None = None
-        try:
-            listen = AikoListen()
-        except Exception:
-            log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")
+        listen: AikoListen | None = None                                                                     # initiate listening module handle to None
+        try:                                                                                                 # attempt to load listening module
+            listen = AikoListen()                                                                            # load listening module
+        except Exception:                                                                                    # if error,
+            log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")    # log failure
 
-        if listen is not None:
+        if listen is not None:                                                                               # gate to skip loading of ASR/VAD model if listening module boot failed
             try:
-                _boot_step('listen_asr', lambda: listen.load_asr())
-                _boot_step('listen_silero', lambda: listen.load_vad())          # also kicks off warmup thread
-                _boot_step('listen_warmup', lambda: listen.join_warmup())
-                _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())  # VAD daemon — costs ~0 CPU at idle
-            except Exception:
-                log.exception("[wakeup] ASR/VAD boot failed — Aiko will run without voice input.")
-                listen = None
+                _boot_step('listen_asr', lambda: listen.load_asr())                                          # load ASR model
+                _boot_step('listen_silero', lambda: listen.load_vad())                                       # load VAD module
+                _boot_step('listen_warmup', lambda: listen.join_warmup())                                    # kick off warmup thread
+                _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())                          # load VAD daemon for barge-in monitor — costs ~0 CPU at idle
+            except Exception:                                                                                # if error,
+                log.exception("[wakeup] ASR/VAD boot failed — Aiko will run without voice input.")           # log failure
+                listen = None                                                                                # set handle to None to indicate error
 
-        return BootResult(
-            think    = think_ref,
-            memorize = memorize,
-            speak    = speak,
-            listen   = listen,
+        return BootResult(                                                                        # return the results of the bootup of the 4 modules:
+            think    = think_ref,                                                                 # cognitive core
+            memorize = memorize,                                                                  # memory system
+            speak    = speak,                                                                     # speaking module
+            listen   = listen,                                                                    # listening module
         )

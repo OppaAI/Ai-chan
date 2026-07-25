@@ -108,6 +108,7 @@ from memory.reflect import _generate_image, _load_soul
 
 from agentic.toolkit.common import workspace_root
 from agentic.toolkit.photography import scan_photo_workspace, scan_video_workspace
+from agentic.toolkit.job_hunt import search_jobs
 
 log = get_logger(__name__)
 
@@ -147,6 +148,18 @@ def photo_social_root() -> Path:
     if override:
         return Path(override).expanduser().resolve()
     return (user_workspace_root() / "social" / "photo").resolve()
+
+
+def job_post_social_root() -> Path:
+    """Resolve the active user job-post draft output root lazily.
+
+    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/job_posts.
+    Holds daily Meta Threads job-post drafts for human review.
+    """
+    override = os.getenv("JOB_POST_SOCIAL_ROOT")
+    if override:
+        return Path(override).expanduser().resolve()
+    return (user_workspace_root() / "social" / "job_posts").resolve()
 
 
 def video_social_root() -> Path:
@@ -1782,6 +1795,166 @@ def run_scheduled_video_social() -> dict[str, Any]:
     return draft
 
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# Lane D — Daily job-post draft for Meta Threads
+# ══════════════════════════════════════════════════════════════════════════
+
+JOB_POST_SOCIAL_AUTODRAFT = os.getenv("JOB_POST_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
+JOB_POST_SOCIAL_AUTOPOST = os.getenv("JOB_POST_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
+JOB_POST_SOCIAL_TIME_OF_DAY = os.getenv("JOB_POST_SOCIAL_TIME_OF_DAY", "09:00")
+JOB_POST_QUERIES = (
+    "government technology IT software developer analyst",
+    "government administrative assistant office",
+    "technology software developer IT analyst",
+    "administrative assistant office coordinator",
+)
+LOW_SALARY_HOURLY_FLOOR = float(os.getenv("JOB_POST_LOW_SALARY_HOURLY_FLOOR", "20"))
+LOW_SALARY_ANNUAL_FLOOR = float(os.getenv("JOB_POST_LOW_SALARY_ANNUAL_FLOOR", "45000"))
+
+
+def _job_post_draft_dir(for_date: datetime | None = None) -> Path:
+    day = (for_date or datetime.now(timezone.utc)).astimezone(ZoneInfo(timezone_name())).strftime("%Y-%m-%d")
+    return job_post_social_root() / day
+
+
+def _salary_too_low(salary: str) -> bool:
+    nums = [float(n.replace(",", "")) for n in re.findall(r"\d[\d,]*(?:\.\d+)?", salary or "")]
+    if not nums:
+        return False
+    text = salary.lower()
+    high = max(nums)
+    if any(unit in text for unit in ("/hr", "hour", "hr")):
+        return high < LOW_SALARY_HOURLY_FLOOR
+    return high < LOW_SALARY_ANNUAL_FLOOR if high > 1000 else False
+
+
+def _is_specialty_job(posting: Mapping[str, Any]) -> bool:
+    blob = " ".join(str(posting.get(k, "")) for k in ("title", "experience"))
+    return bool(re.search(r"\b(senior|lead|principal|manager|director|nurse|doctor|engineer iii|security clearance)\b", blob, re.I))
+
+
+def _choose_daily_job_post() -> dict[str, Any] | None:
+    for query in JOB_POST_QUERIES:
+        for posting in search_jobs(query, "Vancouver, BC, Canada", max_results=10, max_age_days=14):
+            if _salary_too_low(str(posting.get("salary", ""))) or _is_specialty_job(posting):
+                continue
+            return posting
+    return None
+
+
+def _format_threads_job_post(posting: Mapping[str, Any] | None, date_text: str) -> str:
+    def field(*names: str) -> str:
+        if not posting:
+            return ""
+        for name in names:
+            value = str(posting.get(name, "") or "").strip()
+            if value:
+                return value
+        return ""
+
+    return (
+        f"Job Post - {date_text}\n"
+        f"機構：{field('organization')}\n"
+        f"職位：{field('title', 'position')}\n"
+        f"類別：{field('employment_type')}\n"
+        f"地區：{field('location')}\n"
+        f"薪金：{field('salary')}\n"
+        f"經驗：{field('experience')}\n"
+        f"截止日期：{field('close_date', 'application_deadline', 'deadline')}\n\n"
+        f"*請入以下連結參看詳情\n{field('url')}"
+    )
+
+
+def generate_daily_job_post_draft(*, force: bool = False) -> dict[str, Any]:
+    draft_dir = _job_post_draft_dir()
+    meta_path = draft_dir / "draft.json"
+    if meta_path.exists() and not force:
+        return {"success": True, "skipped": True, "reason": "draft_exists", "draft_dir": str(draft_dir)}
+
+    today = datetime.now(ZoneInfo(timezone_name())).strftime("%Y-%m-%d")
+    posting = _choose_daily_job_post()
+    if posting is None:
+        return {
+            "success": False,
+            "skipped": False,
+            "reason": "no_eligible_posting",
+            "draft_dir": str(draft_dir),
+        }
+
+    text = _format_threads_job_post(posting, today)
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    (draft_dir / "draft_post.txt").write_text(text.strip() + "\n", encoding="utf-8")
+    (draft_dir / "review.md").write_text(
+        f"# Daily Job Post Draft — {today}\n\n## Draft post\n\n{text}\n\n"
+        "## Review checklist\n\n- [ ] Job details look correct\n- [ ] Salary is acceptable\n- [ ] Approved to post to Meta Threads\n",
+        encoding="utf-8",
+    )
+    meta = {
+        "success": True,
+        "draft_dir": str(draft_dir),
+        "provider": "threads",
+        "posting": posting,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "posted": False,
+        "human_approved": False,
+    }
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return meta
+
+
+def _read_job_post_meta(path: Path) -> dict[str, Any]:
+    meta_path = path / "draft.json"
+    if not meta_path.exists():
+        return {}
+    return json.loads(meta_path.read_text(encoding="utf-8"))
+
+
+def post_job_post_draft(draft_dir: str | Path) -> dict[str, Any]:
+    path = Path(draft_dir).resolve()
+    try:
+        _require_approved(path)
+        draft_post_path = path / "draft_post.txt"
+        if not draft_post_path.exists():
+            raise SocialApprovalError(f"missing draft_post.txt at {path}")
+        text = draft_post_path.read_text(encoding="utf-8").strip()
+        if not text:
+            raise SocialApprovalError(f"empty draft_post.txt at {path}")
+    except (SocialApprovalError, OSError) as e:
+        return {"posted": False, "error": str(e)}
+
+    result = _post_threads(text, None)
+    post_meta = {"posted": bool(result.get("ok")), "posted_at": datetime.now(timezone.utc).isoformat(), "results": [result]}
+    (path / "posted.json").write_text(json.dumps(post_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    meta_path = path / "draft.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["posted"] = post_meta["posted"]
+        meta["post_results"] = [result]
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return post_meta
+
+
+def run_scheduled_daily_job_post_social(_memorize: Any = None) -> dict[str, Any]:
+    if not JOB_POST_SOCIAL_AUTODRAFT:
+        return {"success": False, "skipped": True, "reason": "JOB_POST_SOCIAL_AUTODRAFT is off"}
+    draft = generate_daily_job_post_draft()
+    if JOB_POST_SOCIAL_AUTOPOST and draft.get("success"):
+        draft_dir = Path(draft["draft_dir"])
+        try:
+            meta = _read_job_post_meta(draft_dir)
+        except (OSError, json.JSONDecodeError) as e:
+            draft["post"] = {"posted": False, "skipped": True, "reason": str(e)}
+        else:
+            if meta.get("posted") is True:
+                draft["post"] = {"posted": False, "skipped": True, "reason": "already_posted"}
+            elif meta.get("human_approved") is True:
+                draft["post"] = post_job_post_draft(draft_dir)
+            else:
+                draft["post"] = {"posted": False, "skipped": True, "reason": "not_approved"}
+    return draft
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Agent-tool wrappers. agentic/agentic.py registers four of the wrapper
 # functions below (draft_photo_social, post_photo_social, draft_video_social,
@@ -1814,6 +1987,21 @@ def _resolve_contained_draft_dir(draft_dir: str | Path, allowed_root: Path) -> P
     except ValueError:
         raise ValueError(f"draft_dir must be inside {root}, got {resolved}")
     return resolved
+
+
+def draft_job_post_social(*, force: bool = False) -> dict[str, Any]:
+    """Create a daily Vancouver-area job-post draft for Meta Threads review."""
+    return generate_daily_job_post_draft(force=force)
+
+
+def post_job_post_social(draft_dir: str) -> dict[str, Any]:
+    """Post a human-approved daily job-post draft to Meta Threads only."""
+    try:
+        path = _resolve_contained_draft_dir(draft_dir, job_post_social_root())
+        _require_approved(path)
+    except (ValueError, SocialApprovalError) as e:
+        return {"posted": False, "error": str(e)}
+    return post_job_post_draft(path)
 
 
 def draft_weekly_social(*, force: bool = False) -> dict[str, Any]:

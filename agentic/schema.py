@@ -19,7 +19,6 @@ import re
 import uuid
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -777,8 +776,6 @@ def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
         return str(node.run_if["contains"]).strip().lower() in actual
     return True
 
-
-from agentic.checkpoint import save_node_result, load_checkpoint, clear_checkpoint
 
 def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                    llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
