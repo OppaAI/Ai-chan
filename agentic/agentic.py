@@ -624,8 +624,8 @@ _reg("summarize_task_state", "Summarize task state.",
     required=["goal"])
 
 _reg("schedule_job", "Schedule local job/alarm. HH:MM. Frequencies: once,hourly,daily,weekdays,weekly,biweekly,monthly,custom_weekdays. Supports relative_days for today/tomorrow/day-after-tomorrow offsets.",
-    lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"), args.get("relative_days")),
-    {"title": {"type": "string"}, "task": {"type": "string"}, "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"}, "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]}, "timezone": {"type": "string"}, "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"}, "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"}, "action": {"type": "string", "enum": ["announce", "agentic"], "description": "announce only, or agentic to let Aiko perform a local autonomous task"}},
+    lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"), args.get("relative_days"), args.get("tool_call"), args.get("skill")),
+    {"title": {"type": "string"}, "task": {"type": "string"}, "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"}, "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]}, "timezone": {"type": "string"}, "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"}, "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"}, "action": {"type": "string", "enum": ["announce", "agentic", "tool"], "description": "announce, agentic task, or direct registered tool invocation"}, "tool_call": {"type": "object", "description": "Required for action=tool: {name: registered tool name, arguments: object}"}, "skill": {"type": "string", "description": "Optional custom SKILL.md-style instructions for an agentic job"}},
     required=["title", "task", "time_of_day"])
 
 _reg("list_schedule", "List schedule.",
@@ -744,6 +744,24 @@ _reg("final_answer", "Final answer.",
 for _tool_schema, _tool_handler in _TOOL_DEFS:
     _tool_name = _tool_schema["function"]["name"]
     _TOOLS[_tool_name] = (_tool_schema, _tool_handler)
+
+
+def invoke_registered_tool(name: str, arguments: dict | None = None):
+    """Invoke a registered agentic tool for a data-driven scheduled job.
+
+    A schedule can select only an existing tool; it cannot import or execute
+    arbitrary Python. Tool-specific safety gates still apply.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("scheduled tool call requires a tool name")
+    if arguments is None:
+        arguments = {}
+    if not isinstance(arguments, dict):
+        raise ValueError("scheduled tool arguments must be an object")
+    entry = _TOOLS.get(name)
+    if entry is None or entry[1] is None:
+        raise ValueError(f"unknown or non-invocable scheduled tool: {name}")
+    return entry[1](arguments)
     
 
 def _required_args_for(name: str) -> list[str]:

@@ -45,7 +45,7 @@ TIMEZONE: "America/Vancouver"  # IANA timezone name used everywhere Aiko resolve
 
 # -- Paths --
 WORKSPACE_ROOT: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/workspace.
-SCHEDULE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/workspace/tasks/schedule.json.
+SCHEDULE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/tasks/schedule.json.
 
 # -- System job timing --
 DAILY_JOB_HOUR: "0"  # Local hour for daily reflection/dream job; integer 0-23.

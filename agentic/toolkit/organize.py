@@ -37,6 +37,8 @@ def schedule_job(
     days_of_week: list[str] | str | None = None,
     action: str = "agentic",
     relative_days: int | str | None = None,
+    tool_call: dict | None = None,
+    skill: str | None = None,
 ) -> str:
     """Schedule a local recurring job while Aiko is running."""
     try:
@@ -49,6 +51,8 @@ def schedule_job(
             days_of_week,
             action,
             relative_days,
+            tool_call=tool_call,
+            skill=skill,
         )
         # Notify the running scheduler so it picks up the new job immediately
         from system.schedule import notify_scheduler_new_job

@@ -9,7 +9,9 @@ A scheduled job is a small local record with:
   - days_of_week: optional weekday names for custom_weekdays/weekly jobs
   - relative_days: optional integer day offset for phrases like tomorrow or the day after tomorrow
   - task: what Aiko should do or say when the job fires
-  - action: announce or agentic
+  - action: announce, agentic, or tool
+  - tool_call: optional registered agentic tool invocation, e.g.
+    {"name": "draft_job_post_social", "arguments": {}}
   - handler: optional name of a pre-registered system handler (see
     register_system_handler) to call directly instead of going through
     on_due/chat — used for window-style jobs like the deep_studying
@@ -44,7 +46,7 @@ sleep loop begins.
     backfill doesn't trigger redundant consolidation passes.
 
   - monthly_consolidate: catch-up is detected via a small local state file
-    (tasks/monthly_consolidate_state.json under the workspace root)
+    (memory/monthly_consolidate_state.json under the user memory directory)
     recording the last "YYYY-MM" the job actually completed. If the
     current month doesn't match on startup and we're not still waiting
     for this month's scheduled window, one catch-up run fires.
@@ -104,11 +106,11 @@ def user_state_root() -> Path:
 
 
 def schedule_path() -> Path:
-    """Resolve the active user schedule path lazily."""
+    """Resolve the active user canonical schedule path lazily."""
     override = os.getenv("SCHEDULE_PATH")
     if override:
         return Path(override).expanduser().resolve()
-    return (user_workspace_root() / "tasks" / "schedule.json").resolve()
+    return user_state_path("tasks/schedule.json").resolve()
 
 # System job timing — env overridable, not user-modifiable via schedule.json
 DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
@@ -122,8 +124,8 @@ MONTHLY_JOB_MINUTE = int(os.getenv("MONTHLY_JOB_MINUTE", "5"))
 CATCHUP_MAX_LOOKBACK_DAYS = int(os.getenv("CATCHUP_MAX_LOOKBACK_DAYS", "7"))
 
 # Filename for the small local state file tracking the last month
-# monthly_consolidate actually completed. Lives under
-# <workspace_root>/tasks/, alongside schedule.json.
+# monthly_consolidate actually completed. It belongs with the user memory DB.
+# It is intentionally separate from the editable task schedule directory.
 MONTHLY_CATCHUP_STATE_PATH_NAME = "monthly_consolidate_state.json"
 
 FREQUENCIES = {"once", "interval", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"}
@@ -268,14 +270,26 @@ def _reflection_post_exists(date: datetime) -> bool:
 
 def _monthly_state_path() -> Path:
     """Resolve the local monthly-consolidate catch-up state file path."""
-    return (workspace_root() / "tasks" / MONTHLY_CATCHUP_STATE_PATH_NAME).resolve()
+    return user_state_path(f"memory/{MONTHLY_CATCHUP_STATE_PATH_NAME}").resolve()
 
 
 def _read_last_consolidated_month() -> str | None:
     """Return the last 'YYYY-MM' monthly_consolidate completed, or None."""
     path = _monthly_state_path()
     if not path.exists():
-        return None
+        # Preserve the marker written by pre-migration scheduler versions.
+        legacy_path = (workspace_root() / "tasks" / MONTHLY_CATCHUP_STATE_PATH_NAME).resolve()
+        if legacy_path.exists():
+            try:
+                legacy_data = json.loads(legacy_path.read_text(encoding="utf-8"))
+                if isinstance(legacy_data, dict):
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(json.dumps(legacy_data), encoding="utf-8")
+                    log.info("Migrated monthly consolidation state from %s to %s", legacy_path, path)
+            except Exception as e:
+                log.warning("Failed migrating monthly consolidation state %s: %s", legacy_path, e)
+        if not path.exists():
+            return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return data.get("last_run_month")
@@ -365,7 +379,21 @@ _schedule_dirty: bool = True
 
 def _read_and_cache() -> list[dict]:
     global _schedule_cache, _schedule_dirty
-    data = _read_raw(schedule_path())
+    path = schedule_path()
+    data = _read_raw(path)
+    # One-time migration from older schedule locations.
+    if not data and not path.exists() and not os.getenv("SCHEDULE_PATH"):
+        legacy_paths = [
+            (user_state_path("task/schedule.json").resolve(), "user task folder"),
+            ((user_workspace_root() / "tasks" / "schedule.json").resolve(), "workspace task folder"),
+        ]
+        for legacy_path, legacy_label in legacy_paths:
+            legacy_data = _read_raw(legacy_path)
+            if legacy_data:
+                _write_all(legacy_data)
+                data = legacy_data
+                log.info("Migrated schedule from %s to %s (%s)", legacy_path, path, legacy_label)
+                break
     _schedule_cache = data
     _schedule_dirty = False
     return data
@@ -397,6 +425,8 @@ def schedule_job_record(
     relative_days: int | str | None = None,
     handler: str | None = None,
     interval_seconds: int | str | None = None,
+    tool_call: dict[str, Any] | None = None,
+    skill: str | None = None,
 ) -> dict:
     """Create and persist a scheduled job record, returning the stored dict.
 
@@ -408,8 +438,21 @@ def schedule_job_record(
     handler-based jobs.
     """
     action = (action or "agentic").lower().strip()
-    if action not in {"announce", "agentic"}:
-        raise ValueError("action must be 'announce' or 'agentic'")
+    if action not in {"announce", "agentic", "tool"}:
+        raise ValueError("action must be 'announce', 'agentic', or 'tool'")
+    if skill is not None and not isinstance(skill, str):
+        raise ValueError("skill must be Markdown text")
+    normalized_skill = skill.strip() if skill else None
+    normalized_tool_call: dict[str, Any] | None = None
+    if tool_call is not None:
+        if not isinstance(tool_call, dict) or not isinstance(tool_call.get("name"), str) or not tool_call["name"].strip():
+            raise ValueError("tool_call must contain a non-empty tool name")
+        arguments = tool_call.get("arguments", tool_call.get("args", {}))
+        if not isinstance(arguments, dict):
+            raise ValueError("tool_call arguments must be an object")
+        normalized_tool_call = {"name": tool_call["name"].strip(), "arguments": arguments}
+    if action == "tool" and normalized_tool_call is None:
+        raise ValueError("tool action requires tool_call")
     tz_name = bioclock.timezone_name(timezone)
     normalized_days = _normalize_weekdays(days_of_week)
     normalized_relative_days = _normalize_relative_days(relative_days)
@@ -438,6 +481,8 @@ def schedule_job_record(
         "kind": "scheduled_job",
         "action": action,
         "handler": handler,
+        "tool_call": normalized_tool_call,
+        "skill": normalized_skill,
     }
     jobs = _read_all()
     jobs.append(job)
@@ -557,7 +602,7 @@ VIDEO_SOCIAL_JOB_TITLE = "video_social_scan"
 VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
 
 JOB_POST_SOCIAL_JOB_TITLE = "daily_job_post_social"
-JOB_POST_SOCIAL_TIME_OF_DAY = os.getenv("JOB_POST_SOCIAL_TIME_OF_DAY", "09:00")
+JOB_POST_SOCIAL_TIME_OF_DAY = "09:00"
 
 
 def ensure_weekly_social_job(timezone: str | None = None) -> None:
@@ -645,17 +690,29 @@ def ensure_video_social_job(timezone: str | None = None) -> None:
 
 def ensure_daily_job_post_social_job(timezone: str | None = None) -> None:
     """Idempotently seed the daily Vancouver-area Meta Threads job-post draft job."""
-    existing_titles = {job.get("title") for job in _read_all()}
-    if JOB_POST_SOCIAL_JOB_TITLE in existing_titles:
-        return
+    jobs = _read_all()
+    for job in jobs:
+        if job.get("title") == JOB_POST_SOCIAL_JOB_TITLE:
+            # Upgrade older handler-backed records without overriding a user
+            # change unless it is the former built-in handler format.
+            if job.get("handler") == "daily_job_post_social":
+                job.update({
+                    "time_of_day": JOB_POST_SOCIAL_TIME_OF_DAY,
+                    "frequency": "daily",
+                    "action": "tool",
+                    "handler": None,
+                    "tool_call": {"name": "draft_job_post_social", "arguments": {}},
+                })
+                _write_all(jobs)
+            return
     schedule_job_record(
         title=JOB_POST_SOCIAL_JOB_TITLE,
         task="Draft one recent Vancouver-area job post for Meta Threads review",
         time_of_day=JOB_POST_SOCIAL_TIME_OF_DAY,
         frequency="daily",
         timezone=timezone,
-        action="agentic",
-        handler="daily_job_post_social",
+        action="tool",
+        tool_call={"name": "draft_job_post_social", "arguments": {}},
     )
     log.info("Seeded daily job-post social job at %s", JOB_POST_SOCIAL_TIME_OF_DAY)
 
@@ -684,14 +741,12 @@ def register_social_handlers(timezone: str | None = None) -> None:
         run_scheduled_photo_social,
         run_scheduled_video_social,
         retry_weekly_social_if_needed,
-        run_scheduled_daily_job_post_social,
     )
 
     register_system_handler("weekly_social", run_scheduled_weekly_social)
     register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
     register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
     register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
-    register_system_handler("daily_job_post_social", run_scheduled_daily_job_post_social)
 
     ensure_weekly_social_job(timezone)
     ensure_photo_social_job(timezone)
@@ -699,7 +754,54 @@ def register_social_handlers(timezone: str | None = None) -> None:
     ensure_weekly_social_retry_job(timezone)
     ensure_daily_job_post_social_job(timezone)
 
-    log.info("Registered social handlers (weekly_social, weekly_social_retry, photo_social, video_social, daily_job_post_social) and seeded their jobs.")
+    log.info("Registered social handlers and seeded social jobs; daily_job_post_social uses a schedule.json tool_call.")
+
+
+def bootstrap_non_system_jobs(
+    *,
+    think: Any | None = None,
+    memorize: Any | None = None,
+    timezone: str | None = None,
+) -> None:
+    """Register and seed every startup schedule behavior except the hardcoded system jobs.
+
+    This keeps wakeup.py focused on booting subsystems while the scheduler
+    module owns the runtime job wiring:
+      - deep-study handlers and their window jobs
+      - workspace knowledge scan job
+      - social jobs, including the daily job-post tool call
+    """
+    if think is not None:
+        try:
+            from memory import learn
+
+            learn.register_deep_study_handlers(
+                client=getattr(think, "_client", None),
+                model=getattr(think, "_llm_model", None),
+                timezone=timezone,
+            )
+        except Exception:
+            log.exception("Failed to bootstrap deep-study schedule jobs.")
+
+    if memorize is not None:
+        try:
+            from memory.knowledge import ingest_workspace_knowledge_folder
+
+            register_system_handler(
+                "workspace_knowledge_scan",
+                lambda _memorize: ingest_workspace_knowledge_folder(
+                    embedder=_memorize._mem._embedder,
+                    user_id=_memorize.get_user_id(),
+                ),
+            )
+            ensure_workspace_knowledge_job(timezone)
+        except Exception:
+            log.exception("Failed to bootstrap workspace knowledge schedule job.")
+
+    try:
+        register_social_handlers(timezone)
+    except Exception:
+        log.exception("Failed to bootstrap social schedule jobs.")
 
 
 def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
@@ -779,6 +881,8 @@ class DueJob:
     title: str
     task: str
     action: str = "agentic"
+    tool_call: dict[str, Any] | None = None
+    skill: str | None = None
 
 
 DueReminder = DueJob
@@ -840,7 +944,7 @@ class ScheduleRunner:
         oldest first, on a background thread started from start().
       - monthly_consolidate: _monthly_catchup_needed() compares the
         current "YYYY-MM" against a small local state file
-        (tasks/monthly_consolidate_state.json) recording the last month
+        (memory/monthly_consolidate_state.json) recording the last month
         that actually completed, and fires one catch-up run if they
         don't match and we're not still waiting on this month's window.
     """
@@ -1149,6 +1253,8 @@ class ScheduleRunner:
                         title=job.get("title", "Scheduled job"),
                         task=job.get("task", "Scheduled job"),
                         action=job.get("action", "agentic"),
+                        tool_call=job.get("tool_call"),
+                        skill=job.get("skill"),
                     ))
                 job["last_ran_at"] = bioclock.local_now(tz_name).isoformat()
                 if job.get("frequency") == "once":

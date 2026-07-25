@@ -22,9 +22,23 @@ Purpose: keep Aiko from mixing user settings, runtime state, and generated work.
 
 Keep scheduler defaults in `config/schedule.yaml`.
 
-Keep user-created scheduled jobs in `~/.aiko/<user_id>/schedule.json`. This file is runtime state: Aiko and the scheduler update it while running. It should stay in the per-user state directory, not in config or shared workspace directories.
+Keep user-created scheduled jobs in `~/.aiko/<user_id>/tasks/schedule.json`. This file is runtime state: Aiko and the scheduler update it while running. It should stay in the per-user state directory, not in config or shared workspace directories.
 
-Do not move `~/.aiko/<user_id>/schedule.json` into `config/` just because it looks like settings. It contains mutable jobs, not static defaults.
+Do not move `~/.aiko/<user_id>/tasks/schedule.json` into `config/` just because it looks like settings. It contains mutable jobs, not static defaults.
+
+A direct tool job is data-only and may select any registered agentic tool:
+
+```json
+{
+  "title": "daily_job_post_social",
+  "time_of_day": "09:00",
+  "frequency": "daily",
+  "action": "tool",
+  "tool_call": {"name": "draft_job_post_social", "arguments": {}}
+}
+```
+
+For an `agentic` job, the optional `skill` field can contain custom `SKILL.md`-style Markdown instructions. The scheduler supplies it with the task when the job fires. Tool names are restricted to the existing agentic tool registry; schedule files cannot run arbitrary Python.
 
 ## When To Use Runtime
 

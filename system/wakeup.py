@@ -123,9 +123,7 @@ from sensory.listen import AikoListen                       # for initiating lis
 from system.schedule import (                               # for initiating scheduler system
     ScheduleRunner,
     register_scheduler,
-    register_system_handler,
-    ensure_workspace_knowledge_job,
-    register_social_handlers,
+    bootstrap_non_system_jobs,
 )
 from memory.reflect import generate_and_post                # for loading daily reflection into scheduler
 from memory.consolidate import maybe_run_consolidation      # for loading monthly consolidation into scheduler
@@ -330,35 +328,6 @@ class AikoWakeup:
             log.exception("[wakeup] AikoSpeak construction failed — Aiko will run without voice output.")  # log failure
             speak = None                                                                      # set to None to indicate failure
 
-        # ── wire deep_studying into the scheduler's weekday/weekend window ────
-        # Must happen before the ScheduleRunner below starts (or at least
-        # before its first tick) so the "deep_study_start"/"deep_study_stop"
-        # jobs seeded into schedule.json (system.schedule.ensure_deep_study_window_jobs)
-        # have a registered handler to call into — otherwise they log
-        # "unregistered handler" and silently never fire. Needs AikoThink's
-        # LLM client/model, so it can only happen here, after think boots.
-        from memory import learn                                                              # access self-learning module
-
-        # NOTE (model-swap possibility): deep-study handlers are wired to think_ref's
-        # client/model here because that's what's live at boot. quick_studying (in
-        # memory/learn.py's idle_learner_loop) should stay on think's model — it fires
-        # during short chat-idle gaps, so any swap latency would be paid on the interactive
-        # path. deep_studying runs in scheduled off-hours windows (05:00-18:00 weekdays /
-        # 05:00-10:00 weekends by default), which is exactly where an Active/Idle mode
-        # split would pay off: Idle mode could tear down TTS/ASR/CV/(maybe embedder) and
-        # load a bigger, smarter model just for deep_studying + other off-hour autonomous
-        # jobs, then swap back before the window closes. When that mode exists, this call
-        # site — not learn.py itself — is where the alternate client/model gets threaded
-        # in; register_deep_study_handlers() already accepts client/model as plain params,
-        # so no changes needed there.
-        learn.register_deep_study_handlers(                                                   # wire handlers for scheduled deep-study jobs to think's live LLM client/model
-            client=think_ref._client,                                                         # cognitive core's LLM API client
-            model=think_ref._llm_model,                                                       # NOTE: swap target once Action/Idle mode split exists
-        )
-
-        if memorize is None:                                                                  # if error during memory system boot,
-            log.warning("[wakeup] Memory boot failed — ScheduleRunner starting without system jobs.")  # log warning, not error — Aiko keeps running, just degraded
-
         # NOTE: this is the ONE ScheduleRunner for the whole app. AikoThink
         # used to also construct its own ScheduleRunner in __init__, which
         # meant two independent daemon threads were both reading and firing
@@ -367,51 +336,23 @@ class AikoWakeup:
         # That duplicate construction has been removed from cognition/think.py;
         # this is now the only instance, and it's the one registered via
         # register_scheduler() so tools can notify it of newly added jobs.
-        scheduler = ScheduleRunner(                                                            # construct a scheduler daemon to fire scheduled jobs
-            on_due=think_ref.handle_scheduled_job,                                             # callback: hands fired jobs to think for processing
-            memorize=memorize,                                                                 # the live memory system AikoMemorize instance
-            generate_and_post_fn=generate_and_post,                                            # daily reflection job (see memory/reflect.py for cadence)
-            consolidate_fn=maybe_run_consolidation,                                            # monthly memory consolidation job (see memory/reflect.py for cadence)
+        scheduler = ScheduleRunner(
+            on_due=think_ref.handle_scheduled_job,
+            memorize=memorize,
+            generate_and_post_fn=generate_and_post,
+            consolidate_fn=maybe_run_consolidation,
         )
-        register_scheduler(scheduler)                                                          # allow tools to notify scheduler of new jobs
-        scheduler.start()                                                                      # start the scheduler in background thread
+        register_scheduler(scheduler)
+        scheduler.start()
 
-        # Schedule-driven workspace/knowledge scan. The schedule runner keeps
-        # using one sleep-until-next-event loop; the KB scan is represented in
-        # schedule.json as a normal interval handler job.
-        if memorize is not None:                                                               # gate to skip if memory boot failed
-            try:                                                                               # attempt to register workspace/knowledge base folder scanning into scheduler
-                from memory.knowledge import ingest_workspace_knowledge_folder                 # access workspace/knowledge base
-
-                register_system_handler(                                                       # register the handle function to grab embedder from memory system for converting kb into vectors
-                    "workspace_knowledge_scan",
-                    lambda _memorize: ingest_workspace_knowledge_folder(
-                        embedder=_memorize._mem._embedder,
-                        user_id=_memorize.get_user_id(),
-                    ),
-                )
-                ensure_workspace_knowledge_job()                                                # seed the job entry of the above function into scheduler
-                scheduler.notify_new_job()                                                      # poke the already-running scheduler to refresh new jobs
-                log.info("[wakeup] Workspace knowledge scan schedule ensured")                  # log success
-            except Exception:                                                                   # if error,
-                log.exception("[wakeup] Workspace knowledge scan schedule failed")              # log failure
-
-        # Schedule-driven social lanes (weekly postcard, photo inbox, video
-        # inbox). register_social_handlers() registers all three handlers
-        # with the system handler registry and idempotently seeds their
-        # schedule.json jobs (see system/schedule.py). Doesn't depend on
-        # memorize the way the workspace-knowledge scan does — the
-        # weekly/photo/video handlers are called with memorize but the
-        # photo/video ones just absorb and ignore it — but this is kept
-        # here, after memory boot, so all "post-scheduler" job seeding
-        # happens in one place and any failure here doesn't affect the
-        # scheduler start above.
-        try:                                                                                     # attempt to register scheduled social lanes (weekly postcards, photo/video inbox monitoring)
-            register_social_handlers()                                                           # register social lanes into scheduler
-            scheduler.notify_new_job()                                                           # poke the already-running scheduler to refresh new jobs
-            log.info("[wakeup] Social handlers registered and schedules ensured")                # log success
-        except Exception:                                                                        # if error,
-            log.exception("[wakeup] Social handler registration failed")                         # log failure
+        # ── bootstrap the schedule module's non-system jobs ────────────────
+        # This keeps the boot orchestrator focused on subsystem startup while
+        # system.schedule owns the job registration/seeding for everything
+        # except the hardcoded daily reflection + monthly consolidation jobs.
+        bootstrap_non_system_jobs(think=think_ref, memorize=memorize)
+        if memorize is None:
+            log.warning("[wakeup] Memory boot failed — workspace knowledge schedule skipped.")
+        scheduler.notify_new_job()
 
         # ── voice subsystems ──────────────────────────────────────────────────
 

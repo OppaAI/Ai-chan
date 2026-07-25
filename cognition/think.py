@@ -1071,7 +1071,20 @@ class AikoThink:
             else:
                 log.info(f"Aiko scheduled job: {text}")
             return
+        if job.action == "tool":
+            threading.Thread(target=self._run_scheduled_tool_job, args=(job,), daemon=True).start()
+            return
         threading.Thread(target=self._run_scheduled_agentic_job, args=(job,), daemon=True).start()
+
+    def _run_scheduled_tool_job(self, job: DueJob) -> None:
+        """Invoke one registered agentic tool from a schedule.json record."""
+        tool_call = job.tool_call or {}
+        try:
+            from agentic.agentic import invoke_registered_tool
+            result = invoke_registered_tool(tool_call.get("name", ""), tool_call.get("arguments", {}))
+            log.info("Scheduled tool job %s completed: %s", job.id, result)
+        except Exception as e:
+            log.error("Scheduled tool job %s failed: %s", job.id, e)
 
     def _run_scheduled_agentic_job(self, job: DueJob) -> None:
         """Run a scheduled autonomous task through Aiko's agent loop."""
@@ -1079,6 +1092,7 @@ class AikoThink:
             "Scheduled job due. Use only local available tools. If external action "
             "is unavailable, draft/save the best local artifact and state next step.\n\n"
             f"Title: {job.title}\nTask: {job.task}"
+            + (f"\n\nScheduled skill instructions:\n{job.skill}" if job.skill else "")
         )
         try:
             self.agentic_chat(prompt)
