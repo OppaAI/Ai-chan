@@ -18,6 +18,7 @@ Supported boards: Greenhouse, Lever, Ashby, RemoteOK, We Work Remotely, Wellfoun
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -52,7 +53,36 @@ JOB_SITES = [
     "site:weworkremotely.com",
     "site:wellfound.com",
 ]
-_CONFIG_PATH = Path(__file__).resolve().parents[2] / "skills" / "skillsets" / "job_hunt.json"
+
+
+def _job_config_path() -> Path:
+    """Return path to job_hunt.json config file.
+    
+    Order of precedence:
+    1. JOB_HUNT_CONFIG_PATH env var (absolute or relative to workspace)
+    2. <USER_STATE_ROOT>/<user_id>/skillsets/job_hunt.json
+    3. <workspace>/agentic/skillsets/job_hunt.json (fallback)
+    """
+    # Check env var first
+    env_path = os.getenv("JOB_HUNT_CONFIG_PATH")
+    if env_path:
+        p = Path(env_path).expanduser()
+        if p.is_absolute():
+            return p
+        # Relative paths resolve to workspace root
+        return Path(__file__).resolve().parents[2] / p
+    
+    # Try per-user skillsets directory
+    try:
+        from system.userspace import user_state_dir, current_user_id
+        user_path = user_state_dir() / "skillsets" / "job_hunt.json"
+        if user_path.exists():
+            return user_path
+    except Exception:
+        pass
+    
+    # Fallback to agentic/skillsets
+    return Path(__file__).resolve().parents[2] / "agentic" / "skillsets" / "job_hunt.json"
 
 
 @dataclass
@@ -85,8 +115,9 @@ def _job_config() -> dict[str, Any]:
         "default_job_type": "",
         "include_remote": True,
     }
+    config_path = _job_config_path()
     try:
-        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        data = json.loads(config_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return default
     if isinstance(data, dict):

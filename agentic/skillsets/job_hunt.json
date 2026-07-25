@@ -1,0 +1,39 @@
+{
+  "default_location": "San Francisco, CA, USA",
+  "radius_km": 50,
+  "nearby_locations": [
+    "Oakland, CA",
+    "Berkeley, CA",
+    "San Jose, CA",
+    "Santa Clara, CA",
+    "Sunnyvale, CA",
+    "Mountain View, CA",
+    "Palo Alto, CA",
+    "Redwood City, CA",
+    "Foster City, CA",
+    "Brisbane, CA",
+    "South San Francisco, CA"
+  ],
+  "max_results": 30,
+  "max_age_days": 30,
+  "fallback_max_age_days": 60,
+  "job_sites": [
+    "site:google.com/about/careers/applications",
+    "site:metacareers.com",
+    "site:amazon.jobs",
+    "site:careers.microsoft.com",
+    "site:jobs.apple.com",
+    "site:nvidia.com/en-us/about-nvidia/careers",
+    "site:openai.com/careers",
+    "site:jobs.ashbyhq.com/openai",
+    "site:job-boards.greenhouse.io/anthropic",
+    "site:jobs.netflix.com",
+    "site:salesforce.com/company/careers",
+    "site:ibm.com/careers",
+    "site:careers.adobe.com",
+    "site:jobs.intel.com"
+  ],
+  "default_job_type": "",
+  "include_remote": true,
+  "notes": "Job type/role should normally come from the user's prompt. Leave default_job_type blank unless you want every search constrained."
+}

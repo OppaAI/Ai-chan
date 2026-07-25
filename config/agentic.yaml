@@ -29,6 +29,9 @@ SKILL_CHUNK_MIN_SCORE: "0.30"  # Min relevance score to keep a chunk; below this
 # -- user skillsets --
 USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <USER_STATE_ROOT>/<user_id>/skillsets/.
 
+# -- job hunt config path --
+JOB_HUNT_CONFIG_PATH: ""  # Path to job_hunt.json config file. Can be absolute or relative to workspace. Defaults to <USER_STATE_ROOT>/<user_id>/skillsets/job_hunt.json if exists, otherwise <workspace>/agentic/skillsets/job_hunt.json.
+
 # Agentic config
 #
 # Settings for agentic/agentic.py plus chat-vs-agent routing used by cognition/think.py.
