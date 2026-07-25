@@ -42,16 +42,10 @@ Flow:
                   construct speak (not yet wired to think)
                             │
                             ▼
-                  register deep-study handlers
-                  (needs think_ref._client / _llm_model)
+                  hand off scheduler startup to system.schedule
                             │
                             ▼
-                  scheduler setup
-            (ScheduleRunner.start, workspace-knowledge job, social lanes)
-                            │
-                            ▼
-                  voice pipeline
-            (TTS warmup → think.set_speak(speak) → ASR + VAD staged init)
+                  voice pipeline (TTS warmup → think.set_speak(speak) → ASR + VAD staged init)
                             │
                             ▼
                   return BootResult
@@ -66,16 +60,10 @@ Flow:
 - memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready_evt.set() in a
   finally — so think never hangs even if memory boot fails.
 - Join point — main thread waits for both think_future/mem_future to finish.
-- speak is constructed right after the join, but NOT wired into think yet (no
-  think.set_speak() call here) — think doesn't get a live speak reference until the
-  voice pipeline below finishes TTS warmup (or falls back to None on failure). Building
-  it early just means it doesn't have to wait on the sequential scheduler-setup phase.
-- Deep-study handler registration — runs right after the join, before the scheduler
-  starts, because ScheduleRunner needs a handler already registered for the
-  deep_study_start/stop jobs seeded into schedule.json, or they'll fire into a void.
-  Needs think_ref._client / _llm_model, so it can only happen after think boots.
-- Scheduler setup (sequential, single-threaded) — starts the one ScheduleRunner, ensures
-  the workspace-knowledge job, registers social lanes.
+- speak is constructed right after the join, but not wired into think until the voice
+  stack is ready.
+- Wakeup then hands the live refs to `system.schedule.start_scheduler()`, which owns
+  the scheduler thread and all seeded jobs.
 - Voice pipeline (sequential) — TTS warmup, then think_ref.set_speak(speak) (or None),
   then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
 - Returns BootResult with all four live subsystem refs.
@@ -121,12 +109,8 @@ from cognition.think import AikoThink                       # for initiating cog
 from sensory.speak import AikoSpeak                         # for initiating speaking module
 from sensory.listen import AikoListen                       # for initiating listening module
 from system.schedule import (                               # for initiating scheduler system
-    ScheduleRunner,
-    register_scheduler,
-    bootstrap_non_system_jobs,
+    start_scheduler,
 )
-from memory.reflect import generate_and_post                # for loading daily reflection into scheduler
-from memory.consolidate import maybe_run_consolidation      # for loading monthly consolidation into scheduler
 
 # ── result container ──────────────────────────────────────────────────────────
 
@@ -328,31 +312,13 @@ class AikoWakeup:
             log.exception("[wakeup] AikoSpeak construction failed — Aiko will run without voice output.")  # log failure
             speak = None                                                                      # set to None to indicate failure
 
-        # NOTE: this is the ONE ScheduleRunner for the whole app. AikoThink
-        # used to also construct its own ScheduleRunner in __init__, which
-        # meant two independent daemon threads were both reading and firing
-        # the same schedule.json — every due job (reminders, weekly_social,
-        # and now the deep_study_start/stop window jobs) would fire twice.
-        # That duplicate construction has been removed from cognition/think.py;
-        # this is now the only instance, and it's the one registered via
-        # register_scheduler() so tools can notify it of newly added jobs.
-        scheduler = ScheduleRunner(
+        # Wakeup now only bootstraps the live subsystems and hands them to
+        # system.schedule's scheduler startup helper.
+        start_scheduler(
             on_due=think_ref.handle_scheduled_job,
             memorize=memorize,
-            generate_and_post_fn=generate_and_post,
-            consolidate_fn=maybe_run_consolidation,
+            think=think_ref,
         )
-        register_scheduler(scheduler)
-        scheduler.start()
-
-        # ── bootstrap the schedule module's non-system jobs ────────────────
-        # This keeps the boot orchestrator focused on subsystem startup while
-        # system.schedule owns the job registration/seeding for everything
-        # except the hardcoded daily reflection + monthly consolidation jobs.
-        bootstrap_non_system_jobs(think=think_ref, memorize=memorize)
-        if memorize is None:
-            log.warning("[wakeup] Memory boot failed — workspace knowledge schedule skipped.")
-        scheduler.notify_new_job()
 
         # ── voice subsystems ──────────────────────────────────────────────────
 

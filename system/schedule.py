@@ -1282,4 +1282,34 @@ class ScheduleRunner:
                     log.exception("Scheduled job handler failed for %s", event.get("title", event.get("id", "?")))
 
 
+def start_scheduler(
+    *,
+    on_due: Callable[[DueJob], None] | None = None,
+    memorize=None,
+    think=None,
+    timezone: str | None = None,
+    user_id: str | None = None,
+) -> ScheduleRunner:
+    """Construct, register, start, and seed the app scheduler in one place.
+
+    This keeps wakeup.py free of scheduler wiring so it only boots the live
+    subsystems and then delegates the rest here.
+    """
+    from memory.reflect import generate_and_post
+    from memory.consolidate import maybe_run_consolidation
+
+    scheduler = ScheduleRunner(
+        on_due=on_due,
+        memorize=memorize,
+        generate_and_post_fn=generate_and_post,
+        consolidate_fn=maybe_run_consolidation,
+        user_id=user_id,
+    )
+    register_scheduler(scheduler)
+    scheduler.start()
+    bootstrap_non_system_jobs(think=think, memorize=memorize, timezone=timezone)
+    scheduler.notify_new_job()
+    return scheduler
+
+
 ReminderScheduler = ScheduleRunner
