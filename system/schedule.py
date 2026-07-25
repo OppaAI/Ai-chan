@@ -556,6 +556,9 @@ PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("PHOTO_SOCIAL_SCAN_INTERVAL_S
 VIDEO_SOCIAL_JOB_TITLE = "video_social_scan"
 VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
 
+JOB_POST_SOCIAL_JOB_TITLE = "daily_job_post_social"
+JOB_POST_SOCIAL_TIME_OF_DAY = os.getenv("JOB_POST_SOCIAL_TIME_OF_DAY", "09:00")
+
 
 def ensure_weekly_social_job(timezone: str | None = None) -> None:
     """Idempotently seed the weekly memory-postcard job (Lane A).
@@ -640,6 +643,23 @@ def ensure_video_social_job(timezone: str | None = None) -> None:
     log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
 
 
+def ensure_daily_job_post_social_job(timezone: str | None = None) -> None:
+    """Idempotently seed the daily Vancouver-area Meta Threads job-post draft job."""
+    existing_titles = {job.get("title") for job in _read_all()}
+    if JOB_POST_SOCIAL_JOB_TITLE in existing_titles:
+        return
+    schedule_job_record(
+        title=JOB_POST_SOCIAL_JOB_TITLE,
+        task="Draft one recent Vancouver-area job post for Meta Threads review",
+        time_of_day=JOB_POST_SOCIAL_TIME_OF_DAY,
+        frequency="daily",
+        timezone=timezone,
+        action="agentic",
+        handler="daily_job_post_social",
+    )
+    log.info("Seeded daily job-post social job at %s", JOB_POST_SOCIAL_TIME_OF_DAY)
+
+
 def register_social_handlers(timezone: str | None = None) -> None:
     """Register the weekly/photo/video social handlers and seed their jobs.
 
@@ -664,19 +684,22 @@ def register_social_handlers(timezone: str | None = None) -> None:
         run_scheduled_photo_social,
         run_scheduled_video_social,
         retry_weekly_social_if_needed,
+        run_scheduled_daily_job_post_social,
     )
 
     register_system_handler("weekly_social", run_scheduled_weekly_social)
     register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
     register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
     register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
+    register_system_handler("daily_job_post_social", run_scheduled_daily_job_post_social)
 
     ensure_weekly_social_job(timezone)
     ensure_photo_social_job(timezone)
     ensure_video_social_job(timezone)
     ensure_weekly_social_retry_job(timezone)
+    ensure_daily_job_post_social_job(timezone)
 
-    log.info("Registered social handlers (weekly_social, weekly_social_retry, photo_social, video_social) and seeded their jobs.")
+    log.info("Registered social handlers (weekly_social, weekly_social_retry, photo_social, video_social, daily_job_post_social) and seeded their jobs.")
 
 
 def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
