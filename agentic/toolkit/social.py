@@ -1839,7 +1839,8 @@ def _format_threads_job_post(posting: Mapping[str, Any] | None, date_text: str) 
         f"類別：{field('employment_type')}\n"
         f"地區：{field('location')}\n"
         f"薪金：{field('salary')}\n"
-        f"經驗：{field('experience')}\n\n"
+        f"經驗：{field('experience')}\n"
+        f"截止日期：{field('close_date', 'application_deadline', 'deadline')}\n\n"
         f"*請入以下連結參看詳情\n{field('url')}"
     )
 

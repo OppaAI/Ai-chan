@@ -158,6 +158,7 @@ def test_generate_daily_job_post_draft_writes_threads_review_bundle(monkeypatch,
         "location": "Vancouver, BC",
         "salary": "$70,000 - $82,000/yr",
         "experience": "2 years",
+        "close_date": "2026-08-15",
         "url": "https://example.test/job",
     })
 
@@ -170,6 +171,7 @@ def test_generate_daily_job_post_draft_writes_threads_review_bundle(monkeypatch,
     assert "Job Post -" in post
     assert "機構：City of Vancouver" in post
     assert "職位：IT Support Analyst" in post
+    assert "截止日期：2026-08-15" in post
     assert "*請入以下連結參看詳情\nhttps://example.test/job" in post
     meta = json.loads((draft_dir / "draft.json").read_text(encoding="utf-8"))
     assert meta["provider"] == "threads"
