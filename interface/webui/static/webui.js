@@ -112,7 +112,97 @@ function switchToChat() {
 }
 
 // ── chat rendering ────────────────────────────────────────────────────────
-let streamEl = null;
+let streamDiv = null;
+let streamRawText = '';
+
+const EMOJI_EXPRESSIONS = {
+  '😊': 'happy', '😄': 'happy', '😁': 'happy', '😆': 'happy', '🥰': 'happy', '😍': 'happy', '🙂': 'happy', '😋': 'happy', '🌸': 'happy', '✨': 'happy', '❤️': 'happy', '💖': 'happy',
+  '😒': 'angry', '😡': 'angry', '😠': 'angry', '😤': 'angry', '🤬': 'angry', '💢': 'angry',
+  '😭': 'sorrow', '😢': 'sorrow', '🥺': 'sorrow', '☹️': 'sorrow', '🙁': 'sorrow', '😔': 'sorrow', '😞': 'sorrow', '💧': 'sorrow',
+  '😮': 'surprised', '😯': 'surprised', '😲': 'surprised', '😳': 'surprised', '🤯': 'surprised', '😱': 'surprised', '⁉️': 'surprised', '❓': 'surprised',
+  '😜': 'fun', '🤪': 'fun', '😏': 'fun', '😈': 'fun', '🙃': 'fun', '😉': 'fun',
+  '😐': 'neutral', '😑': 'neutral', '😶': 'neutral', '🤖': 'neutral', '😴': 'neutral', '🤔': 'neutral', '💭': 'neutral'
+};
+
+function esc(s) {
+  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function parseMarkdown(text) {
+  if (!text) return '';
+  let safe = esc(text);
+  safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+  safe = safe.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  safe = safe.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  safe = safe.replace(/_([^_]+)_/g, '<em>$1</em>');
+  safe = safe.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  safe = safe.replace(/\n/g, '<br>');
+  return safe;
+}
+
+function parseAikoMessage(rawText) {
+  let text = rawText || '';
+  let emoji = null;
+
+  // Extract leading emoji header if present (e.g. "😊:", "😒:", etc.)
+  const emojiHeaderRegex = /^\s*(?:([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF])|\:([a-zA-Z0-9_-]+)\:)?\s*:\s*/u;
+  const match = text.match(emojiHeaderRegex);
+  if (match) {
+    emoji = match[1] || match[2] || null;
+    text = text.replace(emojiHeaderRegex, '');
+  }
+
+  // Extract non-verbal cues (actions, inner thoughts, feelings)
+  const nonVerbalParts = [];
+
+  text = text.replace(/\*([^*]+)\*/g, (m, p1) => {
+    nonVerbalParts.push(`*${p1.trim()}*`);
+    return '';
+  });
+
+  text = text.replace(/\(([^)]+)\)/g, (m, p1) => {
+    nonVerbalParts.push(`(${p1.trim()})`);
+    return '';
+  });
+
+  text = text.replace(/\[([^\]]+)\]/g, (m, p1) => {
+    nonVerbalParts.push(`[${p1.trim()}]`);
+    return '';
+  });
+
+  const nonVerbalText = nonVerbalParts.join(' ').trim();
+  const dialogueText = text.replace(/\s{2,}/g, ' ').trim();
+
+  return { emoji, nonVerbalText, dialogueText };
+}
+
+function renderAikoContent(container, parsed, showCursor = false) {
+  container.replaceChildren();
+
+  const prefixSpan = document.createElement('span');
+  prefixSpan.className = 'msg-prefix';
+  prefixSpan.textContent = 'Aiko: ';
+  container.appendChild(prefixSpan);
+
+  if (parsed.nonVerbalText) {
+    const nvDiv = document.createElement('div');
+    nvDiv.className = 'msg-non-verbal';
+    nvDiv.innerHTML = parseMarkdown(parsed.nonVerbalText);
+    container.appendChild(nvDiv);
+  }
+
+  const dialSpan = document.createElement('span');
+  dialSpan.className = 'msg-dialogue';
+  dialSpan.innerHTML = parseMarkdown(parsed.dialogueText || '');
+
+  if (showCursor) {
+    const cursorSpan = document.createElement('span');
+    cursorSpan.className = 'cursor';
+    dialSpan.appendChild(cursorSpan);
+  }
+
+  container.appendChild(dialSpan);
+}
 
 function addMessage(sender, text) {
   flushStream();
@@ -122,7 +212,12 @@ function addMessage(sender, text) {
     div.innerHTML = `<span class="msg-prefix">${esc(window.currentUsername || 'You')}: </span>${esc(text)}`;
   } else if (sender === 'aiko') {
     div.className = 'msg msg-aiko';
-    div.innerHTML = `<span class="msg-prefix">Aiko: </span>${esc(text)}`;
+    const parsed = parseAikoMessage(text);
+    if (parsed.emoji && window.aikoSetExpression) {
+      const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || 'happy';
+      window.aikoSetExpression(exprName, 1.0);
+    }
+    renderAikoContent(div, parsed, false);
   } else {
     div.className = 'msg msg-sys';
     div.textContent = `  ◈  ${text}`;
@@ -132,26 +227,30 @@ function addMessage(sender, text) {
 }
 
 function appendToken(text) {
-  if (!streamEl) {
-    const div = document.createElement('div');
-    div.className = 'msg msg-aiko';
-    streamEl = document.createElement('span');
-    streamEl.className = 'cursor';
-    div.innerHTML = '<span class="msg-prefix">Aiko: </span>';
-    div.appendChild(streamEl);
-    chatPanel.insertBefore(div, toolStatus);
+  if (!streamDiv) {
+    streamDiv = document.createElement('div');
+    streamDiv.className = 'msg msg-aiko';
+    streamRawText = '';
+    chatPanel.insertBefore(streamDiv, toolStatus);
   }
-  streamEl.textContent += text;
+  streamRawText += text;
+  const parsed = parseAikoMessage(streamRawText);
+  if (parsed.emoji && window.aikoSetExpression) {
+    const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || 'happy';
+    window.aikoSetExpression(exprName, 1.0);
+  }
+  renderAikoContent(streamDiv, parsed, true);
   scrollBottom();
 }
 
 function flushStream() {
-  if (streamEl) { streamEl.classList.remove('cursor'); streamEl = null; }
+  if (streamDiv) {
+    const parsed = parseAikoMessage(streamRawText);
+    renderAikoContent(streamDiv, parsed, false);
+    streamDiv = null;
+    streamRawText = '';
+  }
   toolStatus.textContent = '';
-}
-
-function esc(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function scrollBottom() { content.scrollTop = content.scrollHeight; }

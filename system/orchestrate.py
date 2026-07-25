@@ -81,6 +81,7 @@ from system.bioclock import local_now
 from system.log import get_logger
 from system.wakeup import AikoWakeup
 from agentic.toolkit.research import web_search
+from sensory.speak import extract_dialogue_for_tts
 
 log = get_logger(__name__)
 
@@ -748,14 +749,14 @@ class TypewriterSync:
         no-op — speak's own chunk callback drives the reveal instead."""
         if self.precise:
             return
-        sentence = sentence.strip()
-        if not sentence:
+        dialogue = extract_dialogue_for_tts(sentence)
+        if not dialogue:
             return
         if self._first_audio_fired:
-            for w in sentence.split():
+            for w in dialogue.split():
                 self._q.put((w, 1.0 / KARAOKE_WPS))
         else:
-            self._fallback_buf.append(sentence)
+            self._fallback_buf.append(dialogue)
 
     def on_first_audio(self) -> None:
         """Fallback-mode trigger: release the whole buffered reply, paced by
@@ -763,7 +764,7 @@ class TypewriterSync:
         if self.precise:
             return
         self._first_audio_fired = True
-        text = " ".join(self._fallback_buf)
+        text = extract_dialogue_for_tts(" ".join(self._fallback_buf))
         self._fallback_buf = []
         for w in text.split():
             self._q.put((w, 1.0 / KARAOKE_WPS))
@@ -771,7 +772,8 @@ class TypewriterSync:
     def _on_chunk_start(self, text: str, duration_s: float) -> None:
         """Precise-mode trigger: called by speak.py the instant a given
         sentence-chunk's audio begins playing."""
-        words = text.split()
+        dialogue = extract_dialogue_for_tts(text)
+        words = dialogue.split()
         if not words:
             return
         per_word = duration_s / len(words) if duration_s and duration_s > 0 else 1.0 / KARAOKE_WPS

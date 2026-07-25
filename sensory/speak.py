@@ -184,6 +184,28 @@ def sanitize_for_tts(text: str) -> str:
     return text.strip()
 
 
+_EMOJI_HEADER_RE = re.compile(
+    r"^\s*(?:[\U0001F300-\U0001FAFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]|\:[a-zA-Z0-9_-]+\:)?\s*:\s*",
+    re.UNICODE
+)
+_ACTION_ASTERISK_RE = re.compile(r"\*[^*]+\*")
+_THOUGHT_PAREN_RE = re.compile(r"\([^)]+\)")
+_FEELING_BRACKET_RE = re.compile(r"\[[^\]]+\]")
+
+
+def extract_dialogue_for_tts(text: str) -> str:
+    """Extract pure dialogue for TTS, removing initial emoji headers (e.g. '😊:')
+    and non-verbal cues (*actions*, (thoughts), [feelings])."""
+    if not text:
+        return ""
+    text = _EMOJI_HEADER_RE.sub("", text)
+    text = _ACTION_ASTERISK_RE.sub("", text)
+    text = _THOUGHT_PAREN_RE.sub("", text)
+    text = _FEELING_BRACKET_RE.sub("", text)
+    return sanitize_for_tts(text)
+
+
+
 # ── speak ─────────────────────────────────────────────────────────────────────
 
 class AikoSpeak:
@@ -493,7 +515,7 @@ class AikoSpeak:
                 chunk = chunk_queue.get()
                 if chunk is None:
                     break
-                clean = sanitize_for_tts(chunk)
+                clean = extract_dialogue_for_tts(chunk)
                 if not clean:
                     if on_word:
                         self._emit_words_timed(chunk, 0.0, on_word)

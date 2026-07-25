@@ -441,6 +441,47 @@ body {
   color: var(--aiko);
 }
 
+.msg-non-verbal {
+  display: block;
+  width: 100%;
+  color: var(--mauve);
+  background: rgba(216, 188, 255, 0.08);
+  border-left: 2px solid var(--pink);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin: 4px 0 6px 0;
+  font-style: italic;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.msg-dialogue {
+  display: inline-block;
+  color: var(--aiko);
+  width: 100%;
+}
+
+.msg-non-verbal p,
+.msg-dialogue p {
+  margin: 0;
+  display: inline;
+}
+
+.msg-non-verbal strong,
+.msg-dialogue strong {
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.msg-non-verbal code,
+.msg-dialogue code {
+  font-family: monospace;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
 .msg-sys {
   color: var(--sys);
   font-size: 11px;
