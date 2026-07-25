@@ -32,6 +32,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import requests
+
 from system.bioclock import local_now
 from agentic.toolkit.research import MAX_RESULTS, web_fetch, _web_search_raw
 
@@ -419,6 +421,129 @@ def gen_job_search_plan(prompt: str = "", config_source: str = "") -> str:
     }, ensure_ascii=False)
 
 
+# ── Direct job site search (bypasses SearXNG) ──
+
+def _parse_job_html(html: str, domain: str) -> list[dict]:
+    """Parse job listing URLs from a search results HTML page."""
+    results: list[dict] = []
+    for m in re.finditer(
+        r'<a[^>]*href="(/[^"]*job[^"]*|[^"]*(?:career|job|position|posting|opening)[^"]*)"[^>]*>(.*?)</a>',
+        html, re.IGNORECASE,
+    ):
+        href = m.group(1)
+        title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+        if title and len(title) > 10:
+            url = f"https://{domain}{href}" if href.startswith("/") else href
+            results.append({"title": title, "url": url, "content": "", "company": ""})
+    return results
+
+
+def _search_greenhouse(query: str, location: str, max_results: int) -> list[dict]:
+    """Search Greenhouse jobs via their public JSON embed API."""
+    try:
+        resp = requests.get(
+            "https://boards.greenhouse.io/embed/jobs",
+            params={"title": query, "location": location},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
+    results = []
+    for job in data.get("jobs", [])[:max_results]:
+        results.append({
+            "title": job.get("title", ""),
+            "url": (job.get("absolute_url") or "").strip(),
+            "content": job.get("location", {}).get("name", ""),
+            "company": data.get("company", {}).get("name", ""),
+        })
+    return results
+
+
+def _search_indeed(query: str, location: str, max_results: int) -> list[dict]:
+    """Search Indeed Canada via HTML scraping."""
+    ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+    try:
+        resp = requests.get(
+            "https://ca.indeed.com/jobs",
+            params={"q": query, "l": location},
+            timeout=15, headers={"User-Agent": ua},
+        )
+        resp.raise_for_status()
+        html = resp.text
+    except Exception:
+        return []
+    return _parse_indeed_html(html, max_results)
+
+
+def _parse_indeed_html(html: str, max_results: int) -> list[dict]:
+    """Extract job listings from Indeed HTML."""
+    results: list[dict] = []
+    base = "https://ca.indeed.com"
+    # Extract job cards via regex — matches Indeed's structure
+    for m in re.finditer(
+        r'data-jk="([^"]+)"[^>]*>.*?<a[^>]*class="[^"]*jcs-JobTitle[^"]*"[^>]*href="([^"]*)"[^>]*>(.*?)</a>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        jk = m.group(1)
+        href = m.group(2)
+        title = re.sub(r'<[^>]+>', '', m.group(3)).strip()
+        url = base + href if href.startswith("/") else href
+        results.append({"title": title, "url": url, "content": "", "company": ""})
+        if len(results) >= max_results:
+            break
+    if not results:
+        return _parse_job_html(html, "ca.indeed.com")
+    return results
+
+
+def _search_jobbank(query: str, location: str, max_results: int) -> list[dict]:
+    """Search Job Bank Canada via HTML scraping."""
+    ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"
+    try:
+        resp = requests.get(
+            "https://jobbank.gc.ca/jobsearch/jobsearch.aspx",
+            params={"Keywords": query, "LocationMulti": location, "f": "true"},
+            timeout=15, headers={"User-Agent": ua},
+        )
+        resp.raise_for_status()
+        html = resp.text
+    except Exception:
+        return []
+    results: list[dict] = []
+    for m in re.finditer(
+        r'<a[^>]*href="(/jobsearch/jobdetails[^"]*)"[^>]*class="[^"]*job-title[^"]*"[^>]*>\s*(.*?)\s*</a>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        href = m.group(1)
+        title = re.sub(r'<[^>]+>', '', m.group(2)).strip()
+        url = f"https://jobbank.gc.ca{href}" if href.startswith("/") else href
+        results.append({"title": title, "url": url, "content": "", "company": ""})
+        if len(results) >= max_results:
+            break
+    if not results:
+        return _parse_job_html(html, "jobbank.gc.ca")
+    return results
+
+
+_DIRECT_JOB_HANDLERS: dict[str, callable] = {
+    "boards.greenhouse.io": _search_greenhouse,
+    "indeed.com": _search_indeed,
+    "ca.indeed.com": _search_indeed,
+    "jobbank.gc.ca": _search_jobbank,
+}
+
+
+def _direct_job_search(site: str, query: str, location: str, max_results: int) -> list[dict]:
+    """Try to search a known job site directly, bypassing SearXNG."""
+    domain = site[5:] if site.startswith("site:") else site
+    for pattern, handler in _DIRECT_JOB_HANDLERS.items():
+        if pattern in domain:
+            return handler(query, location, max_results)
+    return []
+
+
 def execute_job_search_plan(plan_json: str) -> str:
     """Node 2: Execute a job search plan → search + parse + filter results JSON."""
     plan = json.loads(plan_json)
@@ -453,8 +578,11 @@ def execute_job_search_plan(plan_json: str) -> str:
         local_raw: list[dict] = []
         for site in sites:
             for sloc in search_locs:
-                sq = " ".join(p for p in [str(site), query_text, job_type, sloc] if p)
-                for r in search_searxng(sq, MAX_RESULTS):
+                raw = _direct_job_search(site, query_text, sloc, MAX_RESULTS)
+                if not raw:
+                    sq = " ".join(p for p in [str(site), query_text, job_type, sloc] if p)
+                    raw = search_searxng(sq, MAX_RESULTS)
+                for r in raw:
                     u = r.get("url", "")
                     if u:
                         with lock:
