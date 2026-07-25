@@ -75,9 +75,6 @@ ALLOWED_PATREON_USERS = _parse_allowlist("ALLOWED_PATREON_USERS")
 CONTRIBUTORS_ENABLED = os.getenv("CONTRIBUTORS_ENABLED", "false").lower() == "true"
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
 
-# Allow unauthenticated guest / local login (default: true for dev convenience)
-LOCAL_AUTH_ENABLED = os.getenv("LOCAL_AUTH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
-
 # ── terms/guidelines gate ────────────────────────────────────────────────────
 # Bump TERMS_VERSION whenever you materially change the guidelines — anyone
 # who accepted an older version gets re-prompted next login.
@@ -238,11 +235,10 @@ async def require_accepted_session(session: dict = Depends(require_session)) -> 
 
 @app.get("/api/auth/config")
 async def get_auth_config():
-    """Return public OAuth client IDs and capabilities to frontend."""
+    """Return public OAuth client IDs to frontend."""
     return {
         "github_id": GITHUB_CLIENT_ID,
         "patreon_id": PATREON_CLIENT_ID,
-        "local_auth_enabled": LOCAL_AUTH_ENABLED,
     }
 
 
@@ -311,21 +307,6 @@ async def github_callback(request: Request, code: str, state: str | None = None)
         raise HTTPException(status_code=403, detail="Not authorized")
 
     session_id = _create_session(user["id"], username, user.get("email"), "github")
-    response = RedirectResponse(url="/")
-    _set_session_cookie(response, session_id, request)
-    return response
-
-
-# ── guest / local login ───────────────────────────────────────────────────────
-
-@app.get("/auth/local/login")
-async def local_login(request: Request):
-    if not LOCAL_AUTH_ENABLED:
-        raise HTTPException(status_code=403, detail="Local login is disabled on this server")
-    guest_id = secrets.token_urlsafe(12)
-    session_id = _create_session(guest_id, "Guest", None, "local")
-    session = sessions[session_id]
-    session["accepted_terms"] = True
     response = RedirectResponse(url="/")
     _set_session_cookie(response, session_id, request)
     return response

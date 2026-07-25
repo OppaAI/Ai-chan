@@ -145,7 +145,7 @@ function parseAikoMessage(rawText) {
   let emoji = null;
 
   // Extract leading emoji header if present (e.g. "😊:", "😒:", etc.)
-  const emojiHeaderRegex = /^\s*(?:([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF])|\:([a-zA-Z0-9_-]+)\:)?\s*:\s*/u;
+  const emojiHeaderRegex = /^\s*(?:([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF])|:([a-zA-Z0-9_-]+):)?\s*:\s*/u;
   const match = text.match(emojiHeaderRegex);
   if (match) {
     emoji = match[1] || match[2] || null;
@@ -706,25 +706,11 @@ function setAuthStatus(msg) {
 }
 
 function loginGitHub() {
-  const cfg = window.OAUTH_CONFIG;
-  if (!cfg || !cfg.github_id) {
-    setAuthStatus('GitHub OAuth is not configured on this server.');
-    return;
-  }
   window.location.href = '/auth/github/login';
 }
 
 function loginPatreon() {
-  const cfg = window.OAUTH_CONFIG;
-  if (!cfg || !cfg.patreon_id) {
-    setAuthStatus('Patreon OAuth is not configured on this server.');
-    return;
-  }
   window.location.href = '/auth/patreon/login';
-}
-
-function loginLocal() {
-  window.location.href = '/auth/local/login';
 }
 
 // ── Terms / guidelines modal ───────────────────────────────────────────────
@@ -773,11 +759,6 @@ fetch('/api/auth/config')
   })
   .then(cfg => {
     window.OAUTH_CONFIG = cfg;
-    // Show/hide the local guest login button based on server config
-    const localBtn = document.getElementById('auth-local-btn');
-    if (localBtn) {
-      localBtn.style.display = cfg.local_auth_enabled ? '' : 'none';
-    }
     return checkAuth();
   })
   .then(authenticated => {
