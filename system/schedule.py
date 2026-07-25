@@ -602,7 +602,7 @@ VIDEO_SOCIAL_JOB_TITLE = "video_social_scan"
 VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
 
 JOB_POST_SOCIAL_JOB_TITLE = "daily_job_post_social"
-JOB_POST_SOCIAL_TIME_OF_DAY = "09:00"
+JOB_POST_SOCIAL_TIME_OF_DAY = os.getenv("JOB_POST_SOCIAL_TIME_OF_DAY", "01:00")
 
 
 def ensure_weekly_social_job(timezone: str | None = None) -> None:
