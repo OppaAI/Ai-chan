@@ -29,7 +29,7 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1336,6 +1336,15 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             graph_trustworthy = _graph_ok and (graph_verdict is None or graph_verdict.ok)
 
             if graph_trustworthy:
+                def _safe_dict(obj):
+                    if is_dataclass(obj):
+                        return asdict(obj)
+                    if hasattr(obj, "__dict__"):
+                        return obj.__dict__
+                    if hasattr(obj, "__slots__"):
+                        return {s: getattr(obj, s) for s in obj.__slots__}
+                    return vars(obj)  # will raise clearly if truly unsupported
+
                 CONTEXT_POOL.submit(
                     experience.record_experience,
                     owner, user_input, graph_result.steps, graph_result.final_answer,
@@ -1346,9 +1355,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "name": graph_result.graph.name,
                     "goal": graph_result.graph.goal,
                     "source": graph_result.graph.source,
-                    "nodes": [n.__dict__ for n in graph_result.graph.nodes],
+                    "nodes": [_safe_dict(n) for n in graph_result.graph.nodes],
                 }
-                node_payload = [r.__dict__ for r in graph_result.results]
+                node_payload = [_safe_dict(r) for r in graph_result.results]
                 owner.last_prompt_debug = {
                     "mode": "agentic_graph",
                     "matched_capabilities": _matched_caps,
