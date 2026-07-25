@@ -921,6 +921,20 @@ body {
   box-shadow: 0 0 10px rgba(255, 66, 77, .4);
 }
 
+.auth-btn.local {
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
+  color: var(--mauve);
+  backdrop-filter: blur(4px);
+}
+
+.auth-btn.local:hover {
+  background: rgba(200, 168, 240, 0.12);
+  border-color: var(--purple);
+  color: var(--purple);
+  box-shadow: 0 0 10px rgba(168, 136, 232, .25);
+}
+
 .auth-btn .icon {
   width: 18px;
   height: 18px;

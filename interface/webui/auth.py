@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import json
 import secrets
@@ -18,6 +19,8 @@ from system.userspace import normalize_user_id, user_state_path
 
 load_dotenv()
 
+log = logging.getLogger(__name__)
+
 app = FastAPI()
 
 # ── cookie signing ────────────────────────────────────────────────────────────
@@ -28,10 +31,12 @@ app = FastAPI()
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
-    raise RuntimeError(
-        "SECRET_KEY is not set. Generate one with "
-        "`python -c \"import secrets; print(secrets.token_hex(32))\"` "
-        "and add it to your .env."
+    SECRET_KEY = secrets.token_hex(32)
+    log.warning(
+        "SECRET_KEY not set in .env — generated ephemeral key. "
+        "All sessions will be invalidated on restart. "
+        "Generate a permanent one with: "
+        "`python -c \"import secrets; print(secrets.token_hex(32))\"`"
     )
 
 signer = URLSafeTimedSerializer(SECRET_KEY, salt="aiko-session-cookie")
@@ -69,6 +74,9 @@ ALLOWED_PATREON_USERS = _parse_allowlist("ALLOWED_PATREON_USERS")
 # on the repo. Until then, GitHub login only works for the owner allowlist.
 CONTRIBUTORS_ENABLED = os.getenv("CONTRIBUTORS_ENABLED", "false").lower() == "true"
 GITHUB_REPO = os.getenv("GITHUB_REPO", "")
+
+# Allow unauthenticated guest / local login (default: true for dev convenience)
+LOCAL_AUTH_ENABLED = os.getenv("LOCAL_AUTH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
 # ── terms/guidelines gate ────────────────────────────────────────────────────
 # Bump TERMS_VERSION whenever you materially change the guidelines — anyone
@@ -167,16 +175,16 @@ def _create_session(user_id, username: str, email: str | None, provider: str) ->
     return session_id
 
 
-def _set_session_cookie(response: RedirectResponse, session_id: str) -> None:
+def _set_session_cookie(response: RedirectResponse, session_id: str, request: Request | None = None) -> None:
     signed_value = signer.dumps(session_id)
-    is_https = REDIRECT_BASE.startswith("https://")
+    is_https = request.url.scheme == "https" if request else REDIRECT_BASE.startswith("https://")
     response.set_cookie(
         "session_id",
         signed_value,
         max_age=SESSION_MAX_AGE_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=is_https,  # True only when REDIRECT_BASE is HTTPS — avoids cookie rejection on local HTTP
+        secure=is_https,
     )
 
 
@@ -186,9 +194,10 @@ def _callback_url(provider: str) -> str:
     return f"{REDIRECT_BASE}/auth/{provider}/callback"
 
 
-def _authorize_url(base: str, **params: str) -> str:
-    """Properly URL-encode query params instead of raw f-string interpolation."""
-    return f"{base}?{urlencode(params)}"
+def _authorize_url(base: str, **params: str | None) -> str:
+    """Properly URL-encode query params, filtering out any None values."""
+    filtered = {k: v for k, v in params.items() if v is not None}
+    return f"{base}?{urlencode(filtered)}"
 
 
 # ── dependencies for gating protected routes ─────────────────────────────────
@@ -229,10 +238,11 @@ async def require_accepted_session(session: dict = Depends(require_session)) -> 
 
 @app.get("/api/auth/config")
 async def get_auth_config():
-    """Return public OAuth client IDs to frontend."""
+    """Return public OAuth client IDs and capabilities to frontend."""
     return {
         "github_id": GITHUB_CLIENT_ID,
         "patreon_id": PATREON_CLIENT_ID,
+        "local_auth_enabled": LOCAL_AUTH_ENABLED,
     }
 
 
@@ -240,6 +250,11 @@ async def get_auth_config():
 
 @app.get("/auth/github/login")
 async def github_login():
+    if not GITHUB_CLIENT_ID:
+        raise HTTPException(
+            status_code=400,
+            detail="GitHub OAuth is not configured on this server. Set GITHUB_CLIENT_ID in .env.",
+        )
     state = _new_state()
     url = _authorize_url(
         "https://github.com/login/oauth/authorize",
@@ -263,7 +278,7 @@ async def _is_contributor(username: str, access_token: str) -> bool:
 
 
 @app.get("/auth/github/callback")
-async def github_callback(code: str, state: str | None = None):
+async def github_callback(request: Request, code: str, state: str | None = None):
     _consume_state(state)
 
     async with httpx.AsyncClient() as client:
@@ -297,7 +312,22 @@ async def github_callback(code: str, state: str | None = None):
 
     session_id = _create_session(user["id"], username, user.get("email"), "github")
     response = RedirectResponse(url="/")
-    _set_session_cookie(response, session_id)
+    _set_session_cookie(response, session_id, request)
+    return response
+
+
+# ── guest / local login ───────────────────────────────────────────────────────
+
+@app.get("/auth/local/login")
+async def local_login(request: Request):
+    if not LOCAL_AUTH_ENABLED:
+        raise HTTPException(status_code=403, detail="Local login is disabled on this server")
+    guest_id = secrets.token_urlsafe(12)
+    session_id = _create_session(guest_id, "Guest", None, "local")
+    session = sessions[session_id]
+    session["accepted_terms"] = True
+    response = RedirectResponse(url="/")
+    _set_session_cookie(response, session_id, request)
     return response
 
 
@@ -312,6 +342,11 @@ PATREON_IDENTITY_URL = "https://www.patreon.com/api/oauth2/v2/identity"
 
 @app.get("/auth/patreon/login")
 async def patreon_login():
+    if not PATREON_CLIENT_ID:
+        raise HTTPException(
+            status_code=400,
+            detail="Patreon OAuth is not configured on this server. Set PATREON_CLIENT_ID in .env.",
+        )
     state = _new_state()
     url = _authorize_url(
         PATREON_AUTHORIZE_URL,
@@ -325,7 +360,7 @@ async def patreon_login():
 
 
 @app.get("/auth/patreon/callback")
-async def patreon_callback(code: str, state: str | None = None):
+async def patreon_callback(request: Request, code: str, state: str | None = None):
     _consume_state(state)
 
     async with httpx.AsyncClient() as client:
@@ -371,7 +406,7 @@ async def patreon_callback(code: str, state: str | None = None):
 
     session_id = _create_session(user_id, username, None, "patreon")
     response = RedirectResponse(url="/")
-    _set_session_cookie(response, session_id)
+    _set_session_cookie(response, session_id, request)
     return response
 
 

@@ -706,11 +706,25 @@ function setAuthStatus(msg) {
 }
 
 function loginGitHub() {
+  const cfg = window.OAUTH_CONFIG;
+  if (!cfg || !cfg.github_id) {
+    setAuthStatus('GitHub OAuth is not configured on this server.');
+    return;
+  }
   window.location.href = '/auth/github/login';
 }
 
 function loginPatreon() {
+  const cfg = window.OAUTH_CONFIG;
+  if (!cfg || !cfg.patreon_id) {
+    setAuthStatus('Patreon OAuth is not configured on this server.');
+    return;
+  }
   window.location.href = '/auth/patreon/login';
+}
+
+function loginLocal() {
+  window.location.href = '/auth/local/login';
 }
 
 // ── Terms / guidelines modal ───────────────────────────────────────────────
@@ -759,6 +773,11 @@ fetch('/api/auth/config')
   })
   .then(cfg => {
     window.OAUTH_CONFIG = cfg;
+    // Show/hide the local guest login button based on server config
+    const localBtn = document.getElementById('auth-local-btn');
+    if (localBtn) {
+      localBtn.style.display = cfg.local_auth_enabled ? '' : 'none';
+    }
     return checkAuth();
   })
   .then(authenticated => {
