@@ -68,6 +68,8 @@ from agentic.tools import (
     read_paper_url,
     write_report,
     search_jobs,
+    draft_job_post_social,
+    post_job_post_social,
     draft_photo_social,
     post_photo_social,
     draft_video_social,
@@ -287,7 +289,7 @@ _LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|d
 # Tools that can genuinely post to a real public account. When one of these
 # ran and succeeded this turn, an answer describing a real "posted" action
 # is not a hallucinated external action — see _verify_final_answer.
-_SOCIAL_POST_TOOLS = {"post_photo_social", "post_video_social"}
+_SOCIAL_POST_TOOLS = {"post_job_post_social", "post_photo_social", "post_video_social"}
 # Any tool message over this length gets compacted to a preview once a
 # later assistant message has arrived — generalized from a research-only
 # rule to cover every bulky tool (repo_read_file, search_jobs, etc.), since
@@ -704,6 +706,15 @@ _reg("search_jobs", "Search configured job boards for a role. If location is omi
     lambda args: json.dumps(search_jobs(args.get("query", ""), args.get("location", ""), int(args["max_results"]) if args.get("max_results") not in (None, "") else None, int(args["max_age_days"]) if args.get("max_age_days") not in (None, "") else None, args.get("job_type", "")), ensure_ascii=False),
     {"query": {"type": "string"}, "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."}, "max_results": {"type": "integer"}, "max_age_days": {"type": "integer"}, "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
     required=["query"])
+
+_reg("draft_job_post_social", "Create a Vancouver-area daily job-post draft for Meta Threads review. Does NOT post anything.",
+    lambda args: draft_job_post_social(force=bool(args.get("force", False))),
+    {"force": {"type": "boolean", "description": "Create a new draft even if one already exists for today."}})
+
+_reg("post_job_post_social", "Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation.",
+    lambda args: post_job_post_social(args.get("draft_dir", "")),
+    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_job_post_social or given by the user."}},
+    required=["draft_dir"])
 
 _reg("draft_photo_social", "Scan the photo inbox, caption and curate candidates, and create an Instagram photo draft bundle for human review. Does NOT post anything.",
     lambda args: draft_photo_social(inbox=args.get("inbox") or None, force=bool(args.get("force", False))),

@@ -19,6 +19,7 @@ from agentic.toolkit.photography import scan_photo_workspace, propose_photo_inge
 from agentic.toolkit.self_improve import repo_file_tree, repo_read_file, repo_search_text
 from agentic.toolkit.job_hunt import search_jobs, dedupe_postings
 from agentic.toolkit.social import (
+    draft_job_post_social, post_job_post_social,
     draft_photo_social, post_photo_social,
     draft_video_social, post_video_social,
 )
@@ -30,11 +31,13 @@ __all__ = [
     "dedupe_postings",
     "deep_research",
     "deep_search",
+    "draft_job_post_social",
     "draft_photo_social",
     "draft_video_social",
     "list_reminders",
     "list_schedule",
     "make_plan",
+    "post_job_post_social",
     "post_photo_social",
     "post_video_social",
     "propose_photo_ingestion",

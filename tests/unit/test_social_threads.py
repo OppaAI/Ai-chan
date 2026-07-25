@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -145,3 +147,44 @@ def test_refresh_threads_token_cli_returns_nonzero_on_failure(monkeypatch, capsy
 
     assert exit_code == 1
     assert '"ok": false' in capsys.readouterr().out
+
+
+def test_generate_daily_job_post_draft_writes_threads_review_bundle(monkeypatch, tmp_path):
+    monkeypatch.setenv("JOB_POST_SOCIAL_ROOT", str(tmp_path / "job_posts"))
+    monkeypatch.setattr(social, "_choose_daily_job_post", lambda: {
+        "organization": "City of Vancouver",
+        "title": "IT Support Analyst",
+        "employment_type": "Full Time Regular",
+        "location": "Vancouver, BC",
+        "salary": "$70,000 - $82,000/yr",
+        "experience": "2 years",
+        "url": "https://example.test/job",
+    })
+
+    result = social.generate_daily_job_post_draft(force=True)
+
+    assert result["success"] is True
+    draft_dir = Path(result["draft_dir"])
+    assert draft_dir.is_dir()
+    post = (draft_dir / "draft_post.txt").read_text(encoding="utf-8")
+    assert "Job Post -" in post
+    assert "機構：City of Vancouver" in post
+    assert "職位：IT Support Analyst" in post
+    assert "*請入以下連結參看詳情\nhttps://example.test/job" in post
+    meta = json.loads((draft_dir / "draft.json").read_text(encoding="utf-8"))
+    assert meta["provider"] == "threads"
+    assert meta["human_approved"] is False
+
+
+def test_post_job_post_social_requires_job_post_root_and_approval(monkeypatch, tmp_path):
+    root = tmp_path / "job_posts"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    monkeypatch.setenv("JOB_POST_SOCIAL_ROOT", str(root))
+    (outside / "draft.json").write_text('{"human_approved": true}', encoding="utf-8")
+
+    result = social.post_job_post_social(str(outside))
+
+    assert result["posted"] is False
+    assert "inside" in result["error"]
