@@ -273,15 +273,15 @@ class AikoWakeup:
                 memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))         # initiate memory system (with logging off to prevent duplicate)
 
                 def _set_display_name():
-                    """Pull the cached display name for this user and pin it to the
-                    memory backend before any recall happens, so pinned memories are
-                    attributed to a human-readable name instead of a raw user_id."""
+                    """Pin the resolved display name to the memory backend before
+                    any recall happens, so pinned memories can use a
+                    human-readable name instead of a raw user_id."""
                     from system.userspace import current_display_name                         # access userspace module
                     display_name = current_display_name()                                     # get the username resolved from OAuth
                     memorize.set_display_name(display_name)                                   # pass the username to memory system
-                    if display_name == memorize.get_user_id():                                # if the cached username is the same as user id, log warning
+                    if display_name == memorize.get_user_id():                                # if display name fell back to raw user id, log warning
                         log.warning(
-                            "[wakeup] No cached display name for user_id=%s — memory pins "
+                            "[wakeup] No display name for user_id=%s — memory pins "
                             "will use raw user_id until the user logs in.",
                             display_name,
                         )
@@ -312,7 +312,6 @@ class AikoWakeup:
             except Exception as exc:                                                          # if error,
                 think_exc = exc                                                               # logged once and chained into the raise later
             memorize = mem_future.result()                                                    # grab the results of memory system
-            from concurrent.futures import wait, ALL_COMPLETED   # add to top-of-file imports
 
         if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
             log.critical(                                                                     # single log point: critical severity + full traceback in one line

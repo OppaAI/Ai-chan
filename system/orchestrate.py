@@ -326,8 +326,9 @@ PROACTIVE_REST_PROMPT_HINT = os.getenv(
 
 
 def _personalize_proactive_text(text: str) -> str:
-    """Fill lightweight proactive placeholders from identity config/env."""
-    user = os.environ.get("AIKO_DISPLAY_NAME") or os.environ.get("AIKO_USER_ID") or "the user"
+    """Fill lightweight proactive placeholders from scoped identity context."""
+    from system.userspace import current_display_name
+    user = current_display_name() or "the user"
     return (
         text.replace("{user}", user)
         .replace("{USER_ID}", user)
@@ -954,7 +955,6 @@ def run_session(ui, args) -> None:
             os.environ["AIKO_USER_ID"] = uid
             display_name = getattr(ui, "_authenticated_display_name", None) or uid
             set_current_display_name(display_name)
-            os.environ["AIKO_DISPLAY_NAME"] = display_name
             log.info("First login received (user_id=%s, display=%s) — starting subsystem boot.", uid, display_name)            
         else:
             log.warning("wait_for_first_login() returned no uid — proceeding with default identity.")

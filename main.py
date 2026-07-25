@@ -63,11 +63,10 @@ import sys                                    # for assigning exit code
 import warnings                               # for filtering out the warning messages
 warnings.filterwarnings("ignore")
 
-from system.log import get_logger, silent_stderr    # assign logging to universal logger
+from system.log import get_logger                     # assign logging to universal logger
 log = get_logger(__name__)
 
-#with silent_stderr():                               # load memory system with warning filtered out
-from memory.memorize import AikoMemorize
+from memory.memorize import AikoMemorize             # load memory system for --clear-mem
 
 
 def parse_args():

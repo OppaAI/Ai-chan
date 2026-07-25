@@ -209,8 +209,8 @@ def _blank_empty_context(block: str) -> str:
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AGENTIC_POLICY_PATHS = (
-    _REPO_ROOT / "skills" / "SKILLS.md",
-    _REPO_ROOT / "skills" / "SCHEDULE.md",
+    _REPO_ROOT / "agentic" / "SKILLS.md",
+    _REPO_ROOT / "agentic" / "SCHEDULE.md",
 )
 
 # Agentic policy context is now RAG-selected against the user's request,
@@ -590,12 +590,11 @@ _reg("save_note", "Save a note to a workspace file. content MUST be plain text o
     {"title": {"type": "string", "description": "Short filename title."}, "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."}, "folder": {"type": "string", "description": "Subfolder, default: notes"}},
     required=["title", "content"])
 
-_reg("read_paper_url",
+_reg_no_handler("read_paper_url",
     "Fetch and extract text from one EXACT URL (a specific paper/article the "
     "user pointed at) — no search involved, unlike deep_search/deep_research. "
     "Pass `query` to get the content condensed to the most relevant excerpts "
     "instead of just the opening section.",
-    lambda args: read_paper_url(args.get("url", ""), args.get("query", ""), embedder=_owner_embedder(_CURRENT_OWNER), max_chars=int(args.get("max_chars", 40000) or 40000)),
     {"url": {"type": "string"}, "query": {"type": "string"}, "max_chars": {"type": "integer"}},
     required=["url"])
 
@@ -860,6 +859,12 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
                 embedder=_owner_embedder(owner),
             )
         return json.dumps({"ok": bool(doc_id), "doc_id": doc_id}, ensure_ascii=False)
+    if name == "search_skillsets":
+        return search_skillsets_json(
+            args.get("query", ""),
+            int(args.get("limit", 3) or 3),
+            embedder=_owner_embedder(owner),
+        )
     if name == "read_paper_url":
         return read_paper_url(
             args.get("url", ""), args.get("query", ""),
