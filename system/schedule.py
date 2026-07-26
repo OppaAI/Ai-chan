@@ -105,12 +105,12 @@ def user_state_root() -> Path:
     return (Path(override).expanduser() if override else Path.home() / ".aiko").resolve()
 
 
-def schedule_path() -> Path:
+def schedule_path(user_id: str | None = None) -> Path:
     """Resolve the active user canonical schedule path lazily."""
     override = os.getenv("SCHEDULE_PATH")
     if override:
         return Path(override).expanduser().resolve()
-    return user_state_path("tasks/schedule.json").resolve()
+    return user_state_path("tasks/schedule.json", user_id=user_id).resolve()
 
 # System job timing — env overridable, not user-modifiable via schedule.json
 DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
@@ -268,14 +268,14 @@ def _reflection_post_exists(date: datetime) -> bool:
 # is no external check available for this job (unlike daily reflect's GitHub
 # post existence check), so the scheduler writes this itself on success.
 
-def _monthly_state_path() -> Path:
+def _monthly_state_path(user_id: str | None = None) -> Path:
     """Resolve the local monthly-consolidate catch-up state file path."""
-    return user_state_path(f"memory/{MONTHLY_CATCHUP_STATE_PATH_NAME}").resolve()
+    return user_state_path(f"memory/{MONTHLY_CATCHUP_STATE_PATH_NAME}", user_id=user_id).resolve()
 
 
-def _read_last_consolidated_month() -> str | None:
+def _read_last_consolidated_month(user_id: str | None = None) -> str | None:
     """Return the last 'YYYY-MM' monthly_consolidate completed, or None."""
-    path = _monthly_state_path()
+    path = _monthly_state_path(user_id=user_id)
     if not path.exists():
         # Preserve the marker written by pre-migration scheduler versions.
         legacy_path = (workspace_root() / "tasks" / MONTHLY_CATCHUP_STATE_PATH_NAME).resolve()
@@ -298,9 +298,9 @@ def _read_last_consolidated_month() -> str | None:
         return None
 
 
-def _write_last_consolidated_month(month_str: str) -> None:
+def _write_last_consolidated_month(month_str: str, user_id: str | None = None) -> None:
     """Persist the 'YYYY-MM' that monthly_consolidate just completed for."""
-    path = _monthly_state_path()
+    path = _monthly_state_path(user_id=user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"last_run_month": month_str}), encoding="utf-8")
@@ -368,29 +368,29 @@ def _read_raw(path: Path) -> list[dict]:
         return []
 
 
-def _read_all() -> list[dict]:
+def _read_all(user_id: str | None = None) -> list[dict]:
     """Read scheduled jobs for the active user (cached)."""
     if _schedule_cache is not None:
         return _schedule_cache
-    return _read_and_cache()
+    return _read_and_cache(user_id=user_id)
 
 _schedule_cache: list[dict] | None = None
 _schedule_dirty: bool = True
 
-def _read_and_cache() -> list[dict]:
+def _read_and_cache(user_id: str | None = None) -> list[dict]:
     global _schedule_cache, _schedule_dirty
-    path = schedule_path()
+    path = schedule_path(user_id=user_id)
     data = _read_raw(path)
     # One-time migration from older schedule locations.
     if not data and not path.exists() and not os.getenv("SCHEDULE_PATH"):
         legacy_paths = [
-            (user_state_path("task/schedule.json").resolve(), "user task folder"),
-            ((user_workspace_root() / "tasks" / "schedule.json").resolve(), "workspace task folder"),
+            (user_state_path("task/schedule.json", user_id=user_id).resolve(), "user task folder"),
+            ((user_workspace_root(user_id) / "tasks" / "schedule.json").resolve(), "workspace task folder"),
         ]
         for legacy_path, legacy_label in legacy_paths:
             legacy_data = _read_raw(legacy_path)
             if legacy_data:
-                _write_all(legacy_data)
+                _write_all(legacy_data, user_id=user_id)
                 data = legacy_data
                 log.info("Migrated schedule from %s to %s (%s)", legacy_path, path, legacy_label)
                 break
@@ -404,10 +404,10 @@ def _invalidate_cache() -> None:
     _schedule_dirty = True
 
 
-def _write_all(jobs: list[dict]) -> None:
+def _write_all(jobs: list[dict], user_id: str | None = None) -> None:
     """Persist scheduled jobs atomically enough for a single local process."""
     _invalidate_cache()
-    path = schedule_path()
+    path = schedule_path(user_id=user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -484,30 +484,30 @@ def schedule_job_record(
         "tool_call": normalized_tool_call,
         "skill": normalized_skill,
     }
-    jobs = _read_all()
+    jobs = _read_all(user_id=user_id)
     jobs.append(job)
-    _write_all(jobs)
+    _write_all(jobs, user_id=user_id)
     return job
 
 
-def list_schedule_records(include_disabled: bool = False) -> list[dict]:
+def list_schedule_records(include_disabled: bool = False, user_id: str | None = None) -> list[dict]:
     """Return persisted scheduled jobs, optionally including disabled records."""
-    jobs = _read_all()
+    jobs = _read_all(user_id=user_id)
     if include_disabled:
         return jobs
     return [job for job in jobs if job.get("enabled", True)]
 
 
-def cancel_schedule_record(job_id: str) -> bool:
+def cancel_schedule_record(job_id: str, user_id: str | None = None) -> bool:
     """Disable a scheduled job by id; returns True when a matching record changed."""
     changed = False
-    jobs = _read_all()
+    jobs = _read_all(user_id=user_id)
     for job in jobs:
         if job.get("id") == job_id:
             job["enabled"] = False
             changed = True
     if changed:
-        _write_all(jobs)
+        _write_all(jobs, user_id=user_id)
     return changed
 
 
@@ -549,14 +549,14 @@ WORKSPACE_KNOWLEDGE_JOB_TITLE = "workspace_knowledge_scan"
 WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS = int(os.getenv("WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS", "60"))
 
 
-def ensure_workspace_knowledge_job(timezone: str | None = None) -> None:
+def ensure_workspace_knowledge_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the scheduled KB folder scan job.
 
     The scheduler owns this periodic check so document-drop monitoring lives
     alongside other schedule.json-driven system behaviors instead of running
     a separate ticker thread.
     """
-    existing_titles = {job.get("title") for job in _read_all()}
+    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     if WORKSPACE_KNOWLEDGE_JOB_TITLE in existing_titles:
         return
     schedule_job_record(
@@ -605,7 +605,7 @@ JOB_POST_SOCIAL_JOB_TITLE = "daily_job_post_social"
 JOB_POST_SOCIAL_TIME_OF_DAY = "23:00"
 
 
-def ensure_weekly_social_job(timezone: str | None = None) -> None:
+def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the weekly memory-postcard job (Lane A).
 
     Fires once a week; the handler itself decides which completed Sun-Sat
@@ -613,7 +613,7 @@ def ensure_weekly_social_job(timezone: str | None = None) -> None:
     so the exact day/time here just needs to land safely after a week closes
     — it does not need to be precise.
     """
-    existing_titles = {job.get("title") for job in _read_all()}
+    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     if WEEKLY_SOCIAL_JOB_TITLE in existing_titles:
         return
     schedule_job_record(
@@ -629,14 +629,14 @@ def ensure_weekly_social_job(timezone: str | None = None) -> None:
     log.info("Seeded weekly social job (Sundays at %s)", WEEKLY_SOCIAL_TIME_OF_DAY)
 
 
-def ensure_weekly_social_retry_job(timezone: str | None = None) -> None:
+def ensure_weekly_social_retry_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the Sunday-bounded retry check for Lane A.
 
     Fires every WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS regardless of day; the
     handler itself (retry_weekly_social_if_needed) is what limits action to
     Sundays, so there's nothing day-specific to seed here.
     """
-    existing_titles = {job.get("title") for job in _read_all()}
+    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     if WEEKLY_SOCIAL_RETRY_JOB_TITLE in existing_titles:
         return
     schedule_job_record(
@@ -648,13 +648,14 @@ def ensure_weekly_social_retry_job(timezone: str | None = None) -> None:
         action="agentic",
         handler="weekly_social_retry",
         interval_seconds=max(60, WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS),
+        user_id=user_id,
     )
     log.info("Seeded weekly social retry-check job every %ss", max(60, WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS))
 
 
-def ensure_photo_social_job(timezone: str | None = None) -> None:
+def ensure_photo_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the photo-inbox scan job (Lane B)."""
-    existing_titles = {job.get("title") for job in _read_all()}
+    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     if PHOTO_SOCIAL_JOB_TITLE in existing_titles:
         return
     schedule_job_record(
@@ -666,13 +667,14 @@ def ensure_photo_social_job(timezone: str | None = None) -> None:
         action="agentic",
         handler="photo_social",
         interval_seconds=max(60, PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS),
+        user_id=user_id,
     )
     log.info("Seeded photo social scan job every %ss", max(60, PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS))
 
 
-def ensure_video_social_job(timezone: str | None = None) -> None:
+def ensure_video_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the video-inbox scan job (Lane C)."""
-    existing_titles = {job.get("title") for job in _read_all()}
+    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     if VIDEO_SOCIAL_JOB_TITLE in existing_titles:
         return
     schedule_job_record(
@@ -684,6 +686,7 @@ def ensure_video_social_job(timezone: str | None = None) -> None:
         action="agentic",
         handler="video_social",
         interval_seconds=max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS),
+        user_id=user_id,
     )
     log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
 
@@ -803,7 +806,7 @@ def bootstrap_non_system_jobs(
         log.exception("Failed to bootstrap social schedule jobs.")
 
 
-def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
+def ensure_deep_study_window_jobs(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the four recurring jobs that bound Aiko's
     scheduled deep_studying window (weekdays 05:00-18:00, weekends
     05:00-10:00). Safe to call on every app startup — existing jobs (by
@@ -815,7 +818,7 @@ def ensure_deep_study_window_jobs(timezone: str | None = None) -> None:
     actually fire anything — see memory.learn.register_deep_study_handlers,
     which does both the handler registration and calls this function.
     """
-    existing_titles = {job.get("title") for job in _read_all()}
+    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     for title, (time_of_day, days, handler) in DEEP_STUDY_WINDOW_JOB_TITLES.items():
         if title in existing_titles:
             continue
@@ -1212,7 +1215,7 @@ class ScheduleRunner:
         a registered system handler call directly into that Python function
         instead of going through on_due/chat.
         """
-        jobs = _read_all()
+        jobs = _read_all(user_id=self._user_id)
         changed = False
         due_events: list[DueJob] = []
 
@@ -1270,7 +1273,7 @@ class ScheduleRunner:
                 changed = True
 
         if changed:
-            _write_all(jobs)
+            _write_all(jobs, user_id=self._user_id)
 
         # fire sequentially — preserves order and avoids concurrent job side effects
         for event in due_events:
