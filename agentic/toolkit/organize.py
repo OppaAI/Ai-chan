@@ -39,6 +39,7 @@ def schedule_job(
     relative_days: int | str | None = None,
     tool_call: dict | None = None,
     skill: str | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Schedule a local recurring job while Aiko is running."""
     try:
@@ -53,6 +54,7 @@ def schedule_job(
             relative_days,
             tool_call=tool_call,
             skill=skill,
+            user_id=user_id,
         )
         # Notify the running scheduler so it picks up the new job immediately
         from system.schedule import notify_scheduler_new_job
@@ -62,15 +64,15 @@ def schedule_job(
         return f"[schedule failed: {e}]"
 
 
-def list_schedule(include_disabled: bool = False) -> str:
+def list_schedule(include_disabled: bool = False, user_id: str | None = None) -> str:
     """List local scheduled jobs from Aiko's schedule file."""
-    jobs = list_schedule_records(include_disabled=include_disabled)
+    jobs = list_schedule_records(include_disabled=include_disabled, user_id=user_id)
     return json_block("schedule", {"count": len(jobs), "items": jobs})
 
 
-def cancel_schedule(job_id: str) -> str:
+def cancel_schedule(job_id: str, user_id: str | None = None) -> str:
     """Cancel/disable a local scheduled job by id."""
-    if cancel_schedule_record(job_id):
+    if cancel_schedule_record(job_id, user_id=user_id):
         return json_block("scheduled job cancelled", {"id": job_id})
     return f"[scheduled job not found: {job_id}]"
 
@@ -81,10 +83,11 @@ def schedule_reminder(
     time_of_day: str,
     repeat: str = "daily",
     timezone: str | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Schedule a local reminder/alarm while Aiko is running."""
     try:
-        reminder = schedule_reminder_record(title, message, time_of_day, repeat, timezone)
+        reminder = schedule_reminder_record(title, message, time_of_day, repeat, timezone, user_id=user_id)
         # Notify the running scheduler so it picks up the new reminder immediately
         from system.schedule import notify_scheduler_new_job
         notify_scheduler_new_job()
@@ -93,14 +96,14 @@ def schedule_reminder(
         return f"[reminder failed: {e}]"
 
 
-def list_reminders(include_disabled: bool = False) -> str:
+def list_reminders(include_disabled: bool = False, user_id: str | None = None) -> str:
     """List reminders stored in Aiko's local reminder file."""
-    reminders = list_reminder_records(include_disabled=include_disabled)
+    reminders = list_reminder_records(include_disabled=include_disabled, user_id=user_id)
     return json_block("reminders", {"count": len(reminders), "items": reminders})
 
 
-def cancel_reminder(reminder_id: str) -> str:
+def cancel_reminder(reminder_id: str, user_id: str | None = None) -> str:
     """Cancel/disable a local reminder by id."""
-    if cancel_reminder_record(reminder_id):
+    if cancel_reminder_record(reminder_id, user_id=user_id):
         return json_block("reminder cancelled", {"id": reminder_id})
     return f"[reminder not found: {reminder_id}]"

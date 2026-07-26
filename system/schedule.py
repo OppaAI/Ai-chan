@@ -512,20 +512,20 @@ def cancel_schedule_record(job_id: str, user_id: str | None = None) -> bool:
 
 
 # Backwards-compatible reminder names used by older tools/tests.
-def schedule_reminder_record(title: str, message: str, time_of_day: str, repeat: str = "daily", timezone: str | None = None) -> dict:
+def schedule_reminder_record(title: str, message: str, time_of_day: str, repeat: str = "daily", timezone: str | None = None, user_id: str | None = None) -> dict:
     """Compatibility wrapper: schedule a reminder as a scheduled job."""
     frequency = "daily" if repeat == "daily" else "once"
-    return schedule_job_record(title, message, time_of_day, frequency, timezone, action="announce")
+    return schedule_job_record(title, message, time_of_day, frequency, timezone, action="announce", user_id=user_id)
 
 
-def list_reminder_records(include_disabled: bool = False) -> list[dict]:
+def list_reminder_records(include_disabled: bool = False, user_id: str | None = None) -> list[dict]:
     """Compatibility wrapper: list scheduled jobs."""
-    return list_schedule_records(include_disabled)
+    return list_schedule_records(include_disabled, user_id=user_id)
 
 
-def cancel_reminder_record(reminder_id: str) -> bool:
+def cancel_reminder_record(reminder_id: str, user_id: str | None = None) -> bool:
     """Compatibility wrapper: cancel a scheduled job by id."""
-    return cancel_schedule_record(reminder_id)
+    return cancel_schedule_record(reminder_id, user_id=user_id)
 
 
 # ── deep-study window job seeding ─────────────────────────────────────────────
@@ -691,9 +691,9 @@ def ensure_video_social_job(timezone: str | None = None, user_id: str | None = N
     log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
 
 
-def ensure_daily_job_post_social_job(timezone: str | None = None) -> None:
+def ensure_daily_job_post_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the daily Vancouver-area Meta Threads job-post draft job."""
-    jobs = _read_all()
+    jobs = _read_all(user_id=user_id)
     for job in jobs:
         if job.get("title") == JOB_POST_SOCIAL_JOB_TITLE:
             # Upgrade older handler-backed records without overriding a user
@@ -705,7 +705,7 @@ def ensure_daily_job_post_social_job(timezone: str | None = None) -> None:
                     "handler": None,
                     "tool_call": {"name": "run_job_post_playbook", "arguments": {"prompt": ""}},
                 })
-                _write_all(jobs)
+                _write_all(jobs, user_id=user_id)
             return
     schedule_job_record(
         title=JOB_POST_SOCIAL_JOB_TITLE,
@@ -715,11 +715,12 @@ def ensure_daily_job_post_social_job(timezone: str | None = None) -> None:
         timezone=timezone,
         action="tool",
         tool_call={"name": "run_job_post_playbook", "arguments": {"prompt": ""}},
+        user_id=user_id,
     )
     log.info("Seeded daily job-post social job at %s", JOB_POST_SOCIAL_TIME_OF_DAY)
 
 
-def register_social_handlers(timezone: str | None = None) -> None:
+def register_social_handlers(timezone: str | None = None, user_id: str | None = None) -> None:
     """Register the weekly/photo/video social handlers and seed their jobs.
 
     This is the concrete version of the pattern this module's module-level
@@ -750,11 +751,11 @@ def register_social_handlers(timezone: str | None = None) -> None:
     register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
     register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
 
-    ensure_weekly_social_job(timezone)
-    ensure_photo_social_job(timezone)
-    ensure_video_social_job(timezone)
-    ensure_weekly_social_retry_job(timezone)
-    ensure_daily_job_post_social_job(timezone)
+    ensure_weekly_social_job(timezone, user_id=user_id)
+    ensure_photo_social_job(timezone, user_id=user_id)
+    ensure_video_social_job(timezone, user_id=user_id)
+    ensure_weekly_social_retry_job(timezone, user_id=user_id)
+    ensure_daily_job_post_social_job(timezone, user_id=user_id)
 
     log.info("Registered social handlers and seeded social jobs; daily_job_post_social uses a schedule.json tool_call.")
 
@@ -773,6 +774,8 @@ def bootstrap_non_system_jobs(
       - workspace knowledge scan job
       - social jobs, including the daily job-post tool call
     """
+    user_id = memorize.get_user_id() if memorize and hasattr(memorize, 'get_user_id') else None
+    
     if think is not None:
         try:
             from memory import learn
@@ -796,12 +799,12 @@ def bootstrap_non_system_jobs(
                     user_id=_memorize.get_user_id(),
                 ),
             )
-            ensure_workspace_knowledge_job(timezone)
+            ensure_workspace_knowledge_job(timezone, user_id=user_id)
         except Exception:
             log.exception("Failed to bootstrap workspace knowledge schedule job.")
 
     try:
-        register_social_handlers(timezone)
+        register_social_handlers(timezone, user_id=user_id)
     except Exception:
         log.exception("Failed to bootstrap social schedule jobs.")
 
@@ -1020,7 +1023,7 @@ class ScheduleRunner:
             return False  # job due soon / just ran, nothing to catch up
 
         current_month = now.strftime("%Y-%m")
-        last_run = _read_last_consolidated_month()
+        last_run = _read_last_consolidated_month(user_id=self._user_id)
         if last_run == current_month:
             return False
 
@@ -1202,7 +1205,7 @@ class ScheduleRunner:
             now = bioclock.local_now()
             result = self._consolidate_fn(self._memorize, now=now, user_id=self._user_id)
             log.info("monthly_consolidate: done — %s", result)
-            _write_last_consolidated_month(now.strftime("%Y-%m"))
+            _write_last_consolidated_month(now.strftime("%Y-%m"), user_id=self._user_id)
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)
 
