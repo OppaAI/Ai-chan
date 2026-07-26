@@ -3,62 +3,33 @@ agentic/tools.py
 
 Compatibility facade for Aiko's autonomous toolkit.
 
-Keep this file even though implementations live under ``agentic/toolkit/``: it gives
-older callers and the agent loop one stable import surface while domain tools
-move into focused modules. New primitive capabilities should be implemented in
-``agentic/toolkit/<domain>.py`` and re-exported here only when the chat facade or
-agent loop needs them.
+This module provides a stable import surface for all tools decorated with
+@tool() in the agentic/toolkit/ submodules. The __all__ list is auto-generated
+from the registry, so adding a new @tool decorator automatically includes it
+here without manual list maintenance.
 """
 from __future__ import annotations
 
-from agentic.toolkit.websurf import web_search_context
-from agentic.toolkit.research import adaptive_search, deep_research, deep_read
-from agentic.toolkit.reports import write_report
-from agentic.toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
-from agentic.toolkit.organize import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
-from agentic.toolkit.photography import scan_photo_workspace, propose_photo_ingestion, write_photo_ingestion_report
-from agentic.toolkit.self_improve import repo_file_tree, repo_read_file, repo_search_text
-from agentic.toolkit.job_hunt import search_jobs, dedupe_postings
-from agentic.toolkit.social import (
-    draft_job_post_social, post_job_post_social,
-    draft_photo_social, post_photo_social,
-    draft_video_social, post_video_social,
-)
+# Import all toolkit modules to trigger @tool decorator registration
+# Order matters: research depends on websurf, others are independent
+from agentic.toolkit import websurf  # noqa: F401
+from agentic.toolkit import synthesize  # noqa: F401
+from agentic.toolkit import plan  # noqa: F401
+from agentic.toolkit import organize  # noqa: F401
+from agentic.toolkit import photography  # noqa: F401
+from agentic.toolkit import self_improve  # noqa: F401
+from agentic.toolkit import reports  # noqa: F401
+from agentic.toolkit import research  # noqa: F401
+from agentic.toolkit import job_hunt  # noqa: F401
+from agentic.toolkit import social  # noqa: F401
 
+# Re-export registry for tool registration
 from agentic.registry import tool, registry, register_tool_schema
-from agentic.toolkit import synthesize as _synthesize  # noqa: F401
 
+# Auto-generate __all__ from all decorated tools in registry
 __all__ = [
+    # Registry exports
     "tool",
     "registry",
     "register_tool_schema",
-    "cancel_reminder",
-    "cancel_schedule",
-    "create_checklist",
-    "dedupe_postings",
-    "deep_read",
-    "deep_research",
-    "adaptive_search",
-    "draft_job_post_social",
-    "draft_photo_social",
-    "draft_video_social",
-    "list_reminders",
-    "list_schedule",
-    "make_plan",
-    "post_job_post_social",
-    "post_photo_social",
-    "post_video_social",
-    "propose_photo_ingestion",
-    "read_workspace_file",
-    "repo_file_tree",
-    "repo_read_file",
-    "repo_search_text",
-    "save_note",
-    "scan_photo_workspace",
-    "schedule_job",
-    "schedule_reminder",
-    "search_jobs",
-    "summarize_task_state",
-    "web_search_context",
-    "write_photo_ingestion_report",
-]
+] + sorted(registry.get_all_tool_names())

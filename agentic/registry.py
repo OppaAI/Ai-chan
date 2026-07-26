@@ -21,10 +21,13 @@ class ToolSpec:
     handler: Optional[Callable[..., Any]] = None
     props: Dict[str, Any] = field(default_factory=dict)
     required: List[str] = field(default_factory=list)
-    domain: Optional[str] = None
-    always_on: bool = False
-    graph: bool = True
-    react: bool = True
+    domain: Optional[str] = None  # capability routing (research, scheduling, etc.)
+    always_on: bool = False  # always included in tool list regardless of capability match
+    # Execution modes - which backends can execute this tool
+    react: bool = True   # ReAct loop
+    graph: bool = True   # graph_engine playbook
+    wiki: bool = False   # wiki workflow
+    skill: bool = False  # skill workflow
 
     def to_openai_schema(self) -> dict[str, Any]:
         """Convert ToolSpec to OpenAI function schema format."""
@@ -56,8 +59,10 @@ class ToolRegistry:
         required: Optional[List[str]] = None,
         domain: Optional[str] = None,
         always_on: bool = False,
-        graph: bool = True,
         react: bool = True,
+        graph: bool = True,
+        wiki: bool = False,
+        skill: bool = False,
     ) -> ToolSpec:
         spec = ToolSpec(
             name=name,
@@ -67,8 +72,10 @@ class ToolRegistry:
             required=required or [],
             domain=domain,
             always_on=always_on,
-            graph=graph,
             react=react,
+            graph=graph,
+            wiki=wiki,
+            skill=skill,
         )
         self._tools[name] = spec
         return spec
@@ -111,6 +118,26 @@ class ToolRegistry:
             if spec.graph and spec.handler is not None
         }
 
+    def get_wiki_tools(self) -> Dict[str, Callable[..., Any]]:
+        """Return dict mapping tool_name -> handler for wiki workflow."""
+        return {
+            spec.name: spec.handler
+            for spec in self._tools.values()
+            if spec.wiki and spec.handler is not None
+        }
+
+    def get_skill_tools(self) -> Dict[str, Callable[..., Any]]:
+        """Return dict mapping tool_name -> handler for skill workflow."""
+        return {
+            spec.name: spec.handler
+            for spec in self._tools.values()
+            if spec.skill and spec.handler is not None
+        }
+
+    def get_all_tool_names(self) -> List[str]:
+        """Return list of all registered tool names for auto-export."""
+        return list(self._tools.keys())
+
 
 # Global registry instance
 registry = ToolRegistry()
@@ -124,10 +151,25 @@ def tool(
     required: Optional[List[str]] = None,
     domain: Optional[str] = None,
     always_on: bool = False,
-    graph: bool = True,
     react: bool = True,
+    graph: bool = True,
+    wiki: bool = False,
+    skill: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorator to register a function as an agentic tool."""
+    """Decorator to register a function as an agentic tool.
+
+    Args:
+        name: Tool name for OpenAI schema and registry lookup
+        description: Human-readable description for LLM tool selection
+        props: Parameter schema dict
+        required: List of required parameter names
+        domain: Capability domain for routing (research, scheduling, etc.)
+        always_on: Always include in tool list regardless of capability match
+        react: Available in ReAct loop (default: True)
+        graph: Available in graph_engine playbook (default: True)
+        wiki: Available in wiki workflow (default: False)
+        skill: Available in skill workflow (default: False)
+    """
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         registry.register(
             name=name,
@@ -137,8 +179,10 @@ def tool(
             required=required,
             domain=domain,
             always_on=always_on,
-            graph=graph,
             react=react,
+            graph=graph,
+            wiki=wiki,
+            skill=skill,
         )
         return fn
     return decorator
@@ -152,10 +196,17 @@ def register_tool_schema(
     required: Optional[List[str]] = None,
     domain: Optional[str] = None,
     always_on: bool = False,
-    graph: bool = True,
     react: bool = True,
+    graph: bool = True,
+    wiki: bool = False,
+    skill: bool = False,
 ) -> ToolSpec:
-    """Register a ReAct/graph tool schema whose execution is handled elsewhere."""
+    """Register a tool schema whose execution is handled elsewhere.
+
+    Use for tools where the handler isn't a Python function (e.g., external
+    services, graph nodes, etc.). The registry still tracks the schema and
+    execution modes for routing purposes.
+    """
     return registry.register(
         name=name,
         description=description,
@@ -164,6 +215,8 @@ def register_tool_schema(
         required=required,
         domain=domain,
         always_on=always_on,
-        graph=graph,
         react=react,
+        graph=graph,
+        wiki=wiki,
+        skill=skill,
     )
