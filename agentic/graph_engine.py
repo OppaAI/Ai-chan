@@ -1027,8 +1027,8 @@ def _tool_params(fn: Callable[..., Any]) -> frozenset[str]:
 
 
 def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
-              embedder=None, llm_client=None, llm_model: str | None = None,
-              extras: dict[str, Any] | None = None, state: GraphState | None = None) -> NodeResult:
+               embedder=None, llm_client=None, llm_model: str | None = None,
+               extras: dict[str, Any] | None = None, state: GraphState | None = None) -> NodeResult:
     tools = _tool_map()
     fn = tools.get(node.tool)
     args = _substitute(node.args, prompt, results, extras)
@@ -1052,41 +1052,52 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
     if "state" in params and "state" not in call_args:
         call_args["state"] = state
 
+    last_result = None
     for attempt in range(node.max_retries + 1):
         try:
-            from system.log import get_logger
             if attempt > 0:
                 wait = node.retry_backoff_seconds * (2 ** (attempt - 1))
-                log.info(f"Retry node {node.id}, attempt {attempt + 1}/{node.max_retries + 1}, waiting {wait}s")
-                import time
+                log.info("Retry node %s, attempt %d/%d, waiting %.1fs", node.id, attempt + 1, node.max_retries + 1, wait)
                 time.sleep(wait)
             result = fn(**call_args)
+            last_result = result
             if result.ok:
-                break
+                usage = state.data.pop("_usage", None) if state else None
+                return NodeResult(node.id, node.tool, True, str(result), args=args, usage=usage)
             if attempt == node.max_retries:
-                log.warning(f"Node {node.id} failed after {node.max_retries + 1} attempts")
-                result = NodeResult(
+                log.warning("Node %s failed after %d attempts", node.id, node.max_retries + 1)
+                return NodeResult(
                     node.id, node.tool,
                     ok=False,
                     content=result.content or f"Node {node.id} failed after retries",
                     args=args,
-                    error_type=result.error_type or "node_failed"
+                    error_type=result.error_type or "node_failed",
+                    usage=state.data.pop("_usage", None) if state else None,
                 )
-                return result
         except Exception as e:
-            log.warning(f"Node {node.id} retry {attempt + 1}/{node.max_retries + 1} raised: {str(e)}")
+            log.warning("Node %s retry %d/%d raised: %s", node.id, attempt + 1, node.max_retries + 1, str(e))
             if attempt == node.max_retries:
                 return NodeResult(
                     node.id, node.tool,
                     ok=False,
                     content=str(e),
                     args=args,
-                    error_type="exception_after_retries"
+                    error_type="exception_after_retries",
+                    usage=state.data.pop("_usage", None) if state else None,
                 )
-            import time
             wait = node.retry_backoff_seconds * (2 ** attempt)
             time.sleep(wait)
 
+    # All retries exhausted without success
+    if last_result is not None and not last_result.ok:
+        return NodeResult(
+            node.id, node.tool,
+            ok=False,
+            content=last_result.content or f"Node {node.id} failed after retries",
+            args=args,
+            error_type=last_result.error_type or "node_failed",
+            usage=state.data.pop("_usage", None) if state else None,
+        )
     try:
         out = fn(**call_args)
         usage = state.data.pop("_usage", None) if state else None
@@ -1263,33 +1274,16 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                     future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
             for fut in as_completed(future_map):
                 node = future_map[fut]
-                result = None
-                
-                # Retry logic with exponential backoff
-                for attempt in range(node.max_retries + 1):
-                    try:
-                        if node.timeout_seconds is not None:
-                            result = fut.result(timeout=node.timeout_seconds)
-                        else:
-                            result = fut.result()
-                        
-                        if result.ok:
-                            break
-                        
-                        if attempt < node.max_retries:
-                            wait = node.retry_backoff_seconds * (2 ** attempt)
-                            time.sleep(wait)
-                    except FutureTimeoutError:
-                        result = NodeResult(node.id, node.tool, False, f"timed out after {node.timeout_seconds}s", error_type="timeout")
-                        fut.cancel()
-                        break
-                    except Exception as exc:
-                        result = NodeResult(node.id, node.tool, False, str(exc), error_type="execution_error")
-                        break
-                
-                if result is None:
-                    result = NodeResult(node.id, node.tool, False, "unexpected error during retry", error_type="execution_error")
-                
+                try:
+                    if node.timeout_seconds is not None:
+                        result = fut.result(timeout=node.timeout_seconds)
+                    else:
+                        result = fut.result()
+                except FutureTimeoutError:
+                    result = NodeResult(node.id, node.tool, False, f"timed out after {node.timeout_seconds}s", error_type="timeout")
+                    fut.cancel()
+                except Exception as exc:
+                    result = NodeResult(node.id, node.tool, False, str(exc), error_type="execution_error")
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
@@ -1320,8 +1314,8 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                                     call_args["embedder"] = embedder
                                 if "client" in params and "client" not in call_args:
                                     call_args["client"] = llm_client
-                                if "model" in params and "model" not in call_args:
-                                    call_args["model"] = llm_model
+                                if "llm_model" in params and "llm_model" not in call_args:
+                                    call_args["llm_model"] = llm_model
                                 if "state" in params and "state" not in call_args:
                                     call_args["state"] = state
                                 
