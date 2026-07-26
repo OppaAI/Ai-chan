@@ -570,7 +570,15 @@ class TestGraphRunResultMetrics:
     """Tests for GraphRunResult total_tokens and total_cost properties."""
 
     def test_total_tokens_with_usage(self):
-        from agentic.graph_engine import NodeResult
+        import os
+        os.environ["GRAPH_COST_PER_1M_INPUT"] = "0.80"
+        os.environ["GRAPH_COST_PER_1M_OUTPUT"] = "2.40"
+        # Force reload of module to pick up new env values
+        import importlib
+        import agentic.graph_engine as ge
+        importlib.reload(ge)
+        from agentic.graph_engine import GraphRunResult, PlanGraph, NodeResult
+        
         results = (
             NodeResult("a", "tool1", True, "content", {}, usage={"output_tokens": 100, "input_tokens": 50}),
             NodeResult("b", "tool2", True, "content", {}, usage={"output_tokens": 200, "input_tokens": 150}),
