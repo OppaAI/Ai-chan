@@ -283,6 +283,9 @@ def match_capabilities(
     return [cap_id for cap_id, terms in _CAPABILITY_KEYWORDS.items() if _capability_text_matches(folded, terms)]
 
 
+from agentic.registry import registry
+
+
 def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[dict]:
     """Narrow the full tool schema list to ALWAYS_ON_TOOLS plus whatever
     domains the matched capabilities pull in. No match -> return everything
@@ -293,10 +296,16 @@ def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[d
     # Filter out unknown capability IDs to avoid KeyError
     valid_cap_ids = [cid for cid in cap_ids if cid in CAPABILITIES]
     domains = {d for cid in valid_cap_ids for d in CAPABILITIES[cid].tool_domains}
-    keep = set(ALWAYS_ON_TOOLS)
+    
+    # Merge static TOOL_DOMAINS / ALWAYS_ON_TOOLS with dynamic registry entries
+    effective_domains = dict(TOOL_DOMAINS)
+    effective_domains.update(registry.get_tool_domains())
+    effective_always_on = ALWAYS_ON_TOOLS | registry.get_always_on_tools()
+
+    keep = set(effective_always_on)
     for schema in all_schemas:
         name = schema["function"]["name"]
-        if TOOL_DOMAINS.get(name) in domains:
+        if effective_domains.get(name) in domains:
             keep.add(name)
     filtered = [s for s in all_schemas if s["function"]["name"] in keep]
     return filtered or all_schemas

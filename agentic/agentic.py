@@ -594,19 +594,23 @@ def _f(name, description, properties=None, required=None):
         s["function"]["parameters"]["required"] = required
     return s
 
-# ── tool registration ────────────────────────────────────────────────────────
-# Each tool is defined as (schema, handler) in a single place so that
-# parameter names in the schema and the handler never drift apart.
+from agentic.registry import registry
 
 _TOOL_DEFS: list[tuple[dict, object]] = []
 
-def _reg(name, desc, handler, props=None, required=None):
-    schema = _f(name, desc, props, required)
-    _TOOL_DEFS.append((schema, handler))
+def _reg(name, desc, handler, props=None, required=None, domain=None, always_on=False):
+    spec = registry.register(
+        name=name, description=desc, handler=handler, props=props, required=required,
+        domain=domain, always_on=always_on,
+    )
+    _TOOL_DEFS.append((spec.to_openai_schema(), handler))
 
-def _reg_no_handler(name, desc, props=None, required=None):
-    schema = _f(name, desc, props, required)
-    _TOOL_DEFS.append((schema, None))
+def _reg_no_handler(name, desc, props=None, required=None, domain=None, always_on=False):
+    spec = registry.register(
+        name=name, description=desc, handler=None, props=props, required=required,
+        domain=domain, always_on=always_on,
+    )
+    _TOOL_DEFS.append((spec.to_openai_schema(), None))
 
 _reg_no_handler("adaptive_search",
     "The default tool for any internet lookup. Adaptively searches, judges if snippets suffice, and only fetches full pages if needed.",

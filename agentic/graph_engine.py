@@ -1018,6 +1018,11 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
         log.debug("job tools unavailable for graph executor: %s", exc)
     mapping["run_subgraph"] = run_subgraph
     mapping["goal_verification"] = goal_verification
+    try:
+        from agentic.registry import registry
+        mapping.update(registry.get_graph_tool_map())
+    except Exception as exc:
+        log.debug("registry graph tools unavailable for graph executor: %s", exc)
     return mapping
 
 

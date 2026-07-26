@@ -25,7 +25,11 @@ from agentic.toolkit.social import (
     draft_video_social, post_video_social,
 )
 
+from agentic.registry import tool, registry
+
 __all__ = [
+    "tool",
+    "registry",
     "cancel_reminder",
     "cancel_schedule",
     "create_checklist",
