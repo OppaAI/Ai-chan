@@ -28,6 +28,7 @@ from agentic.graph_engine import (
     PlanGraph,
     NodeResult,
     GraphRunResult,
+    GraphState,
     _default_playbooks,
     load_playbooks,
     _score_plan,
@@ -571,13 +572,13 @@ class TestGraphRunResultMetrics:
     def test_total_tokens_with_usage(self):
         from agentic.graph_engine import NodeResult
         results = (
-            NodeResult("a", "tool1", True, "content", {"output_tokens": 100, "input_tokens": 50}),
-            NodeResult("b", "tool2", True, "content", {"output_tokens": 200, "input_tokens": 150}),
-            NodeResult("c", "tool3", False, "error", {}),  # No usage, should not contribute
+            NodeResult("a", "tool1", True, "content", {}, usage={"output_tokens": 100, "input_tokens": 50}),
+            NodeResult("b", "tool2", True, "content", {}, usage={"output_tokens": 200, "input_tokens": 150}),
+            NodeResult("c", "tool3", False, "error", {}, usage=None),  # No usage, should not contribute
         )
         graph = PlanGraph("test", "Test", "goal", ())
         result = GraphRunResult(graph, results, "final answer")
-        
+
         assert result.total_tokens == 300  # 100 + 200
         # Cost calculation: (50/1e6 * 0.80) + (100/1e6 * 2.40) + (150/1e6 * 0.80) + (200/1e6 * 2.40)
         expected_cost = (50/1e6) * 0.80 + (100/1e6) * 2.40 + (150/1e6) * 0.80 + (200/1e6) * 2.40
@@ -586,22 +587,22 @@ class TestGraphRunResultMetrics:
     def test_total_tokens_no_usage(self):
         from agentic.graph_engine import NodeResult
         results = (
-            NodeResult("a", "tool1", True, "content", None),
-            NodeResult("b", "tool2", False, "error", {"output_tokens": 10}),
+            NodeResult("a", "tool1", True, "content"),
+            NodeResult("b", "tool2", False, "error", {}, usage=None),
         )
         graph = PlanGraph("test", "Test", "goal", ())
         result = GraphRunResult(graph, results, "final answer")
-        
+
         assert result.total_tokens == 0  # None usage defaults to no tokens
 
     def test_total_tokens_empty_usage_dict(self):
         from agentic.graph_engine import NodeResult
         results = (
-            NodeResult("a", "tool1", True, "content", {}),
+            NodeResult("a", "tool1", True, "content", {}, usage={}),
         )
         graph = PlanGraph("test", "Test", "goal", ())
         result = GraphRunResult(graph, results, "final answer")
-        
+
         assert result.total_tokens == 0
 
 

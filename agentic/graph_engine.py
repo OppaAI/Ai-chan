@@ -158,68 +158,68 @@ class NodeResult:
         return f"{self.node_id}:{self.tool}[{status}] {body}".strip()
 
 
-    @dataclass
-    class GraphState:
-        """Shared mutable scratch space, threaded BY REFERENCE through every
-        node in one execute_graph() run — the direct analogue of LangGraph's
-        State object.
+@dataclass
+class GraphState:
+    """Shared mutable scratch space, threaded BY REFERENCE through every
+    node in one execute_graph() run — the direct analogue of LangGraph's
+    State object.
 
-        Complements, does not replace, $result:/$prompt string substitution:
-        keep using $result: for small values that benefit from being visible
-        in playbook JSON, tool-call logs, and checkpoints. Use state for large
-        or non-string objects (accumulated URL sets, embeddings, live handles)
-        that would otherwise have to be JSON-encoded into a $result: string
-        and hit _substitute's 4000-char per-arg truncation.
+    Complements, does not replace, $result:/$prompt string substitution:
+    keep using $result: for small values that benefit from being visible
+    in playbook JSON, tool-call logs, and checkpoints. Use state for large
+    or non-string objects (accumulated URL sets, embeddings, live handles)
+    that would otherwise have to be JSON-encoded into a $result: string
+    and hit _substitute's 4000-char per-arg truncation.
 
-        A tool opts into receiving it purely by declaring a `state` parameter
-        in its own signature — see _tool_params()/_run_node() below. Nothing
-        elsewhere needs to know which tools use it.
+    A tool opts into receiving it purely by declaring a `state` parameter
+    in its own signature — see _tool_params()/_run_node() below. Nothing
+    elsewhere needs to know which tools use it.
 
-        Each key may declare a reducer strategy in ``reducers`` that controls
-        how writes from multiple nodes (or repeated loop cycles) merge:
-        "replace" (default), "append", "add", "set_union", "dict_merge".
+    Each key may declare a reducer strategy in ``reducers`` that controls
+    how writes from multiple nodes (or repeated loop cycles) merge:
+    "replace" (default), "append", "add", "set_union", "dict_merge".
 
-        Checkpointed and restored on resume (unlike the previous design where
-        state was explicitly not checkpointed).
-        """
-        data: dict[str, Any] = field(default_factory=dict)
-        reducers: dict[str, str] = field(default_factory=dict)
+    Checkpointed and restored on resume (unlike the previous design where
+    state was explicitly not checkpointed).
+    """
+    data: dict[str, Any] = field(default_factory=dict)
+    reducers: dict[str, str] = field(default_factory=dict)
 
-        def get(self, key: str, default: Any = None) -> Any:
-            return self.data.get(key, default)
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.data.get(key, default)
 
-        def set(self, key: str, value: Any, reducer: str | None = None) -> None:
-            strategy = reducer or self.reducers.get(key, REDUCER_REPLACE)
-            current = self.data.get(key)
-            self.data[key] = _apply_reducer(current, value, strategy)
+    def set(self, key: str, value: Any, reducer: str | None = None) -> None:
+        strategy = reducer or self.reducers.get(key, REDUCER_REPLACE)
+        current = self.data.get(key)
+        self.data[key] = _apply_reducer(current, value, strategy)
 
-        def inc_visit(self, node_id: str) -> None:
-            visits = self.get("_node_visits", {})
-            visits[node_id] = visits.get(node_id, 0) + 1
-            self.set("_node_visits", visits)
+    def inc_visit(self, node_id: str) -> None:
+        visits = self.get("_node_visits", {})
+        visits[node_id] = visits.get(node_id, 0) + 1
+        self.set("_node_visits", visits)
 
-        def iteration(self) -> int:
-            iter_count = self.get("_iteration", 0)
-            self.set("_iteration", iter_count + 1)
-            return iter_count + 1
+    def iteration(self) -> int:
+        iter_count = self.get("_iteration", 0)
+        self.set("_iteration", iter_count + 1)
+        return iter_count + 1
 
-        def record_tool_execution(self, tool_name: str, args: dict, result: Any) -> None:
-            """Record tool execution visibility for debugging/adaptive logic"""
-            exec_log = self.get("_tool_executions", [])
-            exec_log.append({
-                "tool": tool_name,
-                "args": args,
-                "result": str(result)[:500],
-                "iteration": self.iteration(),
-            })
-            self.set("_tool_executions", exec_log)
+    def record_tool_execution(self, tool_name: str, args: dict, result: Any) -> None:
+        """Record tool execution visibility for debugging/adaptive logic"""
+        exec_log = self.get("_tool_executions", [])
+        exec_log.append({
+            "tool": tool_name,
+            "args": args,
+            "result": str(result)[:500],
+            "iteration": self.iteration(),
+        })
+        self.set("_tool_executions", exec_log)
 
-        def get_tool_executions(self, tool_name: str | None = None) -> list[dict]:
-            """Get tool execution logs, optionally filtered by tool name"""
-            exec_log = self.get("_tool_executions", [])
-            if tool_name:
-                return [e for e in exec_log if e["tool"] == tool_name]
-            return exec_log
+    def get_tool_executions(self, tool_name: str | None = None) -> list[dict]:
+        """Get tool execution logs, optionally filtered by tool name"""
+        exec_log = self.get("_tool_executions", [])
+        if tool_name:
+            return [e for e in exec_log if e["tool"] == tool_name]
+        return exec_log
 
 
 @dataclass(frozen=True, slots=True)
@@ -1052,60 +1052,41 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
     if "state" in params and "state" not in call_args:
         call_args["state"] = state
 
-    last_result = None
+    last_exc = None
     for attempt in range(node.max_retries + 1):
         try:
             if attempt > 0:
                 wait = node.retry_backoff_seconds * (2 ** (attempt - 1))
                 log.info("Retry node %s, attempt %d/%d, waiting %.1fs", node.id, attempt + 1, node.max_retries + 1, wait)
                 time.sleep(wait)
-            result = fn(**call_args)
-            last_result = result
-            if result.ok:
-                usage = state.data.pop("_usage", None) if state else None
-                return NodeResult(node.id, node.tool, True, str(result), args=args, usage=usage)
-            if attempt == node.max_retries:
-                log.warning("Node %s failed after %d attempts", node.id, node.max_retries + 1)
-                return NodeResult(
-                    node.id, node.tool,
-                    ok=False,
-                    content=result.content or f"Node {node.id} failed after retries",
-                    args=args,
-                    error_type=result.error_type or "node_failed",
-                    usage=state.data.pop("_usage", None) if state else None,
-                )
+            out = fn(**call_args)
+            usage = state.data.pop("_usage", None) if state else None
+            return NodeResult(node.id, node.tool, True, str(out), args=args, usage=usage)
         except Exception as e:
+            last_exc = e
             log.warning("Node %s retry %d/%d raised: %s", node.id, attempt + 1, node.max_retries + 1, str(e))
-            if attempt == node.max_retries:
-                return NodeResult(
-                    node.id, node.tool,
-                    ok=False,
-                    content=str(e),
-                    args=args,
-                    error_type="exception_after_retries",
-                    usage=state.data.pop("_usage", None) if state else None,
-                )
-            wait = node.retry_backoff_seconds * (2 ** attempt)
-            time.sleep(wait)
+            if attempt < node.max_retries:
+                wait = node.retry_backoff_seconds * (2 ** attempt)
+                time.sleep(wait)
 
-    # All retries exhausted without success
-    if last_result is not None and not last_result.ok:
+    if last_exc is not None:
+        log.error("Node %s failed after %d attempts: %s", node.id, node.max_retries + 1, str(last_exc))
         return NodeResult(
             node.id, node.tool,
             ok=False,
-            content=last_result.content or f"Node {node.id} failed after retries",
+            content=str(last_exc),
             args=args,
-            error_type=last_result.error_type or "node_failed",
+            error_type="exception_after_retries",
             usage=state.data.pop("_usage", None) if state else None,
         )
-    try:
-        out = fn(**call_args)
-        usage = state.data.pop("_usage", None) if state else None
-        return NodeResult(node.id, node.tool, True, str(out), args=args, usage=usage)
-    except Exception as exc:
-        log.exception("Graph node %s (%s) raised unexpectedly", node.id, node.tool)
-        usage = state.data.pop("_usage", None) if state else None
-        return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error", usage=usage)
+    return NodeResult(
+        node.id, node.tool,
+        ok=False,
+        content="",
+        args=args,
+        error_type=None,
+        usage=state.data.pop("_usage", None) if state else None,
+    )
 
 
 def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
