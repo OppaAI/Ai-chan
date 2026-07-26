@@ -15,7 +15,7 @@ from system.userspace import current_user_id, user_state_dir
 
 log = get_logger(__name__)
 
-_DB_PATH = user_state_dir(current_user_id()) / "agentic" / "graph_checkpoints.db"
+_DB_PATH = user_state_dir(current_user_id()) / "agentic" / "checkpoints.db"
 _lock = threading.Lock()
 
 
@@ -42,7 +42,7 @@ def _get_conn() -> sqlite3.Connection:
 
 def _ensure_migrated() -> None:
     """Ensure checkpoint DB is in user-space location, migrating if needed."""
-    old_path = Path(__file__).parent / "graph_checkpoints.db"
+    old_path = Path(__file__).parent / "checkpoint.db"
     new_path = _DB_PATH
 
     if not old_path.exists():
@@ -78,6 +78,7 @@ def _add_state_column_if_missing() -> None:
 
 def save_node_result(run_id: str, seq: int, result, state_json: str = "{}") -> None:
     """Persist one NodeResult and an optional state snapshot."""
+    _add_state_column_if_missing()
     safe_args = {
         k: v for k, v in result.args.items()
         if k not in {"embedder", "client", "model"}
@@ -121,6 +122,7 @@ def load_checkpoint(run_id: str, node_result_cls) -> list:
 
 def save_graph_state(run_id: str, state: dict) -> None:
     """Persist a standalone state snapshot keyed by run_id."""
+    _add_state_column_if_missing()
     with _lock:
         conn = _get_conn()
         try:
