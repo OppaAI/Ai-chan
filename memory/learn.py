@@ -126,35 +126,14 @@ def quick_studying(
     client=None,
     model: str | None = None,
     embedder=None,
-    max_rounds: int = QUICK_STUDY_MAX_ROUNDS,
-    num_searches: int | None = None,
-    num_fetches: int | None = None,
 ) -> str:
-    """Interactive-depth research on a topic. This is exactly deep_research —
-    same TTL cache, same in-memory ephemeral scoring, same single-call cost
-    model. Named separately so call sites (the idle learner's short-gap
-    path, or a direct /research command) read as "which depth am I asking
-    for" rather than exposing agentic.toolkit.research internals at every
-    call site.
-
-    max_rounds defaults to QUICK_STUDY_MAX_ROUNDS (config/learn.yaml),
-    actually wired through now — previously this default was hardcoded to
-    3 regardless of what QUICK_STUDY_MAX_ROUNDS was set to.
-
-    num_searches/num_fetches are optional pass-throughs to deep_research's
-    own per-call overrides (see agentic.toolkit.research.deep_research).
-    Leave them None to use deep_research's own DEEP_RESEARCH_NUM_SEARCHES/
-    DEEP_RESEARCH_NUM_FETCHES env defaults.
+    """Interactive-depth research on a topic — adaptive_search's cheap
+    snippet-first-escalate-if-needed path. This is what the idle learner's
+    short-gap top-ups and any direct /research command should use; it is
+    NOT deep_research (that's reserved for explicit user asks and the
+    scheduled overnight deep_study window — see deep_studying below).
     """
-    overrides: dict = {}
-    if num_searches is not None:
-        overrides["num_searches"] = num_searches
-    if num_fetches is not None:
-        overrides["num_fetches"] = num_fetches
-    return deep_research(
-        topic, client=client, model=model, embedder=embedder,
-        max_rounds=max_rounds, **overrides,
-    )
+    return adaptive_search(topic, client=client, model=model, embedder=embedder)
 
 
 # ── idle learner loop ─────────────────────────────────────────────────────────
