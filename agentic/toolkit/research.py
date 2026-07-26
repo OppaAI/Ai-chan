@@ -2,6 +2,7 @@
 toolkit/research.py
 
 Adaptive search + deep research, expressed as bounded-unroll subgraphs.
+Plus deep_read: a single-known-URL fetch with content-type routing.
 
 Both adaptive_search and deep_research_graph build and run their OWN small
 PlanGraph instances via graph_engine.py's execute_graph(). This means they plug
@@ -9,9 +10,18 @@ into graph_engine._tool_map() as single opaque tools — so any playbook that
 currently calls "deep_search" or "deep_research" can switch to
 "adaptive_search" or "deep_research_graph" with a one-line args change.
 
+deep_read is NOT a PlanGraph — a single known URL has no "escalate: widen the
+candidate pool" move the way a search does, so there's nothing here that
+benefits from loop_to/max_visits or graph-level concurrency. It's a flat
+escalation chain (route by content-type → extract → optionally condense),
+same tier of composition as adaptive_search/deep_research from the LLM's
+perspective (one opaque tool call), just without the graph machinery
+underneath.
+
 Sub-modules:
   - adaptive_search:     snippet-only → fetch only if judge says ESCALATE
   - deep_research_graph: multi-round fetch + combine + synthesize
+  - deep_read:            known URL → content-type routed fetch (+ condense)
 """
 from __future__ import annotations
 
@@ -32,6 +42,11 @@ from agentic.toolkit.websurf import (
     _fetch_and_score_pipeline,
     _finalize_condensed,
     _crawl4ai_fetch_many,
+    _download_bytes,
+    _sniff_content_type,
+    _extract_with_markitdown,
+    web_fetch,
+    condense_evidence,
     MAX_RESULTS,
     RESEARCH_USE_CRAWL4AI,
     RESEARCH_RESPECT_ROBOTS,
@@ -42,6 +57,7 @@ from agentic.toolkit.websurf import (
     RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE,
     DEEP_RESEARCH_NUM_SEARCHES,
     DEEP_RESEARCH_NUM_FETCHES,
+    THIN_TEXT_CHARS_THRESHOLD,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
 
@@ -164,7 +180,7 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
     - broad: search → fetch → judge (loop if ESCALATE, max ADAPTIVE_SEARCH_MAX_ROUNDS)
     """
     max_rounds = max_rounds if max_rounds is not None else ADAPTIVE_SEARCH_MAX_ROUNDS
-    
+
     if tier == "simple":
         # Simple: search → judge (no fetch, no loop)
         nodes = [
@@ -175,7 +191,7 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
     else:
         # Medium/Broad: search → fetch → judge (loop if ESCALATE)
         num_fetches = 3 if tier == "medium" else 6
-        
+
         nodes = [
             PlanNode(id="search_r", tool="search_and_rank", args={"prompt": "$prompt"}),
             PlanNode(id="fetch_r", tool="fetch_and_condense_ranked", depends_on=("search_r",),
@@ -186,7 +202,7 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
                      loop_to="search_r", loop_condition={"equals": "ESCALATE"},
                      max_visits=max_rounds),
         ]
-    
+
     return PlanGraph(id="adaptive_search", name="Adaptive search", goal=query, nodes=tuple(nodes))
 
 
@@ -194,7 +210,7 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
                      max_rounds: int | None = None) -> str:
     if not query or not query.strip():
         return "[search failed: empty query]"
-    
+
     # First, determine the tier by calling plan_effort
     try:
         plan_json = plan_effort(query.strip())
@@ -204,17 +220,100 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
     except Exception:
         tier = "simple"
         freshness_bias = False
-    
+
     # Build graph appropriate for the tier
     graph = _build_adaptive_search_subgraph(query.strip(), tier, max_rounds=max_rounds, freshness_bias=freshness_bias)
     result = execute_graph(graph, embedder=embedder, llm_client=client, llm_model=model)
-    
+
     # Prefer fetch_r's content (for medium/broad), fall back to search/judge
     for node_id in ("fetch_r", "search_r", "judge_r"):
         match = next((r for r in result.results if r.node_id == node_id and r.ok), None)
         if match and match.content and not match.content.startswith("["):
             return match.content
     return result.final_answer
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# deep_read — single known URL, content-type routed fetch (+ optional condense)
+# ══════════════════════════════════════════════════════════════════════════
+#
+# Distinct from adaptive_search/deep_research, which discover URLs via
+# search: deep_read is handed one exact URL the user (or agent) already
+# chose. There's no "widen the candidate pool" escalation available here —
+# just an ordered attempt chain per content type:
+#
+#   non-HTML (pdf/docx/pptx/xlsx/epub/csv/xml/zip/ipynb/msg)
+#       → download bytes → MarkItDown conversion
+#   HTML (or unknown/ambiguous)
+#       → web_fetch (cheap, trafilatura)
+#       → if failed/thin: escalate to a single-URL Crawl4AI fetch (JS render)
+#
+# Then, same as the legacy read_paper_url: no query → return raw text
+# (truncated); query given → condense_evidence relevance-filters it.
+
+DEEP_READ_MAX_CHARS = int(os.getenv("DEEP_READ_MAX_CHARS", 40000))
+DEEP_READ_MAX_DOWNLOAD_BYTES = int(os.getenv("DEEP_READ_MAX_DOWNLOAD_BYTES", 20_000_000))
+DEEP_READ_CONDENSE_TOP_K = int(os.getenv("DEEP_READ_CONDENSE_TOP_K", 12))
+
+
+def deep_read(
+    url: str,
+    query: str = "",
+    embedder=None,
+    max_chars: int = DEEP_READ_MAX_CHARS,
+    condense_top_k: int = DEEP_READ_CONDENSE_TOP_K,
+) -> str:
+    """Fetch one EXACT URL — no search involved — routing by content type
+    and escalating when the cheap path comes back empty or thin.
+
+    Non-HTML documents (pdf, docx, pptx, xlsx, epub, csv, xml, zip, ipynb,
+    msg) are downloaded and converted via MarkItDown — this is what
+    read_paper_url could never do, since trafilatura only understands HTML.
+
+    HTML (or anything _sniff_content_type can't classify) goes through the
+    cheap web_fetch/trafilatura path first. Only if that fails outright or
+    returns fewer than THIN_TEXT_CHARS_THRESHOLD chars does it escalate to
+    a single-URL Crawl4AI fetch (JS rendering) — mirrors the cheap-first,
+    escalate-only-when-warranted pattern adaptive_search/judge_sufficient
+    already use, so a single-URL read doesn't pay a browser-launch cost on
+    every call, only on the ones that actually need it.
+
+    Without `query`: returns the first max_chars of extracted/converted
+    text (further truncated to AGENT_TOOL_RESULT_MAX_CHARS once wrapped as
+    a tool observation).
+
+    With `query`: text is chunked and relevance-scored via condense_evidence,
+    same as deep_research's evidence condensation, so what survives the
+    observation-length limit is what's actually relevant to the question.
+    """
+    if not url or not url.strip():
+        return "[fetch failed: empty url]"
+    url = url.strip()
+
+    content_type = _sniff_content_type(url)
+
+    if content_type != "html":
+        downloaded, error = _download_bytes(url, DEEP_READ_MAX_DOWNLOAD_BYTES)
+        if error:
+            return error
+        text = _extract_with_markitdown(downloaded, content_type, max_chars)
+    else:
+        text = web_fetch(url, max_chars=max_chars, max_download_bytes=DEEP_READ_MAX_DOWNLOAD_BYTES)
+        is_thin = text.startswith("[fetch failed") or len(text.strip()) < THIN_TEXT_CHARS_THRESHOLD
+        if is_thin and RESEARCH_USE_CRAWL4AI:
+            crawled = _crawl4ai_fetch_many([url], max_chars)
+            candidate = crawled.get(url, "").strip()
+            current_len = 0 if text.startswith("[fetch failed") else len(text.strip())
+            if candidate and len(candidate) > current_len:
+                text = candidate
+
+    if text.startswith("[fetch failed"):
+        return text
+    if not query:
+        return f"[Fetched content — {url}]\n\n{text}"
+    condensed = condense_evidence([(url, text)], query, embedder=embedder, top_k=condense_top_k)
+    return f"[Fetched content — {url}, condensed for: {query}]\n\n{condensed}"
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Deep research graph — multi-round fetch + synthesize
@@ -364,7 +463,7 @@ def deep_research(query: str, embedder=None, client=None, model: str | None = No
                          max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS, tool_mode: bool = False) -> str:
     """Public entry point — drop-in replacement for research.py's
     deep_research() when called from the graph executor.
-    
+
     Args:
         tool_mode: If True, skips write_report and learn_report nodes.
                    Use when calling as a sub-tool from an outer playbook

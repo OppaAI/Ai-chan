@@ -7,13 +7,19 @@ Pure building blocks — no multi-step workflows. Callers compose
 these via the graph executor (research_graph.py) or ReAct loop.
 
   - web_search()              — SearXNG query → numbered snippets
-  - web_fetch()               — single URL → extracted text
-  - read_paper_url()          — fetch URL + optional relevance condensation
-  - condense_evidence()       — chunk + score + dedupe + format pages
-  - web_search_context()      — chat-mode wrapper around web_search
-  - _web_search_raw()         — low-level SearXNG call (raw JSON)
+  - web_fetch()                — single URL → extracted text (HTML/trafilatura)
+  - read_paper_url()           — legacy: fetch URL + optional relevance condensation
+                                  (HTML-only; superseded by research.py's deep_read
+                                  for non-HTML formats and JS-rendering escalation)
+  - condense_evidence()        — chunk + score + dedupe + format pages
+  - web_search_context()       — chat-mode wrapper around web_search
+  - _web_search_raw()          — low-level SearXNG call (raw JSON)
+  - _download_bytes()          — shared streamed/size-capped byte download
+  - _sniff_content_type()      — HEAD/extension based format classification
+  - _extract_with_markitdown() — non-HTML document → markdown text (pdf/docx/
+                                  pptx/xlsx/epub/csv/xml/ipynb via MarkItDown)
   - _fetch_and_score_pipeline() — batch fetch + concurrent relevance scoring
-  - _deep_search_impl()       — shared logic for graph-based research tools
+  - _deep_search_impl()        — shared logic for graph-based research tools
 
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
@@ -27,6 +33,7 @@ import ipaddress
 import os
 import re
 import socket
+import tempfile
 import time
 import threading
 from dataclasses import dataclass, field
@@ -130,6 +137,41 @@ WEB_FETCH_USER_AGENT = os.getenv(
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0 Safari/537.36",
 )
+
+# -- deep_read (research.py) support: content-type routing + MarkItDown --
+# THIN_TEXT_CHARS_THRESHOLD is the "did trafilatura actually get anything
+# useful" bar used by research.py's deep_read to decide whether to escalate
+# an HTML fetch to Crawl4AI. Kept here (not in research.py) so it lives next
+# to the other extraction tuning knobs, even though only deep_read reads it.
+THIN_TEXT_CHARS_THRESHOLD = int(os.getenv("THIN_TEXT_CHARS_THRESHOLD", 200))
+
+# MarkItDown handles non-HTML document formats by converting to markdown.
+# Base install only (`pip install markitdown`) covers all of these with no
+# heavy optional deps — deliberately NOT enabling the image-OCR or
+# audio-transcription extras here, since those pull real weight for
+# capabilities deep_read doesn't need.
+_MARKITDOWN_CONTENT_TYPE_MAP = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/epub+zip": "epub",
+    "text/csv": "csv",
+    "application/xml": "xml",
+    "text/xml": "xml",
+    "application/zip": "zip",
+    "application/x-ipynb+json": "ipynb",
+}
+_MARKITDOWN_EXTENSION_MAP = {
+    ".pdf": "pdf", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx",
+    ".epub": "epub", ".csv": "csv", ".xml": "xml", ".zip": "zip",
+    ".ipynb": "ipynb", ".msg": "msg",
+}
+_MARKITDOWN_SUFFIX_MAP = {
+    "pdf": ".pdf", "docx": ".docx", "pptx": ".pptx", "xlsx": ".xlsx",
+    "epub": ".epub", "csv": ".csv", "xml": ".xml", "zip": ".zip",
+    "ipynb": ".ipynb", "msg": ".msg",
+}
 
 # -- short-lived in-process query cache --
 CACHE_TTL_SECONDS = int(os.getenv("TOOLS_CACHE_TTL_SECONDS", 900))  # 15 min
@@ -242,6 +284,62 @@ def _is_private_or_local_host(hostname: str) -> bool:
         return True
 
 
+def _download_bytes(
+    url: str,
+    max_download_bytes: int,
+    timeout: int = WEB_FETCH_TIMEOUT_SECONDS,
+) -> tuple[bytes | None, str | None]:
+    """Stream-download a URL, aborting mid-stream the moment
+    max_download_bytes is exceeded — BEFORE any extraction step runs. This
+    is the single shared size-guard: web_fetch's trafilatura/HTML path and
+    deep_read's MarkItDown non-HTML path both call this instead of each
+    re-implementing their own streaming loop, so the worst-case-memory bound
+    only needs to be correct in one place.
+
+    Returns (bytes, None) on success, or (None, error_string) on failure.
+    Callers are responsible for scheme/host validation before calling this —
+    it does not repeat the private/local-host or scheme checks web_fetch
+    already does, since deep_read's content-type sniff runs first and both
+    callers share the same validated URL.
+    """
+    if importlib.util.find_spec("requests") is None:
+        return None, "[fetch failed: requests is not installed]"
+    requests = importlib.import_module("requests")
+    try:
+        with requests.get(
+            url,
+            stream=True,
+            timeout=timeout,
+            headers={"User-Agent": WEB_FETCH_USER_AGENT},
+        ) as resp:
+            resp.raise_for_status()
+
+            content_length = resp.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    if int(content_length) > max_download_bytes:
+                        return None, "[fetch failed: page too large]"
+                except ValueError:
+                    pass
+
+            buf = io.BytesIO()
+            total = 0
+            for chunk in resp.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > max_download_bytes:
+                    return None, "[fetch failed: page exceeded size limit during download]"
+                buf.write(chunk)
+            downloaded = buf.getvalue()
+    except requests.exceptions.RequestException as e:
+        return None, f"[fetch failed: {e}]"
+
+    if not downloaded:
+        return None, "[fetch failed: empty response]"
+    return downloaded, None
+
+
 def web_fetch(
     url: str,
     max_chars: int = 4000,
@@ -256,9 +354,10 @@ def web_fetch(
     Crawl4AI misses or when it isn't installed. deep_search always uses this
     directly (when it fetches at all).
 
-    Downloads are streamed and capped at max_download_bytes, aborted
-    mid-stream BEFORE trafilatura ever runs extraction and BEFORE max_chars
-    truncation — this is what bounds worst-case memory for a single fetch.
+    Downloads are streamed and capped at max_download_bytes via
+    _download_bytes, aborted mid-stream BEFORE trafilatura ever runs
+    extraction and BEFORE max_chars truncation — this is what bounds
+    worst-case memory for a single fetch.
 
     Successful fetches are cached in-process for CACHE_TTL_SECONDS keyed on
     (url, max_chars). Failed fetches are never cached.
@@ -275,45 +374,13 @@ def web_fetch(
         if cached is not None:
             return cached
 
-    if importlib.util.find_spec("requests") is None:
-        return "[fetch failed: requests is not installed]"
     if importlib.util.find_spec("trafilatura") is None:
         return "[fetch failed: trafilatura is not installed]"
-    requests = importlib.import_module("requests")
     trafilatura = importlib.import_module("trafilatura")
 
-    try:
-        with requests.get(
-            url,
-            stream=True,
-            timeout=WEB_FETCH_TIMEOUT_SECONDS,
-            headers={"User-Agent": WEB_FETCH_USER_AGENT},
-        ) as resp:
-            resp.raise_for_status()
-
-            content_length = resp.headers.get("content-length")
-            if content_length is not None:
-                try:
-                    if int(content_length) > max_download_bytes:
-                        return "[fetch failed: page too large]"
-                except ValueError:
-                    pass
-
-            buf = io.BytesIO()
-            total = 0
-            for chunk in resp.iter_content(chunk_size=65536):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if total > max_download_bytes:
-                    return "[fetch failed: page exceeded size limit during download]"
-                buf.write(chunk)
-            downloaded = buf.getvalue()
-    except requests.exceptions.RequestException as e:
-        return f"[fetch failed: {e}]"
-
-    if not downloaded:
-        return "[fetch failed: empty response]"
+    downloaded, error = _download_bytes(url, max_download_bytes)
+    if error:
+        return error
 
     try:
         text = trafilatura.extract(downloaded, include_links=False, include_tables=False) or ""
@@ -324,6 +391,76 @@ def web_fetch(
     if use_cache and text:
         _cache_set(_fetch_cache, cache_key, result)
     return result
+
+
+def _sniff_content_type(url: str) -> str:
+    """Best-effort content-type classification for research.py's deep_read
+    routing: returns 'html' (default/fallback) or one of the MarkItDown-
+    handled non-HTML kinds ('pdf', 'docx', 'pptx', 'xlsx', 'epub', 'csv',
+    'xml', 'zip', 'ipynb', 'msg').
+
+    Tries a cheap HEAD request first (no body download) and reads the
+    Content-Type header; falls back to the URL's file extension if HEAD is
+    blocked, times out, or the server omits/mislabels the header. Fails open
+    to 'html' on total ambiguity — the HTML path degrading gracefully
+    (via web_fetch's own "[fetch failed: no extractable text]") is a safer
+    default than guessing a document format wrong.
+    """
+    parsed = urlparse(url)
+    ext = os.path.splitext(parsed.path)[1].lower()
+
+    if importlib.util.find_spec("requests") is not None:
+        requests = importlib.import_module("requests")
+        try:
+            resp = requests.head(
+                url, timeout=5, allow_redirects=True,
+                headers={"User-Agent": WEB_FETCH_USER_AGENT},
+            )
+            ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ctype in _MARKITDOWN_CONTENT_TYPE_MAP:
+                return _MARKITDOWN_CONTENT_TYPE_MAP[ctype]
+            if ctype.startswith("text/html") or ctype.startswith("application/xhtml"):
+                return "html"
+        except Exception:
+            pass  # fall through to extension sniff below
+
+    return _MARKITDOWN_EXTENSION_MAP.get(ext, "html")
+
+
+def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> str:
+    """Convert non-HTML document bytes (pdf/docx/pptx/xlsx/epub/csv/xml/zip/
+    ipynb/msg) to markdown text via MarkItDown.
+
+    MarkItDown's convert() wants a file path or file-like object with a
+    recognizable extension; bytes are written to a suffix-matched temp file
+    rather than relying on an in-memory stream, since MarkItDown's format
+    detection is more reliable off a real extension than a bare stream.
+
+    Requires the base `markitdown` package only (`pip install markitdown`)
+    — no OCR/audio extras. Returns a bracketed failure string, same
+    convention as web_fetch, on any failure so callers can check
+    text.startswith("[fetch failed") uniformly regardless of which
+    extraction path produced the text.
+    """
+    if importlib.util.find_spec("markitdown") is None:
+        return "[fetch failed: markitdown is not installed]"
+    markitdown_mod = importlib.import_module("markitdown")
+    MarkItDown = markitdown_mod.MarkItDown
+
+    suffix = _MARKITDOWN_SUFFIX_MAP.get(content_type, "")
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            converter = MarkItDown()
+            result = converter.convert(tmp.name)
+            text = (getattr(result, "text_content", None) or "").strip()
+    except Exception as e:
+        return f"[fetch failed: markitdown conversion error: {e}]"
+
+    if not text:
+        return "[fetch failed: markitdown returned no extractable text]"
+    return text[:max_chars]
 
 
 def read_paper_url(
@@ -338,10 +475,14 @@ def read_paper_url(
     which discovers URLs via search and may or may not land on the exact
     page given.
 
-    Caveat: extraction is trafilatura, built for HTML article pages. Many
-    paper links are raw PDFs (arxiv.org/pdf/...) and will likely return
-    little or no text. Prefer the HTML/abstract page (arxiv.org/abs/... or
-    an arXiv HTML rendering) over a direct PDF link where available.
+    LEGACY / HTML-only path: extraction is trafilatura, built for HTML
+    article pages. Raw PDFs (arxiv.org/pdf/...) and other non-HTML formats
+    will likely return little or no text, and there is no JS-rendering
+    escalation for thin HTML fetches here. For those cases, prefer
+    research.py's deep_read, which routes PDFs/DOCX/PPTX/XLSX/EPUB/etc.
+    through MarkItDown and escalates thin HTML fetches to Crawl4AI. This
+    function is kept as the simple/fast path for plain HTML pages and for
+    any existing callers relying on its exact behavior.
 
     Without `query`: returns the first max_chars of extracted text — which
     will then be hard-truncated again to AGENT_TOOL_RESULT_MAX_CHARS (8000
@@ -477,6 +618,9 @@ def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
     path deep_research prefers; returns {} on any failure or when crawl4ai
     isn't installed, so the caller's per-URL fallback (web_fetch) covers
     every URL missing from the result.
+
+    Also used (with a single-URL list) by research.py's deep_read as the
+    JS-rendering escalation path when a plain web_fetch comes back thin.
 
     Already filters out robots-disallowed URLs itself as defense in depth,
     though _deep_search_impl also filters before calling this.
