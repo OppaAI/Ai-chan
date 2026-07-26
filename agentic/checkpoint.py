@@ -15,14 +15,19 @@ from system.userspace import current_user_id, user_state_dir
 
 log = get_logger(__name__)
 
-_DB_PATH = user_state_dir(current_user_id()) / "agentic" / "checkpoints.db"
 _lock = threading.Lock()
+
+
+def _db_path() -> Path:
+    return user_state_dir(current_user_id()) / "agentic" / "checkpoints.db"
 
 
 def _get_conn() -> sqlite3.Connection:
     _ensure_migrated()
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+    _add_state_column_if_missing()
+    path = _db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, check_same_thread=False)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS node_checkpoints (
             run_id TEXT NOT NULL,
@@ -43,7 +48,7 @@ def _get_conn() -> sqlite3.Connection:
 def _ensure_migrated() -> None:
     """Ensure checkpoint DB is in user-space location, migrating if needed."""
     old_path = Path(__file__).parent / "checkpoint.db"
-    new_path = _DB_PATH
+    new_path = _db_path()
 
     if not old_path.exists():
         return
@@ -64,7 +69,7 @@ def _ensure_migrated() -> None:
 
 def _add_state_column_if_missing() -> None:
     """Idempotent migration for existing DBs that lack state_json."""
-    conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(_db_path(), check_same_thread=False)
     try:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(node_checkpoints)").fetchall()]
         if "state_json" not in cols:

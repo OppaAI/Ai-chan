@@ -1,13 +1,13 @@
 # Multi-user testing plan
 
 There may be simple `$5 Patreon tester` isolation model for Aiko just to cover the cost of the front-end/back-end servers.
-OAuth is the source of identity; `persona/identity.md` remains Aiko's identity only and is no longer a user identity source.
+OAuth is the source of identity; `persona/SOUL.md` remains Aiko's identity only and is no longer a user identity source.
 
 ## Current implementation
 
 - OAuth sessions store a provider-scoped runtime id, such as `github_123456` or `patreon_987654321`, to avoid collisions between providers.
 - User-private state defaults to `<USER_SPACE_ROOT>/<user_id>/`:
-  - `user.md` for the user's editable bio/profile.
+  - `USER.md` for the user's editable bio/profile.
   - `memory.db` for that user's sqlite-vec memory store.
   - `monthly_consolidation_state.jsonl` for that user's monthly consolidation state.
   - `schedule.json` for that user's scheduled jobs/reminders (agentic scheduling).

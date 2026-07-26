@@ -323,7 +323,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "Investigate this comprehensively and give me a detailed report",
                 "Analyze this topic in depth with citations",
             ],
-            "requires_any": [],
+            "requires_any": ["research", "investigate", "analyze", "report", "comprehensive", "thorough", "deep", "study"],
             "capabilities": ["research"],
             "nodes": [
                 {"id": "web",    "tool": "deep_research", "args": {"query": "$prompt"}},
@@ -352,7 +352,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "Search for this and write a concise report",
                 "Give me a quick overview with sources",
             ],
-            "requires_any": [],
+            "requires_any": ["search", "look up", "find", "what is", "what are", "who is", "when did", "where is", "how do", "how to", "quick", "brief", "tell me"],
             "capabilities": ["research"],
             "nodes": [
                 {"id": "web",    "tool": "adaptive_search",  "args": {"query": "$prompt"}},
@@ -381,7 +381,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "Give me a pros and cons comparison of these options",
                 "Contrast these alternatives with a recommendation",
             ],
-            "requires_any": [],
+            "requires_any": ["compare", "versus", "vs", "contrast", "pros", "cons", "difference"],
             "capabilities": ["research"],
             "nodes": [
                 {"id": "web_a",  "tool": "deep_research", "args": {"query": "$compare_left"}},
@@ -404,7 +404,12 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "id": "checklist_and_save",
             "name": "Checklist and save note",
             "triggers": ["checklist", "todo", "to-do", "steps to", "how to"],
+            "semantic_triggers": [
+                "Create a checklist and save it as a note",
+                "Break this down into steps and save it",
+            ],
             "requires_any": ["save", "note", "checklist", "todo", "list"],
+            "capabilities": ["note_taking", "planning"],
             "nodes": [
                 {"id": "checklist", "tool": "create_checklist", "args": {"title": "$title", "items": "$heuristic_items"}},
                 {"id": "save",      "tool": "save_note", "depends_on": ["checklist"],
@@ -414,8 +419,17 @@ def _default_playbooks() -> list[dict[str, Any]]:
         {
             "id": "simple_save_note",
             "name": "Save provided text as a note",
-            "triggers": ["save note", "write note", "draft", "note that", "jot down", "save this"],
-            "requires_any": ["save", "note", "draft"],
+            "triggers": [
+                "save note", "write note", "draft", "note that", "jot down", "save this",
+                "save as note", "make a note", "take a note", "write down",
+            ],
+            "semantic_triggers": [
+                "Save this as a note for later",
+                "Jot this down so I don't forget",
+                "Make a note of this information",
+            ],
+            "requires_any": ["save", "note", "draft", "jot", "write down"],
+            "capabilities": ["note_taking"],
             "nodes": [
                 {"id": "save", "tool": "save_note",
                  "args": {"title": "$title", "content": "$prompt", "folder": "notes"}},
@@ -1055,6 +1069,8 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
         call_args["llm_model"] = llm_model
     if "state" in params and "state" not in call_args:
         call_args["state"] = state
+    if "user_id" in params and "user_id" not in call_args:
+        call_args["user_id"] = current_user_id()
 
     last_exc = None
     for attempt in range(node.max_retries + 1):

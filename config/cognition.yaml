@@ -49,7 +49,7 @@ GITHUB_REPO: "OppaAI/aiko-blog"  # Repository for reflection posts, e.g. owner/r
 GITHUB_BRANCH: "main"  # Branch to write reflection posts to.
 HUGO_CONTENT_PATH: "content/posts"  # Path inside repo where markdown posts are written.
 HUGO_IMAGES_PATH: "static/images"  # Path inside repo where generated reflection images are written.
-SOUL_PATH: "persona/soul.md"  # Local persona/soul prompt file used by reflection.
+SOUL_PATH: "persona/SOUL.md"  # Local persona/soul prompt file used by reflection.
 
 # -- Reflection content --
 REFLECT_MAX_MEMS: "100"  # Maximum memory snippets included in a reflection prompt.

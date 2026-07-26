@@ -83,7 +83,7 @@ TERMS_STORE_PATH = os.getenv("TERMS_STORE_PATH", "").strip()
 
 
 def _terms_store_path(user_id: str | None) -> Path:
-    """Per-user terms acceptance store next to profile/user.md by default."""
+    """Per-user terms acceptance store next to profile/USER.md by default."""
     if TERMS_STORE_PATH:
         override = Path(TERMS_STORE_PATH).expanduser()
         if override.is_absolute():

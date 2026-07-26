@@ -38,8 +38,8 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Realtime speech synthesis via MioTTS | ✅ Done |
 | Background LLM warmup — eliminates cold-start latency | ✅ Done |
 | Background TTS warmup — eliminates cold-start latency | ✅ Done |
-| Soul persona system (`persona/soul.md`) | ✅ Done |
-| Identity metadata and character framework (`persona/identity.md`) | ✅ Done |
+| Soul persona system (`persona/SOUL.md`) | ✅ Done |
+| Identity metadata and character framework (`persona/SOUL.md`) | ✅ Done |
 | Architectural renaming (`brain → think`, `memory → memorize`) | ✅ Done |
 | Non-blocking memory queue worker | ✅ Done |
 | Search output filtering and instruction refinement | ✅ Done |

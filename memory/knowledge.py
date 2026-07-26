@@ -197,7 +197,39 @@ END;
 
 
 def _connect(user_id: str | None = None) -> sqlite3.Connection:
-    return initialize_store_db(KNOWLEDGE_DB_PATH, _DDL, user_id=user_id, vector=True)
+    conn = initialize_store_db(KNOWLEDGE_DB_PATH, _DDL, user_id=user_id, vector=True)
+    _ensure_knowledge_schema_migrated(conn, user_id)
+    return conn
+
+
+def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | None = None) -> None:
+    """Add missing columns to knowledge tables if they don't exist."""
+    try:
+        # Check learned_chunks table for access_count and last_accessed
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks)").fetchall()]
+        if "access_count" not in cols:
+            conn.execute("ALTER TABLE learned_chunks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
+            log.info("[knowledge] Added missing access_count column to learned_chunks")
+        if "last_accessed" not in cols:
+            conn.execute("ALTER TABLE learned_chunks ADD COLUMN last_accessed TEXT")
+            log.info("[knowledge] Added missing last_accessed column to learned_chunks")
+        if "archived_at" not in cols:
+            conn.execute("ALTER TABLE learned_chunks ADD COLUMN archived_at TEXT")
+            log.info("[knowledge] Added missing archived_at column to learned_chunks")
+
+        # Check learned_chunks_archive table
+        try:
+            archive_cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks_archive)").fetchall()]
+            if "access_count" not in archive_cols:
+                conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
+            if "last_accessed" not in archive_cols:
+                conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN last_accessed TEXT")
+        except sqlite3.OperationalError:
+            pass  # table might not exist yet
+
+        conn.commit()
+    except Exception as e:
+        log.warning("[knowledge] Schema migration check failed: %s", e)
 
 
 def _now() -> str:
@@ -491,7 +523,6 @@ def search_knowledge(
     finally:
         conn.close()
 
-
 def _attr(value: object) -> str:
     return escape(str(value or ""), quote=True)
 
@@ -503,31 +534,41 @@ def knowledge_context_for(
     embedder: Embedder | None = None,
     user_id: str | None = None,
 ) -> str:
+    """Retrieve knowledge context for a query, tracking access counts.
+
+    Args:
+        query: Search query
+        limit: Max number of results
+        max_chars: Max total characters in returned context (default: KNOWLEDGE_CONTEXT_CHARS)
+        embedder: Optional embedder for vector search
+        user_id: Optional user ID (defaults to current_user_id)
+    """
     uid = user_id or current_user_id()
+    remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
+
     cached = _search_cache_get(query, uid, limit)
     if cached is not None:
-        hits = cached
-    else:
-        hits = search_knowledge(query, limit=limit, embedder=embedder, user_id=uid)
+        # Track access for cached results too
+        chunk_ids = [r["id"] for r in cached]
+        _increment_access_count(chunk_ids, uid)
+        return _format_knowledge_context(cached, remaining)
+
+    hits = search_knowledge(query, limit=limit, embedder=embedder, user_id=uid)
+    if hits:
         _search_cache_set(query, uid, limit, hits)
+
     if not hits:
         return "<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"
-    remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
-    blocks: list[str] = []
-    for hit in hits:
-        if remaining <= 0:
-            break
-        text = str(hit["text"])[:remaining]
-        blocks.append(
-            f'<knowledge_chunk doc_id="{_attr(hit["doc_id"])}" title="{_attr(hit["title"])}" '
-            f'kind="{_attr(hit["kind"])}" source="{_attr(hit["source"])}" score="{hit["score"]:.4f}">\n'
-            f'{text}\n</knowledge_chunk>'
-        )
-        remaining -= len(text)
-    return "<knowledge_context>\n" + "\n\n".join(blocks) + "\n</knowledge_context>"
+
+    # Track access for non-cached results
+    chunk_ids = [h["id"] for h in hits]
+    _increment_access_count(chunk_ids, uid)
+
+    return _format_knowledge_context(hits, remaining)
 
 
 # ── Access tracking & maintenance ─────────────────────────────────────────────
+
 
 def _increment_access_count(chunk_ids: list[str], user_id: str | None = None) -> None:
     """Increment access count and update last_accessed for given chunk IDs."""
@@ -549,64 +590,18 @@ def _increment_access_count(chunk_ids: list[str], user_id: str | None = None) ->
         conn.close()
 
 
-def knowledge_context_for(query: str, limit: int = 5, embedder=None) -> str:
-    """Retrieve knowledge context for a query, tracking access counts."""
-    uid = current_user_id()
-    cached = _search_cache_get(query, uid, limit)
-    if cached is not None:
-        # Track access for cached results too
-        chunk_ids = [r["id"] for r in cached]
-        _increment_access_count(chunk_ids, uid)
-        return _format_knowledge_context(cached)
-
-    rank_knn = rank_by_id(_knn(query, uid, limit))
-    rank_fts = rank_by_id(_fts(query, uid, limit))
-    ids = set(rank_knn) | set(rank_fts)
-    if not ids:
-        return "<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"
-
-    placeholders = ",".join("?" * len(ids))
-    conn = _connect(uid)
-    try:
-        rows = conn.execute(
-            f"SELECT * FROM learned_chunks WHERE id IN ({','.join('?' * len(ids))})",
-            list(ids),
-        ).fetchall()
-        by_id = {row["id"]: dict(row) for row in rows}
-    finally:
-        conn.close()
-
-    scored = []
-    for eid in ids:
-        score = rrf_score(eid, rank_knn, rank_fts, k=KNOWLEDGE_RRF_K)
-        if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD and eid in by_id:
-            scored.append((score, eid))
-    scored.sort(key=lambda pair: -pair[0])
-    scored = scored[:limit]
-
-    results = []
-    chunk_ids = []
-    for score, eid in scored:
-        row = by_id[eid]
-        row["recall_score"] = score
-        results.append(row)
-        chunk_ids.append(eid)
-
-    if chunk_ids:
-        _increment_access_count(chunk_ids, uid)
-
-    _search_cache_set(query, uid, limit, results)
-    return _format_knowledge_context(results)
-
-
-def _format_knowledge_context(results: list[dict]) -> str:
-    remaining = KNOWLEDGE_CONTEXT_CHARS
+def _format_knowledge_context(results: list[dict], max_chars: int | None = None) -> str:
+    remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
     blocks = []
     for row in results:
         if remaining <= 0:
             break
         body = row["text"][:remaining]
-        blocks.append(f'<chunk source="{row["id"]}">\n{body}\n</chunk>')
+        blocks.append(
+            f'<knowledge_chunk doc_id="{_attr(row.get("doc_id", ""))}" title="{_attr(row.get("title", ""))}" '
+            f'kind="{_attr(row.get("kind", ""))}" source="{_attr(row.get("source", ""))}" score="{row.get("score", row.get("recall_score", 0)):.4f}">\n'
+            f'{body}\n</knowledge_chunk>'
+        )
         remaining -= len(body)
     return "<knowledge_context>\n" + "\n\n".join(blocks) + "\n</knowledge_context>"
 

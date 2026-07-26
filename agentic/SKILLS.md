@@ -1,6 +1,6 @@
 # Aiko Skills
 
-This file describes what Aiko can do. Personality lives in `persona/soul.md`; user facts live in `persona/user.md`.
+This file describes what Aiko can do. Personality lives in `persona/SOUL.md`; user facts live in `profile/USER.md`.
 
 ## Operating Mode
 

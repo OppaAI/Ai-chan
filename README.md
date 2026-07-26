@@ -55,7 +55,7 @@ This project currently serves as:
 - **Local-first LLM** — OpenAI-compatible endpoint (llama.cpp `llama-server` recommended), runs entirely on your hardware
 - **Curses TUI** — Full-screen cyberpunk terminal interface with streaming tokens, status panels, and command palette
 - **Browser WebUI (optional)** — Modern web interface with VRM avatar, WebSocket bridge, browser microphone streaming
-- **Persona system** — Rich personality defined in `persona/soul.md` with identity, skills, and user profile
+- **Persona system** — Rich personality defined in `persona/SOUL.md` with identity, skills, and user profile
 
 ### 🧠 Persistent Memory
 - **sqlite-vec + custom Harrier ONNX embedder** — Serverless vector store, no Qdrant/mem0 required

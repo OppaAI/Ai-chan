@@ -119,7 +119,7 @@ Run before any phase suite.
 
 ### 1.3 Persona and conversation quality
 
-- [ ] `persona/soul.md`, `persona/identity.md`, `persona/user.md`, `persona/character.md`, and `persona/skills.md` load without startup errors.
+- [ ] `persona/SOUL.md`, `persona/SOCIAL.md`, and `profile/USER.md` load without startup errors.
 - [ ] Responses are consistent with Aiko's persona over at least 20 mixed turns: casual chat, technical help, Japanese/English mixed text, and emotional support.
 - [ ] Persona compliance survives `/reset`; short-term context resets without deleting persistent memories.
 - [ ] The assistant does not reveal raw system/developer prompts or internal tool schemas during normal chat.
@@ -209,7 +209,7 @@ Run before any phase suite.
 
 ### 1.5.3 Identity and persona panels
 
-- [ ] `persona/identity.md` banner/ASCII art render correctly in the identity panel.
+- [ ] `persona/SOUL.md` persona block renders correctly.
 - [ ] Missing or malformed persona files produce clear diagnostics and a safe fallback.
 - [ ] Persona updates are picked up after restart and do not require code changes.
 - [ ] The UI handles wide Unicode, Japanese kana/kanji, combining marks, and emoji without column misalignment severe enough to hide input.
