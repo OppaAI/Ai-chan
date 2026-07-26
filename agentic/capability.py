@@ -66,7 +66,6 @@ TOOL_DOMAINS: dict[str, str] = {
     "repo_file_tree": "repo",
     "repo_read_file": "repo",
     "repo_search_text": "repo",
-    "read_paper_url": "research",
     "write_report": "reports",
     "learn_knowledge": "kb",
     "search_jobs": "jobs",
@@ -103,7 +102,6 @@ TOOL_DOMAINS: dict[str, str] = {
 ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "make_plan", "create_checklist", "save_note", "read_workspace_file",
     "summarize_task_state", "list_playbooks", "run_playbook", "final_answer",
-    "read_paper_url",
 })
 
 # Tool domains per capability (maps capability id -> tuple of domains)

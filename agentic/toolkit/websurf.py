@@ -1,17 +1,13 @@
 """
 toolkit/websurf.py
 
-Web search, fetch, and evidence condensation primitives.
+Web search and fetch primitives.
 
 Pure building blocks — no multi-step workflows. Callers compose
 these via the graph executor (research_graph.py) or ReAct loop.
 
   - web_search()              — SearXNG query → numbered snippets
   - web_fetch()                — single URL → extracted text (HTML/trafilatura)
-  - read_paper_url()           — legacy: fetch URL + optional relevance condensation
-                                  (HTML-only; superseded by research.py's deep_read
-                                  for non-HTML formats and JS-rendering escalation)
-  - condense_evidence()        — chunk + score + dedupe + format pages
   - web_search_context()       — chat-mode wrapper around web_search
   - _web_search_raw()          — low-level SearXNG call (raw JSON)
   - _download_bytes()          — shared streamed/size-capped byte download
@@ -27,7 +23,6 @@ Requires a running SearXNG instance (SEARXNG_URL env var).
 from __future__ import annotations
 
 import concurrent.futures
-import hashlib
 import io
 import ipaddress
 import os
@@ -47,6 +42,12 @@ import numpy as np
 
 from system.log import get_logger
 from cognition import reason
+
+from agentic.toolkit.research import (
+    _apply_corroboration_bonus,
+    _score_url_chunks,
+    _finalize_condensed,
+)
 
 log = get_logger(__name__)
 
@@ -463,45 +464,6 @@ def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> 
     return text[:max_chars]
 
 
-def read_paper_url(
-    url: str,
-    query: str = "",
-    embedder=None,
-    max_chars: int = 40000,
-    condense_top_k: int = 12,
-) -> str:
-    """Fetch one EXACT URL — no search involved — for reading a specific
-    paper/document the user already chose. Distinct from deep_research,
-    which discovers URLs via search and may or may not land on the exact
-    page given.
-
-    LEGACY / HTML-only path: extraction is trafilatura, built for HTML
-    article pages. Raw PDFs (arxiv.org/pdf/...) and other non-HTML formats
-    will likely return little or no text, and there is no JS-rendering
-    escalation for thin HTML fetches here. For those cases, prefer
-    research.py's deep_read, which routes PDFs/DOCX/PPTX/XLSX/EPUB/etc.
-    through MarkItDown and escalates thin HTML fetches to Crawl4AI. This
-    function is kept as the simple/fast path for plain HTML pages and for
-    any existing callers relying on its exact behavior.
-
-    Without `query`: returns the first max_chars of extracted text — which
-    will then be hard-truncated again to AGENT_TOOL_RESULT_MAX_CHARS (8000
-    chars) once wrapped as a tool observation, so a long paper effectively
-    gets reduced to its opening section only.
-
-    With `query`: text is chunked and relevance-scored the same way
-    deep_research condenses evidence, so what survives the 8000-char
-    observation limit is the material most relevant to the task at hand,
-    not just whatever came first in the document.
-    """
-    text = web_fetch(url, max_chars=max_chars, max_download_bytes=15_000_000)
-    if text.startswith("[fetch failed"):
-        return text
-    if not query:
-        return f"[Fetched paper content — {url}]\n\n{text}"
-    condensed = condense_evidence([(url, text)], query, embedder=embedder, top_k=condense_top_k)
-    return f"[Fetched paper content — {url}, condensed for: {query}]\n\n{condensed}"
-  
 # ── robots.txt compliance ("source agreement" to be crawled) ────────────────
 
 def _get_robot_parser(origin: str) -> RobotFileParser:
@@ -670,82 +632,7 @@ def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
         return {}
 
 
-# ── cross-source corroboration ("sources agreement" scoring) ────────────────
-
-def _apply_corroboration_bonus(
-    scored_chunks: list[tuple[float, str, str]],
-    bonus: float = RESEARCH_AGREEMENT_BONUS,
-    similarity_threshold: float = RESEARCH_AGREEMENT_SIMILARITY,
-    shingle_size: int = RESEARCH_AGREEMENT_SHINGLE_SIZE,
-) -> list[tuple[float, str, str, int]]:
-    """Boost chunks whose content is independently corroborated by a
-    DIFFERENT domain. Returns (score, url, chunk, corroboration_count)
-    tuples — count=1 means single-source.
-
-    Uses cheap word-shingle Jaccard similarity rather than a second
-    embedding pass: good enough to catch two sources saying substantially
-    the same thing, with no extra model calls on top of the relevance
-    scoring _score_url_chunks already did.
-    """
-    def _domain(u: str) -> str:
-        try:
-            netloc = urlparse(u).netloc.lower()
-            return netloc[4:] if netloc.startswith("www.") else netloc
-        except Exception:
-            return u
-
-    def _shingles(text: str) -> set[str]:
-        words = text.lower().split()
-        n = shingle_size
-        if len(words) < n:
-            return {" ".join(words)} if words else set()
-        return {" ".join(words[i:i + n]) for i in range(len(words) - n + 1)}
-
-    domains = [_domain(u) for _s, u, _c in scored_chunks]
-    shingle_sets = [_shingles(c) for _s, _u, c in scored_chunks]
-    counts = [1] * len(scored_chunks)
-
-    for i in range(len(scored_chunks)):
-        if not shingle_sets[i]:
-            continue
-        for j in range(i + 1, len(scored_chunks)):
-            if domains[i] == domains[j] or not shingle_sets[j]:
-                continue
-            inter = len(shingle_sets[i] & shingle_sets[j])
-            union = len(shingle_sets[i] | shingle_sets[j])
-            if union and inter / union >= similarity_threshold:
-                counts[i] += 1
-                counts[j] += 1
-
-    boosted = []
-    for (score, url, chunk), count in zip(scored_chunks, counts):
-        adjusted = min(1.0, score + bonus * (count - 1)) if count > 1 else score
-        boosted.append((adjusted, url, chunk, count))
-    return boosted
-
-
-def _score_url_chunks(
-    url_chunks: list[tuple[str, str]], query: str, embedder, max_chunks_to_score: int,
-) -> list[tuple[float, str, str]]:
-    """Score (url, chunk) pairs in one batched numpy pass via
-    reason instead of a per-chunk Python loop. Falls back to
-    keyword overlap per chunk if no embedder is available or embedding
-    fails."""
-    url_chunks = url_chunks[:max_chunks_to_score]
-    if not url_chunks:
-        return []
-    texts = [c for _u, c in url_chunks]
-    if embedder is not None and hasattr(embedder, "embed_query"):
-        try:
-            query_vec = np.asarray(embedder.embed_query(query), dtype=np.float32)
-            chunk_vecs = reason.embed_batch_or_none(embedder, texts)
-            if chunk_vecs is not None and chunk_vecs.shape[0] == len(texts):
-                scores = reason.batch_cosine_scores(query_vec, chunk_vecs)
-                return [(float(scores[i]), url_chunks[i][0], url_chunks[i][1]) for i in range(len(url_chunks))]
-        except Exception:
-            pass  # fall through to keyword scoring below
-    return [(reason.keyword_overlap_score(query, c), u, c) for u, c in url_chunks]
-
+# ── batch fetch + concurrent relevance scoring ──────────────────────────
 
 def _fetch_and_score_pipeline(
     urls: list[str],
@@ -827,99 +714,6 @@ def _fetch_and_score_pipeline(
         len(pages), len(urls), chunks_scored,
     )
     return scored, pages, url_outcomes
-
-
-def _format_url_manifest(url_outcomes: list[tuple[str, str]]) -> str:
-    if not url_outcomes:
-        return "[no URLs attempted]"
-    lines = [f"[URL manifest — {len(url_outcomes)} attempted]"]
-    for url, status in url_outcomes:
-        lines.append(f"- {url} — {status}")
-    return "\n".join(lines)
-
-
-def _finalize_condensed(
-    scored_chunks: list[tuple[float, str, str]],
-    query: str,
-    top_k: int = CONDENSE_TOP_K,
-    min_score: float = CONDENSE_MIN_SCORE,
-    annotate_agreement: bool = False,
-    agreement_bonus: float = RESEARCH_AGREEMENT_BONUS,
-    agreement_similarity: float = RESEARCH_AGREEMENT_SIMILARITY,
-) -> str:
-    """Dedup, filter, rank, and format already-scored chunks. Filtering is
-    literal: chunks below min_score are dropped, not truncated or reworded.
-    If nothing clears the bar, returns an explicit sentinel.
-
-    When annotate_agreement is True (deep_research), chunks are first passed
-    through the cross-source corroboration bonus, and each surfaced excerpt
-    is tagged 'corroborated x2' or 'single-source, unverified' so a reader
-    (or the synthesis LLM) can weight confidence accordingly.
-    """
-    if not scored_chunks:
-        return "[no fetched content available to condense]"
-
-    if annotate_agreement:
-        working = _apply_corroboration_bonus(scored_chunks, agreement_bonus, agreement_similarity)
-    else:
-        working = [(score, url, chunk, 1) for score, url, chunk in scored_chunks]
-
-    seen_hashes: set[str] = set()
-    deduped: list[tuple[float, str, str, int]] = []
-    for score, url, chunk, count in working:
-        h = hashlib.sha1(chunk.strip().lower().encode("utf-8", "ignore")).hexdigest()
-        if h in seen_hashes:
-            continue
-        seen_hashes.add(h)
-        deduped.append((score, url, chunk, count))
-
-    relevant = sorted(
-        (item for item in deduped if item[0] >= min_score),
-        key=lambda item: item[0],
-        reverse=True,
-    )[:top_k]
-
-    if not relevant:
-        return (
-            f"[no relevant content found among fetched sources for: {query} — "
-            "fetched pages did not match the query closely enough to include; "
-            "do not fabricate an answer from them, disclose the gap instead]"
-        )
-
-    lines = [f"[Condensed evidence for: {query} — {len(relevant)} relevant excerpt(s)]"]
-    if annotate_agreement:
-        corroborated_n = sum(1 for item in relevant if item[3] > 1)
-        lines.append(
-            f"[Source agreement: {corroborated_n}/{len(relevant)} excerpt(s) corroborated by "
-            "an independent domain; treat the rest as single-source and unverified]"
-        )
-    for score, url, chunk, count in relevant:
-        trust = f"corroborated x{count}" if count > 1 else "single-source, unverified"
-        if annotate_agreement:
-            lines.append(f"[source: {url} | relevance: {score:.2f} | {trust}]\n{chunk}")
-        else:
-            lines.append(f"[source: {url} | relevance: {score:.2f}]\n{chunk}")
-    return "\n\n".join(lines)
-
-
-def condense_evidence(
-    pages: list[tuple[str, str]],
-    query: str,
-    embedder=None,
-    top_k: int = CONDENSE_TOP_K,
-    chunk_chars: int = CONDENSE_CHUNK_CHARS,
-    min_score: float = CONDENSE_MIN_SCORE,
-    max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
-) -> str:
-    """Convenience wrapper for callers that already have raw (url, text)
-    pages in hand and just want them chunked, scored, and condensed."""
-    url_chunks: list[tuple[str, str]] = []
-    for url, text in pages:
-        url_chunks.extend((url, c) for c in reason.chunk_text(text, chunk_chars))
-        if len(url_chunks) >= max_chunks_to_score:
-            break
-    scored = _score_url_chunks(url_chunks, query, embedder, max_chunks_to_score)
-    return _finalize_condensed(scored, query, top_k=top_k, min_score=min_score)
 
 
 def _deep_search_impl(

@@ -25,7 +25,9 @@ Sub-modules:
 """
 from __future__ import annotations
 
+import concurrent.futures
 import functools
+import hashlib
 import json
 import os
 import re
@@ -33,20 +35,19 @@ import threading
 import time
 import uuid
 from typing import Any
+from urllib.parse import urlparse
+
+import numpy as np
 
 from system.log import get_logger
 from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.toolkit.websurf import (
     _web_search_raw,
-    _deep_search_impl,
-    _fetch_and_score_pipeline,
-    _finalize_condensed,
     _crawl4ai_fetch_many,
     _download_bytes,
     _sniff_content_type,
     _extract_with_markitdown,
     web_fetch,
-    condense_evidence,
     MAX_RESULTS,
     RESEARCH_USE_CRAWL4AI,
     RESEARCH_RESPECT_ROBOTS,
@@ -248,8 +249,8 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
 #       → web_fetch (cheap, trafilatura)
 #       → if failed/thin: escalate to a single-URL Crawl4AI fetch (JS render)
 #
-# Then, same as the legacy read_paper_url: no query → return raw text
-# (truncated); query given → condense_evidence relevance-filters it.
+# Then: no query → return raw text (truncated); query given →
+# condense_evidence relevance-filters it.
 
 DEEP_READ_MAX_CHARS = int(os.getenv("DEEP_READ_MAX_CHARS", 40000))
 DEEP_READ_MAX_DOWNLOAD_BYTES = int(os.getenv("DEEP_READ_MAX_DOWNLOAD_BYTES", 20_000_000))
@@ -268,7 +269,8 @@ def deep_read(
 
     Non-HTML documents (pdf, docx, pptx, xlsx, epub, csv, xml, zip, ipynb,
     msg) are downloaded and converted via MarkItDown — this is what
-    read_paper_url could never do, since trafilatura only understands HTML.
+    the legacy read_paper_url could never do, since trafilatura only
+    understands HTML.
 
     HTML (or anything _sniff_content_type can't classify) goes through the
     cheap web_fetch/trafilatura path first. Only if that fails outright or
@@ -315,7 +317,384 @@ def deep_read(
     return f"[Fetched content — {url}, condensed for: {query}]\n\n{condensed}"
 
 
-# ══════════════════════════════════════════════════════════════════════════
+# ── evidence condensation ──────────────────────────────────────────────
+# These helpers score, dedupe, filter, and format evidence chunks.
+# Moved here from websurf.py to keep research logic in the research module.
+
+import hashlib
+import concurrent.futures
+
+from cognition import reason
+
+
+def _apply_corroboration_bonus(
+    scored_chunks: list[tuple[float, str, str]],
+    bonus: float = RESEARCH_AGREEMENT_BONUS,
+    similarity_threshold: float = RESEARCH_AGREEMENT_SIMILARITY,
+    shingle_size: int = RESEARCH_AGREEMENT_SHINGLE_SIZE,
+) -> list[tuple[float, str, str, int]]:
+    """Boost chunks whose content is independently corroborated by a
+    DIFFERENT domain. Returns (score, url, chunk, corroboration_count)
+    tuples — count=1 means single-source.
+
+    Uses cheap word-shingle Jaccard similarity rather than a second
+    embedding pass: good enough to catch two sources saying substantially
+    the same thing, with no extra model calls on top of the relevance
+    scoring _score_url_chunks already did.
+    """
+    def _domain(u: str) -> str:
+        try:
+            netloc = urlparse(u).netloc.lower()
+            return netloc[4:] if netloc.startswith("www.") else netloc
+        except Exception:
+            return u
+
+    def _shingles(text: str) -> set[str]:
+        words = text.lower().split()
+        n = shingle_size
+        if len(words) < n:
+            return {" ".join(words)} if words else set()
+        return {" ".join(words[i:i + n]) for i in range(len(words) - n + 1)}
+
+    domains = [_domain(u) for _s, u, _c in scored_chunks]
+    shingle_sets = [_shingles(c) for _s, _u, c in scored_chunks]
+    counts = [1] * len(scored_chunks)
+
+    for i in range(len(scored_chunks)):
+        if not shingle_sets[i]:
+            continue
+        for j in range(i + 1, len(scored_chunks)):
+            if domains[i] == domains[j] or not shingle_sets[j]:
+                continue
+            inter = len(shingle_sets[i] & shingle_sets[j])
+            union = len(shingle_sets[i] | shingle_sets[j])
+            if union and inter / union >= similarity_threshold:
+                counts[i] += 1
+                counts[j] += 1
+
+    boosted = []
+    for (score, url, chunk), count in zip(scored_chunks, counts):
+        adjusted = min(1.0, score + bonus * (count - 1)) if count > 1 else score
+        boosted.append((adjusted, url, chunk, count))
+    return boosted
+
+
+def _score_url_chunks(
+    url_chunks: list[tuple[str, str]], query: str, embedder, max_chunks_to_score: int,
+) -> list[tuple[float, str, str]]:
+    """Score (url, chunk) pairs in one batched numpy pass via
+    reason instead of a per-chunk Python loop. Falls back to
+    keyword overlap per chunk if no embedder is available or embedding
+    fails."""
+    url_chunks = url_chunks[:max_chunks_to_score]
+    if not url_chunks:
+        return []
+    texts = [c for _u, c in url_chunks]
+    if embedder is not None and hasattr(embedder, "embed_query"):
+        try:
+            query_vec = np.asarray(embedder.embed_query(query), dtype=np.float32)
+            chunk_vecs = reason.embed_batch_or_none(embedder, texts)
+            if chunk_vecs is not None and chunk_vecs.shape[0] == len(texts):
+                scores = reason.batch_cosine_scores(query_vec, chunk_vecs)
+                return [(float(scores[i]), url_chunks[i][0], url_chunks[i][1]) for i in range(len(url_chunks))]
+        except Exception:
+            pass  # fall through to keyword scoring below
+    return [(reason.keyword_overlap_score(query, c), u, c) for u, c in url_chunks]
+
+
+def _finalize_condensed(
+    scored_chunks: list[tuple[float, str, str]],
+    query: str,
+    top_k: int = CONDENSE_TOP_K,
+    min_score: float = CONDENSE_MIN_SCORE,
+    annotate_agreement: bool = False,
+    agreement_bonus: float = RESEARCH_AGREEMENT_BONUS,
+    agreement_similarity: float = RESEARCH_AGREEMENT_SIMILARITY,
+) -> str:
+    """Dedup, filter, rank, and format already-scored chunks. Filtering is
+    literal: chunks below min_score are dropped, not truncated or reworded.
+    If nothing clears the bar, returns an explicit sentinel.
+
+    When annotate_agreement is True (deep_research), chunks are first passed
+    through the cross-source corroboration bonus, and each surfaced excerpt
+    is tagged 'corroborated x2' or 'single-source, unverified' so a reader
+    (or the synthesis LLM) can weight confidence accordingly.
+    """
+    if not scored_chunks:
+        return "[no fetched content available to condense]"
+
+    if annotate_agreement:
+        working = _apply_corroboration_bonus(scored_chunks, agreement_bonus, agreement_similarity)
+    else:
+        working = [(score, url, chunk, 1) for score, url, chunk in scored_chunks]
+
+    seen_hashes: set[str] = set()
+    deduped: list[tuple[float, str, str, int]] = []
+    for score, url, chunk, count in working:
+        h = hashlib.sha1(chunk.strip().lower().encode("utf-8", "ignore")).hexdigest()
+        if h in seen_hashes:
+            continue
+        seen_hashes.add(h)
+        deduped.append((score, url, chunk, count))
+
+    relevant = sorted(
+        (item for item in deduped if item[0] >= min_score),
+        key=lambda item: item[0],
+        reverse=True,
+    )[:top_k]
+
+    if not relevant:
+        return (
+            f"[no relevant content found among fetched sources for: {query} — "
+            "fetched pages did not match the query closely enough to include; "
+            "do not fabricate an answer from them, disclose the gap instead]"
+        )
+
+    lines = [f"[Condensed evidence for: {query} — {len(relevant)} relevant excerpt(s)]"]
+    if annotate_agreement:
+        corroborated_n = sum(1 for item in relevant if item[3] > 1)
+        lines.append(
+            f"[Source agreement: {corroborated_n}/{len(relevant)} excerpt(s) corroborated by "
+            "an independent domain; treat the rest as single-source and unverified]"
+        )
+    for score, url, chunk, count in relevant:
+        trust = f"corroborated x{count}" if count > 1 else "single-source, unverified"
+        if annotate_agreement:
+            lines.append(f"[source: {url} | relevance: {score:.2f} | {trust}]\n{chunk}")
+        else:
+            lines.append(f"[source: {url} | relevance: {score:.2f}]\n{chunk}")
+    return "\n\n".join(lines)
+
+
+def condense_evidence(
+    pages: list[tuple[str, str]],
+    query: str,
+    embedder=None,
+    top_k: int = CONDENSE_TOP_K,
+    chunk_chars: int = CONDENSE_CHUNK_CHARS,
+    min_score: float = CONDENSE_MIN_SCORE,
+    max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
+) -> str:
+    """Convenience wrapper for callers that already have raw (url, text)
+    pages in hand and just want them chunked, scored, and condensed."""
+    url_chunks: list[tuple[str, str]] = []
+    for url, text in pages:
+        url_chunks.extend((url, c) for c in reason.chunk_text(text, chunk_chars))
+        if len(url_chunks) >= max_chunks_to_score:
+            break
+    scored = _score_url_chunks(url_chunks, query, embedder, max_chunks_to_score)
+    return _finalize_condensed(scored, query, top_k=top_k, min_score=min_score)
+
+
+# ── fetch + scoring pipeline helpers ──────────────────────────────────
+# These are imported by websurf.py for its _fetch_and_score_pipeline and _deep_search_impl
+
+def _fetch_and_score_pipeline(
+    urls: list[str],
+    query: str,
+    embedder,
+    max_chars_per_page: int,
+    chunk_chars: int = CONDENSE_CHUNK_CHARS,
+    max_workers: int = DEEP_SEARCH_MAX_WORKERS,
+    max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
+    fetch_fn=web_fetch,
+    batch_prefetch_fn=None,
+) -> tuple[list[tuple[float, str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
+    """Fetch multiple URLs concurrently, scoring each page's chunks for
+    relevance the moment that page finishes downloading — not after every
+    URL has finished.
+
+    If batch_prefetch_fn is given (deep_research's Crawl4AI batch path), it's
+    called ONCE with the full url list up front to grab as many pages as
+    possible in a single browser session; only URLs it doesn't cover fall
+    through to the per-URL thread-pool path using fetch_fn (e.g. web_fetch).
+    deep_search never passes batch_prefetch_fn, so its behavior is unchanged.
+
+    Returns (scored_chunks, pages, url_outcomes).
+    """
+    if not urls:
+        return [], [], []
+
+    log.info("[fetch_pipeline] attempting %d url(s): %s", len(urls), urls)
+
+    scored: list[tuple[float, str, str]] = []
+    pages: list[tuple[str, str]] = []
+    url_outcomes: list[tuple[str, str]] = []
+    chunks_scored = 0
+
+    def _process(url: str, text: str) -> None:
+        nonlocal chunks_scored
+        if text.startswith("[fetch failed"):
+            log.info("[fetch_pipeline] failed %s: %s", url, text)
+            url_outcomes.append((url, text))
+            return
+        log.info("[fetch_pipeline] fetched %s (%d chars)", url, len(text))
+        url_outcomes.append((url, f"ok ({len(text)} chars)"))
+        pages.append((url, text))
+        remaining_budget = max_chunks_to_score - chunks_scored
+        if remaining_budget <= 0:
+            return
+        page_chunks = [(url, c) for c in reason.chunk_text(text, chunk_chars)][:remaining_budget]
+        page_scored = _score_url_chunks(page_chunks, query, embedder, remaining_budget)
+        scored.extend(page_scored)
+        chunks_scored += len(page_scored)
+
+    prefetched: dict[str, str] = {}
+    if batch_prefetch_fn is not None:
+        try:
+            prefetched = batch_prefetch_fn(urls, max_chars_per_page) or {}
+        except Exception as e:
+            log.info("[fetch_pipeline] batch prefetch failed: %s", e)
+            prefetched = {}
+
+    for url, text in prefetched.items():
+        _process(url, text)
+
+    remaining_urls = [u for u in urls if u not in prefetched]
+    if remaining_urls:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(remaining_urls)))) as pool:
+            future_to_url = {pool.submit(fetch_fn, url, max_chars_per_page): url for url in remaining_urls}
+            for future in concurrent.futures.as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    text = future.result()
+                except Exception as e:
+                    log.warning("[fetch_pipeline] exception fetching %s: %s", url, e)
+                    url_outcomes.append((url, f"exception: {e}"))
+                    continue
+                _process(url, text)
+
+    log.info(
+        "[fetch_pipeline] done: %d/%d succeeded, %d chunk(s) scored",
+        len(pages), len(urls), chunks_scored,
+    )
+    return scored, pages, url_outcomes
+
+
+def _deep_search_impl(
+    query: str,
+    embedder,
+    *,
+    num_searches: int = 1,
+    num_fetches: int = 0,
+    max_chars_per_page: int = 4000,
+    max_workers: int = 3,
+    exclude_urls: set[str] | None = None,
+    fetch_fn=web_fetch,
+    batch_prefetch_fn=None,
+    respect_robots: bool = False,
+    annotate_agreement: bool = False,
+    condense_top_k: int = CONDENSE_TOP_K,
+    condense_min_score: float = CONDENSE_MIN_SCORE,
+    condense_max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
+    expand_sitemap: bool = False,
+    sitemap_max_urls: int = RESEARCH_SITEMAP_MAX_URLS,
+) -> tuple[str, set[str]]:
+    """Fixed, non-adaptive search pass with optional fetch/condense.
+
+    With num_fetches=0 this returns snippets/URLs only, which is now the
+    default public deep_search behavior. Deep_research calls this helper with
+    its own positive fetch count plus the research-only knobs (Crawl4AI batch
+    prefetch, robots gating, sitemap expansion, corroboration annotation) to
+    do fetched-source work.
+
+    Returns (formatted_bundle, urls_actually_fetched) — the URL set lets
+    deep_research exclude already-seen URLs across rounds without a
+    separate re-fetch-avoidance mechanism.
+    """
+    if not query or not query.strip():
+        return "[search failed: empty query]", set()
+
+    num_searches = max(1, num_searches)
+    num_fetches = max(0, num_fetches)
+
+    log.info("[deep_search] query=%r searches=%d fetches=%d", query, num_searches, num_fetches)
+
+    # Search phase
+    snippets = []
+    seen_urls = set()
+    for i in range(num_searches):
+        raw, err = _web_search_raw(query, MAX_RESULTS, pageno=i + 1)
+        if err:
+            log.warning("[deep_search] search %d failed: %s", i + 1, err)
+            continue
+        results = raw or []
+        for r in results:
+            u = r.get("url")
+            if u and u not in seen_urls:
+                seen_urls.add(u)
+                snippets.append(r)
+
+    snippet_bundle = _format_snippet_bundle(snippets)
+
+    if num_fetches == 0:
+        return snippet_bundle, set()
+
+    # Fetch phase
+    candidates = [r.get("url") for r in snippets[:num_fetches] if r.get("url")]
+    if not candidates:
+        return snippet_bundle, set()
+
+    urls_to_fetch = [u for u in candidates if u not in (exclude_urls or set())]
+    if not urls_to_fetch:
+        return snippet_bundle, set()
+
+    # Score/fetch pipeline
+    scored_chunks, pages, url_outcomes = _fetch_and_score_pipeline(
+        urls_to_fetch,
+        query,
+        embedder,
+        max_chars_per_page,
+        chunk_chars=CONDENSE_CHUNK_CHARS,
+        max_workers=max_workers,
+        max_chunks_to_score=condense_max_chunks_to_score,
+        fetch_fn=fetch_fn,
+        batch_prefetch_fn=batch_prefetch_fn,
+    )
+
+    # Condense evidence
+    if pages:
+        condensed = _finalize_condensed(
+            scored_chunks, query, top_k=condense_top_k, min_score=condense_min_score,
+            annotate_agreement=annotate_agreement,
+            agreement_bonus=RESEARCH_AGREEMENT_BONUS,
+            agreement_similarity=RESEARCH_AGREEMENT_SIMILARITY,
+        )
+    else:
+        condensed = "[no fetched content available to condense]"
+
+    manifest = _format_url_manifest(url_outcomes)
+    fetched_url_set = {url for url, _text in pages}
+
+    if not pages:
+        return f"{snippet_bundle}\n\n{manifest}", fetched_url_set
+
+    return f"{snippet_bundle}\n\n{manifest}\n\n{condensed}", fetched_url_set
+
+
+def _format_snippet_bundle(snippets: list[dict]) -> str:
+    """Format a bundle of search snippets for the LLM."""
+    if not snippets:
+        return "[no search results]"
+    lines = ["[Search results — {} result(s)]".format(len(snippets))]
+    for i, s in enumerate(snippets, 1):
+        title = s.get("title") or ""
+        snippet = s.get("snippet") or ""
+        url = s.get("url") or ""
+        lines.append(f"{i}. {title}\n   {snippet}\n   {url}")
+    return "\n".join(lines)
+
+
+def _format_url_manifest(url_outcomes: list[tuple[str, str]]) -> str:
+    if not url_outcomes:
+        return "[no URLs attempted]"
+    lines = [f"[URL manifest — {len(url_outcomes)} attempted]"]
+    for url, status in url_outcomes:
+        lines.append(f"- {url} — {status}")
+    return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Deep research graph — multi-round fetch + synthesize
 # ══════════════════════════════════════════════════════════════════════════
 

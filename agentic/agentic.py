@@ -65,7 +65,6 @@ from agentic.tools import (
     repo_file_tree,
     repo_read_file,
     repo_search_text,
-    read_paper_url,
     write_report,
     search_jobs,
     draft_job_post_social,
@@ -632,14 +631,6 @@ _reg("save_note", "Save a note to a workspace file. content MUST be plain text o
     {"title": {"type": "string", "description": "Short filename title."}, "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."}, "folder": {"type": "string", "description": "Subfolder, default: notes"}},
     required=["title", "content"])
 
-_reg_no_handler("read_paper_url",
-    "Fetch and extract text from one EXACT URL (a specific paper/article the "
-    "user pointed at) — no search involved, unlike adaptive_search/deep_research. "
-    "Pass `query` to get the content condensed to the most relevant excerpts "
-    "instead of just the opening section.",
-    {"url": {"type": "string"}, "query": {"type": "string"}, "max_chars": {"type": "integer"}},
-    required=["url"])
-
 _reg_no_handler("write_report",
     "Write (or append a section to) one polished long-form markdown report "
     "under the workspace reports folder. Use for a single coherent "
@@ -934,12 +925,6 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("query", ""),
             int(args.get("limit", 3) or 3),
             embedder=_owner_embedder(owner),
-        )
-    if name == "read_paper_url":
-        return read_paper_url(
-            args.get("url", ""), args.get("query", ""),
-            embedder=_owner_embedder(owner),
-            max_chars=int(args.get("max_chars", 40000) or 40000),
         )
     if name == "write_report":
         return write_report(

@@ -62,12 +62,8 @@ caller passes the already-loaded client/model (typically the
 """
 from __future__ import annotations
 
-import os
-import re
-from typing import Any
-
 from system.log import get_logger
-from agentic.toolkit.websurf import condense_evidence
+from agentic.toolkit.research import condense_evidence
 
 log = get_logger(__name__)
 

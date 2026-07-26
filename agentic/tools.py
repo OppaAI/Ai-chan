@@ -11,7 +11,7 @@ agent loop needs them.
 """
 from __future__ import annotations
 
-from agentic.toolkit.websurf import read_paper_url, web_search_context
+from agentic.toolkit.websurf import web_search_context
 from agentic.toolkit.research import adaptive_search, deep_research
 from agentic.toolkit.reports import write_report
 from agentic.toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state

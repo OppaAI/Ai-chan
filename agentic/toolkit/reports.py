@@ -2,7 +2,7 @@
 toolkit/reports.py
 
 Long-form document writing for Aiko's agentic loop — the write counterpart
-to repo_read_file/read_paper_url. Distinct from save_note (plain-text,
+to repo_read_file/deep_read. Distinct from save_note (plain-text,
 <=400 chars, scratch) and learn_knowledge (chunked into the RAG store):
 this is for one coherent, structured deliverable saved to the workspace.
 
