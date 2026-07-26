@@ -49,7 +49,7 @@ class Capability:
 # always available (see ALWAYS_ON_TOOLS) — this keeps cross-cutting tools
 # like make_plan/save_note from ever being accidentally filtered out.
 TOOL_DOMAINS: dict[str, str] = {
-    "deep_search": "research",
+    "adaptive_search": "research",
     "deep_research": "research",
     "schedule_job": "scheduling",
     "list_schedule": "scheduling",
@@ -103,6 +103,8 @@ TOOL_DOMAINS: dict[str, str] = {
 ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "make_plan", "create_checklist", "save_note", "read_workspace_file",
     "summarize_task_state", "list_playbooks", "run_playbook", "final_answer",
+    "read_paper_url",
+    "web_search_context",
 })
 
 # Tool domains per capability (maps capability id -> tuple of domains)

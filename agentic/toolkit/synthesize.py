@@ -67,7 +67,7 @@ import re
 from typing import Any
 
 from system.log import get_logger
-from agentic.toolkit.research import condense_evidence
+from agentic.toolkit.websurf import condense_evidence
 
 log = get_logger(__name__)
 

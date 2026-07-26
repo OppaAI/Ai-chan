@@ -80,7 +80,7 @@ import time
 from system.bioclock import local_now
 from system.log import get_logger
 from system.wakeup import AikoWakeup
-from agentic.toolkit.research import web_search
+from agentic.toolkit.websurf import web_search
 from sensory.speak import extract_dialogue_for_tts
 
 log = get_logger(__name__)

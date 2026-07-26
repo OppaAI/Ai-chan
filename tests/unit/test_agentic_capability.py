@@ -54,7 +54,7 @@ class TestCapabilityStructure:
         """All registered tools should have a domain or be in ALWAYS_ON_TOOLS."""
         all_tools = set(TOOL_DOMAINS.keys()) | ALWAYS_ON_TOOLS
         # Check key tools are present
-        assert "deep_search" in TOOL_DOMAINS
+        assert "adaptive_search" in TOOL_DOMAINS
         assert "deep_research" in TOOL_DOMAINS
         assert "write_report" in TOOL_DOMAINS
         assert "learn_knowledge" in TOOL_DOMAINS
@@ -187,7 +187,7 @@ class TestFilteredToolSchemas:
         """Build mock tool schemas for testing."""
         return [
             {"function": {"name": "make_plan", "parameters": {}}},
-            {"function": {"name": "deep_search", "parameters": {}}},
+            {"function": {"name": "adaptive_search", "parameters": {}}},
             {"function": {"name": "deep_research", "parameters": {}}},
             {"function": {"name": "write_report", "parameters": {}}},
             {"function": {"name": "learn_knowledge", "parameters": {}}},
@@ -209,7 +209,7 @@ class TestFilteredToolSchemas:
         names = {s["function"]["name"] for s in filtered}
 
         # Research domain
-        assert "deep_search" in names
+        assert "adaptive_search" in names
         assert "deep_research" in names
         # KB domain
         assert "learn_knowledge" in names
@@ -228,7 +228,7 @@ class TestFilteredToolSchemas:
         names = {s["function"]["name"] for s in filtered}
 
         assert "schedule_job" in names
-        assert "deep_search" not in names
+        assert "adaptive_search" not in names
         assert "make_plan" in names  # Always on
 
     def test_multiple_capabilities_union(self):
@@ -237,7 +237,7 @@ class TestFilteredToolSchemas:
         filtered = filtered_tool_schemas(schemas, ["research", "scheduling"])
         names = {s["function"]["name"] for s in filtered}
 
-        assert "deep_search" in names
+        assert "adaptive_search" in names
         assert "schedule_job" in names
 
     def test_unknown_capability_ignored(self):

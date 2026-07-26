@@ -11,7 +11,8 @@ agent loop needs them.
 """
 from __future__ import annotations
 
-from agentic.toolkit.research import web_fetch, deep_search, deep_research, web_search, web_search_context, read_paper_url
+from agentic.toolkit.websurf import read_paper_url, web_search_context
+from agentic.toolkit.research import adaptive_search, deep_research
 from agentic.toolkit.reports import write_report
 from agentic.toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
 from agentic.toolkit.organize import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
@@ -30,7 +31,7 @@ __all__ = [
     "create_checklist",
     "dedupe_postings",
     "deep_research",
-    "deep_search",
+    "adaptive_search",
     "draft_job_post_social",
     "draft_photo_social",
     "draft_video_social",
@@ -51,8 +52,6 @@ __all__ = [
     "schedule_reminder",
     "search_jobs",
     "summarize_task_state",
-    "web_fetch",
-    "web_search",
     "web_search_context",
     "write_photo_ingestion_report",
 ]

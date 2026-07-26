@@ -46,7 +46,7 @@ AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "5000"))
 # embedder for these; the graph executor previously never did, so any
 # RAG-style scoring inside these tools silently degraded to keyword
 # fallback when run through the graph path instead of ReAct.
-_EMBEDDER_AWARE_TOOLS = {"deep_search", "deep_research"}
+_EMBEDDER_AWARE_TOOLS = {"adaptive_search", "deep_research"}
 _TOOL_MAP_CACHE: dict[str, Callable[..., Any]] | None = None
 _TOOL_MAP_LOCK = threading.Lock()
 _PLAYBOOK_WRITE_LOCK = threading.Lock()
@@ -138,7 +138,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
     to invent the same sequence on every prompt:
 
       - "research_and_report"   (deep_research + KB + synthesize + write_report + learn_knowledge)
-      - "search_kb_and_report"  (deep_search + KB + synthesize + write_report + learn_knowledge)
+      - "search_kb_and_report"  (adaptive_search + KB + synthesize + write_report + learn_knowledge)
       - "compare_and_report"    (two parallel deep_research calls + KB + comparison synthesize + write_report + learn_knowledge)
       - "checklist_and_save"    (create_checklist + save_note; for explicit checklist asks)
       - "simple_save_note"      (just save the prompt as a note; for plain scratch saves)
@@ -199,7 +199,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "requires_any": [],
             "capabilities": ["research"],
             "nodes": [
-                {"id": "web",    "tool": "deep_search",  "args": {"query": "$prompt"}},
+                {"id": "web",    "tool": "adaptive_search",  "args": {"query": "$prompt"}},
                 {"id": "kb",     "tool": "kb_search",    "depends_on": ["web"],    "args": {"query": "$prompt"}},
                 {"id": "merge",  "tool": "combine_evidence", "depends_on": ["web", "kb"],
                  "args": {"parts": ["$result:web", "$result:kb"]}},
@@ -691,10 +691,23 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("organize tools unavailable for graph executor: %s", exc)
     try:
-        from agentic.toolkit.research import deep_search, deep_research
-        mapping.update({"deep_search": deep_search, "deep_research": deep_research})
+        from agentic.toolkit.research import (
+            adaptive_search, plan_effort, search_and_rank,
+            fetch_and_condense_ranked, judge_sufficient,
+            deep_research, deep_fetch_round, combine_research_rounds,
+        )
+        mapping.update({
+            "adaptive_search": adaptive_search,
+            "plan_effort": plan_effort,
+            "search_and_rank": search_and_rank,
+            "fetch_and_condense_ranked": fetch_and_condense_ranked,
+            "judge_sufficient": judge_sufficient,
+            "deep_research": deep_research,
+            "deep_fetch_round": deep_fetch_round,
+            "combine_research_rounds": combine_research_rounds,
+        })
     except Exception as exc:
-        log.debug("research tools unavailable for graph executor: %s", exc)
+        log.debug("research graph tools unavailable for graph executor: %s", exc)
     try:
         # write_report is a long-form markdown writer — formerly ReAct-only
         # (see agentic/agentic.py:602). Wiring it into the graph tool map
@@ -795,9 +808,9 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
     # graph executor is the only place that has the owner's client+model
     # pair; the tool map functions themselves are pure so they don't reach
     # back into the owner object.
-    if node.tool in {"synthesize_report", "polish_text"}:
+    if node.tool in {"synthesize_report", "polish_text", "judge_sufficient", "combine_research_rounds"}:
         args["client"] = llm_client
-        args["model"] = llm_model
+        args["model"] = llm_model        
     if node.tool in {"kb_search", "learn_report", "condense_text"}:
         args["embedder"] = embedder
     try:
@@ -963,7 +976,7 @@ def _promotion_args_for_step(tool: str, step: dict[str, Any]) -> dict[str, Any]:
         return {"title": "$title", "items": "$heuristic_items"}
     if tool == "save_note":
         return {"title": "$title", "content": "$prompt", "folder": "notes"}
-    if tool in {"deep_search", "deep_research"}:
+    if tool == "deep_research":
         return {"query": "$prompt"}
     if tool in {"synthesize_report", "polish_text"}:
         return {"evidence": "$prompt", "prompt": "$prompt", "style": "auto"}

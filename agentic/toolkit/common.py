@@ -65,3 +65,21 @@ def safe_path(relative_path: str) -> Path:
 def json_block(title: str, payload: dict[str, Any]) -> str:
     """Render machine-readable tool output with a short human title."""
     return f"[{title}]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def ask_llm_json(client, model: str, prompt: str, max_tokens: int) -> dict | None:
+    """Best-effort structured LLM call returning parsed JSON or None."""
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            max_tokens=max_tokens,
+            temperature=0.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        import re, json
+        match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        return json.loads(match.group(0) if match else raw)
+    except Exception:
+        return None

@@ -35,7 +35,7 @@ from typing import Any
 import requests
 
 from system.bioclock import local_now
-from agentic.toolkit.research import MAX_RESULTS, web_fetch, _web_search_raw
+from agentic.toolkit.websurf import MAX_RESULTS, web_fetch, _web_search_raw
 
 _RELATIVE_RE = re.compile(
     r"(?P<num>\d+)\s*(?P<unit>hour|day|week|month)s?\s+ago", re.IGNORECASE,

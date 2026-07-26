@@ -50,7 +50,7 @@ from agentic.agentic import (
 from agentic import schema
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
 from agentic.toolkit.reports import write_report
-from agentic.toolkit.research import deep_search, deep_research
+from agentic.toolkit.research import deep_research
 from agentic.capability import match_capabilities, filtered_tool_schemas, ALWAYS_ON_TOOLS
 
 
@@ -112,7 +112,7 @@ class TestToolRegistration:
     def test_all_core_tools_registered(self):
         expected_tools = {
             "make_plan", "create_checklist", "save_note", "read_workspace_file",
-            "summarize_task_state", "deep_search", "deep_research", "read_paper_url",
+            "summarize_task_state", "adaptive_search", "deep_research", "read_paper_url",
             "write_report", "learn_knowledge", "run_playbook", "list_playbooks",
             "search_jobs", "draft_photo_social", "post_photo_social",
             "draft_video_social", "post_video_social", "final_answer",
@@ -133,7 +133,7 @@ class TestToolRegistration:
         assert "draft_photo_social" not in _SOCIAL_POST_TOOLS
 
     def test_research_tools_identified(self):
-        assert "deep_search" in _RESEARCH_TOOLS
+        assert "adaptive_search" in _RESEARCH_TOOLS
         assert "deep_research" in _RESEARCH_TOOLS
 
 
@@ -144,7 +144,7 @@ class TestRequiredArgs:
         assert "goal" in _required_args_for("make_plan")
         assert "title" in _required_args_for("save_note")
         assert "content" in _required_args_for("save_note")
-        assert "query" in _required_args_for("deep_search")
+        assert "query" in _required_args_for("adaptive_search")
         assert "query" in _required_args_for("deep_research")
         assert "title" in _required_args_for("write_report")
         assert "title" in _required_args_for("learn_knowledge")
@@ -158,8 +158,8 @@ class TestRequiredArgs:
         assert result.error_type == "missing_args"
         assert "content" in result.content
 
-    def test_validate_args_empty_query(self):
-        result = _validate_args("deep_search", {"query": ""})
+    def test_validate_args_empty_query_for_adaptive_search(self):
+        result = _validate_args("adaptive_search", {"query": ""})
         assert result is not None
         assert result.ok is False
         assert result.error_type == "missing_args"
@@ -239,7 +239,7 @@ class TestDispatchTool:
 
     def test_deep_search_uses_embedder(self):
         owner = MockOwner()
-        result = dispatch_tool("deep_search", {"query": "test query"}, owner=owner)
+        result = dispatch_tool("adaptive_search", {"query": "test query"}, owner=owner)
         assert "Web search results" in result or "no results found" in result.lower()
 
     def test_run_playbook_passes_embedder(self):
@@ -325,7 +325,7 @@ class TestMaxAttempts:
             assert agentic_module._max_attempts_for("deep_research") == 3
 
     def test_other_tools_default_1(self):
-        assert _max_attempts_for("deep_search") == 1
+        # deep_search removed; adaptive_search uses default attempts=1
         assert _max_attempts_for("save_note") == 1
 
 
@@ -373,7 +373,7 @@ class TestCapabilityMatching:
         filtered = filtered_tool_schemas(all_schemas, ["research"])
         tool_names = {s["function"]["name"] for s in filtered}
         # Should have research tools
-        assert "deep_search" in tool_names
+        assert "adaptive_search" in tool_names
         assert "deep_research" in tool_names
         assert "read_paper_url" in tool_names
         assert "write_report" in tool_names

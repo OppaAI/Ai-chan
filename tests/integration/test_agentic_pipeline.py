@@ -26,7 +26,7 @@ load_config()
 from agentic import schema
 from agentic.agentic import run_agentic_chat
 from agentic.toolkit.synthesize import synthesize_report, kb_search, learn_report
-from agentic.toolkit.research import deep_search, deep_research
+from agentic.toolkit.research import deep_research
 from agentic.toolkit.plan import save_note, create_checklist
 
 
@@ -126,8 +126,8 @@ class TestGraphExecutorIntegration:
 
         with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
             with patch("agentic.agentic._fetch_agentic_only_context", return_value={}):
-                with patch("agentic.toolkit.research.deep_search") as mock_search:
-                    mock_search.return_value = "Search snippets"
+                with patch("agentic.toolkit.research.adaptive_search") as mock_search:
+                    mock_search.return_value = "Search results from adaptive_search"
                     with patch("agentic.toolkit.synthesize.kb_search") as mock_kb:
                         mock_kb.return_value = "KB context"
                         with patch("agentic.toolkit.reports.write_report") as mock_write:
@@ -264,15 +264,17 @@ class TestToolDispatchIntegration:
             result = dispatch_tool("deep_research", {"query": "test"}, owner=owner)
             assert "Deep research" in result
 
-    def test_deep_search_dispatch(self):
+    def test_adaptive_search_dispatch(self):
         from agentic.agentic import dispatch_tool
 
         owner = MockOwner()
         owner._memorize._mem._embedder = FakeEmbedder()
 
         with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
-            result = dispatch_tool("deep_search", {"query": "test"}, owner)
-            assert "Web search results" in result
+            with patch("agentic.toolkit.research.adaptive_search") as mock_as:
+                mock_as.return_value = "Search results from adaptive_search"
+                result = dispatch_tool("adaptive_search", {"query": "test"}, owner)
+                assert "Search results" in result
 
     def test_write_report_dispatch(self):
         from agentic.agentic import dispatch_tool

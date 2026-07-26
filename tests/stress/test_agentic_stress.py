@@ -33,7 +33,6 @@ from agentic import schema
 from agentic.agentic import dispatch_tool, _research_call_count, AGENT_RESEARCH_MAX_CALLS
 from agentic.toolkit.synthesize import synthesize_report, kb_search
 from agentic.toolkit.plan import save_note, create_checklist
-from agentic.toolkit.research import deep_search
 from agentic.capability import match_capabilities, filtered_tool_schemas
 
 
@@ -180,7 +179,7 @@ class TestToolDispatchStress:
             owner = MagicMock()
             owner._memorize._mem._embedder = FakeEmbedder()
             with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
-                return dispatch_tool("deep_search", {"query": f"query {i}"}, owner=owner)
+                return dispatch_tool("adaptive_search", {"query": f"query {i}"}, owner=owner)
 
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = [executor.submit(call_search, i) for i in range(num_calls)]

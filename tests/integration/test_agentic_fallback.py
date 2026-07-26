@@ -79,7 +79,7 @@ def test_tool_failure_detail_is_sanitized_for_user_facing_fallback():
 
 def test_processed_deep_search_context_is_compacted_after_use():
     messages = [
-        {"role": "tool", "name": "deep_search", "content": "x" * 1200},
+        {"role": "tool", "name": "adaptive_search", "content": "x" * 1200},
         {"role": "assistant", "content": "I processed the evidence and will save a note."},
     ]
 
@@ -91,10 +91,10 @@ def test_processed_deep_search_context_is_compacted_after_use():
 
 def test_deep_search_limit_only_counts_successful_calls():
     state = TaskState(goal="research with one successful deep search")
-    state.record(ToolResult(ok=False, tool="deep_search", args={"query": "bad"}, content="[search failed: timeout]"))
+    state.record(ToolResult(ok=False, tool="adaptive_search", args={"query": "bad"}, content="[search failed: timeout]"))
 
-    assert not _has_successful_tool_call(state, "deep_search")
+    assert not _has_successful_tool_call(state, "adaptive_search")
 
-    state.record(ToolResult(ok=True, tool="deep_search", args={"query": "good"}, content="[Web search results]"))
+    state.record(ToolResult(ok=True, tool="adaptive_search", args={"query": "good"}, content="[Web search results]"))
 
-    assert _has_successful_tool_call(state, "deep_search")
+    assert _has_successful_tool_call(state, "adaptive_search")

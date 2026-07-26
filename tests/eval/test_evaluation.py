@@ -27,7 +27,8 @@ load_config()
 
 from agentic import schema
 from agentic.toolkit.synthesize import synthesize_report, detect_style, detect_compare, split_subjects
-from agentic.toolkit.research import deep_search, deep_research, condense_evidence
+from agentic.toolkit.websurf import condense_evidence
+from agentic.toolkit.research import deep_research
 from agentic.capability import match_capabilities, filtered_tool_schemas
 from agentic.agentic import _verify_final_answer
 from agentic.toolkit.reports import write_report
@@ -454,7 +455,7 @@ class TestCapabilityRoutingAccuracy:
         names = {s["function"]["name"] for s in filtered}
 
         # Research domain
-        assert "deep_search" in names
+        assert "adaptive_search" in names
         assert "deep_research" in names
         assert "read_paper_url" in names
         # KB domain
@@ -473,7 +474,7 @@ class TestCapabilityRoutingAccuracy:
         filtered = filtered_tool_schemas(all_schemas, ["research", "scheduling"])
         names = {s["function"]["name"] for s in filtered}
 
-        assert "deep_search" in names
+        assert "adaptive_search" in names
         assert "schedule_job" in names
 
 

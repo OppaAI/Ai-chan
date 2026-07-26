@@ -74,11 +74,11 @@ class TestPlaybookStructure:
         web_node = next(n for n in p["nodes"] if n["id"] == "web")
         assert web_node["tool"] == "deep_research"
 
-    def test_search_kb_and_report_uses_deep_search(self):
+    def test_search_kb_and_report_uses_adaptive_search(self):
         playbooks = _default_playbooks()
         p = next(p for p in playbooks if p["id"] == "search_kb_and_report")
         web_node = next(n for n in p["nodes"] if n["id"] == "web")
-        assert web_node["tool"] == "deep_search"
+        assert web_node["tool"] == "adaptive_search"
 
     def test_compare_and_report_has_parallel_web_nodes(self):
         playbooks = _default_playbooks()
@@ -128,13 +128,13 @@ class TestPlaceholderSubstitution:
         assert result == ["item1", "item2", "item3"]
 
     def test_result_substitution(self):
-        results = {"search": NodeResult("search", "deep_search", True, "search results here", {})}
+        results = {"search": NodeResult("search", "adaptive_search", True, "search results here", {})}
         result = _substitute("$result:search", "prompt", results)
         assert result == "search results here"
 
     def test_result_substitution_truncates_at_4000(self):
         long_content = "x" * 5000
-        results = {"search": NodeResult("search", "deep_search", True, long_content, {})}
+        results = {"search": NodeResult("search", "adaptive_search", True, long_content, {})}
         result = _substitute("$result:search", "prompt", results)
         assert len(result) == 4000
 
@@ -306,7 +306,7 @@ class TestToolMap:
 
     def test_research_tools_present(self):
         tool_map = _build_tool_map()
-        assert "deep_search" in tool_map
+        assert "adaptive_search" in tool_map
         assert "deep_research" in tool_map
 
     def test_synthesis_tools_present(self):
@@ -363,9 +363,9 @@ class TestNodeExecution:
 
     def test_embedder_passed_to_aware_tools(self):
         embedder = FakeEmbedder()
-        tool_map = {"deep_search": lambda query, embedder=None: f"searched: {query}"}
+        tool_map = {"adaptive_search": lambda query, embedder=None: f"searched: {query}"}
         with patch("agentic.schema._tool_map", return_value=tool_map):
-            node = PlanNode("search", "deep_search", {"query": "$prompt"})
+            node = PlanNode("search", "adaptive_search", {"query": "$prompt"})
             result = _run_node(node, "test query", {}, embedder=embedder)
             assert result.ok
 

@@ -80,13 +80,13 @@ from system.config import load_config
 load_config()
 
 from cognition import reason
-from agentic.toolkit.research import (
-    _ask_llm_json,
+from agentic.toolkit.websurf import (
     _is_private_or_local_host,
     _web_search_raw,
-    deep_research,
     web_fetch,
 )
+from agentic.toolkit.research import deep_research
+from agentic.toolkit.common import ask_llm_json as _ask_llm_json
 
 from system.log import get_logger
 

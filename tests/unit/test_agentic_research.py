@@ -1,7 +1,7 @@
 """
 tests/unit/test_agentic_research.py
 
-Unit tests for agentic/toolkit/research.py — web search, deep_search, deep_research.
+Unit tests for web primitives (websurf) and research graphs (research_graph).
 
 Run: pytest tests/unit/test_agentic_research.py -v
 """
@@ -22,11 +22,9 @@ sys.path.insert(0, "/home/oppa-ai/jetson")
 from system.config import load_config
 load_config()
 
-from agentic.toolkit.research import (
+from agentic.toolkit.websurf import (
     web_search,
     web_fetch,
-    deep_search,
-    deep_research,
     condense_evidence,
     read_paper_url,
     _web_search_raw,
@@ -35,7 +33,6 @@ from agentic.toolkit.research import (
     _apply_corroboration_bonus,
     _fetch_and_score_pipeline,
     _deep_search_impl,
-    _ask_llm_json,
     DEEP_SEARCH_NUM_FETCHES,
     DEEP_SEARCH_NUM_SEARCHES,
     DEEP_SEARCH_MAX_CHARS_PER_PAGE,
@@ -47,6 +44,7 @@ from agentic.toolkit.research import (
     CONDENSE_TOP_K,
     CONDENSE_MIN_SCORE,
 )
+from agentic.toolkit.research import deep_research
 
 
 class FakeEmbedder:
@@ -80,7 +78,7 @@ class TestWebSearchRaw:
     """Tests for _web_search_raw low-level SearXNG call."""
 
     def test_successful_search(self):
-        with patch("agentic.toolkit.research.requests.get") as mock_get:
+        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.return_value = {
@@ -96,7 +94,7 @@ class TestWebSearchRaw:
             assert results[0]["title"] == "Test"
 
     def test_rate_limit_retry(self):
-        with patch("agentic.toolkit.research.requests.get") as mock_get:
+        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
             # First two calls rate limited, third succeeds
             mock_resp_429 = MagicMock()
             mock_resp_429.status_code = 429
@@ -112,7 +110,7 @@ class TestWebSearchRaw:
 
     def test_connection_error_retry(self):
         import requests
-        with patch("agentic.toolkit.research.requests.get") as mock_get:
+        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
             mock_get.side_effect = [
                 requests.exceptions.ConnectionError("conn error"),
                 MagicMock(status_code=200, json=lambda: {"results": []}),
@@ -122,7 +120,7 @@ class TestWebSearchRaw:
             assert mock_get.call_count == 2
 
     def test_invalid_json(self):
-        with patch("agentic.toolkit.research.requests.get") as mock_get:
+        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.json.side_effect = ValueError("bad json")
@@ -136,7 +134,7 @@ class TestWebSearch:
     """Tests for web_search public function."""
 
     def test_formats_results(self):
-        with patch("agentic.toolkit.research._web_search_raw") as mock_raw:
+        with patch("agentic.toolkit.websurf._web_search_raw") as mock_raw:
             mock_raw.return_value = (
                 [{"title": "T", "url": "https://u.com", "content": "c"}], None
             )
@@ -146,13 +144,13 @@ class TestWebSearch:
             assert "https://u.com" in result
 
     def test_no_results(self):
-        with patch("agentic.toolkit.research._web_search_raw") as mock_raw:
+        with patch("agentic.toolkit.websurf._web_search_raw") as mock_raw:
             mock_raw.return_value = ([], None)
             result = web_search("nothing")
             assert "no results found" in result.lower()
 
     def test_search_failure_propagates(self):
-        with patch("agentic.toolkit.research._web_search_raw") as mock_raw:
+        with patch("agentic.toolkit.websurf._web_search_raw") as mock_raw:
             mock_raw.return_value = (None, "connection failed")
             result = web_search("query")
             assert "search failed" in result.lower()
@@ -174,34 +172,12 @@ class TestWebFetch:
         assert "not allowed" in result.lower()
 
 
-class TestDeepSearch:
-    """Tests for deep_search snippet-only search."""
-
-    def test_snippet_only_by_default(self):
-        """DEEP_SEARCH_NUM_FETCHES=0 means snippet-only."""
-        assert DEEP_SEARCH_NUM_FETCHES == 0
-
-        with patch("agentic.toolkit.research._web_search_raw") as mock_raw:
-            mock_raw.return_value = ([{"title": "T", "url": "https://u.com", "content": "c"}], None)
-            result = deep_search("query", embedder=FakeEmbedder())
-            assert "Web search results for: query" in result
-            # Should NOT have manifest or condensed sections
-            assert "URL manifest" not in result
-            assert "Condensed evidence" not in result
-
-    def test_with_fetches_if_configured(self):
-        """If DEEP_SEARCH_NUM_FETCHES > 0, fetches pages."""
-        with patch.dict("os.environ", {"DEEP_SEARCH_NUM_FETCHES": "2"}):
-            # Need to reload module for env change - skip for now
-            pass
-
-
 class TestDeepResearch:
     """Tests for deep_research multi-round adaptive research."""
 
     def test_requires_client_and_model_for_adaptive(self):
         """Without client/model, runs single round only."""
-        with patch("agentic.toolkit.research._deep_search_impl") as mock_impl:
+        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
             mock_impl.return_value = ("results", set())
             result = deep_research("query", client=None, model=None, embedder=FakeEmbedder())
             # Should only call once (max_rounds=1 when not adaptive)
@@ -217,7 +193,7 @@ class TestDeepResearch:
             MagicMock(choices=[MagicMock(message=MagicMock(content='{"continue": false, "next_query": "", "reason": "enough"}'))]),
         ]
 
-        with patch("agentic.toolkit.research._deep_search_impl") as mock_impl:
+        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
             mock_impl.return_value = ("round results", {"https://example.com"})
             result = deep_research("query", client=mock_client, model="test", embedder=FakeEmbedder(), max_rounds=3)
             # Should have called _deep_search_impl twice (2 rounds)
@@ -233,7 +209,7 @@ class TestDeepResearch:
             MagicMock(choices=[MagicMock(message=MagicMock(content="Synthesized answer"))]),
         ]
 
-        with patch("agentic.toolkit.research._deep_search_impl") as mock_impl:
+        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
             mock_impl.return_value = ("good evidence here", {"https://example.com"})
             result = deep_research("query", client=mock_client, model="test", embedder=FakeEmbedder())
             assert "Synthesized answer" in result
@@ -249,7 +225,7 @@ class TestDeepResearch:
             Exception("LLM error"),
         ]
 
-        with patch("agentic.toolkit.research._deep_search_impl") as mock_impl:
+        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
             mock_impl.return_value = ("evidence", {"https://example.com"})
             result = deep_research("query", client=mock_client, model="test", embedder=FakeEmbedder())
             # Should return raw rounds log without synthesis
@@ -257,7 +233,7 @@ class TestDeepResearch:
             assert "Round 1" in result
 
     def test_empty_results_handled(self):
-        with patch("agentic.toolkit.research._deep_search_impl") as mock_impl:
+        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
             mock_impl.return_value = ("[search failed: ...]", set())
             result = deep_research("query", embedder=FakeEmbedder())
             assert "no results found" in result.lower()
@@ -336,7 +312,7 @@ class TestFetchAndScorePipeline:
             time.sleep(0.01)  # Simulate network
             return f"Content from {url}"
 
-        with patch("agentic.toolkit.research.web_fetch", side_effect=mock_fetch):
+        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch):
             start = time.monotonic()
             scored, pages, outcomes = _fetch_and_score_pipeline(
                 urls, "query", FakeEmbedder(), 1000, max_workers=4
@@ -356,7 +332,7 @@ class TestFetchAndScorePipeline:
         def batch_fn(url_list, max_chars):
             return {u: prefetched.get(u, "") for u in url_list}
 
-        with patch("agentic.toolkit.research.web_fetch") as mock_fetch:
+        with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
             mock_fetch.return_value = "fallback content"
             scored, pages, outcomes = _fetch_and_score_pipeline(
                 urls, "query", FakeEmbedder(), 1000, batch_prefetch_fn=batch_fn
@@ -373,7 +349,7 @@ class TestFetchAndScorePipeline:
                 return "[fetch failed: connection error]"
             return "Good content here"
 
-        with patch("agentic.toolkit.research.web_fetch", side_effect=mock_fetch):
+        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch):
             scored, pages, outcomes = _fetch_and_score_pipeline(
                 urls, "query", FakeEmbedder(), 1000
             )
@@ -417,15 +393,15 @@ class TestReadPaperUrl:
     """Tests for read_paper_url."""
 
     def test_without_query_returns_full(self):
-        with patch("agentic.toolkit.research.web_fetch") as mock_fetch:
+        with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
             mock_fetch.return_value = "Full paper content here"
             result = read_paper_url("https://arxiv.org/abs/1234.5678")
             assert "Full paper content here" in result
 
     def test_with_query_condenses(self):
-        with patch("agentic.toolkit.research.web_fetch") as mock_fetch:
+        with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
             mock_fetch.return_value = "Long paper about quantum. " * 100
-            with patch("agentic.toolkit.research.condense_evidence") as mock_condense:
+            with patch("agentic.toolkit.websurf.condense_evidence") as mock_condense:
                 mock_condense.return_value = "Condensed for query"
                 result = read_paper_url("https://arxiv.org/abs/1234.5678", query="quantum")
                 assert "Condensed for query" in result
@@ -463,12 +439,12 @@ class TestIntegrationScenarios:
             MagicMock(choices=[MagicMock(message=MagicMock(content="Final synthesized answer"))]),
         ]
 
-        with patch("agentic.toolkit.research._web_search_raw") as mock_search:
+        with patch("agentic.toolkit.websurf._web_search_raw") as mock_search:
             mock_search.return_value = ([
                 {"title": "Q Computing", "url": "https://qc.com", "content": "Quantum computing uses qubits"}
             ], None)
 
-            with patch("agentic.toolkit.research.web_fetch") as mock_fetch:
+            with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
                 mock_fetch.return_value = "Full page: quantum computing uses qubits for superposition."
 
                 result = deep_research(
@@ -482,23 +458,6 @@ class TestIntegrationScenarios:
         assert "Final synthesized answer" in result
         assert "[Synthesis]" in result
         assert "Round 1" in result
-
-    def test_deep_search_snippet_only(self):
-        """deep_search returns only snippets by default."""
-        with patch("agentic.toolkit.research._web_search_raw") as mock_search:
-            mock_search.return_value = ([
-                {"title": "R1", "url": "https://r1.com", "content": "content 1"},
-                {"title": "R2", "url": "https://r2.com", "content": "content 2"},
-            ], None)
-
-            result = deep_search("test query", embedder=FakeEmbedder())
-            assert "Web search results for: test query" in result
-            assert "1. R1" in result
-            assert "2. R2" in result
-            # No fetch/condense sections
-            assert "URL manifest" not in result
-            assert "Condensed evidence" not in result
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

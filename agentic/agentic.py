@@ -46,7 +46,7 @@ from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowle
 from agentic import experience
 from agentic import schema
 from agentic.tools import (
-    deep_search,
+    adaptive_search,
     deep_research,
     make_plan,
     create_checklist,
@@ -111,10 +111,9 @@ AGENT_INCLUDE_EXPERIENCE_CONTEXT = os.getenv("AGENT_INCLUDE_EXPERIENCE_CONTEXT",
 # would create a circular import).
 AGENT_HISTORY_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
-# Max number of times deep_search/deep_research together can be invoked in
-# ONE agentic workflow. Previously hardcoded to exactly once; now tunable.
-# The two tools share one budget so a single agentic workflow cannot keep
-# spending web/research calls after enough evidence or snippets were gathered.
+# Max number of times adaptive_search/deep_research together can be invoked in
+# ONE agentic workflow. The two tools share one budget so a single agentic
+# workflow cannot keep spending web/research calls after enough evidence was gathered.
 AGENT_RESEARCH_MAX_CALLS = int(os.getenv("AGENT_RESEARCH_MAX_CALLS", 1))
 
 # TASK MODE instruction split into a small always-kept CORE (operationally
@@ -134,7 +133,7 @@ TASK_MODE_GUIDANCE = (
     "in task mode. Do not summarize in 1-2 sentences. Output length is "
     "irrelevant until final_answer is reached.\n\n"
     "Treat agentic work as a sequence of steps, not one category: plan/decide "
-    "when useful, research with deep_search for snippet-only discovery/support "
+    "when useful, use adaptive_search for discovery/support "
     "inside a workflow, or deep_research for fetched source reading, synthesis, "
     "and self-learning, inspect repository files for coding or architecture "
     "work, schedule with schedule_job or schedule_reminder when requested, and "
@@ -146,12 +145,13 @@ TASK_MODE_GUIDANCE = (
     "Tool observations are structured JSON. If ok=false, do not pretend the "
     "action succeeded: retry with corrected arguments, choose another tool or "
     "query, or clearly disclose the limitation in the final answer. "
-    f"deep_search/deep_research together may be used at most {AGENT_RESEARCH_MAX_CALLS} "
+    f"adaptive_search/deep_research together may be used at most {AGENT_RESEARCH_MAX_CALLS} "
     "time(s) per agentic workflow. After research returns, read its evidence "
     "and continue with the next productive step (plan, summarize, save, or "
     "answer) instead of searching again. In task mode, do not use "
-    "web_search/web_fetch directly; deep_search is snippet-only and "
-    "deep_research is for fetched evidence. When writing notes after research: "
+    "web_search/web_fetch directly; adaptive_search is the general-purpose "
+    "research tool and deep_research is for thorough fetched evidence. "
+    "When writing notes after research: "
     "cross-check any hardware specs, commands, or version numbers against "
     "fetched page content only — never state technical facts from memory "
     "alone. If a fact cannot be confirmed from fetched content, omit it or "
@@ -295,7 +295,7 @@ _SOCIAL_POST_TOOLS = {"post_job_post_social", "post_photo_social", "post_video_s
 # rule to cover every bulky tool (repo_read_file, search_jobs, etc.), since
 # any of them can accumulate across MAX_AGENT_ITER iterations otherwise.
 _COMPACTABLE_MIN_CHARS = 800
-_RESEARCH_TOOLS = {"deep_search", "deep_research"}
+_RESEARCH_TOOLS = {"adaptive_search", "deep_research"}
 
 
 
@@ -608,12 +608,13 @@ def _reg_no_handler(name, desc, props=None, required=None):
     schema = _f(name, desc, props, required)
     _TOOL_DEFS.append((schema, None))
 
-_reg_no_handler("deep_search", "Web search returning result snippets/URLs only (no full-page fetch). Use for quick discovery or as one step inside a larger workflow.",
-    {"query": {"type": "string", "description": "The focused research query to search and fetch."}},
+_reg_no_handler("adaptive_search",
+    "The default tool for any internet lookup. Adaptively searches, judges if snippets suffice, and only fetches full pages if needed.",
+    {"query": {"type": "string"}},
     required=["query"])
 
-_reg_no_handler("deep_research", "Research tool that fetches and synthesizes full source pages from discovered URLs. Use when the research itself is the deliverable or for self-learning. Costs more than deep_search.",
-    {"query": {"type": "string", "description": "The research question. Can be broader/less scoped than a deep_search query since the tool refines it internally."}},
+_reg_no_handler("deep_research", "Research tool that fetches and synthesizes full source pages from discovered URLs. Use when the research itself is the deliverable or for deep/thorough self-learning.",
+    {"query": {"type": "string", "description": "The research question. Can be broader/less scoped since the tool refines it internally."}},
     required=["query"])
 
 _reg("make_plan", "Make plan.",
@@ -633,7 +634,7 @@ _reg("save_note", "Save a note to a workspace file. content MUST be plain text o
 
 _reg_no_handler("read_paper_url",
     "Fetch and extract text from one EXACT URL (a specific paper/article the "
-    "user pointed at) — no search involved, unlike deep_search/deep_research. "
+    "user pointed at) — no search involved, unlike adaptive_search/deep_research. "
     "Pass `query` to get the content condensed to the most relevant excerpts "
     "instead of just the opening section.",
     {"url": {"type": "string"}, "query": {"type": "string"}, "max_chars": {"type": "integer"}},
@@ -835,12 +836,6 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             error_type="missing_args", retryable=True,
         )
 
-    if name == "deep_search" and not (args.get("query") or "").strip():
-        return ToolResult(
-            ok=False, tool=name, args=args,
-            content="Missing required argument: query must be a non-empty string. Reissue with a focused research query.",
-            error_type="missing_args", retryable=True,
-        )
     if name == "deep_research" and not (args.get("query") or "").strip():
         return ToolResult(
             ok=False, tool=name, args=args,
@@ -889,21 +884,24 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
     """Run one named tool with already-decoded JSON args.
 
     ``owner`` is the AikoThink instance driving this agentic turn.
-    deep_search and deep_research both need it for the shared embedder;
+    adaptive_search and deep_research both need it for the shared embedder;
     deep_research additionally needs the already-loaded local LLM
     client/model for its adaptive continue/refine and synthesis steps.
     Every other tool is a pure function of its args and ignores it.
     """
-    if name == "deep_research":
-        return deep_research(
+    # agentic/agentic.py — dispatch_tool()
+    if name == "adaptive_search":
+        return adaptive_search(
             args.get("query", ""),
             client=getattr(owner, "_client", None),
             model=getattr(owner, "_llm_model", None),
             embedder=_owner_embedder(owner),
         )
-    if name == "deep_search":
-        return deep_search(
+    if name == "deep_research":
+        return deep_research(
             args.get("query", ""),
+            client=getattr(owner, "_client", None),
+            model=getattr(owner, "_llm_model", None),
             embedder=_owner_embedder(owner),
         )
     if name == "run_playbook":
@@ -976,8 +974,6 @@ def dispatch_tool_checked(name: str, args: dict, owner=None) -> ToolResult:
 def _max_attempts_for(name: str) -> int:
     if name == "deep_research":
         return max(1, int(os.getenv("AGENT_DEEP_RESEARCH_ATTEMPTS", 1)))
-    if name == "deep_search":
-        return max(1, int(os.getenv("AGENT_WEB_TOOL_ATTEMPTS", 2)))
     if name in {"save_note", "schedule_job", "schedule_reminder"}:
         return max(1, int(os.getenv("AGENT_LOCAL_TOOL_ATTEMPTS", 1)))
     if name in _SOCIAL_POST_TOOLS:
@@ -1010,7 +1006,7 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
 
 
 def _research_call_count(state: TaskState) -> int:
-    """How many times deep_search/deep_research have already SUCCEEDED in
+    """How many times adaptive_search/deep_research have already SUCCEEDED in
     this workflow. The two tools share one counted budget so one task cannot
     keep spending web/research calls indefinitely."""
     return sum(1 for step in state.steps if step["tool"] in _RESEARCH_TOOLS and step["ok"])
@@ -1023,7 +1019,7 @@ def _compact_processed_tool_context(messages: list[dict], preview_chars: int = 1
 
     Generalized from a research-tool-only rule: any tool's output can
     accumulate across iterations (repo_read_file, search_jobs, etc.), not
-    just deep_search/deep_research, so this now applies uniformly
+    just adaptive_search/deep_research, so this now applies uniformly
     to any tool-role message over _COMPACTABLE_MIN_CHARS.
     """
     for message in messages:
@@ -1657,7 +1653,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 result = ToolResult(
                     ok=False, tool=name, args=args,
                     content=(
-                        f"deep_search/deep_research have already been used "
+                        f"adaptive_search/deep_research have already been used "
                         f"{AGENT_RESEARCH_MAX_CALLS} time(s) in this agentic workflow. "
                         "Do not search again; use the evidence already gathered to "
                         "plan, summarize, save, or answer."

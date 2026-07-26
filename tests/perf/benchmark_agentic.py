@@ -26,7 +26,7 @@ load_config()
 from agentic import schema
 from agentic.capability import match_capabilities, filtered_tool_schemas
 from agentic.toolkit.synthesize import synthesize_report, kb_search, combine_evidence, condense_text
-from agentic.toolkit.research import deep_search, condense_evidence
+from agentic.toolkit.websurf import condense_evidence
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
 from agentic.toolkit.reports import write_report
 from agentic.agentic import _validate_args, _classify_result, _owner_embedder
@@ -226,20 +226,6 @@ class TestSynthesisPerformance:
 # ─── Research Benchmarks ──────────────────────────────────────────────────────
 class TestResearchPerformance:
     """Benchmarks for research tools."""
-
-    def test_deep_search_latency(self, benchmark, embedder):
-        """Benchmark deep_search (snippet-only)."""
-        with patch("agentic.toolkit.research._web_search_raw") as mock_search:
-            mock_search.return_value = ([
-                {"title": f"R{i}", "url": f"https://r{i}.com", "content": f"Content {i}"}
-                for i in range(10)
-            ], None)
-
-            def _run():
-                return deep_search("test query", embedder=embedder)
-
-        result = benchmark(_run)
-        assert "Web search results" in result
 
     def test_condense_evidence(self, benchmark, embedder):
         """Benchmark condense_evidence."""

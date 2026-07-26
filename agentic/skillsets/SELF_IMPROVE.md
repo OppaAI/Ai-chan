@@ -3,7 +3,7 @@ id: SELF_IMPROVE
 name: Self-Improvement — Architecture Research and Code Improvement
 summary: Help research, inspect, plan, and safely improve Aiko's own codebase and architecture with repo-reading tools, web research, notes, and explicit review gates.
 triggers: improve Aiko, architecture, refactor, optimize, debug Aiko, implement feature, codebase, tools, skills, memory, agentic
-tools: repo_file_tree, repo_search_text, repo_read_file, read_paper_url, deep_search, deep_research, make_plan, create_checklist, save_note, summarize_task_state, write_report
+tools: repo_file_tree, repo_search_text, repo_read_file, read_paper_url, adaptive_search, deep_research, make_plan, create_checklist, save_note, summarize_task_state, write_report
 ---
 # Self-Improvement — Architecture Research and Code Improvement
 
@@ -22,11 +22,11 @@ Use this skill when Oppa asks Aiko to research, inspect, design, optimize, refac
    - use `repo_file_tree` to locate likely files;
    - use `repo_search_text` for symbols/concepts;
    - use `repo_read_file` for relevant files.
-3. If current external facts are needed, use `deep_search` for a single well-scoped question. If the research spans multiple unclear angles, use `deep_research` instead. Prefer official docs or primary sources either way.
+3. If current external facts are needed, use `adaptive_search` for a single well-scoped question. If the research spans multiple unclear angles, use `deep_research` instead. Prefer official docs or primary sources either way.
 3.5. To read a paper the user pointed at directly, use `read_paper_url` with
      `query` set to the current architecture-review question — this
      condenses the fetch to relevant excerpts rather than just the opening
-     section. Only fall back to deep_search/deep_research for open-ended
+     section. Only fall back to adaptive_search/deep_research for open-ended
      "find a paper about X" requests.
 5. Use notes/checklists/task-state tools to preserve research and decisions under the workspace.
 6. Clearly distinguish:
