@@ -116,6 +116,77 @@ def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
     return target_start, target_end, key
 
 
+# ── monthly maintenance: reports archive, KB prune, DB vacuum ────────────────
+
+def _archive_reports(older_than_days: int = 90, archive_dir: str = "reports/archive") -> int:
+    """Move report files older than N days to archive directory. Returns count."""
+    from system.userspace import user_workspace_root, current_user_id
+    root = user_workspace_root(current_user_id())
+    reports_dir = (root / "reports").resolve()
+    arch_dir = (root / archive_dir).resolve()
+    arch_dir.mkdir(parents=True, exist_ok=True)
+    if not reports_dir.is_dir():
+        return 0
+    cutoff = datetime.now() - timedelta(days=older_than_days)
+    moved = 0
+    for f in reports_dir.glob("*.md"):
+        if f.is_file():
+            mtime = datetime.fromtimestamp(f.stat().st_mtime)
+            if mtime < cutoff:
+                try:
+                    dest = arch_dir / f.name
+                    if dest.exists():
+                        base, ext = f.stem, f.suffix
+                        i = 1
+                        while (arch_dir / f"{base}_{i}{ext}").exists():
+                            i += 1
+                        dest = arch_dir / f"{base}_{i}{ext}"
+                    f.rename(dest)
+                    moved += 1
+                except Exception as exc:
+                    log.warning("failed to archive report %s: %s", f, exc)
+    if moved:
+        log.info("Archived %d reports older than %d days", moved, older_than_days)
+    return moved
+
+
+def _prune_knowledge_maintenance(user_id: str | None = None) -> dict:
+    """Prune knowledge DB: archive cold chunks, delete never-accessed, dedupe, vacuum."""
+    try:
+        from memory.knowledge import prune_knowledge, vacuum_knowledge_db
+    except Exception as exc:
+        log.warning("knowledge module not available for maintenance: %s", exc)
+        return {"skipped": True}
+    # Get embedder for deduplication (optional - skip if not available)
+    embedder = None
+    try:
+        from cognition import reason
+        embedder = reason.load_embedder()
+    except Exception:
+        pass  # dedupe will be skipped if embedder unavailable
+
+    stats = prune_knowledge(
+        keep_days=30,
+        min_access=2,
+        archive_days=90,
+        delete_days=180,
+        dedupe_threshold=0.95,
+        embedder=embedder,
+    )
+    vacuum_knowledge_db()
+    return stats
+
+
+def _maintenance_run(user_id: str | None = None) -> dict:
+    """Run all monthly maintenance tasks. Returns combined stats."""
+    results = {}
+    # 1. Archive old reports
+    results["reports_archived"] = _archive_reports(older_than_days=90)
+    # 2. Prune knowledge DB
+    results["knowledge"] = _prune_knowledge_maintenance(user_id)
+    return results
+
+
 # ── state ────────────────────────────────────────────────────────────────────
 
 def _load_state(user_id: str | None = None) -> dict:
@@ -408,6 +479,14 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         "monthly_consolidate complete: month=%s source_count=%s facts_written=%s daily_deleted=%s",
         month_key, len(daily_rows), facts_written, daily_deleted,
     )
+
+    # Run monthly maintenance (archive reports, prune KB, vacuum)
+    try:
+        maintenance_results = _maintenance_run(user_id)
+        log.info("monthly_maintenance complete: %s", maintenance_results)
+    except Exception as exc:
+        log.warning("monthly_maintenance failed: %s", exc)
+
     return {
         "ran":            True,
         "month":          month_key,
@@ -415,3 +494,99 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         "facts_written":  facts_written,
         "daily_deleted":  daily_deleted,
     }
+
+
+# ── Monthly maintenance helpers ──────────────────────────────────────────────
+# Called at end of consolidation to archive reports, prune KB, vacuum DBs.
+
+def _archive_reports(user_id: str | None = None, keep_days: int = 90) -> dict:
+    """Archive report files older than keep_days to reports/archive/."""
+    from pathlib import Path
+    import shutil
+    from datetime import datetime, timedelta
+    from system.userspace import user_workspace_root
+
+    uid = user_id or current_user_id()
+    root = user_workspace_root(uid)
+    reports_dir = root / "reports"
+    archive_dir = reports_dir / "archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    cutoff = datetime.now() - timedelta(days=keep_days)
+    moved = 0
+    errors = 0
+
+    if not reports_dir.exists():
+        return {"moved": 0, "errors": 0}
+
+    for report_file in reports_dir.iterdir():
+        if not report_file.is_file() or report_file.suffix not in {".md", ".txt", ".json"}:
+            continue
+        try:
+            mtime = datetime.fromtimestamp(report_file.stat().st_mtime)
+            if mtime < datetime.now() - timedelta(days=keep_days):
+                dest = archive_dir / report_file.name
+                if dest.exists():
+                    # Rename with timestamp to avoid collision
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    dest = archive_dir / f"{report_file.stem}_{ts}{report_file.suffix}"
+                shutil.move(str(report_file), str(dest))
+                moved += 1
+        except Exception as exc:
+            log.warning("failed to archive %s: %s", report_file, exc)
+            errors += 1
+
+    return {"moved": moved, "errors": errors}
+
+
+def _maintenance_run(user_id: str | None = None) -> dict:
+    """Run monthly maintenance: archive reports, prune KB, vacuum DBs."""
+    uid = user_id or current_user_id()
+    results = {}
+
+    # 1. Archive old reports (keep 90 days hot)
+    try:
+        results["archive_reports"] = _archive_reports(uid, keep_days=90)
+    except Exception as exc:
+        log.warning("archive_reports failed: %s", exc)
+        results["archive_reports"] = {"error": str(exc)}
+
+    # 2. Prune knowledge DB (archive cold, delete never-used, dedupe)
+    try:
+        from memory.knowledge import prune_knowledge
+        # Note: embedder would be passed in production; skipping dedupe without it
+        results["prune_knowledge"] = prune_knowledge(
+            keep_days=30,
+            min_access=2,
+            archive_days=90,
+            delete_days=180,
+            dedupe_threshold=0.95,
+            user_id=uid,
+            embedder=None,  # Pass embedder to enable dedupe
+        )
+    except Exception as exc:
+        log.warning("prune_knowledge failed: %s", exc)
+        results["prune_knowledge"] = {"error": str(exc)}
+
+    # 3. Vacuum both DBs to reclaim space
+    try:
+        from memory.knowledge import vacuum_knowledge_db
+        vacuum_knowledge_db(uid)
+        results["vacuum_knowledge"] = "ok"
+    except Exception as exc:
+        log.warning("vacuum_knowledge failed: %s", exc)
+        results["vacuum_knowledge"] = {"error": str(exc)}
+
+    try:
+        from memory import memorize
+        # memorize uses SQLite, vacuum it
+        conn = memorize._connect(uid)
+        conn.execute("VACUUM")
+        conn.execute("ANALYZE")
+        conn.close()
+        results["vacuum_memory"] = "ok"
+    except Exception as exc:
+        log.warning("vacuum_memory failed: %s", exc)
+        results["vacuum_memory"] = {"error": str(exc)}
+
+    return results

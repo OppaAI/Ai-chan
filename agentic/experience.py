@@ -96,6 +96,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS experiences_vec USING vec0(
     embedding FLOAT[{dims}]
 );
 
+-- Engram relations: explicit links between experiences (continuation, contradiction, refines, synthesizes)
+CREATE TABLE IF NOT EXISTS engram_relations (
+    from_engram TEXT NOT NULL,
+    to_engram   TEXT NOT NULL,
+    relation_type TEXT NOT NULL,  -- 'continuation', 'contradiction', 'refines', 'synthesizes'
+    confidence  REAL NOT NULL DEFAULT 1.0,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (from_engram, to_engram, relation_type),
+    FOREIGN KEY (from_engram) REFERENCES experiences(id) ON DELETE CASCADE,
+    FOREIGN KEY (to_engram)   REFERENCES experiences(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_engram_relations_from ON engram_relations(from_engram);
+CREATE INDEX IF NOT EXISTS idx_engram_relations_to   ON engram_relations(to_engram);
+
 CREATE TRIGGER IF NOT EXISTS experiences_ai AFTER INSERT ON experiences BEGIN
     INSERT INTO experiences_fts(rowid, record_text, id) VALUES (new.rowid, new.record_text, new.id);
 END;
@@ -285,3 +299,76 @@ def record_practice_experience(goal: str, steps: list[dict], final_answer: str =
     while testing tiny routing/execution models such as Needle.
     """
     return record_experience(None, goal, steps, final_answer, verified_ok, score, embedder=embedder)
+
+
+# ── Engram relations ───────────────────────────────────────────────────────────
+# Explicit links between experiences: continuation, contradiction, refines, synthesizes
+
+RELATION_TYPES = ("continuation", "contradiction", "refines", "synthesizes")
+
+def record_engram_relation(from_engram: str, to_engram: str, relation_type: str, confidence: float = 1.0, user_id: str | None = None) -> bool:
+    """Record an explicit relation between two experiences.
+
+    Args:
+        from_engram: Source experience ID
+        to_engram: Target experience ID
+        relation_type: One of 'continuation', 'contradiction', 'refines', 'synthesizes'
+        confidence: 0.0-1.0 confidence score
+        user_id: Optional user ID (defaults to current)
+
+    Returns:
+        True if recorded, False if invalid relation type or DB error
+    """
+    if relation_type not in RELATION_TYPES:
+        log.warning("Invalid relation_type %r; must be one of %s", relation_type, RELATION_TYPES)
+        return False
+    uid = user_id or current_user_id()
+    conn = _connect(uid)
+    try:
+        conn.execute(
+            """INSERT OR REPLACE INTO engram_relations
+               (from_engram, to_engram, relation_type, confidence, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (from_engram, to_engram, relation_type, max(0.0, min(1.0, confidence)), utc_now_iso())
+        )
+        conn.commit()
+        return True
+    except Exception as exc:
+        log.warning("record_engram_relation failed: %s", exc)
+        return False
+    finally:
+        conn.close()
+
+
+def get_engram_relations(engram_id: str, direction: str = "both", user_id: str | None = None) -> list[dict]:
+    """Fetch relations for an engram.
+
+    Args:
+        engram_id: Experience ID to query
+        direction: 'outgoing' (from), 'incoming' (to), or 'both'
+        user_id: Optional user ID (defaults to current)
+
+    Returns:
+        List of relation dicts with keys: from_engram, to_engram, relation_type, confidence, created_at
+    """
+    uid = user_id or current_user_id()
+    conn = _connect(uid)
+    try:
+        if direction == "outgoing":
+            rows = conn.execute(
+                "SELECT from_engram, to_engram, relation_type, confidence, created_at FROM engram_relations WHERE from_engram=?",
+                (engram_id,)
+            ).fetchall()
+        elif direction == "incoming":
+            rows = conn.execute(
+                "SELECT from_engram, to_engram, relation_type, confidence, created_at FROM engram_relations WHERE to_engram=?",
+                (engram_id,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT from_engram, to_engram, relation_type, confidence, created_at FROM engram_relations WHERE from_engram=? OR to_engram=?",
+                (engram_id, engram_id)
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()

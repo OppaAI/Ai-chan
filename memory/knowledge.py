@@ -25,10 +25,13 @@ import uuid
 import zipfile
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
+from datetime import datetime, timedelta
 from html import escape
 from pathlib import Path
 from typing import Iterable, Protocol
 from defusedxml import ElementTree as DET
+
+import numpy as np
 
 from system.config import load_config
 load_config()
@@ -131,17 +134,21 @@ CREATE TABLE IF NOT EXISTS learned_docs (
 );
 
 CREATE TABLE IF NOT EXISTS learned_chunks (
-    id          TEXT PRIMARY KEY,
-    doc_id      TEXT NOT NULL REFERENCES learned_docs(id) ON DELETE CASCADE,
-    user_id     TEXT NOT NULL,
-    chunk_index INTEGER NOT NULL,
-    text        TEXT NOT NULL,
-    created_at  TEXT NOT NULL
+    id              TEXT PRIMARY KEY,
+    doc_id          TEXT NOT NULL REFERENCES learned_docs(id) ON DELETE CASCADE,
+    user_id         TEXT NOT NULL,
+    chunk_index     INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    access_count    INTEGER NOT NULL DEFAULT 0,
+    last_accessed   TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_learned_docs_user ON learned_docs(user_id);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_doc ON learned_chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_user ON learned_chunks(user_id);
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_access ON learned_chunks(access_count, last_accessed);
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_created ON learned_chunks(created_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_fts USING fts5(
     text,
@@ -154,6 +161,22 @@ CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_vec USING vec0(
     id TEXT PRIMARY KEY,
     embedding FLOAT[{dims}]
 );
+
+-- Archive table for cold storage of rarely-accessed chunks
+CREATE TABLE IF NOT EXISTS learned_chunks_archive (
+    id              TEXT PRIMARY KEY,
+    doc_id          TEXT NOT NULL,
+    user_id         TEXT NOT NULL,
+    chunk_index     INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    access_count    INTEGER NOT NULL DEFAULT 0,
+    last_accessed   TEXT,
+    archived_at     TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_archive_user ON learned_chunks_archive(user_id);
+CREATE INDEX IF NOT EXISTS idx_learned_chunks_archive_created ON learned_chunks_archive(created_at);
 
 CREATE TRIGGER IF NOT EXISTS learned_chunks_ai AFTER INSERT ON learned_chunks BEGIN
     INSERT INTO learned_chunks_fts(rowid, text, id) VALUES (new.rowid, new.text, new.id);
@@ -502,3 +525,236 @@ def knowledge_context_for(
         )
         remaining -= len(text)
     return "<knowledge_context>\n" + "\n\n".join(blocks) + "\n</knowledge_context>"
+
+
+# ── Access tracking & maintenance ─────────────────────────────────────────────
+
+def _increment_access_count(chunk_ids: list[str], user_id: str | None = None) -> None:
+    """Increment access count and update last_accessed for given chunk IDs."""
+    if not chunk_ids:
+        return
+    uid = user_id or current_user_id()
+    conn = _connect(uid)
+    try:
+        now = utc_now_iso()
+        placeholders = ",".join("?" * len(chunk_ids))
+        conn.execute(
+            f"UPDATE learned_chunks SET access_count = access_count + 1, last_accessed = ? WHERE id IN ({placeholders})",
+            [now] + chunk_ids,
+        )
+        conn.commit()
+    except Exception as exc:
+        log.warning("increment access count failed: %s", exc)
+    finally:
+        conn.close()
+
+
+def knowledge_context_for(query: str, limit: int = 5, embedder=None) -> str:
+    """Retrieve knowledge context for a query, tracking access counts."""
+    uid = current_user_id()
+    cached = _search_cache_get(query, uid, limit)
+    if cached is not None:
+        # Track access for cached results too
+        chunk_ids = [r["id"] for r in cached]
+        _increment_access_count(chunk_ids, uid)
+        return _format_knowledge_context(cached)
+
+    rank_knn = rank_by_id(_knn(query, uid, limit))
+    rank_fts = rank_by_id(_fts(query, uid, limit))
+    ids = set(rank_knn) | set(rank_fts)
+    if not ids:
+        return "<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"
+
+    placeholders = ",".join("?" * len(ids))
+    conn = _connect(uid)
+    try:
+        rows = conn.execute(
+            f"SELECT * FROM learned_chunks WHERE id IN ({','.join('?' * len(ids))})",
+            list(ids),
+        ).fetchall()
+        by_id = {row["id"]: dict(row) for row in rows}
+    finally:
+        conn.close()
+
+    scored = []
+    for eid in ids:
+        score = rrf_score(eid, rank_knn, rank_fts, k=KNOWLEDGE_RRF_K)
+        if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD and eid in by_id:
+            scored.append((score, eid))
+    scored.sort(key=lambda pair: -pair[0])
+    scored = scored[:limit]
+
+    results = []
+    chunk_ids = []
+    for score, eid in scored:
+        row = by_id[eid]
+        row["recall_score"] = score
+        results.append(row)
+        chunk_ids.append(eid)
+
+    if chunk_ids:
+        _increment_access_count(chunk_ids, uid)
+
+    _search_cache_set(query, uid, limit, results)
+    return _format_knowledge_context(results)
+
+
+def _format_knowledge_context(results: list[dict]) -> str:
+    remaining = KNOWLEDGE_CONTEXT_CHARS
+    blocks = []
+    for row in results:
+        if remaining <= 0:
+            break
+        body = row["text"][:remaining]
+        blocks.append(f'<chunk source="{row["id"]}">\n{body}\n</chunk>')
+        remaining -= len(body)
+    return "<knowledge_context>\n" + "\n\n".join(blocks) + "\n</knowledge_context>"
+
+
+# ── Monthly maintenance: prune & archive ──────────────────────────────────────
+
+def prune_knowledge(
+    *,
+    keep_days: int = 30,
+    min_access: int = 2,
+    archive_days: int = 90,
+    delete_days: int = 180,
+    dedupe_threshold: float = 0.95,
+    user_id: str | None = None,
+    embedder=None,
+) -> dict:
+    """
+    Prune knowledge DB: archive cold chunks, delete never-accessed old chunks,
+    deduplicate near-duplicates. Returns stats dict.
+    """
+    uid = user_id or current_user_id()
+    conn = _connect(uid)
+    stats = {"archived": 0, "deleted": 0, "deduped": 0, "errors": 0}
+    now = utc_now_iso()
+    try:
+        # 1. Archive: move cold chunks (old + low access) to archive table
+        archive_cutoff = (datetime.fromisoformat(now.replace('Z', '+00:00')) - timedelta(days=archive_days)).isoformat()
+        conn.execute(
+            """
+            INSERT INTO learned_chunks_archive
+            (id, doc_id, user_id, chunk_index, text, created_at, access_count, last_accessed, archived_at)
+            SELECT id, doc_id, user_id, chunk_index, text, created_at, access_count, last_accessed, ?
+            FROM learned_chunks
+            WHERE user_id = ?
+              AND created_at < ?
+              AND access_count < ?
+              AND id NOT IN (SELECT id FROM learned_chunks_archive WHERE user_id = ?)
+            """,
+            (now, uid, archive_cutoff, min_access, uid),
+        )
+        stats["archived"] = conn.total_changes
+
+        # Delete archived from main table
+        conn.execute(
+            "DELETE FROM learned_chunks WHERE id IN (SELECT id FROM learned_chunks_archive WHERE user_id = ? AND archived_at = ?)",
+            (uid, now),
+        )
+
+        # 2. Delete: remove never-accessed chunks older than delete_days
+        delete_cutoff = (datetime.fromisoformat(now.replace('Z', '+00:00')) - timedelta(days=delete_days)).isoformat()
+        conn.execute(
+            """
+            DELETE FROM learned_chunks
+            WHERE user_id = ?
+              AND created_at < ?
+              AND access_count = 0
+              AND id NOT IN (SELECT id FROM learned_chunks_archive WHERE user_id = ?)
+            """,
+            (uid, delete_cutoff, uid),
+        )
+        stats["deleted"] = conn.total_changes - stats["archived"]
+
+        # 3. Deduplicate: find near-duplicate chunks via embedding similarity
+        if embedder is not None:
+            stats["deduped"] = _deduplicate_chunks(conn, uid, embedder, dedupe_threshold)
+
+        conn.commit()
+    except Exception as exc:
+        conn.rollback()
+        log.warning("prune_knowledge failed: %s", exc)
+        stats["errors"] = 1
+    finally:
+        conn.close()
+    return stats
+
+
+def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, threshold: float) -> int:
+    """Find near-duplicate chunks via embedding similarity and archive duplicates."""
+    rows = conn.execute(
+        """
+        SELECT id, text, chunk_index FROM learned_chunks
+        WHERE user_id = ? AND id NOT IN (SELECT id FROM learned_chunks_archive WHERE user_id = ?)
+        ORDER BY chunk_index
+        """,
+        (user_id, user_id),
+    ).fetchall()
+
+    if len(rows) < 2:
+        return 0
+
+    texts = [row["text"] for row in rows]
+    ids = [row["id"] for row in rows]
+    indices = [row["chunk_index"] for row in rows]
+
+    try:
+        if hasattr(embedder, "embed_queries"):
+            batch = embedder.embed_queries(texts)
+        else:
+            batch = [embedder.embed_query(t) for t in texts]
+        vectors = np.array(batch, dtype=np.float32)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        vectors = vectors / norms
+        sim = vectors @ vectors.T
+    except Exception:
+        return 0
+
+    to_archive = set()
+    n = len(ids)
+    for i in range(n):
+        if ids[i] in to_archive:
+            continue
+        for j in range(i + 1, n):
+            if ids[j] in to_archive:
+                continue
+            if sim[i, j] >= threshold:
+                # Archive the one with higher chunk_index (later occurrence)
+                if indices[i] < indices[j]:
+                    to_archive.add(ids[j])
+                else:
+                    to_archive.add(ids[i])
+
+    if to_archive:
+        now = utc_now_iso()
+        for cid in to_archive:
+            row = conn.execute("SELECT * FROM learned_chunks WHERE id = ?", (cid,)).fetchone()
+            if row:
+                conn.execute(
+                    """
+                    INSERT INTO learned_chunks_archive
+                    (id, doc_id, user_id, chunk_index, text, created_at, access_count, last_accessed, archived_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (row["id"], row["doc_id"], row["user_id"], row["chunk_index"],
+                     row["text"], row["created_at"], row["access_count"],
+                     row["last_accessed"], now),
+                )
+                conn.execute("DELETE FROM learned_chunks WHERE id = ?", (cid,))
+
+    return len(to_archive)
+
+
+def vacuum_knowledge_db(user_id: str | None = None) -> None:
+    """VACUUM the knowledge DB to reclaim space after deletions."""
+    uid = user_id or current_user_id()
+    conn = _connect(uid)
+    try:
+        conn.execute("VACUUM")
+        conn.execute("ANALYZE")
+    finally:
+        conn.close()
