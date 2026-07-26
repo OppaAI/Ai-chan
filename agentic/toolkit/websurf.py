@@ -13,9 +13,8 @@ these via the graph executor (research_graph.py) or ReAct loop.
   - _download_bytes()          — shared streamed/size-capped byte download
   - _sniff_content_type()      — HEAD/extension based format classification
   - _extract_with_markitdown() — non-HTML document → markdown text (pdf/docx/
-                                  pptx/xlsx/epub/csv/xml/ipynb via MarkItDown)
+                                   pptx/xlsx/epub/csv/xml/ipynb via MarkItDown)
   - _fetch_and_score_pipeline() — batch fetch + concurrent relevance scoring
-  - _deep_search_impl()        — shared logic for graph-based research tools
 
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
@@ -33,7 +32,6 @@ import time
 import threading
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
-from urllib.robotparser import RobotFileParser
 
 import importlib
 import importlib.util
@@ -46,78 +44,6 @@ log = get_logger(__name__)
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 
-# -- internal _deep_search_impl (fixed, non-adaptive snippet search pass) --
-# The helper is intentionally snippet-only by default (num_fetches=0). It uses
-# the same raw SearXNG primitive as web_search, but is available to agentic
-# workflows while web_search/web_fetch remain chat-mode primitives.
-# _deep_search_impl NEVER uses Crawl4AI, sitemap expansion, or robots-gated
-# fetching — those are deep_research-only, by design, to keep this path fast.
-
-# -- deep_research (adaptive fetched-source research) --
-# Deep research uses search only to discover URLs, then fetches pages and
-# condenses/synthesizes evidence. It has its own fetch knobs so the internal
-# _deep_search_impl helper stays snippet-only by default. These are read once
-# as module-level DEFAULTS; deep_research() itself now accepts
-# num_searches/num_fetches/max_chars_per_page as real function args (see
-# below) so a caller — e.g. memory.learn.quick_studying — can override
-# per-call instead of only ever getting these env defaults.
-#
-# Tuned for accuracy-over-latency per JJ: more fetches, more rounds, more
-# per-page budget than the old defaults.
-DEEP_RESEARCH_NUM_SEARCHES = int(os.getenv("DEEP_RESEARCH_NUM_SEARCHES", 1))
-DEEP_RESEARCH_NUM_FETCHES = int(os.getenv("DEEP_RESEARCH_NUM_FETCHES", 4))
-DEEP_RESEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_RESEARCH_MAX_CHARS_PER_PAGE", 3500))
-DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 4))
-DEEP_RESEARCH_MAX_WORKERS = int(os.getenv("DEEP_RESEARCH_MAX_WORKERS", 4))
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION", 8000))
-DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS", 12000))
-DEEP_RESEARCH_DECISION_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_DECISION_MAX_TOKENS", 200))
-DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS", 700))  # raised to 1500 in config/agentic.yaml
-
-# -- in-memory evidence condensation (numpy-vectorized relevance filtering) --
-# A FILTER, not a rewrite: chunks are scored for relevance and either kept
-# verbatim or dropped entirely. Summarization only happens later, in
-# deep_research's separate LLM synthesis call.
-#
-# deep_research uses the RESEARCH_CONDENSE_* knobs further down — wider net,
-# lower bar, because the corroboration bonus (see _apply_corroboration_bonus)
-# promotes borderline items that get independently confirmed by a second domain.
-CONDENSE_CHUNK_CHARS = int(os.getenv("CONDENSE_CHUNK_CHARS", 500))
-CONDENSE_TOP_K = int(os.getenv("CONDENSE_TOP_K", 8))
-CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
-# Caps embedding calls PER fetch pipeline invocation (per _deep_search_impl call,
-# i.e. per round) — not a lifetime cap.
-CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("CONDENSE_MAX_CHUNKS_TO_SCORE", 60))
-
-RESEARCH_CONDENSE_TOP_K = int(os.getenv("RESEARCH_CONDENSE_TOP_K", 12))
-RESEARCH_CONDENSE_MIN_SCORE = float(os.getenv("RESEARCH_CONDENSE_MIN_SCORE", 0.12))
-RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE", 100))
-
-# -- cross-source corroboration ("sources agreement" scoring) --
-# Independent confirmation from a SECOND domain boosts a chunk's relevance
-# score; same-domain repeats don't count. This is separate from the
-# robots.txt "may I fetch this" agreement below — this one is about whether
-# multiple independent sources agree on a claim.
-RESEARCH_AGREEMENT_BONUS = float(os.getenv("RESEARCH_AGREEMENT_BONUS", 0.12))
-RESEARCH_AGREEMENT_SIMILARITY = float(os.getenv("RESEARCH_AGREEMENT_SIMILARITY", 0.5))
-RESEARCH_AGREEMENT_SHINGLE_SIZE = int(os.getenv("RESEARCH_AGREEMENT_SHINGLE_SIZE", 5))
-
-# -- Crawl4AI (optional, richer extraction for deep_research) --
-# Requires: pip install crawl4ai && crawl4ai-setup (installs the Playwright
-# browser). Gracefully no-ops if not installed — deep_research falls back to
-# web_fetch (requests+trafilatura) for every URL in that case.
-RESEARCH_USE_CRAWL4AI = os.getenv("RESEARCH_USE_CRAWL4AI", "1").lower() in {"1", "true", "yes", "on"}
-CRAWL4AI_TIMEOUT_MS = int(os.getenv("CRAWL4AI_TIMEOUT_MS", 20000))
-CRAWL4AI_MAX_CONCURRENT = int(os.getenv("CRAWL4AI_MAX_CONCURRENT", 4))
-CRAWL4AI_WORD_COUNT_THRESHOLD = int(os.getenv("CRAWL4AI_WORD_COUNT_THRESHOLD", 40))
-
-# -- robots.txt compliance ("source agreement" to be crawled) + sitemap --
-RESEARCH_RESPECT_ROBOTS = os.getenv("RESEARCH_RESPECT_ROBOTS", "1").lower() in {"1", "true", "yes", "on"}
-ROBOTS_CACHE_TTL_SECONDS = int(os.getenv("ROBOTS_CACHE_TTL_SECONDS", 3600))
-RESEARCH_SITEMAP_ENABLED = os.getenv("RESEARCH_SITEMAP_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
-RESEARCH_SITEMAP_MAX_URLS = int(os.getenv("RESEARCH_SITEMAP_MAX_URLS", 6))
-RESEARCH_SITEMAP_TIMEOUT_SECONDS = int(os.getenv("RESEARCH_SITEMAP_TIMEOUT_SECONDS", 6))
-
 # -- web_fetch download guard --
 WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
 WEB_FETCH_TIMEOUT_SECONDS = int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", 8))
@@ -126,13 +52,6 @@ WEB_FETCH_USER_AGENT = os.getenv(
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0 Safari/537.36",
 )
-
-# -- deep_read (research.py) support: content-type routing + MarkItDown --
-# THIN_TEXT_CHARS_THRESHOLD is the "did trafilatura actually get anything
-# useful" bar used by research.py's deep_read to decide whether to escalate
-# an HTML fetch to Crawl4AI. Kept here (not in research.py) so it lives next
-# to the other extraction tuning knobs, even though only deep_read reads it.
-THIN_TEXT_CHARS_THRESHOLD = int(os.getenv("THIN_TEXT_CHARS_THRESHOLD", 200))
 
 # MarkItDown handles non-HTML document formats by converting to markdown.
 # Base install only (`pip install markitdown`) covers all of these with no
@@ -169,9 +88,6 @@ CACHE_MAX_ENTRIES = int(os.getenv("TOOLS_CACHE_MAX_ENTRIES", 256))
 _cache_lock = threading.Lock()
 _search_cache: dict[str, tuple[float, list[dict]]] = {}
 _fetch_cache: dict[str, tuple[float, str]] = {}
-
-_robots_lock = threading.Lock()
-_robots_cache: dict[str, tuple[float, RobotFileParser]] = {}
 
 
 def _cache_get(cache: dict, key: str):
@@ -340,8 +256,7 @@ def web_fetch(
     This is the baseline "fetch a page" primitive in the toolkit — fast,
     dependency-light, no JS rendering. deep_research prefers Crawl4AI when
     available (see _crawl4ai_fetch_many) and falls back to this for anything
-    Crawl4AI misses or when it isn't installed. The internal _deep_search_impl
-    helper uses this directly (when it fetches at all).
+    Crawl4AI misses or when it isn't installed.
 
     Downloads are streamed and capped at max_download_bytes via
     _download_bytes, aborted mid-stream BEFORE trafilatura ever runs
@@ -452,174 +367,6 @@ def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> 
     return text[:max_chars]
 
 
-# ── robots.txt compliance ("source agreement" to be crawled) ────────────────
-
-def _get_robot_parser(origin: str) -> RobotFileParser:
-    """Fetch and cache a RobotFileParser for one origin (scheme://netloc).
-    Fails open (allow-all) if robots.txt is missing or unreachable, which
-    matches standard crawler convention — explicit Disallow rules are still
-    honored whenever robots.txt IS reachable."""
-    with _robots_lock:
-        entry = _robots_cache.get(origin)
-        if entry and time.monotonic() - entry[0] < ROBOTS_CACHE_TTL_SECONDS:
-            return entry[1]
-
-    parser = RobotFileParser()
-    parser.set_url(f"{origin}/robots.txt")
-    if importlib.util.find_spec("requests") is not None:
-        requests = importlib.import_module("requests")
-        try:
-            resp = requests.get(
-                f"{origin}/robots.txt", timeout=5,
-                headers={"User-Agent": WEB_FETCH_USER_AGENT},
-            )
-            if resp.status_code >= 400:
-                parser.parse([])
-            else:
-                parser.parse(resp.text.splitlines())
-        except Exception:
-            parser.parse([])
-    else:
-        parser.parse([])
-
-    with _robots_lock:
-        _robots_cache[origin] = (time.monotonic(), parser)
-    return parser
-
-
-def _source_agreement_allows(url: str) -> bool:
-    """deep_research's crawl-citizenship gate: only fetch pages the source's
-    own robots.txt permits for our user-agent. Fails open on any lookup
-    error (unreachable/unparseable robots.txt), same convention as most
-    well-behaved crawlers."""
-    if not RESEARCH_RESPECT_ROBOTS:
-        return True
-    parsed = urlparse(url)
-    if not parsed.scheme or not parsed.netloc:
-        return True
-    origin = f"{parsed.scheme}://{parsed.netloc}"
-    try:
-        parser = _get_robot_parser(origin)
-        return parser.can_fetch(WEB_FETCH_USER_AGENT, url)
-    except Exception:
-        return True
-
-
-# ── sitemap discovery ────────────────────────────────────────────────────────
-
-def _discover_sitemap_urls(origin: str, query_hint: str = "", max_urls: int = RESEARCH_SITEMAP_MAX_URLS) -> list[str]:
-    """Best-effort sitemap.xml discovery for one domain, used by deep_research
-    to widen candidate URLs beyond search-engine snippets when a source
-    domain looks authoritative for the query (e.g. official docs). Checks
-    robots.txt 'Sitemap:' directives first, falls back to /sitemap.xml.
-    Returns at most max_urls URLs, ranked by keyword overlap with query_hint
-    when provided."""
-    if not RESEARCH_SITEMAP_ENABLED:
-        return []
-    if importlib.util.find_spec("requests") is None:
-        return []
-    requests = importlib.import_module("requests")
-
-    candidates: list[str] = []
-    try:
-        robots_resp = requests.get(
-            f"{origin}/robots.txt", timeout=RESEARCH_SITEMAP_TIMEOUT_SECONDS,
-            headers={"User-Agent": WEB_FETCH_USER_AGENT},
-        )
-        if robots_resp.ok:
-            for line in robots_resp.text.splitlines():
-                if line.lower().startswith("sitemap:"):
-                    candidates.append(line.split(":", 1)[1].strip())
-    except Exception:
-        pass
-    if not candidates:
-        candidates.append(f"{origin}/sitemap.xml")
-
-    urls: list[str] = []
-    for sitemap_url in candidates[:3]:
-        try:
-            resp = requests.get(
-                sitemap_url, timeout=RESEARCH_SITEMAP_TIMEOUT_SECONDS,
-                headers={"User-Agent": WEB_FETCH_USER_AGENT},
-            )
-            if not resp.ok:
-                continue
-            locs = re.findall(r"<loc>(.*?)</loc>", resp.text, flags=re.IGNORECASE | re.DOTALL)
-            urls.extend(loc.strip() for loc in locs if loc.strip())
-        except Exception:
-            continue
-        if urls:
-            break  # first working sitemap source is enough
-
-    if not urls:
-        return []
-
-    if query_hint:
-        urls = sorted(urls, key=lambda u: reason.keyword_overlap_score(query_hint, u), reverse=True)
-    return urls[:max_urls]
-
-
-# ── Crawl4AI batch fetch (deep_research only) ────────────────────────────────
-
-def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
-    """Fetch many URLs in ONE Crawl4AI session (single browser launch,
-    concurrent pages via arun_many) instead of one browser per URL — a
-    per-URL launch would be far too slow to be worth it. This is the batch
-    path deep_research prefers; returns {} on any failure or when crawl4ai
-    isn't installed, so the caller's per-URL fallback (web_fetch) covers
-    every URL missing from the result.
-
-    Also used (with a single-URL list) by research.py's deep_read as the
-    JS-rendering escalation path when a plain web_fetch comes back thin.
-
-    Already filters out robots-disallowed URLs itself as defense in depth,
-    though _deep_search_impl also filters before calling this.
-    """
-    if not urls or importlib.util.find_spec("crawl4ai") is None:
-        return {}
-
-    allowed_urls = [u for u in urls if _source_agreement_allows(u)] if RESEARCH_RESPECT_ROBOTS else list(urls)
-    if not allowed_urls:
-        return {}
-
-    try:
-        import asyncio
-        crawl4ai = importlib.import_module("crawl4ai")
-        AsyncWebCrawler = crawl4ai.AsyncWebCrawler
-        CrawlerRunConfig = crawl4ai.CrawlerRunConfig
-        CacheMode = crawl4ai.CacheMode
-
-        async def _run() -> dict[str, str]:
-            config = CrawlerRunConfig(
-                cache_mode=CacheMode.BYPASS,
-                page_timeout=CRAWL4AI_TIMEOUT_MS,
-                word_count_threshold=CRAWL4AI_WORD_COUNT_THRESHOLD,
-                excluded_tags=["nav", "footer", "header", "aside", "form"],
-                exclude_external_links=True,
-                exclude_social_media_links=True,
-            )
-            out: dict[str, str] = {}
-            async with AsyncWebCrawler() as crawler:
-                results = await crawler.arun_many(
-                    urls=allowed_urls, config=config,
-                    max_concurrent=CRAWL4AI_MAX_CONCURRENT,
-                )
-                for r in results:
-                    if not r or not getattr(r, "success", False):
-                        continue
-                    md = getattr(r, "markdown", None)
-                    text = getattr(md, "fit_markdown", None) or md or ""
-                    text = str(text).strip()
-                    if text:
-                        out[getattr(r, "url", "")] = text[:max_chars]
-            return out
-
-        return asyncio.run(_run())
-    except Exception as e:
-        log.info("[crawl4ai] batch fetch failed for %d url(s): %s", len(urls), e)
-        return {}
-
-
 # ── batch fetch + concurrent relevance scoring ──────────────────────────
 
 def _fetch_and_score_pipeline(
@@ -627,9 +374,9 @@ def _fetch_and_score_pipeline(
     query: str,
     embedder,
     max_chars_per_page: int,
-    chunk_chars: int = CONDENSE_CHUNK_CHARS,
+    chunk_chars: int = 500,
     max_workers: int = 4,
-    max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
+    max_chunks_to_score: int = 60,
     fetch_fn=web_fetch,
     batch_prefetch_fn=None,
 ) -> tuple[list[tuple[float, str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
@@ -702,138 +449,6 @@ def _fetch_and_score_pipeline(
         len(pages), len(urls), chunks_scored,
     )
     return scored, pages, url_outcomes
-
-
-def _deep_search_impl(
-    query: str,
-    embedder,
-    *,
-    num_searches: int = 1,
-    num_fetches: int = 0,
-    max_chars_per_page: int = 4000,
-    max_workers: int = 3,
-    exclude_urls: set[str] | None = None,
-    fetch_fn=web_fetch,
-    batch_prefetch_fn=None,
-    respect_robots: bool = False,
-    annotate_agreement: bool = False,
-    condense_top_k: int = CONDENSE_TOP_K,
-    condense_min_score: float = CONDENSE_MIN_SCORE,
-    condense_max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
-    expand_sitemap: bool = False,
-    sitemap_max_urls: int = RESEARCH_SITEMAP_MAX_URLS,
-) -> tuple[str, set[str]]:
-    """Fixed, non-adaptive search pass with optional fetch/condense.
-
-    With num_fetches=0 this returns snippets/URLs only (snippet-only mode).
-    Deep_research calls this helper with its own positive fetch count plus the
-    research-only knobs (Crawl4AI batch prefetch, robots gating, sitemap
-    expansion, corroboration annotation) to do fetched-source work.
-
-    Returns (formatted_bundle, urls_actually_fetched) — the URL set lets
-    deep_research exclude already-seen URLs across rounds without a
-    separate re-fetch-avoidance mechanism.
-    """
-    if not query or not query.strip():
-        return "[search failed: empty query]", set()
-
-    num_searches = max(1, num_searches)
-    num_fetches = max(0, num_fetches)
-    all_results: list[dict] = []
-    errors: list[str] = []
-
-    log.info("[_deep_search_impl] %d search call(s) for: %s", num_searches, query)
-
-    if num_searches == 1:
-        results, error = _web_search_raw(query, MAX_RESULTS, pageno=1)
-        if error:
-            errors.append(error)
-        elif results:
-            all_results.extend(results)
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(num_searches, max_workers)) as pool:
-            futures = [pool.submit(_web_search_raw, query, MAX_RESULTS, p) for p in range(1, num_searches + 1)]
-            for future in futures:
-                results, error = future.result()
-                if error:
-                    errors.append(error)
-                elif results:
-                    all_results.extend(results)
-
-    if not all_results:
-        return (errors[0] if errors else f"[no results found for: {query}]"), set()
-
-    exclude_urls = exclude_urls or set()
-    seen_urls: set[str] = set()
-    deduped_results = []
-    for r in all_results:
-        url = (r.get("url") or "").strip()
-        if not url or url in seen_urls or url in exclude_urls:
-            continue
-        seen_urls.add(url)
-        deduped_results.append(r)
-
-    snippet_lines = [f"[Web search results for: {query} ({len(deduped_results)} unique across {num_searches} search call(s))]"]
-    for i, r in enumerate(deduped_results, 1):
-        snippet_lines.append(f"{i}. {r.get('title', '').strip()}\n   {r.get('url', '').strip()}\n   {r.get('content', '').strip()}")
-    snippet_bundle = "\n\n".join(snippet_lines)
-
-    fetch_urls = [r["url"].strip() for r in deduped_results[:num_fetches] if r.get("url")]
-    if num_fetches <= 0:
-        return snippet_bundle, set()
-
-    if expand_sitemap and deduped_results:
-        sitemap_urls: list[str] = []
-        seen_domains: set[str] = set()
-        for r in deduped_results[:3]:
-            url = (r.get("url") or "").strip()
-            if not url:
-                continue
-            try:
-                parts = urlparse(url)
-                domain = parts.netloc
-                origin = f"{parts.scheme}://{domain}"
-            except Exception:
-                continue
-            if not domain or domain in seen_domains:
-                continue
-            seen_domains.add(domain)
-            found = _discover_sitemap_urls(origin, query, max_urls=sitemap_max_urls)
-            sitemap_urls.extend(u for u in found if u not in fetch_urls and u not in exclude_urls and u not in sitemap_urls)
-            if len(seen_domains) >= 2:
-                break
-        if sitemap_urls:
-            log.info("[deep_research] sitemap expansion added %d url(s) for: %s", len(sitemap_urls[:sitemap_max_urls]), query)
-            fetch_urls = fetch_urls + sitemap_urls[:sitemap_max_urls]
-
-    skipped_outcomes: list[tuple[str, str]] = []
-    if respect_robots:
-        allowed_fetch_urls = []
-        for u in fetch_urls:
-            if _source_agreement_allows(u):
-                allowed_fetch_urls.append(u)
-            else:
-                skipped_outcomes.append((u, "[skipped: disallowed by robots.txt]"))
-        fetch_urls = allowed_fetch_urls
-
-    scored_chunks, fetched_pages, url_outcomes = _fetch_and_score_pipeline(
-        fetch_urls, query, embedder, max_chars_per_page, max_workers=max_workers,
-        max_chunks_to_score=condense_max_chunks_to_score,
-        fetch_fn=fetch_fn, batch_prefetch_fn=batch_prefetch_fn,
-    )
-    url_outcomes = skipped_outcomes + url_outcomes
-    manifest = _format_url_manifest(url_outcomes)
-    fetched_url_set = {url for url, _text in fetched_pages}
-
-    if not fetched_pages:
-        return f"{snippet_bundle}\n\n{manifest}", fetched_url_set
-
-    from agentic.toolkit.research import _finalize_condensed
-    condensed = _finalize_condensed(
-        scored_chunks, query, top_k=condense_top_k, min_score=condense_min_score,
-        annotate_agreement=annotate_agreement,
-    )
-    return f"{snippet_bundle}\n\n{manifest}\n\n{condensed}", fetched_url_set
 
 
 def web_search_context(query: str, max_results: int = MAX_RESULTS) -> str | None:

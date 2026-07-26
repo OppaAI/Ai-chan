@@ -28,6 +28,8 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import hashlib
+import importlib
+import importlib.util
 import json
 import os
 import re
@@ -44,37 +46,109 @@ from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.registry import tool
 from agentic.toolkit.websurf import (
     _web_search_raw,
-    _crawl4ai_fetch_many,
     _download_bytes,
     _sniff_content_type,
     _extract_with_markitdown,
     web_fetch,
     MAX_RESULTS,
-    RESEARCH_USE_CRAWL4AI,
-    RESEARCH_RESPECT_ROBOTS,
-    RESEARCH_SITEMAP_ENABLED,
-    RESEARCH_SITEMAP_MAX_URLS,
-    DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
-    RESEARCH_CONDENSE_TOP_K,
-    RESEARCH_CONDENSE_MIN_SCORE,
-    RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE,
-    RESEARCH_AGREEMENT_BONUS,
-    RESEARCH_AGREEMENT_SIMILARITY,
-    RESEARCH_AGREEMENT_SHINGLE_SIZE,
-    DEEP_RESEARCH_NUM_SEARCHES,
-    DEEP_RESEARCH_NUM_FETCHES,
-    THIN_TEXT_CHARS_THRESHOLD,
-    CONDENSE_CHUNK_CHARS,
-    CONDENSE_TOP_K,
-    CONDENSE_MIN_SCORE,
-    CONDENSE_MAX_CHUNKS_TO_SCORE,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
 
 log = get_logger(__name__)
 
+# -- deep_research config (moved from websurf.py) --
+# These are module-level DEFAULTS; deep_research() itself now accepts
+# num_searches/num_fetches/max_chars_per_page as real function args so
+# callers (e.g. memory.learn.quick_studying) can override per-call.
+DEEP_RESEARCH_NUM_SEARCHES = int(os.getenv("DEEP_RESEARCH_NUM_SEARCHES", 1))
+DEEP_RESEARCH_NUM_FETCHES = int(os.getenv("DEEP_RESEARCH_NUM_FETCHES", 4))
+DEEP_RESEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_RESEARCH_MAX_CHARS_PER_PAGE", 3500))
+DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 4))
+DEEP_RESEARCH_MAX_WORKERS = int(os.getenv("DEEP_RESEARCH_MAX_WORKERS", 4))
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION", 8000))
+DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS", 12000))
+DEEP_RESEARCH_DECISION_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_DECISION_MAX_TOKENS", 200))
+DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS", 700))
+
+# -- in-memory evidence condensation (numpy-vectorized relevance filtering) --
+# A FILTER, not a rewrite: chunks are scored for relevance and either kept
+# verbatim or dropped entirely. Summarization only happens later, in
+# deep_research's separate LLM synthesis call.
+#
+# deep_research uses the RESEARCH_CONDENSE_* knobs further down — wider net,
+# lower bar, because the corroboration bonus (see _apply_corroboration_bonus)
+# promotes borderline items that get independently confirmed by a second domain.
+CONDENSE_CHUNK_CHARS = int(os.getenv("CONDENSE_CHUNK_CHARS", 500))
+CONDENSE_TOP_K = int(os.getenv("CONDENSE_TOP_K", 8))
+CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
+# Caps embedding calls PER fetch pipeline invocation (per _deep_search_impl call,
+# i.e. per round) — not a lifetime cap.
+CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("CONDENSE_MAX_CHUNKS_TO_SCORE", 60))
+
+RESEARCH_CONDENSE_TOP_K = int(os.getenv("RESEARCH_CONDENSE_TOP_K", 12))
+RESEARCH_CONDENSE_MIN_SCORE = float(os.getenv("RESEARCH_CONDENSE_MIN_SCORE", 0.12))
+RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE", 100))
+
+# -- cross-source corroboration ("sources agreement" scoring) --
+# Independent confirmation from a SECOND domain boosts a chunk's relevance
+# score; same-domain repeats don't count. This is separate from the
+# robots.txt "may I fetch this" agreement below — this one is about whether
+# multiple independent sources agree on a claim.
+RESEARCH_AGREEMENT_BONUS = float(os.getenv("RESEARCH_AGREEMENT_BONUS", 0.12))
+RESEARCH_AGREEMENT_SIMILARITY = float(os.getenv("RESEARCH_AGREEMENT_SIMILARITY", 0.5))
+RESEARCH_AGREEMENT_SHINGLE_SIZE = int(os.getenv("RESEARCH_AGREEMENT_SHINGLE_SIZE", 5))
+
+# -- Crawl4AI (optional, richer extraction for deep_research) --
+# Requires: pip install crawl4ai && crawl4ai-setup (installs the Playwright
+# browser). Gracefully no-ops if not installed — deep_research falls back to
+# web_fetch (requests+trafilatura) for every URL in that case.
+RESEARCH_USE_CRAWL4AI = os.getenv("RESEARCH_USE_CRAWL4AI", "1").lower() in {"1", "true", "yes", "on"}
+CRAWL4AI_TIMEOUT_MS = int(os.getenv("CRAWL4AI_TIMEOUT_MS", 20000))
+CRAWL4AI_MAX_CONCURRENT = int(os.getenv("CRAWL4AI_MAX_CONCURRENT", 4))
+CRAWL4AI_WORD_COUNT_THRESHOLD = int(os.getenv("CRAWL4AI_WORD_COUNT_THRESHOLD", 40))
+
+# -- robots.txt compliance ("source agreement" to be crawled) + sitemap --
+RESEARCH_RESPECT_ROBOTS = os.getenv("RESEARCH_RESPECT_ROBOTS", "1").lower() in {"1", "true", "yes", "on"}
+ROBOTS_CACHE_TTL_SECONDS = int(os.getenv("ROBOTS_CACHE_TTL_SECONDS", 3600))
+RESEARCH_SITEMAP_ENABLED = os.getenv("RESEARCH_SITEMAP_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+RESEARCH_SITEMAP_MAX_URLS = int(os.getenv("RESEARCH_SITEMAP_MAX_URLS", 6))
+RESEARCH_SITEMAP_TIMEOUT_SECONDS = int(os.getenv("RESEARCH_SITEMAP_TIMEOUT_SECONDS", 6))
+
+# -- deep_read (research.py) support: content-type routing + MarkItDown --
+# THIN_TEXT_CHARS_THRESHOLD is the "did trafilatura actually get anything
+# useful" bar used by deep_read to decide whether to escalate
+# an HTML fetch to Crawl4AI.
+THIN_TEXT_CHARS_THRESHOLD = int(os.getenv("THIN_TEXT_CHARS_THRESHOLD", 200))
+
+# MarkItDown handles non-HTML document formats by converting to markdown.
+# Base install only (`pip install markitdown`) covers all of these with no
+# heavy optional deps — deliberately NOT enabling the image-OCR or
+# audio-transcription extras here, since those pull real weight for
+# capabilities deep_read doesn't need.
+_MARKITDOWN_CONTENT_TYPE_MAP = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/epub+zip": "epub",
+    "text/csv": "csv",
+    "application/xml": "xml",
+    "text/xml": "xml",
+    "application/zip": "zip",
+    "application/x-ipynb+json": "ipynb",
+}
+_MARKITDOWN_EXTENSION_MAP = {
+    ".pdf": "pdf", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx",
+    ".epub": "epub", ".csv": "csv", ".xml": "xml", ".zip": "zip",
+    ".ipynb": "ipynb", ".msg": "msg",
+}
+_MARKITDOWN_SUFFIX_MAP = {
+    "pdf": ".pdf", "docx": ".docx", "pptx": ".pptx", "xlsx": ".xlsx",
+    "epub": ".epub", "csv": ".csv", "xml": ".xml", "zip": ".zip",
+    "ipynb": ".ipynb", "msg": ".msg",
+}
+
 ADAPTIVE_SEARCH_MAX_ROUNDS = int(os.getenv("ADAPTIVE_SEARCH_MAX_ROUNDS", 2))
-DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 3))
 
 # Same tiering as the earlier heuristic plan, kept here so this module has
 # no import dependency on the retired adaptive_search.py.
@@ -89,6 +163,163 @@ _EFFORT_TIERS = {
     "medium": {"num_fetches": 3, "rounds": 2},
     "broad":  {"num_fetches": 6, "rounds": ADAPTIVE_SEARCH_MAX_ROUNDS},
 }
+
+
+# ── Crawl4AI batch fetch (deep_research / deep_read) ────────────────────────
+
+async def _crawl4ai_fetch_many_async(urls: list[str], max_chars: int) -> dict[str, str]:
+    """Fetch many URLs in ONE Crawl4AI session (single browser launch,
+    concurrent pages via arun_many) instead of one browser per URL.
+    Returns {} on any failure or when crawl4ai isn't installed.
+    """
+    if not urls or importlib.util.find_spec("crawl4ai") is None:
+        return {}
+
+    allowed_urls = [u for u in urls if _source_agreement_allows(u)] if RESEARCH_RESPECT_ROBOTS else list(urls)
+    if not allowed_urls:
+        return {}
+
+    try:
+        crawl4ai = importlib.import_module("crawl4ai")
+        AsyncWebCrawler = crawl4ai.AsyncWebCrawler
+        CrawlerRunConfig = crawl4ai.CrawlerRunConfig
+        CacheMode = crawl4ai.CacheMode
+
+        config = CrawlerRunConfig(
+            cache_mode=CacheMode.BYPASS,
+            page_timeout=CRAWL4AI_TIMEOUT_MS,
+            word_count_threshold=CRAWL4AI_WORD_COUNT_THRESHOLD,
+            excluded_tags=["nav", "footer", "header", "aside", "form"],
+            exclude_external_links=True,
+            exclude_social_media_links=True,
+        )
+        out: dict[str, str] = {}
+        async with AsyncWebCrawler() as crawler:
+            results = await crawler.arun_many(
+                urls=allowed_urls, config=config,
+                max_concurrent=CRAWL4AI_MAX_CONCURRENT,
+            )
+            for r in results:
+                if not r or not getattr(r, "success", False):
+                    continue
+                md = getattr(r, "markdown", None)
+                text = getattr(md, "fit_markdown", None) or md or ""
+                text = str(text).strip()
+                if text:
+                    out[getattr(r, "url", "")] = text[:max_chars]
+        return out
+    except Exception as e:
+        log.info("[crawl4ai] batch fetch failed for %d url(s): %s", len(urls), e)
+        return {}
+
+
+def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
+    """Synchronous wrapper for _crawl4ai_fetch_many_async."""
+    import asyncio
+    return asyncio.run(_crawl4ai_fetch_many_async(urls, max_chars))
+
+
+# ── robots.txt compliance ("source agreement" to be crawled) ─────────────────
+
+_robots_lock = threading.Lock()
+_robots_cache: dict[str, tuple[float, RobotFileParser]] = {}
+
+
+def _get_robot_parser(origin: str) -> RobotFileParser:
+    """Fetch and cache a RobotFileParser for one origin (scheme://netloc).
+    Fails open (allow-all) if robots.txt is missing or unreachable."""
+    with _robots_lock:
+        entry = _robots_cache.get(origin)
+        if entry and time.monotonic() - entry[0] < ROBOTS_CACHE_TTL_SECONDS:
+            return entry[1]
+
+    parser = RobotFileParser()
+    parser.set_url(f"{origin}/robots.txt")
+    if importlib.util.find_spec("requests") is not None:
+        requests = importlib.import_module("requests")
+        try:
+            resp = requests.get(
+                f"{origin}/robots.txt", timeout=5,
+                headers={"User-Agent": WEB_FETCH_USER_AGENT},
+            )
+            if resp.status_code >= 400:
+                parser.parse([])
+            else:
+                parser.parse(resp.text.splitlines())
+        except Exception:
+            parser.parse([])
+    else:
+        parser.parse([])
+
+    with _robots_lock:
+        _robots_cache[origin] = (time.monotonic(), parser)
+    return parser
+
+
+def _source_agreement_allows(url: str) -> bool:
+    """Crawl-citizenship gate: only fetch pages the source's own robots.txt
+    permits for our user-agent. Fails open on any lookup error."""
+    if not RESEARCH_RESPECT_ROBOTS:
+        return True
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return True
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    try:
+        parser = _get_robot_parser(origin)
+        return parser.can_fetch(WEB_FETCH_USER_AGENT, url)
+    except Exception:
+        return True
+
+
+# ── sitemap discovery ────────────────────────────────────────────────────────
+
+def _discover_sitemap_urls(origin: str, query_hint: str = "", max_urls: int = RESEARCH_SITEMAP_MAX_URLS) -> list[str]:
+    """Best-effort sitemap.xml discovery for one domain. Checks robots.txt
+    'Sitemap:' directives first, falls back to /sitemap.xml."""
+    if not RESEARCH_SITEMAP_ENABLED:
+        return []
+    if importlib.util.find_spec("requests") is None:
+        return []
+    requests = importlib.import_module("requests")
+
+    candidates: list[str] = []
+    try:
+        robots_resp = requests.get(
+            f"{origin}/robots.txt", timeout=RESEARCH_SITEMAP_TIMEOUT_SECONDS,
+            headers={"User-Agent": WEB_FETCH_USER_AGENT},
+        )
+        if robots_resp.ok:
+            for line in robots_resp.text.splitlines():
+                if line.lower().startswith("sitemap:"):
+                    candidates.append(line.split(":", 1)[1].strip())
+    except Exception:
+        pass
+    if not candidates:
+        candidates.append(f"{origin}/sitemap.xml")
+
+    urls: list[str] = []
+    for sitemap_url in candidates[:3]:
+        try:
+            resp = requests.get(
+                sitemap_url, timeout=RESEARCH_SITEMAP_TIMEOUT_SECONDS,
+                headers={"User-Agent": WEB_FETCH_USER_AGENT},
+            )
+            if not resp.ok:
+                continue
+            locs = re.findall(r"<loc>(.*?)</loc>", resp.text, flags=re.IGNORECASE | re.DOTALL)
+            urls.extend(loc.strip() for loc in locs if loc.strip())
+        except Exception:
+            continue
+        if urls:
+            break
+
+    if not urls:
+        return []
+
+    if query_hint:
+        urls = sorted(urls, key=lambda u: reason.keyword_overlap_score(query_hint, u), reverse=True)
+    return urls[:max_urls]
 
 
 def plan_effort(prompt: str = "") -> str:
@@ -274,6 +505,67 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
 DEEP_READ_MAX_CHARS = int(os.getenv("DEEP_READ_MAX_CHARS", 40000))
 DEEP_READ_MAX_DOWNLOAD_BYTES = int(os.getenv("DEEP_READ_MAX_DOWNLOAD_BYTES", 20_000_000))
 DEEP_READ_CONDENSE_TOP_K = int(os.getenv("DEEP_READ_CONDENSE_TOP_K", 12))
+
+
+# ── Crawl4AI batch fetch (deep_research & deep_read) ────────────────────────
+
+def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
+    """Fetch many URLs in ONE Crawl4AI session (single browser launch,
+    concurrent pages via arun_many) instead of one browser per URL — a
+    per-URL launch would be far too slow to be worth it. This is the batch
+    path deep_research prefers; returns {} on any failure or when crawl4ai
+    isn't installed, so the caller's per-URL fallback (web_fetch) covers
+    every URL missing from the result.
+
+    Also used (with a single-URL list) by deep_read as the
+    JS-rendering escalation path when a plain web_fetch comes back thin.
+
+    Already filters out robots-disallowed URLs itself as defense in depth,
+    though _deep_search_impl also filters before calling this.
+    """
+    if not urls or importlib.util.find_spec("crawl4ai") is None:
+        return {}
+
+    allowed_urls = [u for u in urls if _source_agreement_allows(u)] if RESEARCH_RESPECT_ROBOTS else list(urls)
+    if not allowed_urls:
+        return {}
+
+    try:
+        import asyncio
+        crawl4ai = importlib.import_module("crawl4ai")
+        AsyncWebCrawler = crawl4ai.AsyncWebCrawler
+        CrawlerRunConfig = crawl4ai.CrawlerRunConfig
+        CacheMode = crawl4ai.CacheMode
+
+        async def _run() -> dict[str, str]:
+            config = CrawlerRunConfig(
+                cache_mode=CacheMode.BYPASS,
+                page_timeout=CRAWL4AI_TIMEOUT_MS,
+                word_count_threshold=CRAWL4AI_WORD_COUNT_THRESHOLD,
+                excluded_tags=["nav", "footer", "header", "aside", "form"],
+                exclude_external_links=True,
+                exclude_social_media_links=True,
+            )
+            out: dict[str, str] = {}
+            async with AsyncWebCrawler() as crawler:
+                results = await crawler.arun_many(
+                    urls=allowed_urls, config=config,
+                    max_concurrent=CRAWL4AI_MAX_CONCURRENT,
+                )
+                for r in results:
+                    if not r or not getattr(r, "success", False):
+                        continue
+                    md = getattr(r, "markdown", None)
+                    text = getattr(md, "fit_markdown", None) or md or ""
+                    text = str(text).strip()
+                    if text:
+                        out[getattr(r, "url", "")] = text[:max_chars]
+            return out
+
+        return asyncio.run(_run())
+    except Exception as e:
+        log.info("[crawl4ai] batch fetch failed for %d url(s): %s", len(urls), e)
+        return {}
 
 
 @tool(
@@ -796,7 +1088,7 @@ def deep_fetch_round(prompt: str = "", num_searches: str = "1", num_fetches: str
         num_searches=n_searches,
         num_fetches=n_fetches,
         max_chars_per_page=DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
-        max_workers=4,
+        max_workers=DEEP_RESEARCH_MAX_WORKERS,
         exclude_urls=exclude_urls,
         batch_prefetch_fn=batch_prefetch_fn,
         respect_robots=RESEARCH_RESPECT_ROBOTS,
