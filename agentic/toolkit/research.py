@@ -174,7 +174,6 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
         ]
     else:
         # Medium/Broad: search → fetch → judge (loop if ESCALATE)
-        max_rounds = max_rounds if max_rounds is not None else ADAPTIVE_SEARCH_MAX_ROUNDS
         num_fetches = 3 if tier == "medium" else 6
         
         nodes = [
