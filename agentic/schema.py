@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -41,12 +42,6 @@ GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
 # graph executor can't end up longer than one saved via the ReAct path.
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "5000"))
 
-# Tools whose toolkit implementations accept an `embedder` kwarg for
-# semantic scoring. dispatch_tool() in agentic.py passes the shared Harrier
-# embedder for these; the graph executor previously never did, so any
-# RAG-style scoring inside these tools silently degraded to keyword
-# fallback when run through the graph path instead of ReAct.
-_EMBEDDER_AWARE_TOOLS = {"adaptive_search", "deep_research"}
 _TOOL_MAP_CACHE: dict[str, Callable[..., Any]] | None = None
 _TOOL_MAP_LOCK = threading.Lock()
 _PLAYBOOK_WRITE_LOCK = threading.Lock()
@@ -59,6 +54,18 @@ class PlanNode:
     args: dict[str, Any]
     depends_on: tuple[str, ...] = ()
     run_if: dict[str, Any] | None = None
+    # Bounded loop-back (see execute_graph): if THIS node's own result
+    # satisfies loop_condition, `loop_to` (and everything that depends on
+    # it, including this node) is re-scheduled instead of the graph
+    # moving on — up to max_visits times total. The static playbook JSON
+    # stays fully enumerable (every node id is still known ahead of run
+    # time); only the RUN COUNT of a loop_to node is dynamic, capped by
+    # max_visits — the same safety role LangGraph's recursion_limit plays
+    # for a true agent->tools->agent cycle, just expressed as bounded
+    # re-scheduling within a fixed node set instead of an open-ended walk.
+    loop_to: str | None = None
+    loop_condition: dict[str, Any] | None = None
+    max_visits: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,11 +93,48 @@ class NodeResult:
         return f"{self.node_id}:{self.tool}[{status}] {body}".strip()
 
 
+@dataclass
+class GraphState:
+    """Shared mutable scratch space, threaded BY REFERENCE through every
+    node in one execute_graph() run — the direct analogue of LangGraph's
+    State object.
+
+    Complements, does not replace, $result:/$prompt string substitution:
+    keep using $result: for small values that benefit from being visible
+    in playbook JSON, tool-call logs, and checkpoints. Use state for large
+    or non-string objects (accumulated URL sets, embeddings, live handles)
+    that would otherwise have to be JSON-encoded into a $result: string
+    and hit _substitute's 4000-char per-arg truncation.
+
+    A tool opts into receiving it purely by declaring a `state` parameter
+    in its own signature — see _tool_params()/_run_node() below. Nothing
+    elsewhere needs to know which tools use it.
+
+    NOT checkpointed. execute_graph's run_id/save_node_result mechanism
+    persists NodeResult objects only, one per node — a resumed run always
+    starts with a FRESH, empty GraphState. Any tool relying on state for
+    correctness (not just optimization/caching) must tolerate a resume
+    wiping it, the same way a session-scoped cache always has to tolerate
+    a cold start.
+    """
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self.data.get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        self.data[key] = value
+
+
 @dataclass(frozen=True, slots=True)
 class GraphRunResult:
     graph: PlanGraph
     results: tuple[NodeResult, ...]
     final_answer: str
+    # Snapshot of GraphState.data at the end of the run — purely for
+    # debugging/inspection (e.g. logging what a run accumulated). Not
+    # meant to be relied on for control flow by callers.
+    final_state: dict[str, Any] = field(default_factory=dict)
 
     @property
     def steps(self) -> list[dict[str, Any]]:
@@ -647,6 +691,9 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
             args=dict(raw.get("args") or {}),
             depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
             run_if=dict(raw["run_if"]) if isinstance(raw.get("run_if"), dict) else None,
+            loop_to=str(raw["loop_to"]) if raw.get("loop_to") else None,
+            loop_condition=dict(raw["loop_condition"]) if isinstance(raw.get("loop_condition"), dict) else None,
+            max_visits=int(raw.get("max_visits", 1) or 1),
         ))        
     if not nodes:
         return None
@@ -790,9 +837,32 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     return mapping
 
 
+# ── generic per-tool context injection ───────────────────────────────────
+# Instead of maintaining hand-curated tool-name sets (the old
+# _EMBEDDER_AWARE_TOOLS constant plus two more inline membership checks in
+# _run_node), inspect what each tool function actually declares in its own
+# signature and hand it only what it asks for — the same "a tool opts in
+# via its own parameter list" model LangGraph's bind_tools()/ToolNode use.
+# Wiring a brand-new graph tool that needs client/model/embedder/state
+# never requires touching this module again; it just declares the param.
+_TOOL_PARAM_CACHE: dict[Callable[..., Any], frozenset[str]] = {}
+
+
+def _tool_params(fn: Callable[..., Any]) -> frozenset[str]:
+    cached = _TOOL_PARAM_CACHE.get(fn)
+    if cached is not None:
+        return cached
+    try:
+        params = frozenset(inspect.signature(fn).parameters.keys())
+    except (TypeError, ValueError):
+        params = frozenset()
+    _TOOL_PARAM_CACHE[fn] = params
+    return params
+
+
 def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
               embedder=None, llm_client=None, llm_model: str | None = None,
-              extras: dict[str, Any] | None = None) -> NodeResult:
+              extras: dict[str, Any] | None = None, state: GraphState | None = None) -> NodeResult:
     tools = _tool_map()
     fn = tools.get(node.tool)
     args = _substitute(node.args, prompt, results, extras)
@@ -800,21 +870,24 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
         return NodeResult(node.id, node.tool, False, f"unknown graph tool: {node.tool}", args=args, error_type="unknown_tool")
     if node.tool == "save_note":
         args["content"] = str(args.get("content", ""))[:AGENT_NOTE_MAX_CHARS]
-    # Pass embedder to tools that need it for semantic scoring/condensation.
-    if node.tool in _EMBEDDER_AWARE_TOOLS:
-        args["embedder"] = embedder
-    # Pass LLM client/model to tools that call the model (synthesize_report,
-    # polish_text, kb_search/learn_report which accept embedder). The
-    # graph executor is the only place that has the owner's client+model
-    # pair; the tool map functions themselves are pure so they don't reach
-    # back into the owner object.
-    if node.tool in {"synthesize_report", "polish_text", "judge_sufficient", "combine_research_rounds"}:
-        args["client"] = llm_client
-        args["model"] = llm_model        
-    if node.tool in {"kb_search", "learn_report", "condense_text"}:
-        args["embedder"] = embedder
+
+    # Build the actual call kwargs separately from `args` — injected
+    # objects (client/embedder/state) are NOT JSON-serializable and must
+    # never end up in NodeResult.args, which gets written into
+    # run_playbook_json's output and into checkpoint files.
+    call_args = dict(args)
+    params = _tool_params(fn)
+    if "embedder" in params and "embedder" not in call_args:
+        call_args["embedder"] = embedder
+    if "client" in params and "client" not in call_args:
+        call_args["client"] = llm_client
+    if "model" in params and "model" not in call_args:
+        call_args["model"] = llm_model
+    if "state" in params and "state" not in call_args:
+        call_args["state"] = state
+
     try:
-        out = fn(**args)
+        out = fn(**call_args)
         return NodeResult(node.id, node.tool, True, str(out), args=args)
     except Exception as exc:
         log.exception("Graph node %s (%s) raised unexpectedly", node.id, node.tool)
@@ -835,12 +908,58 @@ def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
     return True
 
 
+def _check_loop_condition(node: PlanNode, result: NodeResult) -> bool:
+    """Does THIS node's own result satisfy its loop_condition? Same
+    equals/contains shape as run_if, evaluated against the node's own
+    output rather than another node's — see PlanNode.loop_condition."""
+    if not node.loop_condition:
+        return False
+    cond = node.loop_condition
+    actual = (result.content or "").strip().lower()
+    if "equals" in cond:
+        return actual == str(cond["equals"]).strip().lower()
+    if "contains" in cond:
+        return str(cond["contains"]).strip().lower() in actual
+    return False
+
+
+def _downstream_of(node_id: str, nodes_by_id: dict[str, PlanNode]) -> set[str]:
+    """All node ids that transitively depend_on node_id (direct or
+    indirect). Used by the loop-back handler to figure out which
+    already-completed nodes need to be invalidated and re-scheduled when a
+    loop_to fires — a stale downstream result computed from a PRE-loop
+    upstream value must not survive into the next pass."""
+    dependents: dict[str, set[str]] = {}
+    for n in nodes_by_id.values():
+        for dep in n.depends_on:
+            dependents.setdefault(dep, set()).add(n.id)
+    seen: set[str] = set()
+    frontier = [node_id]
+    while frontier:
+        current = frontier.pop()
+        for child in dependents.get(current, ()):
+            if child not in seen:
+                seen.add(child)
+                frontier.append(child)
+    return seen
+
+
 def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                    llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
-    pending = {node.id: node for node in graph.nodes}
+    nodes_by_id = {node.id: node for node in graph.nodes}
+    pending = dict(nodes_by_id)
     results: dict[str, NodeResult] = {}
     ordered: list[NodeResult] = []
     extras = getattr(graph, "_extras", {}) or {}
+
+    # Shared mutable scratch space for THIS run only — see GraphState's
+    # docstring. Deliberately not checkpointed; a resumed run always
+    # starts with a fresh, empty state.
+    state = GraphState()
+    # How many times each loop_to-bearing node has fired its loop-back,
+    # keyed by that node's own id — bounds re-execution the same way
+    # LangGraph's recursion_limit bounds a true agent<->tools cycle.
+    visit_counts: dict[str, int] = {}
 
     if run_id:
         for prior in load_checkpoint(run_id, NodeResult):
@@ -881,7 +1000,10 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                     save_node_result(run_id, seq, result); seq += 1
             if not runnable:
                 continue
-            future_map = {pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras): node for node in runnable}
+            future_map = {
+                pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state): node
+                for node in runnable
+            }
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:
@@ -894,10 +1016,36 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                 if run_id:
                     save_node_result(run_id, seq, result); seq += 1
 
+                # Bounded loop-back: this is the "true cycle, but capped"
+                # primitive LangGraph gets from an agent->tools->agent
+                # edge, expressed here as re-scheduling within the SAME
+                # static node set rather than an open-ended graph walk —
+                # see PlanNode.loop_to's docstring.
+                if node.loop_to and node.loop_to in nodes_by_id and _check_loop_condition(node, result):
+                    visit_counts[node.id] = visit_counts.get(node.id, 0) + 1
+                    if visit_counts[node.id] < node.max_visits:
+                        target_id = node.loop_to
+                        to_reset = _downstream_of(target_id, nodes_by_id) | {target_id}
+                        for reset_id in to_reset:
+                            results.pop(reset_id, None)
+                            pending[reset_id] = nodes_by_id[reset_id]
+                        ordered = [r for r in ordered if r.node_id not in to_reset]
+                        # NOTE: checkpoint entries already written this
+                        # pass for the reset node ids are now stale — the
+                        # clean-success clear_checkpoint() below still
+                        # covers the normal (no crash) case, but a crash
+                        # mid-loop combined with run_id resume is not
+                        # fully consistent yet: a resumed run could reload
+                        # a stale pre-loop result for a node that was
+                        # mid-reset. Avoid relying on run_id resume for
+                        # playbooks that use loop_to until this is
+                        # tightened with a proper per-node checkpoint
+                        # invalidation call.
+
     final_answer = _synthesize_without_llm(graph, tuple(ordered))
     if run_id:
         clear_checkpoint(run_id)  # clean success — drop the checkpoint
-    return GraphRunResult(graph=graph, results=tuple(ordered), final_answer=final_answer)
+    return GraphRunResult(graph=graph, results=tuple(ordered), final_answer=final_answer, final_state=dict(state.data))
 
 
 def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -> str:
