@@ -78,6 +78,13 @@ GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "tr
 GRAPH_AGENT_PLAYBOOK = os.getenv("GRAPH_AGENT_PLAYBOOK", "agentic/playbook.json")
 GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
 
+# Goal-verification tiers — each independently toggleable so users can match
+# their hardware budget.  Heuristic is always cheap; embedder reuses the
+# already-loaded model; LLM verification adds 1-2 s / 1-4 GB per run.
+GRAPH_VERIFY_HEURISTIC = os.getenv("GRAPH_VERIFY_HEURISTIC", "1").lower() in {"1", "true", "yes", "on"}
+GRAPH_VERIFY_EMBEDDER = os.getenv("GRAPH_VERIFY_EMBEDDER", "1").lower() in {"1", "true", "yes", "on"}
+GRAPH_VERIFY_LLM = os.getenv("GRAPH_VERIFY_LLM", "0").lower() in {"1", "true", "yes", "on"}
+
 # Kept in sync with agentic.py's AGENT_NOTE_MAX_CHARS so a note saved via the
 # graph executor can't end up longer than one saved via the ReAct path.
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "5000"))
@@ -1201,11 +1208,47 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
     return GraphRunResult(graph=graph, results=tuple(ordered), final_answer=final_answer, final_state=dict(state.data))
 
 
+def _verify_goal(goal: str, results: tuple[NodeResult, ...],
+                   embedder=None, llm_client=None, llm_model: str | None = None) -> tuple[float, list[str]]:
+    """Run enabled verification tiers, return (score, reasons)."""
+    score = 0.0
+    reasons: list[str] = []
+
+    if GRAPH_VERIFY_HEURISTIC:
+        score, reasons = _score_goal_achievement(goal, results, embedder=None)
+
+    if GRAPH_VERIFY_EMBEDDER and embedder is not None:
+        h_score, h_reasons = _score_goal_achievement(goal, results, embedder=embedder)
+        if h_score > score:
+            score = h_score
+        reasons.extend(r for r in h_reasons if r not in reasons)
+
+    if GRAPH_VERIFY_LLM and llm_client is not None and llm_model:
+        try:
+            evidence = "\n".join(r.content for r in results if r.ok)[:3000]
+            out = goal_verification(evidence=evidence, goal=goal,
+                                     client=llm_client, model=llm_model)
+            if "ACHIEVED" in out.upper():
+                score = max(score, 0.8)
+                reasons.append("llm:achieved")
+            elif "PARTIAL" in out.upper():
+                score = max(score, 0.4)
+                reasons.append(f"llm:partial")
+            else:
+                score = min(score, 0.3)
+                reasons.append("llm:failed")
+        except Exception as exc:
+            log.debug("LLM goal verification failed: %s", exc)
+
+    return score, reasons
+
+
 def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                    llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
     result = _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
                                    llm_model=llm_model, run_id=run_id)
-    score, reasons = _score_goal_achievement(graph.goal, result.results, embedder=embedder)
+    score, reasons = _verify_goal(graph.goal, result.results, embedder=embedder,
+                                   llm_client=llm_client, llm_model=llm_model)
     return replace(result, goal_score=score, goal_reasons=reasons)
 
 
@@ -1219,7 +1262,8 @@ def execute_graph_stream(graph: PlanGraph, embedder=None, llm_client=None,
 
     final = _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
                                   llm_model=llm_model, run_id=run_id, _yield=_capture)
-    score, reasons = _score_goal_achievement(graph.goal, final.results, embedder=embedder)
+    score, reasons = _verify_goal(graph.goal, final.results, embedder=embedder,
+                                   llm_client=llm_client, llm_model=llm_model)
     final = replace(final, goal_score=score, goal_reasons=reasons)
     yield from results
     yield final
@@ -1345,6 +1389,19 @@ def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -
     return "\n".join(lines)
 
 
+def _record_goal_engram(goal: str, score: float, reasons: list[str],
+                         graph_name: str, steps: list[dict]) -> None:
+    """Write a goal-achievement engram so the nightly reflection can include it."""
+    try:
+        from agentic.experience import record_experience
+        engram_goal = f"graph_goal:{goal[:300]}"
+        record_experience(None, engram_goal, steps,
+                          final_answer=f"score={score:.2f} reasons={'; '.join(reasons)}",
+                          verified_ok=score >= 0.6, score=score)
+    except Exception:
+        pass
+
+
 def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None,
                      llm_client=None, llm_model: str | None = None,
                      run_id: str | None = None) -> GraphRunResult | None:
@@ -1355,9 +1412,12 @@ def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder
         run_id = hashlib.sha256(f"{graph.id}|{user_input}".encode()).hexdigest()[:16]
     result = execute_graph(graph, embedder=embedder, llm_client=llm_client,
                             llm_model=llm_model, run_id=run_id)
-    if result.goal_score is not None and result.goal_score < 0.4:
-        log.warning("Goal '%s' score low (%.2f): %s",
-                     graph.goal, result.goal_score, result.goal_reasons)
+    if result.goal_score is not None:
+        _record_goal_engram(graph.goal, result.goal_score, result.goal_reasons,
+                            graph.name, result.steps)
+        if result.goal_score < 0.4:
+            log.warning("Goal '%s' score low (%.2f): %s",
+                         graph.goal, result.goal_score, result.goal_reasons)
     return result
 
 
