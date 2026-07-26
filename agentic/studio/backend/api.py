@@ -4,10 +4,9 @@ Serves the playbooks JSON and handles API requests for the studio frontend.
 """
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from pathlib import Path
-import json
 
 app = FastAPI(title="Aiko Graph Studio")
 
@@ -27,8 +26,6 @@ FRONTEND_DIR = STUDIO_DIR / "frontend"
 
 if (BASE_DIR / "static").exists():
     app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
-
-templates = Jinja2Templates(directory=str(FRONTEND_DIR))
 
 
 # ── Playbook helpers ──────────────────────────────────────────────────────────
@@ -83,8 +80,8 @@ async def get_playbook(playbook_id: str):
 
 @app.get("/")
 async def serve_studio(request: Request):
-    """Serve the studio interface."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    """Serve the studio interface (static SPA; no Jinja needed)."""
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 if __name__ == "__main__":
