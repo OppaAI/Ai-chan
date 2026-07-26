@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import re
 import threading
 import time
@@ -38,6 +39,7 @@ from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensiti
 log = get_logger(__name__)
 
 ADAPTIVE_SEARCH_MAX_ROUNDS = int(os.getenv("ADAPTIVE_SEARCH_MAX_ROUNDS", 2))
+DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 3))
 
 # Same tiering as the earlier heuristic plan, kept here so this module has
 # no import dependency on the retired adaptive_search.py.
@@ -298,7 +300,7 @@ def combine_research_rounds(r1: str = "", r2: str = "", r3: str = "", r4: str = 
 
 
 def _build_deep_research_subgraph(query: str, session_id: str,
-                                   max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS) -> PlanGraph:
+                                   max_rounds: int = ADAPTIVE_SEARCH_MAX_ROUNDS) -> PlanGraph:
     """Collapsed to 2 dynamic nodes + 3 static, using loop_to instead of
     an N-node unroll.  Fetch → Judge (loops back to Fetch if ESCALATE) →
     Finalize → Report → Learn."""

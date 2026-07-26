@@ -1274,7 +1274,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 pending.pop(node.id, None)
                 if run_id:
                     save_node_result(run_id, seq, result, state_json=json.dumps(state.data)); seq += 1
-                save_graph_state(run_id, state.data)
+                    save_graph_state(run_id, state.data)
                 if _yield:
                     _yield(result)
 
