@@ -1049,6 +1049,8 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
         call_args["embedder"] = embedder
     if "client" in params and "client" not in call_args:
         call_args["client"] = llm_client
+    if "model" in params and "model" not in call_args:
+        call_args["model"] = llm_model
     if "llm_model" in params and "llm_model" not in call_args:
         call_args["llm_model"] = llm_model
     if "state" in params and "state" not in call_args:
