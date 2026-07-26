@@ -47,7 +47,7 @@ DEEP_STUDY_MAX_ITERATIONS: "10"  # Hard ceiling on search+fetch iterations for o
 DEEP_STUDY_SEED_QUERIES: "6"  # How many concrete sub-queries the model breaks the topic into up front, explored before the adaptive next-query loop kicks in. Keep this comfortably below MAX_ITERATIONS (currently is) so there's still budget left for adaptive follow-ups.
 DEEP_STUDY_RESULTS_PER_QUERY: "3"  # SearXNG results considered per sub-query. Falls back to web.yaml's SEARXNG_MAX_RESULTS if unset.
 DEEP_STUDY_FETCH_TOP: "3"  # How many of those results actually get fetched per iteration.
-DEEP_STUDY_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap, same role as DEEP_SEARCH_MAX_CHARS_PER_PAGE in web.yaml but scoped to deep_studying's own fetch calls.
+DEEP_STUDY_MAX_CHARS_PER_PAGE: "2000"  # Per-page fetched text cap, same role as CONDENSE_CHUNK_CHARS but scoped to deep_studying's own fetch calls.
 DEEP_STUDY_CHUNK_CHARS: "500"  # Chunk size fetched pages are split into before scoring/storing. Falls back to web.yaml's CONDENSE_CHUNK_CHARS if unset.
 DEEP_STUDY_MIN_SCORE: "0.15"  # Minimum relevance score for a chunk to survive into distillation. Falls back to web.yaml's CONDENSE_MIN_SCORE if unset.
 DEEP_STUDY_TOP_K_FOR_DISTILLATION: "40"  # Max ranked chunks handed to the final synthesis call, scored against the ORIGINAL topic (not individual sub-queries). Lower this if 40 excerpts is more than DEEP_STUDY_SYNTHESIS_MAX_TOKENS can meaningfully use.

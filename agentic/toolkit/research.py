@@ -7,8 +7,8 @@ Plus deep_read: a single-known-URL fetch with content-type routing.
 Both adaptive_search and deep_research_graph build and run their OWN small
 PlanGraph instances via graph_engine.py's execute_graph(). This means they plug
 into graph_engine._tool_map() as single opaque tools — so any playbook that
-currently calls "deep_search" or "deep_research" can switch to
-"adaptive_search" or "deep_research_graph" with a one-line args change.
+currently calls "deep_research" can switch to "deep_research_graph" with a
+one-line args change.
 
 deep_read is NOT a PlanGraph — a single known URL has no "escalate: widen the
 candidate pool" move the way a search does, so there's nothing here that
@@ -68,7 +68,6 @@ from agentic.toolkit.websurf import (
     CONDENSE_TOP_K,
     CONDENSE_MIN_SCORE,
     CONDENSE_MAX_CHUNKS_TO_SCORE,
-    DEEP_SEARCH_MAX_WORKERS,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
 
@@ -131,7 +130,7 @@ def fetch_and_condense_ranked(candidates_json: str = "[]", prompt: str = "",
     """Graph tool: fetch the top-N already-ranked candidates, blend
     authority+recency into relevance scoring, return condensed evidence in
     the same '[source: url | relevance: N | corroborated xN]' shape
-    deep_search/deep_research already produce, so downstream synthesize/
+    _deep_search_impl/deep_research already produce, so downstream synthesize/
     combine_evidence nodes need no changes."""
     try:
         data = json.loads(candidates_json)
@@ -223,7 +222,9 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
     props={"query": {"type": "string"}},
     required=["query"],
     domain="research",
+    react=True,
     graph=True,
+    wiki=True,
 )
 def adaptive_search(query: str, embedder=None, client=None, model: str | None = None,
                      max_rounds: int | None = None) -> str:
@@ -281,6 +282,9 @@ DEEP_READ_CONDENSE_TOP_K = int(os.getenv("DEEP_READ_CONDENSE_TOP_K", 12))
     props={"url": {"type": "string", "description": "The exact URL to fetch and read."}, "query": {"type": "string", "description": "Optional focus query — if given, content is relevance-filtered to what matters for this question."}},
     required=["url"],
     domain="research",
+    react=True,
+    graph=True,
+    wiki=True,
 )
 def deep_read(
     url: str,
@@ -520,7 +524,7 @@ def _fetch_and_score_pipeline(
     embedder,
     max_chars_per_page: int,
     chunk_chars: int = CONDENSE_CHUNK_CHARS,
-    max_workers: int = DEEP_SEARCH_MAX_WORKERS,
+    max_workers: int = 4,
     max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
     fetch_fn=web_fetch,
     batch_prefetch_fn=None,
@@ -533,7 +537,8 @@ def _fetch_and_score_pipeline(
     called ONCE with the full url list up front to grab as many pages as
     possible in a single browser session; only URLs it doesn't cover fall
     through to the per-URL thread-pool path using fetch_fn (e.g. web_fetch).
-    deep_search never passes batch_prefetch_fn, so its behavior is unchanged.
+    The internal _deep_search_impl helper never passes batch_prefetch_fn, so
+    its behavior is unchanged.
 
     Returns (scored_chunks, pages, url_outcomes).
     """
@@ -617,11 +622,10 @@ def _deep_search_impl(
 ) -> tuple[str, set[str]]:
     """Fixed, non-adaptive search pass with optional fetch/condense.
 
-    With num_fetches=0 this returns snippets/URLs only, which is now the
-    default public deep_search behavior. Deep_research calls this helper with
-    its own positive fetch count plus the research-only knobs (Crawl4AI batch
-    prefetch, robots gating, sitemap expansion, corroboration annotation) to
-    do fetched-source work.
+    With num_fetches=0 this returns snippets/URLs only (snippet-only mode).
+    Deep_research calls this helper with its own positive fetch count plus the
+    research-only knobs (Crawl4AI batch prefetch, robots gating, sitemap
+    expansion, corroboration annotation) to do fetched-source work.
 
     Returns (formatted_bundle, urls_actually_fetched) — the URL set lets
     deep_research exclude already-seen URLs across rounds without a
@@ -633,7 +637,7 @@ def _deep_search_impl(
     num_searches = max(1, num_searches)
     num_fetches = max(0, num_fetches)
 
-    log.info("[deep_search] query=%r searches=%d fetches=%d", query, num_searches, num_fetches)
+    log.info("[_deep_search_impl] query=%r searches=%d fetches=%d", query, num_searches, num_fetches)
 
     # Search phase
     snippets = []
@@ -641,7 +645,7 @@ def _deep_search_impl(
     for i in range(num_searches):
         raw, err = _web_search_raw(query, MAX_RESULTS, pageno=i + 1)
         if err:
-            log.warning("[deep_search] search %d failed: %s", i + 1, err)
+            log.warning("[_deep_search_impl] search %d failed: %s", i + 1, err)
             continue
         results = raw or []
         for r in results:
@@ -792,6 +796,7 @@ def deep_fetch_round(prompt: str = "", num_searches: str = "1", num_fetches: str
         num_searches=n_searches,
         num_fetches=n_fetches,
         max_chars_per_page=DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
+        max_workers=4,
         exclude_urls=exclude_urls,
         batch_prefetch_fn=batch_prefetch_fn,
         respect_robots=RESEARCH_RESPECT_ROBOTS,
@@ -869,6 +874,9 @@ def _build_deep_research_subgraph(query: str, session_id: str,
     props={"query": {"type": "string", "description": "The research question. Can be broader/less scoped since the tool refines it internally."}},
     required=["query"],
     domain="research",
+    react=True,
+    graph=True,
+    wiki=True,
 )
 def deep_research(query: str, embedder=None, client=None, model: str | None = None,
                          max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS, tool_mode: bool = False) -> str:

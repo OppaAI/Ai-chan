@@ -46,32 +46,29 @@ log = get_logger(__name__)
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 
-# -- deep_search (fixed, non-adaptive snippet search pass) --
-# Task-mode deep_search is intentionally snippet-only. It uses the same raw
-# SearXNG primitive as web_search, but is exposed to agentic workflows while
-# web_search/web_fetch remain chat-mode primitives. deep_search NEVER uses
-# Crawl4AI, sitemap expansion, or robots-gated fetching — those are
-# deep_research-only, by design, to keep this path fast.
-DEEP_SEARCH_NUM_SEARCHES = int(os.getenv("DEEP_SEARCH_NUM_SEARCHES", 1))
-DEEP_SEARCH_NUM_FETCHES = int(os.getenv("DEEP_SEARCH_NUM_FETCHES", 0))  # legacy override; keep 0 for snippet-only deep_search
-DEEP_SEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_SEARCH_MAX_CHARS_PER_PAGE", 2000))
-DEEP_SEARCH_MAX_WORKERS = int(os.getenv("DEEP_SEARCH_MAX_WORKERS", 4))
+# -- internal _deep_search_impl (fixed, non-adaptive snippet search pass) --
+# The helper is intentionally snippet-only by default (num_fetches=0). It uses
+# the same raw SearXNG primitive as web_search, but is available to agentic
+# workflows while web_search/web_fetch remain chat-mode primitives.
+# _deep_search_impl NEVER uses Crawl4AI, sitemap expansion, or robots-gated
+# fetching — those are deep_research-only, by design, to keep this path fast.
 
 # -- deep_research (adaptive fetched-source research) --
 # Deep research uses search only to discover URLs, then fetches pages and
-# condenses/synthesizes evidence. It has its own fetch knobs so deep_search can
-# stay snippet-only. These are read once as module-level DEFAULTS; deep_research()
-# itself now accepts num_searches/num_fetches/max_chars_per_page as real
-# function args (see below) so a caller — e.g. memory.learn.quick_studying —
-# can override per-call instead of only ever getting these env defaults.
+# condenses/synthesizes evidence. It has its own fetch knobs so the internal
+# _deep_search_impl helper stays snippet-only by default. These are read once
+# as module-level DEFAULTS; deep_research() itself now accepts
+# num_searches/num_fetches/max_chars_per_page as real function args (see
+# below) so a caller — e.g. memory.learn.quick_studying — can override
+# per-call instead of only ever getting these env defaults.
 #
 # Tuned for accuracy-over-latency per JJ: more fetches, more rounds, more
-# per-page budget than the old defaults. deep_search's knobs above are left
-# untouched so it stays the fast path.
-DEEP_RESEARCH_NUM_SEARCHES = int(os.getenv("DEEP_RESEARCH_NUM_SEARCHES", os.getenv("DEEP_SEARCH_NUM_SEARCHES", 1)))
+# per-page budget than the old defaults.
+DEEP_RESEARCH_NUM_SEARCHES = int(os.getenv("DEEP_RESEARCH_NUM_SEARCHES", 1))
 DEEP_RESEARCH_NUM_FETCHES = int(os.getenv("DEEP_RESEARCH_NUM_FETCHES", 4))
 DEEP_RESEARCH_MAX_CHARS_PER_PAGE = int(os.getenv("DEEP_RESEARCH_MAX_CHARS_PER_PAGE", 3500))
 DEEP_RESEARCH_MAX_ROUNDS = int(os.getenv("DEEP_RESEARCH_MAX_ROUNDS", 4))
+DEEP_RESEARCH_MAX_WORKERS = int(os.getenv("DEEP_RESEARCH_MAX_WORKERS", 4))
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_DECISION", 8000))
 DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS = int(os.getenv("DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS", 12000))
 DEEP_RESEARCH_DECISION_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_DECISION_MAX_TOKENS", 200))
@@ -82,14 +79,13 @@ DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_SYNTHESIS_MAX_
 # verbatim or dropped entirely. Summarization only happens later, in
 # deep_research's separate LLM synthesis call.
 #
-# deep_search keeps the original (fast/cheap) knobs below. deep_research uses
-# the separate RESEARCH_CONDENSE_* knobs further down — wider net, lower bar,
-# because the corroboration bonus (see _apply_corroboration_bonus) promotes
-# borderline items that get independently confirmed by a second domain.
+# deep_research uses the RESEARCH_CONDENSE_* knobs further down — wider net,
+# lower bar, because the corroboration bonus (see _apply_corroboration_bonus)
+# promotes borderline items that get independently confirmed by a second domain.
 CONDENSE_CHUNK_CHARS = int(os.getenv("CONDENSE_CHUNK_CHARS", 500))
 CONDENSE_TOP_K = int(os.getenv("CONDENSE_TOP_K", 8))
 CONDENSE_MIN_SCORE = float(os.getenv("CONDENSE_MIN_SCORE", 0.15))
-# Caps embedding calls PER fetch pipeline invocation (per deep_search call,
+# Caps embedding calls PER fetch pipeline invocation (per _deep_search_impl call,
 # i.e. per round) — not a lifetime cap.
 CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("CONDENSE_MAX_CHUNKS_TO_SCORE", 60))
 
@@ -344,8 +340,8 @@ def web_fetch(
     This is the baseline "fetch a page" primitive in the toolkit — fast,
     dependency-light, no JS rendering. deep_research prefers Crawl4AI when
     available (see _crawl4ai_fetch_many) and falls back to this for anything
-    Crawl4AI misses or when it isn't installed. deep_search always uses this
-    directly (when it fetches at all).
+    Crawl4AI misses or when it isn't installed. The internal _deep_search_impl
+    helper uses this directly (when it fetches at all).
 
     Downloads are streamed and capped at max_download_bytes via
     _download_bytes, aborted mid-stream BEFORE trafilatura ever runs
@@ -632,7 +628,7 @@ def _fetch_and_score_pipeline(
     embedder,
     max_chars_per_page: int,
     chunk_chars: int = CONDENSE_CHUNK_CHARS,
-    max_workers: int = DEEP_SEARCH_MAX_WORKERS,
+    max_workers: int = 4,
     max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
     fetch_fn=web_fetch,
     batch_prefetch_fn=None,
@@ -645,7 +641,6 @@ def _fetch_and_score_pipeline(
     called ONCE with the full url list up front to grab as many pages as
     possible in a single browser session; only URLs it doesn't cover fall
     through to the per-URL thread-pool path using fetch_fn (e.g. web_fetch).
-    deep_search never passes batch_prefetch_fn, so its behavior is unchanged.
 
     Returns (scored_chunks, pages, url_outcomes).
     """
@@ -730,11 +725,10 @@ def _deep_search_impl(
 ) -> tuple[str, set[str]]:
     """Fixed, non-adaptive search pass with optional fetch/condense.
 
-    With num_fetches=0 this returns snippets/URLs only, which is now the
-    default public deep_search behavior. Deep_research calls this helper with
-    its own positive fetch count plus the research-only knobs (Crawl4AI batch
-    prefetch, robots gating, sitemap expansion, corroboration annotation) to
-    do fetched-source work.
+    With num_fetches=0 this returns snippets/URLs only (snippet-only mode).
+    Deep_research calls this helper with its own positive fetch count plus the
+    research-only knobs (Crawl4AI batch prefetch, robots gating, sitemap
+    expansion, corroboration annotation) to do fetched-source work.
 
     Returns (formatted_bundle, urls_actually_fetched) — the URL set lets
     deep_research exclude already-seen URLs across rounds without a
@@ -748,7 +742,7 @@ def _deep_search_impl(
     all_results: list[dict] = []
     errors: list[str] = []
 
-    log.info("[deep_search] %d search call(s) for: %s", num_searches, query)
+    log.info("[_deep_search_impl] %d search call(s) for: %s", num_searches, query)
 
     if num_searches == 1:
         results, error = _web_search_raw(query, MAX_RESULTS, pageno=1)

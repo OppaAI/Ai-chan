@@ -62,6 +62,9 @@ caller passes the already-loaded client/model (typically the
 """
 from __future__ import annotations
 
+import os
+import re
+
 from system.log import get_logger
 from agentic.toolkit.research import condense_evidence
 from agentic.registry import tool
@@ -202,6 +205,7 @@ def split_subjects(prompt: str) -> list[str]:
     props={"parts": {"type": "array", "items": {"type": "string"}}, "separator": {"type": "string"}},
     domain="reports",
     react=False,
+    graph=True,
 )
 def combine_evidence(parts: list[str], separator: str = "\n\n---\n\n") -> str:
     """Concatenate non-empty evidence blocks with a visible separator.
@@ -221,6 +225,7 @@ def combine_evidence(parts: list[str], separator: str = "\n\n---\n\n") -> str:
     props={"text": {"type": "string"}, "query": {"type": "string"}, "max_chars": {"type": "integer"}},
     domain="reports",
     react=False,
+    graph=True,
 )
 def condense_text(
     text: str,
@@ -274,6 +279,7 @@ def condense_text(
     required=["query"],
     domain="kb",
     react=False,
+    graph=True,
 )
 def kb_search(
     query: str,
@@ -326,6 +332,7 @@ def kb_search(
     required=["title", "text"],
     domain="kb",
     react=False,
+    graph=True,
 )
 def learn_report(
     title: str,
@@ -427,6 +434,7 @@ def _format_comparison_block(subjects: list[str]) -> str:
     },
     domain="reports",
     react=False,
+    graph=True,
 )
 def synthesize_report(
     evidence: str,
@@ -544,6 +552,7 @@ def synthesize_report(
     props={"text": {"type": "string"}, "style": {"type": "string"}, "max_tokens": {"type": "integer"}},
     domain="reports",
     react=False,
+    graph=True,
 )
 def polish_text(
     text: str,

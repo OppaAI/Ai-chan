@@ -68,6 +68,8 @@ def _report_path(title: str, report_dir: str) -> Path:
     },
     required=["title"],
     domain="reports",
+    react=True,
+    graph=True,
 )
 def write_report(
     title: str,

@@ -340,6 +340,8 @@ def dedupe_postings(postings: list[dict], title_threshold: float = 0.7) -> list[
     props={"query": {"type": "string"}, "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."}, "max_results": {"type": "integer"}, "max_age_days": {"type": "integer"}, "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
     required=["query"],
     domain="jobs",
+    react=False,
+    graph=True,
 )
 def search_jobs(
     query: str,

@@ -33,9 +33,6 @@ from agentic.toolkit.websurf import (
     _apply_corroboration_bonus,
     _fetch_and_score_pipeline,
     _deep_search_impl,
-    DEEP_SEARCH_NUM_FETCHES,
-    DEEP_SEARCH_NUM_SEARCHES,
-    DEEP_SEARCH_MAX_CHARS_PER_PAGE,
     DEEP_RESEARCH_NUM_FETCHES,
     DEEP_RESEARCH_NUM_SEARCHES,
     DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
@@ -409,11 +406,6 @@ class TestReadPaperUrl:
 
 class TestResearchEnvConfig:
     """Tests that env vars are read correctly."""
-
-    def test_deep_search_defaults(self):
-        assert DEEP_SEARCH_NUM_SEARCHES == 1
-        assert DEEP_SEARCH_NUM_FETCHES == 0
-        assert DEEP_SEARCH_MAX_CHARS_PER_PAGE == 2000
 
     def test_deep_research_defaults(self):
         assert DEEP_RESEARCH_NUM_SEARCHES >= 1

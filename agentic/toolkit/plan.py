@@ -29,7 +29,9 @@ from agentic.registry import tool
     description="Make plan.",
     props={"goal": {"type": "string"}, "constraints": {"type": "string"}, "max_steps": {"type": "integer"}},
     required=["goal"],
+    domain="planning",
     always_on=True,
+    react=True,
     graph=True,
 )
 def make_plan(goal: str, constraints: str = "", max_steps: int = 8) -> str:
@@ -58,7 +60,9 @@ def make_plan(goal: str, constraints: str = "", max_steps: int = 8) -> str:
     description="Make checklist.",
     props={"title": {"type": "string"}, "items": {"type": "string", "description": "Newline-separated checklist items."}},
     required=["title", "items"],
+    domain="planning",
     always_on=True,
+    react=True,
     graph=True,
 )
 def create_checklist(title: str, items: list[str] | str) -> str:
@@ -79,7 +83,9 @@ def create_checklist(title: str, items: list[str] | str) -> str:
     description="Save a note to a workspace file. content MUST be plain text only, under 400 characters. No markdown tables, no bullet lists, no backticks, no quotes. Write a brief plain-text summary only.",
     props={"title": {"type": "string", "description": "Short filename title."}, "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."}, "folder": {"type": "string", "description": "Subfolder, default: notes"}},
     required=["title", "content"],
+    domain="planning",
     always_on=True,
+    react=True,
     graph=True,
 )
 def save_note(title: str, content: str, folder: str = "notes") -> str:
@@ -98,7 +104,9 @@ def save_note(title: str, content: str, folder: str = "notes") -> str:
     description="Read workspace file.",
     props={"relative_path": {"type": "string"}},
     required=["relative_path"],
+    domain="planning",
     always_on=True,
+    react=True,
     graph=True,
 )
 def read_workspace_file(relative_path: str, max_chars: int = MAX_READ_CHARS) -> str:
@@ -117,7 +125,9 @@ def read_workspace_file(relative_path: str, max_chars: int = MAX_READ_CHARS) -> 
     description="Summarize task state.",
     props={"goal": {"type": "string"}, "done": {"type": "string"}, "next_action": {"type": "string"}, "risks": {"type": "string"}},
     required=["goal"],
+    domain="planning",
     always_on=True,
+    react=True,
     graph=True,
 )
 def summarize_task_state(goal: str, done: str = "", next_action: str = "", risks: str = "") -> str:

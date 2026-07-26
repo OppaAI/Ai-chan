@@ -52,6 +52,8 @@ def _iter_repo_files(root: Path = REPO_ROOT):
     description="List repository text files for Aiko architecture/code navigation.",
     props={"prefix": {"type": "string"}, "limit": {"type": "integer"}},
     domain="repo",
+    react=True,
+    graph=True,
 )
 def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
     """List repository text files for architecture/code navigation."""
@@ -79,6 +81,8 @@ def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
     props={"relative_path": {"type": "string"}, "max_chars": {"type": "integer"}},
     required=["relative_path"],
     domain="repo",
+    react=True,
+    graph=True,
 )
 def repo_read_file(relative_path: str, max_chars: int = MAX_REPO_READ_CHARS) -> str:
     """Read one repository text file without permitting path traversal."""
@@ -99,6 +103,8 @@ def repo_read_file(relative_path: str, max_chars: int = MAX_REPO_READ_CHARS) -> 
     props={"query": {"type": "string"}, "prefix": {"type": "string"}, "limit": {"type": "integer"}},
     required=["query"],
     domain="repo",
+    react=True,
+    graph=True,
 )
 def repo_search_text(query: str, prefix: str = "", limit: int = 50) -> str:
     """Search repository text files with simple case-insensitive substring matching."""
