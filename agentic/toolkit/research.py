@@ -37,7 +37,7 @@ from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensiti
 
 log = get_logger(__name__)
 
-ADAPTIVE_SEARCH_MAX_ROUNDS = 2  # bounded unroll cap — raise to 3-4 for deep_research-equivalent depth
+ADAPTIVE_SEARCH_MAX_ROUNDS = int(os.getenv("ADAPTIVE_SEARCH_MAX_ROUNDS", 2))
 
 # Same tiering as the earlier heuristic plan, kept here so this module has
 # no import dependency on the retired adaptive_search.py.
@@ -146,7 +146,8 @@ def judge_sufficient(evidence: str = "", prompt: str = "", client=None, model=No
     return "SUFFICIENT" if "SUFFICIENT" in str(out).upper() else "ESCALATE"
 
 
-def _build_adaptive_search_subgraph(query: str) -> PlanGraph:
+def _build_adaptive_search_subgraph(query: str, max_rounds: int | None = None) -> PlanGraph:
+    max_rounds = max_rounds if max_rounds is not None else ADAPTIVE_SEARCH_MAX_ROUNDS
     nodes = [
         PlanNode(id="plan", tool="plan_effort", args={"prompt": "$prompt"}),
         PlanNode(id="search_r1", tool="search_and_rank", depends_on=("plan",), args={"prompt": "$prompt"}),
@@ -157,7 +158,7 @@ def _build_adaptive_search_subgraph(query: str) -> PlanGraph:
                   args={"candidates_json": "$result:search_r1", "prompt": "$prompt",
                         "num_fetches": "3", "freshness_bias": "false"}),
     ]
-    if ADAPTIVE_SEARCH_MAX_ROUNDS >= 2:
+    if max_rounds >= 2:
         nodes += [
             PlanNode(id="judge_r2", tool="judge_sufficient", depends_on=("fetch_r1",),
                       run_if={"node": "judge_r1", "equals": "ESCALATE"},
@@ -173,20 +174,11 @@ def _build_adaptive_search_subgraph(query: str) -> PlanGraph:
     return PlanGraph(id="adaptive_search", name="Adaptive search", goal=query, nodes=tuple(nodes))
 
 
-def adaptive_search(query: str, embedder=None, client=None, model: str | None = None) -> str:
-    """Public entry point — same signature shape as deep_search/deep_research,
-    so it's a one-line swap in _build_tool_map() and in any playbook's
-    "tool": "deep_search" -> "tool": "adaptive_search" args.
-
-    Internally builds and runs its OWN small PlanGraph via schema.py's
-    existing execute_graph() — this is the 'subgraph' referred to in the
-    node-count discussion; schema.py has no native subgraph-call syntax,
-    so nesting is done at the Python level (one tool function = one
-    self-contained graph run), not inside the PlanGraph data structure.
-    """
+def adaptive_search(query: str, embedder=None, client=None, model: str | None = None,
+                     max_rounds: int | None = None) -> str:
     if not query or not query.strip():
         return "[search failed: empty query]"
-    graph = _build_adaptive_search_subgraph(query.strip())
+    graph = _build_adaptive_search_subgraph(query.strip(), max_rounds=max_rounds)
     result = execute_graph(graph, embedder=embedder, llm_client=client, llm_model=model)
     # Prefer the last successful fetch/search node's content over the
     # generic no-LLM _synthesize_without_llm() summary, since callers of

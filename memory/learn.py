@@ -118,7 +118,7 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 # ── quick_studying ────────────────────────────────────────────────────────────
 
-QUICK_STUDY_MAX_ROUNDS = int(os.getenv("QUICK_STUDY_MAX_ROUNDS", 3))
+QUICK_STUDY_MAX_ROUNDS = int(os.getenv("QUICK_STUDY_MAX_ROUNDS", 5))
 
 
 def quick_studying(
@@ -127,13 +127,8 @@ def quick_studying(
     model: str | None = None,
     embedder=None,
 ) -> str:
-    """Interactive-depth research on a topic — adaptive_search's cheap
-    snippet-first-escalate-if-needed path. This is what the idle learner's
-    short-gap top-ups and any direct /research command should use; it is
-    NOT deep_research (that's reserved for explicit user asks and the
-    scheduled overnight deep_study window — see deep_studying below).
-    """
-    return adaptive_search(topic, client=client, model=model, embedder=embedder)
+    return adaptive_search(topic, client=client, model=model, embedder=embedder,
+                            max_rounds=QUICK_STUDY_MAX_ROUNDS)
 
 
 # ── idle learner loop ─────────────────────────────────────────────────────────
