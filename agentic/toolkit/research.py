@@ -40,6 +40,8 @@ from agentic.toolkit.websurf import (
     RESEARCH_CONDENSE_TOP_K,
     RESEARCH_CONDENSE_MIN_SCORE,
     RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE,
+    DEEP_RESEARCH_NUM_SEARCHES,
+    DEEP_RESEARCH_NUM_FETCHES,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
 
@@ -155,7 +157,7 @@ def judge_sufficient(evidence: str = "", prompt: str = "", client=None, model=No
     return "SUFFICIENT" if "SUFFICIENT" in str(out).upper() else "ESCALATE"
 
 
-def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | None = None) -> PlanGraph:
+def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | None = None, freshness_bias: bool = False) -> PlanGraph:
     """Build adaptive search graph based on tier.
     - simple: search → judge (no fetch, 1 round max)
     - medium: search → fetch → judge (loop if ESCALATE, max 2 rounds)
@@ -166,9 +168,7 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
     if tier == "simple":
         # Simple: search → judge (no fetch, no loop)
         nodes = [
-            PlanNode(id="plan", tool="plan_effort", args={"prompt": "$prompt"}),
-            PlanNode(id="search_r", tool="search_and_rank", depends_on=("plan",),
-                     args={"prompt": "$prompt"}),
+            PlanNode(id="search_r", tool="search_and_rank", args={"prompt": "$prompt"}),
             PlanNode(id="judge_r", tool="judge_sufficient", depends_on=("search_r",),
                      args={"evidence": "$result:search_r", "prompt": "$prompt"}),
         ]
@@ -178,12 +178,10 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
         num_fetches = 3 if tier == "medium" else 6
         
         nodes = [
-            PlanNode(id="plan", tool="plan_effort", args={"prompt": "$prompt"}),
-            PlanNode(id="search_r", tool="search_and_rank", depends_on=("plan",),
-                     args={"prompt": "$prompt"}),
+            PlanNode(id="search_r", tool="search_and_rank", args={"prompt": "$prompt"}),
             PlanNode(id="fetch_r", tool="fetch_and_condense_ranked", depends_on=("search_r",),
                      args={"candidates_json": "$result:search_r", "prompt": "$prompt",
-                           "num_fetches": str(num_fetches), "freshness_bias": "false"}),
+                           "num_fetches": str(num_fetches), "freshness_bias": "true" if freshness_bias else "false"}),
             PlanNode(id="judge_r", tool="judge_sufficient", depends_on=("fetch_r",),
                      args={"evidence": "$result:fetch_r", "prompt": "$prompt"},
                      loop_to="search_r", loop_condition={"equals": "ESCALATE"},
@@ -203,15 +201,17 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
         plan_json = plan_effort(query.strip())
         plan = json.loads(plan_json)
         tier = plan.get("tier", "simple")
+        freshness_bias = plan.get("freshness_bias", False)
     except Exception:
         tier = "simple"
+        freshness_bias = False
     
     # Build graph appropriate for the tier
-    graph = _build_adaptive_search_subgraph(query.strip(), tier, max_rounds=max_rounds)
+    graph = _build_adaptive_search_subgraph(query.strip(), tier, max_rounds=max_rounds, freshness_bias=freshness_bias)
     result = execute_graph(graph, embedder=embedder, llm_client=client, llm_model=model)
     
     # Prefer fetch_r's content (for medium/broad), fall back to search/judge
-    for node_id in ("fetch_r", "search_r", "judge_r", "plan"):
+    for node_id in ("fetch_r", "search_r", "judge_r"):
         match = next((r for r in result.results if r.node_id == node_id and r.ok), None)
         if match and match.content and not match.content.startswith("["):
             return match.content
@@ -341,10 +341,10 @@ def _build_deep_research_subgraph(query: str, session_id: str,
     """Collapsed to 2 dynamic nodes + 3 static, using loop_to instead of
     an N-node unroll. Fetch → Judge (loops back to Fetch if ESCALATE) →
     Finalize → Report → Learn. In tool_mode, skips report/learn."""
-    max_rounds = max(1, min(4, max_rounds))
+    max_rounds = max(1, min(5, max_rounds))  # Cap at 5 per Grok analysis
     nodes = [
         PlanNode(id="fetch_r", tool="deep_fetch_round",
-                 args={"prompt": "$prompt", "num_searches": "1", "num_fetches": "4",
+                 args={"prompt": "$prompt", "num_searches": str(DEEP_RESEARCH_NUM_SEARCHES), "num_fetches": str(DEEP_RESEARCH_NUM_FETCHES),
                        "session_id": session_id}),
         PlanNode(id="judge_r", tool="judge_sufficient", depends_on=("fetch_r",),
                  args={"evidence": "$result:fetch_r", "prompt": "$prompt"},
