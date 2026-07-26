@@ -223,6 +223,7 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
     props={"query": {"type": "string"}},
     required=["query"],
     domain="research",
+    graph=True,
 )
 def adaptive_search(query: str, embedder=None, client=None, model: str | None = None,
                      max_rounds: int | None = None) -> str:

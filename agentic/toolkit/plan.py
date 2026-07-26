@@ -30,6 +30,7 @@ from agentic.registry import tool
     props={"goal": {"type": "string"}, "constraints": {"type": "string"}, "max_steps": {"type": "integer"}},
     required=["goal"],
     always_on=True,
+    graph=True,
 )
 def make_plan(goal: str, constraints: str = "", max_steps: int = 8) -> str:
     """Create a pragmatic step-by-step plan for a real-world or digital task."""
@@ -58,6 +59,7 @@ def make_plan(goal: str, constraints: str = "", max_steps: int = 8) -> str:
     props={"title": {"type": "string"}, "items": {"type": "string", "description": "Newline-separated checklist items."}},
     required=["title", "items"],
     always_on=True,
+    graph=True,
 )
 def create_checklist(title: str, items: list[str] | str) -> str:
     """Build a markdown checklist from a list or newline-separated string."""
@@ -78,6 +80,7 @@ def create_checklist(title: str, items: list[str] | str) -> str:
     props={"title": {"type": "string", "description": "Short filename title."}, "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."}, "folder": {"type": "string", "description": "Subfolder, default: notes"}},
     required=["title", "content"],
     always_on=True,
+    graph=True,
 )
 def save_note(title: str, content: str, folder: str = "notes") -> str:
     """Save a note, plan, draft, or task artifact under WORKSPACE_ROOT."""
@@ -96,6 +99,7 @@ def save_note(title: str, content: str, folder: str = "notes") -> str:
     props={"relative_path": {"type": "string"}},
     required=["relative_path"],
     always_on=True,
+    graph=True,
 )
 def read_workspace_file(relative_path: str, max_chars: int = MAX_READ_CHARS) -> str:
     """Read a text file from WORKSPACE_ROOT for continuation or review."""
@@ -114,6 +118,7 @@ def read_workspace_file(relative_path: str, max_chars: int = MAX_READ_CHARS) -> 
     props={"goal": {"type": "string"}, "done": {"type": "string"}, "next_action": {"type": "string"}, "risks": {"type": "string"}},
     required=["goal"],
     always_on=True,
+    graph=True,
 )
 def summarize_task_state(goal: str, done: str = "", next_action: str = "", risks: str = "") -> str:
     """Produce a compact task-state snapshot."""

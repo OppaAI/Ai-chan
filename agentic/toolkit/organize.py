@@ -35,6 +35,7 @@ from agentic.registry import tool
     props={"title": {"type": "string"}, "task": {"type": "string"}, "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"}, "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]}, "timezone": {"type": "string"}, "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"}, "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"}, "action": {"type": "string", "enum": ["announce", "agentic", "tool"], "description": "announce, agentic task, or direct registered tool invocation"}, "tool_call": {"type": "object", "description": "Required for action=tool: {name: registered tool name, arguments: object}"}, "skill": {"type": "string", "description": "Optional custom SKILL.md-style instructions for an agentic job"}},
     required=["title", "task", "time_of_day"],
     domain="scheduling",
+    graph=True,
 )
 def schedule_job(
     title: str,
@@ -77,6 +78,7 @@ def schedule_job(
     description="List schedule.",
     props={"include_disabled": {"type": "boolean"}},
     domain="scheduling",
+    graph=True,
 )
 def list_schedule(include_disabled: bool = False, user_id: str | None = None) -> str:
     """List local scheduled jobs from Aiko's schedule file."""
@@ -90,6 +92,7 @@ def list_schedule(include_disabled: bool = False, user_id: str | None = None) ->
     props={"job_id": {"type": "string"}},
     required=["job_id"],
     domain="scheduling",
+    graph=True,
 )
 def cancel_schedule(job_id: str, user_id: str | None = None) -> str:
     """Cancel/disable a local scheduled job by id."""
@@ -104,6 +107,7 @@ def cancel_schedule(job_id: str, user_id: str | None = None) -> str:
     props={"title": {"type": "string"}, "message": {"type": "string"}, "time_of_day": {"type": "string"}, "repeat": {"type": "string", "enum": ["once", "daily"]}, "timezone": {"type": "string"}},
     required=["title", "message", "time_of_day"],
     domain="scheduling",
+    graph=True,
 )
 def schedule_reminder(
     title: str,
@@ -129,6 +133,7 @@ def schedule_reminder(
     description="List reminders.",
     props={"include_disabled": {"type": "boolean"}},
     domain="scheduling",
+    graph=True,
 )
 def list_reminders(include_disabled: bool = False, user_id: str | None = None) -> str:
     """List reminders stored in Aiko's local reminder file."""
@@ -142,6 +147,7 @@ def list_reminders(include_disabled: bool = False, user_id: str | None = None) -
     props={"reminder_id": {"type": "string"}},
     required=["reminder_id"],
     domain="scheduling",
+    graph=True,
 )
 def cancel_reminder(reminder_id: str, user_id: str | None = None) -> str:
     """Cancel/disable a local reminder by id."""

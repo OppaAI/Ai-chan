@@ -151,10 +151,10 @@ def tool(
     required: Optional[List[str]] = None,
     domain: Optional[str] = None,
     always_on: bool = False,
-    react: bool = True,
-    graph: bool = True,
-    wiki: bool = False,
-    skill: bool = False,
+    react: bool = True,    # ReAct is the default execution mode
+    graph: bool = False,   # Must opt-in for graph engine
+    wiki: bool = False,    # Must opt-in for wiki workflow
+    skill: bool = False,   # Must opt-in for skill workflow
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to register a function as an agentic tool.
 
