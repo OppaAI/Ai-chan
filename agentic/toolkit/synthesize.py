@@ -400,6 +400,7 @@ def synthesize_report(
     max_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     comparison_subjects: list[str] | None = None,
     user_id: str | None = None,
+    state=None,
 ) -> str:
     """Produce the synthesized long-form report from combined evidence.
 
@@ -470,6 +471,16 @@ def synthesize_report(
             temperature=0.2,
         )
         text = (resp.choices[0].message.content or "").strip()
+        if state is not None:
+            try:
+                u = resp.usage
+                state.set("_usage", {
+                    "prompt_tokens": u.prompt_tokens,
+                    "completion_tokens": u.completion_tokens,
+                    "total_tokens": u.total_tokens,
+                })
+            except Exception:
+                pass
     except Exception as e:
         log.warning("[synthesize.synthesize_report] LLM call failed: %s", e)
         text = ""

@@ -19,8 +19,8 @@ import os
 import re
 import uuid
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -94,18 +94,11 @@ class PlanNode:
     args: dict[str, Any]
     depends_on: tuple[str, ...] = ()
     run_if: dict[str, Any] | None = None
-    # Bounded loop-back (see execute_graph): if THIS node's own result
-    # satisfies loop_condition, `loop_to` (and everything that depends on
-    # it, including this node) is re-scheduled instead of the graph
-    # moving on — up to max_visits times total. The static playbook JSON
-    # stays fully enumerable (every node id is still known ahead of run
-    # time); only the RUN COUNT of a loop_to node is dynamic, capped by
-    # max_visits — the same safety role LangGraph's recursion_limit plays
-    # for a true agent->tools->agent cycle, just expressed as bounded
-    # re-scheduling within a fixed node set instead of an open-ended walk.
     loop_to: str | None = None
     loop_condition: dict[str, Any] | None = None
     max_visits: int = 1
+    interrupt: bool = False
+    timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +120,7 @@ class NodeResult:
     content: str
     args: dict[str, Any] = field(default_factory=dict)
     error_type: str | None = None
+    usage: dict[str, int] | None = None
 
     def summary(self, max_chars: int = 700) -> str:
         status = "ok" if self.ok else self.error_type or "failed"
@@ -175,10 +169,12 @@ class GraphRunResult:
     graph: PlanGraph
     results: tuple[NodeResult, ...]
     final_answer: str
-    # Snapshot of GraphState.data at the end of the run — purely for
-    # debugging/inspection (e.g. logging what a run accumulated). Not
-    # meant to be relied on for control flow by callers.
     final_state: dict[str, Any] = field(default_factory=dict)
+    interrupted: bool = False
+    interrupted_at: str | None = None
+    interrupted_question: str | None = None
+    goal_score: float | None = None
+    goal_reasons: list[str] = field(default_factory=list)
 
     @property
     def steps(self) -> list[dict[str, Any]]:
@@ -738,6 +734,8 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
             loop_to=str(raw["loop_to"]) if raw.get("loop_to") else None,
             loop_condition=dict(raw["loop_condition"]) if isinstance(raw.get("loop_condition"), dict) else None,
             max_visits=int(raw.get("max_visits", 1) or 1),
+            interrupt=bool(raw.get("interrupt", False)),
+            timeout_seconds=float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None,
         ))        
     if not nodes:
         return None
@@ -750,6 +748,50 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
         _extras=extras,
     )
     return graph
+
+
+def run_subgraph(graph_json: str = "{}", goal: str = "",
+                  embedder=None, client=None, model: str | None = None) -> str:
+    """Graph tool: execute a PlanGraph defined inline as JSON.
+    
+    Accept a JSON-serializable dict of the subgraph definition (same shape as
+    a playbook entry, but only ``nodes`` and optional ``reducers`` are read).
+    This lets a playbook arbitrarily nest sub-computations without flattening
+    them into the parent DAG.
+    """
+    from agentic.schema import execute_graph, PlanGraph, PlanNode
+    try:
+        data = json.loads(graph_json) if isinstance(graph_json, str) else graph_json
+    except (json.JSONDecodeError, TypeError):
+        return "[run_subgraph: invalid graph_json]"
+    if not isinstance(data, dict):
+        return "[run_subgraph: expected a dict]"
+    nodes = []
+    for raw in data.get("nodes", []):
+        if not isinstance(raw, dict) or not raw.get("id") or not raw.get("tool"):
+            return f"[run_subgraph: invalid node: {raw.get('id', '?')}]"
+        nodes.append(PlanNode(
+            id=str(raw["id"]), tool=str(raw["tool"]),
+            args=dict(raw.get("args") or {}),
+            depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
+            run_if=dict(raw["run_if"]) if isinstance(raw.get("run_if"), dict) else None,
+            loop_to=str(raw["loop_to"]) if raw.get("loop_to") else None,
+            loop_condition=dict(raw["loop_condition"]) if isinstance(raw.get("loop_condition"), dict) else None,
+            max_visits=int(raw.get("max_visits", 1) or 1),
+            interrupt=bool(raw.get("interrupt", False)),
+            timeout_seconds=float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None,
+        ))
+    if not nodes:
+        return "[run_subgraph: empty subgraph]"
+    graph = PlanGraph(
+        id=data.get("id", "inline_subgraph"),
+        name=data.get("name", "inline"),
+        goal=goal,
+        nodes=tuple(nodes),
+        reducers=dict(data.get("reducers") or {}),
+    )
+    result = execute_graph(graph, embedder=embedder, llm_client=client, llm_model=model)
+    return result.final_answer
 
 
 def _tool_map() -> dict[str, Callable[..., Any]]:
@@ -879,6 +921,8 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
         })
     except Exception as exc:
         log.debug("job tools unavailable for graph executor: %s", exc)
+    mapping["run_subgraph"] = run_subgraph
+    mapping["goal_verification"] = goal_verification
     return mapping
 
 
@@ -933,10 +977,12 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
 
     try:
         out = fn(**call_args)
-        return NodeResult(node.id, node.tool, True, str(out), args=args)
+        usage = state.data.pop("_usage", None) if state else None
+        return NodeResult(node.id, node.tool, True, str(out), args=args, usage=usage)
     except Exception as exc:
         log.exception("Graph node %s (%s) raised unexpectedly", node.id, node.tool)
-        return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error")
+        usage = state.data.pop("_usage", None) if state else None
+        return NodeResult(node.id, node.tool, False, f"{type(exc).__name__}: {exc}", args=args, error_type="execution_error", usage=usage)
 
 
 def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
@@ -946,26 +992,57 @@ def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
     if ref not in results:
         return False
     actual = (results[ref].content or "").strip().lower()
-    if "equals" in node.run_if:
-        return actual == str(node.run_if["equals"]).strip().lower()
-    if "contains" in node.run_if:
-        return str(node.run_if["contains"]).strip().lower() in actual
+    return _check_condition(node.run_if, actual)
+
+
+def _check_condition(cond: dict[str, Any], actual: str) -> bool:
+    actual_lower = actual.lower()
+    if "not" in cond:
+        return not _check_condition(cond["not"], actual)
+    if "and" in cond:
+        return all(_check_condition(c, actual) for c in cond["and"])
+    if "or" in cond:
+        return any(_check_condition(c, actual) for c in cond["or"])
+    if "equals" in cond:
+        return actual_lower == str(cond["equals"]).strip().lower()
+    if "contains" in cond:
+        return str(cond["contains"]).strip().lower() in actual_lower
+    if "matches" in cond:
+        try:
+            return bool(re.search(str(cond["matches"]), actual_lower))
+        except re.error:
+            return False
+    if "gt" in cond:
+        try:
+            return float(actual) > float(cond["gt"])
+        except (ValueError, TypeError):
+            return False
+    if "gte" in cond:
+        try:
+            return float(actual) >= float(cond["gte"])
+        except (ValueError, TypeError):
+            return False
+    if "lt" in cond:
+        try:
+            return float(actual) < float(cond["lt"])
+        except (ValueError, TypeError):
+            return False
+    if "lte" in cond:
+        try:
+            return float(actual) <= float(cond["lte"])
+        except (ValueError, TypeError):
+            return False
+    if "len_gt" in cond:
+        return len(actual) > int(cond["len_gt"])
+    if "len_lt" in cond:
+        return len(actual) < int(cond["len_lt"])
     return True
 
 
 def _check_loop_condition(node: PlanNode, result: NodeResult) -> bool:
-    """Does THIS node's own result satisfy its loop_condition? Same
-    equals/contains shape as run_if, evaluated against the node's own
-    output rather than another node's — see PlanNode.loop_condition."""
     if not node.loop_condition:
         return False
-    cond = node.loop_condition
-    actual = (result.content or "").strip().lower()
-    if "equals" in cond:
-        return actual == str(cond["equals"]).strip().lower()
-    if "contains" in cond:
-        return str(cond["contains"]).strip().lower() in actual
-    return False
+    return _check_condition(node.loop_condition, (result.content or "").strip().lower())
 
 
 def _downstream_of(node_id: str, nodes_by_id: dict[str, PlanNode]) -> set[str]:
@@ -1066,14 +1143,22 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                     _yield(nr)
             if not runnable:
                 continue
-            future_map = {
-                pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state): node
-                for node in runnable
-            }
+            future_map = {}
+            for node in runnable:
+                if node.timeout_seconds is not None:
+                    future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
+                else:
+                    future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:
-                    result = fut.result()
+                    if node.timeout_seconds is not None:
+                        result = fut.result(timeout=node.timeout_seconds)
+                    else:
+                        result = fut.result()
+                except FutureTimeoutError:
+                    result = NodeResult(node.id, node.tool, False, f"timed out after {node.timeout_seconds}s", error_type="timeout")
+                    fut.cancel()
                 except Exception as exc:
                     result = NodeResult(node.id, node.tool, False, str(exc), error_type="execution_error")
                 results[node.id] = result
@@ -1084,6 +1169,18 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 save_graph_state(run_id, state.data)
                 if _yield:
                     _yield(result)
+
+                # Interrupt: stop and return partial results.
+                if node.interrupt and result.ok:
+                    final_answer = _synthesize_without_llm(graph, tuple(ordered))
+                    if run_id:
+                        clear_checkpoint(run_id)
+                    return GraphRunResult(
+                        graph=graph, results=tuple(ordered), final_answer=final_answer,
+                        final_state=dict(state.data), interrupted=True,
+                        interrupted_at=node.id,
+                        interrupted_question=str(result.content[:2000]),
+                    )
 
                 # Bounded loop-back with proper checkpoint invalidation.
                 if node.loop_to and node.loop_to in nodes_by_id and _check_loop_condition(node, result):
@@ -1106,8 +1203,10 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
 
 def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                    llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
-    return _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
-                                 llm_model=llm_model, run_id=run_id)
+    result = _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
+                                   llm_model=llm_model, run_id=run_id)
+    score, reasons = _score_goal_achievement(graph.goal, result.results, embedder=embedder)
+    return replace(result, goal_score=score, goal_reasons=reasons)
 
 
 def execute_graph_stream(graph: PlanGraph, embedder=None, llm_client=None,
@@ -1120,8 +1219,116 @@ def execute_graph_stream(graph: PlanGraph, embedder=None, llm_client=None,
 
     final = _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
                                   llm_model=llm_model, run_id=run_id, _yield=_capture)
+    score, reasons = _score_goal_achievement(graph.goal, final.results, embedder=embedder)
+    final = replace(final, goal_score=score, goal_reasons=reasons)
     yield from results
     yield final
+
+
+def resume_graph(graph: PlanGraph, run_id: str, resume_input: str = "",
+                  embedder=None, llm_client=None, llm_model: str | None = None) -> GraphRunResult:
+    """Continue an interrupted graph run.
+
+    The ``resume_input`` is injected into GraphState as ``_resume`` so the
+    interrupted node (or any downstream node that inspects state) can read
+    the user's response.
+    """
+    state_data = dict(load_graph_state(run_id) or {})
+    if resume_input:
+        state_data["_resume"] = resume_input
+    save_graph_state(run_id, state_data)
+    return execute_graph(graph, embedder=embedder, llm_client=llm_client,
+                          llm_model=llm_model, run_id=run_id)
+
+
+# ── Goal achievement scoring ─────────────────────────────────────────────
+# Lightweight, no-LLM heuristic: checks content length, entity mentions,
+# failed nodes, and optional embedder cosine similarity.  Playbooks can also
+# add an explicit ``goal_verification`` tool node for LLM-based checking.
+
+_GOAL_ENTITY_RE = re.compile(r"\b([A-Z][a-zA-Z]+(?:\s+\d+(?:\.\d+)?)?)\b")
+
+
+def _score_goal_achievement(goal: str, results: tuple[NodeResult, ...],
+                             embedder=None) -> tuple[float, list[str]]:
+    """Rate 0.0–1.0: did the DAG output actually achieve the goal?
+
+    Returns (score, reasons).  No LLM call — purely heuristic.
+    """
+    reasons: list[str] = []
+    scores: list[float] = []
+    final_content = " ".join(r.content for r in results if r.ok)
+
+    # 1. Output must exist and be non-trivial
+    if len(final_content.strip()) < 50:
+        reasons.append("output_too_short")
+        scores.append(0.0)
+        return max(0.0, min(1.0, sum(scores) / max(len(scores), 1))), reasons
+    reasons.append("output_present")
+    scores.append(0.3)
+
+    # 2. Entity mentions (capitalised terms like "Jetson", "RTX 3060")
+    entities = _GOAL_ENTITY_RE.findall(goal)
+    if entities:
+        matched = sum(1 for e in entities if e.lower() in final_content.lower())
+        ratio = matched / len(entities)
+        reasons.append(f"entities:{matched}/{len(entities)}")
+        scores.append(0.15 + 0.15 * ratio)
+
+    # 3. Penalise failed nodes
+    failed = [r for r in results if not r.ok]
+    if failed:
+        reasons.append(f"failed_nodes:{len(failed)}")
+        scores.append(-0.2 * len(failed))
+
+    # 4. Optional semantic check via embedder
+    if embedder is not None:
+        try:
+            import numpy as np
+            from cognition import reason
+            gv = reason.normalize_vec(np.asarray(embedder.embed_query(goal), dtype=np.float32))
+            cv = reason.normalize_vec(np.asarray(embedder.embed_query(final_content[:500]), dtype=np.float32))
+            cos = float(np.dot(gv, cv))
+            if cos >= 0.6:
+                reasons.append(f"semantic:{cos:.2f}")
+                scores.append(0.3)
+            elif cos >= 0.4:
+                reasons.append(f"semantic_partial:{cos:.2f}")
+                scores.append(0.1)
+            else:
+                reasons.append(f"semantic_low:{cos:.2f}")
+        except Exception:
+            pass
+
+    total = max(0.0, min(1.0, sum(scores) / max(len(scores), 1)))
+    return total, reasons
+
+
+def goal_verification(evidence: str = "", goal: str = "",
+                       client=None, model: str | None = None) -> str:
+    """Graph tool (optional): LLM-based check whether evidence achieves goal.
+
+    Returns one of: ``ACHIEVED``, ``PARTIAL: <gap>``, ``FAILED: <reason>``.
+    Playbooks add this as a final node when they want explicit LLM verification
+    (adds one extra LLM call per run).
+    """
+    if not evidence or not evidence.strip():
+        return "FAILED: no evidence to verify"
+    if client is None or not model:
+        return "ACHIEVED"  # can't verify without LLM — assume success
+    from agentic.toolkit.synthesize import synthesize_report
+    prompt = (
+        f"Goal: {goal}\n\n"
+        f"Evidence:\n{evidence[:3000]}\n\n"
+        f"Does this evidence fully achieve the goal? "
+        f"Reply with exactly one line: ACHIEVED, PARTIAL: <gap>, or FAILED: <reason>."
+    )
+    out = synthesize_report(evidence=evidence, prompt=prompt, style="plain",
+                             client=client, model=model)
+    for tag in ("ACHIEVED", "PARTIAL", "FAILED"):
+        if tag in str(out).upper():
+            return str(out)[:200].strip()
+    return "ACHIEVED"  # conservative default
 
 
 def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -> str:
@@ -1146,8 +1353,12 @@ def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder
         return None
     if run_id is None:
         run_id = hashlib.sha256(f"{graph.id}|{user_input}".encode()).hexdigest()[:16]
-    return execute_graph(graph, embedder=embedder, llm_client=llm_client,
-                          llm_model=llm_model, run_id=run_id)
+    result = execute_graph(graph, embedder=embedder, llm_client=llm_client,
+                            llm_model=llm_model, run_id=run_id)
+    if result.goal_score is not None and result.goal_score < 0.4:
+        log.warning("Goal '%s' score low (%.2f): %s",
+                     graph.goal, result.goal_score, result.goal_reasons)
+    return result
 
 
 def list_playbooks_json() -> str:

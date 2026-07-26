@@ -125,7 +125,7 @@ def fetch_and_condense_ranked(candidates_json: str = "[]", prompt: str = "",
     return _finalize_condensed(boosted, prompt, annotate_agreement=True)
 
 
-def judge_sufficient(evidence: str = "", prompt: str = "", client=None, model=None) -> str:
+def judge_sufficient(evidence: str = "", prompt: str = "", client=None, model=None, state=None) -> str:
     """Graph tool: is the evidence gathered so far enough to fully answer
     the original question? Returns literally 'SUFFICIENT' or 'ESCALATE' so
     run_if:{equals: ...} on downstream nodes can gate on it directly —
@@ -142,7 +142,7 @@ def judge_sufficient(evidence: str = "", prompt: str = "", client=None, model=No
         f"Question: {prompt}\n\nEvidence:\n{evidence[:3000]}"
     )
     out = synthesize_report(evidence=evidence, prompt=prompt_text, style="plain",
-                             client=client, model=model)
+                             client=client, model=model, state=state)
     return "SUFFICIENT" if "SUFFICIENT" in str(out).upper() else "ESCALATE"
 
 
@@ -270,7 +270,8 @@ def deep_fetch_round(prompt: str = "", num_searches: str = "1", num_fetches: str
 
 def combine_research_rounds(r1: str = "", r2: str = "", r3: str = "", r4: str = "",
                              prompt: str = "", session_id: str = "",
-                             client=None, model=None, evidence: str = "") -> str:
+                             client=None, model=None, evidence: str = "",
+                             state=None) -> str:
     """Graph tool: filter skipped-round placeholders, combine whatever
     rounds ran, synthesize the final report, then release this run's dedup
     registry entry — this is the normal-path cleanup; the TTL sweep above
@@ -284,13 +285,13 @@ def combine_research_rounds(r1: str = "", r2: str = "", r3: str = "", r4: str = 
     try:
         if evidence:
             return synthesize_report(evidence=evidence, prompt=prompt, style="professional",
-                                      client=client, model=model)
+                                      client=client, model=model, state=state)
         rounds = [r for r in (r1, r2, r3, r4) if r and not r.strip().startswith("skipped:")]
         if not rounds:
             return "[no research evidence gathered — all rounds skipped or failed]"
         combined = combine_evidence(parts=rounds, separator="\n\n===\n\n")
         return synthesize_report(evidence=combined, prompt=prompt, style="professional",
-                                  client=client, model=model)
+                                  client=client, model=model, state=state)
     finally:
         if session_id:
             _session_end(session_id)
