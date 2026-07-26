@@ -19,10 +19,13 @@ This directory contains the frontend and backend for the visual graph editor.
 # Features
 
 - View all available playbooks
-- Display graphs with nodes and edges
-- Inspect node details (tool, conditions, reducers)
-- Drag nodes to reposition
-- Export graphs as JSON
+- Display DAG graphs with fixed level-based layout
+- Nodes with input/output ports (left: depends_on; right: triggered by)
+- Edge styling by type: depends_on (gray solid), loop_to (pink dashed), fallback_to (orange)
+- Inspect node details (tool, run_if, max_visits, loop, fallback)
+- Inspect edge details (type, source, target, tool call)
+- Zoom and pan canvas (mouse wheel + buttons)
+- Legend showing edge type colors
 
 # Files
 
@@ -37,5 +40,6 @@ This is a minimal implementation. For production use, you'd want to:
 - Add authentication
 - Add graph editing capabilities
 - Create a proper React frontend
-- Add more visualization features
+- Add node search/filter
+- Add playbook execution controls
 """

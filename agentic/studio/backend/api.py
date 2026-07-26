@@ -34,17 +34,20 @@ def playbook_to_graph(playbook: dict) -> dict:
     if not isinstance(playbook.get("nodes"), list):
         return playbook
     nodes = playbook["nodes"]
+    node_map = {n.get("id"): n for n in nodes if n.get("id")}
     edges = []
     for n in nodes:
         nid = n.get("id")
         if not nid:
             continue
+        src_node = node_map.get(nid, {})
+        tool_call = {"tool": src_node.get("tool"), "args": src_node.get("args")}
         for dep in n.get("depends_on") or []:
-            edges.append({"source": dep, "target": nid, "type": "depends_on"})
+            edges.append({"source": dep, "target": nid, "type": "depends_on", "tool_call": tool_call, "skill": src_node.get("tool")})
         if n.get("loop_to"):
-            edges.append({"source": nid, "target": n["loop_to"], "type": "loop_to"})
+            edges.append({"source": nid, "target": n["loop_to"], "type": "loop_to", "tool_call": tool_call, "skill": src_node.get("tool")})
         if n.get("fallback_to"):
-            edges.append({"source": nid, "target": n["fallback_to"], "type": "fallback_to"})
+            edges.append({"source": nid, "target": n["fallback_to"], "type": "fallback_to", "tool_call": tool_call, "skill": src_node.get("tool")})
     return {**playbook, "nodes": nodes, "edges": edges}
 
 
