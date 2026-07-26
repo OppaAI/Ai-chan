@@ -156,6 +156,7 @@
         function renderGraph(playbook) {
             const svg = d3.select('#canvas');
             svg.selectAll('*').remove();
+            if (!playbook.nodes || !playbook.edges) {
                 const g = svg.append('g');
                 g.append('text')
                     .attr('x', 400)
