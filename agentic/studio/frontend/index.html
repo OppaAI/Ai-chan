@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aiko Graph Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .node {
+            fill: #f8f9fa;
+            stroke: #4285f4;
+            stroke-width: 2;
+            rx: 8;
+        }
+        .node.selected {
+            fill: #e8f0fe;
+            stroke-width: 3;
+        }
+        .node:hover {
+            stroke-width: 3;
+        }
+        .edge {
+            fill: none;
+            stroke: #b0b0b0;
+            stroke-width: 2;
+        }
+        .edge.selected {
+            stroke: #4285f4;
+            stroke-width: 3;
+        }
+        .node-label {
+            font-family: sans-serif;
+            font-size: 12px;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            pointer-events: none;
+        }
+        .edge-label {
+            font-family: sans-serif;
+            font-size: 10px;
+            fill: #555;
+            pointer-events: none;
+        }
+        .node-group:hover .node-label {
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen">
+    <header class="bg-white shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-4">
+                <h1 class="text-2xl font-bold text-gray-900">Aiko Graph Studio</h1>
+                <div class="flex items-center space-x-4">
+                    <button id="export-btn" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                        Export Graph
+                    </button>
+                    <button id="refresh-btn" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
+                        Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div class="bg-white rounded-lg shadow">
+            <div class="p-6">
+                <h2 class="text-xl font-semibold mb-4">Playbooks</h2>
+                <div id="playbooks-list" class="space-y-2">
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-6 bg-white rounded-lg shadow">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-semibold">Graph View</h2>
+                    <div class="text-sm text-gray-500" id="graph-info">
+                        Select a playbook to view
+                    </div>
+                </div>
+                <div id="canvas-container" class="relative w-full h-96 bg-gray-50 rounded border">
+                    <svg id="canvas" class="w-full h-full" viewBox="0 0 800 400">
+                    </svg>
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-6 bg-white rounded-lg shadow">
+            <div class="p-6">
+                <h2 class="text-xl font-semibold mb-4">Details</h2>
+                <div id="details-panel" class="text-sm text-gray-700">
+                    <p>Select a node to see details</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+    <script>
+        // State
+        let currentPlaybooks = [];
+        let selectedPlaybook = null;
+        let selectedNode = null;
+        let selectedEdge = null;
+        
+        // Fetch playbooks from API
+        async function fetchPlaybooks() {
+            try {
+                const response = await fetch('/api/playbooks');
+                currentPlaybooks = await response.json();
+                renderPlaybooksList();
+            } catch (error) {
+                console.error('Failed to fetch playbooks:', error);
+                document.getElementById('playbooks-list').innerHTML =
+                    '<div class="text-red-500">Failed to load playbooks</div>';
+            }
+        }
+        
+        // Render playbooks list
+        function renderPlaybooksList() {
+            const container = document.getElementById('playbooks-list');
+            container.innerHTML = '';
+            
+            if (currentPlaybooks.length === 0) {
+                container.innerHTML = '<div class="text-gray-500">No playbooks available</div>';
+                return;
+            }
+            
+            currentPlaybooks.forEach(playbook => {
+                const item = document.createElement('div');
+                item.className = `p-3 rounded cursor-pointer transition-colors ${selectedPlaybook === playbook.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50 border border-gray-200'}`;
+                item.onclick = () => selectPlaybook(playbook);
+                
+                item.innerHTML = `
+                    <div class="font-medium text-gray-900">${playbook.name}</div>
+                    <div class="text-sm text-gray-500">ID: ${playbook.id}</div>
+                    <div class="text-xs text-gray-400 mt-1">Nodes: ${playbook.nodes ? Object.keys(playbook.nodes).length : 0}</div>
+                `;
+                
+                container.appendChild(item);
+            });
+        }
+        
+        // Select a playbook
+        function selectPlaybook(playbook) {
+            selectedPlaybook = playbook.id;
+            renderPlaybooksList();
+            renderGraph(playbook);
+        }
+        
+        // Render the graph visualization
+        function renderGraph(playbook) {
+            const svg = d3.select('#canvas');
+            svg.selectAll('*').remove();n
+            if (!playbook.nodes || !playbook.edges) {
+                const g = svg.append('g');
+                g.append('text')
+                    .attr('x', 400)
+                    .attr('y', 200)
+                    .attr('text-anchor', 'middle')
+                    .text('No graph data available');
+                return;
+            }
+            
+            // Create simulation for node positions
+            const width = 800;
+            const height = 400;
+            const simulation = d3.forceSimulation()
+                .force('link', d3.forceLink().id(d => d.id))
+                .force('charge', d3.forceManyBody().strength(-50))
+                .force('center', d3.forceCenter(width / 2, height / 2))
+                .force('collision', d3.forceCollide().radius(40));
+            
+            // Prepare nodes and edges
+            const nodes = Object.values(playbook.nodes);
+            const edges = playbook.edges || [];
+            
+            // Create edges
+            const link = svg.append('g')
+                .attr('class', 'edges')
+                .selectAll('path')
+                .data(edges)
+                .enter()
+                .append('path')
+                .attr('class', 'edge')
+                .attr('d', d => {
+                    const source = typeof d.source === 'string' ? 
+                        nodes.find(n => n.id === d.source) : d.source;
+                    const target = typeof d.target === 'string' ? 
+                        nodes.find(n => n.id === d.target) : d.target;
+                    if (!source || !target) return '';
+                    const dx = target.x - source.x;
+                    const dy = target.y - source.y;
+                    const dr = Math.sqrt(dx * dx + dy * dy);
+                    return `M${source.x},${source.y} L${target.x},${target.y}`;
+                });
+            
+            // Create nodes
+            const node = svg.append('g')
+                .attr('class', 'nodes')
+                .selectAll('g')
+                .data(nodes)
+                .enter()
+                .append('g')
+                .attr('class', 'node-group')
+                .call(d3.drag()
+                    .on('start', dragStart)
+                    .on('drag', dragged)
+                    .on('end', dragEnd)
+                );
+            
+            // Add rect to nodes
+            node.append('rect')
+                .attr('class', 'node')
+                .attr('width', 120)
+                .attr('height', 60);
+            
+            // Add labels to nodes
+            node.append('text')
+                .attr('class', 'node-label')
+                .attr('x', 60)
+                .attr('y', 30)
+                .text(d => {
+                    const toolName = playbook.tool_map && playbook.tool_map[d.id] ? 
+                        (playbook.tool_map[d.id].split('.').pop() || d.id) : d.id;
+                    return toolName.length > 15 ? toolName.substring(0, 12) + '...' : toolName;
+                });
+            
+            // Update simulation
+            simulation.nodes(nodes);
+            simulation.force('link')
+                .links(edges.map(edge => {
+                    return {
+                        source: typeof edge.source === 'string' ? 
+                            nodes.find(n => n.id === edge.source) : edge.source,
+                        target: typeof edge.target === 'string' ? 
+                            nodes.find(n => n.id === edge.target) : edge.target
+                    };
+                }));
+            
+            // Node interactions
+            node.on('click', (event, d) => {
+                event.stopPropagation();
+                selectNode(d);
+            });
+            
+            // Update simulation on tick
+            simulation.on('tick', () => {
+                link.attr('d', d => {
+                    const source = typeof d.source === 'string' ? 
+                        nodes.find(n => n.id === d.source) : d.source;
+                    const target = typeof d.target === 'string' ? 
+                        nodes.find(n => n.id === d.target) : d.target;
+                    if (!source || !target) return '';
+                    return `M${source.x},${source.y} L${target.x},${target.y}`;
+                });
+                
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
+            });
+            
+            // Update graph info
+            document.getElementById('graph-info').textContent = 
+                `${nodes.length} nodes, ${edges.length} edges`;n            
+            // Zoom behavior
+            const zoom = d3.zoom()
+                .scaleExtent([0.5, 2])
+                .on('zoom', zoomed);
+            
+            svg.call(zoom);
+            
+            function zoomed(event) {
+                const { transform } = event;
+                g.attr('transform', transform);
+            }
+            
+            function dragStart(event, d) {
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }
+            
+            function dragged(event, d) {
+                d.fx = event.x;
+                d.fy = event.y;
+            }
+            
+            function dragEnd(event, d) {
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }
+            
+            // Render edges first (behind nodes)
+            svg.insert('defs').remove();
+            svg.insert('g', ':first-child').attr('class', 'edges');
+        }
+        
+        // Select a node
+        function selectNode(node) {
+            selectedNode = node;
+            renderGraph(selectedPlaybook);
+            
+            // Update details panel
+            const detailsPanel = document.getElementById('details-panel');
+            if (node) {
+                const playbook = currentPlaybooks.find(p => p.id === selectedPlaybook);
+                if (playbook && playbook.tool_map && playbook.tool_map[node.id]) {
+                    detailsPanel.innerHTML = `
+                        <div><strong>Tool:</strong> ${playbook.tool_map[node.id]}</div>
+                        <div><strong>ID:</strong> ${node.id}</div>
+                        <div><strong>Position:</strong> x=${Math.round(node.x)}, y=${Math.round(node.y)}</div>
+                        ${node.run_if ? `<div><strong>Condition:</strong> ${JSON.stringify(node.run_if)}</div>` : ''}
+                        ${node.reducers ? `<div><strong>Reducers:</strong> ${JSON.stringify(node.reducers)}</div>` : ''}
+                    `;
+                } else {
+                    detailsPanel.innerHTML = `
+                        <div><strong>ID:</strong> ${node.id}</div>
+                        <div><strong>Position:</strong> x=${Math.round(node.x)}, y=${Math.round(node.y)}</div>
+                        <div class="text-gray-400">No tool info available</div>
+                    `;
+                }
+            } else {
+                detailsPanel.innerHTML = '<p>Select a node to see details</p>';
+            }
+        }
+        
+        // Select a edge
+        function selectEdge(edge) {
+            selectedEdge = edge;
+            renderGraph(selectedPlaybook);
+        }
+        
+        // Handle clicks on canvas
+        d3.select('#canvas').on('click', () => {
+            selectNode(null);
+            selectEdge(null);
+        });
+        
+        // Event listeners
+        document.getElementById('refresh-btn').addEventListener('click', fetchPlaybooks);
+        document.getElementById('export-btn').addEventListener('click', () => {
+            if (!selectedPlaybook) return;
+            const playbook = currentPlaybooks.find(p => p.id === selectedPlaybook);
+            if (!playbook) return;
+            
+            const dataStr = 'data:application/json;charset=utf-8,' +
+                encodeURIComponent(JSON.stringify(playbook, null, 2));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute('href', dataStr);
+            downloadAnchorNode.setAttribute('download', `${selectedPlaybook}.json`);
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        });
+        
+        // Initialize
+        fetchPlaybooks();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(fetchPlaybooks, 30000);
+    </script>
+</body>
+</html>

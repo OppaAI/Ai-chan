@@ -1,13 +1,32 @@
 """
 agentic/graph_engine.py
 
-Graph-first, mostly model-free agentic executor.
+Graph-first, mostly model-free agentic executor optimized for Jetson Orin Nano.
 
-This module is intentionally conservative: it only handles workflows that can be
-matched to a known playbook template and whose tool arguments can be derived
-from the user's prompt with deterministic heuristics. Novel/ambiguous tasks
-return ``None`` so the normal ReAct loop can run once and record experience for
-future promotion into the playbook.
+DESIGN:
+  - Static DAGs (playbooks in JSON), not dynamic graphs
+  - Tiered goal verification (heuristic → embedder → LLM opt-in)
+  - Bounded loops (loop_to + max_visits) instead of open-ended cycles
+  - Per-node timeout + interrupt for UX gates and runaway checks
+  - Tool opt-in via signature inspection (no hand-curated lists)
+  - Retry logic with exponential backoff to handle transient failures
+
+LIFECYCLE:
+  1. plan_from_master() — match user prompt to best playbook
+  2. execute_graph() — run DAG, collect results, verify goal achievement
+  3. resume_graph() — continue interrupted runs with user input
+  4. append_playbook_from_experience() — promote successful runs into playbooks
+
+PLAYBOOKS:
+  Built-in: research_and_report, compare_and_report, evaluator_optimizer, etc.
+  User: auto-promoted from ReAct experience or hand-edited in playbook.json
+
+VERIFICATION TIERS (configurable):
+  - GRAPH_VERIFY_HEURISTIC (on): content length, entity mentions, embedder cosine
+  - GRAPH_VERIFY_EMBEDDER (on): semantic match goal ↔ output
+  - GRAPH_VERIFY_LLM (off): explicit LLM check (adds 1-2s, 1-4GB)
+
+For comparison vs LangGraph/CrewAI, see ../README.md or docs/graph_comparison.md
 """
 from __future__ import annotations
 
@@ -17,6 +36,7 @@ import inspect
 import json
 import os
 import re
+import time
 import uuid
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FutureTimeoutError
@@ -106,6 +126,9 @@ class PlanNode:
     max_visits: int = 1
     interrupt: bool = False
     timeout_seconds: float | None = None
+    max_retries: int = 0
+    retry_backoff_seconds: float = 1.0
+    fallback_to: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,40 +158,68 @@ class NodeResult:
         return f"{self.node_id}:{self.tool}[{status}] {body}".strip()
 
 
-@dataclass
-class GraphState:
-    """Shared mutable scratch space, threaded BY REFERENCE through every
-    node in one execute_graph() run — the direct analogue of LangGraph's
-    State object.
+    @dataclass
+    class GraphState:
+        """Shared mutable scratch space, threaded BY REFERENCE through every
+        node in one execute_graph() run — the direct analogue of LangGraph's
+        State object.
 
-    Complements, does not replace, $result:/$prompt string substitution:
-    keep using $result: for small values that benefit from being visible
-    in playbook JSON, tool-call logs, and checkpoints. Use state for large
-    or non-string objects (accumulated URL sets, embeddings, live handles)
-    that would otherwise have to be JSON-encoded into a $result: string
-    and hit _substitute's 4000-char per-arg truncation.
+        Complements, does not replace, $result:/$prompt string substitution:
+        keep using $result: for small values that benefit from being visible
+        in playbook JSON, tool-call logs, and checkpoints. Use state for large
+        or non-string objects (accumulated URL sets, embeddings, live handles)
+        that would otherwise have to be JSON-encoded into a $result: string
+        and hit _substitute's 4000-char per-arg truncation.
 
-    A tool opts into receiving it purely by declaring a `state` parameter
-    in its own signature — see _tool_params()/_run_node() below. Nothing
-    elsewhere needs to know which tools use it.
+        A tool opts into receiving it purely by declaring a `state` parameter
+        in its own signature — see _tool_params()/_run_node() below. Nothing
+        elsewhere needs to know which tools use it.
 
-    Each key may declare a reducer strategy in ``reducers`` that controls
-    how writes from multiple nodes (or repeated loop cycles) merge:
-    "replace" (default), "append", "add", "set_union", "dict_merge".
+        Each key may declare a reducer strategy in ``reducers`` that controls
+        how writes from multiple nodes (or repeated loop cycles) merge:
+        "replace" (default), "append", "add", "set_union", "dict_merge".
 
-    Checkpointed and restored on resume (unlike the previous design where
-    state was explicitly not checkpointed).
-    """
-    data: dict[str, Any] = field(default_factory=dict)
-    reducers: dict[str, str] = field(default_factory=dict)
+        Checkpointed and restored on resume (unlike the previous design where
+        state was explicitly not checkpointed).
+        """
+        data: dict[str, Any] = field(default_factory=dict)
+        reducers: dict[str, str] = field(default_factory=dict)
 
-    def get(self, key: str, default: Any = None) -> Any:
-        return self.data.get(key, default)
+        def get(self, key: str, default: Any = None) -> Any:
+            return self.data.get(key, default)
 
-    def set(self, key: str, value: Any, reducer: str | None = None) -> None:
-        strategy = reducer or self.reducers.get(key, REDUCER_REPLACE)
-        current = self.data.get(key)
-        self.data[key] = _apply_reducer(current, value, strategy)
+        def set(self, key: str, value: Any, reducer: str | None = None) -> None:
+            strategy = reducer or self.reducers.get(key, REDUCER_REPLACE)
+            current = self.data.get(key)
+            self.data[key] = _apply_reducer(current, value, strategy)
+
+        def inc_visit(self, node_id: str) -> None:
+            visits = self.get("_node_visits", {})
+            visits[node_id] = visits.get(node_id, 0) + 1
+            self.set("_node_visits", visits)
+
+        def iteration(self) -> int:
+            iter_count = self.get("_iteration", 0)
+            self.set("_iteration", iter_count + 1)
+            return iter_count + 1
+
+        def record_tool_execution(self, tool_name: str, args: dict, result: Any) -> None:
+            """Record tool execution visibility for debugging/adaptive logic"""
+            exec_log = self.get("_tool_executions", [])
+            exec_log.append({
+                "tool": tool_name,
+                "args": args,
+                "result": str(result)[:500],
+                "iteration": self.iteration(),
+            })
+            self.set("_tool_executions", exec_log)
+
+        def get_tool_executions(self, tool_name: str | None = None) -> list[dict]:
+            """Get tool execution logs, optionally filtered by tool name"""
+            exec_log = self.get("_tool_executions", [])
+            if tool_name:
+                return [e for e in exec_log if e["tool"] == tool_name]
+            return exec_log
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +245,18 @@ class GraphRunResult:
             }
             for r in self.results
         ]
+
+    @property
+    def total_tokens(self) -> int:
+        return sum((r.usage or {}).get("output_tokens", 0) for r in self.results)
+
+    @property
+    def total_cost(self) -> float:
+        cost_per_1m_input = 0.80
+        cost_per_1m_output = 2.40
+        inputs = sum((r.usage or {}).get("input_tokens", 0) for r in self.results)
+        outputs = sum((r.usage or {}).get("output_tokens", 0) for r in self.results)
+        return (inputs / 1e6) * cost_per_1m_input + (outputs / 1e6) * cost_per_1m_output
 
 
 
@@ -743,6 +806,9 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
             max_visits=int(raw.get("max_visits", 1) or 1),
             interrupt=bool(raw.get("interrupt", False)),
             timeout_seconds=float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None,
+            max_retries=int(raw.get("max_retries", 0) or 0),
+            retry_backoff_seconds=float(raw.get("retry_backoff_seconds", 1.0) or 1.0),
+            fallback_to=str(raw["fallback_to"]) if raw.get("fallback_to") else None,
         ))        
     if not nodes:
         return None
@@ -778,7 +844,8 @@ def run_subgraph(graph_json: str = "{}", goal: str = "",
         if not isinstance(raw, dict) or not raw.get("id") or not raw.get("tool"):
             return f"[run_subgraph: invalid node: {raw.get('id', '?')}]"
         nodes.append(PlanNode(
-            id=str(raw["id"]), tool=str(raw["tool"]),
+            id=str(raw["id"]),
+            tool=str(raw["tool"]),
             args=dict(raw.get("args") or {}),
             depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
             run_if=dict(raw["run_if"]) if isinstance(raw.get("run_if"), dict) else None,
@@ -787,6 +854,9 @@ def run_subgraph(graph_json: str = "{}", goal: str = "",
             max_visits=int(raw.get("max_visits", 1) or 1),
             interrupt=bool(raw.get("interrupt", False)),
             timeout_seconds=float(raw["timeout_seconds"]) if raw.get("timeout_seconds") is not None else None,
+            max_retries=int(raw.get("max_retries", 0) or 0),
+            retry_backoff_seconds=float(raw.get("retry_backoff_seconds", 1.0) or 1.0),
+            fallback_to=str(raw["fallback_to"]) if raw.get("fallback_to") else None,
         ))
     if not nodes:
         return "[run_subgraph: empty subgraph]"
@@ -977,10 +1047,45 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
         call_args["embedder"] = embedder
     if "client" in params and "client" not in call_args:
         call_args["client"] = llm_client
-    if "model" in params and "model" not in call_args:
-        call_args["model"] = llm_model
+    if "llm_model" in params and "llm_model" not in call_args:
+        call_args["llm_model"] = llm_model
     if "state" in params and "state" not in call_args:
         call_args["state"] = state
+
+    for attempt in range(node.max_retries + 1):
+        try:
+            from system.log import get_logger
+            if attempt > 0:
+                wait = node.retry_backoff_seconds * (2 ** (attempt - 1))
+                log.info(f"Retry node {node.id}, attempt {attempt + 1}/{node.max_retries + 1}, waiting {wait}s")
+                import time
+                time.sleep(wait)
+            result = fn(**call_args)
+            if result.ok:
+                break
+            if attempt == node.max_retries:
+                log.warning(f"Node {node.id} failed after {node.max_retries + 1} attempts")
+                result = NodeResult(
+                    node.id, node.tool,
+                    ok=False,
+                    content=result.content or f"Node {node.id} failed after retries",
+                    args=args,
+                    error_type=result.error_type or "node_failed"
+                )
+                return result
+        except Exception as e:
+            log.warning(f"Node {node.id} retry {attempt + 1}/{node.max_retries + 1} raised: {str(e)}")
+            if attempt == node.max_retries:
+                return NodeResult(
+                    node.id, node.tool,
+                    ok=False,
+                    content=str(e),
+                    args=args,
+                    error_type="exception_after_retries"
+                )
+            import time
+            wait = node.retry_backoff_seconds * (2 ** attempt)
+            time.sleep(wait)
 
     try:
         out = fn(**call_args)
@@ -1158,16 +1263,33 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                     future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
             for fut in as_completed(future_map):
                 node = future_map[fut]
-                try:
-                    if node.timeout_seconds is not None:
-                        result = fut.result(timeout=node.timeout_seconds)
-                    else:
-                        result = fut.result()
-                except FutureTimeoutError:
-                    result = NodeResult(node.id, node.tool, False, f"timed out after {node.timeout_seconds}s", error_type="timeout")
-                    fut.cancel()
-                except Exception as exc:
-                    result = NodeResult(node.id, node.tool, False, str(exc), error_type="execution_error")
+                result = None
+                
+                # Retry logic with exponential backoff
+                for attempt in range(node.max_retries + 1):
+                    try:
+                        if node.timeout_seconds is not None:
+                            result = fut.result(timeout=node.timeout_seconds)
+                        else:
+                            result = fut.result()
+                        
+                        if result.ok:
+                            break
+                        
+                        if attempt < node.max_retries:
+                            wait = node.retry_backoff_seconds * (2 ** attempt)
+                            time.sleep(wait)
+                    except FutureTimeoutError:
+                        result = NodeResult(node.id, node.tool, False, f"timed out after {node.timeout_seconds}s", error_type="timeout")
+                        fut.cancel()
+                        break
+                    except Exception as exc:
+                        result = NodeResult(node.id, node.tool, False, str(exc), error_type="execution_error")
+                        break
+                
+                if result is None:
+                    result = NodeResult(node.id, node.tool, False, "unexpected error during retry", error_type="execution_error")
+                
                 results[node.id] = result
                 ordered.append(result)
                 pending.pop(node.id, None)
@@ -1176,6 +1298,55 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 save_graph_state(run_id, state.data)
                 if _yield:
                     _yield(result)
+
+                # Handle fallback logic
+                if not result.ok and node.fallback_to:
+                    fallback_node = nodes_by_id.get(node.fallback_to)
+                    if fallback_node:
+                        if all(dep in results for dep in fallback_node.depends_on) and all(results[dep].ok for dep in fallback_node.depends_on):
+                            log.info("Node %s failed (fallback to %s)", node.id, node.fallback_to)
+                            
+                            # Try fallback node execution with access to current state
+                            fallback_tools = _tool_map()
+                            fallback_fn = fallback_tools.get(fallback_node.tool)
+                            if fallback_fn:
+                                # Build arguments using the same logic as normal execution
+                                fallback_args = _substitute(fallback_node.args, graph.goal, results, extras)
+                                
+                                # Build call kwargs with injected dependencies
+                                call_args = dict(fallback_args)
+                                params = _tool_params(fallback_fn)
+                                if "embedder" in params and "embedder" not in call_args:
+                                    call_args["embedder"] = embedder
+                                if "client" in params and "client" not in call_args:
+                                    call_args["client"] = llm_client
+                                if "model" in params and "model" not in call_args:
+                                    call_args["model"] = llm_model
+                                if "state" in params and "state" not in call_args:
+                                    call_args["state"] = state
+                                
+                                try:
+                                    fallback_out = fallback_fn(**call_args)
+                                    fallback_usage = state.data.pop("_usage", None) if state else None
+                                    fallback_result = NodeResult(fallback_node.id, fallback_node.tool, True, str(fallback_out), 
+                                                              args=fallback_args, usage=fallback_usage)
+                                    results[fallback_node.id] = fallback_result
+                                    ordered.append(fallback_result)
+                                    pending.pop(fallback_node.id, None)
+                                    if run_id:
+                                        save_node_result(run_id, seq, fallback_result, state_json=json.dumps(state.data)); seq += 1
+                                    save_graph_state(run_id, state.data)
+                                    if _yield:
+                                        _yield(fallback_result)
+                                    log.info("Fallback node %s succeeded", fallback_node.id)
+                                except Exception as exc:
+                                    log.exception("Fallback node %s failed", fallback_node.id)
+                            else:
+                                log.warning("Fallback node %s tool %s not found", fallback_node.id, fallback_node.tool)
+                        else:
+                            log.debug("Fallback node %s has unmet dependencies or failed dependencies", fallback_node.id)
+                    else:
+                        log.debug("Fallback target node %s not found", node.fallback_to)
 
                 # Interrupt: stop and return partial results.
                 if node.interrupt and result.ok:
@@ -1418,6 +1589,10 @@ def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder
         if result.goal_score < 0.4:
             log.warning("Goal '%s' score low (%.2f): %s",
                          graph.goal, result.goal_score, result.goal_reasons)
+        
+        # Log cost and metrics for monitoring
+        log.info("Goal score: %.2f, tokens: %d, cost: $%.4f",
+                 result.goal_score, result.total_tokens, result.total_cost)
     return result
 
 

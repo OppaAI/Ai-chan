@@ -565,5 +565,159 @@ class TestTitleAndHeuristics:
         assert items == ["short"]
 
 
+class TestGraphRunResultMetrics:
+    """Tests for GraphRunResult total_tokens and total_cost properties."""
+
+    def test_total_tokens_with_usage(self):
+        from agentic.graph_engine import NodeResult
+        results = (
+            NodeResult("a", "tool1", True, "content", {"output_tokens": 100, "input_tokens": 50}),
+            NodeResult("b", "tool2", True, "content", {"output_tokens": 200, "input_tokens": 150}),
+            NodeResult("c", "tool3", False, "error", {}),  # No usage, should not contribute
+        )
+        graph = PlanGraph("test", "Test", "goal", ())
+        result = GraphRunResult(graph, results, "final answer")
+        
+        assert result.total_tokens == 300  # 100 + 200
+        # Cost calculation: (50/1e6 * 0.80) + (100/1e6 * 2.40) + (150/1e6 * 0.80) + (200/1e6 * 2.40)
+        expected_cost = (50/1e6) * 0.80 + (100/1e6) * 2.40 + (150/1e6) * 0.80 + (200/1e6) * 2.40
+        assert abs(result.total_cost - expected_cost) < 0.0001
+
+    def test_total_tokens_no_usage(self):
+        from agentic.graph_engine import NodeResult
+        results = (
+            NodeResult("a", "tool1", True, "content", None),
+            NodeResult("b", "tool2", False, "error", {"output_tokens": 10}),
+        )
+        graph = PlanGraph("test", "Test", "goal", ())
+        result = GraphRunResult(graph, results, "final answer")
+        
+        assert result.total_tokens == 0  # None usage defaults to no tokens
+
+    def test_total_tokens_empty_usage_dict(self):
+        from agentic.graph_engine import NodeResult
+        results = (
+            NodeResult("a", "tool1", True, "content", {}),
+        )
+        graph = PlanGraph("test", "Test", "goal", ())
+        result = GraphRunResult(graph, results, "final answer")
+        
+        assert result.total_tokens == 0
+
+
+class TestGraphStateMethods:
+    """Tests for GraphState.inc_visit, iteration, record_tool_execution, get_tool_executions."""
+
+    def test_graph_state_inc_visit(self):
+        state = GraphState()
+        state.inc_visit("node1")
+        assert state.get("_node_visits") == {"node1": 1}
+        
+        state.inc_visit("node1")
+        assert state.get("_node_visits") == {"node1": 2}
+        
+        state.inc_visit("node2")
+        assert state.get("_node_visits") == {"node1": 2, "node2": 1}
+
+    def test_graph_state_iteration(self):
+        state = GraphState()
+        
+        assert state.iteration() == 1
+        assert state.get("_iteration") == 1
+        
+        assert state.iteration() == 2
+        assert state.get("_iteration") == 2
+
+    def test_graph_state_record_tool_execution(self):
+        state = GraphState()
+        
+        state.record_tool_execution("deep_research", {"query": "test"}, "research result")
+        
+        executions = state.get_tool_executions()
+        assert len(executions) == 1
+        assert executions[0]["tool"] == "deep_research"
+        assert executions[0]["args"]["query"] == "test"
+        assert executions[0]["result"] == "research result"
+        assert executions[0]["iteration"] == 1
+
+    def test_graph_state_get_tool_executions_filter(self):
+        state = GraphState()
+        state.record_tool_execution("deep_research", {"query": "test1"}, "result1")
+        state.record_tool_execution("kb_search", {"query": "test2"}, "result2")
+        state.record_tool_execution("deep_research", {"query": "test3"}, "result3")
+        
+        deep_executions = state.get_tool_executions("deep_research")
+        assert len(deep_executions) == 2
+        assert all(e["tool"] == "deep_research" for e in deep_executions)
+        
+        kb_executions = state.get_tool_executions("kb_search")
+        assert len(kb_executions) == 1
+        assert kb_executions[0]["tool"] == "kb_search"
+
+    def test_graph_state_get_all_executions(self):
+        state = GraphState()
+        
+        executions = state.get_tool_executions()
+        assert executions == []
+        
+        state.record_tool_execution("tool1", {"arg": "val"}, "res")
+        executions = state.get_tool_executions()
+        assert len(executions) == 1
+
+
+class TestPlanNodeNewFields:
+    """Tests for PlanNode.max_retries, retry_backoff_seconds, fallback_to."""
+
+    def test_plan_node_default_values(self):
+        """Test that new fields have proper defaults."""
+        node = PlanNode("test", "tool", {})
+        
+        # max_retries should default to 0 (no retry)
+        assert node.max_retries == 0
+        
+        # retry_backoff_seconds should default to 1.0
+        assert node.retry_backoff_seconds == 1.0
+        
+        # fallback_to should default to None
+        assert node.fallback_to is None
+
+    def test_plan_node_with_values(self):
+        """Test PlanNode with explicit values for new fields."""
+        node = PlanNode(
+            "test", 
+            "tool", 
+            {},
+            max_retries=3,
+            retry_backoff_seconds=2.0,
+            fallback_to="fallback_node"
+        )
+        
+        assert node.max_retries == 3
+        assert node.retry_backoff_seconds == 2.0
+        assert node.fallback_to == "fallback_node"
+
+    def test_plan_node_backward_compatibility(self):
+        """Test that existing code without new fields still works."""
+        # This simulates JSON loading from playbook
+        node_dict = {
+            "id": "web",
+            "tool": "deep_research",
+            "args": {"query": "$prompt"},
+            "depends_on": ["web"],
+            "max_retries": 2,
+            "retry_backoff_seconds": 1.5,
+            "fallback_to": "kb"
+        }
+        
+        # When loaded via plan_from_master, should have all fields
+        graph = plan_from_master("research this", ["research"])
+        web_node = next(n for n in graph.nodes if n.id == "web")
+        
+        # Should have retry and fallback capability
+        assert hasattr(web_node, 'max_retries')
+        assert hasattr(web_node, 'retry_backoff_seconds')
+        assert hasattr(web_node, 'fallback_to')
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
