@@ -12,7 +12,7 @@ agent loop needs them.
 from __future__ import annotations
 
 from agentic.toolkit.websurf import web_search_context
-from agentic.toolkit.research import adaptive_search, deep_research
+from agentic.toolkit.research import adaptive_search, deep_research, deep_read
 from agentic.toolkit.reports import write_report
 from agentic.toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
 from agentic.toolkit.organize import schedule_job, list_schedule, cancel_schedule, schedule_reminder, list_reminders, cancel_reminder
@@ -30,6 +30,7 @@ __all__ = [
     "cancel_schedule",
     "create_checklist",
     "dedupe_postings",
+    "deep_read",
     "deep_research",
     "adaptive_search",
     "draft_job_post_social",

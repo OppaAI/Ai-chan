@@ -51,6 +51,7 @@ class Capability:
 TOOL_DOMAINS: dict[str, str] = {
     "adaptive_search": "research",
     "deep_research": "research",
+    "deep_read": "research",
     "schedule_job": "scheduling",
     "list_schedule": "scheduling",
     "cancel_schedule": "scheduling",

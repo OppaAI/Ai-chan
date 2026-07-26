@@ -48,6 +48,7 @@ from agentic import graph_engine as schema
 from agentic.tools import (
     adaptive_search,
     deep_research,
+    deep_read,
     make_plan,
     create_checklist,
     save_note,
@@ -294,7 +295,7 @@ _SOCIAL_POST_TOOLS = {"post_job_post_social", "post_photo_social", "post_video_s
 # rule to cover every bulky tool (repo_read_file, search_jobs, etc.), since
 # any of them can accumulate across MAX_AGENT_ITER iterations otherwise.
 _COMPACTABLE_MIN_CHARS = 800
-_RESEARCH_TOOLS = {"adaptive_search", "deep_research"}
+_RESEARCH_TOOLS = {"adaptive_search", "deep_research", "deep_read"}
 
 
 
@@ -616,6 +617,11 @@ _reg_no_handler("deep_research", "Research tool that fetches and synthesizes ful
     {"query": {"type": "string", "description": "The research question. Can be broader/less scoped since the tool refines it internally."}},
     required=["query"])
 
+_reg_no_handler("deep_read",
+    "Fetch and extract content from one EXACT known URL. Handles HTML pages (with JS-render escalation), PDFs, DOCX, PPTX, XLSX, EPUB, CSV, and more. Use when you already have the specific URL to read — not for discovery (use adaptive_search for that).",
+    {"url": {"type": "string", "description": "The exact URL to fetch and read."}, "query": {"type": "string", "description": "Optional focus query — if given, content is relevance-filtered to what matters for this question."}},
+    required=["url"])
+
 _reg("make_plan", "Make plan.",
     lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
     {"goal": {"type": "string"}, "constraints": {"type": "string"}, "max_steps": {"type": "integer"}},
@@ -893,6 +899,12 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("query", ""),
             client=getattr(owner, "_client", None),
             model=getattr(owner, "_llm_model", None),
+            embedder=_owner_embedder(owner),
+        )
+    if name == "deep_read":
+        return deep_read(
+            args.get("url", ""),
+            query=args.get("query", ""),
             embedder=_owner_embedder(owner),
         )
     if name == "run_playbook":

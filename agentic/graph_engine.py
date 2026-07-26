@@ -922,6 +922,7 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
             adaptive_search, plan_effort, search_and_rank,
             fetch_and_condense_ranked, judge_sufficient,
             deep_research, deep_fetch_round, combine_research_rounds,
+            deep_read,
         )
         mapping.update({
             "adaptive_search": adaptive_search,
@@ -932,6 +933,7 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
             "deep_research": deep_research,
             "deep_fetch_round": deep_fetch_round,
             "combine_research_rounds": combine_research_rounds,
+            "deep_read": deep_read,
         })
     except Exception as exc:
         log.debug("research graph tools unavailable for graph executor: %s", exc)
