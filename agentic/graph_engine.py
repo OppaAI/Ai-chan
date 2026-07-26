@@ -109,6 +109,10 @@ GRAPH_VERIFY_LLM = os.getenv("GRAPH_VERIFY_LLM", "0").lower() in {"1", "true", "
 # graph executor can't end up longer than one saved via the ReAct path.
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "5000"))
 
+# Cost tracking — env-driven so Jetson local can set 0, cloud can override.
+GRAPH_COST_PER_1M_INPUT = float(os.getenv("GRAPH_COST_PER_1M_INPUT", "0"))
+GRAPH_COST_PER_1M_OUTPUT = float(os.getenv("GRAPH_COST_PER_1M_OUTPUT", "0"))
+
 _TOOL_MAP_CACHE: dict[str, Callable[..., Any]] | None = None
 _TOOL_MAP_LOCK = threading.Lock()
 _PLAYBOOK_WRITE_LOCK = threading.Lock()
@@ -252,11 +256,9 @@ class GraphRunResult:
 
     @property
     def total_cost(self) -> float:
-        cost_per_1m_input = 0.80
-        cost_per_1m_output = 2.40
         inputs = sum((r.usage or {}).get("input_tokens", 0) for r in self.results)
         outputs = sum((r.usage or {}).get("output_tokens", 0) for r in self.results)
-        return (inputs / 1e6) * cost_per_1m_input + (outputs / 1e6) * cost_per_1m_output
+        return (inputs / 1e6) * GRAPH_COST_PER_1M_INPUT + (outputs / 1e6) * GRAPH_COST_PER_1M_OUTPUT
 
 
 
@@ -1274,6 +1276,10 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 if _yield:
                     _yield(result)
 
+                # State helper tracking
+                state.inc_visit(node.id)
+                state.record_tool_execution(node.tool, dict(result.args), str(result.content))
+
                 # Handle fallback logic
                 if not result.ok and node.fallback_to:
                     fallback_node = nodes_by_id.get(node.fallback_to)
@@ -1297,6 +1303,8 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                                     call_args["client"] = llm_client
                                 if "llm_model" in params and "llm_model" not in call_args:
                                     call_args["llm_model"] = llm_model
+                                if "model" in params and "model" not in call_args:
+                                    call_args["model"] = llm_model
                                 if "state" in params and "state" not in call_args:
                                     call_args["state"] = state
                                 
