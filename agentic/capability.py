@@ -104,7 +104,6 @@ ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
     "make_plan", "create_checklist", "save_note", "read_workspace_file",
     "summarize_task_state", "list_playbooks", "run_playbook", "final_answer",
     "read_paper_url",
-    "web_search_context",
 })
 
 # Tool domains per capability (maps capability id -> tuple of domains)
