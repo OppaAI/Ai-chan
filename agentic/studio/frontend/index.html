@@ -101,7 +101,7 @@
     <script>
         // State
         let currentPlaybooks = [];
-        let selectedPlaybook = null;
+        let selectedPlaybook = null;  // holds full playbook object
         let selectedNode = null;
         let selectedEdge = null;
         
@@ -130,13 +130,15 @@
             
             currentPlaybooks.forEach(playbook => {
                 const item = document.createElement('div');
-                item.className = `p-3 rounded cursor-pointer transition-colors ${selectedPlaybook === playbook.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50 border border-gray-200'}`;
+                item.className = `p-3 rounded cursor-pointer transition-colors ${selectedPlaybook && selectedPlaybook.id === playbook.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50 border border-gray-200'}`;
                 item.onclick = () => selectPlaybook(playbook);
+                
+                const nodeCount = Array.isArray(playbook.nodes) ? playbook.nodes.length : 0;
                 
                 item.innerHTML = `
                     <div class="font-medium text-gray-900">${playbook.name}</div>
                     <div class="text-sm text-gray-500">ID: ${playbook.id}</div>
-                    <div class="text-xs text-gray-400 mt-1">Nodes: ${playbook.nodes ? Object.keys(playbook.nodes).length : 0}</div>
+                    <div class="text-xs text-gray-400 mt-1">Nodes: ${nodeCount}</div>
                 `;
                 
                 container.appendChild(item);
@@ -145,15 +147,15 @@
         
         // Select a playbook
         function selectPlaybook(playbook) {
-            selectedPlaybook = playbook.id;
+            selectedPlaybook = playbook;  // keep full object
             renderPlaybooksList();
             renderGraph(playbook);
         }
         
-        // Render the graph visualization
+// Render the graph visualization
         function renderGraph(playbook) {
             const svg = d3.select('#canvas');
-            svg.selectAll('*').remove();n
+            svg.selectAll('*').remove();
             if (!playbook.nodes || !playbook.edges) {
                 const g = svg.append('g');
                 g.append('text')
@@ -174,11 +176,14 @@
                 .force('collision', d3.forceCollide().radius(40));
             
             // Prepare nodes and edges
-            const nodes = Object.values(playbook.nodes);
+            const nodes = playbook.nodes;  // already an array
             const edges = playbook.edges || [];
             
+            // Create a g group for zoom
+            const g = svg.append('g');
+            
             // Create edges
-            const link = svg.append('g')
+            const link = g.append('g')
                 .attr('class', 'edges')
                 .selectAll('path')
                 .data(edges)
@@ -198,7 +203,7 @@
                 });
             
             // Create nodes
-            const node = svg.append('g')
+            const node = g.append('g')
                 .attr('class', 'nodes')
                 .selectAll('g')
                 .data(nodes)
@@ -246,34 +251,18 @@
                 selectNode(d);
             });
             
-            // Update simulation on tick
-            simulation.on('tick', () => {
-                link.attr('d', d => {
-                    const source = typeof d.source === 'string' ? 
-                        nodes.find(n => n.id === d.source) : d.source;
-                    const target = typeof d.target === 'string' ? 
-                        nodes.find(n => n.id === d.target) : d.target;
-                    if (!source || !target) return '';
-                    return `M${source.x},${source.y} L${target.x},${target.y}`;
-                });
-                
-                node.attr('transform', d => `translate(${d.x},${d.y})`);
-            });
-            
             // Update graph info
             document.getElementById('graph-info').textContent = 
-                `${nodes.length} nodes, ${edges.length} edges`;n            
+                `${nodes.length} nodes, ${edges.length} edges`;
+            
             // Zoom behavior
             const zoom = d3.zoom()
                 .scaleExtent([0.5, 2])
-                .on('zoom', zoomed);
+                .on('zoom', (event) => {
+                    g.attr('transform', event.transform);
+                });
             
             svg.call(zoom);
-            
-            function zoomed(event) {
-                const { transform } = event;
-                g.attr('transform', transform);
-            }
             
             function dragStart(event, d) {
                 if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -291,21 +280,20 @@
                 d.fx = null;
                 d.fy = null;
             }
-            
-            // Render edges first (behind nodes)
-            svg.insert('defs').remove();
-            svg.insert('g', ':first-child').attr('class', 'edges');
         }
         
         // Select a node
         function selectNode(node) {
             selectedNode = node;
-            renderGraph(selectedPlaybook);
+            // Re-render to update selection visuals
+            if (selectedPlaybook) {
+                renderGraph(selectedPlaybook);
+            }
             
             // Update details panel
             const detailsPanel = document.getElementById('details-panel');
             if (node) {
-                const playbook = currentPlaybooks.find(p => p.id === selectedPlaybook);
+                const playbook = currentPlaybooks.find(p => p.id === selectedPlaybook?.id);
                 if (playbook && playbook.tool_map && playbook.tool_map[node.id]) {
                     detailsPanel.innerHTML = `
                         <div><strong>Tool:</strong> ${playbook.tool_map[node.id]}</div>
@@ -326,10 +314,12 @@
             }
         }
         
-        // Select a edge
+        // Select an edge
         function selectEdge(edge) {
             selectedEdge = edge;
-            renderGraph(selectedPlaybook);
+            if (selectedPlaybook) {
+                renderGraph(selectedPlaybook);
+            }
         }
         
         // Handle clicks on canvas
@@ -342,14 +332,14 @@
         document.getElementById('refresh-btn').addEventListener('click', fetchPlaybooks);
         document.getElementById('export-btn').addEventListener('click', () => {
             if (!selectedPlaybook) return;
-            const playbook = currentPlaybooks.find(p => p.id === selectedPlaybook);
+            const playbook = currentPlaybooks.find(p => p.id === selectedPlaybook.id);
             if (!playbook) return;
             
             const dataStr = 'data:application/json;charset=utf-8,' +
                 encodeURIComponent(JSON.stringify(playbook, null, 2));
             const downloadAnchorNode = document.createElement('a');
             downloadAnchorNode.setAttribute('href', dataStr);
-            downloadAnchorNode.setAttribute('download', `${selectedPlaybook}.json`);
+            downloadAnchorNode.setAttribute('download', `${selectedPlaybook.id}.json`);
             document.body.appendChild(downloadAnchorNode);
             downloadAnchorNode.click();
             downloadAnchorNode.remove();
