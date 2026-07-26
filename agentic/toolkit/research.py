@@ -808,7 +808,7 @@ def condense_evidence(
 
 
 # ── fetch + scoring pipeline helpers ──────────────────────────────────
-# These are imported by websurf.py for its _fetch_and_score_pipeline and _deep_search_impl
+# These are research-specific tools for deep_research and adaptive_search.
 
 def _fetch_and_score_pipeline(
     urls: list[str],
@@ -816,7 +816,7 @@ def _fetch_and_score_pipeline(
     embedder,
     max_chars_per_page: int,
     chunk_chars: int = CONDENSE_CHUNK_CHARS,
-    max_workers: int = 4,
+    max_workers: int = DEEP_RESEARCH_MAX_WORKERS,
     max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
     fetch_fn=web_fetch,
     batch_prefetch_fn=None,
@@ -829,8 +829,6 @@ def _fetch_and_score_pipeline(
     called ONCE with the full url list up front to grab as many pages as
     possible in a single browser session; only URLs it doesn't cover fall
     through to the per-URL thread-pool path using fetch_fn (e.g. web_fetch).
-    The internal _deep_search_impl helper never passes batch_prefetch_fn, so
-    its behavior is unchanged.
 
     Returns (scored_chunks, pages, url_outcomes).
     """
