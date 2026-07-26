@@ -1253,10 +1253,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 continue
             future_map = {}
             for node in runnable:
-                if node.timeout_seconds is not None:
-                    future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
-                else:
-                    future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
+                future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:

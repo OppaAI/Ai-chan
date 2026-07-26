@@ -2,7 +2,7 @@
 
 Serves the playbooks JSON and handles API requests for the studio frontend.
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20,14 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-FRONTEND_DIR = BASE_DIR / "frontend"
+BASE_DIR = Path(__file__).resolve().parent.parent
+STUDIO_DIR = BASE_DIR
+STATIC_DIR = STUDIO_DIR / "static"
+FRONTEND_DIR = STUDIO_DIR / "frontend"
 
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-if FRONTEND_DIR.exists():
-    app.mount("/frontend", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend")
+if (BASE_DIR / "static").exists():
+    app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 templates = Jinja2Templates(directory=str(FRONTEND_DIR))
 
@@ -83,7 +82,7 @@ async def get_playbook(playbook_id: str):
 
 
 @app.get("/")
-async def serve_studio(request):
+async def serve_studio(request: Request):
     """Serve the studio interface."""
     return templates.TemplateResponse("index.html", {"request": request})
 

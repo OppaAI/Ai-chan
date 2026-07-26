@@ -215,8 +215,6 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
         match = next((r for r in result.results if r.node_id == node_id and r.ok), None)
         if match and match.content and not match.content.startswith("["):
             return match.content
-        if match and match.content:
-            return match.content
     return result.final_answer
 
 # ══════════════════════════════════════════════════════════════════════════

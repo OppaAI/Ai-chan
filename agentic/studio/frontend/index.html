@@ -156,7 +156,6 @@
         function renderGraph(playbook) {
             const svg = d3.select('#canvas');
             svg.selectAll('*').remove();
-            if (!playbook.nodes || !playbook.edges) {
                 const g = svg.append('g');
                 g.append('text')
                     .attr('x', 400)
@@ -228,8 +227,7 @@
                 .attr('x', 60)
                 .attr('y', 30)
                 .text(d => {
-                    const toolName = playbook.tool_map && playbook.tool_map[d.id] ? 
-                        (playbook.tool_map[d.id].split('.').pop() || d.id) : d.id;
+                    const toolName = d.tool ? (d.tool.split('.').pop() || d.id) : d.id;
                     return toolName.length > 15 ? toolName.substring(0, 12) + '...' : toolName;
                 });
             
@@ -245,10 +243,18 @@
                     };
                 }));
             
-            // Node interactions
-            node.on('click', (event, d) => {
-                event.stopPropagation();
-                selectNode(d);
+            // Simulation tick handler
+            simulation.on('tick', () => {
+                link.attr('d', d => {
+                    const source = typeof d.source === 'string' ? 
+                        nodes.find(n => n.id === d.source) : d.source;
+                    const target = typeof d.target === 'string' ? 
+                        nodes.find(n => n.id === d.target) : d.target;
+                    if (!source || !target) return '';
+                    return `M${source.x},${source.y} L${target.x},${target.y}`;
+                });
+                
+                node.attr('transform', d => `translate(${d.x},${d.y})`);
             });
             
             // Update graph info
@@ -293,22 +299,20 @@
             // Update details panel
             const detailsPanel = document.getElementById('details-panel');
             if (node) {
-                const playbook = currentPlaybooks.find(p => p.id === selectedPlaybook?.id);
-                if (playbook && playbook.tool_map && playbook.tool_map[node.id]) {
-                    detailsPanel.innerHTML = `
-                        <div><strong>Tool:</strong> ${playbook.tool_map[node.id]}</div>
-                        <div><strong>ID:</strong> ${node.id}</div>
-                        <div><strong>Position:</strong> x=${Math.round(node.x)}, y=${Math.round(node.y)}</div>
-                        ${node.run_if ? `<div><strong>Condition:</strong> ${JSON.stringify(node.run_if)}</div>` : ''}
-                        ${node.reducers ? `<div><strong>Reducers:</strong> ${JSON.stringify(node.reducers)}</div>` : ''}
-                    `;
-                } else {
-                    detailsPanel.innerHTML = `
-                        <div><strong>ID:</strong> ${node.id}</div>
-                        <div><strong>Position:</strong> x=${Math.round(node.x)}, y=${Math.round(node.y)}</div>
-                        <div class="text-gray-400">No tool info available</div>
-                    `;
-                }
+                // Node itself has tool, args, run_if, loop_to, max_visits
+                const toolName = node.tool || node.id;
+                const args = node.args ? JSON.stringify(node.args, null, 2) : '{}';
+                detailsPanel.innerHTML = `
+                    <div><strong>Tool:</strong> ${toolName}</div>
+                    <div><strong>ID:</strong> ${node.id}</div>
+                    <div><strong>Args:</strong> <pre class="text-xs bg-gray-100 p-2 rounded overflow-auto">${args}</pre></div>
+                    ${node.run_if ? `<div><strong>Run If:</strong> <pre class="text-xs bg-gray-100 p-2 rounded overflow-auto">${JSON.stringify(node.run_if, null, 2)}</pre></div>` : ''}
+                    ${node.loop_to ? `<div><strong>Loop To:</strong> ${node.loop_to}</div>` : ''}
+                    ${node.loop_condition ? `<div><strong>Loop Condition:</strong> <pre class="text-xs bg-gray-100 p-2 rounded overflow-auto">${JSON.stringify(node.loop_condition, null, 2)}</pre></div>` : ''}
+                    ${node.max_visits ? `<div><strong>Max Visits:</strong> ${node.max_visits}</div>` : ''}
+                    ${node.fallback_to ? `<div><strong>Fallback To:</strong> ${node.fallback_to}</div>` : ''}
+                    <div><strong>Position:</strong> x=${Math.round(node.x)}, y=${Math.round(node.y)}</div>
+                `;
             } else {
                 detailsPanel.innerHTML = '<p>Select a node to see details</p>';
             }
