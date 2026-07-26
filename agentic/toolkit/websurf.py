@@ -1,26 +1,26 @@
 """
 toolkit/websurf.py
-
+ 
 Web search and fetch primitives.
-
+ 
 Pure building blocks — no multi-step workflows. Callers compose
 these via the graph executor (research_graph.py) or ReAct loop.
-
+ 
   - web_search()              — SearXNG query → numbered snippets
   - web_fetch()                — single URL → extracted text (HTML/trafilatura)
   - web_search_context()       — chat-mode wrapper around web_search
   - _web_search_raw()          — low-level SearXNG call (raw JSON)
   - _download_bytes()          — shared streamed/size-capped byte download
   - _sniff_content_type()      — HEAD/extension based format classification
-  - _extract_with_markitdown() — non-HTML document → markdown text (pdf/docx/
-                                   pptx/xlsx/epub/csv/xml/ipynb via MarkItDown)
+  - _extract_with_markitdown() — non-HTML document → markdown text
   - _fetch_and_score_pipeline() — batch fetch + concurrent relevance scoring
-
+ 
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
 
-from __future__ import annotations
 
+from __future__ import annotations
+ 
 import concurrent.futures
 import io
 import ipaddress
@@ -29,21 +29,21 @@ import re
 import socket
 import tempfile
 import time
-import threading
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
-
+ 
 import importlib
 import importlib.util
-
+ 
 from cognition import reason
 from system.log import get_logger
+from agentic.toolkit.cache import TTLCache 
 
 log = get_logger(__name__)
-
+ 
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
-
+ 
 # -- web_fetch download guard --
 WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
 WEB_FETCH_TIMEOUT_SECONDS = int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", 8))
@@ -81,47 +81,37 @@ _MARKITDOWN_SUFFIX_MAP = {
     "ipynb": ".ipynb", "msg": ".msg",
 }
 
-# -- short-lived in-process query cache --
-CACHE_TTL_SECONDS = int(os.getenv("TOOLS_CACHE_TTL_SECONDS", 900))  # 15 min
-CACHE_MAX_ENTRIES = int(os.getenv("TOOLS_CACHE_MAX_ENTRIES", 256))
-
-_cache_lock = threading.Lock()
-_search_cache: dict[str, tuple[float, list[dict]]] = {}
-_fetch_cache: dict[str, tuple[float, str]] = {}
-
-
-def _cache_get(cache: dict, key: str):
-    with _cache_lock:
-        entry = cache.get(key)
-        if entry is None:
-            return None
-        ts, value = entry
-        if time.monotonic() - ts > CACHE_TTL_SECONDS:
-            cache.pop(key, None)
-            return None
-        return value
-
-
-def _cache_set(cache: dict, key: str, value) -> None:
-    with _cache_lock:
-        if len(cache) >= CACHE_MAX_ENTRIES:
-            oldest_key = min(cache, key=lambda k: cache[k][0], default=None)
-            if oldest_key is not None:
-                cache.pop(oldest_key, None)
-        cache[key] = (time.monotonic(), value)
+# -- shared TTL cache instances --
+# Both search and fetch operations use the same TTL window but separate
+# cache instances, allowing independent tuning if needed later.
+_SEARCH_CACHE = TTLCache(
+    ttl_seconds=int(os.getenv("TOOLS_CACHE_TTL_SECONDS", 900)),
+    max_entries=int(os.getenv("TOOLS_CACHE_MAX_ENTRIES", 256)),
+)
+ 
+_FETCH_CACHE = TTLCache(
+    ttl_seconds=int(os.getenv("TOOLS_CACHE_TTL_SECONDS", 900)),
+    max_entries=int(os.getenv("TOOLS_CACHE_MAX_ENTRIES", 256)),
+)
 
 
 def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list[dict] | None, str | None]:
     """Low-level SearXNG call returning (results, error). Cached in-process
-    for CACHE_TTL_SECONDS keyed on (query, max_results, pageno)."""
+    via TTLCache for TOOLS_CACHE_TTL_SECONDS, keyed on (query, max_results, pageno).
+    
+    Returns (results, None) on success, or (None, error_string) on failure.
+    """
     cache_key = f"{query}|{max_results}|{pageno}"
-    cached = _cache_get(_search_cache, cache_key)
+    
+    # Check cache first
+    cached = _SEARCH_CACHE.get(cache_key)
     if cached is not None:
         return cached, None
-
+ 
     if importlib.util.find_spec("requests") is None:
         return None, "[search failed: requests is not installed]"
     requests = importlib.import_module("requests")
+    
     last_error = None
     for attempt in range(3):
         try:
@@ -147,10 +137,64 @@ def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list
             return None, f"[search failed: {e}]"
     else:
         return None, last_error or "[search failed: max retries]"
-
+ 
     results = data.get("results", [])[:max_results]
-    _cache_set(_search_cache, cache_key, results)
+    _SEARCH_CACHE.set(cache_key, results)  # <-- NEW: Use TTLCache.set()
     return results, None
+ 
+ 
+def web_fetch(
+    url: str,
+    max_chars: int = 4000,
+    max_download_bytes: int = WEB_FETCH_MAX_DOWNLOAD_BYTES,
+    use_cache: bool = True,
+) -> str:
+    """Fetch a single URL and extract its main article/body text with trafilatura.
+ 
+    This is the baseline "fetch a page" primitive in the toolkit — fast,
+    dependency-light, no JS rendering. deep_research prefers Crawl4AI when
+    available (see _crawl4ai_fetch_many) and falls back to this for anything
+    Crawl4AI misses or when it isn't installed.
+ 
+    Downloads are streamed and capped at max_download_bytes via
+    _download_bytes, aborted mid-stream BEFORE trafilatura ever runs
+    extraction and BEFORE max_chars truncation — this is what bounds
+    worst-case memory for a single fetch.
+ 
+    Successful fetches are cached in-process for TOOLS_CACHE_TTL_SECONDS keyed on
+    (url, max_chars). Failed fetches are never cached.
+    
+    REFACTORED: Uses TTLCache.get/set instead of _cache_get/_cache_set.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return f"[fetch failed: unsupported URL scheme: {parsed.scheme or 'none'}]"
+    if _is_private_or_local_host(parsed.hostname):
+        return "[fetch failed: URL host is not allowed]"
+ 
+    cache_key = f"{url}|{max_chars}"
+    if use_cache:
+        cached = _FETCH_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+ 
+    if importlib.util.find_spec("trafilatura") is None:
+        return "[fetch failed: trafilatura is not installed]"
+    trafilatura = importlib.import_module("trafilatura")
+ 
+    downloaded, error = _download_bytes(url, max_download_bytes)
+    if error:
+        return error
+ 
+    try:
+        text = trafilatura.extract(downloaded, include_links=False, include_tables=False) or ""
+    except Exception as e:
+        return f"[fetch failed: {e}]"
+ 
+    result = text[:max_chars] if text else "[fetch failed: no extractable text]"
+    if use_cache and text:
+        _FETCH_CACHE.set(cache_key, result)
+    return result
 
 
 def web_search(query: str, max_results: int = MAX_RESULTS) -> str:
