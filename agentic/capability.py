@@ -45,68 +45,9 @@ class Capability:
     tool_domains: tuple[str, ...] = ()
 
 
-# Tool name -> domain. Any tool NOT listed here is treated as "core" and is
-# always available (see ALWAYS_ON_TOOLS) — this keeps cross-cutting tools
-# like make_plan/save_note from ever being accidentally filtered out.
-TOOL_DOMAINS: dict[str, str] = {
-    "adaptive_search": "research",
-    "deep_research": "research",
-    "deep_read": "research",
-    "schedule_job": "scheduling",
-    "list_schedule": "scheduling",
-    "cancel_schedule": "scheduling",
-    "schedule_reminder": "scheduling",
-    "list_reminders": "scheduling",
-    "cancel_reminder": "scheduling",
-    "list_skillsets": "skills",
-    "search_skillsets": "skills",
-    "load_skillset": "skills",
-    "scan_photo_workspace": "photo",
-    "propose_photo_ingestion": "photo",
-    "write_photo_ingestion_report": "photo",
-    "repo_file_tree": "repo",
-    "repo_read_file": "repo",
-    "repo_search_text": "repo",
-    "write_report": "reports",
-    "learn_knowledge": "kb",
-    "search_jobs": "jobs",
-    "list_playbooks": "graph",
-    "run_playbook": "graph",
-    # Graph-level synthesis/KB tools (new)
-    "kb_search": "kb",
-    "synthesize_report": "reports",
-    "polish_text": "reports",
-    "combine_evidence": "reports",
-    "condense_text": "reports",
-    "learn_report": "kb",
-    # Social posting tools — deliberately capability-gated, never ALWAYS_ON.
-    # Posting is the highest-stakes tool class in the loop, so it gets the
-    # same (not looser) gating as research/scheduling/photo/repo.
-    #
-    # Lane A (weekly postcard) is intentionally NOT exposed here — it is
-    # non-agentic by design (see agentic/toolkit/social.py docstring): the scheduler
-    # drives it directly via run_scheduled_weekly_social() on a Sun-Sat
-    # cadence. Posting still requires draft.json["human_approved"] = true
-    # regardless of path (scheduler or agent) — see _require_approved in
-    # agentic/toolkit/social.py — but there is no conversational "draft/post the
-    # weekly postcard" action for the agent loop to take, so it's not
-    # registered as a tool. Only the inbox-driven photo/video lanes are
-    # agent-callable.
-    "draft_photo_social": "social",
-    "post_photo_social": "social",
-    "draft_video_social": "social",
-    "post_video_social": "social",
-}
-
-# Always sent regardless of which capability matched — the base loop tools
-# every agentic turn can plausibly need.
-ALWAYS_ON_TOOLS: frozenset[str] = frozenset({
-    "make_plan", "create_checklist", "save_note", "read_workspace_file",
-    "summarize_task_state", "list_playbooks", "run_playbook", "final_answer",
-})
-
-# Tool domains per capability (maps capability id -> tuple of domains)
-# Kept in Python since these are code-level mappings to TOOL_DOMAINS
+# Tool domains and always-on flags are derived from the central registry.
+from agentic.registry import registry
+# Kept in Python since these are code-level capability -> domain mappings.
 _CAPABILITY_TOOL_DOMAINS: dict[str, tuple[str, ...]] = {
     "research": ("research", "kb", "reports"),
     "scheduling": ("scheduling",),
@@ -283,11 +224,8 @@ def match_capabilities(
     return [cap_id for cap_id, terms in _CAPABILITY_KEYWORDS.items() if _capability_text_matches(folded, terms)]
 
 
-from agentic.registry import registry
-
-
 def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[dict]:
-    """Narrow the full tool schema list to ALWAYS_ON_TOOLS plus whatever
+    """Narrow the full tool schema list to always-on tools plus whatever
     domains the matched capabilities pull in. No match -> return everything
     unchanged, so this can only reduce tool-list size, never regress a turn
     that the old keyword/semantic matching would have handled fine."""
@@ -296,11 +234,9 @@ def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[d
     # Filter out unknown capability IDs to avoid KeyError
     valid_cap_ids = [cid for cid in cap_ids if cid in CAPABILITIES]
     domains = {d for cid in valid_cap_ids for d in CAPABILITIES[cid].tool_domains}
-    
-    # Merge static TOOL_DOMAINS / ALWAYS_ON_TOOLS with dynamic registry entries
-    effective_domains = dict(TOOL_DOMAINS)
-    effective_domains.update(registry.get_tool_domains())
-    effective_always_on = ALWAYS_ON_TOOLS | registry.get_always_on_tools()
+
+    effective_domains = registry.get_tool_domains()
+    effective_always_on = registry.get_always_on_tools()
 
     keep = set(effective_always_on)
     for schema in all_schemas:

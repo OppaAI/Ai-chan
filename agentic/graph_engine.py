@@ -1712,4 +1712,30 @@ def append_playbook_from_experience(goal: str, steps: list[dict[str, Any]], *, n
         tmp_path = path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_path.replace(path)
-    return path
+
+
+from agentic.registry import register_tool_schema, tool
+
+
+@tool(
+    name="list_playbooks",
+    description="List graph/playbook workflows available to the model-free graph executor.",
+    props={},
+    domain="graph",
+    always_on=True,
+)
+def list_playbooks() -> str:
+    return list_playbooks_json()
+
+
+register_tool_schema(
+    "run_playbook",
+    "Run a saved graph/playbook workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",
+    props={
+        "task": {"type": "string", "description": "The task prompt to match against graph playbooks."},
+        "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."},
+    },
+    required=["task"],
+    domain="graph",
+    always_on=True,
+)

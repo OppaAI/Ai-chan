@@ -580,215 +580,62 @@ def tool_schemas() -> list[dict]:
     return [schema for schema, _handler in _TOOLS.values()]
 
 
-def _f(name, description, properties=None, required=None):
-    """Build an OpenAI tool schema dict."""
-    s = {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": {"type": "object", "properties": properties or {}},
+from agentic.registry import registry, register_tool_schema, tool
+
+
+def _bootstrap_tool_registry() -> None:
+    """Import toolkit modules so @tool decorators populate the registry."""
+    import agentic.tools  # noqa: F401
+    from agentic.toolkit import synthesize  # noqa: F401
+
+
+@tool(
+    name="final_answer",
+    description="Final answer.",
+    props={"answer": {"type": "string", "description": "The final answer text."}},
+    required=["answer"],
+    always_on=True,
+)
+def final_answer(answer: str) -> str:
+    return answer
+
+
+def run_job_post_playbook(prompt: str = "") -> str:
+    return _run_job_post_playbook(prompt)
+
+
+def _register_agentic_local_tools() -> None:
+    register_tool_schema(
+        "learn_knowledge",
+        "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted document text, or after explicit self-learning/research should be retained. Do not use for private personal preferences; those belong in memory. Do not use for merely saving a human-readable note; use save_note for that.",
+        props={
+            "title": {"type": "string", "description": "Short title for the learned document or fact set."},
+            "text": {"type": "string", "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."},
+            "relative_path": {"type": "string", "description": "Optional workspace-relative document path to ingest instead of text."},
+            "source": {"type": "string", "description": "Optional source URL/path/context for pasted text."},
+            "kind": {"type": "string", "enum": ["ingested", "self_learned", "study_note"], "description": "Where this knowledge came from."},
         },
-    }
-    if required:
-        s["function"]["parameters"]["required"] = required
-    return s
-
-from agentic.registry import registry
-
-_TOOL_DEFS: list[tuple[dict, object]] = []
-
-def _reg(name, desc, handler, props=None, required=None, domain=None, always_on=False):
-    spec = registry.register(
-        name=name, description=desc, handler=handler, props=props, required=required,
-        domain=domain, always_on=always_on,
+        required=["title"],
+        domain="kb",
     )
-    _TOOL_DEFS.append((spec.to_openai_schema(), handler))
-
-def _reg_no_handler(name, desc, props=None, required=None, domain=None, always_on=False):
-    spec = registry.register(
-        name=name, description=desc, handler=None, props=props, required=required,
-        domain=domain, always_on=always_on,
+    registry.register(
+        name="run_job_post_playbook",
+        description="Run the daily job post graph playbook: search jobs, draft posts, save/flag them. Uses config from job_hunt.json. Pass a prompt to override defaults (e.g. location, salary).",
+        handler=run_job_post_playbook,
+        props={"prompt": {"type": "string", "description": "Optional prompt with overrides like location, salary, categories. Empty = use job_hunt.json defaults."}},
+        domain="graph",
     )
-    _TOOL_DEFS.append((spec.to_openai_schema(), None))
 
-_reg_no_handler("adaptive_search",
-    "The default tool for any internet lookup. Adaptively searches, judges if snippets suffice, and only fetches full pages if needed.",
-    {"query": {"type": "string"}},
-    required=["query"])
 
-_reg_no_handler("deep_research", "Research tool that fetches and synthesizes full source pages from discovered URLs. Use when the research itself is the deliverable or for deep/thorough self-learning.",
-    {"query": {"type": "string", "description": "The research question. Can be broader/less scoped since the tool refines it internally."}},
-    required=["query"])
+def _init_tool_tables() -> tuple[dict[str, tuple[dict, object]], list[tuple[dict, object]]]:
+    _bootstrap_tool_registry()
+    _register_agentic_local_tools()
+    tool_defs = registry.get_react_defs()
+    tools = {schema["function"]["name"]: (schema, handler) for schema, handler in tool_defs}
+    return tools, tool_defs
 
-_reg_no_handler("deep_read",
-    "Fetch and extract content from one EXACT known URL. Handles HTML pages (with JS-render escalation), PDFs, DOCX, PPTX, XLSX, EPUB, CSV, and more. Use when you already have the specific URL to read — not for discovery (use adaptive_search for that).",
-    {"url": {"type": "string", "description": "The exact URL to fetch and read."}, "query": {"type": "string", "description": "Optional focus query — if given, content is relevance-filtered to what matters for this question."}},
-    required=["url"])
 
-_reg("make_plan", "Make plan.",
-    lambda args: make_plan(args.get("goal", ""), args.get("constraints", ""), int(args.get("max_steps", 8) or 8)),
-    {"goal": {"type": "string"}, "constraints": {"type": "string"}, "max_steps": {"type": "integer"}},
-    required=["goal"])
-
-_reg("create_checklist", "Make checklist.",
-    lambda args: create_checklist(args.get("title", "Checklist"), args.get("items", "")),
-    {"title": {"type": "string"}, "items": {"type": "string", "description": "Newline-separated checklist items."}},
-    required=["title", "items"])
-
-_reg("save_note", "Save a note to a workspace file. content MUST be plain text only, under 400 characters. No markdown tables, no bullet lists, no backticks, no quotes. Write a brief plain-text summary only.",
-    lambda args: save_note(args.get("title", "Aiko note"), args.get("content", ""), args.get("folder", "notes")),
-    {"title": {"type": "string", "description": "Short filename title."}, "content": {"type": "string", "description": "Plain text only. Max 400 chars. No markdown."}, "folder": {"type": "string", "description": "Subfolder, default: notes"}},
-    required=["title", "content"])
-
-_reg_no_handler("write_report",
-    "Write (or append a section to) one polished long-form markdown report "
-    "under the workspace reports folder. Use for a single coherent "
-    "deliverable — architecture review, paper comparison, improvement "
-    "proposal — not short scratch notes (save_note) or retrievable knowledge "
-    "(learn_knowledge). For arxiv_style, call once per section across "
-    "multiple turns with append=true, using the same title each time.",
-    {"title": {"type": "string"}, "content": {"type": "string"},
-     "report_dir": {"type": "string"}, "arxiv_style": {"type": "boolean"},
-     "section": {"type": "string", "description": "abstract|introduction|related_work|architecture|discussion|limitations|conclusion|references"},
-     "append": {"type": "boolean"}},
-    required=["title"])
-
-_reg("read_workspace_file", "Read workspace file.",
-    lambda args: read_workspace_file(args.get("relative_path", "")),
-    {"relative_path": {"type": "string"}},
-    required=["relative_path"])
-
-_reg("summarize_task_state", "Summarize task state.",
-    lambda args: summarize_task_state(args.get("goal", ""), args.get("done", ""), args.get("next_action", ""), args.get("risks", "")),
-    {"goal": {"type": "string"}, "done": {"type": "string"}, "next_action": {"type": "string"}, "risks": {"type": "string"}},
-    required=["goal"])
-
-_reg("schedule_job", "Schedule local job/alarm. HH:MM. Frequencies: once,hourly,daily,weekdays,weekly,biweekly,monthly,custom_weekdays. Supports relative_days for today/tomorrow/day-after-tomorrow offsets.",
-    lambda args: schedule_job(args.get("title", "Scheduled job"), args.get("task", "Scheduled job"), args.get("time_of_day", "06:00"), args.get("frequency", "daily"), args.get("timezone"), args.get("days_of_week"), args.get("action", "agentic"), args.get("relative_days"), args.get("tool_call"), args.get("skill")),
-    {"title": {"type": "string"}, "task": {"type": "string"}, "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"}, "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]}, "timezone": {"type": "string"}, "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"}, "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"}, "action": {"type": "string", "enum": ["announce", "agentic", "tool"], "description": "announce, agentic task, or direct registered tool invocation"}, "tool_call": {"type": "object", "description": "Required for action=tool: {name: registered tool name, arguments: object}"}, "skill": {"type": "string", "description": "Optional custom SKILL.md-style instructions for an agentic job"}},
-    required=["title", "task", "time_of_day"])
-
-_reg("list_schedule", "List schedule.",
-    lambda args: list_schedule(bool(args.get("include_disabled", False))),
-    {"include_disabled": {"type": "boolean"}})
-
-_reg("cancel_schedule", "Cancel schedule item.",
-    lambda args: cancel_schedule(args.get("job_id", "")),
-    {"job_id": {"type": "string"}},
-    required=["job_id"])
-
-_reg("schedule_reminder", "Simple once/daily reminder.",
-    lambda args: schedule_reminder(args.get("title", "Reminder"), args.get("message", "Reminder"), args.get("time_of_day", "06:00"), args.get("repeat", "daily"), args.get("timezone")),
-    {"title": {"type": "string"}, "message": {"type": "string"}, "time_of_day": {"type": "string"}, "repeat": {"type": "string", "enum": ["once", "daily"]}, "timezone": {"type": "string"}},
-    required=["title", "message", "time_of_day"])
-
-_reg("list_reminders", "List reminders.",
-    lambda args: list_reminders(bool(args.get("include_disabled", False))),
-    {"include_disabled": {"type": "boolean"}})
-
-_reg("cancel_reminder", "Cancel reminder by id.",
-    lambda args: cancel_reminder(args.get("reminder_id", "")),
-    {"reminder_id": {"type": "string"}},
-    required=["reminder_id"])
-
-_reg("list_skillsets", "List Aiko's predefined local workflow skillsets.",
-    lambda args: list_skillsets(),
-    {})
-
-_reg("search_skillsets", "Search Aiko's predefined workflow skillsets by task/query.",
-    lambda args: search_skillsets_json(args.get("query", ""), int(args.get("limit", 3) or 3)),
-    {"query": {"type": "string"}, "limit": {"type": "integer"}},
-    required=["query"])
-
-_reg("load_skillset", "Load the full markdown instructions for one predefined skillset by id.",
-    lambda args: load_skillset(args.get("skill_id", "")),
-    {"skill_id": {"type": "string"}},
-    required=["skill_id"])
-
-_reg("list_playbooks", "List graph/playbook workflows available to the model-free graph executor.",
-    lambda args: schema.list_playbooks_json(),
-    {})
-
-_reg_no_handler("run_playbook", "Run a saved graph/playbook workflow by matching this task prompt. This uses deterministic graph execution, not an LLM planner; if no graph matches, continue with ReAct once and learn the sequence.",    {"task": {"type": "string", "description": "The task prompt to match against graph playbooks."}, "cap_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional matched capability ids."}},
-    required=["task"])
-
-_reg("scan_photo_workspace", "Scan a workspace photo inbox for wildlife/nature/astro image files.",
-    lambda args: scan_photo_workspace(args.get("inbox", "photos/inbox"), int(args.get("limit", 100) or 100)),
-    {"inbox": {"type": "string", "description": "Workspace-relative inbox path, default photos/inbox."}, "limit": {"type": "integer"}})
-
-_reg("propose_photo_ingestion", "Create a safe dry-run ingestion plan for photo files without moving or editing metadata.",
-    lambda args: propose_photo_ingestion(args.get("inbox", "photos/inbox"), args.get("library_root", "photos/library"), args.get("rating_rule", "manual-review-first")),
-    {"inbox": {"type": "string"}, "library_root": {"type": "string"}, "rating_rule": {"type": "string"}})
-
-_reg("write_photo_ingestion_report", "Write a photo workflow report under the workspace reports folder.",
-    lambda args: write_photo_ingestion_report(args.get("title", "photo-ingestion"), args.get("content", ""), args.get("report_dir", "photos/reports")),
-    {"title": {"type": "string"}, "content": {"type": "string"}, "report_dir": {"type": "string"}})
-
-_reg("repo_file_tree", "List repository text files for Aiko architecture/code navigation.",
-    lambda args: repo_file_tree(args.get("prefix", ""), int(args.get("limit", 200) or 200)),
-    {"prefix": {"type": "string"}, "limit": {"type": "integer"}})
-
-_reg("repo_read_file", "Read one repository text file for architecture/code work.",
-    lambda args: repo_read_file(args.get("relative_path", ""), int(args.get("max_chars", 20000) or 20000)),
-    {"relative_path": {"type": "string"}, "max_chars": {"type": "integer"}},
-    required=["relative_path"])
-
-_reg("repo_search_text", "Search repository text files with simple substring matching.",
-    lambda args: repo_search_text(args.get("query", ""), args.get("prefix", ""), int(args.get("limit", 50) or 50)),
-    {"query": {"type": "string"}, "prefix": {"type": "string"}, "limit": {"type": "integer"}},
-    required=["query"])
-
-_reg_no_handler("learn_knowledge", "Store durable learned knowledge in Aiko's vector RAG store (encrypted when SQLite encryption is enabled). Use only when the user asks Aiko to remember/add/store knowledge, ingest pasted document text, or after explicit self-learning/research should be retained. Do not use for private personal preferences; those belong in memory. Do not use for merely saving a human-readable note; use save_note for that.",
-    {"title": {"type": "string", "description": "Short title for the learned document or fact set."}, "text": {"type": "string", "description": "Knowledge text to chunk, embed, and retrieve later. Use this for pasted/extracted text."}, "relative_path": {"type": "string", "description": "Optional workspace-relative document path to ingest instead of text."}, "source": {"type": "string", "description": "Optional source URL/path/context for pasted text."}, "kind": {"type": "string", "enum": ["ingested", "self_learned", "study_note"], "description": "Where this knowledge came from."}},
-    required=["title"])
-
-_reg("search_jobs", "Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
-    lambda args: json.dumps(search_jobs(args.get("query", ""), args.get("location", ""), int(args["max_results"]) if args.get("max_results") not in (None, "") else None, int(args["max_age_days"]) if args.get("max_age_days") not in (None, "") else None, args.get("job_type", "")), ensure_ascii=False),
-    {"query": {"type": "string"}, "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."}, "max_results": {"type": "integer"}, "max_age_days": {"type": "integer"}, "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
-    required=["query"])
-
-_reg("draft_job_post_social", "Create a Vancouver-area daily job-post draft for Meta Threads review. Does NOT post anything.",
-    lambda args: draft_job_post_social(force=bool(args.get("force", False))),
-    {"force": {"type": "boolean", "description": "Create a new draft even if one already exists for today."}})
-
-_reg("run_job_post_playbook", "Run the daily job post graph playbook: search jobs, draft posts, save/flag them. Uses config from job_hunt.json. Pass a prompt to override defaults (e.g. location, salary).",
-    lambda args: _run_job_post_playbook(args.get("prompt", "")),
-    {"prompt": {"type": "string", "description": "Optional prompt with overrides like location, salary, categories. Empty = use job_hunt.json defaults."}})
-
-_reg("post_job_post_social", "Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation.",
-    lambda args: post_job_post_social(args.get("draft_dir", "")),
-    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_job_post_social or given by the user."}},
-    required=["draft_dir"])
-
-_reg("draft_photo_social", "Scan the photo inbox, caption and curate candidates, and create an Instagram photo draft bundle for human review. Does NOT post anything.",
-    lambda args: draft_photo_social(inbox=args.get("inbox") or None, force=bool(args.get("force", False))),
-    {"inbox": {"type": "string", "description": "Optional workspace-relative photo inbox override."}, "force": {"type": "boolean", "description": "Create a new draft even if one already exists for this run."}})
-
-_reg("post_photo_social", "Post an ALREADY HUMAN-APPROVED photo draft to Instagram. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
-    lambda args: post_photo_social(args.get("draft_dir", ""), providers=args.get("providers") or None),
-    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_photo_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["instagram"]}}},
-    required=["draft_dir"])
-
-_reg("draft_video_social", "Queue the oldest not-yet-drafted video in the video inbox that already has a matching NAME.md description file, polishing it into a YouTube title/description for human review. Does NOT post, and does NOT choose which video — dropping the file with its description IS the selection.",
-    lambda args: draft_video_social(inbox=args.get("inbox") or None),
-    {"inbox": {"type": "string", "description": "Optional workspace-relative video inbox override."}})
-
-_reg("post_video_social", "Post an ALREADY HUMAN-APPROVED video draft to YouTube. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
-    lambda args: post_video_social(args.get("draft_dir", ""), providers=args.get("providers") or None),
-    {"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_video_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["youtube"]}}},
-    required=["draft_dir"])
-
-_reg("final_answer", "Final answer.",
-    lambda args: final_answer(args.get("answer", "")),
-    {"answer": {"type": "string", "description": "The final answer text."}},
-    required=["answer"])
-
-# ── populate _TOOLS from _TOOL_DEFS ──────────────────────────────────────────
-
-for _tool_schema, _tool_handler in _TOOL_DEFS:
-    _tool_name = _tool_schema["function"]["name"]
-    _TOOLS[_tool_name] = (_tool_schema, _tool_handler)
+_TOOLS, _TOOL_DEFS = _init_tool_tables()
 
 
 def invoke_registered_tool(name: str, arguments: dict | None = None):
@@ -948,13 +795,16 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("report_dir", "reports"), bool(args.get("arxiv_style", False)),
             args.get("section", ""), bool(args.get("append", False)),
         )
-    entry = _TOOLS.get(name)
-    if not entry or entry[1] is None:
+    spec = registry.get(name)
+    if not spec or spec.handler is None:
         return f"[unknown tool: {name}]"
     if name == "save_note":
         args["content"] = args.get("content", "")[:AGENT_NOTE_MAX_CHARS]
         args["title"] = args.get("title", "aiko-note")
-    return entry[1](args)
+    try:
+        return spec.handler(**args)
+    except TypeError:
+        return spec.handler(args)
 
 
 def dispatch_tool_checked(name: str, args: dict, owner=None) -> ToolResult:

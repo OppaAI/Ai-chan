@@ -22,8 +22,6 @@ load_config()
 
 from agentic.capability import (
     Capability,
-    TOOL_DOMAINS,
-    ALWAYS_ON_TOOLS,
     CAPABILITIES,
     _CAPABILITY_INSTRUCT,
     _CAPABILITY_THRESHOLD,
@@ -32,6 +30,8 @@ from agentic.capability import (
     match_capabilities,
     filtered_tool_schemas,
 )
+from agentic.registry import registry
+import agentic.agentic  # noqa: F401 — bootstrap full tool registry
 
 
 class FakeEmbedder:
@@ -51,20 +51,21 @@ class TestCapabilityStructure:
     """Tests for capability data structures."""
 
     def test_tool_domains_comprehensive(self):
-        """All registered tools should have a domain or be in ALWAYS_ON_TOOLS."""
-        all_tools = set(TOOL_DOMAINS.keys()) | ALWAYS_ON_TOOLS
+        """All registered tools should have a domain or be always-on."""
+        tool_domains = registry.get_tool_domains()
+        always_on = registry.get_always_on_tools()
         # Check key tools are present
-        assert "adaptive_search" in TOOL_DOMAINS
-        assert "deep_research" in TOOL_DOMAINS
-        assert "write_report" in TOOL_DOMAINS
-        assert "learn_knowledge" in TOOL_DOMAINS
-        assert "kb_search" in TOOL_DOMAINS
-        assert "synthesize_report" in TOOL_DOMAINS
-        assert "combine_evidence" in TOOL_DOMAINS
-        assert "condense_text" in TOOL_DOMAINS
-        assert "polish_text" in TOOL_DOMAINS
-        assert "make_plan" in ALWAYS_ON_TOOLS
-        assert "save_note" in ALWAYS_ON_TOOLS
+        assert "adaptive_search" in tool_domains
+        assert "deep_research" in tool_domains
+        assert "write_report" in tool_domains
+        assert "learn_knowledge" in tool_domains
+        assert "kb_search" in tool_domains
+        assert "synthesize_report" in tool_domains
+        assert "combine_evidence" in tool_domains
+        assert "condense_text" in tool_domains
+        assert "polish_text" in tool_domains
+        assert "make_plan" in always_on
+        assert "save_note" in always_on
 
     def test_capabilities_defined(self):
         expected_caps = {"research", "scheduling", "kb_proposal", "photo", "repo", "job_hunt", "social"}

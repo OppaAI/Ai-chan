@@ -64,6 +64,7 @@ from __future__ import annotations
 
 from system.log import get_logger
 from agentic.toolkit.research import condense_evidence
+from agentic.registry import tool
 
 log = get_logger(__name__)
 
@@ -195,6 +196,13 @@ def split_subjects(prompt: str) -> list[str]:
     return parts[:6] if len(parts) >= 2 else []
 
 
+@tool(
+    name="combine_evidence",
+    description="Concatenate non-empty evidence blocks with a visible separator.",
+    props={"parts": {"type": "array", "items": {"type": "string"}}, "separator": {"type": "string"}},
+    domain="reports",
+    react=False,
+)
 def combine_evidence(parts: list[str], separator: str = "\n\n---\n\n") -> str:
     """Concatenate non-empty evidence blocks with a visible separator.
 
@@ -207,6 +215,13 @@ def combine_evidence(parts: list[str], separator: str = "\n\n---\n\n") -> str:
     return separator.join(cleaned)
 
 
+@tool(
+    name="condense_text",
+    description="Condense a long evidence block to its most query-relevant chunks.",
+    props={"text": {"type": "string"}, "query": {"type": "string"}, "max_chars": {"type": "integer"}},
+    domain="reports",
+    react=False,
+)
 def condense_text(
     text: str,
     query: str,
@@ -252,6 +267,14 @@ def condense_text(
         return text[:max_chars]
 
 
+@tool(
+    name="kb_search",
+    description="Search Aiko's learned-knowledge RAG store for relevant context.",
+    props={"query": {"type": "string"}, "max_chars": {"type": "integer"}},
+    required=["query"],
+    domain="kb",
+    react=False,
+)
 def kb_search(
     query: str,
     *,
@@ -296,6 +319,14 @@ def kb_search(
     return result
 
 
+@tool(
+    name="learn_report",
+    description="Ingest a synthesized report into Aiko's learned-knowledge RAG store.",
+    props={"title": {"type": "string"}, "text": {"type": "string"}, "kind": {"type": "string"}},
+    required=["title", "text"],
+    domain="kb",
+    react=False,
+)
 def learn_report(
     title: str,
     text: str,
@@ -385,6 +416,18 @@ def _format_comparison_block(subjects: list[str]) -> str:
     )
 
 
+@tool(
+    name="synthesize_report",
+    description="Produce a synthesized long-form report from combined evidence.",
+    props={
+        "evidence": {"type": "string"},
+        "prompt": {"type": "string"},
+        "style": {"type": "string"},
+        "max_tokens": {"type": "integer"},
+    },
+    domain="reports",
+    react=False,
+)
 def synthesize_report(
     evidence: str,
     prompt: str,
@@ -495,6 +538,13 @@ def synthesize_report(
     return text
 
 
+@tool(
+    name="polish_text",
+    description="Rewrite an already-synthesized draft in the requested style.",
+    props={"text": {"type": "string"}, "style": {"type": "string"}, "max_tokens": {"type": "integer"}},
+    domain="reports",
+    react=False,
+)
 def polish_text(
     text: str,
     *,

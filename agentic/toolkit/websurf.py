@@ -38,16 +38,8 @@ from urllib.robotparser import RobotFileParser
 import importlib
 import importlib.util
 
-import numpy as np
-
-from system.log import get_logger
 from cognition import reason
-
-from agentic.toolkit.research import (
-    _apply_corroboration_bonus,
-    _score_url_chunks,
-    _finalize_condensed,
-)
+from system.log import get_logger
 
 log = get_logger(__name__)
 
@@ -679,6 +671,7 @@ def _fetch_and_score_pipeline(
         remaining_budget = max_chunks_to_score - chunks_scored
         if remaining_budget <= 0:
             return
+        from agentic.toolkit.research import _score_url_chunks
         page_chunks = [(url, c) for c in reason.chunk_text(text, chunk_chars)][:remaining_budget]
         page_scored = _score_url_chunks(page_chunks, query, embedder, remaining_budget)
         scored.extend(page_scored)
@@ -841,6 +834,7 @@ def _deep_search_impl(
     if not fetched_pages:
         return f"{snippet_bundle}\n\n{manifest}", fetched_url_set
 
+    from agentic.toolkit.research import _finalize_condensed
     condensed = _finalize_condensed(
         scored_chunks, query, top_k=condense_top_k, min_score=condense_min_score,
         annotate_agreement=annotate_agreement,

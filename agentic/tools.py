@@ -25,11 +25,13 @@ from agentic.toolkit.social import (
     draft_video_social, post_video_social,
 )
 
-from agentic.registry import tool, registry
+from agentic.registry import tool, registry, register_tool_schema
+from agentic.toolkit import synthesize as _synthesize  # noqa: F401
 
 __all__ = [
     "tool",
     "registry",
+    "register_tool_schema",
     "cancel_reminder",
     "cancel_schedule",
     "create_checklist",

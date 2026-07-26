@@ -142,3 +142,28 @@ def tool(
         )
         return fn
     return decorator
+
+
+def register_tool_schema(
+    name: str,
+    description: str,
+    *,
+    props: Optional[Dict[str, Any]] = None,
+    required: Optional[List[str]] = None,
+    domain: Optional[str] = None,
+    always_on: bool = False,
+    graph: bool = True,
+    react: bool = True,
+) -> ToolSpec:
+    """Register a ReAct/graph tool schema whose execution is handled elsewhere."""
+    return registry.register(
+        name=name,
+        description=description,
+        handler=None,
+        props=props,
+        required=required,
+        domain=domain,
+        always_on=always_on,
+        graph=graph,
+        react=react,
+    )

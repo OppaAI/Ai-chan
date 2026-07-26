@@ -24,6 +24,7 @@ from pathlib import Path
 
 from system.bioclock import local_now
 from agentic.toolkit.common import json_block, now_stamp, safe_path, slugify, workspace_root
+from agentic.registry import tool
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp", ".heic", ".dng", ".cr2", ".cr3", ".nef", ".arw", ".orf", ".rw2"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".mkv", ".avi", ".m4v"}
@@ -45,6 +46,12 @@ def _image_files(root: Path, limit: int | None = None) -> list[Path]:
     return _files_with_extensions(root, IMAGE_EXTENSIONS, limit)
 
 
+@tool(
+    name="scan_photo_workspace",
+    description="Scan a workspace photo inbox for wildlife/nature/astro image files.",
+    props={"inbox": {"type": "string", "description": "Workspace-relative inbox path, default photos/inbox."}, "limit": {"type": "integer"}},
+    domain="photo",
+)
 def scan_photo_workspace(inbox: str = DEFAULT_PHOTO_INBOX, limit: int = 100) -> str:
     """Scan a workspace photo inbox for image files Aiko can ingest."""
     try:
@@ -87,6 +94,12 @@ def scan_video_workspace(inbox: str = DEFAULT_VIDEO_INBOX, limit: int = 100) -> 
         return f"[video scan failed: {e}]"
 
 
+@tool(
+    name="propose_photo_ingestion",
+    description="Create a safe dry-run ingestion plan for photo files without moving or editing metadata.",
+    props={"inbox": {"type": "string"}, "library_root": {"type": "string"}, "rating_rule": {"type": "string"}},
+    domain="photo",
+)
 def propose_photo_ingestion(inbox: str = DEFAULT_PHOTO_INBOX, library_root: str = "photos/library", rating_rule: str = "manual-review-first") -> str:
     """Create a safe dry-run ingestion plan for untracked photos."""
     try:
@@ -117,6 +130,12 @@ def propose_photo_ingestion(inbox: str = DEFAULT_PHOTO_INBOX, library_root: str 
         return f"[photo ingestion proposal failed: {e}]"
 
 
+@tool(
+    name="write_photo_ingestion_report",
+    description="Write a photo workflow report under the workspace reports folder.",
+    props={"title": {"type": "string"}, "content": {"type": "string"}, "report_dir": {"type": "string"}},
+    domain="photo",
+)
 def write_photo_ingestion_report(title: str = "photo-ingestion", content: str = "", report_dir: str = DEFAULT_PHOTO_REPORTS) -> str:
     """Write a photo workflow report under the workspace report folder."""
     try:

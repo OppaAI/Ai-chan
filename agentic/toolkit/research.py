@@ -41,6 +41,7 @@ import numpy as np
 
 from system.log import get_logger
 from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
+from agentic.registry import tool
 from agentic.toolkit.websurf import (
     _web_search_raw,
     _crawl4ai_fetch_many,
@@ -52,13 +53,22 @@ from agentic.toolkit.websurf import (
     RESEARCH_USE_CRAWL4AI,
     RESEARCH_RESPECT_ROBOTS,
     RESEARCH_SITEMAP_ENABLED,
+    RESEARCH_SITEMAP_MAX_URLS,
     DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
     RESEARCH_CONDENSE_TOP_K,
     RESEARCH_CONDENSE_MIN_SCORE,
     RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE,
+    RESEARCH_AGREEMENT_BONUS,
+    RESEARCH_AGREEMENT_SIMILARITY,
+    RESEARCH_AGREEMENT_SHINGLE_SIZE,
     DEEP_RESEARCH_NUM_SEARCHES,
     DEEP_RESEARCH_NUM_FETCHES,
     THIN_TEXT_CHARS_THRESHOLD,
+    CONDENSE_CHUNK_CHARS,
+    CONDENSE_TOP_K,
+    CONDENSE_MIN_SCORE,
+    CONDENSE_MAX_CHUNKS_TO_SCORE,
+    DEEP_SEARCH_MAX_WORKERS,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
 
@@ -207,6 +217,13 @@ def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | Non
     return PlanGraph(id="adaptive_search", name="Adaptive search", goal=query, nodes=tuple(nodes))
 
 
+@tool(
+    name="adaptive_search",
+    description="The default tool for any internet lookup. Adaptively searches, judges if snippets suffice, and only fetches full pages if needed.",
+    props={"query": {"type": "string"}},
+    required=["query"],
+    domain="research",
+)
 def adaptive_search(query: str, embedder=None, client=None, model: str | None = None,
                      max_rounds: int | None = None) -> str:
     if not query or not query.strip():
@@ -257,6 +274,13 @@ DEEP_READ_MAX_DOWNLOAD_BYTES = int(os.getenv("DEEP_READ_MAX_DOWNLOAD_BYTES", 20_
 DEEP_READ_CONDENSE_TOP_K = int(os.getenv("DEEP_READ_CONDENSE_TOP_K", 12))
 
 
+@tool(
+    name="deep_read",
+    description="Fetch and extract content from one EXACT known URL. Handles HTML pages (with JS-render escalation), PDFs, DOCX, PPTX, XLSX, EPUB, CSV, and more. Use when you already have the specific URL to read — not for discovery (use adaptive_search for that).",
+    props={"url": {"type": "string", "description": "The exact URL to fetch and read."}, "query": {"type": "string", "description": "Optional focus query — if given, content is relevance-filtered to what matters for this question."}},
+    required=["url"],
+    domain="research",
+)
 def deep_read(
     url: str,
     query: str = "",
@@ -405,8 +429,8 @@ def _score_url_chunks(
 def _finalize_condensed(
     scored_chunks: list[tuple[float, str, str]],
     query: str,
-    top_k: int = CONDENSE_TOP_K,
-    min_score: float = CONDENSE_MIN_SCORE,
+    top_k: int = RESEARCH_CONDENSE_TOP_K,
+    min_score: float = RESEARCH_CONDENSE_MIN_SCORE,
     annotate_agreement: bool = False,
     agreement_bonus: float = RESEARCH_AGREEMENT_BONUS,
     agreement_similarity: float = RESEARCH_AGREEMENT_SIMILARITY,
@@ -838,6 +862,13 @@ def _build_deep_research_subgraph(query: str, session_id: str,
     return PlanGraph(id="deep_research", name="Deep research", goal=query, nodes=tuple(nodes))
 
 
+@tool(
+    name="deep_research",
+    description="Research tool that fetches and synthesizes full source pages from discovered URLs. Use when the research itself is the deliverable or for deep/thorough self-learning.",
+    props={"query": {"type": "string", "description": "The research question. Can be broader/less scoped since the tool refines it internally."}},
+    required=["query"],
+    domain="research",
+)
 def deep_research(query: str, embedder=None, client=None, model: str | None = None,
                          max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS, tool_mode: bool = False) -> str:
     """Public entry point — drop-in replacement for research.py's
