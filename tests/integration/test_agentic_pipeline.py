@@ -302,7 +302,7 @@ class TestToolDispatchIntegration:
         owner._memorize._mem._embedder = FakeEmbedder()
 
         with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
-            with patch("agentic.schema.run_playbook_json") as mock_run:
+            with patch("agentic.graph_engine.run_playbook_json") as mock_run:
                 mock_run.return_value = json.dumps({"ok": True, "graph_id": "test"})
                 result = dispatch_tool("run_playbook", {"task": "test task"}, owner)
                 assert "ok" in result

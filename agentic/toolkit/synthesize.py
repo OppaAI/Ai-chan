@@ -3,7 +3,7 @@ toolkit/synthesize.py
 
 Graph-level LLM-backed helpers for Aiko's agentic schema (DAG) executor.
 
-The four default playbooks (see agentic/schema.py) all end with a
+The four default playbooks (see agentic/graph_engine.py) all end with a
 synthesize → write_report/learn_knowledge pair. These helpers implement the
 parts that need an LLM (or the KB / condensation pipeline) — they were
 inlined nowhere before, so the graph's old _synthesize_without_llm fallback

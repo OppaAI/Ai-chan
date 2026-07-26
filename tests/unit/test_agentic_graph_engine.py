@@ -18,12 +18,12 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-# Ensure config is loaded before importing schema
+# Ensure config is loaded before importing graph_engine
 from system.config import load_config
 load_config()
 
-from agentic import schema
-from agentic.schema import (
+from agentic import graph_engine as schema
+from agentic.graph_engine import (
     PlanNode,
     PlanGraph,
     NodeResult,
@@ -339,7 +339,7 @@ class TestNodeExecution:
 
     def test_successful_node_execution(self):
         tool_map = {"test_tool": lambda x: f"result: {x}"}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             node = PlanNode("test", "test_tool", {"x": "hello"})
             result = _run_node(node, "prompt", {})
             assert result.ok
@@ -347,7 +347,7 @@ class TestNodeExecution:
 
     def test_unknown_tool_returns_error(self):
         tool_map = {}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             node = PlanNode("test", "unknown_tool", {})
             result = _run_node(node, "prompt", {})
             assert not result.ok
@@ -355,16 +355,16 @@ class TestNodeExecution:
 
     def test_save_note_truncates_content(self):
         tool_map = {"save_note": lambda title, content, folder="notes": f"saved: {content}"}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             node = PlanNode("save", "save_note", {"title": "test", "content": "x" * 10000})
-            with patch("agentic.schema.AGENT_NOTE_MAX_CHARS", 5000):
+            with patch("agentic.graph_engine.AGENT_NOTE_MAX_CHARS", 5000):
                 result = _run_node(node, "prompt", {})
             assert len(result.args.get("content", "")) <= 5000
 
     def test_embedder_passed_to_aware_tools(self):
         embedder = FakeEmbedder()
         tool_map = {"adaptive_search": lambda query, embedder=None: f"searched: {query}"}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             node = PlanNode("search", "adaptive_search", {"query": "$prompt"})
             result = _run_node(node, "test query", {}, embedder=embedder)
             assert result.ok
@@ -375,7 +375,7 @@ class TestNodeExecution:
         tool_map = {
             "synthesize_report": lambda evidence, prompt, client, model: f"synthesized: {prompt}"
         }
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             node = PlanNode("draft", "synthesize_report", {"evidence": "ev", "prompt": "$prompt"})
             result = _run_node(node, "test prompt", {}, llm_client=mock_client, llm_model=mock_model)
             assert result.ok
@@ -398,7 +398,7 @@ class TestGraphExecution:
             "step2": make_tool("step2"),
             "step3": make_tool("step3"),
         }
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             nodes = [
                 PlanNode("step1", "step1", {}),
                 PlanNode("step2", "step2", {}, depends_on=("step1",)),
@@ -426,8 +426,8 @@ class TestGraphExecution:
             "parallel_b": make_tool("parallel_b"),
             "merge": make_tool("merge"),
         }
-        with patch("agentic.schema._tool_map", return_value=tool_map):
-            with patch("agentic.schema.GRAPH_MAX_WORKERS", 4):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
+            with patch("agentic.graph_engine.GRAPH_MAX_WORKERS", 4):
                 nodes = [
                     PlanNode("parallel_a", "parallel_a", {}),
                     PlanNode("parallel_b", "parallel_b", {}),
@@ -452,7 +452,7 @@ class TestGraphExecution:
             raise AssertionError("should not execute")
 
         tool_map = {"fail": fail_tool, "skip": skip_tool}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             nodes = [
                 PlanNode("fail", "fail", {}),
                 PlanNode("skip", "skip", {}, depends_on=("fail",)),
@@ -467,7 +467,7 @@ class TestGraphExecution:
     def test_dependency_cycle_detected(self):
         """Cycle in dependencies reported as error."""
         tool_map = {"a": lambda: "a", "b": lambda: "b"}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             nodes = [
                 PlanNode("a", "a", {}, depends_on=("b",)),
                 PlanNode("b", "b", {}, depends_on=("a",)),
@@ -485,7 +485,7 @@ class TestGraphExecution:
             return f"tool2 got: {content}"
 
         tool_map = {"tool1": tool1, "tool2": tool2}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
             nodes = [
                 PlanNode("first", "tool1", {}),
                 PlanNode("second", "tool2", {"content": "$result:first"}, depends_on=("first",)),
@@ -506,8 +506,8 @@ class TestGraphExecution:
             return "done"
 
         tool_map = {f"task_{i}": slow_tool for i in range(4)}
-        with patch("agentic.schema._tool_map", return_value=tool_map):
-            with patch("agentic.schema.GRAPH_MAX_WORKERS", 2):
+        with patch("agentic.graph_engine._tool_map", return_value=tool_map):
+            with patch("agentic.graph_engine.GRAPH_MAX_WORKERS", 2):
                 nodes = [PlanNode(f"task_{i}", f"task_{i}", {}) for i in range(4)]
                 graph = PlanGraph("test", "Test", "goal", tuple(nodes))
                 execute_graph(graph)

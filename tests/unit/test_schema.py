@@ -1,4 +1,4 @@
-from agentic import schema
+from agentic import graph_engine as schema
 
 
 def test_playbook_prefers_checklist_workflow():

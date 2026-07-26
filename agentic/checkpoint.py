@@ -1,4 +1,4 @@
-"""SQLite-backed checkpointing for graph runs (agentic/schema.py).
+"""SQLite-backed checkpointing for graph runs (agentic/graph_engine.py).
 
 A run_id identifies one invocation of execute_graph. If interrupted,
 calling execute_graph again with the same run_id resumes from the last

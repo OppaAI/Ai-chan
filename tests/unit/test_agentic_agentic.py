@@ -47,7 +47,7 @@ from agentic.agentic import (
     _research_call_count,
     _verify_final_answer,
 )
-from agentic import schema
+from agentic import graph_engine as schema
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
 from agentic.toolkit.reports import write_report
 from agentic.toolkit.research import deep_research
@@ -244,7 +244,7 @@ class TestDispatchTool:
 
     def test_run_playbook_passes_embedder(self):
         owner = MockOwner()
-        with patch("agentic.schema.run_playbook_json") as mock_run:
+        with patch("agentic.graph_engine.run_playbook_json") as mock_run:
             mock_run.return_value = '{"ok": true}'
             result = dispatch_tool("run_playbook", {"task": "test task"}, owner=owner)
             mock_run.assert_called_once()
@@ -434,7 +434,7 @@ class TestGraphExecutorIntegration:
 
     def test_run_schema_agent_called_with_llm(self):
         """Verify run_schema_agent receives llm_client and llm_model."""
-        with patch("agentic.schema.run_schema_agent") as mock_run:
+        with patch("agentic.graph_engine.run_schema_agent") as mock_run:
             mock_run.return_value = None  # Force fallback to ReAct
             owner = MockOwner()
             owner._client = MockLLMClient()
@@ -463,7 +463,7 @@ class TestRunAgenticChatSmoke:
     def test_graph_mode_returns_graph_result(self):
         """When AGENT_EXECUTOR_MODE=graph, returns graph result directly."""
         with patch.dict(os.environ, {"AGENT_EXECUTOR_MODE": "graph"}):
-            with patch("agentic.schema.run_schema_agent") as mock_run:
+            with patch("agentic.graph_engine.run_schema_agent") as mock_run:
                 mock_result = MagicMock()
                 mock_result.final_answer = "Graph answer"
                 mock_result.results = []
@@ -479,7 +479,7 @@ class TestRunAgenticChatSmoke:
     def test_hybrid_fallbacks_to_react_on_untrustworthy(self):
         """When graph result fails verification, falls back to ReAct."""
         with patch.dict(os.environ, {"AGENT_EXECUTOR_MODE": "hybrid"}):
-            with patch("agentic.schema.run_schema_agent") as mock_run:
+            with patch("agentic.graph_engine.run_schema_agent") as mock_run:
                 mock_result = MagicMock()
                 mock_result.final_answer = "Graph answer"
                 mock_result.results = [MagicMock(ok=False)]  # Failed node

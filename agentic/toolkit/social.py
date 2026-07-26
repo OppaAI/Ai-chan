@@ -1800,7 +1800,7 @@ def run_scheduled_video_social() -> dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════════════
 # Delegates to the graph playbook (daily_job_post) via job_hunt primitives.
 # Old composed functions replaced by graph nodes — see job_hunt.py for the
-# primitive blocks and schema.py for the playbook definition.
+# primitive blocks and graph_engine.py for the playbook definition.
 
 JOB_POST_SOCIAL_AUTODRAFT = os.getenv("JOB_POST_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
 JOB_POST_SOCIAL_AUTOPOST = os.getenv("JOB_POST_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}

@@ -1,5 +1,5 @@
 """
-agentic/schema.py
+agentic/graph_engine.py
 
 Graph-first, mostly model-free agentic executor.
 
@@ -766,7 +766,7 @@ def run_subgraph(graph_json: str = "{}", goal: str = "",
     This lets a playbook arbitrarily nest sub-computations without flattening
     them into the parent DAG.
     """
-    from agentic.schema import execute_graph, PlanGraph, PlanNode
+    from agentic.graph_engine import execute_graph, PlanGraph, PlanNode
     try:
         data = json.loads(graph_json) if isinstance(graph_json, str) else graph_json
     except (json.JSONDecodeError, TypeError):

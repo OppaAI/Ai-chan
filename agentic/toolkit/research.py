@@ -4,8 +4,8 @@ toolkit/research.py
 Adaptive search + deep research, expressed as bounded-unroll subgraphs.
 
 Both adaptive_search and deep_research_graph build and run their OWN small
-PlanGraph instances via schema.py's execute_graph(). This means they plug
-into schema._tool_map() as single opaque tools — so any playbook that
+PlanGraph instances via graph_engine.py's execute_graph(). This means they plug
+into graph_engine._tool_map() as single opaque tools — so any playbook that
 currently calls "deep_search" or "deep_research" can switch to
 "adaptive_search" or "deep_research_graph" with a one-line args change.
 
@@ -24,7 +24,7 @@ import uuid
 from typing import Any
 
 from system.log import get_logger
-from agentic.schema import PlanGraph, PlanNode, execute_graph
+from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.toolkit.websurf import (
     _web_search_raw,
     _deep_search_impl,

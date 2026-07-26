@@ -44,7 +44,7 @@ from agentic.wiki import wiki_agentic_contexts_for
 from agentic.capability import match_capabilities, filtered_tool_schemas
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from agentic import experience
-from agentic import schema
+from agentic import graph_engine as schema
 from agentic.tools import (
     adaptive_search,
     deep_research,
@@ -539,7 +539,7 @@ class VerificationResult:
 def _run_job_post_playbook(prompt: str = "") -> str:
     """Run the daily_job_post graph playbook directly by ID."""
     try:
-        from agentic.schema import load_playbooks, PlanGraph, PlanNode, execute_graph
+        from agentic.graph_engine import load_playbooks, PlanGraph, PlanNode, execute_graph
         playbooks = load_playbooks()
         playbook = None
         for p in playbooks:
