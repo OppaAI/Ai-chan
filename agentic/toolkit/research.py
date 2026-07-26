@@ -147,30 +147,21 @@ def judge_sufficient(evidence: str = "", prompt: str = "", client=None, model=No
 
 
 def _build_adaptive_search_subgraph(query: str, max_rounds: int | None = None) -> PlanGraph:
+    """Collapsed to 2 dynamic nodes (+ plan) using loop_to instead of N-node unroll."""
     max_rounds = max_rounds if max_rounds is not None else ADAPTIVE_SEARCH_MAX_ROUNDS
     nodes = [
         PlanNode(id="plan", tool="plan_effort", args={"prompt": "$prompt"}),
-        PlanNode(id="search_r1", tool="search_and_rank", depends_on=("plan",), args={"prompt": "$prompt"}),
-        PlanNode(id="judge_r1", tool="judge_sufficient", depends_on=("search_r1",),
-                  args={"evidence": "$result:search_r1", "prompt": "$prompt"}),
-        PlanNode(id="fetch_r1", tool="fetch_and_condense_ranked", depends_on=("judge_r1",),
-                  run_if={"node": "judge_r1", "equals": "ESCALATE"},
-                  args={"candidates_json": "$result:search_r1", "prompt": "$prompt",
-                        "num_fetches": "3", "freshness_bias": "false"}),
+        PlanNode(id="search_r", tool="search_and_rank", depends_on=("plan",),
+                 args={"prompt": "$prompt"}),
+        PlanNode(id="judge_r", tool="judge_sufficient", depends_on=("search_r",),
+                 args={"evidence": "$result:search_r", "prompt": "$prompt"},
+                 loop_to="search_r", loop_condition={"equals": "ESCALATE"},
+                 max_visits=max_rounds),
+        PlanNode(id="fetch_r", tool="fetch_and_condense_ranked", depends_on=("judge_r",),
+                 run_if={"node": "judge_r", "equals": "ESCALATE"},
+                 args={"candidates_json": "$result:search_r", "prompt": "$prompt",
+                       "num_fetches": "3", "freshness_bias": "false"}),
     ]
-    if max_rounds >= 2:
-        nodes += [
-            PlanNode(id="judge_r2", tool="judge_sufficient", depends_on=("fetch_r1",),
-                      run_if={"node": "judge_r1", "equals": "ESCALATE"},
-                      args={"evidence": "$result:fetch_r1", "prompt": "$prompt"}),
-            PlanNode(id="search_r2", tool="search_and_rank", depends_on=("judge_r2",),
-                      run_if={"node": "judge_r2", "equals": "ESCALATE"},
-                      args={"prompt": "$prompt"}),
-            PlanNode(id="fetch_r2", tool="fetch_and_condense_ranked", depends_on=("search_r2",),
-                      run_if={"node": "judge_r2", "equals": "ESCALATE"},
-                      args={"candidates_json": "$result:search_r2", "prompt": "$prompt",
-                            "num_fetches": "3", "freshness_bias": "false"}),
-        ]
     return PlanGraph(id="adaptive_search", name="Adaptive search", goal=query, nodes=tuple(nodes))
 
 
@@ -180,10 +171,9 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
         return "[search failed: empty query]"
     graph = _build_adaptive_search_subgraph(query.strip(), max_rounds=max_rounds)
     result = execute_graph(graph, embedder=embedder, llm_client=client, llm_model=model)
-    # Prefer the last successful fetch/search node's content over the
-    # generic no-LLM _synthesize_without_llm() summary, since callers of
-    # adaptive_search expect condensed evidence text, not a step log.
-    for node_id in ("fetch_r2", "search_r2", "fetch_r1", "search_r1"):
+    # Prefer fetch_r's content (only runs when judge says ESCALATE),
+    # fall back to the search summary or generic fallback.
+    for node_id in ("fetch_r", "search_r", "judge_r"):
         match = next((r for r in result.results if r.node_id == node_id and r.ok), None)
         if match and match.content and not match.content.startswith("["):
             return match.content
@@ -280,13 +270,21 @@ def deep_fetch_round(prompt: str = "", num_searches: str = "1", num_fetches: str
 
 def combine_research_rounds(r1: str = "", r2: str = "", r3: str = "", r4: str = "",
                              prompt: str = "", session_id: str = "",
-                             client=None, model=None) -> str:
+                             client=None, model=None, evidence: str = "") -> str:
     """Graph tool: filter skipped-round placeholders, combine whatever
     rounds ran, synthesize the final report, then release this run's dedup
     registry entry — this is the normal-path cleanup; the TTL sweep above
-    is only a backstop for abnormal exits."""
+    is only a backstop for abnormal exits.
+
+    Supports both:
+      - collapsed mode: single ``evidence`` string (synthesized directly)
+      - legacy mode: ``r1``-``r4`` combined and then synthesized
+    """
     from agentic.toolkit.synthesize import combine_evidence, synthesize_report
     try:
+        if evidence:
+            return synthesize_report(evidence=evidence, prompt=prompt, style="professional",
+                                      client=client, model=model)
         rounds = [r for r in (r1, r2, r3, r4) if r and not r.strip().startswith("skipped:")]
         if not rounds:
             return "[no research evidence gathered — all rounds skipped or failed]"
@@ -300,34 +298,25 @@ def combine_research_rounds(r1: str = "", r2: str = "", r3: str = "", r4: str = 
 
 def _build_deep_research_subgraph(query: str, session_id: str,
                                    max_rounds: int = DEEP_RESEARCH_MAX_ROUNDS) -> PlanGraph:
+    """Collapsed to 2 dynamic nodes + 3 static, using loop_to instead of
+    an N-node unroll.  Fetch → Judge (loops back to Fetch if ESCALATE) →
+    Finalize → Report → Learn."""
     max_rounds = max(1, min(4, max_rounds))
-    nodes: list[PlanNode] = []
-    prev_judge_id: str | None = None
-
-    for i in range(1, max_rounds + 1):
-        fetch_id, judge_id = f"fetch_r{i}", f"judge_r{i}"
-        run_if = {"node": prev_judge_id, "equals": "ESCALATE"} if prev_judge_id else None
-        depends_fetch = (prev_judge_id,) if prev_judge_id else ()
-        nodes.append(PlanNode(id=fetch_id, tool="deep_fetch_round", depends_on=depends_fetch,
-                               run_if=run_if,
-                               args={"prompt": "$prompt", "num_searches": "1", "num_fetches": "4",
-                                     "session_id": session_id}))
-        if i < max_rounds:
-            nodes.append(PlanNode(id=judge_id, tool="judge_sufficient", depends_on=(fetch_id,),
-                                   run_if=run_if, args={"evidence": f"$result:{fetch_id}", "prompt": "$prompt"}))
-            prev_judge_id = judge_id
-
-    fetch_ids = [f"fetch_r{i}" for i in range(1, max_rounds + 1)]
-    combine_args = {f"r{i+1}": f"$result:{fid}" for i, fid in enumerate(fetch_ids)}
-    combine_args["prompt"] = "$prompt"
-    combine_args["session_id"] = session_id
-    nodes.append(PlanNode(id="finalize", tool="combine_research_rounds",
-                           depends_on=tuple(fetch_ids), args=combine_args))
-    nodes.append(PlanNode(id="report", tool="write_report", depends_on=("finalize",),
-                           args={"title": "$title", "content": "$result:finalize", "report_dir": "reports"}))
-    nodes.append(PlanNode(id="learn", tool="learn_report", depends_on=("report",),
-                           args={"title": "$title", "text": "$result:finalize", "kind": "self_learned"}))
-
+    nodes = [
+        PlanNode(id="fetch_r", tool="deep_fetch_round",
+                 args={"prompt": "$prompt", "num_searches": "1", "num_fetches": "4",
+                       "session_id": session_id}),
+        PlanNode(id="judge_r", tool="judge_sufficient", depends_on=("fetch_r",),
+                 args={"evidence": "$result:fetch_r", "prompt": "$prompt"},
+                 loop_to="fetch_r", loop_condition={"equals": "ESCALATE"},
+                 max_visits=max_rounds),
+        PlanNode(id="finalize", tool="combine_research_rounds", depends_on=("judge_r",),
+                 args={"evidence": "$result:fetch_r", "prompt": "$prompt", "session_id": session_id}),
+        PlanNode(id="report", tool="write_report", depends_on=("finalize",),
+                 args={"title": "$title", "content": "$result:finalize", "report_dir": "reports"}),
+        PlanNode(id="learn", tool="learn_report", depends_on=("report",),
+                 args={"title": "$title", "text": "$result:finalize", "kind": "self_learned"}),
+    ]
     return PlanGraph(id="deep_research", name="Deep research", goal=query, nodes=tuple(nodes))
 
 

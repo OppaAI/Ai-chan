@@ -29,9 +29,49 @@ load_config()
 
 from system.log import get_logger
 from system.userspace import current_user_id, user_state_dir
-from agentic.checkpoint import save_node_result, load_checkpoint, clear_checkpoint
+from agentic.checkpoint import (
+    save_node_result, load_checkpoint, clear_checkpoint,
+    delete_node_checkpoint, save_graph_state, load_graph_state,
+)
 
 log = get_logger(__name__)
+
+# ── Reducer strategies for GraphState ────────────────────────────────────
+# Each state key can declare a reducer that controls how concurrent or
+# repeated writes to that key are merged.  "replace" (default) simply
+# overwrites; the others accumulate.
+REDUCER_REPLACE = "replace"
+REDUCER_APPEND = "append"        # list.append / list.extend
+REDUCER_ADD = "add"              # numeric +=
+REDUCER_SET_UNION = "set_union"  # set |= 
+REDUCER_DICT_MERGE = "dict_merge"  # dict.update
+
+
+def _apply_reducer(current: Any, new: Any, strategy: str | None) -> Any:
+    if not strategy or strategy == REDUCER_REPLACE:
+        return new
+    if strategy == REDUCER_APPEND:
+        if not isinstance(current, list):
+            current = []
+        current.extend(new if isinstance(new, list) else [new])
+        return current
+    if strategy == REDUCER_ADD:
+        return (current if current is not None else 0) + (new if new is not None else 0)
+    if strategy == REDUCER_SET_UNION:
+        if not isinstance(current, set):
+            current = set()
+        if isinstance(new, set):
+            current |= new
+        else:
+            current.add(new)
+        return current
+    if strategy == REDUCER_DICT_MERGE:
+        if not isinstance(current, dict):
+            current = {}
+        if isinstance(new, dict):
+            current.update(new)
+        return current
+    return new
 
 
 GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
@@ -75,6 +115,7 @@ class PlanGraph:
     goal: str
     nodes: tuple[PlanNode, ...]
     source: str = "playbook"
+    reducers: dict[str, str] = field(default_factory=dict)
     _extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -110,20 +151,23 @@ class GraphState:
     in its own signature — see _tool_params()/_run_node() below. Nothing
     elsewhere needs to know which tools use it.
 
-    NOT checkpointed. execute_graph's run_id/save_node_result mechanism
-    persists NodeResult objects only, one per node — a resumed run always
-    starts with a FRESH, empty GraphState. Any tool relying on state for
-    correctness (not just optimization/caching) must tolerate a resume
-    wiping it, the same way a session-scoped cache always has to tolerate
-    a cold start.
+    Each key may declare a reducer strategy in ``reducers`` that controls
+    how writes from multiple nodes (or repeated loop cycles) merge:
+    "replace" (default), "append", "add", "set_union", "dict_merge".
+
+    Checkpointed and restored on resume (unlike the previous design where
+    state was explicitly not checkpointed).
     """
     data: dict[str, Any] = field(default_factory=dict)
+    reducers: dict[str, str] = field(default_factory=dict)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
 
-    def set(self, key: str, value: Any) -> None:
-        self.data[key] = value
+    def set(self, key: str, value: Any, reducer: str | None = None) -> None:
+        strategy = reducer or self.reducers.get(key, REDUCER_REPLACE)
+        current = self.data.get(key)
+        self.data[key] = _apply_reducer(current, value, strategy)
 
 
 @dataclass(frozen=True, slots=True)
@@ -702,6 +746,7 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
         name=str(plan.get("name") or plan.get("id") or "workflow"),
         goal=user_input,
         nodes=tuple(nodes),
+        reducers=dict(plan.get("reducers") or {}),
         _extras=extras,
     )
     return graph
@@ -944,25 +989,39 @@ def _downstream_of(node_id: str, nodes_by_id: dict[str, PlanNode]) -> set[str]:
     return seen
 
 
-def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
-                   llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
+def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
+                          llm_model: str | None = None, run_id: str | None = None,
+                          _yield=None) -> GraphRunResult:
+    """Shared internals for execute_graph and execute_graph_stream.
+
+    When ``_yield`` is a callable (e.g. ``yield`` in a generator context)
+    each completed NodeResult is passed to it *before* the loop-back check,
+    allowing a streaming caller to observe results as they land.
+    """
     nodes_by_id = {node.id: node for node in graph.nodes}
     pending = dict(nodes_by_id)
     results: dict[str, NodeResult] = {}
     ordered: list[NodeResult] = []
     extras = getattr(graph, "_extras", {}) or {}
+    reducers = getattr(graph, "reducers", {}) or {}
 
-    # Shared mutable scratch space for THIS run only — see GraphState's
-    # docstring. Deliberately not checkpointed; a resumed run always
-    # starts with a fresh, empty state.
-    state = GraphState()
-    # How many times each loop_to-bearing node has fired its loop-back,
-    # keyed by that node's own id — bounds re-execution the same way
-    # LangGraph's recursion_limit bounds a true agent<->tools cycle.
+    state = GraphState(reducers=reducers)
     visit_counts: dict[str, int] = {}
 
     if run_id:
-        for prior in load_checkpoint(run_id, NodeResult):
+        checkpoint_results = load_checkpoint(run_id, NodeResult)
+        checkpoint_state = load_graph_state(run_id)
+        if checkpoint_state:
+            state.data.update(checkpoint_state)
+        for prior in checkpoint_results:
+            if prior.node_id == "__graph_state__":
+                continue
+            restored_state = getattr(prior, "_checkpoint_state", None)
+            if restored_state and restored_state != "{}":
+                try:
+                    state.data.update(json.loads(restored_state))
+                except Exception:
+                    pass
             results[prior.node_id] = prior
             ordered.append(prior)
             pending.pop(prior.node_id, None)
@@ -974,7 +1033,10 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
             ready = [node for node in pending.values() if all(dep in results for dep in node.depends_on)]
             if not ready:
                 stuck = ", ".join(sorted(pending))
-                ordered.append(NodeResult("graph", "graph_executor", False, f"dependency cycle or missing dependency among: {stuck}", error_type="dependency_error"))
+                nr = NodeResult("graph", "graph_executor", False, f"dependency cycle or missing dependency among: {stuck}", error_type="dependency_error")
+                ordered.append(nr)
+                if _yield:
+                    _yield(nr)
                 break
             runnable, blocked, skipped = [], [], []
             for node in ready:
@@ -985,19 +1047,23 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                 else:
                     runnable.append(node)
             for node in blocked:
-                result = NodeResult(node.id, node.tool, False, "skipped: an upstream dependency failed", error_type="dependency_failed")
-                results[node.id] = result
-                ordered.append(result)
+                nr = NodeResult(node.id, node.tool, False, "skipped: an upstream dependency failed", error_type="dependency_failed")
+                results[node.id] = nr
+                ordered.append(nr)
                 pending.pop(node.id, None)
                 if run_id:
-                    save_node_result(run_id, seq, result); seq += 1
+                    save_node_result(run_id, seq, nr, state_json=json.dumps(state.data)); seq += 1
+                if _yield:
+                    _yield(nr)
             for node in skipped:
-                result = NodeResult(node.id, node.tool, True, "skipped: run_if condition not met", error_type=None)
-                results[node.id] = result
-                ordered.append(result)
+                nr = NodeResult(node.id, node.tool, True, "skipped: run_if condition not met", error_type=None)
+                results[node.id] = nr
+                ordered.append(nr)
                 pending.pop(node.id, None)
                 if run_id:
-                    save_node_result(run_id, seq, result); seq += 1
+                    save_node_result(run_id, seq, nr, state_json=json.dumps(state.data)); seq += 1
+                if _yield:
+                    _yield(nr)
             if not runnable:
                 continue
             future_map = {
@@ -1014,13 +1080,12 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                 ordered.append(result)
                 pending.pop(node.id, None)
                 if run_id:
-                    save_node_result(run_id, seq, result); seq += 1
+                    save_node_result(run_id, seq, result, state_json=json.dumps(state.data)); seq += 1
+                save_graph_state(run_id, state.data)
+                if _yield:
+                    _yield(result)
 
-                # Bounded loop-back: this is the "true cycle, but capped"
-                # primitive LangGraph gets from an agent->tools->agent
-                # edge, expressed here as re-scheduling within the SAME
-                # static node set rather than an open-ended graph walk —
-                # see PlanNode.loop_to's docstring.
+                # Bounded loop-back with proper checkpoint invalidation.
                 if node.loop_to and node.loop_to in nodes_by_id and _check_loop_condition(node, result):
                     visit_counts[node.id] = visit_counts.get(node.id, 0) + 1
                     if visit_counts[node.id] < node.max_visits:
@@ -1029,23 +1094,34 @@ def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
                         for reset_id in to_reset:
                             results.pop(reset_id, None)
                             pending[reset_id] = nodes_by_id[reset_id]
+                            if run_id:
+                                delete_node_checkpoint(run_id, reset_id)
                         ordered = [r for r in ordered if r.node_id not in to_reset]
-                        # NOTE: checkpoint entries already written this
-                        # pass for the reset node ids are now stale — the
-                        # clean-success clear_checkpoint() below still
-                        # covers the normal (no crash) case, but a crash
-                        # mid-loop combined with run_id resume is not
-                        # fully consistent yet: a resumed run could reload
-                        # a stale pre-loop result for a node that was
-                        # mid-reset. Avoid relying on run_id resume for
-                        # playbooks that use loop_to until this is
-                        # tightened with a proper per-node checkpoint
-                        # invalidation call.
 
     final_answer = _synthesize_without_llm(graph, tuple(ordered))
     if run_id:
-        clear_checkpoint(run_id)  # clean success — drop the checkpoint
+        clear_checkpoint(run_id)
     return GraphRunResult(graph=graph, results=tuple(ordered), final_answer=final_answer, final_state=dict(state.data))
+
+
+def execute_graph(graph: PlanGraph, embedder=None, llm_client=None,
+                   llm_model: str | None = None, run_id: str | None = None) -> GraphRunResult:
+    return _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
+                                 llm_model=llm_model, run_id=run_id)
+
+
+def execute_graph_stream(graph: PlanGraph, embedder=None, llm_client=None,
+                          llm_model: str | None = None, run_id: str | None = None):
+    """Generator variant: yields each NodeResult as it completes."""
+    results: list[NodeResult] = []
+
+    def _capture(nr: NodeResult) -> None:
+        results.append(nr)
+
+    final = _execute_graph_inner(graph, embedder=embedder, llm_client=llm_client,
+                                  llm_model=llm_model, run_id=run_id, _yield=_capture)
+    yield from results
+    yield final
 
 
 def _synthesize_without_llm(graph: PlanGraph, results: tuple[NodeResult, ...]) -> str:
