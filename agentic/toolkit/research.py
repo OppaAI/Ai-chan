@@ -33,7 +33,6 @@ import importlib.util
 import json
 import os
 import re
-import threading
 import time
 import uuid
 from typing import Any
@@ -56,10 +55,13 @@ from agentic.toolkit.ingest import (
     _sniff_content_type,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
+from agentic.toolkit.cache import TTLCache
 
 log = get_logger(__name__)
 
-# -- deep_research config (moved from websearch.py) --
+# ── Config ──────────────────────────────────────────────────────────────────
+
+# ── deep_research config ────────────────────────────────────────────────
 # These are module-level DEFAULTS; deep_research() itself now accepts
 # num_searches/num_fetches/max_chars_per_page as real function args so
 # callers (e.g. memory.learn.quick_studying) can override per-call.
@@ -73,7 +75,7 @@ DEEP_RESEARCH_EVIDENCE_CHARS_FOR_SYNTHESIS = int(os.getenv("DEEP_RESEARCH_EVIDEN
 DEEP_RESEARCH_DECISION_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_DECISION_MAX_TOKENS", 200))
 DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS = int(os.getenv("DEEP_RESEARCH_SYNTHESIS_MAX_TOKENS", 700))
 
-# -- in-memory evidence condensation (numpy-vectorized relevance filtering) --
+# ── in-memory evidence condensation (numpy-vectorized relevance filtering) ─
 # A FILTER, not a rewrite: chunks are scored for relevance and either kept
 # verbatim or dropped entirely. Summarization only happens later, in
 # deep_research's separate LLM synthesis call.
@@ -92,7 +94,7 @@ RESEARCH_CONDENSE_TOP_K = int(os.getenv("RESEARCH_CONDENSE_TOP_K", 12))
 RESEARCH_CONDENSE_MIN_SCORE = float(os.getenv("RESEARCH_CONDENSE_MIN_SCORE", 0.12))
 RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE = int(os.getenv("RESEARCH_CONDENSE_MAX_CHUNKS_TO_SCORE", 100))
 
-# -- cross-source corroboration ("sources agreement" scoring) --
+# ── cross-source corroboration ("sources agreement" scoring) ──────────────
 # Independent confirmation from a SECOND domain boosts a chunk's relevance
 # score; same-domain repeats don't count. This is separate from the
 # robots.txt "may I fetch this" agreement below — this one is about whether
@@ -101,7 +103,7 @@ RESEARCH_AGREEMENT_BONUS = float(os.getenv("RESEARCH_AGREEMENT_BONUS", 0.12))
 RESEARCH_AGREEMENT_SIMILARITY = float(os.getenv("RESEARCH_AGREEMENT_SIMILARITY", 0.5))
 RESEARCH_AGREEMENT_SHINGLE_SIZE = int(os.getenv("RESEARCH_AGREEMENT_SHINGLE_SIZE", 5))
 
-# -- Crawl4AI (optional, richer extraction for deep_research) --
+# ── Crawl4AI (optional, richer extraction for deep_research) ──────────────
 # Requires: pip install crawl4ai && crawl4ai-setup (installs the Playwright
 # browser). Gracefully no-ops if not installed — deep_research falls back to
 # web_fetch (requests+trafilatura) for every URL in that case.
@@ -110,14 +112,14 @@ CRAWL4AI_TIMEOUT_MS = int(os.getenv("CRAWL4AI_TIMEOUT_MS", 20000))
 CRAWL4AI_MAX_CONCURRENT = int(os.getenv("CRAWL4AI_MAX_CONCURRENT", 4))
 CRAWL4AI_WORD_COUNT_THRESHOLD = int(os.getenv("CRAWL4AI_WORD_COUNT_THRESHOLD", 40))
 
-# -- robots.txt compliance ("source agreement" to be crawled) + sitemap --
+# ── robots.txt compliance ("source agreement" to be crawled) + sitemap ────
 RESEARCH_RESPECT_ROBOTS = os.getenv("RESEARCH_RESPECT_ROBOTS", "1").lower() in {"1", "true", "yes", "on"}
 ROBOTS_CACHE_TTL_SECONDS = int(os.getenv("ROBOTS_CACHE_TTL_SECONDS", 3600))
 RESEARCH_SITEMAP_ENABLED = os.getenv("RESEARCH_SITEMAP_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 RESEARCH_SITEMAP_MAX_URLS = int(os.getenv("RESEARCH_SITEMAP_MAX_URLS", 6))
 RESEARCH_SITEMAP_TIMEOUT_SECONDS = int(os.getenv("RESEARCH_SITEMAP_TIMEOUT_SECONDS", 6))
 
-# -- deep_read (research.py) support: content-type routing + MarkItDown --
+# ── deep_read (research.py) support: content-type routing + MarkItDown ────
 # THIN_TEXT_CHARS_THRESHOLD is the "did trafilatura actually get anything
 # useful" bar used by deep_read to decide whether to escalate
 # an HTML fetch to Crawl4AI.
@@ -196,17 +198,15 @@ def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
 
 # ── robots.txt compliance ("source agreement" to be crawled) ─────────────────
 
-_robots_lock = threading.Lock()
-_robots_cache: dict[str, tuple[float, RobotFileParser]] = {}
+_robots_cache = TTLCache(ttl_seconds=ROBOTS_CACHE_TTL_SECONDS)
 
 
 def _get_robot_parser(origin: str) -> RobotFileParser:
     """Fetch and cache a RobotFileParser for one origin (scheme://netloc).
     Fails open (allow-all) if robots.txt is missing or unreachable."""
-    with _robots_lock:
-        entry = _robots_cache.get(origin)
-        if entry and time.monotonic() - entry[0] < ROBOTS_CACHE_TTL_SECONDS:
-            return entry[1]
+    cached = _robots_cache.get(origin)
+    if cached is not None:
+        return cached
 
     parser = RobotFileParser()
     parser.set_url(f"{origin}/robots.txt")
@@ -226,8 +226,7 @@ def _get_robot_parser(origin: str) -> RobotFileParser:
     else:
         parser.parse([])
 
-    with _robots_lock:
-        _robots_cache[origin] = (time.monotonic(), parser)
+    _robots_cache.set(origin, parser)
     return parser
 
 
@@ -296,6 +295,8 @@ def _discover_sitemap_urls(origin: str, query_hint: str = "", max_urls: int = RE
         urls = sorted(urls, key=lambda u: reason.keyword_overlap_score(query_hint, u), reverse=True)
     return urls[:max_urls]
 
+
+# ── Public API ──────────────────────────────────────────────────────────────
 
 def plan_effort(prompt: str = "") -> str:
     """Graph tool: classify query complexity, return JSON plan.
@@ -389,6 +390,8 @@ def judge_sufficient(evidence: str = "", prompt: str = "", client=None, model=No
     return "SUFFICIENT" if "SUFFICIENT" in str(out).upper() else "ESCALATE"
 
 
+# ── Private helpers ──────────────────────────────────────────────────────────
+
 def _build_adaptive_search_subgraph(query: str, tier: str, max_rounds: int | None = None, freshness_bias: bool = False) -> PlanGraph:
     """Build adaptive search graph based on tier.
     - simple: search → judge (no fetch, 1 round max)
@@ -459,9 +462,7 @@ def adaptive_search(query: str, embedder=None, client=None, model: str | None = 
     return result.final_answer
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# deep_read — single known URL, content-type routed fetch (+ optional condense)
-# ══════════════════════════════════════════════════════════════════════════
+# ── deep_read — single known URL, content-type routed fetch (+ condense) ─────
 #
 # Distinct from adaptive_search/deep_research, which discover URLs via
 # search: deep_read is handed one exact URL the user (or agent) already
@@ -988,9 +989,7 @@ def _format_url_manifest(url_outcomes: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# Deep research graph — multi-round fetch + synthesize
-# ══════════════════════════════════════════════════════════════════════════
+# ── Deep research graph — multi-round fetch + synthesize ──────────────────────
 
 
 # ── session-scoped cross-round URL dedup ─────────────────────────────────
@@ -1000,47 +999,30 @@ def _format_url_manifest(url_outcomes: list[tuple[str, str]]) -> str:
 # safety net in case a run dies before reaching combine_research_rounds's
 # explicit cleanup (e.g. process killed mid-run).
 _SESSION_TTL_SECONDS = 6 * 3600
-_session_lock = threading.Lock()
-_session_seen_urls: dict[str, tuple[float, set[str]]] = {}
-
-
-def _session_sweep_locked() -> None:
-    now = time.monotonic()
-    dead = [sid for sid, (ts, _urls) in _session_seen_urls.items() if now - ts > _SESSION_TTL_SECONDS]
-    for sid in dead:
-        _session_seen_urls.pop(sid, None)
+_session_cache = TTLCache(ttl_seconds=_SESSION_TTL_SECONDS)
 
 
 def _session_start() -> str:
     session_id = uuid.uuid4().hex[:16]
-    with _session_lock:
-        _session_sweep_locked()
-        _session_seen_urls[session_id] = (time.monotonic(), set())
+    _session_cache.set(session_id, set())
     return session_id
 
 
 def _session_get_seen(session_id: str) -> set[str]:
-    with _session_lock:
-        entry = _session_seen_urls.get(session_id)
-        return set(entry[1]) if entry else set()
+    return set(_session_cache.get(session_id) or set())
 
 
 def _session_add_seen(session_id: str, urls: set[str]) -> None:
     if not urls:
         return
-    with _session_lock:
-        entry = _session_seen_urls.get(session_id)
-        if entry is None:
-            _session_seen_urls[session_id] = (time.monotonic(), set(urls))
-        else:
-            ts, seen = entry
-            seen.update(urls)
-            _session_seen_urls[session_id] = (ts, seen)
+    seen = set(_session_cache.get(session_id) or set())
+    seen.update(urls)
+    _session_cache.set(session_id, seen)
 
 
 def _session_end(session_id: str) -> None:
-    with _session_lock:
-        _session_seen_urls.pop(session_id, None)
+    # TTLCache auto-expires entries; explicit removal not needed.
+    pass
 
 
 def deep_fetch_round(prompt: str = "", num_searches: str = "1", num_fetches: str = "4",

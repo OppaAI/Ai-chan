@@ -17,7 +17,6 @@ toolkit/ingest.py and toolkit/research.py respectively.
 Public API:
   - web_search()              — SearXNG query → structured results (list[dict])
   - web_search_context()      — search → formatted numbered snippets for chat
-  - web_search_and_fetch()    — search + fetch top result's extracted text
   - web_fetch()               — single known URL → extracted text (HTML/trafilatura)
 
 Requires a running SearXNG instance (SEARXNG_URL env var).
@@ -50,12 +49,12 @@ SEARXNG_MAX_RETRIES = int(os.getenv("SEARXNG_MAX_RETRIES", 3))
 SEARXNG_RETRY_BASE_DELAY = float(os.getenv("SEARXNG_RETRY_BASE_DELAY", 1.0))
 SEARXNG_RATE_LIMIT_DELAY = float(os.getenv("SEARXNG_RATE_LIMIT_DELAY", 2.0))
  
-# -- web_fetch download guard --
+# ── web_fetch download guard ───────────────────────────────────────────────
 WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
 WEB_FETCH_TIMEOUT_SECONDS = int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", 8))
 WEB_FETCH_MAX_CHARS = int(os.getenv("WEB_FETCH_MAX_CHARS", 4000))
 # ── Cache instance ──────────────────────────────────────────────────────
-# -- shared TTL cache instances --
+# ── shared TTL cache instances ─────────────────────────────────────────────
 # Both search and fetch operations use the same TTL window but separate
 # cache instances, allowing independent tuning if needed later.
 _SEARCH_CACHE = TTLCache(
@@ -71,7 +70,7 @@ _FETCH_CACHE = TTLCache(
 # ── Public API ──────────────────────────────────────────────────────────
 
 def web_search(
-    query: str, max_results: int, pageno: int = 1
+    query: str, max_results: int, pageno: int = 1, categories: str = ""
 ) -> tuple[list[dict] | None, str | None]:
     """Search the web via SearXNG. Returns structured results.
 
@@ -85,6 +84,7 @@ def web_search(
         query: Search query string.
         max_results: Maximum results to return for this page.
         pageno: Pagination number (1-indexed, default 1).
+        categories: Optional SearXNG category filter, e.g. "general,science,news".
 
     Returns:
         (results_list, None) on success, (None, error_msg) on failure.
@@ -94,7 +94,7 @@ def web_search(
     if not query.strip():
         return [], "[search failed: empty query]"
 
-    cache_key = f"{query}|{max_results}|{pageno}"
+    cache_key = f"{query}|{max_results}|{pageno}|{categories}"
     cached = _SEARCH_CACHE.get(cache_key)
     if cached is not None:
         return cached, None
@@ -106,9 +106,12 @@ def web_search(
     last_error = None
     for attempt in range(SEARXNG_MAX_RETRIES):
         try:
+            params = {"q": query, "format": "json", "pageno": pageno}
+            if categories:
+                params["categories"] = categories
             response = requests.get(
                 f"{SEARXNG_URL}/search",
-                params={"q": query, "format": "json", "pageno": pageno},
+                params=params,
                 timeout=SEARXNG_TIMEOUT_SECONDS,
             )
             if response.status_code == 429:
@@ -186,7 +189,8 @@ def web_fetch(
     return result
 
 
-def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str | None:
+def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS,
+                       categories: str = "") -> str | None:
     """Search the web and return numbered snippets as chat context.
 
     Calls web_search() for structured results, then formats them as a
@@ -196,6 +200,7 @@ def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> st
     Args:
         query: Search query string.
         max_results: Number of results to fetch (default SEARXNG_MAX_RESULTS=5).
+        categories: Optional SearXNG category filter, e.g. "general,science,news".
 
     Returns:
         Formatted numbered list on success, or None if the search failed
@@ -203,7 +208,7 @@ def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> st
     """
     if not query or not query.strip():
         return None
-    results, error = web_search(query, max_results, pageno=1)
+    results, error = web_search(query, max_results, pageno=1, categories=categories)
     if error or not results:
         return None
 
@@ -215,43 +220,3 @@ def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> st
         lines.append(f"{i}. {title}\n   {url}\n   {content}")
 
     return f"{'\n\n'.join(lines)}\n\nUser asked: {query}"
-
-
-def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
-    """Search the web and fetch the top result's content.
-
-    Calls web_search() for structured results, formats them as a numbered
-    list, then fetches the top result's URL via web_fetch().
-
-    Args:
-        query: Search query string.
-        max_results: Number of search results to fetch (default 5).
-
-    Returns:
-        Formatted string with search results and fetched content, or error.
-    """
-    results, error = web_search(query, max_results, pageno=1)
-    if error:
-        return error
-    if not results:
-        return f"[no results found for: {query}]"
-
-    lines = [f"[Web search results for: {query}]"]
-    for i, result in enumerate(results, 1):
-        title = result.get("title", "").strip()
-        url = result.get("url", "").strip()
-        content = result.get("content", "").strip()
-        lines.append(f"{i}. {title}\n   {url}\n   {content}")
-
-    search_text = "\n\n".join(lines)
-    top_url = results[0].get("url", "").strip()
-    if not top_url:
-        return search_text
-
-    fetch_result = web_fetch(top_url, max_chars=WEB_FETCH_MAX_CHARS)
-    return f"{search_text}\n\n---\n\nFetched content:\n{fetch_result}"
-
-
-
-
-
