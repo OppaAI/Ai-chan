@@ -35,11 +35,12 @@ from agentic.toolkit import job_hunt  # noqa: F401
 from agentic.toolkit import social  # noqa: F401
 
 # Re-export registry for tool registration
-from agentic.registry import tool, registry, register_tool_schema, load_tools_from_yaml
+from agentic.registry import tool, registry, register_tool_schema
 
 # Load tool definitions from centralized YAML config
 _TOOLS_YAML = "config/tools.yaml"
 try:
+    from system.config import load_tools_from_yaml
     _count = load_tools_from_yaml(_TOOLS_YAML)
     print(f"[tools] Loaded {_count} tool definitions from {_TOOLS_YAML}")
 except Exception as e:

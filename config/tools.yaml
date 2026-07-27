@@ -89,8 +89,8 @@ tools:
     description: |
       Write (or append a section to) one polished long-form markdown report
       under the workspace reports folder. Use for a single coherent
-      deliverable — architecture review, paper comparison, improvement
-      proposal — not short scratch notes (save_note) or retrievable knowledge
+      deliverable -- architecture review, paper comparison, improvement
+      proposal -- not short scratch notes (save_note) or retrievable knowledge
       (learn_knowledge). For arxiv_style, call once per section across
       multiple turns with append=true, using the same title each time.
     handler: "agentic.toolkit.reports:write_report"
@@ -338,11 +338,11 @@ tools:
     wiki: true
 
   - name: "deep_read"
-    description: "Fetch and extract content from one EXACT known URL. Handles HTML pages (with JS-render escalation), PDFs, DOCX, PPTX, XLSX, EPUB, CSV, and more. Use when you already have the specific URL to read — not for discovery (use adaptive_search for that)."
+    description: "Fetch and extract content from one EXACT known URL. Handles HTML pages (with JS-render escalation), PDFs, DOCX, PPTX, XLSX, EPUB, CSV, and more. Use when you already have the specific URL to read -- not for discovery (use adaptive_search for that)."
     handler: "agentic.toolkit.research:deep_read"
     props:
       url: {type: "string", description: "The exact URL to fetch and read."}
-      query: {type: "string", description: "Optional focus query — if given, content is relevance-filtered to what matters for this question."}
+      query: {type: "string", description: "Optional focus query -- if given, content is relevance-filtered to what matters for this question."}
     required: ["url"]
     domain: "research"
     react: true
@@ -362,7 +362,7 @@ tools:
 
   # ── Ingest / URL Fetch (agentic/toolkit/ingest.py) ──────────────────────────
   - name: "fetch_from_url"
-    description: "Download and extract text from any URL. Handles HTML pages, PDFs, DOCX, PPTX, XLSX, EPUB, CSV, XML, ZIP, IPYNB, MSG. Lightweight alternative to deep_read — no JS rendering, no relevance filtering, no Crawl4AI escalation. Use when you have a known URL and want its plain text."
+    description: "Download and extract text from any URL. Handles HTML pages, PDFs, DOCX, PPTX, XLSX, EPUB, CSV, XML, ZIP, IPYNB, MSG. Lightweight alternative to deep_read -- no JS rendering, no relevance filtering, no Crawl4AI escalation. Use when you have a known URL and want its plain text."
     handler: "agentic.toolkit.ingest:fetch_from_url"
     props:
       url: {type: "string", description: "The exact URL to fetch and read."}
@@ -490,8 +490,8 @@ tools:
     description: |
       Write (or append a section to) one polished long-form markdown report
       under the workspace reports folder. Use for a single coherent
-      deliverable — architecture review, paper comparison, improvement
-      proposal — not short scratch notes (save_note) or retrievable knowledge
+      deliverable -- architecture review, paper comparison, improvement
+      proposal -- not short scratch notes (save_note) or retrievable knowledge
       (learn_knowledge). For arxiv_style, call once per section across
       multiple turns with append=true, using the same title each time.
     handler: "agentic.toolkit.reports:write_report"
