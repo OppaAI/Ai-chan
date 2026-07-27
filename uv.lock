@@ -9,6 +9,13 @@ supported-markers = [
     "platform_machine == 'aarch64'",
 ]
 
+[manifest]
+overrides = [
+    { name = "onnxruntime", marker = "sys_platform == 'ignore_this_marker'" },
+    { name = "onnxruntime-gpu", marker = "platform_machine != 'aarch64'", specifier = ">=1.17.0" },
+    { name = "onnxruntime-gpu", marker = "platform_machine == 'aarch64'", path = "/home/oppa-ai/wheels/onnxruntime_gpu-1.27.0-cp312-cp312-linux_aarch64.whl" },
+]
+
 [[package]]
 name = "aiko-chan"
 version = "0.1.5"
@@ -672,7 +679,7 @@ source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "numpy" },
-    { name = "onnxruntime" },
+    { name = "onnxruntime", marker = "sys_platform == 'ignore_this_marker'" },
     { name = "python-dotenv" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a3/f3/3d1dcdd7b9c41d589f5cff252d32ed91cdf86ba84391cfc81d9d8773571d/magika-0.6.3.tar.gz", hash = "sha256:7cc52aa7359af861957043e2bf7265ed4741067251c104532765cd668c0c0cb1", size = 3042784, upload-time = "2025-10-30T15:22:34.499Z" }
@@ -953,19 +960,13 @@ wheels = [
 
 [[package]]
 name = "onnxruntime"
-version = "1.20.1"
+version = "1.28.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "coloredlogs" },
     { name = "flatbuffers" },
     { name = "numpy" },
     { name = "packaging" },
     { name = "protobuf" },
-    { name = "sympy" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/39/9335e0874f68f7d27103cbffc0e235e32e26759202df6085716375c078bb/onnxruntime-1.20.1-cp312-cp312-macosx_13_0_universal2.whl", hash = "sha256:22b0655e2bf4f2161d52706e31f517a0e54939dc393e92577df51808a7edc8c9", size = 31007580, upload-time = "2024-11-21T00:49:07.029Z" },
-    { url = "https://files.pythonhosted.org/packages/c5/9d/a42a84e10f1744dd27c6f2f9280cc3fb98f869dd19b7cd042e391ee2ab61/onnxruntime-1.20.1-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:f1f56e898815963d6dc4ee1c35fc6c36506466eff6d16f3cb9848cea4e8c8172", size = 11952833, upload-time = "2024-11-21T00:49:10.563Z" },
 ]
 
 [[package]]
