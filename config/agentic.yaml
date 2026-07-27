@@ -164,6 +164,10 @@ WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS: "60"  # How often (seconds) the sched
 SEARXNG_URL: "http://localhost:8888"  # Base URL for self-hosted SearXNG instance.
 SEARCH_SEMANTIC_THRESHOLD: "0.70"  # Semantic score to trigger web search from chat; higher means fewer searches.
 SEARXNG_MAX_RESULTS: "3"  # Max results per SearXNG call. Shared by web_search (snippet-only) and _deep_search_impl/deep_research underlying search calls.
+SEARXNG_TIMEOUT_SECONDS: "8"  # Seconds before SearXNG search calls time out.
+SEARXNG_MAX_RETRIES: "3"  # Max retry attempts for transient search failures.
+SEARXNG_RETRY_BASE_DELAY: "1.0"  # Base delay in seconds for search retry backoff (1s, 2s, 3s...).
+SEARXNG_RATE_LIMIT_DELAY: "2.0"  # Base delay in seconds for HTTP 429 rate-limit retries (2s, 4s, 6s...).
 
 # -- internal _deep_search_impl (snippet-only search pass) --
 # These are _deep_search_impl's OWN defaults — used when the internal helper
@@ -244,5 +248,6 @@ RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots
 # -- web_fetch download guard & caching --
 WEB_FETCH_MAX_DOWNLOAD_BYTES: "5_000_000"  # Hard byte cap per fetch; download aborted mid-stream before extraction/truncation, bounding worst-case memory for one fetch.
 WEB_FETCH_TIMEOUT_SECONDS: "8"  # Per-request timeout for web_fetch's underlying HTTP call.
+WEB_FETCH_USER_AGENT: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"  # User-Agent header for web fetch requests.
 TOOLS_CACHE_TTL_SECONDS: "900"  # In-process cache lifetime (seconds) for both search results and fetched pages. 15 min default.
-TOOLS_CACHE_MAX_ENTRIES: "128"  # Max entries per cache (search cache and fetch cache each get their own instance of this limit) before oldest entries are evicted.
+TOOLS_CACHE_MAX_ENTRIES: "256"  # Max entries per cache (search cache and fetch cache each get their own instance of this limit) before oldest entries are evicted.
