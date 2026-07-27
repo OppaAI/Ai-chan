@@ -82,6 +82,16 @@ DEFAULT_MAX_OUTPUT_TOKENS = int(os.getenv("GRAPH_SYNTH_MAX_OUTPUT_TOKENS", "1500
 DEFAULT_CONDENSE_TOP_K = int(os.getenv("GRAPH_SYNTH_CONDENSE_TOP_K", "12"))
 DEFAULT_CONDENSE_CHUNK_CHARS = int(os.getenv("GRAPH_SYNTH_CONDENSE_CHUNK_CHARS", "500"))
 DEFAULT_CONDENSE_MAX_CHARS = int(os.getenv("GRAPH_SYNTH_CONDENSE_MAX_CHARS", "6000"))
+DEFAULT_COMBINE_PART_MAX_CHARS = int(os.getenv("GRAPH_COMBINE_PART_MAX_CHARS", "4000"))
+DEFAULT_COMBINE_MAX_CHARS = int(os.getenv("GRAPH_COMBINE_MAX_CHARS", "12000"))
+
+
+def _truncate_with_marker(text: str, max_chars: int, marker: str) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars <= len(marker):
+        return marker[:max_chars]
+    return text[:max_chars - len(marker)] + marker
 
 
 # Heuristic style keywords. Order matters: "concise" and "brief" should win
@@ -207,16 +217,30 @@ def split_subjects(prompt: str) -> list[str]:
     react=False,
     graph=True,
 )
-def combine_evidence(parts: list[str], separator: str = "\n\n---\n\n") -> str:
+def combine_evidence(parts: list[str], separator: str = "\n\n---\n\n", *, part_max_chars: int = DEFAULT_COMBINE_PART_MAX_CHARS, max_chars: int = DEFAULT_COMBINE_MAX_CHARS) -> str:
     """Concatenate non-empty evidence blocks with a visible separator.
 
     Used as the combine step in every research playbook: web snippets +
     KB context + (optional) prior synthesis go in, one combined text
     comes out, ready to be (optionally) condensed and handed to the LLM.
     """
-    cleaned = [str(p or "").strip() for p in parts]
-    cleaned = [p for p in cleaned if p]
-    return separator.join(cleaned)
+    cleaned: list[str] = []
+    for part in parts:
+        text = str(part or "").strip()
+        if not text:
+            continue
+        text = _truncate_with_marker(
+            text,
+            part_max_chars,
+            "\n[part truncated by GRAPH_COMBINE_PART_MAX_CHARS]",
+        )
+        cleaned.append(text)
+    joined = separator.join(cleaned)
+    return _truncate_with_marker(
+        joined,
+        max_chars,
+        "\n[combined evidence truncated by GRAPH_COMBINE_MAX_CHARS]",
+    )
 
 
 @tool(

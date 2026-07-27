@@ -165,6 +165,25 @@ class TestCombineEvidence:
     def test_empty_list_returns_empty(self):
         assert combine_evidence([]) == ""
 
+    def test_truncates_parts_before_join(self):
+        result = combine_evidence(["a" * 80, "b" * 80], part_max_chars=64, max_chars=0)
+        parts = result.split("\n\n---\n\n")
+
+        assert all(len(part) <= 64 for part in parts)
+        assert parts[0].endswith("[part truncated by GRAPH_COMBINE_PART_MAX_CHARS]")
+        assert parts[1].endswith("[part truncated by GRAPH_COMBINE_PART_MAX_CHARS]")
+
+    def test_truncates_joined_output(self):
+        result = combine_evidence(["a" * 80, "b" * 80], part_max_chars=0, max_chars=72)
+
+        assert len(result) <= 72
+        assert result.endswith("[combined evidence truncated by GRAPH_COMBINE_MAX_CHARS]")
+
+    def test_truncates_with_short_cap(self):
+        result = combine_evidence(["a" * 80], part_max_chars=8, max_chars=0)
+
+        assert len(result) == 8
+
 
 class TestCondenseText:
     """Tests for condense_text semantic condensation."""

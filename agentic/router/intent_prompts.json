@@ -1,5 +1,32 @@
 {
-  "ternary": {
+  "quaternary": {
+    "greeting": [
+      "hi",
+      "hello",
+      "hey",
+      "hiya",
+      "yo",
+      "good morning",
+      "good afternoon",
+      "good evening",
+      "morning",
+      "evening",
+      "hey there",
+      "hello there",
+      "hi aiko",
+      "hey aiko",
+      "how are you",
+      "how are you doing",
+      "what's up",
+      "sup",
+      "nice to see you",
+      "just saying hi",
+      "good to see you",
+      "thanks",
+      "thank you",
+      "okay thanks",
+      "cool thanks"
+    ],
     "agentic": [
       "fix this bug in my code",
       "implement this feature in my codebase",

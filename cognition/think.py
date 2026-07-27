@@ -11,15 +11,13 @@ Aiko's chat facade.
     waits on before starting autonomous quick-study top-ups.
 
 Memory + knowledge-base fetch:
-  route() kicks off _fetch_memory_and_knowledge() on cognition's
-  shared CONTEXT_POOL BEFORE intent is resolved, since every path
-  (localchat/webchat/agentic) needs memory + KB regardless of which one
-  intent routing picks. The resulting future is handed to whichever
-  handler ends up running, so the fetch overlaps intent classification
-  itself instead of waiting for it to finish first. Wiki/policy/skill/
-  experience context is agentic-only and fetched separately, inside
-  agentic.agentic.run_agentic_chat, only once intent has actually resolved
-  to "agentic".
+  route() resolves quaternary intent first (greeting/localchat/webchat/agentic).
+  Greeting-only turns short-circuit directly to the LLM without memory/KB
+  recall or memory writeback. All other paths start memory + KB recall only
+  after intent is known, then hand the resulting future to the selected
+  handler. Wiki/policy/skill/experience context is agentic-only and fetched
+  separately, inside agentic.agentic.run_agentic_chat, only once intent has
+  actually resolved to "agentic".
 """
 
 from __future__ import annotations
@@ -118,7 +116,8 @@ if _ROUTE_MODE not in _ROUTE_VALID_MODES:
 _AGENTIC_MODE_ON = os.getenv("AGENTIC_MODE_ON", "1").lower() in {"1", "true", "yes", "on"}
 
 # Three separate instruct strings, one per embedding context
-_ROUTE_INSTRUCT_TERNARY = "What kind of task or question is this?"  # used by route() for ternary intent routing
+_ROUTE_INSTRUCT_QUATERNARY = "What kind of task or question is this?"  # used by route() for quaternary intent routing
+_ROUTE_INSTRUCT_TERNARY = _ROUTE_INSTRUCT_QUATERNARY  # backwards-compatible alias for wakeup/tests
 
 _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
@@ -280,15 +279,19 @@ def _play_beep() -> None:
             log.warning("Beep playback failed: %s", e)
     threading.Thread(target=_run, daemon=True).start()
 
-# load route examples (ternary intent only - tools/capability moved to agentic/router)
+# load route examples (quaternary intent only - tools/capability moved to agentic/router)
 _EXAMPLES_PATH = Path(__file__).resolve().parent.parent / "agentic" / "router" / "intent_prompts.json"
 
-def _load_route_examples() -> dict:
+def _load_route_examples(*, include_greeting: bool = True) -> dict:
     with open(_EXAMPLES_PATH, encoding="utf-8") as f:
         data = json.load(f)
-    return {k: tuple(v) for k, v in data["ternary"].items()}
+    raw = dict(data.get("quaternary") or data.get("ternary") or {})
+    if not include_greeting:
+        raw.pop("greeting", None)
+    return {k: tuple(v) for k, v in raw.items()}
 
-_ROUTE_TERNARY_EXAMPLES = _load_route_examples()
+_ROUTE_QUATERNARY_EXAMPLES = _load_route_examples()
+_ROUTE_TERNARY_EXAMPLES = _load_route_examples(include_greeting=False)
 
 _AGENTIC_ROUTE_RE = re.compile(
     r"\b("
@@ -300,6 +303,22 @@ _AGENTIC_ROUTE_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+
+_GREETING_ONLY_RE = re.compile(
+    r"^\s*(?:"
+    r"hi+|hello+|hey+|hiya+|yo+|sup|"
+    r"good\s+(?:morning|afternoon|evening)|morning|evening|"
+    r"(?:hi|hello|hey)\s+(?:there|aiko)|"
+    r"how(?:'|’)s\s+it\s+going|how\s+are\s+you(?:\s+doing)?|"
+    r"what(?:'|’)s\s+up|nice\s+to\s+see\s+you|good\s+to\s+see\s+you|"
+    r"just\s+saying\s+hi|thanks?|thank\s+you|okay\s+thanks|cool\s+thanks"
+    r")(?:[\s!?.~、。！]*|\s+(?:lol|haha|hehe)[\s!?.~、。！]*)$",
+    re.IGNORECASE,
+)
+
+
+def _is_greeting_only(user_input: str) -> bool:
+    return bool(_GREETING_ONLY_RE.match(user_input or ""))
 
 
 def _extract_search_results_block(system_prompt: str) -> str:
@@ -413,13 +432,13 @@ class AikoThink:
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
-        """Main entry point. Ternary routing.
+        """Main entry point. Quaternary routing.
 
-        Memory + knowledge-base fetch is kicked off here, BEFORE intent is
-        known — every path (localchat/webchat/agentic) needs both, so
-        there's no reason to wait for _route_intent() to finish before
-        starting them. The future is threaded through to whichever handler
-        ends up running.
+        Intent is resolved before memory/KB recall. Greeting-only turns are
+        intentionally cheap: they go straight to the LLM with persona + recent
+        chat history only and skip memory recall, KB recall, and memory
+        extraction/writeback. Non-greeting turns then start the shared
+        memory+KB future and pass it to the selected handler.
 
         Per-user-active tracking: multiple users' turns can run concurrently
         (e.g. agentic loop for one user, quick chat for another). Shared
@@ -430,21 +449,29 @@ class AikoThink:
             self._active_user_ids.add(user_id)
         self._note_user_activity()
         try:
+            intent = self._route_intent(user_input)
+            log.info("[route] intent=%s", intent)
+
+            if intent == "greeting":
+                return self.chat(
+                    user_input,
+                    token_callback=token_callback,
+                    _skip_search=True,
+                    skip_memory=True,
+                    store_turn=False,
+                )
+
             embedder = self._get_memorize()._mem._embedder
             query_vec = embedder.embed_query(user_input)
             mem_kb_future = CONTEXT_POOL.submit(
                 self._fetch_memory_and_knowledge, user_input, query_vec
             )
 
-            intent = self._route_intent(user_input)
-            log.info("[route] intent=%s", intent)
-
             if intent == "agentic":
                 return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
-            elif intent == "webchat":
+            if intent == "webchat":
                 return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
-            else:  # localchat
-                return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future)
+            return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future)
         finally:
             with self._active_users_lock:
                 self._active_user_ids.discard(user_id)
@@ -458,9 +485,9 @@ class AikoThink:
         """Fetch long-term memory + learned-knowledge (KB) concurrently.
 
         Both are independent reads against separate stores (memory.db /
-        knowledge.db) with no dependency on user intent, so route() fires
-        this off before intent routing even runs and hands the resulting
-        future to whichever path (agentic/webchat/localchat) gets picked.
+        knowledge.db). route() now starts this only after quaternary intent
+        routing, so greeting-only turns can skip recall entirely while
+        agentic/webchat/localchat still receive the same shared future.
         Callers that run standalone (e.g. a scheduled agentic job with no
         prior route() call) can call this directly instead.
 
@@ -528,7 +555,7 @@ class AikoThink:
             self._proactive_resting = resting
 
     def _route_intent(self, user_input: str) -> str:
-        """Ternary routing: single embedding, three-way decision with a
+        """Quaternary routing: single embedding, four-way decision with a
         high-confidence margin so a close call doesn't get committed to
         agentic (or webchat) just because it happened to be checked first.
 
@@ -541,11 +568,13 @@ class AikoThink:
     
         if not _ROUTE_ENABLED:
             return "localchat"
+        if _ROUTE_MODE == "llm_only":
+            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
     
-        instruct = _ROUTE_INSTRUCT_TERNARY
+        instruct = _ROUTE_INSTRUCT_QUATERNARY
         embedder = self._get_memorize()._mem._embedder
         query_vec = embedder.embed_query(user_input, instruct=instruct)
-        labels, example_vecs = self._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, instruct)
+        labels, example_vecs = self._semantic_example_vectors(_ROUTE_QUATERNARY_EXAMPLES, instruct)
         scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
 
         if not _AGENTIC_MODE_ON:
@@ -554,6 +583,7 @@ class AikoThink:
             # webchat-vs-localchat decision — no separate code path needed.
             scores.pop("agentic", None)
       
+        greeting_score = scores.get("greeting", 0.0)
         agentic_score = scores.get("agentic", 0.0)
         webchat_score = scores.get("webchat", 0.0)
     
@@ -563,11 +593,15 @@ class AikoThink:
     
         agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
         webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+        greeting_threshold = float(os.getenv("ROUTE_GREETING_THRESHOLD", "0.60"))
     
         log.debug(
-            "[route] ternary scores: agentic=%.3f webchat=%.3f best=%s gap=%.3f for: %r",
-            agentic_score, webchat_score, best_label, gap, user_input
+            "[route] quaternary scores: greeting=%.3f agentic=%.3f webchat=%.3f best=%s gap=%.3f for: %r",
+            greeting_score, agentic_score, webchat_score, best_label, gap, user_input
         )
+
+        if best_label == "greeting" and greeting_score >= greeting_threshold and (gap >= _SEMANTIC_ROUTE_MIN_GAP or _is_greeting_only(user_input)):
+            return "greeting"
     
         if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "agentic"
@@ -576,16 +610,18 @@ class AikoThink:
     
         # Above threshold but too close to call cleanly.
         ambiguous = (
-            (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold)
+            (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold or greeting_score >= greeting_threshold)
             and gap < _SEMANTIC_ROUTE_MIN_GAP
         )
         if ambiguous:
+            if _is_greeting_only(user_input):
+                return "greeting"
             if _ROUTE_MODE == "semantic_only":
                 # Deterministic mode: no LLM call on ambiguity.
                 log.debug("[route] semantic_only: ambiguous gap, defaulting localchat")
                 return "localchat"
             if _ROUTE_MODE == "llm":
-                return self._classify_ternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+                return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
             # "semantic" mode's original binary tie-break. If agentic is
             # off, there's nothing left for this binary check to decide
             # (it only ever distinguishes agentic vs chat), so skip the
@@ -594,6 +630,9 @@ class AikoThink:
                 return "localchat"
             llm_label = self._classify_agent_intent(user_input)
             return "agentic" if llm_label == "agentic" else "localchat"
+
+        if _is_greeting_only(user_input):
+            return "greeting"
     
         return "localchat"
 
@@ -696,59 +735,60 @@ class AikoThink:
             log.warning("Intent routing failed: %s", e)
             return "chat"
 
-    def _classify_ternary_intent_llm(self, user_input: str, allow_agentic: bool = True) -> str:
-        """LLM classify for ROUTE_MODE=llm (ambiguity tie-break) and
-        ROUTE_MODE=llm_only (sole routing decision, every turn).
+    def _intent_llm_prompt_parts(self, *, allow_agentic: bool, include_greeting: bool) -> tuple[str, str, set[str]]:
+        labels = []
+        guidance_parts: list[str] = []
+        examples: list[str] = []
+        valid: set[str] = set()
 
-        allow_agentic=False collapses this to a binary webchat/chat
-        classification — agentic is never offered as a label, so
-        AGENTIC_MODE_ON=0 holds regardless of which ROUTE_MODE is active.
-        """
-        if allow_agentic and _AGENTIC_ROUTE_RE.search(user_input):
-            return "agentic"
+        if include_greeting:
+            labels.append("greeting")
+            valid.add("greeting")
+            guidance_parts.append(
+                "greeting = the entire message is only a salutation, thanks, "
+                "or small acknowledgement with no substantive request.\n"
+            )
+            examples.extend([
+                "Message: 'hey Aiko'\nLabel: greeting\n",
+                "Message: 'thanks'\nLabel: greeting\n",
+            ])
 
         if allow_agentic:
-            labels_line = "Labels: [agentic, webchat, chat]"
-            guidance = (
+            labels.append("agentic")
+            valid.add("agentic")
+            guidance_parts.append(
                 "agentic = the message asks for an action/task (write, save, "
                 "schedule, debug, plan, remind, research-and-report).\n"
-                "webchat = the message needs current/external information "
-                "(news, prices, scores, recent releases, real-time facts) but "
-                "is not itself a task.\n"
-                "chat = casual conversation, opinions, or something answerable "
-                "from general/persona knowledge alone.\n\n"
-                "Message: 'set a reminder for 9pm'\n"
-                "Label: agentic\n\n"
-                "Message: 'debug why asyncio.run() hangs'\n"
-                "Label: agentic\n\n"
-                "Message: 'what's the weather in Vancouver right now'\n"
-                "Label: webchat\n\n"
-                "Message: 'who won the game last night'\n"
-                "Label: webchat\n\n"
-                "Message: 'what do you think about minimalism'\n"
-                "Label: chat\n\n"
-                "Message: 'explain semaphores from memory'\n"
-                "Label: chat\n\n"
             )
-            valid = {"agentic", "webchat", "chat"}
-        else:
-            labels_line = "Labels: [webchat, chat]"
-            guidance = (
-                "webchat = the message needs current/external information "
-                "(news, prices, scores, recent releases, real-time facts).\n"
-                "chat = casual conversation, opinions, or something answerable "
-                "from general/persona knowledge alone.\n\n"
-                "Message: 'what's the weather in Vancouver right now'\n"
-                "Label: webchat\n\n"
-                "Message: 'who won the game last night'\n"
-                "Label: webchat\n\n"
-                "Message: 'what do you think about minimalism'\n"
-                "Label: chat\n\n"
-                "Message: 'explain semaphores from memory'\n"
-                "Label: chat\n\n"
-            )
-            valid = {"webchat", "chat"}
+            examples.extend([
+                "Message: 'set a reminder for 9pm'\nLabel: agentic\n",
+                "Message: 'debug why asyncio.run() hangs'\nLabel: agentic\n",
+            ])
 
+        labels.extend(["webchat", "chat"])
+        valid.update({"webchat", "chat"})
+        guidance_parts.extend([
+            "webchat = the message needs current/external information "
+            "(news, prices, scores, recent releases, real-time facts) but "
+            "is not itself a task.\n",
+            "chat = casual conversation, opinions, or something answerable "
+            "from general/persona knowledge alone.\n",
+        ])
+        examples.extend([
+            "Message: 'what's the weather in Vancouver right now'\nLabel: webchat\n",
+            "Message: 'who won the game last night'\nLabel: webchat\n",
+            "Message: 'what do you think about minimalism'\nLabel: chat\n",
+            "Message: 'explain semaphores from memory'\nLabel: chat\n",
+        ])
+        return f"Labels: [{', '.join(labels)}]", "\n".join(guidance_parts + examples), valid
+
+    def _classify_intent_llm(self, user_input: str, *, allow_agentic: bool, include_greeting: bool, log_name: str) -> str:
+        if allow_agentic and _AGENTIC_ROUTE_RE.search(user_input):
+            return "agentic"
+        labels_line, guidance, valid = self._intent_llm_prompt_parts(
+            allow_agentic=allow_agentic,
+            include_greeting=include_greeting,
+        )
         try:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
@@ -767,8 +807,26 @@ class AikoThink:
                 return "localchat"
             return "localchat" if label == "chat" else label
         except Exception as e:
-            log.warning("Ternary LLM routing failed: %s", e)
+            log.warning("%s LLM routing failed: %s", log_name, e)
             return "localchat"
+
+    def _classify_quaternary_intent_llm(self, user_input: str, allow_agentic: bool = True) -> str:
+        """LLM classify with greeting/agentic/webchat/chat labels."""
+        return self._classify_intent_llm(
+            user_input,
+            allow_agentic=allow_agentic,
+            include_greeting=True,
+            log_name="Quaternary",
+        )
+
+    def _classify_ternary_intent_llm(self, user_input: str, allow_agentic: bool = True) -> str:
+        """Backward-compatible LLM classifier with no greeting label."""
+        return self._classify_intent_llm(
+            user_input,
+            allow_agentic=allow_agentic,
+            include_greeting=False,
+            log_name="Ternary",
+        )
   
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Delegate task-mode execution to agentic.agentic."""
@@ -916,29 +974,35 @@ class AikoThink:
 
     # ── proactive idle check-in loop ──────────────────────────────────────────
 
-    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None) -> str:
-        """Standard chat: local knowledge only (persona + memory + KB)."""
+    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None, *, skip_memory: bool = False, store_turn: bool = True) -> str:
+        """Standard chat: persona plus optional memory/KB context."""
         speak = self._get_speak()
         if speak and speak.is_playing():
             speak.stop()
         
-        # Memory + KB — either resolved from route()'s pre-intent future,
-        # or fetched directly if this was called standalone.
-        memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-        memory_block = self._get_memorize().format_for_context(memories)
-        
-        system = self._current_system_prompt()
-        system += "\n\n" + bioclock.current_datetime_block()
-        if memory_block:
-            system = f"{system}\n\n{memory_block}"
+        if skip_memory:
+            memories = []
+            knowledge_block = ""
+            memory_block = ""
         else:
-            system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
-        system = f"{system}\n\n{knowledge_block}"
+            # Memory + KB — either resolved from route()'s post-intent future,
+            # or fetched directly if this was called standalone.
+            memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
+            memory_block = self._get_memorize().format_for_context(memories)
+        
+        system = self._current_system_prompt(user_input)
+        system += "\n\n" + bioclock.current_datetime_block()
+        if not skip_memory:
+            if memory_block:
+                system = f"{system}\n\n{memory_block}"
+            else:
+                system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
+            system = f"{system}\n\n{knowledge_block}"
         
         # Additional narrower wiki lookup — only when the user is asking
         # about Aiko's own architecture/docs, distinct from the general KB
         # fetch above. Gated so casual chat doesn't pay for it every turn.
-        if _should_use_local_knowledge(user_input):
+        if not skip_memory and _should_use_local_knowledge(user_input):
             try:
                 wiki_context = wiki_knowledge_context_for(
                     user_input, limit=3, max_chars=3000,
@@ -965,7 +1029,7 @@ class AikoThink:
         
         # Log debug
         self.last_prompt_debug = {
-            "mode": "localchat",
+            "mode": "greeting" if skip_memory else "localchat",
             "system_prompt": system,
             "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
             "knowledge_prompt": knowledge_block,
@@ -981,7 +1045,8 @@ class AikoThink:
         with self._history_lock:
             self._history.append({"role": "assistant", "content": raw_response})
         
-        self._store_async(user_input, raw_response)
+        if store_turn:
+            self._store_async(user_input, raw_response)
         self._reasoning = False
         return raw_response
 
