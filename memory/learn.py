@@ -81,7 +81,7 @@ load_config()
 
 from cognition import reason
 from agentic.toolkit.websurf import (
-    _is_private_or_local_host,
+    _check_host_ssrf,
     fetch_search_results,
     web_fetch,
 )
@@ -472,7 +472,7 @@ def _fetch_one(url: str, rate_limiter: _HostRateLimiter, store: _ScratchStore, m
         return store.get_page_text(url)
 
     parsed = urlparse(url)
-    if not parsed.hostname or _is_private_or_local_host(parsed.hostname):
+    if not parsed.hostname or _check_host_ssrf(parsed.hostname):
         return None
 
     rate_limiter.wait(url)

@@ -46,7 +46,7 @@ from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.registry import tool
 from agentic.toolkit.websurf import (
     fetch_search_results,
-    _download_bytes,
+    _stream_download,
     web_fetch,
     SEARXNG_MAX_RESULTS,
     WEB_FETCH_USER_AGENT,
@@ -591,12 +591,12 @@ def deep_read(
     content_type = _sniff_content_type(url)
 
     if content_type != "html":
-        downloaded, error = _download_bytes(url, DEEP_READ_MAX_DOWNLOAD_BYTES)
+        downloaded, error = _stream_download(url, DEEP_READ_MAX_DOWNLOAD_BYTES)
         if error:
             return error
         text = _extract_with_markitdown(downloaded, content_type, max_chars)
     else:
-        text = web_fetch(url, max_chars=max_chars, max_download_bytes=DEEP_READ_MAX_DOWNLOAD_BYTES)
+        text = web_fetch(url, max_chars=max_chars, max_stream_download=DEEP_READ_MAX_DOWNLOAD_BYTES)
         is_thin = text.startswith("[fetch failed") or len(text.strip()) < THIN_TEXT_CHARS_THRESHOLD
         if is_thin and RESEARCH_USE_CRAWL4AI:
             crawled = _crawl4ai_fetch_many([url], max_chars)

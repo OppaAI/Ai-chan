@@ -26,8 +26,8 @@ from agentic.toolkit.websurf import (
     web_search,
     web_fetch,
     fetch_search_results,
-    _download_bytes,
-    _is_private_or_local_host,
+    _stream_download,
+    _check_host_ssrf,
     web_search_context,
 )
 from agentic.toolkit.ingest import (
