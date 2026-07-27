@@ -36,7 +36,7 @@ import requests
 
 from agentic.registry import tool
 from system.bioclock import local_now
-from agentic.toolkit.websearch import SEARXNG_MAX_RESULTS as MAX_RESULTS, web_fetch, fetch_search_results
+from agentic.toolkit.websearch import SEARXNG_MAX_RESULTS as MAX_RESULTS, web_fetch, web_search
 
 _RELATIVE_RE = re.compile(
     r"(?P<num>\d+)\s*(?P<unit>hour|day|week|month)s?\s+ago", re.IGNORECASE,
@@ -180,7 +180,7 @@ def _similarity(a: str, b: str) -> float:
 
 def search_searxng(query: str, max_results: int = 10) -> list[dict]:
     """Search SearXNG and return raw result dicts."""
-    raw_results, _err = fetch_search_results(query, max_results)
+    raw_results, _err = web_search(query, max_results)
     return raw_results or []
 
 

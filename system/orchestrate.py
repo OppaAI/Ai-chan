@@ -80,7 +80,7 @@ import time
 from system.bioclock import local_now
 from system.log import get_logger
 from system.wakeup import AikoWakeup
-from agentic.toolkit.websearch import web_search
+from agentic.toolkit.websearch import web_search_context
 from sensory.speak import extract_dialogue_for_tts
 
 log = get_logger(__name__)
@@ -1380,9 +1380,13 @@ def run_session(ui, args) -> None:
                     ui.add_message('sys', f'Searching: "{query}"')
                     ui._draw()
                     try:
-                        results = web_search(query)
+                        context = web_search_context(query)
                     except Exception as e:
                         ui.add_message('sys', f'Search failed: {e}')
+                        ui._draw()
+                        continue
+                    if not context:
+                        ui.add_message('sys', 'No search results found.')
                         ui._draw()
                         continue
                     ui.turn_start()
@@ -1390,7 +1394,7 @@ def run_session(ui, args) -> None:
                         ui.stream_token(token)
                         ui._draw(buf=[])
                     think.chat(
-                        f"Use these web search results to answer the question: {query}\n\n{results}",
+                        f"<search_results query='{query}'>\n{context}\n\nAnswer ONLY using these search results.",
                         token_callback=_web_token_cb,
                     )
                     ui.stream_commit()

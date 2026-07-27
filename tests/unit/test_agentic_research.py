@@ -25,7 +25,6 @@ load_config()
 from agentic.toolkit.websearch import (
     web_search,
     web_fetch,
-    fetch_search_results,
     web_search_context,
 )
 from agentic.toolkit.ingest import _check_host_ssrf
@@ -89,8 +88,8 @@ class MockSearXNG:
         return self.results[:max_results], None
 
 
-class TestFetchSearchResults:
-    """Tests for fetch_search_results low-level SearXNG call."""
+class TestWebSearch:
+    """Tests for web_search low-level SearXNG call."""
 
     def test_successful_search(self):
         # Patch _SEARCH_CACHE (module-level, all caps), importlib.util.find_spec and importlib.import_module
@@ -112,7 +111,7 @@ class TestFetchSearchResults:
                     }
                     mock_import.return_value = mock_requests
 
-                    results, error = fetch_search_results("test query", 5)
+                    results, error = web_search("test query", 5)
                     assert error is None
                     assert len(results) == 1
                     assert results[0]["title"] == "Test"
@@ -134,7 +133,7 @@ class TestFetchSearchResults:
                     mock_requests.get.side_effect = [mock_get_429, mock_get_429, mock_get_ok]
                     mock_import.return_value = mock_requests
 
-                    results, error = fetch_search_results("test", 5)
+                    results, error = web_search("test", 5)
                     assert error is None
                     assert len(results) == 1
                     assert mock_requests.get.call_count == 3
@@ -158,7 +157,7 @@ class TestFetchSearchResults:
                     return resp
 
                 with patch("requests.get", side_effect=mock_get):
-                    results, error = fetch_search_results("test", 5)
+                    results, error = web_search("test", 5)
                     assert error is None
                     assert call_count[0] == 2
 
@@ -175,34 +174,36 @@ class TestFetchSearchResults:
                 mock_get.json.side_effect = ValueError("bad json")
 
                 with patch("requests.get", return_value=mock_get):
-                    results, error = fetch_search_results("test", 5)
+                    results, error = web_search("test", 5)
                     assert "invalid JSON" in error
 
 
-class TestWebSearch:
-    """Tests for web_search public function."""
+class TestWebSearchContext:
+    """Tests for web_search_context formatting."""
 
     def test_formats_results(self):
-        with patch("agentic.toolkit.websearch.fetch_search_results") as mock_raw:
+        with patch("agentic.toolkit.websearch.web_search") as mock_raw:
             mock_raw.return_value = (
                 [{"title": "T", "url": "https://u.com", "content": "c"}], None
             )
-            result = web_search("query", 3)
+            result = web_search_context("query", 3)
+            assert result is not None
             assert "Web search results for: query" in result
             assert "1. T" in result
             assert "https://u.com" in result
+            assert "User asked: query" in result
 
-    def test_no_results(self):
-        with patch("agentic.toolkit.websearch.fetch_search_results") as mock_raw:
+    def test_no_results_returns_none(self):
+        with patch("agentic.toolkit.websearch.web_search") as mock_raw:
             mock_raw.return_value = ([], None)
-            result = web_search("nothing")
-            assert "no results found" in result.lower()
+            result = web_search_context("nothing")
+            assert result is None
 
-    def test_search_failure_propagates(self):
-        with patch("agentic.toolkit.websearch.fetch_search_results") as mock_raw:
+    def test_search_failure_returns_none(self):
+        with patch("agentic.toolkit.websearch.web_search") as mock_raw:
             mock_raw.return_value = (None, "[search failed: connection failed]")
-            result = web_search("query")
-            assert "search failed" in result.lower()
+            result = web_search_context("query")
+            assert result is None
 
 
 class TestWebFetch:

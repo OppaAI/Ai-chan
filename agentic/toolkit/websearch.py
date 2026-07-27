@@ -14,12 +14,11 @@ documents (PDF/DOCX/etc.), does NOT do SSRF checks on its own (delegates
 to ingest.py), and does NOT do multi-round research. Those live in
 toolkit/ingest.py and toolkit/research.py respectively.
 
-Building blocks:
-  - fetch_search_results()     — low-level SearXNG call (raw JSON)
-  - web_fetch()                — single URL → extracted text (HTML/trafilatura)
-  - web_search()              — SearXNG query → numbered snippets
-  - web_search_context()       — chat-mode wrapper around web_search
-  - web_search_and_fetch()     — web_search + fetch top result
+Public API:
+  - web_search()              — SearXNG query → structured results (list[dict])
+  - web_search_context()      — search → formatted numbered snippets for chat
+  - web_search_and_fetch()    — search + fetch top result's extracted text
+  - web_fetch()               — single known URL → extracted text (HTML/trafilatura)
 
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
@@ -71,13 +70,16 @@ _FETCH_CACHE = TTLCache(
 
 # ── Public API ──────────────────────────────────────────────────────────
 
-def fetch_search_results(
+def web_search(
     query: str, max_results: int, pageno: int = 1
 ) -> tuple[list[dict] | None, str | None]:
-    """Fetch raw search results from SearXNG backend.
+    """Search the web via SearXNG. Returns structured results.
 
-    Handles retries on transient failures and caches results. Returns
-    unformatted structured data suitable for ranking and filtering.
+    The core search primitive — unformatted structured data suitable for
+    ranking, filtering, and programmatic use. For chat-display formatting
+    use web_search_context().
+
+    Handles retries on transient failures and caches results.
 
     Args:
         query: Search query string.
@@ -96,7 +98,7 @@ def fetch_search_results(
     cached = _SEARCH_CACHE.get(cache_key)
     if cached is not None:
         return cached, None
- 
+
     if importlib.util.find_spec("requests") is None:
         return None, "[search failed: requests is not installed]"
     requests = importlib.import_module("requests")
@@ -125,12 +127,12 @@ def fetch_search_results(
             return None, f"[search failed: {e}]"
     else:
         return None, last_error or "[search failed: max retries]"
- 
+
     results = data.get("results", [])[:max_results]
     _SEARCH_CACHE.set(cache_key, results)
     return results, None
- 
- 
+
+
 def web_fetch(
     url: str,
     max_chars: int = WEB_FETCH_MAX_CHARS,
@@ -184,30 +186,51 @@ def web_fetch(
     return result
 
 
-def web_search(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
-    """
-    Search the web and return formatted numbered snippets.
-    
-    User-friendly wrapper around _fetch_search_results(). Formats raw results
-    as a readable numbered list. For structured data (e.g., ranking), use
-    _fetch_search_results() directly.
-    
+def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str | None:
+    """Search the web and return numbered snippets as chat context.
+
+    Calls web_search() for structured results, then formats them as a
+    readable numbered list. Returns None on failure so callers can
+    fall back gracefully.
+
     Args:
         query: Search query string.
         max_results: Number of results to fetch (default SEARXNG_MAX_RESULTS=5).
 
     Returns:
-        Formatted string on success, or a bracketed error string starting
-        with "[search failed:" or "[no results found for:".
-
-    Notes:
-        Always returns a string; never raises exceptions.
-        Results cached same as fetch_search_results().
-        Only fetches page 1 (use fetch_search_results for pagination).
+        Formatted numbered list on success, or None if the search failed
+        or returned no results.
     """
-    if not query.strip():
-        return "[search failed: empty query]"
-    results, error = fetch_search_results(query, max_results, pageno=1)
+    if not query or not query.strip():
+        return None
+    results, error = web_search(query, max_results, pageno=1)
+    if error or not results:
+        return None
+
+    lines = [f"[Web search results for: {query}]"]
+    for i, result in enumerate(results, 1):
+        title = result.get("title", "").strip()
+        url = result.get("url", "").strip()
+        content = result.get("content", "").strip()
+        lines.append(f"{i}. {title}\n   {url}\n   {content}")
+
+    return f"{'\n\n'.join(lines)}\n\nUser asked: {query}"
+
+
+def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
+    """Search the web and fetch the top result's content.
+
+    Calls web_search() for structured results, formats them as a numbered
+    list, then fetches the top result's URL via web_fetch().
+
+    Args:
+        query: Search query string.
+        max_results: Number of search results to fetch (default 5).
+
+    Returns:
+        Formatted string with search results and fetched content, or error.
+    """
+    results, error = web_search(query, max_results, pageno=1)
     if error:
         return error
     if not results:
@@ -220,61 +243,13 @@ def web_search(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
         content = result.get("content", "").strip()
         lines.append(f"{i}. {title}\n   {url}\n   {content}")
 
-    return "\n\n".join(lines)
+    search_text = "\n\n".join(lines)
+    top_url = results[0].get("url", "").strip()
+    if not top_url:
+        return search_text
 
-
-def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str | None:
-    """Run web_search and wrap successful results as chat context.
-
-    Args:
-        query: Search query string.
-        max_results: Number of results to fetch (default SEARXNG_MAX_RESULTS=5).
-
-    Returns:
-        Search results with "User asked: {query}" appended, or None if the
-        search failed or returned no results.
-    """
-
-    if not query or not query.strip():
-        return "[search failed: empty query]"
-    results = web_search(query, max_results)
-    if results.startswith("[search failed") or results.startswith("[no results"):
-        return None
-    return f"{results}\n\nUser asked: {query}"
-
-
-def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
-    """
-    Perform web search and fetch top results.
-
-    Executes web_search() then web_fetch() on the top result URL.
-    Returns formatted search results + fetched content, or error message.
-
-    Args:
-        query: Search query string.
-        max_results: Number of search results to fetch (default 5).
-
-    Returns:
-        Formatted string with search results and fetched content, or error.
-    """
-    search_result = web_search(query, max_results)
-    if search_result.startswith("[search failed") or search_result.startswith("[no results"):
-        return search_result
-
-    # Extract URL from top result
-    lines = search_result.split("\n")
-    if len(lines) < 4:
-        return "[fetch failed: unexpected search result format]"
-
-    url_line = lines[2]
-    match = re.search(r"^\s*(https?://[^\s]+)", url_line)
-    if not match:
-        return "[fetch failed: could not extract URL from search result]"
-
-    url = match.group(1)
-    fetch_result = web_fetch(url, max_chars=WEB_FETCH_MAX_CHARS)
-
-    return f"{search_result}\n\n---\n\nFetched content:\n{fetch_result}"
+    fetch_result = web_fetch(top_url, max_chars=WEB_FETCH_MAX_CHARS)
+    return f"{search_text}\n\n---\n\nFetched content:\n{fetch_result}"
 
 
 

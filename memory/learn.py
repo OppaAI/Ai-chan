@@ -81,7 +81,7 @@ load_config()
 
 from cognition import reason
 from agentic.toolkit.ingest import _check_host_ssrf
-from agentic.toolkit.websearch import fetch_search_results, web_fetch
+from agentic.toolkit.websearch import web_search, web_fetch
 from agentic.toolkit.research import deep_research
 from agentic.toolkit.common import ask_llm_json as _ask_llm_json
 
@@ -624,7 +624,7 @@ def deep_studying(
     still distilled and handed to on_distilled before returning, it just
     won't start a new iteration. There is no hard external rate-limit
     handling here beyond the per-host minimum interval — if your search
-    backend (SearXNG) itself starts throttling, fetch_search_results' error
+    backend (SearXNG) itself starts throttling, web_search's error
     path will surface that as an empty round and this loop will simply
     stop, same as deep_research does today.
 
@@ -668,7 +668,7 @@ def deep_studying(
             explored.append(current_query)
             iterations_run += 1
 
-            results, error = fetch_search_results(current_query, results_per_query, pageno=1)
+            results, error = web_search(current_query, results_per_query, pageno=1)
             if error:
                 log.info("[deep_studying] search failed for %r: %s", current_query, error)
                 continue
