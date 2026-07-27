@@ -32,6 +32,7 @@ from agentic.graph_engine import (
     _default_playbooks,
     load_playbooks,
     _score_plan,
+    _SEMANTIC_TRIGGER_CACHE,
     _title,
     _heuristic_items,
     _placeholder_extras,
@@ -229,6 +230,30 @@ class TestPlanScoring:
         score = _score_plan(plan, "I want a thorough research report on this topic", ["research"], embedder)
         # Should get semantic boost (cosine similarity high -> +5)
         assert score >= 8  # 3 trigger + 3 cap + semantic boost
+
+
+    def test_semantic_triggers_are_cached(self):
+        class CountingEmbedder:
+            def __init__(self):
+                self.calls = []
+
+            def embed_query(self, text: str, instruct: str = "") -> np.ndarray:
+                self.calls.append(text)
+                return np.array([1.0, 0.0], dtype=np.float32)
+
+        _SEMANTIC_TRIGGER_CACHE.clear()
+        plan = {
+            "triggers": [],
+            "requires_any": [],
+            "capabilities": [],
+            "semantic_triggers": ["static semantic trigger"],
+        }
+        embedder = CountingEmbedder()
+        prompt_vec = np.array([1.0, 0.0], dtype=np.float32)
+
+        assert _score_plan(plan, "prompt", embedder=embedder, prompt_vec=prompt_vec) == 5
+        assert _score_plan(plan, "prompt", embedder=embedder, prompt_vec=prompt_vec) == 5
+        assert embedder.calls == ["static semantic trigger"]
 
     def test_compare_playbook_rejected_without_subjects(self):
         """compare_and_report should be rejected if no comparison subjects found."""
@@ -672,6 +697,16 @@ class TestGraphStateMethods:
         state.record_tool_execution("tool1", {"arg": "val"}, "res")
         executions = state.get_tool_executions()
         assert len(executions) == 1
+
+    def test_graph_state_tool_execution_log_is_capped(self, monkeypatch):
+        monkeypatch.setattr(schema, "GRAPH_TOOL_EXECUTION_LOG_MAX", 2)
+        state = GraphState()
+
+        for idx in range(4):
+            state.record_tool_execution(f"tool{idx}", {}, f"result{idx}")
+
+        executions = state.get_tool_executions()
+        assert [entry["tool"] for entry in executions] == ["tool2", "tool3"]
 
 
 class TestPlanNodeNewFields:

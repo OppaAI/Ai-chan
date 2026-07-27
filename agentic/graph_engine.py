@@ -96,7 +96,7 @@ def _apply_reducer(current: Any, new: Any, strategy: str | None) -> Any:
 
 GRAPH_AGENT_ENABLED = os.getenv("GRAPH_AGENT_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 GRAPH_AGENT_PLAYBOOK = os.getenv("GRAPH_AGENT_PLAYBOOK", "agentic/playbook.json")
-GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "4"))
+GRAPH_MAX_WORKERS = int(os.getenv("GRAPH_MAX_WORKERS", "2"))
 
 # Goal-verification tiers — each independently toggleable so users can match
 # their hardware budget.  Heuristic is always cheap; embedder reuses the
@@ -108,6 +108,8 @@ GRAPH_VERIFY_LLM = os.getenv("GRAPH_VERIFY_LLM", "0").lower() in {"1", "true", "
 # Kept in sync with agentic.py's AGENT_NOTE_MAX_CHARS so a note saved via the
 # graph executor can't end up longer than one saved via the ReAct path.
 AGENT_NOTE_MAX_CHARS = int(os.getenv("AGENT_NOTE_MAX_CHARS", "5000"))
+GRAPH_TOOL_EXECUTION_LOG_MAX = int(os.getenv("GRAPH_TOOL_EXECUTION_LOG_MAX", "100"))
+GRAPH_NODE_RESULT_MAX_CHARS = int(os.getenv("GRAPH_NODE_RESULT_MAX_CHARS", "20000"))
 
 # Cost tracking — env-driven so Jetson local can set 0, cloud can override.
 GRAPH_COST_PER_1M_INPUT = float(os.getenv("GRAPH_COST_PER_1M_INPUT", "0"))
@@ -116,6 +118,53 @@ GRAPH_COST_PER_1M_OUTPUT = float(os.getenv("GRAPH_COST_PER_1M_OUTPUT", "0"))
 _TOOL_MAP_CACHE: dict[str, Callable[..., Any]] | None = None
 _TOOL_MAP_LOCK = threading.Lock()
 _PLAYBOOK_WRITE_LOCK = threading.Lock()
+_SEMANTIC_TRIGGER_CACHE: dict[tuple[int, str], Any] = {}
+_SEMANTIC_TRIGGER_LOCK = threading.Lock()
+
+
+def _trim_node_content(content: Any) -> str:
+    text = str(content)
+    if GRAPH_NODE_RESULT_MAX_CHARS > 0 and len(text) > GRAPH_NODE_RESULT_MAX_CHARS:
+        return text[:GRAPH_NODE_RESULT_MAX_CHARS] + "\n[truncated by GRAPH_NODE_RESULT_MAX_CHARS]"
+    return text
+
+
+def _semantic_trigger_matrix(embedder, semantic_triggers: list[Any]):
+    """Return cached normalized vectors for static playbook semantic triggers."""
+    if embedder is None or not semantic_triggers:
+        return None
+    try:
+        import numpy as np
+        from cognition import reason
+    except Exception:
+        return None
+    missing: list[str] = []
+    vectors: list[Any] = []
+    embedder_id = id(embedder)
+    with _SEMANTIC_TRIGGER_LOCK:
+        for raw in semantic_triggers:
+            text = str(raw)
+            key = (embedder_id, hashlib.sha256(text.encode("utf-8")).hexdigest())
+            cached = _SEMANTIC_TRIGGER_CACHE.get(key)
+            if cached is None:
+                missing.append(text)
+            else:
+                vectors.append(cached)
+    for text in missing:
+        try:
+            vec = reason.normalize_vec(np.asarray(embedder.embed_query(text), dtype=np.float32))
+        except Exception:
+            continue
+        key = (embedder_id, hashlib.sha256(text.encode("utf-8")).hexdigest())
+        with _SEMANTIC_TRIGGER_LOCK:
+            _SEMANTIC_TRIGGER_CACHE[key] = vec
+        vectors.append(vec)
+    if not vectors:
+        return None
+    try:
+        return np.vstack(vectors)
+    except Exception:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +265,8 @@ class GraphState:
             "result": str(result)[:500],
             "iteration": self.iteration(),
         })
+        if GRAPH_TOOL_EXECUTION_LOG_MAX > 0 and len(exec_log) > GRAPH_TOOL_EXECUTION_LOG_MAX:
+            exec_log = exec_log[-GRAPH_TOOL_EXECUTION_LOG_MAX:]
         self.set("_tool_executions", exec_log)
 
     def get_tool_executions(self, tool_name: str | None = None) -> list[dict]:
@@ -692,7 +743,7 @@ def load_playbooks() -> list[dict[str, Any]]:
 
 
 def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = None,
-                embedder=None) -> int:
+                embedder=None, prompt_vec=None) -> int:
     text = prompt.casefold()
     triggers = [str(t).casefold() for t in plan.get("triggers", [])]
     required = [str(t).casefold() for t in plan.get("requires_any", [])]
@@ -710,21 +761,19 @@ def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = N
     if embedder is not None and sem_triggers:
         try:
             import numpy as np
-            from cognition import reason
-            prompt_vec = reason.normalize_vec(np.asarray(embedder.embed_query(prompt), dtype=np.float32))
-            best = 0.0
-            for st in sem_triggers:
-                st_vec = reason.normalize_vec(np.asarray(embedder.embed_query(st), dtype=np.float32))
-                cos = float(np.dot(prompt_vec, st_vec))
-                if cos > best:
-                    best = cos
-            # Scale: 0.7+ cos = strong match (adds ~5), 0.5+ = moderate (adds ~3)
-            if best >= 0.7:
-                score += 5
-            elif best >= 0.5:
-                score += 3
-            elif best >= 0.35:
-                score += 1
+            if prompt_vec is None:
+                from cognition import reason
+                prompt_vec = reason.normalize_vec(np.asarray(embedder.embed_query(prompt), dtype=np.float32))
+            matrix = _semantic_trigger_matrix(embedder, sem_triggers)
+            if matrix is not None:
+                best = float(np.max(matrix @ prompt_vec))
+                # Scale: 0.7+ cos = strong match (adds ~5), 0.5+ = moderate (adds ~3)
+                if best >= 0.7:
+                    score += 5
+                elif best >= 0.5:
+                    score += 3
+                elif best >= 0.35:
+                    score += 1
         except Exception:
             pass
     return score
@@ -789,7 +838,15 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
     if not GRAPH_AGENT_ENABLED:
         return None
     plans = load_playbooks()
-    ranked = sorted(((_score_plan(p, user_input, cap_ids, embedder), p) for p in plans), key=lambda x: x[0], reverse=True)
+    prompt_vec = None
+    if embedder is not None:
+        try:
+            import numpy as np
+            from cognition import reason
+            prompt_vec = reason.normalize_vec(np.asarray(embedder.embed_query(user_input), dtype=np.float32))
+        except Exception:
+            prompt_vec = None
+    ranked = sorted(((_score_plan(p, user_input, cap_ids, embedder, prompt_vec), p) for p in plans), key=lambda x: x[0], reverse=True)
     if not ranked or ranked[0][0] <= 0:
         return None
     plan = ranked[0][1]
@@ -1088,7 +1145,7 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
                 time.sleep(wait)
             out = fn(**call_args)
             usage = state.data.pop("_usage", None) if state else None
-            return NodeResult(node.id, node.tool, True, str(out), args=args, usage=usage)
+            return NodeResult(node.id, node.tool, True, _trim_node_content(out), args=args, usage=usage)
         except Exception as e:
             last_exc = e
             log.warning("Node %s retry %d/%d raised: %s", node.id, attempt + 1, node.max_retries + 1, str(e))
@@ -1101,7 +1158,7 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
         return NodeResult(
             node.id, node.tool,
             ok=False,
-            content=str(last_exc),
+            content=_trim_node_content(last_exc),
             args=args,
             error_type="exception_after_retries",
             usage=state.data.pop("_usage", None) if state else None,
@@ -1333,7 +1390,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                                 try:
                                     fallback_out = fallback_fn(**call_args)
                                     fallback_usage = state.data.pop("_usage", None) if state else None
-                                    fallback_result = NodeResult(fallback_node.id, fallback_node.tool, True, str(fallback_out), 
+                                    fallback_result = NodeResult(fallback_node.id, fallback_node.tool, True, _trim_node_content(fallback_out),
                                                               args=fallback_args, usage=fallback_usage)
                                     results[fallback_node.id] = fallback_result
                                     ordered.append(fallback_result)
