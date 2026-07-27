@@ -1007,6 +1007,9 @@ def _list_candidates(inbox: str, limit: int) -> list[Path]:
     IMAGE_EXTENSIONS (no video formats) — video support would need to be
     added upstream in agentic/toolkit/photography.py first."""
     raw = scan_photo_workspace(inbox, limit)
+    if not isinstance(raw, str):
+        log.warning("scan_photo_workspace returned non-string: %s", type(raw).__name__)
+        return []
     match = re.search(r"\{.*\}", raw or "", flags=re.DOTALL)
     if not match:
         log.warning("Could not parse scan_photo_workspace output: %r", (raw or "")[:200])
@@ -1434,6 +1437,9 @@ def _list_video_candidates(inbox: str, limit: int) -> list[Path]:
     output shape. Same upstream caveat: the tool's own "files" preview is
     hardcapped at 50 regardless of the limit passed here."""
     raw = scan_video_workspace(inbox, limit)
+    if not isinstance(raw, str):
+        log.warning("scan_video_workspace returned non-string: %s", type(raw).__name__)
+        return []
     match = re.search(r"\{.*\}", raw or "", flags=re.DOTALL)
     if not match:
         log.warning("Could not parse scan_video_workspace output: %r", (raw or "")[:200])

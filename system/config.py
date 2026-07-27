@@ -87,6 +87,26 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     return data or {}
 
 
+def load_yaml(path: Path) -> dict[str, Any]:
+    """Load a YAML file from the given path.
+    
+    Args:
+        path: Path to the YAML file (absolute or relative to config dir).
+        
+    Returns:
+        Parsed YAML content as a dictionary.
+        
+    Raises:
+        FileNotFoundError: If the file doesn't exist.
+        ValueError: If the YAML is invalid.
+    """
+    path = Path(path)
+    if not path.is_absolute():
+        # Default to config directory
+        path = Path(__file__).parent.parent / "config" / path
+    return _load_yaml_mapping(path)
+
+
 def _stringify(value: Any) -> str:
     if value is None:
         return ""

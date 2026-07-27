@@ -245,6 +245,12 @@ RESEARCH_SITEMAP_ENABLED: "1"  # 1 to let deep_research widen candidate URLs via
 RESEARCH_SITEMAP_MAX_URLS: "6"  # Max sitemap-discovered URLs added per round, on top of the normal DEEP_RESEARCH_NUM_FETCHES search-derived URLs.
 RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots.txt/sitemap.xml during discovery.
 
+RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots.txt/sitemap.xml during discovery.
+
+# -- deep_study_window (scheduled autonomous study) --
+DEEP_STUDY_TOPIC: ""  # Optional topic for autonomous deep-study windows. Leave empty to skip or set dynamically via memorize.pending_deep_study_topic. Example: "quantum computing fundamentals".
+DEEP_STUDY_WINDOW_TIMEZONE: ""  # Timezone for the daily study window (e.g., "America/New_York"). Empty uses local system timezone.
+
 # -- web_fetch download guard & caching --
 WEB_FETCH_MAX_DOWNLOAD_BYTES: "5_000_000"  # Hard byte cap per fetch; download aborted mid-stream before extraction/truncation, bounding worst-case memory for one fetch.
 WEB_FETCH_TIMEOUT_SECONDS: "8"  # Per-request timeout for web_fetch's underlying HTTP call.

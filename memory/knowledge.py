@@ -204,32 +204,29 @@ def _connect(user_id: str | None = None) -> sqlite3.Connection:
 
 def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | None = None) -> None:
     """Add missing columns to knowledge tables if they don't exist."""
+    # Check learned_chunks table for access_count and last_accessed
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks)").fetchall()]
+    if "access_count" not in cols:
+        conn.execute("ALTER TABLE learned_chunks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
+        log.info("[knowledge] Added missing access_count column to learned_chunks")
+    if "last_accessed" not in cols:
+        conn.execute("ALTER TABLE learned_chunks ADD COLUMN last_accessed TEXT")
+        log.info("[knowledge] Added missing last_accessed column to learned_chunks")
+    if "archived_at" not in cols:
+        conn.execute("ALTER TABLE learned_chunks ADD COLUMN archived_at TEXT")
+        log.info("[knowledge] Added missing archived_at column to learned_chunks")
+
+    # Check learned_chunks_archive table
     try:
-        # Check learned_chunks table for access_count and last_accessed
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks)").fetchall()]
-        if "access_count" not in cols:
-            conn.execute("ALTER TABLE learned_chunks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
-            log.info("[knowledge] Added missing access_count column to learned_chunks")
-        if "last_accessed" not in cols:
-            conn.execute("ALTER TABLE learned_chunks ADD COLUMN last_accessed TEXT")
-            log.info("[knowledge] Added missing last_accessed column to learned_chunks")
-        if "archived_at" not in cols:
-            conn.execute("ALTER TABLE learned_chunks ADD COLUMN archived_at TEXT")
-            log.info("[knowledge] Added missing archived_at column to learned_chunks")
+        archive_cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks_archive)").fetchall()]
+        if "access_count" not in archive_cols:
+            conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
+        if "last_accessed" not in archive_cols:
+            conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN last_accessed TEXT")
+    except sqlite3.OperationalError:
+        pass  # table might not exist yet
 
-        # Check learned_chunks_archive table
-        try:
-            archive_cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks_archive)").fetchall()]
-            if "access_count" not in archive_cols:
-                conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
-            if "last_accessed" not in archive_cols:
-                conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN last_accessed TEXT")
-        except sqlite3.OperationalError:
-            pass  # table might not exist yet
-
-        conn.commit()
-    except Exception as e:
-        log.warning("[knowledge] Schema migration check failed: %s", e)
+    conn.commit()
 
 
 def _now() -> str:

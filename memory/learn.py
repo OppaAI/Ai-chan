@@ -765,12 +765,12 @@ def _pick_window_topic(memorize) -> str | None:
     curiosity/topic-selection policy, so it just checks for an optional
     `pending_deep_study_topic` attribute on the memory store (a place your
     own code — e.g. reflection, or a `/deep-study <topic>` command — could
-    stash a topic ahead of time) and otherwise declines to start rather
-    than guessing at a topic. Replace with real topic-selection logic
-    (e.g. pull the least-covered item from GRACE's knowledge graph, or the
-    top item in a backlog) whenever that's ready.
+    stash a topic ahead of time). If not set, falls back to the
+    `DEEP_STUDY_TOPIC` environment variable. Replace with real topic-selection
+    logic (e.g. pull the least-covered item from GRACE's knowledge graph, or
+    the top item in a backlog) whenever that's ready.
     """
-    return getattr(memorize, "pending_deep_study_topic", None) or None
+    return getattr(memorize, "pending_deep_study_topic", None) or os.getenv("DEEP_STUDY_TOPIC", "").strip() or None
 
 
 class _DeepStudySessionManager:
@@ -886,10 +886,17 @@ def register_deep_study_handlers(client=None, model=None, timezone: str | None =
 
     from system import schedule as _schedule
 
+    # Read study topic from config if not already set
+    study_topic = os.getenv("DEEP_STUDY_TOPIC", "").strip()
+    if study_topic:
+        # Set as pending topic for the next window start
+        # This will be picked up by _pick_window_topic
+        pass  # handled by wakeup or direct assignment
+
     _schedule.register_system_handler(
         "deep_study_start",
         functools.partial(deep_study_window_start, client=client, model=model),
     )
     _schedule.register_system_handler("deep_study_stop", deep_study_window_stop)
-    _schedule.ensure_deep_study_window_jobs(timezone=timezone)
+    _schedule.ensure_deep_study_window_jobs(timezone=timezone or os.getenv("DEEP_STUDY_WINDOW_TIMEZONE", ""))
     log.info("[deep_study_window] handlers registered and window jobs ensured.")
