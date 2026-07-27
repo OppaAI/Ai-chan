@@ -45,12 +45,12 @@ from system.log import get_logger
 from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.registry import tool
 from agentic.toolkit.websurf import (
-    _web_search_raw,
+    fetch_search_results,
     _download_bytes,
     _sniff_content_type,
     _extract_with_markitdown,
     web_fetch,
-    MAX_RESULTS,
+    SEARXNG_MAX_RESULTS,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
 
@@ -343,7 +343,7 @@ def search_and_rank(prompt: str = "") -> str:
     """Graph tool: snippet-only search, results ranked by domain authority
     (not just search-engine order). Returns JSON list of candidates so the
     next node (fetch_and_condense_ranked) can pick the top N."""
-    results, error = _web_search_raw(prompt, MAX_RESULTS, pageno=1)
+    results, error = fetch_search_results(prompt, SEARXNG_MAX_RESULTS, pageno=1)
     if error or not results:
         return json.dumps({"error": error or "no results", "candidates": []})
     ranked = sorted(results, key=lambda r: authority_bonus(r.get("url", ""), prompt), reverse=True)
@@ -933,7 +933,7 @@ def _deep_search_impl(
     snippets = []
     seen_urls = set()
     for i in range(num_searches):
-        raw, err = _web_search_raw(query, MAX_RESULTS, pageno=i + 1)
+        raw, err = fetch_search_results(query, SEARXNG_MAX_RESULTS, pageno=i + 1)
         if err:
             log.warning("[_deep_search_impl] search %d failed: %s", i + 1, err)
             continue

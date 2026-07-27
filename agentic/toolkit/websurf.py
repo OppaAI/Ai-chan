@@ -9,7 +9,7 @@ these via the graph executor (research_graph.py) or ReAct loop.
   - web_search()              — SearXNG query → numbered snippets
   - web_fetch()                — single URL → extracted text (HTML/trafilatura)
   - web_search_context()       — chat-mode wrapper around web_search
-  - _web_search_raw()          — low-level SearXNG call (raw JSON)
+  - fetch_search_results()     — low-level SearXNG call (raw JSON)
   - _download_bytes()          — shared streamed/size-capped byte download
   - _sniff_content_type()      — HEAD/extension based format classification
   - _extract_with_markitdown() — non-HTML document → markdown text
@@ -17,7 +17,6 @@ these via the graph executor (research_graph.py) or ReAct loop.
  
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
-
 
 from __future__ import annotations
  
@@ -42,7 +41,12 @@ from agentic.toolkit.cache import TTLCache
 log = get_logger(__name__)
  
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
-MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
+SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
+SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
+SEARXNG_TIMEOUT_SECONDS = int(os.getenv("SEARXNG_TIMEOUT_SECONDS", 8))
+SEARXNG_MAX_RETRIES = int(os.getenv("SEARXNG_MAX_RETRIES", 3))
+SEARXNG_RETRY_BASE_DELAY = float(os.getenv("SEARXNG_RETRY_BASE_DELAY", 1.0))
+SEARXNG_RATE_LIMIT_DELAY = float(os.getenv("SEARXNG_RATE_LIMIT_DELAY", 2.0))
  
 # -- web_fetch download guard --
 WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
@@ -95,15 +99,38 @@ _FETCH_CACHE = TTLCache(
 )
 
 
-def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list[dict] | None, str | None]:
-    """Low-level SearXNG call returning (results, error). Cached in-process
-    via TTLCache for TOOLS_CACHE_TTL_SECONDS, keyed on (query, max_results, pageno).
-    
-    Returns (results, None) on success, or (None, error_string) on failure.
+def fetch_search_results(query: str, max_results: int, pageno: int = 1):
     """
-    cache_key = f"{query}|{max_results}|{pageno}"
+    Fetch raw search results from SearXNG backend.
     
-    # Check cache first
+    Queries SearXNG, handles retries on transient failures (3x with backoff),
+    and caches results for TOOLS_CACHE_TTL_SECONDS. Returns unformatted structured
+    data suitable for processing (ranking, pagination, filtering).
+    
+    Args:
+        query: Search query string.
+        max_results: Maximum results to return for this page.
+        pageno: Pagination number (1-indexed, default 1).
+    
+    Returns:
+        (results_list, None) on success — list of dicts with 'title', 'url', 'content'.
+        (None, error_msg) on failure — error string starting with "[search failed:".
+        
+        Returns empty list [] if SearXNG finds no results (not an error).
+    
+    Caching:
+        Results cached for ~15 min keyed on (query, max_results, pageno).
+        Identical queries within TTL return immediately.
+    
+    Retry:
+        - Connection errors: 3 retries with 1s, 2s, 3s backoff.
+        - HTTP 429 (rate limited): 3 retries with 2s, 4s, 6s backoff.
+        - Other errors: fail immediately, no retry.
+    """
+    if not query.strip():
+        return [], "[search failed: empty query]"
+
+    cache_key = f"{query}|{max_results}|{pageno}"
     cached = _SEARCH_CACHE.get(cache_key)
     if cached is not None:
         return cached, None
@@ -113,23 +140,22 @@ def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list
     requests = importlib.import_module("requests")
     
     last_error = None
-    for attempt in range(3):
+    for attempt in range(SEARXNG_MAX_RETRIES):
         try:
             response = requests.get(
                 f"{SEARXNG_URL}/search",
                 params={"q": query, "format": "json", "pageno": pageno},
-                timeout=8,
+                timeout=SEARXNG_TIMEOUT_SECONDS,
             )
             if response.status_code == 429:
-                last_error = f"[search failed: rate limited (attempt {attempt + 1})]"
-                time.sleep(2.0 * (attempt + 1))
+                time.sleep(SEARXNG_RATE_LIMIT_DELAY * (attempt + 1))
                 continue
             response.raise_for_status()
             data = response.json()
             break
         except requests.exceptions.ConnectionError as e:
             last_error = f"[search failed: {e}]"
-            time.sleep(1.0 * (attempt + 1))
+            time.sleep(SEARXNG_RETRY_BASE_DELAY * (attempt + 1))
             continue
         except ValueError:
             return None, "[search failed: invalid JSON response]"
@@ -139,7 +165,7 @@ def _web_search_raw(query: str, max_results: int, pageno: int = 1) -> tuple[list
         return None, last_error or "[search failed: max retries]"
  
     results = data.get("results", [])[:max_results]
-    _SEARCH_CACHE.set(cache_key, results)  # <-- NEW: Use TTLCache.set()
+    _SEARCH_CACHE.set(cache_key, results)
     return results, None
  
  
@@ -198,8 +224,29 @@ def web_fetch(
 
 
 def web_search(query: str, max_results: int = MAX_RESULTS) -> str:
-    """Search the web via SearXNG and return compact numbered results."""
-    results, error = _web_search_raw(query, max_results, pageno=1)
+    """
+    Search the web and return formatted numbered snippets.
+    
+    User-friendly wrapper around _fetch_search_results(). Formats raw results
+    as a readable numbered list. For structured data (e.g., ranking), use
+    _fetch_search_results() directly.
+    
+    Args:
+        query: Search query string.
+        max_results: Number of results to fetch (default MAX_RESULTS=5).
+    
+    Returns:
+        Formatted string: "[Web search results for: query]\n1. title\n   url\n   snippet\n..."
+        Or error string: "[search failed: reason]" or "[no results found for: query]"
+    
+    Notes:
+        Always returns a string; never raises exceptions.
+        Results cached same as _fetch_search_results().
+        Only fetches page 1 (use _fetch_search_results for pagination).
+    """
+    if not query.strip():
+        return "[search failed: empty query]"
+    results, error = fetch_search_results(query, max_results, pageno=1)
     if error:
         return error
     if not results:
@@ -289,55 +336,6 @@ def _download_bytes(
     return downloaded, None
 
 
-def web_fetch(
-    url: str,
-    max_chars: int = 4000,
-    max_download_bytes: int = WEB_FETCH_MAX_DOWNLOAD_BYTES,
-    use_cache: bool = True,
-) -> str:
-    """Fetch a single URL and extract its main article/body text with trafilatura.
-
-    This is the baseline "fetch a page" primitive in the toolkit — fast,
-    dependency-light, no JS rendering. deep_research prefers Crawl4AI when
-    available (see _crawl4ai_fetch_many) and falls back to this for anything
-    Crawl4AI misses or when it isn't installed.
-
-    Downloads are streamed and capped at max_download_bytes via
-    _download_bytes, aborted mid-stream BEFORE trafilatura ever runs
-    extraction and BEFORE max_chars truncation — this is what bounds
-    worst-case memory for a single fetch.
-
-    Successful fetches are cached in-process for CACHE_TTL_SECONDS keyed on
-    (url, max_chars). Failed fetches are never cached.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return f"[fetch failed: unsupported URL scheme: {parsed.scheme or 'none'}]"
-    if _is_private_or_local_host(parsed.hostname):
-        return "[fetch failed: URL host is not allowed]"
-
-    cache_key = f"{url}|{max_chars}"
-    if use_cache:
-        cached = _cache_get(_fetch_cache, cache_key)
-        if cached is not None:
-            return cached
-
-    if importlib.util.find_spec("trafilatura") is None:
-        return "[fetch failed: trafilatura is not installed]"
-    trafilatura = importlib.import_module("trafilatura")
-
-    downloaded, error = _download_bytes(url, max_download_bytes)
-    if error:
-        return error
-
-    try:
-        text = trafilatura.extract(downloaded, include_links=False, include_tables=False) or ""
-    except Exception as e:
-        return f"[fetch failed: {e}]"
-
-    result = text[:max_chars] if text else "[fetch failed: no extractable text]"
-    if use_cache and text:
-        _cache_set(_fetch_cache, cache_key, result)
     return result
 
 
@@ -496,7 +494,20 @@ def _fetch_and_score_pipeline(
 
 
 def web_search_context(query: str, max_results: int = MAX_RESULTS) -> str | None:
-    """Run web_search and wrap successful results as context for chat mode."""
+    """
+    Run web_search and wrap successful results as chat context.
+    
+    Returns formatted search results with the query appended for LLM context,
+    or None if search failed/had no results.
+    
+    Args:
+        query: Search query.
+        max_results: Number of results (default MAX_RESULTS=5).
+    
+    Returns:
+        Formatted string with results + "User asked: {query}" or None on failure.
+    """
+
     if not query or not query.strip():
         return "[search failed: empty query]"
     results = web_search(query, max_results)

@@ -25,14 +25,21 @@ load_config()
 from agentic.toolkit.websurf import (
     web_search,
     web_fetch,
+    fetch_search_results,
+    _download_bytes,
+    _sniff_content_type,
+    _extract_with_markitdown,
+    _is_private_or_local_host,
+    _fetch_and_score_pipeline,
+    web_search_context,
+)
+from agentic.toolkit.research import (
     condense_evidence,
-    read_paper_url,
-    _web_search_raw,
     _score_url_chunks,
     _finalize_condensed,
     _apply_corroboration_bonus,
-    _fetch_and_score_pipeline,
     _deep_search_impl,
+    deep_research,
     DEEP_RESEARCH_NUM_FETCHES,
     DEEP_RESEARCH_NUM_SEARCHES,
     DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
@@ -41,7 +48,6 @@ from agentic.toolkit.websurf import (
     CONDENSE_TOP_K,
     CONDENSE_MIN_SCORE,
 )
-from agentic.toolkit.research import deep_research
 
 
 class FakeEmbedder:
@@ -71,67 +77,101 @@ class MockSearXNG:
         return self.results[:max_results], None
 
 
-class TestWebSearchRaw:
-    """Tests for _web_search_raw low-level SearXNG call."""
+class TestFetchSearchResults:
+    """Tests for fetch_search_results low-level SearXNG call."""
 
     def test_successful_search(self):
-        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {
-                "results": [
-                    {"title": "Test", "url": "https://example.com", "content": "test content"}
-                ]
-            }
-            mock_get.return_value = mock_resp
+        # Patch _SEARCH_CACHE (module-level, all caps), importlib.util.find_spec and importlib.import_module
+        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+            mock_cache_get.return_value = None  # cache miss
 
-            results, error = _web_search_raw("test query", 5)
-            assert error is None
-            assert len(results) == 1
-            assert results[0]["title"] == "Test"
+            with patch("importlib.util.find_spec") as mock_find_spec:
+                mock_find_spec.return_value = True  # requests is available
+
+                with patch("importlib.import_module") as mock_import:
+                    mock_requests = MagicMock()
+                    mock_get = MagicMock()
+                    mock_requests.get.return_value = mock_get
+                    mock_get.status_code = 200
+                    mock_get.json.return_value = {
+                        "results": [
+                            {"title": "Test", "url": "https://example.com", "content": "test content"}
+                        ]
+                    }
+                    mock_import.return_value = mock_requests
+
+                    results, error = fetch_search_results("test query", 5)
+                    assert error is None
+                    assert len(results) == 1
+                    assert results[0]["title"] == "Test"
 
     def test_rate_limit_retry(self):
-        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
-            # First two calls rate limited, third succeeds
-            mock_resp_429 = MagicMock()
-            mock_resp_429.status_code = 429
-            mock_resp_ok = MagicMock()
-            mock_resp_ok.status_code = 200
-            mock_resp_ok.json.return_value = {"results": [{"title": "OK", "url": "https://ok.com", "content": "ok"}]}
-            mock_get.side_effect = [mock_resp_429, mock_resp_429, mock_resp_ok]
+        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+            mock_cache_get.return_value = None  # cache miss
 
-            results, error = _web_search_raw("test", 5)
-            assert error is None
-            assert len(results) == 1
-            assert mock_get.call_count == 3
+            with patch("importlib.util.find_spec") as mock_find_spec:
+                mock_find_spec.return_value = True  # requests is available
+
+                with patch("importlib.import_module") as mock_import:
+                    mock_requests = MagicMock()
+                    mock_get_429 = MagicMock()
+                    mock_get_429.status_code = 429
+                    mock_get_ok = MagicMock()
+                    mock_get_ok.status_code = 200
+                    mock_get_ok.json.return_value = {"results": [{"title": "OK", "url": "https://ok.com", "content": "ok"}]}
+                    mock_requests.get.side_effect = [mock_get_429, mock_get_429, mock_get_ok]
+                    mock_import.return_value = mock_requests
+
+                    results, error = fetch_search_results("test", 5)
+                    assert error is None
+                    assert len(results) == 1
+                    assert mock_requests.get.call_count == 3
 
     def test_connection_error_retry(self):
         import requests
-        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
-            mock_get.side_effect = [
-                requests.exceptions.ConnectionError("conn error"),
-                MagicMock(status_code=200, json=lambda: {"results": []}),
-            ]
-            results, error = _web_search_raw("test", 5)
-            assert error is None
-            assert mock_get.call_count == 2
+        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+            mock_cache_get.return_value = None  # cache miss
+            with patch("importlib.util.find_spec") as mock_find_spec:
+                mock_find_spec.return_value = True  # requests is available
+
+                # Patch requests.get directly
+                call_count = [0]
+                def mock_get(*args, **kwargs):
+                    call_count[0] += 1
+                    if call_count[0] == 1:
+                        raise requests.exceptions.ConnectionError("conn error")
+                    resp = MagicMock()
+                    resp.status_code = 200
+                    resp.json.return_value = {"results": []}
+                    return resp
+
+                with patch("requests.get", side_effect=mock_get):
+                    results, error = fetch_search_results("test", 5)
+                    assert error is None
+                    assert call_count[0] == 2
 
     def test_invalid_json(self):
-        with patch("agentic.toolkit.websurf.requests.get") as mock_get:
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.side_effect = ValueError("bad json")
-            mock_get.return_value = mock_resp
+        import requests
+        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+            mock_cache_get.return_value = None  # cache miss
+            with patch("importlib.util.find_spec") as mock_find_spec:
+                mock_find_spec.return_value = True  # requests is available
 
-            results, error = _web_search_raw("test", 5)
-            assert "invalid JSON" in error
+                # Mock the response with invalid JSON
+                mock_get = MagicMock()
+                mock_get.status_code = 200
+                mock_get.json.side_effect = ValueError("bad json")
+
+                with patch("requests.get", return_value=mock_get):
+                    results, error = fetch_search_results("test", 5)
+                    assert "invalid JSON" in error
 
 
 class TestWebSearch:
     """Tests for web_search public function."""
 
     def test_formats_results(self):
-        with patch("agentic.toolkit.websurf._web_search_raw") as mock_raw:
+        with patch("agentic.toolkit.websurf.fetch_search_results") as mock_raw:
             mock_raw.return_value = (
                 [{"title": "T", "url": "https://u.com", "content": "c"}], None
             )
@@ -141,13 +181,13 @@ class TestWebSearch:
             assert "https://u.com" in result
 
     def test_no_results(self):
-        with patch("agentic.toolkit.websurf._web_search_raw") as mock_raw:
+        with patch("agentic.toolkit.websurf.fetch_search_results") as mock_raw:
             mock_raw.return_value = ([], None)
             result = web_search("nothing")
             assert "no results found" in result.lower()
 
     def test_search_failure_propagates(self):
-        with patch("agentic.toolkit.websurf._web_search_raw") as mock_raw:
+        with patch("agentic.toolkit.websurf.fetch_search_results") as mock_raw:
             mock_raw.return_value = (None, "connection failed")
             result = web_search("query")
             assert "search failed" in result.lower()
