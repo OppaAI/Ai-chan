@@ -62,7 +62,7 @@ class ToolRegistry:
         domain: Optional[str] = None,
         always_on: bool = False,
         react: bool = True,
-        graph: bool = True,
+        graph: bool = False,
         wiki: bool = False,
         skill: bool = False,
     ) -> ToolSpec:
