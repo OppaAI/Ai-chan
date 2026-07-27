@@ -218,11 +218,15 @@ def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | N
 
     # Check learned_chunks_archive table
     try:
-        archive_cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks_archive)").fetchall()]
-        if "access_count" not in archive_cols:
-            conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
-        if "last_accessed" not in archive_cols:
-            conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN last_accessed TEXT")
+        conn.execute("SELECT COUNT(*) FROM learned_chunks_archive LIMIT 1")
+        try:
+            archive_cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks_archive)").fetchall()]
+            if "access_count" not in archive_cols:
+                conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
+            if "last_accessed" not in archive_cols:
+                conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN last_accessed TEXT")
+        except sqlite3.OperationalError:
+            pass  # column might not exist yet
     except sqlite3.OperationalError:
         pass  # table might not exist yet
 
