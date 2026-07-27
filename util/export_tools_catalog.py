@@ -72,9 +72,12 @@ def _dump(data: dict[str, Any]) -> str:
         "# Runtime source of truth: @tool decorators.\n"
         "# Regenerate with: python util/export_tools_catalog.py\n"
     )
-    if yaml is not None:
-        return header + yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
-    return header + json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if yaml is None:
+        raise RuntimeError(
+            "PyYAML is required to generate config/tools.yaml. "
+            "Install with: pip install pyyaml"
+        )
+    return header + yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 
 def main() -> int:
