@@ -18,10 +18,12 @@ same tier of composition as adaptive_search/deep_research from the LLM's
 perspective (one opaque tool call), just without the graph machinery
 underneath.
 
-Sub-modules:
+Public API:
   - adaptive_search:     snippet-only → fetch only if judge says ESCALATE
   - deep_research_graph: multi-round fetch + combine + synthesize
   - deep_read:            known URL → content-type routed fetch (+ condense)
+  - condense_evidence:    relevance-score and filter evidence chunks
+  - fetch_urls_and_score: batch fetch + score URLs outside deep_research context
 """
 from __future__ import annotations
 
@@ -35,8 +37,9 @@ import os
 import re
 import time
 import uuid
-from typing import Any
 from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
+from typing import Any
 
 import numpy as np
 
@@ -781,6 +784,45 @@ def condense_evidence(
             break
     scored = _score_url_chunks(url_chunks, query, embedder, max_chunks_to_score)
     return _finalize_condensed(scored, query, top_k=top_k, min_score=min_score)
+
+
+def fetch_urls_and_score(
+    urls: list[str],
+    query: str,
+    embedder,
+    max_chars_per_page: int = 3500,
+    chunk_chars: int = CONDENSE_CHUNK_CHARS,
+    max_workers: int = DEEP_RESEARCH_MAX_WORKERS,
+    max_chunks_to_score: int = CONDENSE_MAX_CHUNKS_TO_SCORE,
+    fetch_fn=web_fetch,
+) -> tuple[list[tuple[str, str]], list[tuple[float, str, str]]]:
+    """Fetch multiple URLs concurrently, score their chunks for relevance
+    to `query`, and return (pages, scored_chunks).
+
+    Public wrapper around _fetch_and_score_pipeline for callers that
+    need batch fetch + relevance scoring outside deep_research/deep_read
+    (e.g. graph nodes, custom research workflows).
+
+    Args:
+        urls: URLs to fetch and score.
+        query: Relevance query for chunk scoring.
+        embedder: Embedder with .embed_query() method.
+        max_chars_per_page: Byte cap per URL download.
+        chunk_chars: Characters per chunk for scoring.
+        max_workers: Thread pool size for concurrent fetches.
+        max_chunks_to_score: Cap on total chunks scored.
+        fetch_fn: Fetch function to use (default web_fetch).
+
+    Returns:
+        (pages, scored_chunks) where pages = [(url, text), ...] and
+        scored_chunks = [(score, url, chunk), ...] sorted by score.
+    """
+    scored, pages, _outcomes = _fetch_and_score_pipeline(
+        urls, query, embedder, max_chars_per_page,
+        chunk_chars=chunk_chars, max_workers=max_workers,
+        max_chunks_to_score=max_chunks_to_score, fetch_fn=fetch_fn,
+    )
+    return pages, scored
 
 
 # ── fetch + scoring pipeline helpers ──────────────────────────────────
