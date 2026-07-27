@@ -17,7 +17,6 @@ Requires a running SearXNG instance (SEARXNG_URL env var).
 
 from __future__ import annotations
  
-import concurrent.futures
 import io
 import ipaddress
 import os
@@ -462,99 +461,3 @@ def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> 
     if not text:
         return "[fetch failed: markitdown returned no extractable text]"
     return text[:max_chars]
-
-
-# ── batch fetch + concurrent relevance scoring ──────────────────────────
-
-def _fetch_and_score_pipeline(
-    urls: list[str],
-    query: str,
-    embedder,
-    max_chars_per_page: int,
-    chunk_chars: int = 500,
-    max_workers: int = 4,
-    max_chunks_to_score: int = 60,
-    fetch_fn=web_fetch,
-    batch_prefetch_fn=None,
-) -> tuple[list[tuple[float, str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
-    """Fetch multiple URLs concurrently and score each page's chunks for relevance.
-
-    Processes pages as they finish (not after every URL completes). If
-    batch_prefetch_fn is given, it is called once with the full URL list up
-    front; uncovered URLs fall through to the per-URL thread-pool.
-
-    Args:
-        urls: URLs to fetch.
-        query: Relevance query for chunk scoring.
-        embedder: Embedder instance for semantic scoring.
-        max_chars_per_page: Max characters to fetch per URL.
-        chunk_chars: Character size for chunking page text.
-        max_workers: Max concurrent fetches.
-        max_chunks_to_score: Max total chunks to score across all pages.
-        fetch_fn: Per-URL fetch function (default web_fetch).
-        batch_prefetch_fn: Optional batch prefetch function for Crawl4AI.
-
-    Returns:
-        (scored_chunks, pages, url_outcomes) tuple:
-        - scored_chunks: list of (score, url, chunk_text)
-        - pages: list of (url, full_text) for successful fetches
-        - url_outcomes: list of (url, status_string)
-    """
-    if not urls:
-        return [], [], []
-
-    log.info("[fetch_pipeline] attempting %d url(s): %s", len(urls), urls)
-
-    scored: list[tuple[float, str, str]] = []
-    pages: list[tuple[str, str]] = []
-    url_outcomes: list[tuple[str, str]] = []
-    chunks_scored = 0
-
-    def _process(url: str, text: str) -> None:
-        nonlocal chunks_scored
-        if text.startswith("[fetch failed"):
-            log.info("[fetch_pipeline] failed %s: %s", url, text)
-            url_outcomes.append((url, text))
-            return
-        log.info("[fetch_pipeline] fetched %s (%d chars)", url, len(text))
-        url_outcomes.append((url, f"ok ({len(text)} chars)"))
-        pages.append((url, text))
-        remaining_budget = max_chunks_to_score - chunks_scored
-        if remaining_budget <= 0:
-            return
-        from agentic.toolkit.research import _score_url_chunks
-        page_chunks = [(url, c) for c in reason.chunk_text(text, chunk_chars)][:remaining_budget]
-        page_scored = _score_url_chunks(page_chunks, query, embedder, remaining_budget)
-        scored.extend(page_scored)
-        chunks_scored += len(page_scored)
-
-    prefetched: dict[str, str] = {}
-    if batch_prefetch_fn is not None:
-        try:
-            prefetched = batch_prefetch_fn(urls, max_chars_per_page) or {}
-        except Exception as e:
-            log.info("[fetch_pipeline] batch prefetch failed: %s", e)
-            prefetched = {}
-
-    for url, text in prefetched.items():
-        _process(url, text)
-
-    remaining_urls = [u for u in urls if u not in prefetched]
-    if remaining_urls:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(remaining_urls)))) as pool:
-            future_to_url = {pool.submit(fetch_fn, url, max_chars_per_page): url for url in remaining_urls}
-            for future in concurrent.futures.as_completed(future_to_url):
-                url = future_to_url[future]
-                try:
-                    text = future.result()
-                except Exception as e:
-                    log.warning("[fetch_pipeline] exception fetching %s: %s", url, e)
-                    url_outcomes.append((url, f"exception: {e}"))
-                    continue
-                _process(url, text)
-
-    log.info(
-        "[fetch_pipeline] done: %d/%d succeeded, %d chunk(s) scored",
-        len(pages), len(urls), chunks_scored,
-    )
-    return scored, pages, url_outcomes

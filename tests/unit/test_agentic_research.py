@@ -30,7 +30,6 @@ from agentic.toolkit.websurf import (
     _sniff_content_type,
     _extract_with_markitdown,
     _is_private_or_local_host,
-    _fetch_and_score_pipeline,
     web_search_context,
 )
 from agentic.toolkit.research import (
@@ -38,6 +37,7 @@ from agentic.toolkit.research import (
     _score_url_chunks,
     _finalize_condensed,
     _apply_corroboration_bonus,
+    _fetch_and_score_pipeline,
     _deep_search_impl,
     deep_research,
     _build_deep_research_subgraph,
@@ -420,10 +420,10 @@ class TestFetchAndScorePipeline:
         def batch_fn(url_list, max_chars):
             return {u: prefetched.get(u, "") for u in url_list}
 
-        with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
-            mock_fetch.return_value = "fallback content"
+        with patch("agentic.toolkit.websurf.web_fetch", return_value="fallback content") as mock_fetch:
             scored, pages, outcomes = _fetch_and_score_pipeline(
-                urls, "query", FakeEmbedder(), 1000, batch_prefetch_fn=batch_fn
+                urls, "query", FakeEmbedder(), 1000, batch_prefetch_fn=batch_fn,
+                fetch_fn=mock_fetch
             )
         # a.com should use prefetched, b.com fallback
         assert any("prefetched" in p[1] for p in pages)
