@@ -282,14 +282,16 @@ def _play_beep() -> None:
 # load route examples (quaternary intent only - tools/capability moved to agentic/router)
 _EXAMPLES_PATH = Path(__file__).resolve().parent.parent / "agentic" / "router" / "intent_prompts.json"
 
-def _load_route_examples() -> dict:
+def _load_route_examples(*, include_greeting: bool = True) -> dict:
     with open(_EXAMPLES_PATH, encoding="utf-8") as f:
         data = json.load(f)
-    raw = data.get("quaternary") or data.get("ternary") or {}
+    raw = dict(data.get("quaternary") or data.get("ternary") or {})
+    if not include_greeting:
+        raw.pop("greeting", None)
     return {k: tuple(v) for k, v in raw.items()}
 
 _ROUTE_QUATERNARY_EXAMPLES = _load_route_examples()
-_ROUTE_TERNARY_EXAMPLES = _ROUTE_QUATERNARY_EXAMPLES  # backwards-compatible alias for wakeup/tests
+_ROUTE_TERNARY_EXAMPLES = _load_route_examples(include_greeting=False)
 
 _AGENTIC_ROUTE_RE = re.compile(
     r"\b("
@@ -733,69 +735,60 @@ class AikoThink:
             log.warning("Intent routing failed: %s", e)
             return "chat"
 
-    def _classify_quaternary_intent_llm(self, user_input: str, allow_agentic: bool = True) -> str:
-        """LLM classify for ROUTE_MODE=llm (ambiguity tie-break) and
-        ROUTE_MODE=llm_only (sole routing decision, every turn).
+    def _intent_llm_prompt_parts(self, *, allow_agentic: bool, include_greeting: bool) -> tuple[str, str, set[str]]:
+        labels = []
+        guidance_parts: list[str] = []
+        examples: list[str] = []
+        valid: set[str] = set()
 
-        allow_agentic=False collapses this to a binary webchat/chat
-        classification — agentic is never offered as a label, so
-        AGENTIC_MODE_ON=0 holds regardless of which ROUTE_MODE is active.
-        """
-        if allow_agentic and _AGENTIC_ROUTE_RE.search(user_input):
-            return "agentic"
+        if include_greeting:
+            labels.append("greeting")
+            valid.add("greeting")
+            guidance_parts.append(
+                "greeting = the entire message is only a salutation, thanks, "
+                "or small acknowledgement with no substantive request.\n"
+            )
+            examples.extend([
+                "Message: 'hey Aiko'\nLabel: greeting\n",
+                "Message: 'thanks'\nLabel: greeting\n",
+            ])
 
         if allow_agentic:
-            labels_line = "Labels: [greeting, agentic, webchat, chat]"
-            guidance = (
-                "greeting = the entire message is only a salutation, thanks, "
-                "or small acknowledgement with no substantive request.\n"
+            labels.append("agentic")
+            valid.add("agentic")
+            guidance_parts.append(
                 "agentic = the message asks for an action/task (write, save, "
                 "schedule, debug, plan, remind, research-and-report).\n"
-                "webchat = the message needs current/external information "
-                "(news, prices, scores, recent releases, real-time facts) but "
-                "is not itself a task.\n"
-                "chat = casual conversation, opinions, or something answerable "
-                "from general/persona knowledge alone.\n\n"
-                "Message: 'hey Aiko'\n"
-                "Label: greeting\n\n"
-                "Message: 'thanks'\n"
-                "Label: greeting\n\n"
-                "Message: 'set a reminder for 9pm'\n"
-                "Label: agentic\n\n"
-                "Message: 'debug why asyncio.run() hangs'\n"
-                "Label: agentic\n\n"
-                "Message: 'what's the weather in Vancouver right now'\n"
-                "Label: webchat\n\n"
-                "Message: 'who won the game last night'\n"
-                "Label: webchat\n\n"
-                "Message: 'what do you think about minimalism'\n"
-                "Label: chat\n\n"
-                "Message: 'explain semaphores from memory'\n"
-                "Label: chat\n\n"
             )
-            valid = {"greeting", "agentic", "webchat", "chat"}
-        else:
-            labels_line = "Labels: [greeting, webchat, chat]"
-            guidance = (
-                "greeting = the entire message is only a salutation, thanks, "
-                "or small acknowledgement with no substantive request.\n"
-                "webchat = the message needs current/external information "
-                "(news, prices, scores, recent releases, real-time facts).\n"
-                "chat = casual conversation, opinions, or something answerable "
-                "from general/persona knowledge alone.\n\n"
-                "Message: 'hello there'\n"
-                "Label: greeting\n\n"
-                "Message: 'what's the weather in Vancouver right now'\n"
-                "Label: webchat\n\n"
-                "Message: 'who won the game last night'\n"
-                "Label: webchat\n\n"
-                "Message: 'what do you think about minimalism'\n"
-                "Label: chat\n\n"
-                "Message: 'explain semaphores from memory'\n"
-                "Label: chat\n\n"
-            )
-            valid = {"greeting", "webchat", "chat"}
+            examples.extend([
+                "Message: 'set a reminder for 9pm'\nLabel: agentic\n",
+                "Message: 'debug why asyncio.run() hangs'\nLabel: agentic\n",
+            ])
 
+        labels.extend(["webchat", "chat"])
+        valid.update({"webchat", "chat"})
+        guidance_parts.extend([
+            "webchat = the message needs current/external information "
+            "(news, prices, scores, recent releases, real-time facts) but "
+            "is not itself a task.\n",
+            "chat = casual conversation, opinions, or something answerable "
+            "from general/persona knowledge alone.\n",
+        ])
+        examples.extend([
+            "Message: 'what's the weather in Vancouver right now'\nLabel: webchat\n",
+            "Message: 'who won the game last night'\nLabel: webchat\n",
+            "Message: 'what do you think about minimalism'\nLabel: chat\n",
+            "Message: 'explain semaphores from memory'\nLabel: chat\n",
+        ])
+        return f"Labels: [{', '.join(labels)}]", "\n".join(guidance_parts + examples), valid
+
+    def _classify_intent_llm(self, user_input: str, *, allow_agentic: bool, include_greeting: bool, log_name: str) -> str:
+        if allow_agentic and _AGENTIC_ROUTE_RE.search(user_input):
+            return "agentic"
+        labels_line, guidance, valid = self._intent_llm_prompt_parts(
+            allow_agentic=allow_agentic,
+            include_greeting=include_greeting,
+        )
         try:
             resp = self._client.chat.completions.create(
                 model=self._router_model,
@@ -814,12 +807,26 @@ class AikoThink:
                 return "localchat"
             return "localchat" if label == "chat" else label
         except Exception as e:
-            log.warning("Quaternary LLM routing failed: %s", e)
+            log.warning("%s LLM routing failed: %s", log_name, e)
             return "localchat"
 
+    def _classify_quaternary_intent_llm(self, user_input: str, allow_agentic: bool = True) -> str:
+        """LLM classify with greeting/agentic/webchat/chat labels."""
+        return self._classify_intent_llm(
+            user_input,
+            allow_agentic=allow_agentic,
+            include_greeting=True,
+            log_name="Quaternary",
+        )
+
     def _classify_ternary_intent_llm(self, user_input: str, allow_agentic: bool = True) -> str:
-        """Backward-compatible wrapper for tests/extensions using the old name."""
-        return self._classify_quaternary_intent_llm(user_input, allow_agentic=allow_agentic)
+        """Backward-compatible LLM classifier with no greeting label."""
+        return self._classify_intent_llm(
+            user_input,
+            allow_agentic=allow_agentic,
+            include_greeting=False,
+            log_name="Ternary",
+        )
   
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Delegate task-mode execution to agentic.agentic."""

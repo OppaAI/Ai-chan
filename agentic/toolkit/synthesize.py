@@ -86,6 +86,14 @@ DEFAULT_COMBINE_PART_MAX_CHARS = int(os.getenv("GRAPH_COMBINE_PART_MAX_CHARS", "
 DEFAULT_COMBINE_MAX_CHARS = int(os.getenv("GRAPH_COMBINE_MAX_CHARS", "12000"))
 
 
+def _truncate_with_marker(text: str, max_chars: int, marker: str) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars <= len(marker):
+        return marker[:max_chars]
+    return text[:max_chars - len(marker)] + marker
+
+
 # Heuristic style keywords. Order matters: "concise" and "brief" should win
 # over "professional" if both are present (a user who explicitly asks for
 # brevity wants brevity, not a 5-page formal report).
@@ -221,13 +229,18 @@ def combine_evidence(parts: list[str], separator: str = "\n\n---\n\n", *, part_m
         text = str(part or "").strip()
         if not text:
             continue
-        if part_max_chars > 0 and len(text) > part_max_chars:
-            text = text[:part_max_chars] + "\n[part truncated by GRAPH_COMBINE_PART_MAX_CHARS]"
+        text = _truncate_with_marker(
+            text,
+            part_max_chars,
+            "\n[part truncated by GRAPH_COMBINE_PART_MAX_CHARS]",
+        )
         cleaned.append(text)
     joined = separator.join(cleaned)
-    if max_chars > 0 and len(joined) > max_chars:
-        return joined[:max_chars] + "\n[combined evidence truncated by GRAPH_COMBINE_MAX_CHARS]"
-    return joined
+    return _truncate_with_marker(
+        joined,
+        max_chars,
+        "\n[combined evidence truncated by GRAPH_COMBINE_MAX_CHARS]",
+    )
 
 
 @tool(

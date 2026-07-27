@@ -122,11 +122,20 @@ _SEMANTIC_TRIGGER_CACHE: dict[tuple[int, str], Any] = {}
 _SEMANTIC_TRIGGER_LOCK = threading.Lock()
 
 
+def _truncate_with_marker(text: str, max_chars: int, marker: str) -> str:
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    if max_chars <= len(marker):
+        return marker[:max_chars]
+    return text[:max_chars - len(marker)] + marker
+
+
 def _trim_node_content(content: Any) -> str:
-    text = str(content)
-    if GRAPH_NODE_RESULT_MAX_CHARS > 0 and len(text) > GRAPH_NODE_RESULT_MAX_CHARS:
-        return text[:GRAPH_NODE_RESULT_MAX_CHARS] + "\n[truncated by GRAPH_NODE_RESULT_MAX_CHARS]"
-    return text
+    return _truncate_with_marker(
+        str(content),
+        GRAPH_NODE_RESULT_MAX_CHARS,
+        "\n[truncated by GRAPH_NODE_RESULT_MAX_CHARS]",
+    )
 
 
 def _semantic_trigger_matrix(embedder, semantic_triggers: list[Any]):

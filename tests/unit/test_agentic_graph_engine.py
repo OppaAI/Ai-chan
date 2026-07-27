@@ -33,6 +33,7 @@ from agentic.graph_engine import (
     load_playbooks,
     _score_plan,
     _SEMANTIC_TRIGGER_CACHE,
+    _trim_node_content,
     _title,
     _heuristic_items,
     _placeholder_extras,
@@ -707,6 +708,19 @@ class TestGraphStateMethods:
 
         executions = state.get_tool_executions()
         assert [entry["tool"] for entry in executions] == ["tool2", "tool3"]
+
+    def test_trim_node_content_respects_max_chars(self, monkeypatch):
+        monkeypatch.setattr(schema, "GRAPH_NODE_RESULT_MAX_CHARS", 64)
+
+        result = _trim_node_content("x" * 200)
+
+        assert len(result) <= 64
+        assert result.endswith("[truncated by GRAPH_NODE_RESULT_MAX_CHARS]")
+
+    def test_trim_node_content_respects_short_max_chars(self, monkeypatch):
+        monkeypatch.setattr(schema, "GRAPH_NODE_RESULT_MAX_CHARS", 8)
+
+        assert len(_trim_node_content("x" * 200)) == 8
 
 
 class TestPlanNodeNewFields:

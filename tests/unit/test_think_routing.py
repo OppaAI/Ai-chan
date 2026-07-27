@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -45,6 +46,12 @@ def test_route_examples_include_greeting_label():
 
     assert "greeting" in examples
     assert any("hello" in example.lower() for example in examples["greeting"])
+
+
+def test_ternary_route_examples_exclude_greeting_label():
+    examples = _load_route_examples(include_greeting=False)
+
+    assert set(examples) == {"agentic", "webchat", "localchat"}
 
 
 def test_route_intent_can_return_greeting_from_semantic_scores(monkeypatch):
@@ -98,3 +105,41 @@ def test_non_greeting_route_starts_memory_after_intent(monkeypatch):
 
     assert think.route("tell me about routers") == "ok"
     assert events == ["intent", "submit_mem_kb"]
+
+
+class FakeCompletions:
+    def __init__(self, label: str):
+        self.label = label
+        self.last_messages = None
+
+    def create(self, **kwargs):
+        self.last_messages = kwargs["messages"]
+        message = SimpleNamespace(content=self.label)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+class FakeClient:
+    def __init__(self, label: str):
+        self.chat = SimpleNamespace(completions=FakeCompletions(label))
+
+
+def test_ternary_llm_classifier_preserves_three_way_labels():
+    think = _bare_think()
+    think._client = FakeClient("greeting")
+    think._router_model = "router"
+
+    assert think._classify_ternary_intent_llm("hello") == "localchat"
+    prompt = think._client.chat.completions.last_messages[0]["content"]
+    assert "Labels: [agentic, webchat, chat]" in prompt
+    assert "Label: greeting" not in prompt
+
+
+def test_quaternary_llm_classifier_allows_greeting_label():
+    think = _bare_think()
+    think._client = FakeClient("greeting")
+    think._router_model = "router"
+
+    assert think._classify_quaternary_intent_llm("hello") == "greeting"
+    prompt = think._client.chat.completions.last_messages[0]["content"]
+    assert "Labels: [greeting, agentic, webchat, chat]" in prompt
+    assert "Label: greeting" in prompt
