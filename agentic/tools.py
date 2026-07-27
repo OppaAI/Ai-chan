@@ -38,7 +38,7 @@ from agentic.toolkit import social  # noqa: F401
 from agentic.registry import tool, registry, register_tool_schema
 
 # Load tool definitions from centralized YAML config
-_TOOLS_YAML = "config/tools.yaml"
+_TOOLS_YAML = "tools.yaml"
 try:
     from system.config import load_tools_from_yaml
     _count = load_tools_from_yaml(_TOOLS_YAML)
