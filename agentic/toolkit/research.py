@@ -47,10 +47,10 @@ from agentic.registry import tool
 from agentic.toolkit.websurf import (
     fetch_search_results,
     _download_bytes,
-    _sniff_content_type,
     _extract_with_markitdown,
     web_fetch,
     SEARXNG_MAX_RESULTS,
+    WEB_FETCH_USER_AGENT,
 )
 from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensitive
 
@@ -147,6 +147,41 @@ _MARKITDOWN_SUFFIX_MAP = {
     "epub": ".epub", "csv": ".csv", "xml": ".xml", "zip": ".zip",
     "ipynb": ".ipynb", "msg": ".msg",
 }
+
+
+def _sniff_content_type(url: str) -> str:
+    """Classify a URL's content type for deep_read's content-type routing.
+
+    Tries a cheap HEAD request first (no body download), then falls back to
+    the URL's file extension. Returns 'html' on total ambiguity.
+
+    Args:
+        url: The URL to classify.
+
+    Returns:
+        'html' (default/fallback) or a MarkItDown-handled format: 'pdf',
+        'docx', 'pptx', 'xlsx', 'epub', 'csv', 'xml', 'zip', 'ipynb', 'msg'.
+    """
+    parsed = urlparse(url)
+    ext = os.path.splitext(parsed.path)[1].lower()
+
+    if importlib.util.find_spec("requests") is not None:
+        requests = importlib.import_module("requests")
+        try:
+            resp = requests.head(
+                url, timeout=5, allow_redirects=True,
+                headers={"User-Agent": WEB_FETCH_USER_AGENT},
+            )
+            ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ctype in _MARKITDOWN_CONTENT_TYPE_MAP:
+                return _MARKITDOWN_CONTENT_TYPE_MAP[ctype]
+            if ctype.startswith("text/html") or ctype.startswith("application/xhtml"):
+                return "html"
+        except Exception:
+            pass
+
+    return _MARKITDOWN_EXTENSION_MAP.get(ext, "html")
+
 
 ADAPTIVE_SEARCH_MAX_ROUNDS = int(os.getenv("ADAPTIVE_SEARCH_MAX_ROUNDS", 2))
 

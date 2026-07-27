@@ -27,7 +27,6 @@ from agentic.toolkit.websurf import (
     web_fetch,
     fetch_search_results,
     _download_bytes,
-    _sniff_content_type,
     _extract_with_markitdown,
     _is_private_or_local_host,
     web_search_context,
@@ -35,6 +34,7 @@ from agentic.toolkit.websurf import (
 from agentic.toolkit.research import (
     condense_evidence,
     _score_url_chunks,
+    _sniff_content_type,
     _finalize_condensed,
     _apply_corroboration_bonus,
     _fetch_and_score_pipeline,

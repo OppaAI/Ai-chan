@@ -392,40 +392,6 @@ def _download_bytes(
     return downloaded, None
 
 
-def _sniff_content_type(url: str) -> str:
-    """Classify a URL's content type for deep_read's content-type routing.
-
-    Tries a cheap HEAD request first (no body download), then falls back to
-    the URL's file extension. Returns 'html' on total ambiguity.
-
-    Args:
-        url: The URL to classify.
-
-    Returns:
-        'html' (default/fallback) or a MarkItDown-handled format: 'pdf',
-        'docx', 'pptx', 'xlsx', 'epub', 'csv', 'xml', 'zip', 'ipynb', 'msg'.
-    """
-    parsed = urlparse(url)
-    ext = os.path.splitext(parsed.path)[1].lower()
-
-    if importlib.util.find_spec("requests") is not None:
-        requests = importlib.import_module("requests")
-        try:
-            resp = requests.head(
-                url, timeout=5, allow_redirects=True,
-                headers={"User-Agent": WEB_FETCH_USER_AGENT},
-            )
-            ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
-            if ctype in _MARKITDOWN_CONTENT_TYPE_MAP:
-                return _MARKITDOWN_CONTENT_TYPE_MAP[ctype]
-            if ctype.startswith("text/html") or ctype.startswith("application/xhtml"):
-                return "html"
-        except Exception:
-            pass  # fall through to extension sniff below
-
-    return _MARKITDOWN_EXTENSION_MAP.get(ext, "html")
-
-
 def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> str:
     """Convert non-HTML document bytes to markdown text via MarkItDown.
 
