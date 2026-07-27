@@ -22,7 +22,6 @@ import ipaddress
 import os
 import re
 import socket
-import tempfile
 import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -52,35 +51,6 @@ WEB_FETCH_USER_AGENT = os.getenv(
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0 Safari/537.36",
 )
-
-# MarkItDown handles non-HTML document formats by converting to markdown.
-# Base install only (`pip install markitdown`) covers all of these with no
-# heavy optional deps — deliberately NOT enabling the image-OCR or
-# audio-transcription extras here, since those pull real weight for
-# capabilities deep_read doesn't need.
-_MARKITDOWN_CONTENT_TYPE_MAP = {
-    "application/pdf": "pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-    "application/epub+zip": "epub",
-    "text/csv": "csv",
-    "application/xml": "xml",
-    "text/xml": "xml",
-    "application/zip": "zip",
-    "application/x-ipynb+json": "ipynb",
-}
-_MARKITDOWN_EXTENSION_MAP = {
-    ".pdf": "pdf", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx",
-    ".epub": "epub", ".csv": "csv", ".xml": "xml", ".zip": "zip",
-    ".ipynb": "ipynb", ".msg": "msg",
-}
-_MARKITDOWN_SUFFIX_MAP = {
-    "pdf": ".pdf", "docx": ".docx", "pptx": ".pptx", "xlsx": ".xlsx",
-    "epub": ".epub", "csv": ".csv", "xml": ".xml", "zip": ".zip",
-    "ipynb": ".ipynb", "msg": ".msg",
-}
-
 # ── Cache instance ──────────────────────────────────────────────────────
 # -- shared TTL cache instances --
 # Both search and fetch operations use the same TTL window but separate
@@ -390,40 +360,4 @@ def _download_bytes(
     if not downloaded:
         return None, "[fetch failed: empty response]"
     return downloaded, None
-
-
-def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> str:
-    """Convert non-HTML document bytes to markdown text via MarkItDown.
-
-    Writes bytes to a suffix-matched temp file for reliable format detection.
-
-    Args:
-        data: Raw document bytes.
-        content_type: One of the MarkItDown-handled format keys ('pdf',
-            'docx', 'pptx', 'xlsx', 'epub', 'csv', 'xml', 'zip', 'ipynb',
-            'msg').
-        max_chars: Maximum characters to return.
-
-    Returns:
-        Markdown text on success, or a bracketed error string starting with
-        "[fetch failed:" on failure.
-    """
-    if importlib.util.find_spec("markitdown") is None:
-        return "[fetch failed: markitdown is not installed]"
-    markitdown_mod = importlib.import_module("markitdown")
-    MarkItDown = markitdown_mod.MarkItDown
-
-    suffix = _MARKITDOWN_SUFFIX_MAP.get(content_type, "")
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
-            tmp.write(data)
-            tmp.flush()
-            converter = MarkItDown()
-            result = converter.convert(tmp.name)
-            text = (getattr(result, "text_content", None) or "").strip()
-    except Exception as e:
-        return f"[fetch failed: markitdown conversion error: {e}]"
-
-    if not text:
-        return "[fetch failed: markitdown returned no extractable text]"
-    return text[:max_chars]
+    
