@@ -26,11 +26,11 @@ from agentic.toolkit.websurf import (
     web_search,
     web_fetch,
     fetch_search_results,
-    _stream_download,
     _check_host_ssrf,
     web_search_context,
 )
 from agentic.toolkit.ingest import (
+    ingest_from_url,
     _extract_with_markitdown,
     _sniff_content_type,
 )

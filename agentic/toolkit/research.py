@@ -46,12 +46,12 @@ from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.registry import tool
 from agentic.toolkit.websurf import (
     fetch_search_results,
-    _stream_download,
     web_fetch,
     SEARXNG_MAX_RESULTS,
-    WEB_FETCH_USER_AGENT,
 )
 from agentic.toolkit.ingest import (
+    ingest_from_url,
+    FETCH_URL_USER_AGENT,
     _extract_with_markitdown,
     _sniff_content_type,
 )
@@ -215,7 +215,7 @@ def _get_robot_parser(origin: str) -> RobotFileParser:
         try:
             resp = requests.get(
                 f"{origin}/robots.txt", timeout=5,
-                headers={"User-Agent": WEB_FETCH_USER_AGENT},
+                headers={"User-Agent": FETCH_URL_USER_AGENT},
             )
             if resp.status_code >= 400:
                 parser.parse([])
@@ -242,7 +242,7 @@ def _source_agreement_allows(url: str) -> bool:
     origin = f"{parsed.scheme}://{parsed.netloc}"
     try:
         parser = _get_robot_parser(origin)
-        return parser.can_fetch(WEB_FETCH_USER_AGENT, url)
+        return parser.can_fetch(FETCH_URL_USER_AGENT, url)
     except Exception:
         return True
 
@@ -262,7 +262,7 @@ def _discover_sitemap_urls(origin: str, query_hint: str = "", max_urls: int = RE
     try:
         robots_resp = requests.get(
             f"{origin}/robots.txt", timeout=RESEARCH_SITEMAP_TIMEOUT_SECONDS,
-            headers={"User-Agent": WEB_FETCH_USER_AGENT},
+            headers={"User-Agent": FETCH_URL_USER_AGENT},
         )
         if robots_resp.ok:
             for line in robots_resp.text.splitlines():
@@ -278,7 +278,7 @@ def _discover_sitemap_urls(origin: str, query_hint: str = "", max_urls: int = RE
         try:
             resp = requests.get(
                 sitemap_url, timeout=RESEARCH_SITEMAP_TIMEOUT_SECONDS,
-                headers={"User-Agent": WEB_FETCH_USER_AGENT},
+                headers={"User-Agent": FETCH_URL_USER_AGENT},
             )
             if not resp.ok:
                 continue
@@ -591,12 +591,12 @@ def deep_read(
     content_type = _sniff_content_type(url)
 
     if content_type != "html":
-        downloaded, error = _stream_download(url, DEEP_READ_MAX_DOWNLOAD_BYTES)
+        downloaded, error = ingest_from_url(url, DEEP_READ_MAX_DOWNLOAD_BYTES)
         if error:
             return error
         text = _extract_with_markitdown(downloaded, content_type, max_chars)
     else:
-        text = web_fetch(url, max_chars=max_chars, max_stream_download=DEEP_READ_MAX_DOWNLOAD_BYTES)
+        text = web_fetch(url, max_chars=max_chars, max_download_bytes=DEEP_READ_MAX_DOWNLOAD_BYTES)
         is_thin = text.startswith("[fetch failed") or len(text.strip()) < THIN_TEXT_CHARS_THRESHOLD
         if is_thin and RESEARCH_USE_CRAWL4AI:
             crawled = _crawl4ai_fetch_many([url], max_chars)

@@ -31,7 +31,8 @@ import importlib.util
  
 from cognition import reason
 from system.log import get_logger
-from agentic.toolkit.cache import TTLCache 
+from agentic.toolkit.cache import TTLCache
+from agentic.toolkit.ingest import ingest_from_url, FETCH_URL_USER_AGENT
 
 log = get_logger(__name__)
  
@@ -46,11 +47,6 @@ SEARXNG_RATE_LIMIT_DELAY = float(os.getenv("SEARXNG_RATE_LIMIT_DELAY", 2.0))
 # -- web_fetch download guard --
 WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
 WEB_FETCH_TIMEOUT_SECONDS = int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", 8))
-WEB_FETCH_USER_AGENT = os.getenv(
-    "WEB_FETCH_USER_AGENT",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0 Safari/537.36",
-)
 # ── Cache instance ──────────────────────────────────────────────────────
 # -- shared TTL cache instances --
 # Both search and fetch operations use the same TTL window but separate
@@ -165,7 +161,7 @@ def web_fetch(
         return "[fetch failed: trafilatura is not installed]"
     trafilatura = importlib.import_module("trafilatura")
  
-    downloaded, error = _download_bytes(url, max_download_bytes)
+    downloaded, error = ingest_from_url(url, max_download_bytes)
     if error:
         return error
  
@@ -307,57 +303,4 @@ def _check_host_ssrf(hostname: str) -> bool:
         return True
 
 
-def _stream_download(
-    url: str,
-    max_download_bytes: int,
-    timeout: int = WEB_FETCH_TIMEOUT_SECONDS,
-) -> tuple[bytes | None, str | None]:
-    """Stream-download a URL, aborting mid-stream when the size limit is exceeded.
 
-    The single shared size-guard for all fetch paths. Callers are responsible
-    for scheme/host validation before calling this.
-
-    Args:
-        url: URL to download.
-        max_download_bytes: Hard byte limit on the response body.
-        timeout: Request timeout in seconds.
-
-    Returns:
-        (bytes, None) on success, (None, error_string) on failure.
-    """
-    if importlib.util.find_spec("requests") is None:
-        return None, "[fetch failed: requests is not installed]"
-    requests = importlib.import_module("requests")
-    try:
-        with requests.get(
-            url,
-            stream=True,
-            timeout=timeout,
-            headers={"User-Agent": WEB_FETCH_USER_AGENT},
-        ) as resp:
-            resp.raise_for_status()
-
-            content_length = resp.headers.get("content-length")
-            if content_length is not None:
-                try:
-                    if int(content_length) > max_download_bytes:
-                        return None, "[fetch failed: page too large]"
-                except ValueError:
-                    pass
-
-            buf = io.BytesIO()
-            total = 0
-            for chunk in resp.iter_content(chunk_size=65536):
-                if not chunk:
-                    continue
-                total += len(chunk)
-                if total > max_download_bytes:
-                    return None, "[fetch failed: page exceeded size limit during download]"
-                buf.write(chunk)
-            downloaded = buf.getvalue()
-    except requests.exceptions.RequestException as e:
-        return None, f"[fetch failed: {e}]"
-
-    if not downloaded:
-        return None, "[fetch failed: empty response]"
-    return downloaded, None
