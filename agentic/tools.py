@@ -3,11 +3,12 @@ agentic/tools.py
 
 Compatibility facade for Aiko's autonomous toolkit.
 
-This module provides a stable import surface for all tools. The tool
-definitions live in config/tools.yaml and are loaded at startup. The
-@tool decorator in each module registers the handler with the global
-registry; this file ensures all toolkit modules are imported so their
-@tool decorators run, then loads additional tool metadata from YAML.
+This module provides a stable import surface for all tools. The @tool
+decorator in each toolkit module is the runtime source of truth for tool
+metadata and handlers; this file imports those modules so their decorators run.
+
+config/tools.yaml is generated documentation only. Do not load it at runtime,
+because doing so creates a second registry path that can drift from decorators.
 """
 from __future__ import annotations
 
@@ -33,18 +34,6 @@ from agentic.toolkit import reports  # noqa: F401
 from agentic.toolkit import research  # noqa: F401
 from agentic.toolkit import job_hunt  # noqa: F401
 from agentic.toolkit import social  # noqa: F401
-
-# Re-export registry for tool registration
-from agentic.registry import tool, registry, register_tool_schema
-
-# Load tool definitions from centralized YAML config
-_TOOLS_YAML = "tools.yaml"
-try:
-    from system.config import load_tools_from_yaml
-    _count = load_tools_from_yaml(_TOOLS_YAML)
-    print(f"[tools] Loaded {_count} tool definitions from {_TOOLS_YAML}")
-except Exception as e:
-    print(f"Warning: Failed to load tools from {_TOOLS_YAML}: {e}")
 
 # Re-export registry for tool registration
 from agentic.registry import tool, registry, register_tool_schema

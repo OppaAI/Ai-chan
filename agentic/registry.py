@@ -140,6 +140,38 @@ class ToolRegistry:
         """Return list of all registered tool names for auto-export."""
         return list(self._tools.keys())
 
+    def to_catalog(self) -> dict[str, Any]:
+        """Return a deterministic, serializable catalog of registered tools.
+
+        The catalog is intended for documentation and drift checks. Runtime
+        registration should continue to use decorators/register_tool_schema so
+        there is only one source of truth.
+        """
+        tools: list[dict[str, Any]] = []
+        for spec in sorted(self._tools.values(), key=lambda item: item.name):
+            entry: dict[str, Any] = {
+                "name": spec.name,
+                "description": spec.description,
+            }
+            if spec.handler is not None:
+                entry["handler"] = f"{spec.handler.__module__}:{spec.handler.__name__}"
+            if spec.props:
+                entry["props"] = spec.props
+            if spec.required:
+                entry["required"] = list(spec.required)
+            if spec.domain is not None:
+                entry["domain"] = spec.domain
+            if spec.always_on:
+                entry["always_on"] = spec.always_on
+            entry["react"] = spec.react
+            entry["graph"] = spec.graph
+            if spec.wiki:
+                entry["wiki"] = spec.wiki
+            if spec.skill:
+                entry["skill"] = spec.skill
+            tools.append(entry)
+        return {"tools": tools}
+
 
 # Global registry instance
 registry = ToolRegistry()
