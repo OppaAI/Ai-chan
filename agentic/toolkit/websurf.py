@@ -152,7 +152,7 @@ def web_fetch(
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return f"[fetch failed: unsupported URL scheme: {parsed.scheme or 'none'}]"
-    if _is_private_or_local_host(parsed.hostname):
+    if _check_host_ssrf(parsed.hostname):
         return "[fetch failed: URL host is not allowed]"
  
     cache_key = f"{url}|{max_chars}"
@@ -272,9 +272,10 @@ def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> 
 
     return f"{search_result}\n\n---\n\nFetched content:\n{fetch_result}"
 
+
 # ── Private helpers ─────────────────────────────────────────────────────
 
-def _is_private_or_local_host(hostname: str) -> bool:
+def _check_host_ssrf(hostname: str) -> bool:
     """Check whether a hostname resolves to a private, local, or reserved IP.
 
     Used as a security guard: web_fetch and any other URL-fetching primitive
@@ -306,7 +307,7 @@ def _is_private_or_local_host(hostname: str) -> bool:
         return True
 
 
-def _download_bytes(
+def _stream_download(
     url: str,
     max_download_bytes: int,
     timeout: int = WEB_FETCH_TIMEOUT_SECONDS,
@@ -360,4 +361,3 @@ def _download_bytes(
     if not downloaded:
         return None, "[fetch failed: empty response]"
     return downloaded, None
-    
