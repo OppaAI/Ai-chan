@@ -27,7 +27,7 @@ load_config()
 
 from agentic import schema
 from agentic.toolkit.synthesize import synthesize_report, detect_style, detect_compare, split_subjects
-from agentic.toolkit.websurf import condense_evidence
+from agentic.toolkit.research import condense_evidence
 from agentic.toolkit.research import deep_research
 from agentic.capability import match_capabilities, filtered_tool_schemas
 from agentic.agentic import _verify_final_answer

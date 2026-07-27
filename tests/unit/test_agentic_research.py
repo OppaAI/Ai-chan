@@ -1,7 +1,7 @@
 """
 tests/unit/test_agentic_research.py
 
-Unit tests for web primitives (websurf) and research graphs (research_graph).
+Unit tests for web primitives (websearch) and research graphs (research_graph).
 
 Run: pytest tests/unit/test_agentic_research.py -v
 """
@@ -22,13 +22,13 @@ sys.path.insert(0, "/home/oppa-ai/jetson")
 from system.config import load_config
 load_config()
 
-from agentic.toolkit.websurf import (
+from agentic.toolkit.websearch import (
     web_search,
     web_fetch,
     fetch_search_results,
-    _check_host_ssrf,
     web_search_context,
 )
+from agentic.toolkit.ingest import _check_host_ssrf
 from agentic.toolkit.ingest import (
     ingest_from_url,
     _extract_with_markitdown,
@@ -94,7 +94,7 @@ class TestFetchSearchResults:
 
     def test_successful_search(self):
         # Patch _SEARCH_CACHE (module-level, all caps), importlib.util.find_spec and importlib.import_module
-        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+        with patch("agentic.toolkit.websearch._SEARCH_CACHE.get") as mock_cache_get:
             mock_cache_get.return_value = None  # cache miss
 
             with patch("importlib.util.find_spec") as mock_find_spec:
@@ -118,7 +118,7 @@ class TestFetchSearchResults:
                     assert results[0]["title"] == "Test"
 
     def test_rate_limit_retry(self):
-        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+        with patch("agentic.toolkit.websearch._SEARCH_CACHE.get") as mock_cache_get:
             mock_cache_get.return_value = None  # cache miss
 
             with patch("importlib.util.find_spec") as mock_find_spec:
@@ -141,7 +141,7 @@ class TestFetchSearchResults:
 
     def test_connection_error_retry(self):
         import requests
-        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+        with patch("agentic.toolkit.websearch._SEARCH_CACHE.get") as mock_cache_get:
             mock_cache_get.return_value = None  # cache miss
             with patch("importlib.util.find_spec") as mock_find_spec:
                 mock_find_spec.return_value = True  # requests is available
@@ -164,7 +164,7 @@ class TestFetchSearchResults:
 
     def test_invalid_json(self):
         import requests
-        with patch("agentic.toolkit.websurf._SEARCH_CACHE.get") as mock_cache_get:
+        with patch("agentic.toolkit.websearch._SEARCH_CACHE.get") as mock_cache_get:
             mock_cache_get.return_value = None  # cache miss
             with patch("importlib.util.find_spec") as mock_find_spec:
                 mock_find_spec.return_value = True  # requests is available
@@ -183,7 +183,7 @@ class TestWebSearch:
     """Tests for web_search public function."""
 
     def test_formats_results(self):
-        with patch("agentic.toolkit.websurf.fetch_search_results") as mock_raw:
+        with patch("agentic.toolkit.websearch.fetch_search_results") as mock_raw:
             mock_raw.return_value = (
                 [{"title": "T", "url": "https://u.com", "content": "c"}], None
             )
@@ -193,13 +193,13 @@ class TestWebSearch:
             assert "https://u.com" in result
 
     def test_no_results(self):
-        with patch("agentic.toolkit.websurf.fetch_search_results") as mock_raw:
+        with patch("agentic.toolkit.websearch.fetch_search_results") as mock_raw:
             mock_raw.return_value = ([], None)
             result = web_search("nothing")
             assert "no results found" in result.lower()
 
     def test_search_failure_propagates(self):
-        with patch("agentic.toolkit.websurf.fetch_search_results") as mock_raw:
+        with patch("agentic.toolkit.websearch.fetch_search_results") as mock_raw:
             mock_raw.return_value = (None, "[search failed: connection failed]")
             result = web_search("query")
             assert "search failed" in result.lower()
@@ -402,7 +402,7 @@ class TestFetchAndScorePipeline:
             time.sleep(0.01)  # Simulate network
             return f"Content from {url}"
 
-        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch) as mock_fetch_fn:
+        with patch("agentic.toolkit.websearch.web_fetch", side_effect=mock_fetch) as mock_fetch_fn:
             start = time.monotonic()
             scored, pages, outcomes = _fetch_and_score_pipeline(
                 urls, "query", FakeEmbedder(), 1000, max_workers=4, fetch_fn=mock_fetch_fn
@@ -422,7 +422,7 @@ class TestFetchAndScorePipeline:
         def batch_fn(url_list, max_chars):
             return {u: prefetched.get(u, "") for u in url_list}
 
-        with patch("agentic.toolkit.websurf.web_fetch", return_value="fallback content") as mock_fetch:
+        with patch("agentic.toolkit.websearch.web_fetch", return_value="fallback content") as mock_fetch:
             scored, pages, outcomes = _fetch_and_score_pipeline(
                 urls, "query", FakeEmbedder(), 1000, batch_prefetch_fn=batch_fn,
                 fetch_fn=mock_fetch
@@ -439,7 +439,7 @@ class TestFetchAndScorePipeline:
                 return "[fetch failed: connection error]"
             return "Good content here"
 
-        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch) as mock_fetch_fn:
+        with patch("agentic.toolkit.websearch.web_fetch", side_effect=mock_fetch) as mock_fetch_fn:
             scored, pages, outcomes = _fetch_and_score_pipeline(
                 urls, "query", FakeEmbedder(), 1000, fetch_fn=mock_fetch_fn
             )

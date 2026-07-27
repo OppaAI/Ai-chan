@@ -1,27 +1,34 @@
 """
-toolkit/websurf.py
- 
-Web search and fetch primitives.
- 
-Pure building blocks — no multi-step workflows. Callers compose
-these via the graph executor (research_graph.py) or ReAct loop.
- 
+toolkit/websearch.py
+
+Search the web, then read what you find. The "find me information"
+module.
+
+Provides a two-step pipeline:
+  1. **Search** — query a SearXNG instance, get structured results
+  2. **Fetch** — read one result URL via trafilatura (HTML article extraction)
+
+This is a *discovery-oriented* module — you have a question and need
+to find relevant pages, then read them. It does NOT handle non-HTML
+documents (PDF/DOCX/etc.), does NOT do SSRF checks on its own (delegates
+to ingest.py), and does NOT do multi-round research. Those live in
+toolkit/ingest.py and toolkit/research.py respectively.
+
+Building blocks:
   - fetch_search_results()     — low-level SearXNG call (raw JSON)
   - web_fetch()                — single URL → extracted text (HTML/trafilatura)
   - web_search()              — SearXNG query → numbered snippets
   - web_search_context()       — chat-mode wrapper around web_search
   - web_search_and_fetch()     — web_search + fetch top result
- 
+
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
 
 from __future__ import annotations
  
 import io
-import ipaddress
 import os
 import re
-import socket
 import time
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -32,10 +39,9 @@ import importlib.util
 from cognition import reason
 from system.log import get_logger
 from agentic.toolkit.cache import TTLCache
-from agentic.toolkit.ingest import ingest_from_url, FETCH_URL_USER_AGENT
+from agentic.toolkit.ingest import ingest_from_url, FETCH_URL_USER_AGENT, _check_host_ssrf
 
 log = get_logger(__name__)
- 
  
 # ── Config ──────────────────────────────────────────────────────────────
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
@@ -49,8 +55,6 @@ SEARXNG_RATE_LIMIT_DELAY = float(os.getenv("SEARXNG_RATE_LIMIT_DELAY", 2.0))
 WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
 WEB_FETCH_TIMEOUT_SECONDS = int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", 8))
 WEB_FETCH_MAX_CHARS = int(os.getenv("WEB_FETCH_MAX_CHARS", 4000))
-
-
 # ── Cache instance ──────────────────────────────────────────────────────
 # -- shared TTL cache instances --
 # Both search and fetch operations use the same TTL window but separate
@@ -64,7 +68,6 @@ _FETCH_CACHE = TTLCache(
     ttl_seconds=int(os.getenv("TOOLS_CACHE_TTL_SECONDS", 900)),
     max_entries=int(os.getenv("TOOLS_CACHE_MAX_ENTRIES", 256)),
 )
-
 
 # ── Public API ──────────────────────────────────────────────────────────
 
@@ -274,38 +277,6 @@ def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> 
     return f"{search_result}\n\n---\n\nFetched content:\n{fetch_result}"
 
 
-# ── Private helpers ─────────────────────────────────────────────────────
-
-def _check_host_ssrf(hostname: str) -> bool:
-    """Check whether a hostname resolves to a private, local, or reserved IP.
-
-    Used as a security guard: web_fetch and any other URL-fetching primitive
-    rejects hosts that resolve to private/loopback/link-local/multicast ranges
-    to prevent SSRF attacks.
-
-    Args:
-        hostname: The hostname to resolve (e.g. "192.168.1.1", "localhost").
-
-    Returns:
-        True if the hostname is private/local/unroutable, False if it appears
-        to be a public routable address. Returns True on resolution failure
-        (fail-closed).
-    """
-    try:
-        for _family, _type, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
-            raw_ip = sockaddr[0]
-            ip = ipaddress.ip_address(raw_ip.split("%")[0])
-            if (
-                ip.is_private
-                or ip.is_loopback
-                or ip.is_link_local
-                or ip.is_reserved
-                or ip.is_multicast
-            ):
-                return True
-        return False
-    except OSError:
-        return True
 
 
 

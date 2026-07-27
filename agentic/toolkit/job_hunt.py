@@ -36,7 +36,7 @@ import requests
 
 from agentic.registry import tool
 from system.bioclock import local_now
-from agentic.toolkit.websurf import MAX_RESULTS, web_fetch, fetch_search_results
+from agentic.toolkit.websearch import SEARXNG_MAX_RESULTS as MAX_RESULTS, web_fetch, fetch_search_results
 
 _RELATIVE_RE = re.compile(
     r"(?P<num>\d+)\s*(?P<unit>hour|day|week|month)s?\s+ago", re.IGNORECASE,

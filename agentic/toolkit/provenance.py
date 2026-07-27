@@ -5,7 +5,7 @@ Domain-authority + recency scoring for fetched web content.
 
 Design intent
 -------------
-websurf.py already has one "trust" signal: _apply_corroboration_bonus,
+websearch.py already has one "trust" signal: _apply_corroboration_bonus,
 which boosts a chunk when a SECOND independent domain says the same thing.
 This module adds the other two signals a careful human researcher uses:
 

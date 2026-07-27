@@ -11,8 +11,9 @@ here without manual list maintenance.
 from __future__ import annotations
 
 # Import all toolkit modules to trigger @tool decorator registration
-# Order matters: research depends on websurf, others are independent
-from agentic.toolkit import websurf  # noqa: F401
+# Order matters: research depends on websearch, others are independent
+from agentic.toolkit import websearch  # noqa: F401
+from agentic.toolkit import ingest  # noqa: F401
 from agentic.toolkit import synthesize  # noqa: F401
 from agentic.toolkit import plan  # noqa: F401
 from agentic.toolkit import organize  # noqa: F401

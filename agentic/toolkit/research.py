@@ -44,7 +44,7 @@ import numpy as np
 from system.log import get_logger
 from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.registry import tool
-from agentic.toolkit.websurf import (
+from agentic.toolkit.websearch import (
     fetch_search_results,
     web_fetch,
     SEARXNG_MAX_RESULTS,
@@ -59,7 +59,7 @@ from agentic.toolkit.provenance import authority_bonus, query_looks_time_sensiti
 
 log = get_logger(__name__)
 
-# -- deep_research config (moved from websurf.py) --
+# -- deep_research config (moved from websearch.py) --
 # These are module-level DEFAULTS; deep_research() itself now accepts
 # num_searches/num_fetches/max_chars_per_page as real function args so
 # callers (e.g. memory.learn.quick_studying) can override per-call.
@@ -615,7 +615,7 @@ def deep_read(
 
 # ── evidence condensation ──────────────────────────────────────────────
 # These helpers score, dedupe, filter, and format evidence chunks.
-# Moved here from websurf.py to keep research logic in the research module.
+# Moved here from websearch.py to keep research logic in the research module.
 
 import hashlib
 import concurrent.futures

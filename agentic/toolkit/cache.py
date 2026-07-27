@@ -56,7 +56,7 @@ TYPICAL USAGE PATTERNS:
 
 CONFIGURATION:
 
-  Via environment variables (websurf.py pattern):
+  Via environment variables (websearch.py pattern):
     TOOLS_CACHE_TTL_SECONDS (default 900)     — 15 minutes
     TOOLS_CACHE_MAX_ENTRIES (default 256)     — entry cap before LRU eviction
 

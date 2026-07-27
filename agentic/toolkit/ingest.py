@@ -1,22 +1,34 @@
 """
 toolkit/ingest.py
 
-Data ingestion: fetch bytes from URLs (with size capping) and convert
-non-HTML documents (PDF, DOCX, XLSX, PPTX, EPUB, CSV, XML, ZIP, IPYNB, MSG)
-into markdown text.
+URL → bytes → extracted text. The "how do I read what's at this URL?"
+module.
 
-Used by websurf's web_fetch and research's deep_read for content-type
-routing, format-agnostic text extraction, and size-capped downloads.
+Handles one specific URL at a time: download with size capping, SSRF
+guard, content-type sniffing, and MarkItDown document conversion
+(PDF/DOCX/XLSX/PPTX/EPUB/CSV/XML/ZIP/IPYNB/MSG/HTML).
+
+This is a *resource-oriented* module — you already know the URL and
+just need its content. It does NOT search, does NOT crawl, does NOT
+rank, does NOT format for chat display. Those live in toolkit/websearch.py.
+
+Provides `fetch_from_url` — a lightweight registered tool for agents
+that just want to download and extract text from one URL without the
+overhead of deep_read's Crawl4AI escalation or relevance filtering.
 """
 from __future__ import annotations
 
 import importlib
 import importlib.util
 import io
+import ipaddress
 import os
+import socket
 import tempfile
 import time
 from urllib.parse import urlparse
+
+from agentic.registry import tool
 
 FETCH_URL_USER_AGENT = os.getenv(
     "FETCH_URL_USER_AGENT",
@@ -24,11 +36,6 @@ FETCH_URL_USER_AGENT = os.getenv(
     "Chrome/124.0 Safari/537.36",
 )
 
-# MarkItDown handles non-HTML document formats by converting to markdown.
-# Base install only (`pip install markitdown`) covers all of these with no
-# heavy optional deps — deliberately NOT enabling the image-OCR or
-# audio-transcription extras here, since those pull real weight for
-# capabilities deep_read doesn't need.
 _MARKITDOWN_CONTENT_TYPE_MAP = {
     "application/pdf": "pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
@@ -40,17 +47,53 @@ _MARKITDOWN_CONTENT_TYPE_MAP = {
     "text/xml": "xml",
     "application/zip": "zip",
     "application/x-ipynb+json": "ipynb",
+    "text/html": "html",
+    "application/xhtml+xml": "html",
 }
 _MARKITDOWN_EXTENSION_MAP = {
     ".pdf": "pdf", ".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx",
     ".epub": "epub", ".csv": "csv", ".xml": "xml", ".zip": "zip",
-    ".ipynb": "ipynb", ".msg": "msg",
+    ".ipynb": "ipynb", ".msg": "msg", ".html": "html", ".htm": "html",
 }
 _MARKITDOWN_SUFFIX_MAP = {
     "pdf": ".pdf", "docx": ".docx", "pptx": ".pptx", "xlsx": ".xlsx",
     "epub": ".epub", "csv": ".csv", "xml": ".xml", "zip": ".zip",
-    "ipynb": ".ipynb", "msg": ".msg",
+    "ipynb": ".ipynb", "msg": ".msg", "html": ".html",
 }
+
+FETCH_FROM_URL_MAX_CHARS = int(os.getenv("FETCH_FROM_URL_MAX_CHARS", 4000))
+
+
+def _check_host_ssrf(hostname: str) -> bool:
+    """Check whether a hostname resolves to a private, local, or reserved IP.
+
+    Used as a security guard: any URL-fetching primitive rejects hosts that
+    resolve to private/loopback/link-local/multicast ranges to prevent SSRF
+    attacks.
+
+    Args:
+        hostname: The hostname to resolve (e.g. "192.168.1.1", "localhost").
+
+    Returns:
+        True if the hostname is private/local/unroutable, False if it appears
+        to be a public routable address. Returns True on resolution failure
+        (fail-closed).
+    """
+    try:
+        for _family, _type, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
+            raw_ip = sockaddr[0]
+            ip = ipaddress.ip_address(raw_ip.split("%")[0])
+            if (
+                ip.is_private
+                or ip.is_loopback
+                or ip.is_link_local
+                or ip.is_reserved
+                or ip.is_multicast
+            ):
+                return True
+        return False
+    except OSError:
+        return True
 
 
 def ingest_from_url(
@@ -178,3 +221,50 @@ def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> 
     if not text:
         return "[fetch failed: markitdown returned no extractable text]"
     return text[:max_chars]
+
+
+@tool(
+    name="fetch_from_url",
+    description="Download and extract text from any URL. Handles HTML pages, PDFs, DOCX, PPTX, XLSX, EPUB, CSV, XML, ZIP, IPYNB, MSG. Lightweight alternative to deep_read — no JS rendering, no relevance filtering, no Crawl4AI escalation. Use when you have a known URL and want its plain text.",
+    props={
+        "url": {"type": "string", "description": "The exact URL to fetch and read."},
+        "max_chars": {"type": "integer", "description": "Maximum characters to return (default FETCH_FROM_URL_MAX_CHARS)."},
+    },
+    required=["url"],
+    domain="research",
+    react=True,
+    graph=True,
+    wiki=True,
+)
+def fetch_from_url(url: str, max_chars: int = FETCH_FROM_URL_MAX_CHARS) -> str:
+    """Download and extract text from any URL.
+
+    Lightweight fetch — no JS rendering, no relevance filtering, no
+    Crawl4AI escalation. Routes HTML through MarkItDown conversion,
+    non-HTML documents through the same MarkItDown pipeline.
+
+    Args:
+        url: The URL to fetch.
+        max_chars: Maximum characters to return.
+
+    Returns:
+        Extracted text on success, or a bracketed error string starting
+        with "[fetch failed:" on failure.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return f"[fetch failed: unsupported URL scheme: {parsed.scheme or 'none'}]"
+    if _check_host_ssrf(parsed.hostname):
+        return "[fetch failed: URL host is not allowed]"
+
+    downloaded, error = ingest_from_url(url, max_bytes=5_000_000)
+    if error:
+        return error
+
+    content_type = _sniff_content_type(url)
+    if content_type == "html":
+        raw = downloaded.decode("utf-8", errors="replace")
+        return raw[:max_chars]
+
+    result = _extract_with_markitdown(downloaded, content_type, max_chars)
+    return result
