@@ -10,10 +10,6 @@ these via the graph executor (research_graph.py) or ReAct loop.
   - web_fetch()                — single URL → extracted text (HTML/trafilatura)
   - web_search_context()       — chat-mode wrapper around web_search
   - fetch_search_results()     — low-level SearXNG call (raw JSON)
-  - _download_bytes()          — shared streamed/size-capped byte download
-  - _sniff_content_type()      — HEAD/extension based format classification
-  - _extract_with_markitdown() — non-HTML document → markdown text
-  - _fetch_and_score_pipeline() — batch fetch + concurrent relevance scoring
  
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
@@ -40,6 +36,7 @@ from agentic.toolkit.cache import TTLCache
 
 log = get_logger(__name__)
  
+# ── Config ──────────────────────────────────────────────────────────────
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 SEARXNG_TIMEOUT_SECONDS = int(os.getenv("SEARXNG_TIMEOUT_SECONDS", 8))
@@ -84,6 +81,7 @@ _MARKITDOWN_SUFFIX_MAP = {
     "ipynb": ".ipynb", "msg": ".msg",
 }
 
+# ── Cache instance ──────────────────────────────────────────────────────
 # -- shared TTL cache instances --
 # Both search and fetch operations use the same TTL window but separate
 # cache instances, allowing independent tuning if needed later.
@@ -97,6 +95,7 @@ _FETCH_CACHE = TTLCache(
     max_entries=int(os.getenv("TOOLS_CACHE_MAX_ENTRIES", 256)),
 )
 
+# ── Public API ──────────────────────────────────────────────────────────
 
 def fetch_search_results(query: str, max_results: int, pageno: int = 1):
     """
@@ -260,6 +259,64 @@ def web_search(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
 
     return "\n\n".join(lines)
 
+
+def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str | None:
+    """
+    Run web_search and wrap successful results as chat context.
+    
+    Returns formatted search results with the query appended for LLM context,
+    or None if search failed/had no results.
+    
+    Args:
+        query: Search query.
+        max_results: Number of results (default MAX_RESULTS=5).
+    
+    Returns:
+        Formatted string with results + "User asked: {query}" or None on failure.
+    """
+
+    if not query or not query.strip():
+        return "[search failed: empty query]"
+    results = web_search(query, max_results)
+    if results.startswith("[search failed") or results.startswith("[no results"):
+        return None
+    return f"{results}\n\nUser asked: {query}"
+
+
+def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
+    """
+    Perform web search and fetch top results.
+
+    Executes web_search() then web_fetch() on the top result URL.
+    Returns formatted search results + fetched content, or error message.
+
+    Args:
+        query: Search query string.
+        max_results: Number of search results to fetch (default 5).
+
+    Returns:
+        Formatted string with search results and fetched content, or error.
+    """
+    search_result = web_search(query, max_results)
+    if search_result.startswith("[search failed") or search_result.startswith("[no results"):
+        return search_result
+
+    # Extract URL from top result
+    lines = search_result.split("\n")
+    if len(lines) < 4:
+        return "[fetch failed: unexpected search result format]"
+
+    url_line = lines[2]
+    match = re.search(r"^\s*(https?://[^\s]+)", url_line)
+    if not match:
+        return "[fetch failed: could not extract URL from search result]"
+
+    url = match.group(1)
+    fetch_result = web_fetch(url, max_chars=4000)
+
+    return f"{search_result}\n\n---\n\nFetched content:\n{fetch_result}"
+
+# ── Private helpers ─────────────────────────────────────────────────────
 
 def _is_private_or_local_host(hostname: str) -> bool:
     try:
@@ -490,26 +547,3 @@ def _fetch_and_score_pipeline(
         len(pages), len(urls), chunks_scored,
     )
     return scored, pages, url_outcomes
-
-
-def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str | None:
-    """
-    Run web_search and wrap successful results as chat context.
-    
-    Returns formatted search results with the query appended for LLM context,
-    or None if search failed/had no results.
-    
-    Args:
-        query: Search query.
-        max_results: Number of results (default MAX_RESULTS=5).
-    
-    Returns:
-        Formatted string with results + "User asked: {query}" or None on failure.
-    """
-
-    if not query or not query.strip():
-        return "[search failed: empty query]"
-    results = web_search(query, max_results)
-    if results.startswith("[search failed") or results.startswith("[no results"):
-        return None
-    return f"{results}\n\nUser asked: {query}"
