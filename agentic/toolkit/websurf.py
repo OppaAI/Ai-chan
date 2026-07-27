@@ -6,10 +6,11 @@ Web search and fetch primitives.
 Pure building blocks — no multi-step workflows. Callers compose
 these via the graph executor (research_graph.py) or ReAct loop.
  
-  - web_search()              — SearXNG query → numbered snippets
-  - web_fetch()                — single URL → extracted text (HTML/trafilatura)
-  - web_search_context()       — chat-mode wrapper around web_search
   - fetch_search_results()     — low-level SearXNG call (raw JSON)
+  - web_fetch()                — single URL → extracted text (HTML/trafilatura)
+  - web_search()              — SearXNG query → numbered snippets
+  - web_search_context()       — chat-mode wrapper around web_search
+  - web_search_and_fetch()     — web_search + fetch top result
  
 Requires a running SearXNG instance (SEARXNG_URL env var).
 """
@@ -97,33 +98,23 @@ _FETCH_CACHE = TTLCache(
 
 # ── Public API ──────────────────────────────────────────────────────────
 
-def fetch_search_results(query: str, max_results: int, pageno: int = 1):
-    """
-    Fetch raw search results from SearXNG backend.
-    
-    Queries SearXNG, handles retries on transient failures (3x with backoff),
-    and caches results for TOOLS_CACHE_TTL_SECONDS. Returns unformatted structured
-    data suitable for processing (ranking, pagination, filtering).
-    
+def fetch_search_results(
+    query: str, max_results: int, pageno: int = 1
+) -> tuple[list[dict] | None, str | None]:
+    """Fetch raw search results from SearXNG backend.
+
+    Handles retries on transient failures and caches results. Returns
+    unformatted structured data suitable for ranking and filtering.
+
     Args:
         query: Search query string.
         max_results: Maximum results to return for this page.
         pageno: Pagination number (1-indexed, default 1).
-    
+
     Returns:
-        (results_list, None) on success — list of dicts with 'title', 'url', 'content'.
-        (None, error_msg) on failure — error string starting with "[search failed:".
-        
+        (results_list, None) on success, (None, error_msg) on failure.
+        results_list is a list of dicts with 'title', 'url', 'content' keys.
         Returns empty list [] if SearXNG finds no results (not an error).
-    
-    Caching:
-        Results cached for ~15 min keyed on (query, max_results, pageno).
-        Identical queries within TTL return immediately.
-    
-    Retry:
-        - Connection errors: 3 retries with 1s, 2s, 3s backoff.
-        - HTTP 429 (rate limited): 3 retries with 2s, 4s, 6s backoff.
-        - Other errors: fail immediately, no retry.
     """
     if not query.strip():
         return [], "[search failed: empty query]"
@@ -174,21 +165,20 @@ def web_fetch(
     use_cache: bool = True,
 ) -> str:
     """Fetch a single URL and extract its main article/body text with trafilatura.
- 
-    This is the baseline "fetch a page" primitive in the toolkit — fast,
-    dependency-light, no JS rendering. deep_research prefers Crawl4AI when
-    available (see _crawl4ai_fetch_many) and falls back to this for anything
-    Crawl4AI misses or when it isn't installed.
- 
-    Downloads are streamed and capped at max_download_bytes via
-    _download_bytes, aborted mid-stream BEFORE trafilatura ever runs
-    extraction and BEFORE max_chars truncation — this is what bounds
-    worst-case memory for a single fetch.
- 
-    Successful fetches are cached in-process for TOOLS_CACHE_TTL_SECONDS keyed on
-    (url, max_chars). Failed fetches are never cached.
-    
-    REFACTORED: Uses TTLCache.get/set instead of _cache_get/_cache_set.
+
+    The baseline "fetch a page" primitive — fast, dependency-light, no JS
+    rendering. Downloads are streamed and capped at max_download_bytes BEFORE
+    extraction and BEFORE max_chars truncation, bounding worst-case memory.
+
+    Args:
+        url: URL to fetch.
+        max_chars: Maximum characters to return from extracted text.
+        max_download_bytes: Hard byte limit on the HTTP response body.
+        use_cache: If True, cache successful fetches in-process.
+
+    Returns:
+        Extracted text on success, or a bracketed error string starting with
+        "[fetch failed:" on failure.
     """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -231,16 +221,16 @@ def web_search(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
     
     Args:
         query: Search query string.
-        max_results: Number of results to fetch (default MAX_RESULTS=5).
-    
+        max_results: Number of results to fetch (default SEARXNG_MAX_RESULTS=5).
+
     Returns:
-        Formatted string: "[Web search results for: query]\n1. title\n   url\n   snippet\n..."
-        Or error string: "[search failed: reason]" or "[no results found for: query]"
-    
+        Formatted string on success, or a bracketed error string starting
+        with "[search failed:" or "[no results found for:".
+
     Notes:
         Always returns a string; never raises exceptions.
-        Results cached same as _fetch_search_results().
-        Only fetches page 1 (use _fetch_search_results for pagination).
+        Results cached same as fetch_search_results().
+        Only fetches page 1 (use fetch_search_results for pagination).
     """
     if not query.strip():
         return "[search failed: empty query]"
@@ -261,18 +251,15 @@ def web_search(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
 
 
 def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str | None:
-    """
-    Run web_search and wrap successful results as chat context.
-    
-    Returns formatted search results with the query appended for LLM context,
-    or None if search failed/had no results.
-    
+    """Run web_search and wrap successful results as chat context.
+
     Args:
-        query: Search query.
-        max_results: Number of results (default MAX_RESULTS=5).
-    
+        query: Search query string.
+        max_results: Number of results to fetch (default SEARXNG_MAX_RESULTS=5).
+
     Returns:
-        Formatted string with results + "User asked: {query}" or None on failure.
+        Search results with "User asked: {query}" appended, or None if the
+        search failed or returned no results.
     """
 
     if not query or not query.strip():
@@ -319,6 +306,20 @@ def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> 
 # ── Private helpers ─────────────────────────────────────────────────────
 
 def _is_private_or_local_host(hostname: str) -> bool:
+    """Check whether a hostname resolves to a private, local, or reserved IP.
+
+    Used as a security guard: web_fetch and any other URL-fetching primitive
+    rejects hosts that resolve to private/loopback/link-local/multicast ranges
+    to prevent SSRF attacks.
+
+    Args:
+        hostname: The hostname to resolve (e.g. "192.168.1.1", "localhost").
+
+    Returns:
+        True if the hostname is private/local/unroutable, False if it appears
+        to be a public routable address. Returns True on resolution failure
+        (fail-closed).
+    """
     try:
         for _family, _type, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
             raw_ip = sockaddr[0]
@@ -341,18 +342,18 @@ def _download_bytes(
     max_download_bytes: int,
     timeout: int = WEB_FETCH_TIMEOUT_SECONDS,
 ) -> tuple[bytes | None, str | None]:
-    """Stream-download a URL, aborting mid-stream the moment
-    max_download_bytes is exceeded — BEFORE any extraction step runs. This
-    is the single shared size-guard: web_fetch's trafilatura/HTML path and
-    deep_read's MarkItDown non-HTML path both call this instead of each
-    re-implementing their own streaming loop, so the worst-case-memory bound
-    only needs to be correct in one place.
+    """Stream-download a URL, aborting mid-stream when the size limit is exceeded.
 
-    Returns (bytes, None) on success, or (None, error_string) on failure.
-    Callers are responsible for scheme/host validation before calling this —
-    it does not repeat the private/local-host or scheme checks web_fetch
-    already does, since deep_read's content-type sniff runs first and both
-    callers share the same validated URL.
+    The single shared size-guard for all fetch paths. Callers are responsible
+    for scheme/host validation before calling this.
+
+    Args:
+        url: URL to download.
+        max_download_bytes: Hard byte limit on the response body.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        (bytes, None) on success, (None, error_string) on failure.
     """
     if importlib.util.find_spec("requests") is None:
         return None, "[fetch failed: requests is not installed]"
@@ -392,21 +393,18 @@ def _download_bytes(
     return downloaded, None
 
 
-    return result
-
-
 def _sniff_content_type(url: str) -> str:
-    """Best-effort content-type classification for research.py's deep_read
-    routing: returns 'html' (default/fallback) or one of the MarkItDown-
-    handled non-HTML kinds ('pdf', 'docx', 'pptx', 'xlsx', 'epub', 'csv',
-    'xml', 'zip', 'ipynb', 'msg').
+    """Classify a URL's content type for deep_read's content-type routing.
 
-    Tries a cheap HEAD request first (no body download) and reads the
-    Content-Type header; falls back to the URL's file extension if HEAD is
-    blocked, times out, or the server omits/mislabels the header. Fails open
-    to 'html' on total ambiguity — the HTML path degrading gracefully
-    (via web_fetch's own "[fetch failed: no extractable text]") is a safer
-    default than guessing a document format wrong.
+    Tries a cheap HEAD request first (no body download), then falls back to
+    the URL's file extension. Returns 'html' on total ambiguity.
+
+    Args:
+        url: The URL to classify.
+
+    Returns:
+        'html' (default/fallback) or a MarkItDown-handled format: 'pdf',
+        'docx', 'pptx', 'xlsx', 'epub', 'csv', 'xml', 'zip', 'ipynb', 'msg'.
     """
     parsed = urlparse(url)
     ext = os.path.splitext(parsed.path)[1].lower()
@@ -430,19 +428,20 @@ def _sniff_content_type(url: str) -> str:
 
 
 def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> str:
-    """Convert non-HTML document bytes (pdf/docx/pptx/xlsx/epub/csv/xml/zip/
-    ipynb/msg) to markdown text via MarkItDown.
+    """Convert non-HTML document bytes to markdown text via MarkItDown.
 
-    MarkItDown's convert() wants a file path or file-like object with a
-    recognizable extension; bytes are written to a suffix-matched temp file
-    rather than relying on an in-memory stream, since MarkItDown's format
-    detection is more reliable off a real extension than a bare stream.
+    Writes bytes to a suffix-matched temp file for reliable format detection.
 
-    Requires the base `markitdown` package only (`pip install markitdown`)
-    — no OCR/audio extras. Returns a bracketed failure string, same
-    convention as web_fetch, on any failure so callers can check
-    text.startswith("[fetch failed") uniformly regardless of which
-    extraction path produced the text.
+    Args:
+        data: Raw document bytes.
+        content_type: One of the MarkItDown-handled format keys ('pdf',
+            'docx', 'pptx', 'xlsx', 'epub', 'csv', 'xml', 'zip', 'ipynb',
+            'msg').
+        max_chars: Maximum characters to return.
+
+    Returns:
+        Markdown text on success, or a bracketed error string starting with
+        "[fetch failed:" on failure.
     """
     if importlib.util.find_spec("markitdown") is None:
         return "[fetch failed: markitdown is not installed]"
@@ -478,16 +477,28 @@ def _fetch_and_score_pipeline(
     fetch_fn=web_fetch,
     batch_prefetch_fn=None,
 ) -> tuple[list[tuple[float, str, str]], list[tuple[str, str]], list[tuple[str, str]]]:
-    """Fetch multiple URLs concurrently, scoring each page's chunks for
-    relevance the moment that page finishes downloading — not after every
-    URL has finished.
+    """Fetch multiple URLs concurrently and score each page's chunks for relevance.
 
-    If batch_prefetch_fn is given (deep_research's Crawl4AI batch path), it's
-    called ONCE with the full url list up front to grab as many pages as
-    possible in a single browser session; only URLs it doesn't cover fall
-    through to the per-URL thread-pool path using fetch_fn (e.g. web_fetch).
+    Processes pages as they finish (not after every URL completes). If
+    batch_prefetch_fn is given, it is called once with the full URL list up
+    front; uncovered URLs fall through to the per-URL thread-pool.
 
-    Returns (scored_chunks, pages, url_outcomes).
+    Args:
+        urls: URLs to fetch.
+        query: Relevance query for chunk scoring.
+        embedder: Embedder instance for semantic scoring.
+        max_chars_per_page: Max characters to fetch per URL.
+        chunk_chars: Character size for chunking page text.
+        max_workers: Max concurrent fetches.
+        max_chunks_to_score: Max total chunks to score across all pages.
+        fetch_fn: Per-URL fetch function (default web_fetch).
+        batch_prefetch_fn: Optional batch prefetch function for Crawl4AI.
+
+    Returns:
+        (scored_chunks, pages, url_outcomes) tuple:
+        - scored_chunks: list of (score, url, chunk_text)
+        - pages: list of (url, full_text) for successful fetches
+        - url_outcomes: list of (url, status_string)
     """
     if not urls:
         return [], [], []
