@@ -47,6 +47,7 @@ SEARXNG_RATE_LIMIT_DELAY = float(os.getenv("SEARXNG_RATE_LIMIT_DELAY", 2.0))
 # -- web_fetch download guard --
 WEB_FETCH_MAX_DOWNLOAD_BYTES = int(os.getenv("WEB_FETCH_MAX_DOWNLOAD_BYTES", 5_000_000))
 WEB_FETCH_TIMEOUT_SECONDS = int(os.getenv("WEB_FETCH_TIMEOUT_SECONDS", 8))
+WEB_FETCH_MAX_CHARS = int(os.getenv("WEB_FETCH_MAX_CHARS", 4000))
 # ── Cache instance ──────────────────────────────────────────────────────
 # -- shared TTL cache instances --
 # Both search and fetch operations use the same TTL window but separate
@@ -125,7 +126,7 @@ def fetch_search_results(
  
 def web_fetch(
     url: str,
-    max_chars: int = 4000,
+    max_chars: int = WEB_FETCH_MAX_CHARS,
     max_download_bytes: int = WEB_FETCH_MAX_DOWNLOAD_BYTES,
     use_cache: bool = True,
 ) -> str:
@@ -264,7 +265,7 @@ def web_search_and_fetch(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> 
         return "[fetch failed: could not extract URL from search result]"
 
     url = match.group(1)
-    fetch_result = web_fetch(url, max_chars=4000)
+    fetch_result = web_fetch(url, max_chars=WEB_FETCH_MAX_CHARS)
 
     return f"{search_result}\n\n---\n\nFetched content:\n{fetch_result}"
 

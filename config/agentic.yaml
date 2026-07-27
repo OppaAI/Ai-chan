@@ -248,6 +248,7 @@ RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots
 # -- web_fetch download guard & caching --
 WEB_FETCH_MAX_DOWNLOAD_BYTES: "5_000_000"  # Hard byte cap per fetch; download aborted mid-stream before extraction/truncation, bounding worst-case memory for one fetch.
 WEB_FETCH_TIMEOUT_SECONDS: "8"  # Per-request timeout for web_fetch's underlying HTTP call.
+WEB_FETCH_MAX_CHARS: "4000"  # Default max characters returned by web_fetch().
 FETCH_URL_USER_AGENT: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"  # User-Agent header for URL fetch requests.
 TOOLS_CACHE_TTL_SECONDS: "900"  # In-process cache lifetime (seconds) for both search results and fetched pages. 15 min default.
 TOOLS_CACHE_MAX_ENTRIES: "256"  # Max entries per cache (search cache and fetch cache each get their own instance of this limit) before oldest entries are evicted.
