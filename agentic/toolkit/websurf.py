@@ -42,7 +42,6 @@ log = get_logger(__name__)
  
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8888")
 SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
-SEARXNG_MAX_RESULTS = int(os.getenv("SEARXNG_MAX_RESULTS", 5))
 SEARXNG_TIMEOUT_SECONDS = int(os.getenv("SEARXNG_TIMEOUT_SECONDS", 8))
 SEARXNG_MAX_RETRIES = int(os.getenv("SEARXNG_MAX_RETRIES", 3))
 SEARXNG_RETRY_BASE_DELAY = float(os.getenv("SEARXNG_RETRY_BASE_DELAY", 1.0))
@@ -223,7 +222,7 @@ def web_fetch(
     return result
 
 
-def web_search(query: str, max_results: int = MAX_RESULTS) -> str:
+def web_search(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str:
     """
     Search the web and return formatted numbered snippets.
     
@@ -493,7 +492,7 @@ def _fetch_and_score_pipeline(
     return scored, pages, url_outcomes
 
 
-def web_search_context(query: str, max_results: int = MAX_RESULTS) -> str | None:
+def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS) -> str | None:
     """
     Run web_search and wrap successful results as chat context.
     

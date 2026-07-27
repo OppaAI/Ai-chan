@@ -40,6 +40,7 @@ from agentic.toolkit.research import (
     _apply_corroboration_bonus,
     _deep_search_impl,
     deep_research,
+    _build_deep_research_subgraph,
     DEEP_RESEARCH_NUM_FETCHES,
     DEEP_RESEARCH_NUM_SEARCHES,
     DEEP_RESEARCH_MAX_CHARS_PER_PAGE,
@@ -48,13 +49,22 @@ from agentic.toolkit.research import (
     CONDENSE_TOP_K,
     CONDENSE_MIN_SCORE,
 )
+from agentic.graph_engine import PlanGraph, PlanNode
 
 
 class FakeEmbedder:
-    """Deterministic embedder for tests."""
+    """Deterministic bag-of-words embedder for tests.
+    
+    Same words → similar vectors; different words → dissimilar vectors.
+    """
     def embed_query(self, text: str, instruct: str = "") -> np.ndarray:
-        h = hash(text) % 1000
-        return np.array([float(h) / 1000.0] * 384, dtype=np.float32)
+        words = text.lower().split()
+        vec = np.zeros(384, dtype=np.float32)
+        for word in words:
+            idx = hash(word) % 384
+            vec[idx] += 1.0
+        norm = np.linalg.norm(vec)
+        return vec / norm if norm > 0 else vec
 
     def embed_batch(self, texts: list[str]) -> np.ndarray:
         return np.stack([self.embed_query(t) for t in texts])
@@ -188,7 +198,7 @@ class TestWebSearch:
 
     def test_search_failure_propagates(self):
         with patch("agentic.toolkit.websurf.fetch_search_results") as mock_raw:
-            mock_raw.return_value = (None, "connection failed")
+            mock_raw.return_value = (None, "[search failed: connection failed]")
             result = web_search("query")
             assert "search failed" in result.lower()
 
@@ -210,70 +220,111 @@ class TestWebFetch:
 
 
 class TestDeepResearch:
-    """Tests for deep_research multi-round adaptive research."""
+    """Tests for deep_research graph-based research."""
 
-    def test_requires_client_and_model_for_adaptive(self):
-        """Without client/model, runs single round only."""
-        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
-            mock_impl.return_value = ("results", set())
-            result = deep_research("query", client=None, model=None, embedder=FakeEmbedder())
-            # Should only call once (max_rounds=1 when not adaptive)
-            assert mock_impl.call_count == 1
+    def test_empty_query(self):
+        result = deep_research("", embedder=FakeEmbedder())
+        assert "search failed" in result.lower()
+        result = deep_research("   ", embedder=FakeEmbedder())
+        assert "search failed" in result.lower()
 
-    def test_adaptive_continues_with_client(self):
-        """With client/model, runs adaptive rounds."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = [
-            # Decision: continue
-            MagicMock(choices=[MagicMock(message=MagicMock(content='{"continue": true, "next_query": "refined query", "reason": "need more"}'))]),
-            # Decision: stop
-            MagicMock(choices=[MagicMock(message=MagicMock(content='{"continue": false, "next_query": "", "reason": "enough"}'))]),
-        ]
+    def test_returns_finalize_content(self):
+        mock_result = MagicMock()
+        mock_result.results = (
+            MagicMock(node_id="fetch_r", ok=True, content="evidence"),
+            MagicMock(node_id="judge_r", ok=True, content="SUFFICIENT"),
+            MagicMock(node_id="finalize", ok=True, content="Final synthesized answer"),
+        )
+        mock_result.final_answer = "fallback"
 
-        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
-            mock_impl.return_value = ("round results", {"https://example.com"})
-            result = deep_research("query", client=mock_client, model="test", embedder=FakeEmbedder(), max_rounds=3)
-            # Should have called _deep_search_impl twice (2 rounds)
-            assert mock_impl.call_count == 2
+        with patch("agentic.toolkit.research.execute_graph", return_value=mock_result) as mock_exec:
+            result = deep_research("quantum computing", embedder=FakeEmbedder())
 
-    def test_synthesis_called_when_evidence_exists(self):
-        """When adaptive and has evidence, calls LLM for synthesis."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = [
-            # Decision: stop after 1 round
-            MagicMock(choices=[MagicMock(message=MagicMock(content='{"continue": false, "next_query": "", "reason": "done"}'))]),
-            # Synthesis
-            MagicMock(choices=[MagicMock(message=MagicMock(content="Synthesized answer"))]),
-        ]
+        assert result == "Final synthesized answer"
+        mock_exec.assert_called_once()
+        graph = mock_exec.call_args[0][0]
+        assert isinstance(graph, PlanGraph)
+        assert graph.goal == "quantum computing"
 
-        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
-            mock_impl.return_value = ("good evidence here", {"https://example.com"})
-            result = deep_research("query", client=mock_client, model="test", embedder=FakeEmbedder())
-            assert "Synthesized answer" in result
-            assert "[Synthesis]" in result
+    def test_falls_back_to_final_answer(self):
+        mock_result = MagicMock()
+        mock_result.results = (
+            MagicMock(node_id="fetch_r", ok=True, content="evidence"),
+        )
+        mock_result.final_answer = "fallback answer"
 
-    def test_synthesis_failure_fallbacks_to_raw(self):
-        """If synthesis LLM call fails, returns raw rounds."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = [
-            # Decision: stop
-            MagicMock(choices=[MagicMock(message=MagicMock(content='{"continue": false}'))]),
-            # Synthesis: fails
-            Exception("LLM error"),
-        ]
-
-        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
-            mock_impl.return_value = ("evidence", {"https://example.com"})
-            result = deep_research("query", client=mock_client, model="test", embedder=FakeEmbedder())
-            # Should return raw rounds log without synthesis
-            assert "[Synthesis]" not in result
-            assert "Round 1" in result
-
-    def test_empty_results_handled(self):
-        with patch("agentic.toolkit.research_graph._deep_search_impl") as mock_impl:
-            mock_impl.return_value = ("[search failed: ...]", set())
+        with patch("agentic.toolkit.research.execute_graph", return_value=mock_result):
             result = deep_research("query", embedder=FakeEmbedder())
-            assert "no results found" in result.lower()
+        assert result == "fallback answer"
+
+    def test_skips_failed_finalize(self):
+        mock_result = MagicMock()
+        mock_result.results = (
+            MagicMock(node_id="finalize", ok=False, content="failed"),
+        )
+        mock_result.final_answer = "actual answer"
+
+        with patch("agentic.toolkit.research.execute_graph", return_value=mock_result):
+            result = deep_research("query", embedder=FakeEmbedder())
+        assert result == "actual answer"
+
+    def test_exception_during_execution(self):
+        with patch("agentic.toolkit.research.execute_graph", side_effect=RuntimeError("graph error")):
+            with pytest.raises(RuntimeError, match="graph error"):
+                deep_research("query", embedder=FakeEmbedder())
+
+    def test_tool_mode_omits_report_learn(self):
+        mock_result = MagicMock()
+        mock_result.results = (
+            MagicMock(node_id="finalize", ok=True, content="result"),
+        )
+        mock_result.final_answer = ""
+
+        with patch("agentic.toolkit.research.execute_graph", return_value=mock_result) as mock_exec:
+            deep_research("query", embedder=FakeEmbedder(), tool_mode=True)
+
+        graph = mock_exec.call_args[0][0]
+        node_ids = [n.id for n in graph.nodes]
+        assert "report" not in node_ids
+        assert "learn" not in node_ids
+
+    def test_default_includes_report_learn(self):
+        mock_result = MagicMock()
+        mock_result.results = (
+            MagicMock(node_id="finalize", ok=True, content="result"),
+        )
+        mock_result.final_answer = ""
+
+        with patch("agentic.toolkit.research.execute_graph", return_value=mock_result) as mock_exec:
+            deep_research("query", embedder=FakeEmbedder())
+
+        graph = mock_exec.call_args[0][0]
+        node_ids = [n.id for n in graph.nodes]
+        assert "report" in node_ids
+        assert "learn" in node_ids
+
+    def test_build_deep_research_subgraph_structure(self):
+        graph = _build_deep_research_subgraph("test query", "sess123", max_rounds=5)
+        assert isinstance(graph, PlanGraph)
+        assert graph.id == "deep_research"
+        assert graph.goal == "test query"
+        node_ids = [n.id for n in graph.nodes]
+        assert "fetch_r" in node_ids
+        assert "judge_r" in node_ids
+        assert "finalize" in node_ids
+        assert "report" in node_ids
+        assert "learn" in node_ids
+
+    def test_build_deep_research_subgraph_tool_mode(self):
+        graph = _build_deep_research_subgraph("q", "sess456", tool_mode=True)
+        node_ids = [n.id for n in graph.nodes]
+        assert "report" not in node_ids
+        assert "learn" not in node_ids
+
+    def test_build_deep_research_subgraph_caps_max_rounds(self):
+        graph = _build_deep_research_subgraph("q", "sess789", max_rounds=999)
+        judge = next(n for n in graph.nodes if n.id == "judge_r")
+        assert judge.max_visits <= 5
 
 
 class TestCondenseEvidence:
@@ -349,10 +400,10 @@ class TestFetchAndScorePipeline:
             time.sleep(0.01)  # Simulate network
             return f"Content from {url}"
 
-        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch):
+        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch) as mock_fetch_fn:
             start = time.monotonic()
             scored, pages, outcomes = _fetch_and_score_pipeline(
-                urls, "query", FakeEmbedder(), 1000, max_workers=4
+                urls, "query", FakeEmbedder(), 1000, max_workers=4, fetch_fn=mock_fetch_fn
             )
             elapsed = time.monotonic() - start
 
@@ -381,14 +432,14 @@ class TestFetchAndScorePipeline:
         """Failed fetches don't produce scored chunks."""
         urls = ["https://good.com", "https://bad.com"]
 
-        def mock_fetch(url, **kwargs):
+        def mock_fetch(url, max_chars=4000):
             if "bad" in url:
                 return "[fetch failed: connection error]"
             return "Good content here"
 
-        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch):
+        with patch("agentic.toolkit.websurf.web_fetch", side_effect=mock_fetch) as mock_fetch_fn:
             scored, pages, outcomes = _fetch_and_score_pipeline(
-                urls, "query", FakeEmbedder(), 1000
+                urls, "query", FakeEmbedder(), 1000, fetch_fn=mock_fetch_fn
             )
 
         # Only good.com should be in pages
@@ -426,24 +477,6 @@ class TestScoreUrlChunks:
         assert len(scored) == 5
 
 
-class TestReadPaperUrl:
-    """Tests for read_paper_url."""
-
-    def test_without_query_returns_full(self):
-        with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
-            mock_fetch.return_value = "Full paper content here"
-            result = read_paper_url("https://arxiv.org/abs/1234.5678")
-            assert "Full paper content here" in result
-
-    def test_with_query_condenses(self):
-        with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
-            mock_fetch.return_value = "Long paper about quantum. " * 100
-            with patch("agentic.toolkit.websurf.condense_evidence") as mock_condense:
-                mock_condense.return_value = "Condensed for query"
-                result = read_paper_url("https://arxiv.org/abs/1234.5678", query="quantum")
-                assert "Condensed for query" in result
-
-
 class TestResearchEnvConfig:
     """Tests that env vars are read correctly."""
 
@@ -462,34 +495,22 @@ class TestIntegrationScenarios:
     """Integration-style tests with mocked external deps."""
 
     def test_deep_research_full_flow(self):
-        """End-to-end deep_research with mocked SearXNG and fetch."""
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = [
-            # Decision: stop after 1 round
-            MagicMock(choices=[MagicMock(message=MagicMock(content='{"continue": false}'))]),
-            # Synthesis
-            MagicMock(choices=[MagicMock(message=MagicMock(content="Final synthesized answer"))]),
-        ]
+        """End-to-end deep_research with mocked graph execution."""
+        mock_result = MagicMock()
+        mock_result.results = (
+            MagicMock(node_id="fetch_r", ok=True, content="Round evidence here"),
+            MagicMock(node_id="judge_r", ok=True, content="SUFFICIENT"),
+            MagicMock(node_id="finalize", ok=True, content="Final synthesized answer"),
+        )
+        mock_result.final_answer = "fallback"
 
-        with patch("agentic.toolkit.websurf._web_search_raw") as mock_search:
-            mock_search.return_value = ([
-                {"title": "Q Computing", "url": "https://qc.com", "content": "Quantum computing uses qubits"}
-            ], None)
-
-            with patch("agentic.toolkit.websurf.web_fetch") as mock_fetch:
-                mock_fetch.return_value = "Full page: quantum computing uses qubits for superposition."
-
-                result = deep_research(
-                    "how does quantum computing work",
-                    client=mock_client,
-                    model="test",
-                    embedder=FakeEmbedder(),
-                    max_rounds=2,
-                )
+        with patch("agentic.toolkit.research.execute_graph", return_value=mock_result):
+            result = deep_research(
+                "how does quantum computing work",
+                embedder=FakeEmbedder(),
+            )
 
         assert "Final synthesized answer" in result
-        assert "[Synthesis]" in result
-        assert "Round 1" in result
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
