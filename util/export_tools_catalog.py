@@ -60,6 +60,7 @@ def discover_tools() -> dict[str, Any]:
                 entry.setdefault("graph", False)
                 entry.setdefault("wiki", False)
                 entry.setdefault("skill", False)
+                entry.setdefault("name", node.name)
                 tools.append(entry)
     tools.sort(key=lambda item: item["name"])
     return {"tools": tools}
