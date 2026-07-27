@@ -248,7 +248,7 @@ RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots
 RESEARCH_SITEMAP_TIMEOUT_SECONDS: "6"  # Per-request timeout for fetching robots.txt/sitemap.xml during discovery.
 
 # -- deep_study_window (scheduled autonomous study) --
-DEEP_STUDY_TOPIC: ""  # Optional topic for autonomous deep-study windows. Leave empty to skip or set dynamically via memorize.pending_deep_study_topic. Example: "quantum computing fundamentals".
+DEEP_STUDY_TOPIC: "Machine Learning"  # Optional topic for autonomous deep-study windows. Leave empty to skip or set dynamically via memorize.pending_deep_study_topic. Example: "quantum computing fundamentals".
 DEEP_STUDY_WINDOW_TIMEZONE: ""  # Timezone for the daily study window (e.g., "America/New_York"). Empty uses local system timezone.
 
 # -- web_fetch download guard & caching --
