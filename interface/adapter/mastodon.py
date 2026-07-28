@@ -5,7 +5,7 @@ import threading
 import time
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -17,9 +17,9 @@ except ImportError:
 
 
 class _MastodonListener(StreamListener):
-    def __init__(self, connector: MastodonConnector) -> None:
+    def __init__(self, adapter: MastodonAdapter) -> None:
         super().__init__()
-        self._connector = connector
+        self._adapter = adapter
 
     def on_notification(self, notification) -> None:
         if notification.type != "mention":
@@ -40,15 +40,15 @@ class _MastodonListener(StreamListener):
             return
         cid = str(status.id)
         log.info("[mastodon] mention from @%s: %.60s", acct.username, text)
-        session = self._connector.handle_message(cid, uid, display, text)
+        session = self._adapter.handle_message(cid, uid, display, text)
         session.wait()
 
     def handle_heartbeat(self) -> None:
         pass
 
 
-class MastodonConnector(ConnectorBase):
-    """Mastodon bot connector using Mastodon.py (streaming API).
+class MastodonAdapter(AdapterBase):
+    """Mastodon bot adapter using Mastodon.py (streaming API).
 
     Listens for mentions via the streaming API and replies in-thread.
 
@@ -95,7 +95,7 @@ class MastodonConnector(ConnectorBase):
         self._stream_thread = threading.Thread(target=self._run_stream, daemon=True)
         self._stream_thread.start()
         self._running = True
-        log.info("[mastodon] Connector started (streaming)")
+        log.info("[mastodon] Adapter started (streaming)")
 
     def stop(self) -> None:
         self._running = False
