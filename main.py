@@ -16,6 +16,7 @@ Usage:
 This module only parses arguments and dispatches to the right front end:
     - interface/webui/webui.py  -> run_webui(args)   (default)
     - interface/cli/cli.py      -> run_cli(args)     (--cli)
+    - interface/adapter/     -> run_adapter(args)  (--adapter <platform>)
 Both front ends converge on the same shared boot/turn-loop logic in
 system/orchestrate.py:run_session(ui, args) — see that module for the
 actual session orchestration (subsystem boot, main loop, commands,
