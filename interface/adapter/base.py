@@ -89,7 +89,7 @@ class ConversationSession:
         self._done.clear()
         self._result = None
         self._error = None
-        t = threading.Thread(target=self._run, name=f"conn-{self.conversation_id}", daemon=True)
+        t = threading.Thread(target=self._run, name=f"adapter-{self.conversation_id}", daemon=True)
         t.start()
 
     def wait(self, timeout: float = 120.0) -> str | None:
