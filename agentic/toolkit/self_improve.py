@@ -29,30 +29,25 @@ _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_mod
 # ── Public API ──────────────────────────────────────────────────────────
 
 @tool(TOOLS["repo_file_tree"])
-def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
+def repo_file_tree(prefix: str = "", limit: int = 100) -> str:
     """
     List repository text files for architecture/code navigation.
 
-    Walks the repository (or a subdirectory of it) and returns the relative
+    Walks the repository (or a subdirectory of it) and returns relative
     paths of files whose extension is in ``_ALLOWED_TEXT_SUFFIXES``,
-    skipping directories in ``_SKIP_DIRS`` (e.g. ``.git``, ``venv``,
-    ``node_modules``). If ``prefix`` points to a single file instead of a
-    directory, that file alone is returned (subject to the same extension
-    check).
+    skipping ``_SKIP_DIRS``. If ``prefix`` is a single file, returns that
+    file alone.
 
     Args:
-        prefix: Repository-relative path to scope the listing to. Empty
-            string (default) lists from the repo root. Resolved and
-            confined to the repo via ``_confine_repo_path``; paths that
-            escape the repository raise and are reported as a failure.
-        limit: Maximum number of files to return. Clamped to [1, 1000].
-            Ignored when ``prefix`` resolves to a single file.
+        prefix: Repo-relative path to scope the listing. Empty = repo root.
+            Confined via ``_confine_repo_path``.
+        limit: Max files returned, clamped to [1, 1000]. Default 100 to
+            fit an 8K context budget (~8-10 tokens/path). Ignored for
+            single-file prefix.
 
     Returns:
-        A JSON block (via ``json_block``) containing ``root`` (absolute
-        repo root), ``prefix`` (as given, or ``"."``), ``count``, and
-        ``files`` (paths relative to the repo root). On failure, returns
-        a ``"[repo tree failed: ...]"`` string instead of raising.
+        JSON block with ``root``, ``prefix``, ``count``, ``files``.
+        Returns ``"[repo tree failed: ...]"`` on error.
     """
     try:
         base = _repo_confine_path(prefix) if prefix else REPO_ROOT
