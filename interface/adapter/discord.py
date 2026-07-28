@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -14,8 +14,8 @@ except ImportError:
     discord = None
 
 
-class DiscordConnector(ConnectorBase):
-    """Discord bot connector using discord.py."""
+class DiscordAdapter(AdapterBase):
+    """Discord bot adapter using discord.py."""
 
     def __init__(self, config: dict[str, str] | None = None) -> None:
         super().__init__(config)
@@ -69,7 +69,7 @@ class DiscordConnector(ConnectorBase):
         )
         self._thread.start()
         self._running = True
-        log.info("[discord] Connector started")
+        log.info("[discord] Adapter started")
 
     def stop(self) -> None:
         self._running = False
