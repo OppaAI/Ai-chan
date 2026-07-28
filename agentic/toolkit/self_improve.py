@@ -20,32 +20,13 @@ from pathlib import Path
 from agentic.toolkit.common import json_block
 from agentic.registry import tool
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-MAX_REPO_READ_CHARS = 20_000
-_ALLOWED_TEXT_SUFFIXES = {".py", ".md", ".toml", ".json", ".yaml", ".yml", ".txt", ".sh", ".html", ".css", ".js", ".ts"}
-_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", "dist", "build"}
+REPO_ROOT = Path(__file__).resolve().parents[2]    # repo directory (the first 2 hierachy directories of this file)
+MAX_REPO_READ_CHARS = 20_000                       # the characters allowed to be read in the repo
+_ALLOWED_TEXT_SUFFIXES = {".py", ".md", ".toml", ".json", ".yaml", ".yml", ".txt", ".sh", ".html", ".css", ".js", ".ts"}   # file suffixes that allowed access
+_SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", "dist", "build"}                    # blacklisted directories
 
 
-def _safe_repo_path(relative_path: str) -> Path:
-    cleaned = relative_path.strip().lstrip("/\\")
-    path = (REPO_ROOT / cleaned).resolve()
-    if path != REPO_ROOT and REPO_ROOT not in path.parents:
-        raise ValueError(f"path escapes repository: {relative_path}")
-    return path
-
-
-def _iter_repo_files(root: Path = REPO_ROOT):
-    for path in root.rglob("*"):
-        if any(part in _SKIP_DIRS for part in path.relative_to(REPO_ROOT).parts):
-            continue
-        if not path.is_file():
-            continue
-        resolved = path.resolve()
-        if resolved != REPO_ROOT and REPO_ROOT not in resolved.parents:
-            continue
-        if resolved.suffix.lower() in _ALLOWED_TEXT_SUFFIXES:
-            yield resolved
-
+# ── Public API ──────────────────────────────────────────────────────────
 
 @tool(
     name="repo_file_tree",
@@ -58,7 +39,7 @@ def _iter_repo_files(root: Path = REPO_ROOT):
 def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
     """List repository text files for architecture/code navigation."""
     try:
-        base = _safe_repo_path(prefix) if prefix else REPO_ROOT
+        base = _confine_repo_path(prefix) if prefix else REPO_ROOT
         if base.is_file():
             if base.suffix.lower() not in _ALLOWED_TEXT_SUFFIXES:
                 return f"[repo tree failed: unsupported file type: {base.suffix}]"
@@ -87,7 +68,7 @@ def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
 def repo_read_file(relative_path: str, max_chars: int = MAX_REPO_READ_CHARS) -> str:
     """Read one repository text file without permitting path traversal."""
     try:
-        path = _safe_repo_path(relative_path)
+        path = _confine_repo_path(relative_path)
         if not path.exists() or not path.is_file():
             return f"[repo read failed: file not found: {relative_path}]"
         if path.suffix.lower() not in _ALLOWED_TEXT_SUFFIXES:
@@ -112,7 +93,7 @@ def repo_search_text(query: str, prefix: str = "", limit: int = 50) -> str:
         needle = query.casefold().strip()
         if not needle:
             return "[repo search failed: empty query]"
-        base = _safe_repo_path(prefix) if prefix else REPO_ROOT
+        base = _confine_repo_path(prefix) if prefix else REPO_ROOT
         if base.is_file():
             if base.suffix.lower() not in _ALLOWED_TEXT_SUFFIXES:
                 return f"[repo search failed: unsupported file type: {base.suffix}]"
@@ -137,3 +118,29 @@ def repo_search_text(query: str, prefix: str = "", limit: int = 50) -> str:
         return json_block("repo search", {"query": query, "prefix": prefix or ".", "count": len(matches), "matches": matches})
     except Exception as e:
         return f"[repo search failed: {e}]"
+
+
+# ── Private Helpers ─────────────────────────────────────────────────────
+
+def _confine_repo_path(jail_path: str) -> Path:
+    """Normalize path (resolve symlinks, `..`) and confine within REPO_ROOT; raise if it escapes."""
+    cleaned = jail_path.strip().lstrip("/\\")                      # strip out leading slash symbol
+    path = (REPO_ROOT / cleaned).resolve()                         # add repo path in front
+    if path != REPO_ROOT and REPO_ROOT not in path.parents:        # if resolved path not within repo,
+        raise ValueError(f"path escapes repository: {jail_path}")  # raise error
+    return path                                                    # return the resolved path
+
+
+def _iter_repo_files(root: Path = REPO_ROOT):
+    """Recursively yield allowed text files, skipping excluded directories."""
+    for path in root.rglob("*"):                                                    # recursively walk everything under repo root
+        if any(part in _SKIP_DIRS for part in path.relative_to(REPO_ROOT).parts):   # if any part of the path's hierarchy is blacklisted,
+            continue                                                                # skip
+        if not path.is_file():                                                      # if path is not a file,
+            continue                                                                # skip
+        resolved = path.resolve()                                                   # grab the resolved path
+        if resolved != REPO_ROOT and REPO_ROOT not in resolved.parents:             # safeguard against escaped path
+            continue                                                                # skip
+        if resolved.suffix.lower() in _ALLOWED_TEXT_SUFFIXES:                       # if path has file suffix that allowed access
+            yield resolved                                                          # yield the resolved path
+          
