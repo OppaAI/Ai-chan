@@ -16,7 +16,7 @@ Aiko's social publishing workflows, combined into one module. Three lanes:
     1. scan the photo inbox (toolkit/photography.py),
     2. caption each candidate via a vision model (grounded in actual pixels),
     3. ask Aiko to pick 1-3 items worth sharing and write a short caption,
-    4. save a local review bundle, then optionally post to Instagram.
+    4. save a local review bundle, then optionally post to Pixelset.
 
   Lane C — YouTube video queue (no grading — you already chose the video by
   dropping it in the folder; Aiko only polishes your description):
@@ -55,12 +55,12 @@ review step (CLI/WebUI, outside the conversation) can set.
 
 Supported providers (by design, current as of this revision):
   - Lane A (weekly postcard): x, threads
-  - Lane B (curated photos):  instagram (photos only, no video)
+  - Lane B (curated photos):  pixelset (photos only, no video)
   - Lane C (video queue):     youtube
 
 Bluesky, Mastodon, and Pixelfed support has been removed — those platforms'
 communities have expressed they don't want AI-posted content, so Aiko no
-longer posts there. Instagram no longer posts video (Aiko doesn't post video
+longer posts there. Pixelset no longer posts video (Aiko doesn't post video
 there); video instead goes to YouTube via its own lane. If a future platform
 should be added, follow the existing pattern: one _post_<provider>(...)
 function plus a registry entry; the post_draft / post_photo_draft /
@@ -70,10 +70,10 @@ Token refresh, by provider:
   - Threads: long-lived token, ~60-day life. Refreshed automatically at post
     time once inside a THREADS_REFRESH_WINDOW_DAYS (default 55) window of
     expiry — see refresh_threads_token_if_due().
-  - Instagram: long-lived token via graph.instagram.com, same ~60-day life
+  - Pixelset: long-lived token via graph.instagram.com, same ~60-day life
     and same pattern — refreshed automatically at post time once inside an
-    IG_REFRESH_WINDOW_DAYS (default 55) window of expiry — see
-    refresh_instagram_token_if_due().
+    PIXELSET_REFRESH_WINDOW_DAYS (default 55) window of expiry — see
+    refresh_pixelset_token_if_due().
   - YouTube: refresh token doesn't expire on a fixed schedule, so there's no
     day-window check — _youtube_access_token() just exchanges it for a fresh
     short-lived access token on every single post.
@@ -242,7 +242,7 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 
-# ── imgbb image hosting (shared by Threads + Instagram, both of which need
+# ── imgbb image hosting (shared by Threads + Pixelset, both of which need
 #    a public image URL rather than a direct upload) ─────────────────────────
 
 def _upload_to_imgbb(image_path: Path) -> dict[str, Any]:
@@ -286,7 +286,7 @@ def _upload_to_imgbb(image_path: Path) -> dict[str, Any]:
         return {"ok": False, "provider": "imgbb", "error": str(e)}
 
 
-# ── shared long-lived-token refresh helper (Threads + Instagram both use
+# ── shared long-lived-token refresh helper (Threads + Pixelset both use
 #    this same request-once-per-day-window / persist-to-.env shape) ──────────
 
 def _write_env_values(env_path: str | Path, values: Mapping[str, str]) -> None:
@@ -322,7 +322,7 @@ def _write_env_values(env_path: str | Path, values: Mapping[str, str]) -> None:
 
 def _token_seconds_remaining(expires_at_env: str) -> int | None:
     """Generic helper: seconds remaining before a stored *_EXPIRES_AT env
-    var's timestamp. Shared by Threads and Instagram (both store an ISO
+    var's timestamp. Shared by Threads and Pixelset (both store an ISO
     "<PROVIDER>_ACCESS_TOKEN_EXPIRES_AT" value after a successful refresh)."""
     raw = os.getenv(expires_at_env, "").strip()
     if not raw:
@@ -891,7 +891,7 @@ def retry_weekly_social_if_needed(memorize: AikoMemorize) -> dict[str, Any]:
     return {"success": bool(post_result.get("posted")), "draft_dir": str(draft_dir), "post": post_result}
   
 # ══════════════════════════════════════════════════════════════════════════
-# Lane B — Curated photo showcase (Instagram only)
+# Lane B — Curated photo showcase (Pixelset only)
 # ══════════════════════════════════════════════════════════════════════════
 
 PHOTO_SOCIAL_AUTODRAFT = os.getenv("PHOTO_SOCIAL_AUTODRAFT", "0").lower() in {"1", "true", "yes", "on"}
@@ -899,7 +899,7 @@ PHOTO_SOCIAL_AUTOPOST = os.getenv("PHOTO_SOCIAL_AUTOPOST", "0").lower() in {"1",
 # Pixelfed dropped from the default provider set — see module docstring.
 PHOTO_SOCIAL_PROVIDERS = tuple(
     p.strip().lower()
-    for p in os.getenv("PHOTO_SOCIAL_PROVIDERS", "instagram").split(",")
+    for p in os.getenv("PHOTO_SOCIAL_PROVIDERS", "pixelset").split(",")
     if p.strip()
 )
 PHOTO_SOCIAL_INBOX = os.getenv("PHOTO_SOCIAL_INBOX", "photos/inbox")
@@ -1151,7 +1151,7 @@ def _read_media_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
     return meta.get("selections", []), meta
 
 
-# ── Instagram (Graph API, Instagram Login variant) ────────────────────────
+# ── Pixelset (Graph API, Pixelset Login variant) ────────────────────────
 # Requires an IG Business/Creator account. Uses graph.instagram.com (not
 # graph.facebook.com — that host/flow is for the legacy Facebook Login
 # variant and is no longer what this integration targets). Images only —
@@ -1159,32 +1159,32 @@ def _read_media_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
 # at a public URL (handled via imgbb, same as Threads).
 #
 # Token refresh mirrors Threads: a long-lived IG token is refreshed once
-# it's within IG_REFRESH_WINDOW_DAYS (default 55) of expiring, checked at
-# post time via refresh_instagram_token_if_due().
+# it's within PIXELSET_REFRESH_WINDOW_DAYS (default 55) of expiring, checked at
+# post time via refresh_pixelset_token_if_due().
 
-IG_REFRESH_WINDOW_DAYS = _int_env("IG_REFRESH_WINDOW_DAYS", 55)
+PIXELSET_REFRESH_WINDOW_DAYS = _int_env("PIXELSET_REFRESH_WINDOW_DAYS", 55)
 
 
-def _instagram_config() -> tuple[str, str, str]:
-    token = os.getenv("IG_ACCESS_TOKEN", "").strip()
-    ig_user_id = os.getenv("IG_BUSINESS_ACCOUNT_ID", "").strip()
-    base = os.getenv("IG_API_BASE", "https://graph.instagram.com").rstrip("/")
+def _pixelset_config() -> tuple[str, str, str]:
+    token = os.getenv("PIXELSET_ACCESS_TOKEN", "").strip()
+    ig_user_id = os.getenv("PIXELSET_BUSINESS_ACCOUNT_ID", "").strip()
+    base = os.getenv("PIXELSET_API_BASE", "https://graph.instagram.com").rstrip("/")
     return token, ig_user_id, base
 
 
-def refresh_instagram_token(
+def refresh_pixelset_token(
     *,
     token: str | None = None,
     persist_env: bool = False,
     env_path: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Refresh an unexpired long-lived Instagram token and optionally
+    """Refresh an unexpired long-lived Pixelset token and optionally
     persist it to an env file. Same shape as refresh_threads_token, but
     against graph.instagram.com's ig_refresh_token grant."""
-    current_token = (token or os.getenv("IG_ACCESS_TOKEN", "")).strip()
-    base = os.getenv("IG_API_BASE", "https://graph.instagram.com").rstrip("/")
+    current_token = (token or os.getenv("PIXELSET_ACCESS_TOKEN", "")).strip()
+    base = os.getenv("PIXELSET_API_BASE", "https://graph.instagram.com").rstrip("/")
     if not current_token:
-        return {"ok": False, "provider": "instagram", "error": "IG_ACCESS_TOKEN not set"}
+        return {"ok": False, "provider": "pixelset", "error": "PIXELSET_ACCESS_TOKEN not set"}
 
     try:
         resp = requests.get(
@@ -1202,7 +1202,7 @@ def refresh_instagram_token(
             safe_payload["access_token"] = "[redacted]"
         result: dict[str, Any] = {
             "ok": ok,
-            "provider": "instagram",
+            "provider": "pixelset",
             "status_code": resp.status_code,
             "response": safe_payload,
         }
@@ -1216,60 +1216,60 @@ def refresh_instagram_token(
             result["expires_at"] = expires_at.isoformat()
             result["expires_in"] = expires_in
         if persist_env:
-            values = {"IG_ACCESS_TOKEN": new_token}
+            values = {"PIXELSET_ACCESS_TOKEN": new_token}
             if result.get("expires_at"):
-                values["IG_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
+                values["PIXELSET_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
             _write_env_values(env_path or ".env", values)
             result["env_updated"] = str(Path(env_path or ".env").expanduser().resolve())
-        os.environ["IG_ACCESS_TOKEN"] = new_token
+        os.environ["PIXELSET_ACCESS_TOKEN"] = new_token
         if result.get("expires_at"):
-            os.environ["IG_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
+            os.environ["PIXELSET_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
         return result
     except (requests.RequestException, ValueError, OSError) as e:
-        return {"ok": False, "provider": "instagram", "error": str(e)}
+        return {"ok": False, "provider": "pixelset", "error": str(e)}
 
 
-def refresh_instagram_token_if_due(*, persist_env: bool | None = None) -> dict[str, Any]:
-    seconds_remaining = _token_seconds_remaining("IG_ACCESS_TOKEN_EXPIRES_AT")
+def refresh_pixelset_token_if_due(*, persist_env: bool | None = None) -> dict[str, Any]:
+    seconds_remaining = _token_seconds_remaining("PIXELSET_ACCESS_TOKEN_EXPIRES_AT")
     if seconds_remaining is None:
         return {
             "ok": True,
-            "provider": "instagram",
+            "provider": "pixelset",
             "skipped": True,
             "reason": "expiry_unknown",
         }
-    threshold_seconds = IG_REFRESH_WINDOW_DAYS * 24 * 60 * 60
+    threshold_seconds = PIXELSET_REFRESH_WINDOW_DAYS * 24 * 60 * 60
     if seconds_remaining is not None and seconds_remaining > threshold_seconds:
         return {
             "ok": True,
-            "provider": "instagram",
+            "provider": "pixelset",
             "skipped": True,
             "reason": "not_due",
             "seconds_remaining": seconds_remaining,
         }
-    should_persist = _env_bool("IG_REFRESH_PERSIST_ENV", False) if persist_env is None else persist_env
-    result = refresh_instagram_token(persist_env=should_persist)
+    should_persist = _env_bool("PIXELSET_REFRESH_PERSIST_ENV", False) if persist_env is None else persist_env
+    result = refresh_pixelset_token(persist_env=should_persist)
     result["seconds_remaining_before_refresh"] = seconds_remaining
     return result
 
 
-def _post_instagram_image(sel: dict[str, Any]) -> dict[str, Any]:
-    refresh_result = refresh_instagram_token_if_due()
+def _post_pixelset_image(sel: dict[str, Any]) -> dict[str, Any]:
+    refresh_result = refresh_pixelset_token_if_due()
     if not refresh_result.get("ok"):
-        return {"ok": False, "provider": "instagram", "stage": "refresh", "refresh": refresh_result}
+        return {"ok": False, "provider": "pixelset", "stage": "refresh", "refresh": refresh_result}
 
-    token, ig_user_id, base = _instagram_config()
+    token, ig_user_id, base = _pixelset_config()
     if not token or not ig_user_id:
-        return {"ok": False, "provider": "instagram", "error": "IG_ACCESS_TOKEN or IG_BUSINESS_ACCOUNT_ID not set"}
+        return {"ok": False, "provider": "pixelset", "error": "PIXELSET_ACCESS_TOKEN or PIXELSET_BUSINESS_ACCOUNT_ID not set"}
 
-    timeout = _int_env("IG_TIMEOUT", 60)
+    timeout = _int_env("PIXELSET_TIMEOUT", 60)
     media_path = Path(sel["media_path"])
     if not media_path.exists():
-        return {"ok": False, "provider": "instagram", "error": f"media not found: {media_path}"}
+        return {"ok": False, "provider": "pixelset", "error": f"media not found: {media_path}"}
 
     upload = _upload_to_imgbb(media_path)
     if not upload.get("ok"):
-        return {"ok": False, "provider": "instagram", "stage": "image_upload", "upload": upload}
+        return {"ok": False, "provider": "pixelset", "stage": "image_upload", "upload": upload}
     image_url = upload["url"]
 
     try:
@@ -1279,12 +1279,12 @@ def _post_instagram_image(sel: dict[str, Any]) -> dict[str, Any]:
             timeout=timeout,
         )
         if not (200 <= create.status_code < 300):
-            return {"ok": False, "provider": "instagram", "stage": "create", "status_code": create.status_code, "response": create.text[:2000]}
+            return {"ok": False, "provider": "pixelset", "stage": "create", "status_code": create.status_code, "response": create.text[:2000]}
         creation_id = create.json().get("id")
         if not creation_id:
-            return {"ok": False, "provider": "instagram", "stage": "create", "error": "missing creation id", "response": create.text[:2000]}
+            return {"ok": False, "provider": "pixelset", "stage": "create", "error": "missing creation id", "response": create.text[:2000]}
 
-        time.sleep(float(os.getenv("IG_PUBLISH_DELAY_SECONDS", "5")))
+        time.sleep(float(os.getenv("PIXELSET_PUBLISH_DELAY_SECONDS", "5")))
         publish = requests.post(
             f"{base}/{ig_user_id}/media_publish",
             data={"creation_id": creation_id, "access_token": token},
@@ -1292,29 +1292,29 @@ def _post_instagram_image(sel: dict[str, Any]) -> dict[str, Any]:
         )
         ok = 200 <= publish.status_code < 300
         return {
-            "ok": ok, "provider": "instagram", "status_code": publish.status_code,
+            "ok": ok, "provider": "pixelset", "status_code": publish.status_code,
             "creation_id": creation_id, "response": publish.text[:2000], "image_upload": upload,
         }
     except Exception as e:
-        return {"ok": False, "provider": "instagram", "error": str(e)}
+        return {"ok": False, "provider": "pixelset", "error": str(e)}
 
 
-def _post_instagram(selections: list[dict[str, Any]]) -> dict[str, Any]:
+def _post_pixelset(selections: list[dict[str, Any]]) -> dict[str, Any]:
     """Posts the FIRST selection only, as an image. Carousel (multi-item)
     posting needs child containers and is not implemented — extend here if
     needed. Images only — Aiko does not post video."""
     if not selections:
-        return {"ok": False, "provider": "instagram", "error": "no selections to post"}
-    return _post_instagram_image(selections[0])
+        return {"ok": False, "provider": "pixelset", "error": "no selections to post"}
+    return _post_pixelset_image(selections[0])
 
 
 # ── provider registry (curated media) ────────────────────────────────────────
-# Pixelfed removed by policy — see module docstring. Instagram is now the
+# Pixelfed removed by policy — see module docstring. Pixelset is now the
 # only media provider, and only for photos (after grading) — Aiko does not
 # post video.
 
 _MEDIA_PROVIDERS_REGISTRY: dict[str, Callable[[list[dict[str, Any]]], dict[str, Any]]] = {
-    "instagram": _post_instagram,
+    "pixelset": _post_pixelset,
 }
 
 
@@ -1631,7 +1631,7 @@ def _read_video_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
 # a video insert costs 1600 units against a default 10,000/day quota
 # (~6 uploads/day) until the Cloud project is verified.
 #
-# No day-window refresh check like Threads/Instagram: the refresh token
+# No day-window refresh check like Threads/Pixelset: the refresh token
 # itself doesn't have a fixed expiry, so _youtube_access_token() just
 # exchanges it for a fresh short-lived access token on every post, unconditionally.
 
@@ -1986,7 +1986,7 @@ def _cmd() -> int:
     weekly_p.add_argument("--env-path", default="", help="env file path used with --persist-env")
     weekly_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
 
-    media_p = sub.add_parser("media", help="curated photo showcase (Instagram) + video queue (YouTube)")
+    media_p = sub.add_parser("media", help="curated photo showcase (Pixelset) + video queue (YouTube)")
     media_p.add_argument("--draft", action="store_true", help="scan photo inbox and create an LLM-curated photo draft bundle")
     media_p.add_argument("--force", action="store_true", help="create a new photo draft even if one exists this run")
     media_p.add_argument("--inbox", default="", help="override the photo inbox folder")
@@ -1994,14 +1994,14 @@ def _cmd() -> int:
     media_p.add_argument("--draft-video-all", action="store_true", help="drain the video inbox, one draft per described video")
     media_p.add_argument("--video-inbox", default="", help="override the video inbox folder")
     media_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory (photo or video, auto-detected)")
-    media_p.add_argument("--providers", default="", help="comma-separated providers overriding the draft kind's default provider list (instagram / youtube)")
+    media_p.add_argument("--providers", default="", help="comma-separated providers overriding the draft kind's default provider list (pixelset / youtube)")
     media_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
     media_p.add_argument(
         "--refresh-ig-token",
         action="store_true",
-        help="refresh the configured long-lived Instagram token",
+        help="refresh the configured long-lived Pixelset token",
     )
-    media_p.add_argument("--persist-env", action="store_true", help="write refreshed Instagram token values back to .env")
+    media_p.add_argument("--persist-env", action="store_true", help="write refreshed Pixelset token values back to .env")
     media_p.add_argument("--env-path", default="", help="env file path used with --persist-env")
 
     args = parser.parse_args()
@@ -2045,7 +2045,7 @@ def _cmd() -> int:
 
     if args.mode == "media":
         if args.refresh_ig_token:
-            result = refresh_instagram_token(persist_env=args.persist_env, env_path=args.env_path or None)
+            result = refresh_pixelset_token(persist_env=args.persist_env, env_path=args.env_path or None)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result.get("ok") else 1
         if args.draft:

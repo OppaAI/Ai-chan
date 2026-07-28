@@ -66,14 +66,11 @@ def _apply_middleware() -> None:
 # ── tool registration ─────────────────────────────────────────────────────
 
 def _load_tools() -> None:
-    from social.tools import x, threads, instagram, youtube
-    from social.tools import reddit, bluesky, mastodon
-    from social.tools import discord, telegram, slack
-    from social.tools import linkedin, facebook
-    from social.tools import email
+    from social.tools import x, threads, youtube
+    from social.tools import reddit, bluesky, mastodon, pixelset, multipost
+    from social.tools import discord, email
 
-    for mod in (x, threads, instagram, youtube, reddit, bluesky, mastodon,
-                discord, telegram, slack, linkedin, facebook, email):
+    for mod in (x, threads, youtube, reddit, bluesky, mastodon, pixelset, discord, email, multipost):
         if hasattr(mod, "load_tools"):
             mod.load_tools(mcp)
 

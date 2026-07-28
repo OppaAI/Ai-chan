@@ -315,3 +315,13 @@ The `dream()` consolidation system runs across all phases and improves continuou
 - Phase numbering is mostly fixed; half-phases such as 1.5 and 2.5 are used when a major enabling layer belongs between two visible product phases.
 - Hardware target throughout: **Jetson Orin Nano** (8 GB), with x86 as secondary.
 - This roadmap reflects the Aiko-chan standalone project. The broader cognitive architecture lives in [GRACE / AuRoRA](https://github.com/OppaAI/AGi).
+
+## Aiko social lanes (updated)
+
+- Two-way messenger adapters are native background services for WebUI/CLI sessions; only Telegram, Discord, Matrix, and Slack are supported for conversational ingress/egress. Standalone `--adapter` remains legacy-only for those four services.
+- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to Reddit r/OppaAI and the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, YouTube Community, and Threads when image hosting is available. Lane A2 manual posting remains out of Aiko.
+- Lane B is the curated photo pipeline for Pixelset/Pixelfed-compatible posting through the social MCP server; Instagram is no longer a target.
+- Lane C YouTube video posting continues to use the existing MCP posting pipeline.
+- Lane D creates one tech-job Threads draft per night at 23:00 instead of multiple daily drafts, using the graph job-hunt playbook and web search results when available.
+- Removed social targets: LinkedIn, Facebook, Messenger, Google Chat, Instagram, and one-way Slack/Telegram MCP posting. Bluesky, Mastodon, Reddit, and YouTube are one-way posting tools only, not two-way adapters.
+- Nightly reflection remains native GitHub/Hugo publishing rather than MCP.
