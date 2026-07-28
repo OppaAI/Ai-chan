@@ -8,13 +8,13 @@ from urllib.parse import urlencode
 import requests
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
 
-class YouTubeConnector(ConnectorBase):
-    """YouTube live chat & comments bot connector.
+class YouTubeAdapter(AdapterBase):
+    """YouTube live chat & comments bot adapter.
 
     Polls the active live broadcast's chat for new messages and replies
     in the live chat, or monitors video comments.
@@ -124,7 +124,7 @@ class YouTubeConnector(ConnectorBase):
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
         self._running = True
-        log.info("[youtube] Connector started (polling every %.0fs)", self.POLL_INTERVAL)
+        log.info("[youtube] Adapter started (polling every %.0fs)", self.POLL_INTERVAL)
 
     def stop(self) -> None:
         self._running = False
