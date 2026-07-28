@@ -4,7 +4,7 @@ import os
 import threading
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -17,8 +17,8 @@ except ImportError:
     WebClient = None
 
 
-class SlackConnector(ConnectorBase):
-    """Slack bot connector using slack-sdk with Socket Mode (no public HTTP endpoint needed).
+class SlackAdapter(AdapterBase):
+    """Slack bot adapter using slack-sdk with Socket Mode (no public HTTP endpoint needed).
 
     Requires:
         SLACK_BOT_TOKEN       — xoxb-* token
@@ -89,7 +89,7 @@ class SlackConnector(ConnectorBase):
         )
         self._thread.start()
         self._running = True
-        log.info("[slack] Connector started")
+        log.info("[slack] Adapter started")
 
     def stop(self) -> None:
         self._running = False
