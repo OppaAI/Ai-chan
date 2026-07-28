@@ -5,7 +5,7 @@ import threading
 import time
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -17,8 +17,8 @@ except ImportError:
     models = None
 
 
-class BlueskyConnector(ConnectorBase):
-    """Bluesky bot connector using the AT Protocol (atproto library).
+class BlueskyAdapter(AdapterBase):
+    """Bluesky bot adapter using the AT Protocol (atproto library).
 
     Polls notifications for mentions/replies and responds in-thread.
 
@@ -66,7 +66,7 @@ class BlueskyConnector(ConnectorBase):
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
         self._running = True
-        log.info("[bluesky] Connector started (polling every %.0fs)", self.POLL_INTERVAL)
+        log.info("[bluesky] Adapter started (polling every %.0fs)", self.POLL_INTERVAL)
 
     def stop(self) -> None:
         self._running = False
