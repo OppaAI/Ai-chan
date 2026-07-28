@@ -1,31 +1,31 @@
-from interface.adapter.base import ConnectorBase, ConversationSession
-from interface.adapter.discord import DiscordConnector
-from interface.adapter.telegram import TelegramConnector
-from interface.adapter.slack import SlackConnector
-from interface.adapter.matrix import MatrixConnector
-from interface.adapter.bluesky import BlueskyConnector
-from interface.adapter.mastodon import MastodonConnector
-from interface.adapter.reddit import RedditConnector
-from interface.adapter.youtube import YouTubeConnector
-from interface.adapter.messenger import MessengerConnector
-from interface.adapter.googlechat import GoogleChatConnector
+from interface.adapter.base import AdapterBase, ConversationSession
+from interface.adapter.discord import DiscordAdapter
+from interface.adapter.telegram import TelegramAdapter
+from interface.adapter.slack import SlackAdapter
+from interface.adapter.matrix import MatrixAdapter
+from interface.adapter.bluesky import BlueskyAdapter
+from interface.adapter.mastodon import MastodonAdapter
+from interface.adapter.reddit import RedditAdapter
+from interface.adapter.youtube import YouTubeAdapter
+from interface.adapter.messenger import MessengerAdapter
+from interface.adapter.googlechat import GoogleChatAdapter
 
-CONNECTOR_REGISTRY: dict[str, type[ConnectorBase]] = {
-    "discord": DiscordConnector,
-    "telegram": TelegramConnector,
-    "slack": SlackConnector,
-    "matrix": MatrixConnector,
-    "bluesky": BlueskyConnector,
-    "mastodon": MastodonConnector,
-    "reddit": RedditConnector,
-    "youtube": YouTubeConnector,
-    "messenger": MessengerConnector,
-    "googlechat": GoogleChatConnector,
+ADAPTER_REGISTRY: dict[str, type[AdapterBase]] = {
+    "discord": DiscordAdapter,
+    "telegram": TelegramAdapter,
+    "slack": SlackAdapter,
+    "matrix": MatrixAdapter,
+    "bluesky": BlueskyAdapter,
+    "mastodon": MastodonAdapter,
+    "reddit": RedditAdapter,
+    "youtube": YouTubeAdapter,
+    "messenger": MessengerAdapter,
+    "googlechat": GoogleChatAdapter,
 }
 
 
-def _bootstrap_connector(connector_name: str) -> tuple:
-    """Boot Aiko subsystems needed by connectors.
+def _bootstrap_adapter(adapter_name: str) -> tuple:
+    """Boot Aiko subsystems needed by adapters.
 
     Returns (think, memorize) — both may be None on failure.
     """
@@ -36,8 +36,8 @@ def _bootstrap_connector(connector_name: str) -> tuple:
     from system.wakeup import AikoWakeup
     from system.userspace import set_current_user_id, set_current_display_name
 
-    # Set a default identity for connector sessions
-    uid = os.getenv("AIKO_USER_ID", f"connector_{connector_name}")
+    # Set a default identity for adapter sessions
+    uid = os.getenv("AIKO_USER_ID", f"adapter_{adapter_name}")
     set_current_user_id(uid)
     set_current_display_name(uid)
 
@@ -49,56 +49,56 @@ def _bootstrap_connector(connector_name: str) -> tuple:
     )
 
     if result.think is None:
-        print(f"  [connector] CRITICAL: AikoThink failed to boot.")
+        print(f"  [adapter] CRITICAL: AikoThink failed to boot.")
         return None, None
 
     return result.think, result.memorize
 
 
-def run_connector(name: str, args) -> None:
-    """Boot Aiko subsystems and launch the named connector."""
+def run_adapter(name: str, args) -> None:
+    """Boot Aiko subsystems and launch the named adapter."""
     from system.config import load_config
 
     load_config()
     name = name.lower()
-    if name not in CONNECTOR_REGISTRY:
-        available = ", ".join(CONNECTOR_REGISTRY)
-        print(f"Unknown connector '{name}'. Available: {available}")
+    if name not in ADAPTER_REGISTRY:
+        available = ", ".join(ADAPTER_REGISTRY)
+        print(f"Unknown adapter '{name}'. Available: {available}")
         return
 
-    print(f"  [connector] Booting Aiko subsystems for {name}...")
-    think, memorize = _bootstrap_connector(name)
+    print(f"  [adapter] Booting Aiko subsystems for {name}...")
+    think, memorize = _bootstrap_adapter(name)
 
     if think is None:
-        print("  [connector] CRITICAL: AikoThink failed to boot. Cannot start connector.")
+        print("  [adapter] CRITICAL: AikoThink failed to boot. Cannot start adapter.")
         return
 
-    cls = CONNECTOR_REGISTRY[name]
-    connector = cls()
-    connector.boot(think, memorize)
+    cls = ADAPTER_REGISTRY[name]
+    adapter = cls()
+    adapter.boot(think, memorize)
 
-    print(f"  [connector] Starting {name}...")
-    connector.start()
+    print(f"  [adapter] Starting {name}...")
+    adapter.start()
 
-    print(f"\n  {name} connector is running. Press Ctrl+C to stop.\n")
+    print(f"\n  {name} adapter is running. Press Ctrl+C to stop.\n")
     try:
         import signal
         signal.pause()
     except KeyboardInterrupt:
         pass
     finally:
-        connector.stop()
-        print(f"  [connector] {name} stopped.")
+        adapter.stop()
+        print(f"  [adapter] {name} stopped.")
 
 
 __all__ = [
-    "ConnectorBase",
+    "AdapterBase",
     "ConversationSession",
-    "DiscordConnector",
-    "TelegramConnector",
-    "TwitterConnector",
-    "SlackConnector",
-    "MatrixConnector",
-    "CONNECTOR_REGISTRY",
-    "run_connector",
+    "DiscordAdapter",
+    "TelegramAdapter",
+    "TwitterAdapter",
+    "SlackAdapter",
+    "MatrixAdapter",
+    "ADAPTER_REGISTRY",
+    "run_adapter",
 ]
