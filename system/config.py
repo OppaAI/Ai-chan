@@ -77,13 +77,17 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     if yaml is not None:
         data = yaml.safe_load(text)
     else:
-        uncommented = "\n".join(
-            line for line in text.splitlines()
-            if not line.lstrip().startswith("#")
-        )
-        stripped = uncommented.lstrip()
+        lines = text.splitlines()
+        start = 0
+        for index, line in enumerate(lines):
+            stripped_line = line.lstrip()
+            if stripped_line and not stripped_line.startswith("#"):
+                start = index
+                break
+        body = "\n".join(lines[start:])
+        stripped = body.lstrip()
         if stripped.startswith("{") or stripped.startswith("["):
-            data = json.loads(uncommented)
+            data = json.loads(body)
         else:
             data = _simple_yaml_load(text)
     return data or {}

@@ -10,10 +10,13 @@ Graph execution loops.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from system.config import load_yaml
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -55,6 +58,7 @@ def load_tool_catalog(path: str = "tools.yaml") -> Dict[str, ToolSpec]:
     catalog: Dict[str, ToolSpec] = {}
     for item in raw_tools:
         if not isinstance(item, dict) or not item.get("name"):
+            log.warning("Skipping invalid tools.yaml entry: %r", item)
             continue
         tool_data = {k: v for k, v in item.items() if k != "handler"}
         spec = ToolSpec(**tool_data)
