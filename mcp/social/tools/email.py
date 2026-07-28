@@ -6,7 +6,7 @@ from email.message import EmailMessage
 
 import requests
 
-from social_mcp.tools.base import env, int_env
+from social.tools.base import env, int_env
 
 
 # ── Gmail API (OAuth 2.0) ────────────────────────────────────────────────

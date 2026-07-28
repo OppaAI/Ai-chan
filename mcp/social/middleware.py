@@ -4,7 +4,7 @@ import time
 from functools import wraps
 from typing import Any, Callable
 
-from social_mcp.db import get_db
+from social.db import get_db
 
 RATE_LIMITS: dict[str, dict[str, int]] = {
     "post_x": {"per_hour": 50, "per_day": 300},

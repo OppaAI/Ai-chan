@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from social_mcp.tools.base import env
+from social.tools.base import env
 
 
 def load_tools(mcp):
