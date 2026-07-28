@@ -6,7 +6,7 @@ import threading
 from pathlib import Path
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -22,8 +22,8 @@ except ImportError:
     AsyncClient = None
 
 
-class MatrixConnector(ConnectorBase):
-    """Matrix bot connector using matrix-nio.
+class MatrixAdapter(AdapterBase):
+    """Matrix bot adapter using matrix-nio.
 
     Requires:
         MATRIX_HOMESERVER   — e.g. https://matrix.org
@@ -47,7 +47,7 @@ class MatrixConnector(ConnectorBase):
             "homeserver": self._get_env("MATRIX_HOMESERVER", "https://matrix.org"),
             "user": self._get_env("MATRIX_USER"),
             "password": self._get_env("MATRIX_PASSWORD"),
-            "device_id": self._get_env("MATRIX_DEVICE_ID", "aiko-connector"),
+            "device_id": self._get_env("MATRIX_DEVICE_ID", "aiko-adapter"),
         }
 
     def start(self) -> None:
@@ -63,7 +63,7 @@ class MatrixConnector(ConnectorBase):
         self._thread = threading.Thread(target=self._run_async, daemon=True)
         self._thread.start()
         self._running = True
-        log.info("[matrix] Connector started")
+        log.info("[matrix] Adapter started")
 
     def _run_async(self) -> None:
         self._loop = asyncio.new_event_loop()
