@@ -74,7 +74,7 @@ class ConversationSession:
             self._result = response.strip()
             self._on_response(self.conversation_id, self._result)
         except Exception as exc:
-            log.exception("[connector] session failed for %s", self.conversation_id)
+            log.exception("[adapter] session failed for %s", self.conversation_id)
             self._error = exc
             if self._on_error:
                 self._on_error(self.conversation_id, exc)
@@ -105,8 +105,8 @@ class ConversationSession:
         return self._error
 
 
-class ConnectorBase(ABC):
-    """Abstract base for messaging/social-media platform connectors.
+class AdapterBase(ABC):
+    """Abstract base for messaging/social-media platform adapters.
 
     Subclasses implement start/stop for the platform listener and
     send_message for delivering responses. Incoming messages are routed
@@ -122,7 +122,7 @@ class ConnectorBase(ABC):
 
     @property
     def name(self) -> str:
-        return self.__class__.__name__.replace("Connector", "").lower()
+        return self.__class__.__name__.replace("Adapter", "").lower()
 
     def boot(self, think: Any, memorize: Any) -> None:
         """Inject live subsystem references from AikoWakeup."""
@@ -165,7 +165,7 @@ class ConnectorBase(ABC):
             self.send_message(conversation_id, text)
 
     def _on_platform_error(self, conversation_id: str, exc: Exception) -> None:
-        log.error("[connector/%s] error for %s: %s", self.name, conversation_id, exc)
+        log.error("[adapter/%s] error for %s: %s", self.name, conversation_id, exc)
         self.send_message(conversation_id, f"Sorry, I encountered an error: {exc}")
 
     @staticmethod
