@@ -86,7 +86,7 @@ def parse_args():
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
-    p.add_argument("--adapter", type=str, default="",           # messaging/social platform adapter
+    p.add_argument("--adapter", type=str, default="",             # messaging/social platform adapter
                    choices=["discord", "telegram", "slack", "matrix",
                             "bluesky", "mastodon", "reddit", "youtube",
                             "messenger", "googlechat", "adapter"],
