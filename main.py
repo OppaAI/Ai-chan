@@ -86,11 +86,11 @@ def parse_args():
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
-    p.add_argument("--connector", type=str, default="",           # messaging/social platform connector
+    p.add_argument("--adapter", type=str, default="",           # messaging/social platform adapter
                    choices=["discord", "telegram", "slack", "matrix",
                             "bluesky", "mastodon", "reddit", "youtube",
-                            "messenger", "googlechat", "connector"],
-                   help="run as a bot connector (discord, telegram, slack, matrix, bluesky, mastodon, reddit, youtube, messenger, googlechat)")
+                            "messenger", "googlechat", "adapter"],
+                   help="run as a bot adapter (discord, telegram, slack, matrix, bluesky, mastodon, reddit, youtube, messenger, googlechat)")
     return p.parse_args()                                         # return namespace of the arguments
 
 
@@ -113,9 +113,9 @@ def main():
         handle_logout()                                 # logout user session
         sys.exit(0)                                     # exit code 0
 
-    if args.connector:                                  # if connector argument set
-        from interface.adapter import run_connector   # load connector runner
-        run_connector(args.connector, args)             # launch connector
+    if args.adapter:                                    # if adapter argument set
+        from interface.adapter import run_adapter       # load adapter runner
+        run_adapter(args.adapter, args)                 # launch adapter
     elif args.cli:                                      # if CLI argument set
         from interface.cli.cli import run_cli           # load CLI with set arguments
         run_cli(args)                                   # launch CLI 
