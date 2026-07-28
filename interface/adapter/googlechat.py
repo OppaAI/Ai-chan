@@ -8,7 +8,7 @@ import time
 import requests
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -22,8 +22,8 @@ except ImportError:
 SCOPES = ["https://www.googleapis.com/auth/chat.bot"]
 
 
-class GoogleChatConnector(ConnectorBase):
-    """Google Chat bot connector using service account authentication (polling).
+class GoogleChatAdapter(AdapterBase):
+    """Google Chat bot adapter using service account authentication (polling).
 
     Requires a Google Cloud service account with the Google Chat API enabled.
     The bot must be published to your Google Workspace domain.
@@ -163,7 +163,7 @@ class GoogleChatConnector(ConnectorBase):
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
         self._running = True
-        log.info("[googlechat] Connector started (polling every %.0fs)", self.POLL_INTERVAL)
+        log.info("[googlechat] Adapter started (polling every %.0fs)", self.POLL_INTERVAL)
 
     def stop(self) -> None:
         self._running = False
