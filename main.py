@@ -8,6 +8,7 @@ Usage:
     python main.py --text        # WebUI, keyboard input + TTS/ASR toggled off
     python main.py --no-asr      # WebUI, keyboard input but keep TTS on
     python main.py --cli         # plain no-curses CLI, for local testing only
+    python main.py --adapter discord   # messaging bot adapter (discord, telegram, …)
     python main.py --debug       # show memory debug info each turn
     python main.py --clear-mem   # wipe all stored memories and exit
     python main.py --logout      # clear stored CLI (GitHub OAuth) auth token and exit
@@ -22,18 +23,19 @@ proactive idle check-ins, karaoke typewriter, latency/debug accounting).
 
 Flow:
 
-                    parse_args()
-                         │
-        ┌────────────────┼────────────────┬───────────────┐
-        ▼                ▼                ▼               ▼
-   --clear-mem       --logout           --cli          (default)
-        │                │                │               │
-        ▼                ▼                ▼               ▼
-  AikoMemorize()    handle_logout()   run_cli(args)   run_webui(args)
-     .clear()             │                │               │
-        │                 ▼                ▼               ▼
-        ▼              sys.exit(0)   → orchestrate.py  → orchestrate.py
-   sys.exit(0)                          run_session()     run_session()
+                                      parse_args()
+                                          │
+        ┌────────────────┼────────────────┼──────────────┼─────────────────┐
+        ▼                ▼                ▼              ▼                 ▼
+   --clear-mem       --logout          --cli           --cli           (default)
+        │                │                │              │                 │
+        ▼                ▼                ▼              ▼                 ▼
+  AikoMemorize()    handle_logout()  run_adapter(args) run_webui(args)  run_webui(args)
+     .clear()             │               │              │                 │
+        │                 ▼               ▼              ▼                 ▼
+        ▼              sys.exit(0)  adapter runs   → orchestrate.py  → orchestrate.py
+   sys.exit(0)                      until Ctrl+C      run_session()    run_session()
+                             (no orchestrate session loop)
 
 Front-end imports are deferred into main() rather than done at module load,
 so that --clear-mem and --logout (which don't need FastAPI, uvicorn,
@@ -89,7 +91,7 @@ def parse_args():
     p.add_argument("--adapter", type=str, default="",             # messaging/social platform adapter
                    choices=["discord", "telegram", "slack", "matrix",
                             "bluesky", "mastodon", "reddit", "youtube",
-                            "messenger", "googlechat", "adapter"],
+                            "messenger", "googlechat"],
                    help="run as a bot adapter (discord, telegram, slack, matrix, bluesky, mastodon, reddit, youtube, messenger, googlechat)")
     return p.parse_args()                                         # return namespace of the arguments
 
