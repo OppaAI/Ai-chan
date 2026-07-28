@@ -31,7 +31,7 @@ Flow:
    --clear-mem       --logout        --adapter         --cli           (default)
         │                │                │              │                 │
         ▼                ▼                ▼              ▼                 ▼
-  AikoMemorize()    handle_logout()  run_adapter(args) run_webui(args)  run_webui(args)
+  AikoMemorize()    handle_logout()  run_adapter(args) run_cli(args)  run_webui(args)
      .clear()            │                │              │                 │
         │                ▼                ▼              ▼                 ▼
         ▼              sys.exit(0)  adapter runs   → orchestrate.py  → orchestrate.py
