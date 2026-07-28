@@ -6,7 +6,7 @@ import threading
 import time
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -16,8 +16,8 @@ except ImportError:
     praw = None
 
 
-class RedditConnector(ConnectorBase):
-    """Reddit bot connector using PRAW.
+class RedditAdapter(AdapterBase):
+    """Reddit bot adapter using PRAW.
 
     Streams inbox mentions and replies to them.
 
@@ -45,7 +45,7 @@ class RedditConnector(ConnectorBase):
             "client_secret": self._get_env("REDDIT_CLIENT_SECRET"),
             "username": self._get_env("REDDIT_USERNAME"),
             "password": self._get_env("REDDIT_PASSWORD"),
-            "user_agent": self._get_env("REDDIT_USER_AGENT", "Aiko-chan connector v0.1"),
+            "user_agent": self._get_env("REDDIT_USER_AGENT", "Aiko-chan adapter v0.1"),
         }
 
     def start(self) -> None:
@@ -77,7 +77,7 @@ class RedditConnector(ConnectorBase):
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
         self._running = True
-        log.info("[reddit] Connector started (polling every %.0fs)", self.POLL_INTERVAL)
+        log.info("[reddit] Adapter started (polling every %.0fs)", self.POLL_INTERVAL)
 
     def stop(self) -> None:
         self._running = False
