@@ -186,9 +186,10 @@ class AikoWakeup:
 
     ALL_BOOT_LABELS: dict[str, str] = {
         **_THINK_LABELS,            # for register AikoThink status
-        **_MEM_LABELS,              # for register AikoMemorize status 
+        **_MEM_LABELS,              # for register AikoMemorize status
         **_SPEAK_LABELS,            # for register AikoSpeak status
         **_LISTEN_LABELS,           # for register AikoListen status
+        "mcp_client": "Connect to Social MCP server",
     }
 
     def boot(
@@ -294,6 +295,17 @@ class AikoWakeup:
             except Exception as exc:                                                          # if error,
                 think_exc = exc                                                               # logged once and chained into the raise later
             memorize = mem_future.result()                                                    # grab the results of memory system
+
+        # ── MCP client boot (non-fatal) ─────────────────────────────────────────
+        try:
+            from agentic.mcp_client.bridge import bootstrap_mcp
+            mcp_ok = _boot_step("mcp_client", lambda: bootstrap_mcp())
+            if not mcp_ok:
+                log.info("[wakeup] MCP client skipped or unavailable — Aiko will run without social posting tools.")
+        except Exception:
+            log.exception("[wakeup] MCP client boot failed")
+            _boot_step("mcp_client", None)  # mark as skip in UI
+            on_skip("mcp_client")
 
         if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
             log.critical(                                                                     # single log point: critical severity + full traceback in one line

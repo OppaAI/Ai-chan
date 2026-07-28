@@ -86,6 +86,11 @@ def parse_args():
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
+    p.add_argument("--connector", type=str, default="",           # messaging/social platform connector
+                   choices=["discord", "telegram", "slack", "matrix",
+                            "bluesky", "mastodon", "reddit", "youtube",
+                            "messenger", "googlechat", "connector"],
+                   help="run as a bot connector (discord, telegram, slack, matrix, bluesky, mastodon, reddit, youtube, messenger, googlechat)")
     return p.parse_args()                                         # return namespace of the arguments
 
 
@@ -108,7 +113,10 @@ def main():
         handle_logout()                                 # logout user session
         sys.exit(0)                                     # exit code 0
 
-    if args.cli:                                        # if CLI argument set
+    if args.connector:                                  # if connector argument set
+        from interface.adapter import run_connector   # load connector runner
+        run_connector(args.connector, args)             # launch connector
+    elif args.cli:                                      # if CLI argument set
         from interface.cli.cli import run_cli           # load CLI with set arguments
         run_cli(args)                                   # launch CLI 
     else:                                               # otherwise,
