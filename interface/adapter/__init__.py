@@ -98,6 +98,12 @@ __all__ = [
     "TelegramAdapter",
     "SlackAdapter",
     "MatrixAdapter",
+    "BlueskyAdapter",
+    "MastodonAdapter",
+    "RedditAdapter",
+    "YouTubeAdapter",
+    "MessengerAdapter",
+    "GoogleChatAdapter",
     "ADAPTER_REGISTRY",
     "run_adapter",
 ]
