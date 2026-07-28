@@ -1780,16 +1780,10 @@ def append_playbook_from_experience(goal: str, steps: list[dict[str, Any]], *, n
         tmp_path.replace(path)
 
 
-from agentic.registry import register_tool_schema, tool
+from agentic.registry import TOOLS, register_tool_schema, tool
 
 
-@tool(
-    name="list_playbooks",
-    description="List graph/playbook workflows available to the model-free graph executor.",
-    props={},
-    domain="graph",
-    always_on=True,
-)
+@tool(TOOLS["list_playbooks"])
 def list_playbooks() -> str:
     return list_playbooks_json()
 

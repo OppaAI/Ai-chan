@@ -34,7 +34,7 @@ from typing import Any
 
 import requests
 
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 from system.bioclock import local_now
 from agentic.toolkit.websearch import SEARXNG_MAX_RESULTS as MAX_RESULTS, web_fetch, web_search
 
@@ -334,15 +334,7 @@ def dedupe_postings(postings: list[dict], title_threshold: float = 0.7) -> list[
 
 # ── Composed convenience (backwards-compatible) ──
 
-@tool(
-    name="search_jobs",
-    description="Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
-    props={"query": {"type": "string"}, "location": {"type": "string", "description": "Optional override. Defaults to the job_hunt skill location."}, "max_results": {"type": "integer"}, "max_age_days": {"type": "integer"}, "job_type": {"type": "string", "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."}},
-    required=["query"],
-    domain="jobs",
-    react=False,
-    graph=True,
-)
+@tool(TOOLS["search_jobs"])
 def search_jobs(
     query: str,
     location: str = "",

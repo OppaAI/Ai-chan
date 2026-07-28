@@ -27,7 +27,7 @@ import numpy as np
 
 from cognition import reason
 from system.userspace import user_state_dir
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 
 DEFAULT_SKILLS_PATH = Path(__file__).resolve().parent.parent / "skills" / "SKILLS.md"
 SKILL_ROOT = Path(__file__).resolve().parent.parent / "skills"
@@ -278,12 +278,7 @@ def discover_skill_docs() -> list[SkillDoc]:
     return docs
 
 
-@tool(
-    name="list_skillsets",
-    description="List Aiko's predefined local workflow skillsets.",
-    props={},
-    domain="skills",
-)
+@tool(TOOLS["list_skillsets"])
 def list_skillsets() -> str:
     """Return available skill workflows as JSON text for agent tools."""
     return json.dumps({"skills": [doc.as_dict() for doc in discover_skill_docs()]}, ensure_ascii=False, indent=2)
@@ -329,13 +324,7 @@ def search_skillsets(query: str, limit: int = 3, embedder: Embedder | None = Non
     return [doc for _score, doc in scored[:limit]]
 
 
-@tool(
-    name="search_skillsets",
-    description="Search Aiko's predefined workflow skillsets by task/query.",
-    props={"query": {"type": "string"}, "limit": {"type": "integer"}},
-    required=["query"],
-    domain="skills",
-)
+@tool(TOOLS["search_skillsets"])
 def search_skillsets_json(query: str, limit: int = 3, embedder: Embedder | None = None) -> str:
     """Return matching skill workflows as JSON text for agent tools.
 
@@ -349,13 +338,7 @@ def search_skillsets_json(query: str, limit: int = 3, embedder: Embedder | None 
     }, ensure_ascii=False, indent=2)
 
 
-@tool(
-    name="load_skillset",
-    description="Load the full markdown instructions for one predefined skillset by id.",
-    props={"skill_id": {"type": "string"}},
-    required=["skill_id"],
-    domain="skills",
-)
+@tool(TOOLS["load_skillset"])
 def load_skillset(skill_id: str, max_chars: int = 12_000) -> str:
     """Load one full skill workflow document by id. Used for explicit
     on-demand full loads — not injected automatically into every turn."""

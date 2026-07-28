@@ -1,9 +1,9 @@
-"""Export decorated tool metadata to config/tools.yaml without importing runtime deps."""
+"""Normalize declarative tool metadata from config/tools.yaml."""
 from __future__ import annotations
 
 import argparse
-import ast
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -13,70 +13,45 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def _literal(node: ast.AST) -> Any:
-    try:
-        return ast.literal_eval(node)
-    except Exception:
-        return ast.unparse(node)
-
-
-def _decorator_name(dec: ast.AST) -> str | None:
-    if isinstance(dec, ast.Call):
-        dec = dec.func
-    if isinstance(dec, ast.Name):
-        return dec.id
-    if isinstance(dec, ast.Attribute):
-        return dec.attr
-    return None
-
-
-def _module_path(path: Path) -> str:
-    return ".".join(path.relative_to(ROOT).with_suffix("").parts)
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def discover_tools() -> dict[str, Any]:
-    tools: list[dict[str, Any]] = []
-    for path in sorted((ROOT / "agentic").rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        module = _module_path(path)
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for dec in node.decorator_list:
-                if not isinstance(dec, ast.Call) or _decorator_name(dec) != "tool":
-                    continue
-                entry: dict[str, Any] = {"handler": f"{module}:{node.name}"}
-                positional = list(dec.args)
-                if positional:
-                    entry["name"] = _literal(positional.pop(0))
-                if positional:
-                    entry["description"] = _literal(positional.pop(0))
-                for kw in dec.keywords:
-                    if kw.arg is not None:
-                        entry[kw.arg] = _literal(kw.value)
-                entry.setdefault("react", True)
-                entry.setdefault("graph", False)
-                entry.setdefault("wiki", False)
-                entry.setdefault("skill", False)
-                entry.setdefault("name", node.name)
-                tools.append(entry)
-    tools.sort(key=lambda item: item["name"])
-    return {"tools": tools}
+    """Load and sort the declarative tool catalog.
+
+    Tool metadata now lives in config/tools.yaml and toolkit decorators consume
+    that metadata with @tool(TOOLS["tool_name"]). This utility remains useful
+    as a normalizer/drift-safe formatter after editing the YAML by hand.
+    """
+    from system.config import load_yaml
+
+    data = load_yaml("tools.yaml")
+    tools = data.get("tools", [])
+    if not isinstance(tools, list):
+        raise ValueError("config/tools.yaml must contain a 'tools' list")
+    normalized: list[dict[str, Any]] = []
+    for entry in tools:
+        if not isinstance(entry, dict) or not entry.get("name"):
+            continue
+        item = dict(entry)
+        item.setdefault("react", True)
+        item.setdefault("graph", False)
+        item.setdefault("wiki", False)
+        item.setdefault("skill", False)
+        normalized.append(item)
+    normalized.sort(key=lambda item: item["name"])
+    return {"tools": normalized}
 
 
 def _dump(data: dict[str, Any]) -> str:
     header = (
-        "# Generated tool catalog for Aiko's agentic toolkit.\n"
-        "# Runtime source of truth: @tool decorators.\n"
-        "# Regenerate with: python util/export_tools_catalog.py\n"
+        "# Declarative tool catalog for Aiko's agentic toolkit.\n"
+        "# Runtime source of truth for @tool decorator metadata.\n"
+        "# Normalize with: python util/export_tools_catalog.py\n"
     )
     if yaml is None:
-        raise RuntimeError(
-            "PyYAML is required to generate config/tools.yaml. "
-            "Install with: pip install pyyaml"
-        )
+        return header + json.dumps(data, indent=2, ensure_ascii=False) + "\n"
     return header + yaml.safe_dump(data, sort_keys=False, allow_unicode=True)
 
 

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from agentic.toolkit.common import json_block
 from system.userspace import user_state_dir
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -50,27 +50,7 @@ def _report_path(title: str, report_dir: str) -> Path:
     return folder / f"{_slugify(title)}.md"
 
 
-@tool(
-    name="write_report",
-    description=(
-        "Write (or append a section to) one polished long-form markdown report "
-        "under the workspace reports folder. Use for a single coherent "
-        "deliverable — architecture review, paper comparison, improvement "
-        "proposal — not short scratch notes (save_note) or retrievable knowledge "
-        "(learn_knowledge). For arxiv_style, call once per section across "
-        "multiple turns with append=true, using the same title each time."
-    ),
-    props={
-        "title": {"type": "string"}, "content": {"type": "string"},
-        "report_dir": {"type": "string"}, "arxiv_style": {"type": "boolean"},
-        "section": {"type": "string", "description": "abstract|introduction|related_work|architecture|discussion|limitations|conclusion|references"},
-        "append": {"type": "boolean"},
-    },
-    required=["title"],
-    domain="reports",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["write_report"])
 def write_report(
     title: str,
     content: str = "",

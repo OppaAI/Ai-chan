@@ -42,12 +42,7 @@ def _strip_comment(line: str) -> str:
 
 
 def _simple_yaml_load(text: str) -> dict[str, Any]:
-    """Tiny fallback parser for Aiko's simple config/*.yaml files.
-
-    It supports top-level KEY: VALUE pairs and the config/index.yaml list used
-    during bootstrap. Full YAML support is still provided by PyYAML when
-    installed, which is the normal runtime path.
-    """
+    """Tiny fallback parser for Aiko's simple config/*.yaml files."""
     data: dict[str, Any] = {}
     current_key: str | None = None
     pending_empty: set[str] = set()
@@ -58,7 +53,6 @@ def _simple_yaml_load(text: str) -> dict[str, Any]:
         stripped = line.strip()
         if stripped.startswith("-") and current_key:
             if current_key in pending_empty:
-                # First list item seen: this key was a list all along.
                 data[current_key] = []
                 pending_empty.discard(current_key)
             data.setdefault(current_key, []).append(stripped[1:].strip().strip('"\''))
@@ -70,9 +64,6 @@ def _simple_yaml_load(text: str) -> dict[str, Any]:
         value = value.strip()
         current_key = key
         if value == "":
-            # Ambiguous: could be an unset scalar or the start of a list.
-            # Default to "unset" (empty string) and only promote to a list
-            # if `-` items actually follow.
             data[key] = ""
             pending_empty.add(key)
         else:
@@ -83,118 +74,34 @@ def _simple_yaml_load(text: str) -> dict[str, Any]:
 
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     text = path.read_text(encoding="utf-8")
-    data = yaml.safe_load(text) if yaml is not None else _simple_yaml_load(text)
+    if yaml is not None:
+        data = yaml.safe_load(text)
+    else:
+        lines = text.splitlines()
+        start = 0
+        for index, line in enumerate(lines):
+            stripped_line = line.lstrip()
+            if stripped_line and not stripped_line.startswith("#"):
+                start = index
+                break
+        body = "\n".join(lines[start:])
+        stripped = body.lstrip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            data = json.loads(body)
+        else:
+            data = _simple_yaml_load(text)
     return data or {}
 
 
-def load_yaml(path: Path) -> dict[str, Any]:
-    """Load a YAML file from the given path.
-    
-    Args:
-        path: Path to the YAML file (absolute or relative to config dir).
-        
-    Returns:
-        Parsed YAML content as a dictionary.
-        
-    Raises:
-        FileNotFoundError: If the file doesn't exist.
-        ValueError: If the YAML is invalid.
-    """
+def load_yaml(path: str | Path) -> dict[str, Any]:
+    """Load a YAML file from the given path."""
     path = Path(path)
     if not path.is_absolute():
-        # Default to config directory
         path = Path(__file__).parent.parent / "config" / path
     return _load_yaml_mapping(path)
 
 
 def _stringify(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, (list, tuple)):
-        return json.dumps([str(item) for item in value], ensure_ascii=False)
-    return str(value)
-
-
-def load_tools_from_yaml(yaml_path: str, tool_handlers: Dict[str, Callable[..., Any]] | None = None) -> int:
-    """Load tool definitions from YAML file and register them in the global registry.
-
-    Args:
-        yaml_path: Path to tools.yaml file (relative to config dir or absolute)
-        tool_handlers: Optional dict mapping tool names to handler functions.
-                       If provided, functions are bound from here instead of
-                       importing modules dynamically.
-
-    Returns:
-        Number of tools successfully registered.
-
-    YAML format:
-    tools:
-      - name: "tool_name"
-        description: "Tool description"
-        handler: "module.path:function_name"  # optional, if not in tool_handlers
-        props: {...}
-        required: [...]
-        domain: "research"
-        react: true
-        graph: false
-        wiki: false
-        skill: false
-        always_on: false
-    """
-    from agentic.registry import registry, register_tool_schema
-
-    # Use config's load_yaml which handles path resolution
-    data = load_yaml(yaml_path)
-
-    if "tools" not in data:
-        raise ValueError("YAML must contain a 'tools' list")
-
-    tool_handlers = tool_handlers or {}
-    registered = 0
-
-    for tool_def in data["tools"]:
-        name = tool_def.get("name")
-        if not name:
-            continue
-
-        # Get handler
-        handler = None
-        if name in tool_handlers:
-            handler = tool_handlers[name]
-        elif "handler" in tool_def:
-            handler_path = tool_def["handler"]
-            try:
-                module_path, func_name = handler_path.rsplit(":", 1)
-                module = __import__(module_path, fromlist=[func_name])
-                handler = getattr(module, func_name)
-            except (ImportError, AttributeError, ValueError) as e:
-                print(f"Warning: Could not load handler for {name}: {e}")
-                continue
-
-        # Register
-        from agentic.registry import register_tool_schema
-        register_tool_schema(
-            name=tool_def["name"],
-            description=tool_def["description"],
-            props=tool_def.get("props"),
-            required=tool_def.get("required"),
-            domain=tool_def.get("domain"),
-            always_on=tool_def.get("always_on", False),
-            react=tool_def.get("react", True),
-            graph=tool_def.get("graph", False),
-            wiki=tool_def.get("wiki", False),
-            skill=tool_def.get("skill", False),
-        )
-        # If we have a handler, bind it to the registry
-        if handler is not None:
-            from agentic.registry import registry
-            registry._tools[tool_def["name"]].handler = handler
-
-        registered += 1
-
-    return registered
     if value is None:
         return ""
     if isinstance(value, bool):

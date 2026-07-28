@@ -26,18 +26,10 @@ from system.schedule import (
     schedule_reminder_record,
 )
 from agentic.toolkit.common import json_block
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 
 
-@tool(
-    name="schedule_job",
-    description="Schedule local job/alarm. HH:MM. Frequencies: once,hourly,daily,weekdays,weekly,biweekly,monthly,custom_weekdays. Supports relative_days for today/tomorrow/day-after-tomorrow offsets.",
-    props={"title": {"type": "string"}, "task": {"type": "string"}, "time_of_day": {"type": "string", "description": "24-hour local time, e.g. 06:00"}, "frequency": {"type": "string", "enum": ["once", "hourly", "daily", "weekdays", "weekly", "biweekly", "monthly", "custom_weekdays"]}, "timezone": {"type": "string"}, "days_of_week": {"type": "string", "description": "Optional weekdays, e.g. Monday Wednesday Friday"}, "relative_days": {"type": "string", "description": "Optional day offset/phrase for the first due date, e.g. 0/today, 1/tomorrow, 2/day after tomorrow"}, "action": {"type": "string", "enum": ["announce", "agentic", "tool"], "description": "announce, agentic task, or direct registered tool invocation"}, "tool_call": {"type": "object", "description": "Required for action=tool: {name: registered tool name, arguments: object}"}, "skill": {"type": "string", "description": "Optional custom SKILL.md-style instructions for an agentic job"}},
-    required=["title", "task", "time_of_day"],
-    domain="scheduling",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["schedule_job"])
 def schedule_job(
     title: str,
     task: str,
@@ -74,29 +66,14 @@ def schedule_job(
         return f"[schedule failed: {e}]"
 
 
-@tool(
-    name="list_schedule",
-    description="List schedule.",
-    props={"include_disabled": {"type": "boolean"}},
-    domain="scheduling",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["list_schedule"])
 def list_schedule(include_disabled: bool = False, user_id: str | None = None) -> str:
     """List local scheduled jobs from Aiko's schedule file."""
     jobs = list_schedule_records(include_disabled=include_disabled, user_id=user_id)
     return json_block("schedule", {"count": len(jobs), "items": jobs})
 
 
-@tool(
-    name="cancel_schedule",
-    description="Cancel schedule item.",
-    props={"job_id": {"type": "string"}},
-    required=["job_id"],
-    domain="scheduling",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["cancel_schedule"])
 def cancel_schedule(job_id: str, user_id: str | None = None) -> str:
     """Cancel/disable a local scheduled job by id."""
     if cancel_schedule_record(job_id, user_id=user_id):
@@ -104,15 +81,7 @@ def cancel_schedule(job_id: str, user_id: str | None = None) -> str:
     return f"[scheduled job not found: {job_id}]"
 
 
-@tool(
-    name="schedule_reminder",
-    description="Simple once/daily reminder.",
-    props={"title": {"type": "string"}, "message": {"type": "string"}, "time_of_day": {"type": "string"}, "repeat": {"type": "string", "enum": ["once", "daily"]}, "timezone": {"type": "string"}},
-    required=["title", "message", "time_of_day"],
-    domain="scheduling",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["schedule_reminder"])
 def schedule_reminder(
     title: str,
     message: str,
@@ -132,29 +101,14 @@ def schedule_reminder(
         return f"[reminder failed: {e}]"
 
 
-@tool(
-    name="list_reminders",
-    description="List reminders.",
-    props={"include_disabled": {"type": "boolean"}},
-    domain="scheduling",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["list_reminders"])
 def list_reminders(include_disabled: bool = False, user_id: str | None = None) -> str:
     """List reminders stored in Aiko's local reminder file."""
     reminders = list_reminder_records(include_disabled=include_disabled, user_id=user_id)
     return json_block("reminders", {"count": len(reminders), "items": reminders})
 
 
-@tool(
-    name="cancel_reminder",
-    description="Cancel reminder by id.",
-    props={"reminder_id": {"type": "string"}},
-    required=["reminder_id"],
-    domain="scheduling",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["cancel_reminder"])
 def cancel_reminder(reminder_id: str, user_id: str | None = None) -> str:
     """Cancel/disable a local reminder by id."""
     if cancel_reminder_record(reminder_id, user_id=user_id):

@@ -1,6 +1,6 @@
-# Generated tool catalog for Aiko's agentic toolkit.
-# Runtime source of truth: @tool decorators.
-# Regenerate with: python util/export_tools_catalog.py
+# Declarative tool catalog for Aiko's agentic toolkit.
+# Runtime source of truth for @tool decorator metadata.
+# Normalize with: python util/export_tools_catalog.py
 {
   "tools": [
     {
