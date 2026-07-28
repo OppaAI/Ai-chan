@@ -47,15 +47,15 @@ def _decrypt_env_age() -> None:
 # ── DB + middleware ───────────────────────────────────────────────────────
 
 def _init_db() -> None:
-    from social_mcp.db import init_db
+    from social.db import init_db
     init_db()
-    from social_mcp.db import get_db
+    from social.db import get_db
     db = get_db()
     db.cleanup()
 
 
 def _apply_middleware() -> None:
-    from social_mcp.middleware import wrap_tool
+    from social.middleware import wrap_tool
 
     for name, tool in list(mcp._tool_manager._tools.items()):
         original_fn = tool.fn
@@ -66,11 +66,11 @@ def _apply_middleware() -> None:
 # ── tool registration ─────────────────────────────────────────────────────
 
 def _load_tools() -> None:
-    from social_mcp.tools import x, threads, instagram, youtube
-    from social_mcp.tools import reddit, bluesky, mastodon
-    from social_mcp.tools import discord, telegram, slack
-    from social_mcp.tools import linkedin, facebook
-    from social_mcp.tools import email
+    from social.tools import x, threads, instagram, youtube
+    from social.tools import reddit, bluesky, mastodon
+    from social.tools import discord, telegram, slack
+    from social.tools import linkedin, facebook
+    from social.tools import email
 
     for mod in (x, threads, instagram, youtube, reddit, bluesky, mastodon,
                 discord, telegram, slack, linkedin, facebook, email):

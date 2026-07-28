@@ -19,7 +19,7 @@ def _get_log():
     global log
     if log is None:
         import logging
-        log = logging.getLogger("social_mcp.db")
+        log = logging.getLogger("social.db")
     return log
 
 
@@ -64,7 +64,7 @@ class MCPDatabase:
         path = db_path or os.getenv("SOCIAL_MCP_DB_PATH", "")
         if not path:
             base = Path(__file__).parent.resolve()
-            path = str(base / "mcp_data.db")
+            path = str(base / "mcp.social.db")
 
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)

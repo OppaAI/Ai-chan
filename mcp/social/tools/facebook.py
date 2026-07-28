@@ -4,7 +4,7 @@ from pathlib import Path
 
 import requests
 
-from social_mcp.tools.base import env
+from social.tools.base import env
 
 
 def load_tools(mcp):
