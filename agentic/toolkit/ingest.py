@@ -28,7 +28,7 @@ import tempfile
 import time
 from urllib.parse import urlparse
 
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 
 FETCH_URL_USER_AGENT = os.getenv(
     "FETCH_URL_USER_AGENT",
@@ -223,19 +223,7 @@ def _extract_with_markitdown(data: bytes, content_type: str, max_chars: int) -> 
     return text[:max_chars]
 
 
-@tool(
-    name="fetch_from_url",
-    description="Download and extract text from any URL. Handles HTML pages, PDFs, DOCX, PPTX, XLSX, EPUB, CSV, XML, ZIP, IPYNB, MSG. Lightweight alternative to deep_read — no JS rendering, no relevance filtering, no Crawl4AI escalation. Use when you have a known URL and want its plain text.",
-    props={
-        "url": {"type": "string", "description": "The exact URL to fetch and read."},
-        "max_chars": {"type": "integer", "description": "Maximum characters to return (default FETCH_FROM_URL_MAX_CHARS)."},
-    },
-    required=["url"],
-    domain="research",
-    react=True,
-    graph=True,
-    wiki=True,
-)
+@tool(TOOLS["fetch_from_url"])
 def fetch_from_url(url: str, max_chars: int = FETCH_FROM_URL_MAX_CHARS) -> str:
     """Download and extract text from any URL.
 

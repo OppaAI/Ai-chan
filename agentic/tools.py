@@ -3,12 +3,10 @@ agentic/tools.py
 
 Compatibility facade for Aiko's autonomous toolkit.
 
-This module provides a stable import surface for all tools. The @tool
-decorator in each toolkit module is the runtime source of truth for tool
-metadata and handlers; this file imports those modules so their decorators run.
-
-config/tools.yaml is generated documentation only. Do not load it at runtime,
-because doing so creates a second registry path that can drift from decorators.
+This module provides a stable import surface for all tools. Tool metadata is
+loaded from config/tools.yaml by agentic.registry, and each toolkit module binds
+that metadata to its Python handler with @tool(TOOLS["tool_name"]). Importing
+this facade imports those modules so their decorators run.
 """
 from __future__ import annotations
 

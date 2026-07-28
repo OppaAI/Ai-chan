@@ -1886,32 +1886,16 @@ def _resolve_contained_draft_dir(draft_dir: str | Path, allowed_root: Path) -> P
     return resolved
 
 
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 
 
-@tool(
-    name="draft_job_post_social",
-    description="Create a Vancouver-area daily job-post draft for Meta Threads review. Does NOT post anything.",
-    props={"force": {"type": "boolean", "description": "Create a new draft even if one already exists for today."}},
-    domain="social",
-    react=True,
-    graph=False,
-)
+@tool(TOOLS["draft_job_post_social"])
 def draft_job_post_social(*, force: bool = False) -> dict[str, Any]:
     """Create a daily Vancouver-area job-post draft for Meta Threads review."""
     return generate_daily_job_post_draft(force=force)
 
 
-@tool(
-    name="post_job_post_social",
-    description="Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation.",
-    props={"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_job_post_social or given by the user."}},
-    required=["draft_dir"],
-    domain="social",
-    react=True,
-    graph=True,
-    wiki=True,
-)
+@tool(TOOLS["post_job_post_social"])
 def post_job_post_social(draft_dir: str) -> dict[str, Any]:
     """Post a human-approved daily job-post draft to Meta Threads only."""
     try:
@@ -1940,29 +1924,13 @@ def post_weekly_social(draft_dir: str, providers: tuple[str, ...] | None = None)
     return post_draft(path, providers=providers)
 
 
-@tool(
-    name="draft_photo_social",
-    description="Scan the photo inbox, caption and curate candidates, and create an Instagram photo draft bundle for human review. Does NOT post anything.",
-    props={"inbox": {"type": "string", "description": "Optional workspace-relative photo inbox override."}, "force": {"type": "boolean", "description": "Create a new draft even if one already exists for this run."}},
-    domain="social",
-    react=True,
-    graph=False,
-)
+@tool(TOOLS["draft_photo_social"])
 def draft_photo_social(*, inbox: str | None = None, force: bool = False) -> dict[str, Any]:
     """Agent-tool wrapper for Lane B draft generation."""
     return generate_photo_draft(inbox=inbox, force=force)
 
 
-@tool(
-    name="post_photo_social",
-    description="Post an ALREADY HUMAN-APPROVED photo draft to Instagram. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
-    props={"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_photo_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["instagram"]}}},
-    required=["draft_dir"],
-    domain="social",
-    react=True,
-    graph=True,
-    wiki=True,
-)
+@tool(TOOLS["post_photo_social"])
 def post_photo_social(draft_dir: str, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Agent-tool wrapper for Lane B posting. Refuses unless the draft at
     draft_dir has already been human-approved outside this conversation."""
@@ -1974,30 +1942,14 @@ def post_photo_social(draft_dir: str, providers: tuple[str, ...] | None = None) 
     return post_photo_draft(path, providers=providers)
 
 
-@tool(
-    name="draft_video_social",
-    description="Queue the oldest not-yet-drafted video in the video inbox that already has a matching NAME.md description file, polishing it into a YouTube title/description for human review. Does NOT post, and does NOT choose which video — dropping the file with its description IS the selection.",
-    props={"inbox": {"type": "string", "description": "Optional workspace-relative video inbox override."}},
-    domain="social",
-    react=True,
-    graph=False,
-)
+@tool(TOOLS["draft_video_social"])
 def draft_video_social(*, inbox: str | None = None) -> dict[str, Any]:
     """Agent-tool wrapper for Lane C draft generation (queues the oldest
     described video in the inbox)."""
     return generate_video_draft(inbox=inbox)
 
 
-@tool(
-    name="post_video_social",
-    description="Post an ALREADY HUMAN-APPROVED video draft to YouTube. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
-    props={"draft_dir": {"type": "string", "description": "The draft_dir path returned by draft_video_social or given by the user."}, "providers": {"type": "array", "items": {"type": "string", "enum": ["youtube"]}}},
-    required=["draft_dir"],
-    domain="social",
-    react=True,
-    graph=True,
-    wiki=True,
-)
+@tool(TOOLS["post_video_social"])
 def post_video_social(draft_dir: str, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Agent-tool wrapper for Lane C posting. Refuses unless the draft at
     draft_dir has already been human-approved outside this conversation."""

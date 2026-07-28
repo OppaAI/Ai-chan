@@ -46,6 +46,25 @@ class ToolSpec:
         return s
 
 
+def load_tool_catalog(path: str = "tools.yaml") -> Dict[str, ToolSpec]:
+    """Load declarative tool metadata keyed by tool name from config/tools.yaml."""
+    data = load_yaml(path)
+    raw_tools = data.get("tools", [])
+    if not isinstance(raw_tools, list):
+        raise ValueError("tools.yaml must contain a 'tools' list")
+    catalog: Dict[str, ToolSpec] = {}
+    for item in raw_tools:
+        if not isinstance(item, dict) or not item.get("name"):
+            continue
+        tool_data = {k: v for k, v in item.items() if k != "handler"}
+        spec = ToolSpec(**tool_data)
+        catalog[spec.name] = spec
+    return catalog
+
+
+TOOLS = load_tool_catalog()
+
+
 class ToolRegistry:
     """Singleton registry tracking all declared agentic tools."""
 
@@ -178,8 +197,8 @@ registry = ToolRegistry()
 
 
 def tool(
-    name: str,
-    description: str,
+    spec_or_name: ToolSpec | str,
+    description: Optional[str] = None,
     *,
     props: Optional[Dict[str, Any]] = None,
     required: Optional[List[str]] = None,
@@ -192,31 +211,45 @@ def tool(
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to register a function as an agentic tool.
 
-    Args:
-        name: Tool name for OpenAI schema and registry lookup
-        description: Human-readable description for LLM tool selection
-        props: Parameter schema dict
-        required: List of required parameter names
-        domain: Capability domain for routing (research, scheduling, etc.)
-        always_on: Always include in tool list regardless of capability match
-        react: Available in ReAct loop (default: True)
-        graph: Available in graph_engine playbook (default: True)
-        wiki: Available in wiki workflow (default: False)
-        skill: Available in skill workflow (default: False)
+    Prefer passing a catalog spec loaded once from config/tools.yaml:
+
+        @tool(TOOLS["repo_file_tree"])
+        def repo_file_tree(...): ...
+
+    The legacy ``@tool(name, description, ...)`` form is still supported for
+    non-catalog callers and tests.
     """
-    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        registry.register(
-            name=name,
+    if isinstance(spec_or_name, ToolSpec):
+        spec = spec_or_name
+    else:
+        if description is None:
+            raise TypeError("description is required when registering by name")
+        spec = ToolSpec(
+            name=spec_or_name,
             description=description,
-            handler=fn,
-            props=props,
-            required=required,
+            props=props or {},
+            required=required or [],
             domain=domain,
             always_on=always_on,
             react=react,
             graph=graph,
             wiki=wiki,
             skill=skill,
+        )
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        registry.register(
+            name=spec.name,
+            description=spec.description,
+            handler=fn,
+            props=spec.props,
+            required=spec.required,
+            domain=spec.domain,
+            always_on=spec.always_on,
+            react=spec.react,
+            graph=spec.graph,
+            wiki=spec.wiki,
+            skill=spec.skill,
         )
         return fn
     return decorator

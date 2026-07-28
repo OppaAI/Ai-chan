@@ -580,7 +580,7 @@ def tool_schemas() -> list[dict]:
     return [schema for schema, _handler in _TOOLS.values()]
 
 
-from agentic.registry import registry, register_tool_schema, tool
+from agentic.registry import TOOLS, registry, register_tool_schema, tool
 
 
 def _bootstrap_tool_registry() -> None:
@@ -589,13 +589,7 @@ def _bootstrap_tool_registry() -> None:
     from agentic.toolkit import synthesize  # noqa: F401
 
 
-@tool(
-    name="final_answer",
-    description="Final answer.",
-    props={"answer": {"type": "string", "description": "The final answer text."}},
-    required=["answer"],
-    always_on=True,
-)
+@tool(TOOLS["final_answer"])
 def final_answer(answer: str) -> str:
     return answer
 

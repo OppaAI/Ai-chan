@@ -18,7 +18,7 @@ from itertools import islice
 from pathlib import Path
 
 from agentic.toolkit.common import json_block
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 
 REPO_ROOT = Path(__file__).resolve().parents[2]    # repo directory (the first 2 hierachy directories of this file)
 MAX_REPO_READ_CHARS = 20_000                       # the characters allowed to be read in the repo
@@ -28,14 +28,7 @@ _SKIP_DIRS = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_mod
 
 # ── Public API ──────────────────────────────────────────────────────────
 
-@tool(
-    name="repo_file_tree",
-    description="List repository text files for Aiko architecture/code navigation.",
-    props={"prefix": {"type": "string"}, "limit": {"type": "integer"}},
-    domain="repo",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["repo_file_tree"])
 def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
     """List repository text files for architecture/code navigation."""
     try:
@@ -56,15 +49,7 @@ def repo_file_tree(prefix: str = "", limit: int = 200) -> str:
         return f"[repo tree failed: {e}]"
 
 
-@tool(
-    name="repo_read_file",
-    description="Read one repository text file for architecture/code work.",
-    props={"relative_path": {"type": "string"}, "max_chars": {"type": "integer"}},
-    required=["relative_path"],
-    domain="repo",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["repo_read_file"])
 def repo_read_file(relative_path: str, max_chars: int = MAX_REPO_READ_CHARS) -> str:
     """Read one repository text file without permitting path traversal."""
     try:
@@ -78,15 +63,7 @@ def repo_read_file(relative_path: str, max_chars: int = MAX_REPO_READ_CHARS) -> 
         return f"[repo read failed: {e}]"
 
 
-@tool(
-    name="repo_search_text",
-    description="Search repository text files with simple substring matching.",
-    props={"query": {"type": "string"}, "prefix": {"type": "string"}, "limit": {"type": "integer"}},
-    required=["query"],
-    domain="repo",
-    react=True,
-    graph=True,
-)
+@tool(TOOLS["repo_search_text"])
 def repo_search_text(query: str, prefix: str = "", limit: int = 50) -> str:
     """Search repository text files with simple case-insensitive substring matching."""
     try:
