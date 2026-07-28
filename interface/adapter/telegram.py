@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
@@ -14,8 +14,8 @@ except ImportError:
     Application = None
 
 
-class TelegramConnector(ConnectorBase):
-    """Telegram bot connector using python-telegram-bot."""
+class TelegramAdapter(AdapterBase):
+    """Telegram bot adapter using python-telegram-bot."""
 
     def __init__(self, config: dict[str, str] | None = None) -> None:
         super().__init__(config)
@@ -71,7 +71,7 @@ class TelegramConnector(ConnectorBase):
             )
             self._thread.start()
             self._running = True
-            log.info("[telegram] Connector started")
+            log.info("[telegram] Adapter started")
 
     def stop(self) -> None:
         self._running = False
