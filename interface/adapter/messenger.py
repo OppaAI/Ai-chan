@@ -7,13 +7,13 @@ import time
 import requests
 
 from system.log import get_logger
-from interface.adapter.base import ConnectorBase
+from interface.adapter.base import AdapterBase
 
 log = get_logger(__name__)
 
 
-class MessengerConnector(ConnectorBase):
-    """Facebook Messenger bot connector via the Graph API (polling).
+class MessengerAdapter(AdapterBase):
+    """Facebook Messenger bot adapter via the Graph API (polling).
 
     Requires:
         FB_PAGE_ID          — your Facebook Page ID
@@ -71,7 +71,7 @@ class MessengerConnector(ConnectorBase):
         self._poll_thread = threading.Thread(target=self._poll_loop, daemon=True)
         self._poll_thread.start()
         self._running = True
-        log.info("[messenger] Connector started (polling every %.0fs)", self.POLL_INTERVAL)
+        log.info("[messenger] Adapter started (polling every %.0fs)", self.POLL_INTERVAL)
 
     def stop(self) -> None:
         self._running = False
