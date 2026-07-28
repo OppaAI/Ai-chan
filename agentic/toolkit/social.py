@@ -1,82 +1,29 @@
 """
 toolkit/social.py
 
-Aiko's social publishing workflows, combined into one module. Three lanes:
+Aiko's social publishing workflows, combined into one module. Four lanes:
 
-  Lane A — Weekly memory postcard (non-agentic, scheduled):
-    1. reads pinned nightly memories from the last completed Sun-Sat week,
-    2. asks Aiko to choose one public-safe memory/theme,
-    3. writes a short social post,
-    4. generates a journal-style image through the existing Modal image endpoint,
-    5. saves a local review bundle, and
-    6. optionally posts an approved bundle to X and/or Threads.
+  Lane A1 — Weekly Patreon dev-post syndication (scheduled):
+    fetch the newest Patreon creator post, save a review bundle, repost the
+    full body to Reddit and a native Hugo/GitHub Pages dev blog, then send a
+    280-character teaser fanout through the social MCP post_social wrapper.
+    Lane A2 remains manual and is intentionally not implemented here.
 
-  Lane B — Curated photo showcase (grounded in real media, not LLM-invented
-  text/imagery):
-    1. scan the photo inbox (toolkit/photography.py),
-    2. caption each candidate via a vision model (grounded in actual pixels),
-    3. ask Aiko to pick 1-3 items worth sharing and write a short caption,
-    4. save a local review bundle, then optionally post to Pixelset.
+  Lane B — Curated photo showcase:
+    scan/caption/select real photos locally, save a review bundle, then post
+    approved photos through MCP to Pixelset/Pixelfed-compatible instances.
 
-  Lane C — YouTube video queue (no grading — you already chose the video by
-  dropping it in the folder; Aiko only polishes your description):
-    1. scan the video inbox,
-    2. queue the oldest not-yet-drafted video that has a matching
-       description file — a video named e.g. "my_trip.mp4" needs a
-       sibling markdown file named "MY_TRIP.md" (the video's filename
-       stem, uppercased, ".md" extension) in the same folder,
-    3. ask Aiko to polish that markdown into a YouTube title + description
-       (no invented claims — grounded in what you wrote),
-    4. save a local review bundle, then optionally post to YouTube.
+  Lane C — YouTube video queue:
+    unchanged described-video queue; approved posts go through MCP YouTube.
 
-Posting is opt-in for all three lanes. By default the scheduler only
-creates drafts.
+  Lane D — Nightly tech job-post draft:
+    run the graph job-hunt playbook, use web search results when available,
+    and save one Threads draft per nightly run for review.
 
-All three lanes are also reachable via thin draft_*_social / post_*_social
-wrappers defined below, in the "agent-tool wrappers" section — but only the
-photo and video lane wrappers (draft_photo_social, post_photo_social,
-draft_video_social, post_video_social) are actually registered as tools in
-the agent loop (agentic/agentic.py). Lane A's draft_weekly_social /
-post_weekly_social are NOT agent-registered: Lane A is scheduler-only by
-design (run_scheduled_weekly_social, on a Sun-Sat cadence), and drafting is
-idempotent per calendar week, so there's no meaningful conversational
-"draft/post the weekly postcard" action for an agent turn to take. The two
-weekly wrapper functions still exist here for manual/CLI-driven use.
-
-Regardless of which path triggers a post — scheduler autopost or the agent
-tool loop — nothing goes out until a human has set
-draft.json["human_approved"] = true. That gate (_require_approved) is
-enforced identically in both places; an env var like *_SOCIAL_AUTOPOST=1
-only controls whether a post is *attempted*, never whether it's *allowed*.
-A model-supplied "confirm: true" tool argument would not be a real safety
-boundary either, since the model fully controls its own tool-call
-arguments — the gate has to live server-side, checking a flag only a human
-review step (CLI/WebUI, outside the conversation) can set.
-
-Supported providers (by design, current as of this revision):
-  - Lane A (weekly postcard): x, threads
-  - Lane B (curated photos):  pixelset (photos only, no video)
-  - Lane C (video queue):     youtube
-
-Bluesky, Mastodon, and Pixelfed support has been removed — those platforms'
-communities have expressed they don't want AI-posted content, so Aiko no
-longer posts there. Pixelset no longer posts video (Aiko doesn't post video
-there); video instead goes to YouTube via its own lane. If a future platform
-should be added, follow the existing pattern: one _post_<provider>(...)
-function plus a registry entry; the post_draft / post_photo_draft /
-post_video_draft dispatchers never need to change otherwise.
-
-Token refresh, by provider:
-  - Threads: long-lived token, ~60-day life. Refreshed automatically at post
-    time once inside a THREADS_REFRESH_WINDOW_DAYS (default 55) window of
-    expiry — see refresh_threads_token_if_due().
-  - Pixelset: long-lived token via graph.instagram.com, same ~60-day life
-    and same pattern — refreshed automatically at post time once inside an
-    PIXELSET_REFRESH_WINDOW_DAYS (default 55) window of expiry — see
-    refresh_pixelset_token_if_due().
-  - YouTube: refresh token doesn't expire on a fixed schedule, so there's no
-    day-window check — _youtube_access_token() just exchanges it for a fresh
-    short-lived access token on every single post.
+Posting remains human-review gated via draft.json["human_approved"] for every
+lane. One-way social posting belongs in the MCP server; two-way conversational
+adapters are limited to Telegram, Discord, Matrix, and Slack. Nightly
+reflection publishing remains native Hugo/GitHub, not MCP.
 """
 
 from __future__ import annotations
@@ -338,7 +285,7 @@ def _token_seconds_remaining(expires_at_env: str) -> int | None:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Lane A — Weekly memory postcard (X + Threads only)
+# Lane A legacy helpers — superseded at runtime by Lane A1 Patreon syndication
 # ══════════════════════════════════════════════════════════════════════════
 
 WEEKLY_AUTODRAFT = os.getenv("WEEKLY_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
@@ -384,11 +331,11 @@ Completed week: {week_start} through {week_end}
 Pinned nightly memories and records:
 {memories}
 
-Choose Aiko's one weekly public memory postcard.
+Legacy memory-postcard prompt retained only for old drafts; Lane A1 uses Patreon posts.
 """
 
 _SAFE_FALLBACK_POST = "This week I kept one small memory from the workshop: Aiko-chan is still becoming more than a chat loop, one reflection at a time. \U0001f338"
-_SAFE_FALLBACK_IMAGE = "Aiko in a quiet cyberpunk room, looking at a glowing weekly memory postcard on a monitor, warm evening light, anime illustration, no text"
+_SAFE_FALLBACK_IMAGE = "Aiko in a quiet cyberpunk room, looking at a glowing weekly Patreon dev-post on a monitor, warm evening light, anime illustration, no text"
 
 
 @dataclass(frozen=True)
@@ -410,7 +357,7 @@ class WeekWindow:
 
 
 def last_completed_sunday_saturday(now: datetime | None = None, tz_name: str | None = None) -> WeekWindow:
-    """Return the most recent fully completed Sunday-Saturday window."""
+    """Return the most recent fully completed Saturday-Saturday window."""
     tz = get_timezone(tz_name)
     current = now.astimezone(tz) if now else datetime.now(tz)
     today = current.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -782,10 +729,9 @@ def _post_threads_with_image_upload(text: str, image_path: Path | None, fallback
     return result
 
 
-# ── provider registry (weekly postcard) ──────────────────────────────────────
-# Bluesky and Mastodon removed by policy — see module docstring. Add a new
-# platform by writing one _post_<provider>(text, image_path) -> dict function
-# above and registering it here. post_draft never needs to change.
+# ── provider registry (weekly Patreon dev-post) ──────────────────────────────────────
+# Legacy weekly registry retained for old draft compatibility. Lane A1 posts
+# Bluesky/Mastodon/other teaser fanout through MCP post_social instead.
 
 _WEEKLY_PROVIDERS_REGISTRY: dict[str, Callable[[str, Path | None], dict[str, Any]]] = {
     "x": _post_x_via_aisa,
@@ -829,7 +775,7 @@ def run_scheduled_weekly_social(memorize: AikoMemorize) -> dict[str, Any]:
     the env var alone only controls whether the scheduler *attempts* a
     post; a person still has to review and approve the draft first (same
     gate _require_approved enforces for the agent-tool wrapper), so this
-    can't quietly auto-publish an unreviewed weekly postcard."""
+    can't quietly auto-publish an unreviewed weekly Patreon dev-post."""
     if not WEEKLY_AUTODRAFT:
         return {"success": False, "skipped": True, "reason": "WEEKLY_SOCIAL_AUTODRAFT is off"}
     draft = generate_weekly_draft(memorize)
@@ -845,13 +791,13 @@ def run_scheduled_weekly_social(memorize: AikoMemorize) -> dict[str, Any]:
 
 
 def retry_weekly_social_if_needed(memorize: AikoMemorize) -> dict[str, Any]:
-    """Interval-driven safety net for Lane A (weekly postcard).
+    """Interval-driven safety net for Lane A1 (Patreon dev-post syndication).
 
     Runs every WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS. On any day other than
-    Sunday it's a one-line no-op — that's the entire "stop checking after
-    Sunday is over" behavior; there's no separate cutoff flag to manage.
+    Saturday it's a one-line no-op — that's the entire "stop checking after
+    Saturday is over" behavior; there's no separate cutoff flag to manage.
 
-    On Sundays it:
+    On Saturdays it:
       1. ensures this week's draft exists (generate_weekly_draft() is
          idempotent per calendar week — skips if draft.json already exists), and
       2. if the draft hasn't posted yet, autopost is on, and it's now
@@ -859,12 +805,12 @@ def retry_weekly_social_if_needed(memorize: AikoMemorize) -> dict[str, Any]:
 
     This covers both a run that failed partway (network/API error) and a
     run that was simply waiting on human approval that arrived later in
-    the day — either way, the next tick picks it back up. Once Monday
-    arrives, every tick is a no-op until next Sunday.
+    the day — either way, the next tick picks it back up. Once Sunday
+    arrives, every tick is a no-op until next Saturday.
     """
     now = datetime.now(get_timezone())
-    if now.weekday() != 6:  # Monday=0 ... Sunday=6
-        return {"success": True, "skipped": True, "reason": "not_sunday"}
+    if now.weekday() != 5:  # Monday=0 ... Saturday=5
+        return {"success": True, "skipped": True, "reason": "not_saturday"}
 
     draft = generate_weekly_draft(memorize)  # idempotent per calendar week
     if not draft.get("success") or not draft.get("draft_dir"):
@@ -889,6 +835,180 @@ def retry_weekly_social_if_needed(memorize: AikoMemorize) -> dict[str, Any]:
 
     post_result = post_draft(draft_dir)
     return {"success": bool(post_result.get("posted")), "draft_dir": str(draft_dir), "post": post_result}
+
+
+# Lane A1 override — Patreon dev-post syndication, replacing the old memory postcard.
+A1_FULL_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_FULL_PROVIDERS", "reddit").split(",") if p.strip())
+A1_TEASER_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_TEASER_PROVIDERS", "x,bluesky,mastodon,discord,threads").split(",") if p.strip())
+A1_TEASER_MAX_CHARS = _int_env("A1_TEASER_MAX_CHARS", 280)
+A1_REDDIT_SUBREDDIT = os.getenv("A1_REDDIT_SUBREDDIT", "OppaAI")
+A1_HUGO_REPO = os.getenv("AIKO_DEV_GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
+A1_HUGO_BRANCH = os.getenv("AIKO_DEV_GITHUB_BRANCH", os.getenv("GITHUB_BRANCH", "main"))
+A1_HUGO_CONTENT_PATH = os.getenv("AIKO_DEV_HUGO_CONTENT_PATH", "content/posts")
+
+
+def _call_social_mcp(tool: str, **kwargs: Any) -> dict[str, Any]:
+    try:
+        from agentic.mcp_client.social_bridge import _call_mcp
+        return _call_mcp(tool, **kwargs)
+    except Exception as e:
+        return {"ok": False, "tool": tool, "error": str(e)}
+
+
+def _fetch_latest_patreon_post() -> dict[str, Any] | None:
+    """Fetch the newest Patreon creator post for Lane A1.
+
+    Prefer PATREON_LATEST_POST_URL for custom/private feeds; otherwise use the
+    Patreon campaign posts API with PATREON_CREATOR_ACCESS_TOKEN and
+    PATREON_CAMPAIGN_ID. The returned dict is normalized for draft writing.
+    """
+    token = os.getenv("PATREON_CREATOR_ACCESS_TOKEN", "").strip()
+    custom_url = os.getenv("PATREON_LATEST_POST_URL", "").strip()
+    campaign_id = os.getenv("PATREON_CAMPAIGN_ID", "").strip()
+    if not token:
+        return None
+    headers = {"Authorization": f"Bearer {token}"}
+    url = custom_url or f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts"
+    params = None if custom_url else {
+        "fields[post]": "title,content,published_at,url,embed,post_file,teaser_text",
+        "sort": "-published_at",
+        "page[count]": "1",
+    }
+    try:
+        resp = requests.get(url, headers=headers, params=params, timeout=30)
+        resp.raise_for_status()
+        payload = resp.json()
+        item = (payload.get("data") or [payload])[0]
+        attrs = item.get("attributes", item)
+        title = attrs.get("title") or "Aiko dev update"
+        body = attrs.get("content") or attrs.get("body") or attrs.get("teaser_text") or ""
+        image_url = ""
+        embed = attrs.get("embed") or {}
+        if isinstance(embed, dict):
+            image_url = embed.get("thumbnail_url") or embed.get("url") or ""
+        return {
+            "id": item.get("id") or attrs.get("id") or title,
+            "title": title,
+            "body": body,
+            "url": attrs.get("url") or attrs.get("patreon_url") or "",
+            "published_at": attrs.get("published_at") or attrs.get("created_at") or datetime.now(timezone.utc).isoformat(),
+            "image_url": image_url,
+        }
+    except Exception as e:
+        log.error("Lane A1 Patreon fetch failed: %s", e)
+        return None
+
+
+def _teaser_for_post(post: dict[str, Any]) -> str:
+    text = re.sub(r"<[^>]+>", " ", post.get("body", ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    title = post.get("title") or "Aiko dev update"
+    teaser = f"{title}: {text}" if text else title
+    if post.get("url"):
+        reserve = len(post["url"]) + 1
+        teaser = teaser[: max(0, A1_TEASER_MAX_CHARS - reserve)].rstrip() + " " + post["url"]
+    return teaser[:A1_TEASER_MAX_CHARS].rstrip()
+
+
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:80] or "aiko-dev-update"
+
+
+def _build_a1_hugo_post(post: dict[str, Any], teaser: str) -> tuple[str, str]:
+    published = str(post.get("published_at") or datetime.now(timezone.utc).isoformat())
+    date_part = published[:10]
+    slug = f"{date_part}-{_slugify(post.get('title', 'aiko-dev-update'))}"
+    title = str(post.get("title") or "Aiko dev update").replace('"', "'")
+    body = post.get("body") or ""
+    source = f"\n\nOriginal Patreon post: {post.get('url')}" if post.get("url") else ""
+    md = (
+        "---\n"
+        f"title: \"{title}\"\n"
+        f"date: {published}\n"
+        "draft: false\n"
+        "tags:\n  - \"aiko-dev\"\n  - \"patreon\"\n"
+        f"summary: \"{teaser.replace(chr(34), chr(39))}\"\n"
+        "---\n\n"
+        f"{body}{source}\n"
+    )
+    return slug, md
+
+
+def _push_a1_hugo_post(slug: str, content: str) -> dict[str, Any]:
+    token = os.getenv("AIKO_DEV_GITHUB_TOKEN", os.getenv("GITHUB_TOKEN", ""))
+    repo = A1_HUGO_REPO
+    if not token or not repo:
+        return {"ok": False, "provider": "github_hugo", "error": "AIKO_DEV_GITHUB_TOKEN/GITHUB_TOKEN or AIKO_DEV_GITHUB_REPO/GITHUB_REPO not set"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    path = f"{A1_HUGO_CONTENT_PATH.rstrip('/')}/{slug}.md"
+    base = f"https://api.github.com/repos/{repo}/contents/{path}"
+    try:
+        existing = requests.get(base, headers=headers, params={"ref": A1_HUGO_BRANCH}, timeout=15)
+        sha = existing.json().get("sha") if existing.status_code == 200 else None
+        payload = {"message": f"feat(aiko-dev): syndicate {slug}", "content": base64.b64encode(content.encode()).decode(), "branch": A1_HUGO_BRANCH}
+        if sha:
+            payload["sha"] = sha
+        resp = requests.put(base, headers=headers, json=payload, timeout=30)
+        return {"ok": 200 <= resp.status_code < 300, "provider": "github_hugo", "path": path, "status_code": resp.status_code, "response": resp.text[:1000]}
+    except Exception as e:
+        return {"ok": False, "provider": "github_hugo", "error": str(e)}
+
+
+def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: datetime | None = None) -> dict[str, Any]:
+    """Create a Lane A1 Patreon dev-post syndication draft bundle."""
+    post = _fetch_latest_patreon_post()
+    if not post:
+        return {"success": False, "reason": "no_patreon_post"}
+    label = _slugify(str(post.get("id") or post.get("title") or "latest"))
+    draft_dir = weekly_social_root() / label
+    meta_path = draft_dir / "draft.json"
+    if meta_path.exists() and not force:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        return {"success": True, "skipped": True, "draft_dir": str(draft_dir), "meta": meta}
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    teaser = _teaser_for_post(post)
+    slug, hugo = _build_a1_hugo_post(post, teaser)
+    (draft_dir / "full_post.md").write_text(str(post.get("body") or "").strip() + "\n", encoding="utf-8")
+    (draft_dir / "teaser.txt").write_text(teaser + "\n", encoding="utf-8")
+    (draft_dir / "hugo.md").write_text(hugo, encoding="utf-8")
+    meta = {"success": True, "lane": "A1", "source": "patreon", "patreon_post": post, "hugo_slug": slug, "human_approved": False, "posted": False, "created_at": datetime.now(timezone.utc).isoformat()}
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"success": True, "draft_dir": str(draft_dir), "meta": meta}
+
+
+def _read_weekly_draft(draft_dir: Path) -> tuple[str, Path | None, dict[str, Any]]:
+    meta = json.loads((draft_dir / "draft.json").read_text(encoding="utf-8"))
+    text_path = draft_dir / "teaser.txt"
+    text = text_path.read_text(encoding="utf-8").strip() if text_path.exists() else _teaser_for_post(meta.get("patreon_post", {}))
+    image_path = draft_dir / "image.png"
+    return text, image_path if image_path.exists() else None, meta
+
+
+def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """Post an approved Lane A1 Patreon draft: native Hugo plus MCP fanout."""
+    path = Path(draft_dir).resolve()
+    try:
+        _require_approved(path)
+        teaser, image_path, meta = _read_weekly_draft(path)
+        full_body = (path / "full_post.md").read_text(encoding="utf-8").strip()
+        hugo = (path / "hugo.md").read_text(encoding="utf-8")
+    except Exception as e:
+        return {"posted": False, "error": str(e)}
+    slug = meta.get("hugo_slug") or _slugify(meta.get("patreon_post", {}).get("title", "aiko-dev-update"))
+    results = [_push_a1_hugo_post(slug, hugo)]
+    full_services = ",".join(providers or A1_FULL_PROVIDERS)
+    if full_services:
+        results.append(_call_social_mcp("post_social", services=full_services, text=full_body, title=meta.get("patreon_post", {}).get("title", "Aiko dev update"), subreddit=A1_REDDIT_SUBREDDIT))
+    teaser_services = ",".join(A1_TEASER_PROVIDERS)
+    if teaser_services:
+        results.append(_call_social_mcp("post_social", services=teaser_services, text=teaser, image_path=str(image_path) if image_path else None, title=meta.get("patreon_post", {}).get("title", "Aiko dev update")))
+    post_meta = {"posted": any(r.get("ok") for r in results), "posted_at": datetime.now(timezone.utc).isoformat(), "results": results}
+    (path / "posted.json").write_text(json.dumps(post_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    meta["posted"] = post_meta["posted"]
+    meta["post_results"] = results
+    (path / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return post_meta
   
 # ══════════════════════════════════════════════════════════════════════════
 # Lane B — Curated photo showcase (Pixelset only)
@@ -1151,171 +1271,22 @@ def _read_media_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
     return meta.get("selections", []), meta
 
 
-# ── Pixelset (Graph API, Pixelset Login variant) ────────────────────────
-# Requires an IG Business/Creator account. Uses graph.instagram.com (not
-# graph.facebook.com — that host/flow is for the legacy Facebook Login
-# variant and is no longer what this integration targets). Images only —
-# Aiko does not post video. No direct file upload; media must be reachable
-# at a public URL (handled via imgbb, same as Threads).
-#
-# Token refresh mirrors Threads: a long-lived IG token is refreshed once
-# it's within PIXELSET_REFRESH_WINDOW_DAYS (default 55) of expiring, checked at
-# post time via refresh_pixelset_token_if_due().
-
-PIXELSET_REFRESH_WINDOW_DAYS = _int_env("PIXELSET_REFRESH_WINDOW_DAYS", 55)
-
-
-def _pixelset_config() -> tuple[str, str, str]:
-    token = os.getenv("PIXELSET_ACCESS_TOKEN", "").strip()
-    ig_user_id = os.getenv("PIXELSET_BUSINESS_ACCOUNT_ID", "").strip()
-    base = os.getenv("PIXELSET_API_BASE", "https://graph.instagram.com").rstrip("/")
-    return token, ig_user_id, base
-
-
-def refresh_pixelset_token(
-    *,
-    token: str | None = None,
-    persist_env: bool = False,
-    env_path: str | Path | None = None,
-) -> dict[str, Any]:
-    """Refresh an unexpired long-lived Pixelset token and optionally
-    persist it to an env file. Same shape as refresh_threads_token, but
-    against graph.instagram.com's ig_refresh_token grant."""
-    current_token = (token or os.getenv("PIXELSET_ACCESS_TOKEN", "")).strip()
-    base = os.getenv("PIXELSET_API_BASE", "https://graph.instagram.com").rstrip("/")
-    if not current_token:
-        return {"ok": False, "provider": "pixelset", "error": "PIXELSET_ACCESS_TOKEN not set"}
-
-    try:
-        resp = requests.get(
-            f"{base}/refresh_access_token",
-            params={"grant_type": "ig_refresh_token", "access_token": current_token},
-            timeout=120,
-        )
-        try:
-            payload: Any = resp.json()
-        except ValueError:
-            payload = {"raw": resp.text[:2000]}
-        ok = 200 <= resp.status_code < 300 and isinstance(payload, dict) and bool(payload.get("access_token"))
-        safe_payload = dict(payload) if isinstance(payload, dict) else payload
-        if isinstance(safe_payload, dict) and "access_token" in safe_payload:
-            safe_payload["access_token"] = "[redacted]"
-        result: dict[str, Any] = {
-            "ok": ok,
-            "provider": "pixelset",
-            "status_code": resp.status_code,
-            "response": safe_payload,
-        }
-        if not ok:
-            return result
-
-        new_token = str(payload["access_token"])
-        expires_in = int(payload.get("expires_in") or 0)
-        if expires_in > 0:
-            expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-            result["expires_at"] = expires_at.isoformat()
-            result["expires_in"] = expires_in
-        if persist_env:
-            values = {"PIXELSET_ACCESS_TOKEN": new_token}
-            if result.get("expires_at"):
-                values["PIXELSET_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
-            _write_env_values(env_path or ".env", values)
-            result["env_updated"] = str(Path(env_path or ".env").expanduser().resolve())
-        os.environ["PIXELSET_ACCESS_TOKEN"] = new_token
-        if result.get("expires_at"):
-            os.environ["PIXELSET_ACCESS_TOKEN_EXPIRES_AT"] = str(result["expires_at"])
-        return result
-    except (requests.RequestException, ValueError, OSError) as e:
-        return {"ok": False, "provider": "pixelset", "error": str(e)}
-
-
-def refresh_pixelset_token_if_due(*, persist_env: bool | None = None) -> dict[str, Any]:
-    seconds_remaining = _token_seconds_remaining("PIXELSET_ACCESS_TOKEN_EXPIRES_AT")
-    if seconds_remaining is None:
-        return {
-            "ok": True,
-            "provider": "pixelset",
-            "skipped": True,
-            "reason": "expiry_unknown",
-        }
-    threshold_seconds = PIXELSET_REFRESH_WINDOW_DAYS * 24 * 60 * 60
-    if seconds_remaining is not None and seconds_remaining > threshold_seconds:
-        return {
-            "ok": True,
-            "provider": "pixelset",
-            "skipped": True,
-            "reason": "not_due",
-            "seconds_remaining": seconds_remaining,
-        }
-    should_persist = _env_bool("PIXELSET_REFRESH_PERSIST_ENV", False) if persist_env is None else persist_env
-    result = refresh_pixelset_token(persist_env=should_persist)
-    result["seconds_remaining_before_refresh"] = seconds_remaining
-    return result
-
-
-def _post_pixelset_image(sel: dict[str, Any]) -> dict[str, Any]:
-    refresh_result = refresh_pixelset_token_if_due()
-    if not refresh_result.get("ok"):
-        return {"ok": False, "provider": "pixelset", "stage": "refresh", "refresh": refresh_result}
-
-    token, ig_user_id, base = _pixelset_config()
-    if not token or not ig_user_id:
-        return {"ok": False, "provider": "pixelset", "error": "PIXELSET_ACCESS_TOKEN or PIXELSET_BUSINESS_ACCOUNT_ID not set"}
-
-    timeout = _int_env("PIXELSET_TIMEOUT", 60)
-    media_path = Path(sel["media_path"])
-    if not media_path.exists():
-        return {"ok": False, "provider": "pixelset", "error": f"media not found: {media_path}"}
-
-    upload = _upload_to_imgbb(media_path)
-    if not upload.get("ok"):
-        return {"ok": False, "provider": "pixelset", "stage": "image_upload", "upload": upload}
-    image_url = upload["url"]
-
-    try:
-        create = requests.post(
-            f"{base}/{ig_user_id}/media",
-            data={"image_url": image_url, "caption": sel.get("caption", "")[:2200], "access_token": token},
-            timeout=timeout,
-        )
-        if not (200 <= create.status_code < 300):
-            return {"ok": False, "provider": "pixelset", "stage": "create", "status_code": create.status_code, "response": create.text[:2000]}
-        creation_id = create.json().get("id")
-        if not creation_id:
-            return {"ok": False, "provider": "pixelset", "stage": "create", "error": "missing creation id", "response": create.text[:2000]}
-
-        time.sleep(float(os.getenv("PIXELSET_PUBLISH_DELAY_SECONDS", "5")))
-        publish = requests.post(
-            f"{base}/{ig_user_id}/media_publish",
-            data={"creation_id": creation_id, "access_token": token},
-            timeout=timeout,
-        )
-        ok = 200 <= publish.status_code < 300
-        return {
-            "ok": ok, "provider": "pixelset", "status_code": publish.status_code,
-            "creation_id": creation_id, "response": publish.text[:2000], "image_upload": upload,
-        }
-    except Exception as e:
-        return {"ok": False, "provider": "pixelset", "error": str(e)}
-
+# ── Pixelset via MCP ─────────────────────────────────────────────────────────
 
 def _post_pixelset(selections: list[dict[str, Any]]) -> dict[str, Any]:
-    """Posts the FIRST selection only, as an image. Carousel (multi-item)
-    posting needs child containers and is not implemented — extend here if
-    needed. Images only — Aiko does not post video."""
+    """Post the first approved Lane B photo through the social MCP server."""
     if not selections:
         return {"ok": False, "provider": "pixelset", "error": "no selections to post"}
-    return _post_pixelset_image(selections[0])
+    sel = selections[0]
+    return _call_social_mcp(
+        "post_social",
+        services="pixelset",
+        text=sel.get("caption", ""),
+        image_path=sel.get("media_path", ""),
+    )
 
 
-# ── provider registry (curated media) ────────────────────────────────────────
-# Pixelfed removed by policy — see module docstring. Pixelset is now the
-# only media provider, and only for photos (after grading) — Aiko does not
-# post video.
-
-_MEDIA_PROVIDERS_REGISTRY: dict[str, Callable[[list[dict[str, Any]]], dict[str, Any]]] = {
-    "pixelset": _post_pixelset,
-}
+_MEDIA_PROVIDERS_REGISTRY["pixelset"] = _post_pixelset
 
 
 def post_photo_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
@@ -1966,10 +1937,10 @@ def post_video_social(draft_dir: str, providers: tuple[str, ...] | None = None) 
 # ══════════════════════════════════════════════════════════════════════════
 
 def _cmd() -> int:
-    parser = argparse.ArgumentParser(description="Aiko social publishing (weekly postcard + curated media)")
+    parser = argparse.ArgumentParser(description="Aiko social publishing (weekly Patreon dev-post + curated media)")
     sub = parser.add_subparsers(dest="mode", required=True)
 
-    weekly_p = sub.add_parser("weekly", help="weekly memory postcard (X, Threads)")
+    weekly_p = sub.add_parser("weekly", help="weekly Patreon dev-post (X, Threads)")
     weekly_p.add_argument("--draft", action="store_true", help="create weekly draft bundle")
     weekly_p.add_argument("--force", action="store_true", help="overwrite existing draft for the week")
     weekly_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory")
@@ -1996,11 +1967,6 @@ def _cmd() -> int:
     media_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory (photo or video, auto-detected)")
     media_p.add_argument("--providers", default="", help="comma-separated providers overriding the draft kind's default provider list (pixelset / youtube)")
     media_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
-    media_p.add_argument(
-        "--refresh-ig-token",
-        action="store_true",
-        help="refresh the configured long-lived Pixelset token",
-    )
     media_p.add_argument("--persist-env", action="store_true", help="write refreshed Pixelset token values back to .env")
     media_p.add_argument("--env-path", default="", help="env file path used with --persist-env")
 
@@ -2044,10 +2010,6 @@ def _cmd() -> int:
         return 2
 
     if args.mode == "media":
-        if args.refresh_ig_token:
-            result = refresh_pixelset_token(persist_env=args.persist_env, env_path=args.env_path or None)
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-            return 0 if result.get("ok") else 1
         if args.draft:
             print(json.dumps(generate_photo_draft(inbox=args.inbox or None, force=args.force), ensure_ascii=False, indent=2))
             return 0

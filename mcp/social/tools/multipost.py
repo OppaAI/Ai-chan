@@ -43,7 +43,7 @@ def load_tools(mcp):
             elif service == "pixelset":
                 result = tools["post_pixelset"].fn(image_path=image_path or "", caption=text)
             elif service == "discord":
-                result = tools["post_discord"].fn(text=text, image_path=image_path)
+                result = tools["post_discord"].fn(text=text, image_path=image_path, channel_id=channel)
             else:
                 result = {"ok": False, "provider": service, "error": "unsupported service"}
             results.append(result)

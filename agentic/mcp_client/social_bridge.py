@@ -28,11 +28,11 @@ def _adapter_post_threads(text: str, image_path: Path | None) -> dict[str, Any]:
     return _call_mcp("post_threads", text=text, image_path=str(image_path) if image_path else None)
 
 
-def _adapter_post_instagram(selections: list[dict[str, Any]]) -> dict[str, Any]:
+def _adapter_post_pixelset(selections: list[dict[str, Any]]) -> dict[str, Any]:
     if not selections:
-        return {"ok": False, "provider": "instagram", "error": "no selections"}
+        return {"ok": False, "provider": "pixelset", "error": "no selections"}
     sel = selections[0]
-    return _call_mcp("post_instagram", image_path=sel.get("media_path", ""), caption=sel.get("caption", ""))
+    return _call_mcp("post_social", services="pixelset", text=sel.get("caption", ""), image_path=sel.get("media_path", ""))
 
 
 def _adapter_post_youtube(sel: dict[str, Any]) -> dict[str, Any]:
@@ -51,7 +51,7 @@ def _adapter_post_threads_text(text: str, _image: Any = None) -> dict[str, Any]:
 MCP_ADAPTERS = {
     "x": _adapter_post_x,
     "threads": _adapter_post_threads,
-    "instagram": _adapter_post_instagram,
+    "pixelset": _adapter_post_pixelset,
     "youtube": _adapter_post_youtube,
 }
 
@@ -62,7 +62,7 @@ def patch_social_registries() -> None:
 
     social._WEEKLY_PROVIDERS_REGISTRY["x"] = _adapter_post_x
     social._WEEKLY_PROVIDERS_REGISTRY["threads"] = _adapter_post_threads
-    social._MEDIA_PROVIDERS_REGISTRY["instagram"] = _adapter_post_instagram
+    social._MEDIA_PROVIDERS_REGISTRY["pixelset"] = _adapter_post_pixelset
     social._VIDEO_PROVIDERS_REGISTRY["youtube"] = _adapter_post_youtube
 
     original_post_job = social.post_job_post_draft

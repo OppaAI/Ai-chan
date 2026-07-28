@@ -330,7 +330,7 @@ If you find this project useful, consider buying me a coffee ☕
 ## Aiko social lanes (updated)
 
 - Two-way messenger adapters are native background services for WebUI/CLI sessions; only Telegram, Discord, Matrix, and Slack are supported for conversational ingress/egress. Standalone `--adapter` remains legacy-only for those four services.
-- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to Reddit r/OppaAI and the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, YouTube Community, and Threads when image hosting is available. Lane A2 manual posting remains out of Aiko.
+- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to Reddit r/OppaAI and the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. Lane A2 manual posting remains out of Aiko.
 - Lane B is the curated photo pipeline for Pixelset/Pixelfed-compatible posting through the social MCP server; Instagram is no longer a target.
 - Lane C YouTube video posting continues to use the existing MCP posting pipeline.
 - Lane D creates one tech-job Threads draft per night at 23:00 instead of multiple daily drafts, using the graph job-hunt playbook and web search results when available.

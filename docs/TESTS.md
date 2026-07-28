@@ -392,7 +392,7 @@ Run before any phase suite.
 
 ## Phase 2.1 — Social
 
-*Draft-first social publishing: weekly memory postcard (X/Threads), curated photo showcase (Instagram), and video queue (YouTube). All posting requires human approval regardless of trigger path.*
+*Draft-first social publishing: weekly Patreon dev-post syndication, curated photo showcase (Pixelset via MCP), nightly one-draft job hunt, and video queue (YouTube). All posting requires human approval regardless of trigger path.*
 
 ### 2.1.1 Approval gate integrity (P0 — test this first)
 
@@ -409,7 +409,7 @@ Run before any phase suite.
 - [ ] An absolute `draft_dir` path outside the lane's root (e.g. `/etc`, another user's workspace) is rejected with a clear `ValueError`, not silently redirected.
 - [ ] A `draft_dir` that resolves inside the correct lane root but doesn't exist yet fails cleanly (missing `draft.json`) rather than crashing.
 
-### 2.1.3 Lane A — weekly memory postcard
+### 2.1.3 Lane A1 — weekly Patreon dev-post
 
 - [ ] `generate_weekly_draft` is idempotent per calendar week: a second call without `force=True` returns `skipped: draft_exists`.
 - [ ] `last_completed_sunday_saturday` correctly identifies the prior Sun–Sat window across a timezone boundary (test with a non-UTC `bioclock` timezone).
@@ -432,9 +432,9 @@ Run before any phase suite.
 - [ ] An empty inbox returns `skipped: empty_inbox` without creating a draft directory.
 - [ ] Zero worthwhile candidates returns `skipped: nothing_selected` without creating a draft directory.
 - [ ] `review.md` correctly links each selected media file's local copy (not the original inbox path).
-- [ ] Instagram posting posts only the first selection when multiple are present; confirm this is documented behavior, not a silent bug, in the review bundle.
-- [ ] Instagram token refresh mirrors the Threads window-check behavior (`IG_REFRESH_WINDOW_DAYS`).
-- [ ] Instagram posting correctly caps `caption` at 2200 chars before submission.
+- [ ] Pixelset posting posts only the first selection when multiple are present; confirm this is documented behavior, not a silent bug, in the review bundle.
+- [ ] Pixelset photo posting goes through MCP `post_social(services="pixelset")`; no Instagram Graph refresh path remains.
+- [ ] Pixelset/MCP posting correctly passes the approved caption and media path to `post_social`.
 
 ### 2.1.5 Lane C — YouTube video queue
 

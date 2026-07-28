@@ -994,6 +994,15 @@ def run_session(ui, args) -> None:
         try:
             from interface.adapter import start_background_adapters
             background_adapters = start_background_adapters(think, memorize)
+            if background_adapters:
+                import atexit
+                def _stop_background_adapters() -> None:
+                    for adapter in background_adapters:
+                        try:
+                            adapter.stop()
+                        except Exception:
+                            log.exception("Failed to stop background messenger adapter %s", adapter.name)
+                atexit.register(_stop_background_adapters)
         except Exception:
             log.exception("Failed to start background messenger adapters.")
 
