@@ -96,7 +96,6 @@ __all__ = [
     "ConversationSession",
     "DiscordAdapter",
     "TelegramAdapter",
-    "TwitterAdapter",
     "SlackAdapter",
     "MatrixAdapter",
     "ADAPTER_REGISTRY",
