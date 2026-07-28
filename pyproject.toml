@@ -77,7 +77,7 @@ youtube = []  # uses raw requests (requests already a core dep)
 messenger = []  # uses raw requests to Meta Graph API (requests already a core dep)
 googlechat = ["google-auth>=2.29.0"]
 msal = ["msal>=1.30.0"]
-connectors = [
+adapters = [
     "discord-py>=2.4.0",
     "python-telegram-bot>=21.0",
     "tweepy>=4.14.0",
