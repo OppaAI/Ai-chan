@@ -32,6 +32,7 @@ import time
 from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 
@@ -541,7 +542,7 @@ def tool_schemas() -> list[dict]:
     return [schema for schema, _handler in _TOOLS.values()]
 
 
-from agentic.registry import TOOLS, registry, register_tool_schema, tool
+from agentic.registry import TOOLS, ValidationError, registry, register_tool_schema, tool
 
 
 def _bootstrap_tool_registry() -> None:
@@ -617,6 +618,25 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content="Tool arguments must be a JSON object. Reissue the call with valid JSON.",
             error_type="invalid_args", retryable=True,
         )
+    spec = registry.get(name)
+    if spec and spec.args_model is not None:
+        try:
+            coerced = spec.validate_args(args)
+        except Exception as exc:
+            if ValidationError is not None and isinstance(exc, ValidationError):
+                detail = exc.errors(include_url=False)
+            else:
+                detail = str(exc)
+            return ToolResult(
+                ok=False, tool=name, args=args,
+                content=json.dumps({
+                    "message": "Tool arguments failed schema validation. Reissue the call with corrected arguments.",
+                    "errors": detail,
+                }, ensure_ascii=False),
+                error_type="schema_validation_failed", retryable=True,
+            )
+        args.clear()
+        args.update(coerced)
     missing = [
         key for key in _required_args_for(name)
         if args.get(key) is None or str(args.get(key)).strip() == ""
@@ -1106,7 +1126,7 @@ def _stream_agent_message(owner, messages, tools, token_callback):
     return msg, usage
 
 
-def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, cap_vec: np.ndarray | None = None) -> str:
+def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, cap_vec: np.ndarray | None = None, output_model: Any | None = None) -> str:
     """Run task mode using the owning AikoThink instance for model/memory/output.
 
     mem_kb_future: a concurrent.futures.Future from
@@ -1534,6 +1554,24 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                         }, ensure_ascii=False, indent=2),
                     })
                     continue
+            if output_model is not None:
+                try:
+                    structured = output_model.model_validate_json(candidate) if isinstance(candidate, str) else output_model.model_validate(candidate)
+                    candidate = json.dumps(structured.model_dump(mode="json"), ensure_ascii=False)
+                except Exception as exc:
+                    if final_repairs < AGENT_MAX_FINAL_REPAIRS:
+                        final_repairs += 1
+                        detail = exc.errors(include_url=False) if ValidationError is not None and isinstance(exc, ValidationError) else str(exc)
+                        messages.append({
+                            "role": "tool", "tool_call_id": call_id,
+                            "name": "final_answer",
+                            "content": json.dumps({
+                                "ok": False, "error_type": "structured_output_validation_failed",
+                                "errors": detail,
+                                "instruction": "Return final_answer as valid JSON matching the requested structured output model.",
+                            }, ensure_ascii=False, indent=2),
+                        })
+                        continue
             final_text = candidate
             messages.append({
                 "role": "tool", "tool_call_id": call_id,

@@ -95,3 +95,41 @@ def test_graph_engine_integration():
     tool_map = _build_tool_map()
     assert "graph_dynamic_tool" in tool_map
     assert tool_map["graph_dynamic_tool"]() == "graph_ok"
+
+
+def test_pydantic_args_model_generates_schema_and_coerces():
+    from pydantic import BaseModel, Field
+
+    class DemoArgs(BaseModel):
+        count: int = Field(ge=1)
+        label: str
+
+    spec = ToolRegistry().register(
+        name="typed_demo",
+        description="Typed demo",
+        args_model=DemoArgs,
+    )
+
+    schema = spec.to_openai_schema()["function"]["parameters"]
+    assert schema["properties"]["count"]["type"] == "integer"
+    assert "count" in schema["required"]
+    assert spec.validate_args({"count": "2", "label": "ok"}) == {"count": 2, "label": "ok"}
+
+
+def test_pydantic_output_model_validates_json():
+    from pydantic import BaseModel
+
+    class FinalShape(BaseModel):
+        summary: str
+        confidence: float
+
+    spec = ToolRegistry().register(
+        name="structured_final",
+        description="Structured final answer",
+        output_model=FinalShape,
+    )
+
+    assert spec.validate_output('{"summary":"done","confidence":0.8}') == {
+        "summary": "done",
+        "confidence": 0.8,
+    }

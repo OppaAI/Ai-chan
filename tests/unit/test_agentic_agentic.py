@@ -508,3 +508,27 @@ class TestSaveNoteContentTruncation:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+def test_validate_args_uses_registered_pydantic_model():
+    from pydantic import BaseModel, Field
+    from agentic.registry import registry
+
+    class StrictArgs(BaseModel):
+        limit: int = Field(ge=1, le=5)
+
+    registry.register(
+        name="typed_validation_test",
+        description="typed validation test",
+        args_model=StrictArgs,
+        react=True,
+    )
+    _TOOLS["typed_validation_test"] = (registry.get("typed_validation_test").to_openai_schema(), None)
+
+    args = {"limit": "3"}
+    assert _validate_args("typed_validation_test", args) is None
+    assert args == {"limit": 3}
+
+    bad = _validate_args("typed_validation_test", {"limit": 99})
+    assert bad is not None
+    assert bad.error_type == "schema_validation_failed"
+    assert bad.retryable is True

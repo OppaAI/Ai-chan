@@ -779,3 +779,54 @@ class TestPlanNodeNewFields:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_graph_when_condition_gates_on_shared_state(monkeypatch):
+    def seed_state(state):
+        state.set("route", "write")
+        return "seeded"
+
+    def writer():
+        return "wrote"
+
+    monkeypatch.setattr(schema, "_TOOL_MAP_CACHE", {"seed_state": seed_state, "writer": writer})
+    graph = PlanGraph(
+        id="state_gate",
+        name="State gate",
+        goal="gate on state",
+        nodes=(
+            PlanNode("seed", "seed_state", {}),
+            PlanNode("write", "writer", {}, depends_on=("seed",), when={"state": "route", "equals": "write"}),
+        ),
+    )
+
+    result = execute_graph(graph)
+
+    assert result.final_state["route"] == "write"
+    assert result.results[-1].node_id == "write"
+    assert result.results[-1].ok is True
+
+
+def test_graph_when_condition_skips_when_state_misses(monkeypatch):
+    def seed_state(state):
+        state.set("route", "research")
+        return "seeded"
+
+    def writer():
+        return "should not run"
+
+    monkeypatch.setattr(schema, "_TOOL_MAP_CACHE", {"seed_state": seed_state, "writer": writer})
+    graph = PlanGraph(
+        id="state_gate_skip",
+        name="State gate skip",
+        goal="gate on state",
+        nodes=(
+            PlanNode("seed", "seed_state", {}),
+            PlanNode("write", "writer", {}, depends_on=("seed",), when={"state": "route", "equals": "write"}),
+        ),
+    )
+
+    result = execute_graph(graph)
+
+    assert result.results[-1].node_id == "write"
+    assert result.results[-1].content == "skipped: run_if condition not met"
