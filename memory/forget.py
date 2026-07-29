@@ -19,10 +19,10 @@ from datetime import datetime, timezone
 import os
 
 # ── tunable parameters ────────────────────────────────────────────────────────
-HALF_LIFE_DAYS    = float(os.getenv("FORGET_HALF_LIFE_DAYS",    7.0))
-CLEANUP_THRESHOLD = float(os.getenv("FORGET_CLEANUP_THRESHOLD", 0.05))
-ACCESS_COUNT_CAP  = int(  os.getenv("FORGET_ACCESS_COUNT_CAP",  255))
-GRACE_PERIOD_DAYS = int(  os.getenv("FORGET_GRACE_PERIOD_DAYS", 14))
+HALF_LIFE_DAYS    = float(os.getenv("FORGET_HALF_LIFE_DAYS",    "21.0"))
+CLEANUP_THRESHOLD = float(os.getenv("FORGET_CLEANUP_THRESHOLD", "0.02"))
+ACCESS_COUNT_CAP  = int(  os.getenv("FORGET_ACCESS_COUNT_CAP",  "255"))
+GRACE_PERIOD_DAYS = int(  os.getenv("FORGET_GRACE_PERIOD_DAYS", "35"))
 
 # ── scoring ───────────────────────────────────────────────────────────────────
 
