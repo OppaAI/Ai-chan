@@ -84,12 +84,12 @@ MEMORY_WRITE_IDLE_GRACE: "3.0"  # Seconds of idle chat before background memory 
 MEMORY_WRITE_MAX_WAIT: "45.0"  # Max seconds memory writer waits before forcing the write.
 
 # -- Decay and dream merge --
-FORGET_HALF_LIFE_DAYS: "7.0"  # Days until memory retention score halves.
+FORGET_HALF_LIFE_DAYS: "21"  # Days until memory retention score halves.
 FORGET_ACCESS_COUNT_CAP: "255"  # Maximum access_count retained for decay scoring.
-FORGET_CLEANUP_THRESHOLD: "0.1"  # Decay score below which cleanup may prune a memory.
+FORGET_CLEANUP_THRESHOLD: "0.02"  # Decay score below which cleanup may prune a memory.
 FORGET_GRACE_PERIOD_DAYS: "35"  # Minimum age before ordinary memories can be cleaned up.
-DREAM_MERGE_THRESHOLD: "0.88"  # Similarity threshold for merging near-duplicate memories; range 0.0-1.0.
-DREAM_BOOST_AMOUNT: "2"  # Access-count boost for memories promoted during dream/reflection.
+DREAM_MERGE_THRESHOLD: "0.94"  # Similarity threshold for merging near-duplicate memories; range 0.0-1.0.
+DREAM_BOOST_AMOUNT: "1"  # Access-count boost for memories promoted during dream/reflection.
 
 # -- Search ranking and context budget --
 MEMORY_SEARCH_CACHE_SIZE: "128"  # Max number of memory search results cached in-process.
@@ -97,7 +97,7 @@ MEMORY_SEARCH_CACHE_TTL: "20.0"  # Seconds before cached memory search result ex
 MEMORY_RANK_RECENCY_WEIGHT: "0.004"  # Small retrieval boost for recent memories (continuous blending, applies to every candidate).
 MEMORY_RANK_RECENCY_HALF_LIFE_DAYS: "30"  # Days for recency boost to halve.
 MEMORY_RANK_ACCESS_WEIGHT: "0.002"  # Small retrieval boost for frequently recalled memories.
-MEMORY_RANK_PINNED_WEIGHT: "0.002"  # Small retrieval boost for pinned memories.
+MEMORY_RANK_PINNED_WEIGHT: "0.01"  # Small retrieval boost for pinned memories.
 MEMORY_CONTEXT_FACT_CHARS: "220"  # Max characters per individual memory fact injected into context.
 MEMORY_CONTEXT_TOTAL_CHARS: "1200"  # Total character budget for all memory facts injected per turn.
 MEMORY_LIFECYCLE_BATCH_SIZE: "500"  # Memories processed per batch during cleanup/decay lifecycle runs.
