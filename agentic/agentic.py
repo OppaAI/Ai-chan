@@ -43,6 +43,7 @@ from cognition import CONTEXT_POOL
 from agentic.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from agentic.wiki import wiki_agentic_contexts_for
 from agentic.capability import match_capabilities, filtered_tool_schemas
+from agentic.guardrails import DEFAULT_POST_ANSWER_GUARDRAILS, default_pre_tool_guardrails
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from agentic import experience
 from agentic import graph_engine as schema
@@ -279,14 +280,7 @@ def _agentic_policy_context(user_input: str, embedder=None) -> str:
     return "<agentic_policy_context>\n" + "\n\n".join(blocks) + "\n</agentic_policy_context>"
 
 
-_ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^\]:]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)
-_DISCLOSURE_RE = re.compile(
-    r"\b(couldn'?t|cannot|can't|failed|unavailable|not available|limitation|"
-    r"could not|wasn'?t able|unable|unverified|not verified|partial)\b",
-    re.IGNORECASE,
-)
-_EXTERNAL_ACTION_RE = re.compile(r"\b(send|sent|email|post|posted|buy|bought|book|booked|order|ordered|delete|deleted)\b", re.IGNORECASE)
-_LOCAL_ARTIFACT_RE = re.compile(r"\b(saved|created|scheduled|cancelled|path|id|draft|note|workspace)\b", re.IGNORECASE)
+_ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^:\]]+)(?::\s*(?P<detail>.*))?\]$", re.DOTALL)
 # Tools that can genuinely post to a real public account. When one of these
 # ran and succeeded this turn, an answer describing a real "posted" action
 # is not a hallucinated external action — see _verify_final_answer.
@@ -297,7 +291,8 @@ _SOCIAL_POST_TOOLS = {"post_job_post_social", "post_photo_social", "post_video_s
 # any of them can accumulate across MAX_AGENT_ITER iterations otherwise.
 _COMPACTABLE_MIN_CHARS = 800
 _RESEARCH_TOOLS = {"adaptive_search", "deep_research", "deep_read"}
-
+_PRE_TOOL_GUARDRAILS = default_pre_tool_guardrails(AGENT_RESEARCH_MAX_CALLS)
+_POST_ANSWER_GUARDRAILS = DEFAULT_POST_ANSWER_GUARDRAILS
 
 
 _TOOLS: dict[str, tuple[dict, object]] = {}
@@ -662,13 +657,6 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             content="Missing required argument: provide text or relative_path with knowledge to store.",
             error_type="missing_args", retryable=True,
         )
-    if name in _SOCIAL_POST_TOOLS and not (args.get("draft_dir") or "").strip():
-        return ToolResult(
-            ok=False, tool=name, args=args,
-            content="Missing required argument: draft_dir must be a non-empty path to a review bundle.",
-            error_type="missing_args", retryable=True,
-        )
-
     return None
 
 
@@ -801,7 +789,18 @@ def _max_attempts_for(name: str) -> int:
 
 
 def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None) -> ToolResult:
-    """Validate, run, retry, and ledger one tool call."""
+    """Validate, guard, run, retry, and ledger one tool call."""
+    for guard in _PRE_TOOL_GUARDRAILS:
+        verdict = guard(name, args, state)
+        if verdict is not None:
+            result = ToolResult(
+                ok=False, tool=name, args=args, content=verdict.content,
+                error_type=verdict.error_type, retryable=verdict.retryable,
+                metadata=verdict.metadata,
+            )
+            state.record(result)
+            return result
+
     validation = _validate_args(name, args)
     if validation is not None:
         state.record(validation)
@@ -913,35 +912,12 @@ def _coerce_verifier_bool(value) -> bool:
 
 def _verify_final_answer(owner, user_input: str, answer: str, state: TaskState) -> VerificationResult:
     """Check answer completeness and evidence support before Aiko speaks it."""
-    issues: list[str] = []
     stripped = (answer or "").strip()
-    lowered = stripped.lower()
-
-    if not stripped:
-        issues.append("The final answer is empty.")
-
-    if state.failures and not _DISCLOSURE_RE.search(stripped):
-        failed = ", ".join(f.tool for f in state.failures[-3:])
-        issues.append(f"Unresolved tool failure(s) were not disclosed: {failed}.")
-
-    if any(step["tool"] == "save_note" and step["ok"] for step in state.steps):
-        if "path" not in lowered and "workspace" not in lowered and ".md" not in lowered:
-            issues.append("A saved note was created, but the final answer does not mention where it was saved.")
-
-    if any(step["tool"] in {"schedule_job", "schedule_reminder"} and step["ok"] for step in state.steps):
-        if "scheduled" not in lowered and "reminder" not in lowered and "alarm" not in lowered:
-            issues.append("A schedule/reminder tool succeeded, but the final answer does not confirm it.")
-
-    # A social post tool actually running and succeeding this turn means a
-    # real external action DID happen — that is not a hallucinated claim,
-    # unlike every other "posted"/"sent"/"ordered" mention this heuristic
-    # exists to catch. Only flag the external-action language when no real
-    # post_* tool ran successfully.
-    posted_for_real = any(
-        step["tool"] in _SOCIAL_POST_TOOLS and step["ok"] for step in state.steps
-    )
-    if _EXTERNAL_ACTION_RE.search(user_input) and not _LOCAL_ARTIFACT_RE.search(stripped) and not posted_for_real:
-        issues.append("The answer may imply an unsupported external action instead of a local draft/staged artifact.")
+    issues = [
+        verdict.content
+        for guard in _POST_ANSWER_GUARDRAILS
+        if (verdict := guard(stripped, state, user_input)) is not None
+    ]
 
     if not issues and AGENT_VERIFY_LLM_MODE in ("off", "auto"):
         return VerificationResult(ok=True, feedback="Deterministic checks passed; LLM verify skipped.", score=1.0)
@@ -1463,24 +1439,6 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 continue
 
             log.info("[agent] step %s → %s(%s)", step, name, args)
-
-            if name in _RESEARCH_TOOLS and _research_call_count(state) >= AGENT_RESEARCH_MAX_CALLS:
-                result = ToolResult(
-                    ok=False, tool=name, args=args,
-                    content=(
-                        f"adaptive_search/deep_research have already been used "
-                        f"{AGENT_RESEARCH_MAX_CALLS} time(s) in this agentic workflow. "
-                        "Do not search again; use the evidence already gathered to "
-                        "plan, summarize, save, or answer."
-                    ),
-                    error_type="research_limit_reached", retryable=False,
-                )
-                state.record(result)
-                messages.append({
-                    "role": "tool", "tool_call_id": call.id,
-                    "name": name, "content": result.observation(),
-                })
-                continue
 
             call_key = (name, json.dumps(args, sort_keys=True))
             if name != "final_answer" and call_key in seen_calls:
