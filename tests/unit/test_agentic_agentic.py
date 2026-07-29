@@ -507,9 +507,6 @@ class TestSaveNoteContentTruncation:
         assert "note saved" in result.lower()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
 def test_validate_args_uses_registered_pydantic_model():
     from pydantic import BaseModel, Field
     from agentic.registry import registry
@@ -556,3 +553,38 @@ def test_verify_final_answer_uses_post_answer_guardrails_for_saved_path(monkeypa
 
     assert verdict.ok is False
     assert "does not mention where it was saved" in verdict.feedback
+
+
+def test_handoff_profile_maps_capabilities():
+    from agentic.agentic import _handoff_profile_for
+
+    profile = _handoff_profile_for(["social", "scheduling"])
+    assert "social" in profile["tool_domains"]
+    assert "scheduling" in profile["tool_domains"]
+    assert profile["max_iter"] <= 5
+
+
+def test_needs_approval_returns_wait_result_and_checkpoint(monkeypatch, tmp_path):
+    from agentic.agentic import AgentContext, TaskState, execute_tool_with_policy
+    from agentic.registry import registry
+
+    registry.register("approval_test", "approval test", needs_approval=True, react=True)
+    monkeypatch.setattr("agentic.agentic.user_state_dir", lambda user_id=None: tmp_path)
+    state = TaskState(goal="approval")
+    result = execute_tool_with_policy("approval_test", {}, state, ctx=AgentContext(run_id="r1"))
+    assert result.error_type == "needs_approval"
+    assert result.metadata["run_id"] == "r1"
+    assert (tmp_path / "agentic" / "traces" / "r1.jsonl").exists()
+
+
+def test_agent_context_passed_to_dispatch(monkeypatch):
+    from agentic.agentic import AgentContext, dispatch_tool
+
+    seen = {}
+    monkeypatch.setattr("agentic.agentic.adaptive_search", lambda query, client=None, model=None, embedder=None: seen.update(client=client, model=model, embedder=embedder) or "ok")
+    ctx = AgentContext(client="c", llm_model="m", embedder="e")
+    assert dispatch_tool("adaptive_search", {"query": "q"}, owner=ctx) == "ok"
+    assert seen == {"client": "c", "model": "m", "embedder": "e"}
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -38,6 +38,7 @@ import numpy as np
 
 from system.log import get_logger
 from system import bioclock
+from system.userspace import user_state_dir
 from cognition import reason
 from cognition import CONTEXT_POOL
 from agentic.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
@@ -294,6 +295,29 @@ _RESEARCH_TOOLS = {"adaptive_search", "deep_research", "deep_read"}
 _PRE_TOOL_GUARDRAILS = default_pre_tool_guardrails(AGENT_RESEARCH_MAX_CALLS)
 _POST_ANSWER_GUARDRAILS = DEFAULT_POST_ANSWER_GUARDRAILS
 
+_CAPABILITY_HANDOFF_PROFILES: dict[str, dict[str, Any]] = {
+    "research": {"tool_domains": ["research", "kb"], "system_overlay": "Research thoroughly, cite evidence, then synthesize.", "max_iter": MAX_AGENT_ITER, "research_budget": AGENT_RESEARCH_MAX_CALLS},
+    "scheduling": {"tool_domains": ["scheduling"], "system_overlay": "Prefer schedule/reminder tools and confirm persisted ids.", "max_iter": min(MAX_AGENT_ITER, 4), "research_budget": 0},
+    "social": {"tool_domains": ["social"], "system_overlay": "Draft/post social content only under explicit request and approval gates.", "max_iter": min(MAX_AGENT_ITER, 5), "research_budget": 0},
+    "repo": {"tool_domains": ["repo"], "system_overlay": "Inspect repository files before proposing code or architecture changes.", "max_iter": MAX_AGENT_ITER, "research_budget": 0},
+}
+
+
+def _handoff_profile_for(capabilities: list[str] | set[str] | tuple[str, ...]) -> dict[str, Any]:
+    profile: dict[str, Any] = {"tool_domains": [], "system_overlay": "", "max_iter": MAX_AGENT_ITER, "research_budget": AGENT_RESEARCH_MAX_CALLS}
+    domains: list[str] = []
+    overlays: list[str] = []
+    for cap in capabilities or []:
+        data = _CAPABILITY_HANDOFF_PROFILES.get(str(cap), {})
+        domains.extend(data.get("tool_domains", []))
+        if data.get("system_overlay"):
+            overlays.append(str(data["system_overlay"]))
+        profile["max_iter"] = min(int(profile["max_iter"]), int(data.get("max_iter", profile["max_iter"])))
+        profile["research_budget"] = min(int(profile["research_budget"]), int(data.get("research_budget", profile["research_budget"])))
+    profile["tool_domains"] = sorted(set(domains))
+    profile["system_overlay"] = "\n".join(overlays)
+    return profile
+
 
 _TOOLS: dict[str, tuple[dict, object]] = {}
 
@@ -453,6 +477,47 @@ def _recent_history_messages(owner, user_input: str = "", max_turns: int = AGENT
     return messages
 
 
+
+
+@dataclass(frozen=True)
+class AgentContext:
+    """Minimal execution context passed to tools instead of the whole owner."""
+
+    client: Any = None
+    llm_model: str | None = None
+    embedder: Any = None
+    user_id: str | None = None
+    run_id: str | None = None
+
+
+def _agent_context(owner=None, *, run_id: str | None = None) -> AgentContext:
+    return AgentContext(
+        client=getattr(owner, "_client", None),
+        llm_model=getattr(owner, "_llm_model", None),
+        embedder=_owner_embedder(owner),
+        user_id=getattr(owner, "user_id", None) or getattr(owner, "_user_id", None),
+        run_id=run_id,
+    )
+
+
+def _context_attr(owner_or_ctx, name: str, default=None):
+    if isinstance(owner_or_ctx, AgentContext):
+        return getattr(owner_or_ctx, name, default)
+    legacy = {"client": "_client", "llm_model": "_llm_model"}.get(name, name)
+    return getattr(owner_or_ctx, legacy, default)
+
+
+def _append_step_trace(ctx: AgentContext | None, event: str, payload: dict[str, Any]) -> None:
+    try:
+        trace_dir = user_state_dir(ctx.user_id if ctx else None) / "agentic" / "traces"
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        run_id = (ctx.run_id if ctx and ctx.run_id else "default")
+        record = {"ts": time.time(), "event": event, "run_id": run_id, **payload}
+        with (trace_dir / f"{run_id}.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+    except Exception as exc:  # pragma: no cover - tracing must never break tools
+        log.debug("failed to append agentic trace: %s", exc)
+
 @dataclass
 class ToolResult:
     """Structured outcome for one tool call attempt."""
@@ -538,6 +603,10 @@ def tool_schemas() -> list[dict]:
 
 
 from agentic.registry import TOOLS, ValidationError, registry, register_tool_schema, tool
+try:
+    from agentic.tool_models import LearnKnowledgeArgs
+except Exception:  # pragma: no cover - pydantic may be unavailable in minimal envs
+    LearnKnowledgeArgs = None
 
 
 def _bootstrap_tool_registry() -> None:
@@ -564,6 +633,7 @@ def _register_agentic_local_tools() -> None:
         },
         required=["title"],
         domain="kb",
+        args_model=LearnKnowledgeArgs,
     )
 
 
@@ -693,30 +763,30 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
     if name == "adaptive_search":
         return adaptive_search(
             args.get("query", ""),
-            client=getattr(owner, "_client", None),
-            model=getattr(owner, "_llm_model", None),
-            embedder=_owner_embedder(owner),
+            client=_context_attr(owner, "client"),
+            model=_context_attr(owner, "llm_model"),
+            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
         )
     if name == "deep_research":
         return deep_research(
             args.get("query", ""),
-            client=getattr(owner, "_client", None),
-            model=getattr(owner, "_llm_model", None),
-            embedder=_owner_embedder(owner),
+            client=_context_attr(owner, "client"),
+            model=_context_attr(owner, "llm_model"),
+            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
         )
     if name == "deep_read":
         return deep_read(
             args.get("url", ""),
             query=args.get("query", ""),
-            embedder=_owner_embedder(owner),
+            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
         )
     if name == "run_playbook":
         return schema.run_playbook_json(
             args.get("task", ""),
             cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None,
-            embedder=_owner_embedder(owner),
-            llm_client=owner._client,
-            llm_model=owner._llm_model,
+            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+            llm_client=_context_attr(owner, "client"),
+            llm_model=_context_attr(owner, "llm_model"),
         )
     if name == "learn_knowledge":
         if (args.get("relative_path") or "").strip():
@@ -724,7 +794,7 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
                 args.get("relative_path", ""),
                 title=args.get("title") or None,
                 kind=args.get("kind", "ingested"),
-                embedder=_owner_embedder(owner),
+                embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
             )
         else:
             doc_id = ingest_knowledge_text(
@@ -732,7 +802,7 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
                 args.get("text", ""),
                 source=args.get("source", ""),
                 kind=args.get("kind", "ingested"),
-                embedder=_owner_embedder(owner),
+                embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
             )
         return json.dumps({"ok": bool(doc_id), "doc_id": doc_id}, ensure_ascii=False)
     if name == "search_skillsets":
@@ -788,8 +858,16 @@ def _max_attempts_for(name: str) -> int:
     return 1
 
 
-def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None) -> ToolResult:
+def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None, ctx: AgentContext | None = None) -> ToolResult:
     """Validate, guard, run, retry, and ledger one tool call."""
+    ctx = ctx or (owner if isinstance(owner, AgentContext) else _agent_context(owner))
+    _append_step_trace(ctx, "tool_call", {"tool": name, "args": args})
+    spec = registry.get(name)
+    if spec and spec.needs_approval:
+        result = ToolResult(ok=False, tool=name, args=args, content=json.dumps({"status": "waiting_for_approval", "run_id": ctx.run_id}, ensure_ascii=False), error_type="needs_approval", retryable=False, metadata={"run_id": ctx.run_id, "checkpoint": state.summary()})
+        state.record(result)
+        _append_step_trace(ctx, "tool_result", {"tool": name, "ok": False, "error_type": "needs_approval"})
+        return result
     for guard in _PRE_TOOL_GUARDRAILS:
         verdict = guard(name, args, state)
         if verdict is not None:
@@ -808,7 +886,7 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
 
     last = ToolResult(ok=False, tool=name, args=args, content="[tool did not run]", error_type="not_run")
     for attempt in range(1, _max_attempts_for(name) + 1):
-        last = dispatch_tool_checked(name, dict(args), owner=owner)
+        last = dispatch_tool_checked(name, dict(args), owner=ctx)
         last.attempts = attempt
         if last.ok or not last.retryable:
             break
@@ -816,6 +894,7 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
             time.sleep(AGENT_TOOL_RETRY_BACKOFF * attempt)
 
     state.record(last)
+    _append_step_trace(ctx, "tool_result", {"tool": name, "ok": last.ok, "error_type": last.error_type, "attempts": last.attempts})
     return last
 
 
@@ -1132,6 +1211,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # No match -> filtered_tool_schemas returns everything unchanged, so this
     # can only shrink the list, never regress a turn.
     _matched_caps = match_capabilities(user_input, embedder=_embedder, query_vector=_cap_vec)
+    handoff_profile = _handoff_profile_for(_matched_caps)
     tools = filtered_tool_schemas(tool_schemas(), _matched_caps)
 
     # Graph-first executor: known playbook workflows can run without an LLM
@@ -1325,6 +1405,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
         f"{agentic_policy_context}\n\n"
         f"{wiki_context}\n\n"
         f"{TASK_MODE_CORE}\n\n"
+        f"{handoff_profile.get('system_overlay', '')}\n\n"
         f"{memory_context}\n\n"
         f"{skill_context}\n\n"
         f"{knowledge_context}\n\n"
@@ -1369,7 +1450,10 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     last_verdict: VerificationResult | None = None
     used_incomplete_fallback = False
 
-    for step in range(MAX_AGENT_ITER):
+    trace_ctx = _agent_context(owner, run_id=f"run-{int(time.time() * 1000)}")
+    _append_step_trace(trace_ctx, "llm_step", {"step": 0, "matched_capabilities": _matched_caps, "handoff_profile": handoff_profile})
+
+    for step in range(int(handoff_profile.get("max_iter") or MAX_AGENT_ITER)):
         if token_callback:
             token_callback("__THINKING__\n")
 
@@ -1473,7 +1557,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
         if batch_calls:
             submitted = [
                 (call_id, name, CONTEXT_POOL.submit(
-                    execute_tool_with_policy, name, args, state, owner=owner
+                    execute_tool_with_policy, name, args, state, owner=owner, ctx=trace_ctx
                 ))
                 for call_id, name, args in batch_calls
             ]
@@ -1530,6 +1614,8 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                             }, ensure_ascii=False, indent=2),
                         })
                         continue
+                    final_text = json.dumps({"ok": False, "error_type": "structured_output_validation_failed", "errors": detail}, ensure_ascii=False)
+                    break
             final_text = candidate
             messages.append({
                 "role": "tool", "tool_call_id": call_id,

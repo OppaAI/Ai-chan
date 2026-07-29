@@ -830,3 +830,9 @@ def test_graph_when_condition_skips_when_state_misses(monkeypatch):
 
     assert result.results[-1].node_id == "write"
     assert result.results[-1].content == "skipped: run_if condition not met"
+
+
+def test_condition_actual_missing_state_key_is_unsatisfied():
+    from agentic.graph_engine import _condition_actual
+
+    assert _condition_actual({"state": "route", "equals": ""}, {}, {}) is None

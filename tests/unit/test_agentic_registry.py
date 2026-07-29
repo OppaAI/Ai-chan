@@ -133,3 +133,15 @@ def test_pydantic_output_model_validates_json():
         "summary": "done",
         "confidence": 0.8,
     }
+
+
+def test_high_churn_tools_have_pydantic_arg_models():
+    from agentic.registry import TOOLS
+
+    for name in [
+        "save_note", "schedule_job", "schedule_reminder", "write_report",
+        "draft_job_post_social", "post_job_post_social", "post_to_social",
+        "draft_photo_social", "post_photo_social", "draft_video_social", "post_video_social",
+    ]:
+        assert TOOLS[name].args_model is not None
+        assert TOOLS[name].to_openai_schema()["function"]["parameters"]["type"] == "object"

@@ -1253,9 +1253,11 @@ def _condition_actual(cond: dict[str, Any], results: dict[str, NodeResult], stat
         if state is None:
             return None
         value = state.get(str(cond["state"]))
+        if value is None:
+            return None
         if isinstance(value, (dict, list, tuple)):
             return json.dumps(value, ensure_ascii=False)
-        return str(value if value is not None else "")
+        return str(value)
     ref = cond.get("node")
     if ref is not None:
         if ref not in results:

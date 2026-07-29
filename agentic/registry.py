@@ -34,6 +34,7 @@ class ToolSpec:
     required: List[str] = field(default_factory=list)
     args_model: Type[BaseModel] | None = None
     output_model: Type[BaseModel] | None = None
+    needs_approval: bool = False
     domain: Optional[str] = None  # capability routing (research, scheduling, etc.)
     always_on: bool = False  # always included in tool list regardless of capability match
     # Execution modes - which backends can execute this tool
@@ -109,6 +110,39 @@ def load_tool_catalog(path: str = "tools.yaml") -> Dict[str, ToolSpec]:
 TOOLS = load_tool_catalog()
 
 
+def _attach_builtin_arg_models() -> None:
+    """Attach concrete Pydantic schemas while keeping tools.yaml as fallback metadata."""
+    try:
+        from agentic.tool_models import (
+            DirectSocialPostArgs, DraftJobPostSocialArgs, DraftPhotoSocialArgs, DraftVideoSocialArgs,
+            LearnKnowledgeArgs, PostPhotoSocialArgs, PostSocialDraftArgs, PostVideoSocialArgs,
+            SaveNoteArgs, ScheduleJobArgs, ScheduleReminderArgs, WriteReportArgs,
+        )
+    except Exception as exc:  # pragma: no cover - import-time optional dependency fallback
+        log.warning("Pydantic tool argument models unavailable; using tools.yaml schemas: %s", exc)
+        return
+    mapping = {
+        "save_note": SaveNoteArgs,
+        "schedule_job": ScheduleJobArgs,
+        "schedule_reminder": ScheduleReminderArgs,
+        "learn_knowledge": LearnKnowledgeArgs,
+        "write_report": WriteReportArgs,
+        "draft_job_post_social": DraftJobPostSocialArgs,
+        "post_job_post_social": PostSocialDraftArgs,
+        "post_to_social": DirectSocialPostArgs,
+        "draft_photo_social": DraftPhotoSocialArgs,
+        "post_photo_social": PostPhotoSocialArgs,
+        "draft_video_social": DraftVideoSocialArgs,
+        "post_video_social": PostVideoSocialArgs,
+    }
+    for name, model in mapping.items():
+        if name in TOOLS:
+            TOOLS[name].args_model = model
+
+
+_attach_builtin_arg_models()
+
+
 class ToolRegistry:
     """Singleton registry tracking all declared agentic tools."""
 
@@ -130,6 +164,7 @@ class ToolRegistry:
         skill: bool = False,
         args_model: Type[BaseModel] | None = None,
         output_model: Type[BaseModel] | None = None,
+        needs_approval: bool = False,
     ) -> ToolSpec:
         spec = ToolSpec(
             name=name,
@@ -145,6 +180,7 @@ class ToolRegistry:
             skill=skill,
             args_model=args_model,
             output_model=output_model,
+            needs_approval=needs_approval,
         )
         self._tools[name] = spec
         return spec
@@ -240,6 +276,8 @@ class ToolRegistry:
                 entry["args_model"] = f"{spec.args_model.__module__}:{spec.args_model.__name__}"
             if spec.output_model is not None:
                 entry["output_model"] = f"{spec.output_model.__module__}:{spec.output_model.__name__}"
+            if spec.needs_approval:
+                entry["needs_approval"] = spec.needs_approval
             tools.append(entry)
         return {"tools": tools}
 
@@ -262,6 +300,7 @@ def tool(
     skill: bool = False,   # Must opt-in for skill workflow
     args_model: Type[BaseModel] | None = None,
     output_model: Type[BaseModel] | None = None,
+    needs_approval: bool = False,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to register a function as an agentic tool.
 
@@ -291,6 +330,7 @@ def tool(
             skill=skill,
             args_model=args_model,
             output_model=output_model,
+            needs_approval=needs_approval,
         )
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -308,6 +348,7 @@ def tool(
             skill=spec.skill,
             args_model=spec.args_model,
             output_model=spec.output_model,
+            needs_approval=spec.needs_approval,
         )
         return fn
     return decorator
@@ -327,6 +368,7 @@ def register_tool_schema(
     skill: bool = False,
     args_model: Type[BaseModel] | None = None,
     output_model: Type[BaseModel] | None = None,
+    needs_approval: bool = False,
 ) -> ToolSpec:
     """Register a tool schema whose execution is handled elsewhere.
 
@@ -348,4 +390,5 @@ def register_tool_schema(
         skill=skill,
         args_model=args_model,
         output_model=output_model,
+        needs_approval=needs_approval,
     )
