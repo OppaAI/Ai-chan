@@ -28,10 +28,9 @@ def test_job_hunt_drafts_one_teaser_list_up_to_cap(monkeypatch):
     assert "Tech B" in result["drafts"][0]["text"]
 
 
-def test_social_media_registry_has_pixelset_not_instagram():
+def test_social_media_registry_has_pixelset_only():
     social = importlib.import_module("agentic.toolkit.social")
-    assert "pixelset" in social._MEDIA_PROVIDERS_REGISTRY
-    assert "instagram" not in social._MEDIA_PROVIDERS_REGISTRY
+    assert set(social._MEDIA_PROVIDERS_REGISTRY) == {"pixelset"}
     assert social.PHOTO_SOCIAL_PROVIDERS == ("pixelset",)
 
 
@@ -61,6 +60,6 @@ def test_post_social_dispatches_selected_services():
 
     mcp = MCP()
     multipost.load_tools(mcp)
-    result = mcp.post_social(services="x,bluesky,pixelfed", text="hello", image_path="img.png")
+    result = mcp.post_social(services="x,bluesky,pixelset", text="hello", image_path="img.png")
     assert result["ok"] is True
     assert [name for name, _ in calls] == ["x", "bluesky", "pixelset"]

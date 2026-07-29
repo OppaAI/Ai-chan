@@ -417,7 +417,6 @@ Run before any phase suite.
 - [ ] Teaser fanout goes to configured `A1_TEASER_PROVIDERS`; YouTube is documented as video-upload only, not YouTube Community posting.
 - [ ] `retry_weekly_social_if_needed` no-ops on any day other than Saturday.
 - [ ] `retry_weekly_social_if_needed` on Saturday picks up a draft that was approved after an earlier failed/skipped run and posts it without duplicating the post.
-- [ ] `authorize_x` returns a usable OAuth URL and does not leak `AISA_API_KEY` in logs.
 
 ### 2.1.4 Lane B — curated photo showcase
 
@@ -429,7 +428,7 @@ Run before any phase suite.
 - [ ] Zero worthwhile candidates returns `skipped: nothing_selected` without creating a draft directory.
 - [ ] `review.md` correctly links each selected media file's local copy (not the original inbox path).
 - [ ] Pixelset posting posts only the first selection when multiple are present; confirm this is documented behavior, not a silent bug, in the review bundle.
-- [ ] Pixelset photo posting goes through MCP `post_social(services="pixelset")`; no Instagram Graph refresh path remains.
+- [ ] Pixelset photo posting goes through MCP `post_social(services="pixelset")`.
 - [ ] Pixelset/MCP posting correctly passes the approved caption and media path to `post_social`.
 
 

@@ -78,41 +78,6 @@ def start_background_adapters(think, memorize, names: list[str] | None = None) -
             log.exception("[adapter] failed to start %s in background", name)
     return adapters
 
-def run_adapter(name: str, args) -> None:
-    """Boot Aiko subsystems and launch the named adapter."""
-    from system.config import load_config
-
-    load_config()
-    name = name.lower()
-    if name not in ADAPTER_REGISTRY:
-        available = ", ".join(ADAPTER_REGISTRY)
-        print(f"Unknown adapter '{name}'. Available: {available}")
-        return
-
-    print(f"  [adapter] Booting Aiko subsystems for {name}...")
-    think, memorize = _bootstrap_adapter(name)
-
-    if think is None:
-        print("  [adapter] CRITICAL: AikoThink failed to boot. Cannot start adapter.")
-        return
-
-    cls = ADAPTER_REGISTRY[name]
-    adapter = cls()
-    adapter.boot(think, memorize)
-
-    print(f"  [adapter] Starting {name}...")
-    adapter.start()
-
-    print(f"\n  {name} adapter is running. Press Ctrl+C to stop.\n")
-    try:
-        import signal
-        signal.pause()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        adapter.stop()
-        print(f"  [adapter] {name} stopped.")
-
 
 __all__ = [
     "AdapterBase",
@@ -123,5 +88,4 @@ __all__ = [
     "MatrixAdapter",
     "ADAPTER_REGISTRY",
     "start_background_adapters",
-    "run_adapter",
 ]

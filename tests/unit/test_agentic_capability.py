@@ -143,7 +143,7 @@ class TestMatchCapabilities:
         assert "repo" not in match_capabilities("dispatch the update")
         assert "social" not in match_capabilities("write a postmortem")
         assert "scheduling" not in match_capabilities("daily news brief")
-        assert "social" in match_capabilities("publish to instagram")
+        assert "social" in match_capabilities("publish to threads")
 
     def test_precomputed_query_vector_used(self):
         """Pre-computed query_vector should be used instead of re-embedding."""
