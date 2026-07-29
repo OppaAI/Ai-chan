@@ -608,13 +608,41 @@ JOB_POST_SOCIAL_TIME_OF_DAY = "23:00"
 def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the weekly Patreon dev-post syndication job (Lane A1).
 
-    Fires once a week; the handler itself decides which completed Sun-Sat
-    window to draft from (see agentic.toolkit.social.last_completed_sunday_saturday),
-    so the exact day/time here just needs to land safely after a week closes
-    — it does not need to be precise.
+    Fires once a week on Saturday at the configured time. Existing installs
+    that still have the old built-in Sunday 08:00 record are migrated, while
+    user-customized weekly_social_post records are preserved.
     """
-    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
-    if WEEKLY_SOCIAL_JOB_TITLE in existing_titles:
+    jobs = _read_all(user_id=user_id)
+    for job in jobs:
+        if job.get("title") != WEEKLY_SOCIAL_JOB_TITLE:
+            continue
+        old_builtin = (
+            job.get("frequency") == "weekly"
+            and str(job.get("time_of_day") or "") == "08:00"
+            and _normalize_weekdays(job.get("days_of_week")) == [6]  # Sunday
+            and (job.get("handler") == "weekly_social" or job.get("kind") == "system_weekly_social")
+            and (job.get("action") in {None, "agentic"})
+        )
+        if old_builtin:
+            tz_name = timezone or job.get("timezone")
+            job["time_of_day"] = WEEKLY_SOCIAL_TIME_OF_DAY
+            job["days_of_week"] = [5]  # Saturday (normalized int form)
+            job["timezone"] = tz_name
+            job["action"] = "agentic"
+            job["handler"] = "weekly_social"
+            job.pop("kind", None)
+            job["next_due"] = calculate_next_due(
+                WEEKLY_SOCIAL_TIME_OF_DAY,
+                "weekly",
+                tz_name,
+                [5],
+            ).isoformat()
+            _write_all(jobs, user_id=user_id)
+            log.info(
+                "Migrated weekly social job from old Sunday 08:00 builtin to Saturdays at %s (next_due=%s)",
+                WEEKLY_SOCIAL_TIME_OF_DAY,
+                job["next_due"],
+            )
         return
     schedule_job_record(
         title=WEEKLY_SOCIAL_JOB_TITLE,
@@ -625,6 +653,7 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
         days_of_week=["sat"],
         action="agentic",
         handler="weekly_social",
+        user_id=user_id,
     )
     log.info("Seeded weekly social job (Saturdays at %s)", WEEKLY_SOCIAL_TIME_OF_DAY)
 
