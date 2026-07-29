@@ -3,6 +3,9 @@ from interface.adapter.discord import DiscordAdapter
 from interface.adapter.telegram import TelegramAdapter
 from interface.adapter.slack import SlackAdapter
 from interface.adapter.matrix import MatrixAdapter
+from system.log import get_logger
+
+log = get_logger(__name__)
 
 ADAPTER_REGISTRY: dict[str, type[AdapterBase]] = {
     "discord": DiscordAdapter,

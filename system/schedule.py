@@ -587,8 +587,8 @@ def ensure_workspace_knowledge_job(timezone: str | None = None, user_id: str | N
 # the registration and seeding described in this comment automatically.
 
 WEEKLY_SOCIAL_JOB_TITLE = "weekly_social_post"
-# Runs once per week, the morning after a Sun-Sat window closes. The handler
-# itself (run_scheduled_weekly_social) is idempotent per calendar week
+# Runs once per week on Saturday evening. The handler
+# itself (run_scheduled_weekly_social) is idempotent per Patreon post
 # (generate_weekly_draft skips if a draft already exists), so a slightly
 # early/late fire here is harmless.
 WEEKLY_SOCIAL_TIME_OF_DAY = os.getenv("WEEKLY_SOCIAL_TIME_OF_DAY", "18:00")
@@ -608,13 +608,30 @@ JOB_POST_SOCIAL_TIME_OF_DAY = "23:00"
 def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the weekly Patreon dev-post syndication job (Lane A1).
 
-    Fires once a week; the handler itself decides which completed Sun-Sat
-    window to draft from (see agentic.toolkit.social.last_completed_sunday_saturday),
-    so the exact day/time here just needs to land safely after a week closes
-    — it does not need to be precise.
+    Fires once a week on Saturday at the configured time. Existing installs
+    that still have the old built-in Sunday 08:00 record are migrated, while
+    user-customized weekly_social_post records are preserved.
     """
-    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
-    if WEEKLY_SOCIAL_JOB_TITLE in existing_titles:
+    jobs = _read_all(user_id=user_id)
+    for job in jobs:
+        if job.get("title") != WEEKLY_SOCIAL_JOB_TITLE:
+            continue
+        old_builtin = (
+            job.get("frequency") == "weekly"
+            and str(job.get("time_of_day") or "") == "08:00"
+            and _normalize_weekdays(job.get("days_of_week")) == ["sun"]
+            and (job.get("handler") == "weekly_social" or job.get("kind") == "system_weekly_social")
+            and (job.get("action") in {None, "agentic"})
+        )
+        if old_builtin:
+            job["time_of_day"] = WEEKLY_SOCIAL_TIME_OF_DAY
+            job["days_of_week"] = ["sat"]
+            job["timezone"] = timezone or job.get("timezone")
+            job["action"] = "agentic"
+            job["handler"] = "weekly_social"
+            job.pop("kind", None)
+            _write_all(jobs, user_id=user_id)
+            log.info("Migrated weekly social job from old Sunday 08:00 builtin to Saturdays at %s", WEEKLY_SOCIAL_TIME_OF_DAY)
         return
     schedule_job_record(
         title=WEEKLY_SOCIAL_JOB_TITLE,
@@ -630,11 +647,11 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
 
 
 def ensure_weekly_social_retry_job(timezone: str | None = None, user_id: str | None = None) -> None:
-    """Idempotently seed the Sunday-bounded retry check for Lane A.
+    """Idempotently seed the Saturday-bounded retry check for Lane A.
 
     Fires every WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS regardless of day; the
     handler itself (retry_weekly_social_if_needed) is what limits action to
-    Sundays, so there's nothing day-specific to seed here.
+    Saturdays, so there's nothing day-specific to seed here.
     """
     existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     if WEEKLY_SOCIAL_RETRY_JOB_TITLE in existing_titles:

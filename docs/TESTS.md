@@ -415,8 +415,8 @@ Run before any phase suite.
 - [ ] `generate_weekly_draft` fetches the latest Patreon post, writes `full_post.md`, `teaser.txt`, `hugo.md`, and `draft.json`, and downloads a Patreon embed/teaser image to the bundle when one is present.
 - [ ] Missing Patreon auth (`PATREON_CREATOR_ACCESS_TOKEN`/`PATREON_CAMPAIGN_ID`, unless `PATREON_LATEST_POST_URL` is used) returns `no_patreon_post` without creating an invalid draft.
 - [ ] Teaser fanout goes to configured `A1_TEASER_PROVIDERS`; YouTube is documented as video-upload only, not YouTube Community posting.
-- [ ] `retry_weekly_social_if_needed` no-ops on any day other than Sunday.
-- [ ] `retry_weekly_social_if_needed` on Sunday picks up a draft that was approved after an earlier failed/skipped run and posts it without duplicating the post.
+- [ ] `retry_weekly_social_if_needed` no-ops on any day other than Saturday.
+- [ ] `retry_weekly_social_if_needed` on Saturday picks up a draft that was approved after an earlier failed/skipped run and posts it without duplicating the post.
 - [ ] `authorize_x` returns a usable OAuth URL and does not leak `AISA_API_KEY` in logs.
 
 ### 2.1.4 Lane B — curated photo showcase
@@ -435,7 +435,7 @@ Run before any phase suite.
 
 ### 2.1.5 Lane D — tech jobs available today
 
-- [ ] Each nightly run fetches only configured RSS feeds (`TECH_JOB_RSS_FEEDS` / `rss_feeds`) and does not call the legacy web-search/scrape path.
+- [ ] Each nightly run fetches only configured RSS feeds (`TECH_JOB_RSS_FEEDS` / `rss_feeds`, defaulting to CivicJobs.ca Lower Mainland and the provided Job Bank Canada filtered feed) and does not call the legacy web-search/scrape path.
 - [ ] Items whose RSS `pubDate`/`published` date is not today in the bioclock timezone are skipped.
 - [ ] `TECH_JOB_KEYWORDS` filters titles/summaries to tech-related postings.
 - [ ] Duplicate RSS items collapse by link/guid before drafting.

@@ -61,8 +61,8 @@
   ],
   "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)",
   "rss_feeds": [
-    "https://www.civicjobs.ca/rss",
-    "https://www.jobbank.gc.ca/rss/jobsearch.xml?searchstring=software+developer&locationstring=Canada"
+    "https://www.civicjobs.ca/rss/region?id=9&region=Lower+Mainland+-+BC",
+    "https://www.jobbank.gc.ca/jobsearch/feed/jobSearchRSSfeed?d=250&fage=2&mid=39070&sort=D&rows=100&fskl=%C2%AC15141&fcat=1"
   ],
   "tech_job_keywords": [
     "software",

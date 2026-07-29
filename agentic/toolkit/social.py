@@ -17,8 +17,8 @@ Aiko's social publishing workflows, combined into one module. Four lanes:
     unchanged described-video queue; approved posts go through MCP YouTube.
 
   Lane D — Nightly tech job-post draft:
-    run the graph job-hunt playbook, use web search results when available,
-    and save one Threads teaser-list draft for tech jobs available today from RSS.
+    run the graph job-hunt playbook against configured RSS feeds only,
+    and save one Threads teaser-list draft for tech jobs available today.
 
 Posting remains human-review gated via draft.json["human_approved"] for every
 lane. One-way social posting belongs in the MCP server; two-way conversational
@@ -967,13 +967,10 @@ def _download_a1_image(post: dict[str, Any], draft_dir: Path) -> Path | None:
         content_type = resp.headers.get("content-type", "")
         ext = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or Path(image_url.split("?", 1)[0]).suffix or ".png"
         if ext.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-            ext = ".png"
+            log.warning("Lane A1 Patreon image has unsupported type %r; skipping download", content_type)
+            return None
         image_path = draft_dir / f"image{ext}"
         image_path.write_bytes(resp.content)
-        canonical = draft_dir / "image.png"
-        if image_path != canonical and ext.lower() == ".png":
-            shutil.copyfile(image_path, canonical)
-            return canonical
         return image_path
     except Exception as e:
         log.warning("Lane A1 Patreon image download failed: %s", e)

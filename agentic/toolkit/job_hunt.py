@@ -25,9 +25,9 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
 import email.utils
-import xml.etree.ElementTree as ET
+import threading
+from defusedxml import ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -38,7 +38,10 @@ import requests
 
 from agentic.registry import TOOLS, tool
 from system.bioclock import local_now
+from system.log import get_logger
 from agentic.toolkit.websearch import SEARXNG_MAX_RESULTS as MAX_RESULTS, web_fetch, web_search
+
+log = get_logger(__name__)
 
 _RELATIVE_RE = re.compile(
     r"(?P<num>\d+)\s*(?P<unit>hour|day|week|month)s?\s+ago", re.IGNORECASE,
@@ -68,8 +71,8 @@ _SPECIALTY_RE = re.compile(
 
 
 DEFAULT_TECH_JOB_FEEDS = [
-    "https://www.civicjobs.ca/rss",
-    "https://www.jobbank.gc.ca/rss/jobsearch.xml?searchstring=software+developer&locationstring=Canada",
+    "https://www.civicjobs.ca/rss/region?id=9&region=Lower+Mainland+-+BC",
+    "https://www.jobbank.gc.ca/jobsearch/feed/jobSearchRSSfeed?d=250&fage=2&mid=39070&sort=D&rows=100&fskl=%C2%AC15141&fcat=1",
 ]
 DEFAULT_TECH_JOB_KEYWORDS = [
     "software", "developer", "programmer", "engineer", "devops", "cloud",
@@ -250,7 +253,8 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
             resp = requests.get(feed_url, timeout=30, headers={"User-Agent": "Aiko-chan job RSS/1.0"})
             resp.raise_for_status()
             root = ET.fromstring(resp.content)
-        except Exception:
+        except Exception as e:
+            log.warning("Lane D RSS feed fetch/parse failed for %s: %s", feed_url, e)
             continue
         entries = list(root.findall(".//item")) or list(root.findall(".//{*}entry"))
         for entry in entries:
