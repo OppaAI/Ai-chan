@@ -1,54 +1,16 @@
 {
-  "default_location": "San Francisco, CA, USA",
+  "default_location": "Canada",
   "radius_km": 50,
-  "nearby_locations": [
-    "Oakland, CA",
-    "Berkeley, CA",
-    "San Jose, CA",
-    "Santa Clara, CA",
-    "Sunnyvale, CA",
-    "Mountain View, CA",
-    "Palo Alto, CA",
-    "Redwood City, CA",
-    "Foster City, CA",
-    "Brisbane, CA",
-    "South San Francisco, CA"
-  ],
+  "nearby_locations": [],
   "max_results": 30,
   "max_age_days": 30,
   "fallback_max_age_days": 60,
-  "job_sites": [
-    "site:google.com/about/careers/applications",
-    "site:metacareers.com",
-    "site:amazon.jobs",
-    "site:careers.microsoft.com",
-    "site:jobs.apple.com",
-    "site:nvidia.com/en-us/about-nvidia/careers",
-    "site:openai.com/careers",
-    "site:jobs.ashbyhq.com/openai",
-    "site:job-boards.greenhouse.io/anthropic",
-    "site:jobs.netflix.com",
-    "site:salesforce.com/company/careers",
-    "site:ibm.com/careers",
-    "site:careers.adobe.com",
-    "site:jobs.intel.com"
-  ],
   "default_job_type": "",
   "include_remote": true,
   "queries": [
     {
       "category": "tech",
-      "query": "software engineer developer",
-      "job_type": ""
-    },
-    {
-      "category": "admin",
-      "query": "administrative assistant office",
-      "job_type": ""
-    },
-    {
-      "category": "food_qa",
-      "query": "food quality assurance inspector",
+      "query": "tech jobs available today",
       "job_type": ""
     }
   ],
@@ -97,5 +59,32 @@
       "key": "url"
     }
   ],
-  "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)"
+  "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)",
+  "rss_feeds": [
+    "https://www.civicjobs.ca/rss/region?id=9&region=Lower+Mainland+-+BC",
+    "https://www.jobbank.gc.ca/jobsearch/feed/jobSearchRSSfeed?d=250&fage=2&mid=39070&sort=D&rows=100&fskl=%C2%AC15141&fcat=1"
+  ],
+  "tech_job_keywords": [
+    "software",
+    "developer",
+    "programmer",
+    "engineer",
+    "devops",
+    "cloud",
+    "data",
+    "database",
+    "systems",
+    "network",
+    "cybersecurity",
+    "security",
+    "information technology",
+    "web",
+    "frontend",
+    "backend",
+    "full stack",
+    "qa",
+    "quality assurance",
+    "technical support"
+  ],
+  "max_jobs_per_draft": 5
 }

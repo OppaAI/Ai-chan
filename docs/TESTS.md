@@ -392,7 +392,7 @@ Run before any phase suite.
 
 ## Phase 2.1 — Social
 
-*Draft-first social publishing: weekly Patreon dev-post syndication, curated photo showcase (Pixelset via MCP), nightly one-draft job hunt, and video queue (YouTube). All posting requires human approval regardless of trigger path.*
+*Draft-first social publishing: weekly Patreon dev-post syndication, curated photo showcase (Pixelset via MCP), nightly RSS-only tech-jobs-available-today draft, and video queue (YouTube). All posting requires human approval regardless of trigger path.*
 
 ### 2.1.1 Approval gate integrity (P0 — test this first)
 
@@ -412,16 +412,11 @@ Run before any phase suite.
 ### 2.1.3 Lane A1 — weekly Patreon dev-post
 
 - [ ] `generate_weekly_draft` is idempotent per calendar week: a second call without `force=True` returns `skipped: draft_exists`.
-- [ ] `last_completed_sunday_saturday` correctly identifies the prior Sun–Sat window across a timezone boundary (test with a non-UTC `bioclock` timezone).
-- [ ] Public-safe memory selection excludes rows not matching pinned/weekly-source patterns; private/non-pinned memories never reach the LLM selection prompt.
-- [ ] LLM selection failure (malformed JSON, timeout) falls back to `_SAFE_FALLBACK_POST` / `_SAFE_FALLBACK_IMAGE` rather than crashing or posting nothing silently.
-- [ ] `post_text` longer than `WEEKLY_SOCIAL_MAX_CHARS` is truncated with an ellipsis, not rejected.
-- [ ] X posting (`_post_x_via_aisa`) succeeds with and without an image attached.
-- [ ] Threads posting succeeds with and without an image; confirm the `time.sleep` delay before publish is respected and container creation/publish are two distinct verified steps.
-- [ ] Threads token refresh: with `THREADS_ACCESS_TOKEN_EXPIRES_AT` inside `THREADS_REFRESH_WINDOW_DAYS`, a post attempt triggers `refresh_threads_token_if_due` and succeeds; outside the window it's skipped (`not_due`).
-- [ ] `retry_weekly_social_if_needed` no-ops on any day other than Sunday.
-- [ ] `retry_weekly_social_if_needed` on Sunday picks up a draft that was approved after an earlier failed/skipped run and posts it without duplicating the post.
-- [ ] `authorize_x` returns a usable OAuth URL and does not leak `AISA_API_KEY` in logs.
+- [ ] `generate_weekly_draft` fetches the latest Patreon post, writes `full_post.md`, `teaser.txt`, `hugo.md`, and `draft.json`, and downloads a Patreon embed/teaser image to the bundle when one is present.
+- [ ] Missing Patreon auth (`PATREON_CREATOR_ACCESS_TOKEN`/`PATREON_CAMPAIGN_ID`, unless `PATREON_LATEST_POST_URL` is used) returns `no_patreon_post` without creating an invalid draft.
+- [ ] Teaser fanout goes to configured `A1_TEASER_PROVIDERS`; YouTube is documented as video-upload only, not YouTube Community posting.
+- [ ] `retry_weekly_social_if_needed` no-ops on any day other than Saturday.
+- [ ] `retry_weekly_social_if_needed` on Saturday picks up a draft that was approved after an earlier failed/skipped run and posts it without duplicating the post.
 
 ### 2.1.4 Lane B — curated photo showcase
 
@@ -433,10 +428,21 @@ Run before any phase suite.
 - [ ] Zero worthwhile candidates returns `skipped: nothing_selected` without creating a draft directory.
 - [ ] `review.md` correctly links each selected media file's local copy (not the original inbox path).
 - [ ] Pixelset posting posts only the first selection when multiple are present; confirm this is documented behavior, not a silent bug, in the review bundle.
-- [ ] Pixelset photo posting goes through MCP `post_social(services="pixelset")`; no Instagram Graph refresh path remains.
+- [ ] Pixelset photo posting goes through MCP `post_social(services="pixelset")`.
 - [ ] Pixelset/MCP posting correctly passes the approved caption and media path to `post_social`.
 
-### 2.1.5 Lane C — YouTube video queue
+
+### 2.1.5 Lane D — tech jobs available today
+
+- [ ] Each nightly run fetches only configured RSS feeds (`TECH_JOB_RSS_FEEDS` / `rss_feeds`, defaulting to CivicJobs.ca Lower Mainland and the provided Job Bank Canada filtered feed) and does not call the legacy web-search/scrape path.
+- [ ] Items whose RSS `pubDate`/`published` date is not today in the bioclock timezone are skipped.
+- [ ] `TECH_JOB_KEYWORDS` filters titles/summaries to tech-related postings.
+- [ ] Duplicate RSS items collapse by link/guid before drafting.
+- [ ] No matches returns `reason: no_tech_jobs_today` and `save_or_post_job_drafts` creates no draft directory.
+- [ ] Matches create one Threads draft containing a teaser list of up to `MAX_JOBS_PER_DRAFT` jobs with title, organization when present, and link only.
+- [ ] The unchanged human approval gate blocks `post_job_post_draft` until `draft.json["human_approved"]` is exactly `true`.
+
+### 2.1.6 Lane C — YouTube video queue
 
 - [ ] A video without a matching `NAME.md` (filename stem, uppercased, `.md`) sibling is left unqueued and reported under `pending_without_description`, not silently skipped.
 - [ ] Video ledger (`_video_ledger.json`) prevents re-drafting the same video across repeated `generate_video_draft` calls.
@@ -451,12 +457,12 @@ Run before any phase suite.
 - [ ] Resumable upload: missing `Location` header on init is caught explicitly rather than causing a downstream `None` crash.
 - [ ] Quota exhaustion (10,000 units/day, ~6 uploads) produces a clear error rather than a silent failure.
 
-### 2.1.6 Provider registry extensibility
+### 2.1.7 Provider registry extensibility
 
 - [ ] Adding a new provider function + registry entry (per module docstring pattern) works without modifying any `post_*_draft` dispatcher.
 - [ ] An unsupported/unregistered provider name in a `providers` argument returns a structured `{"ok": false, "error": "unsupported provider"}` result rather than raising.
 
-### 2.1.7 Stress and regression
+### 2.1.8 Stress and regression
 
 - [ ] Run all three lanes' draft generation back-to-back in one session; no shared-state bleed between lane roots (`weekly_social_root`, `photo_social_root`, `video_social_root`).
 - [ ] Kill network mid-post (imgbb upload, Threads/IG/YouTube API call) for each lane; failure is reported per-provider without corrupting `draft.json`.

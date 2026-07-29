@@ -6,7 +6,7 @@ def _split_services(services: str | list[str] | tuple[str, ...]) -> list[str]:
         raw = services.replace(";", ",").split(",")
     else:
         raw = list(services)
-    aliases = {"twitter": "x", "pixelfed": "pixelset"}
+    aliases = {"twitter": "x"}
     return [aliases.get(str(item).strip().lower(), str(item).strip().lower()) for item in raw if str(item).strip()]
 
 

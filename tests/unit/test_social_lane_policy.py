@@ -9,7 +9,7 @@ def test_adapter_registry_only_two_way_messengers():
     assert set(adapters.ADAPTER_REGISTRY) == {"discord", "telegram", "slack", "matrix"}
 
 
-def test_job_hunt_drafts_only_one_posting():
+def test_job_hunt_drafts_one_teaser_list_up_to_cap(monkeypatch):
     job_hunt = importlib.import_module("agentic.toolkit.job_hunt")
     payload = {
         "location": "Remote",
@@ -18,18 +18,19 @@ def test_job_hunt_drafts_only_one_posting():
             {"title": "Tech B", "organization": "Org B", "url": "https://b.example", "_category": "tech"},
         ],
     }
+    monkeypatch.setenv("MAX_JOBS_PER_DRAFT", "2")
     result = json.loads(job_hunt.draft_job_posts_from_results(json.dumps(payload)))
     assert result["success"] is True
-    assert result["draft_policy"] == "one_tech_job_per_day"
+    assert result["draft_policy"] == "tech_jobs_available_today"
     assert result["total_drafts"] == 1
     assert len(result["drafts"]) == 1
     assert "Tech A" in result["drafts"][0]["text"]
+    assert "Tech B" in result["drafts"][0]["text"]
 
 
-def test_social_media_registry_has_pixelset_not_instagram():
+def test_social_media_registry_has_pixelset_only():
     social = importlib.import_module("agentic.toolkit.social")
-    assert "pixelset" in social._MEDIA_PROVIDERS_REGISTRY
-    assert "instagram" not in social._MEDIA_PROVIDERS_REGISTRY
+    assert set(social._MEDIA_PROVIDERS_REGISTRY) == {"pixelset"}
     assert social.PHOTO_SOCIAL_PROVIDERS == ("pixelset",)
 
 
@@ -59,6 +60,6 @@ def test_post_social_dispatches_selected_services():
 
     mcp = MCP()
     multipost.load_tools(mcp)
-    result = mcp.post_social(services="x,bluesky,pixelfed", text="hello", image_path="img.png")
+    result = mcp.post_social(services="x,bluesky,pixelset", text="hello", image_path="img.png")
     assert result["ok"] is True
     assert [name for name, _ in calls] == ["x", "bluesky", "pixelset"]

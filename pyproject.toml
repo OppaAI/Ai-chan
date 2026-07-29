@@ -74,19 +74,12 @@ bluesky = ["atproto>=0.0.34"]
 mastodon = ["Mastodon.py>=1.8.0"]
 reddit = ["praw>=7.7.0"]
 youtube = []  # uses raw requests (requests already a core dep)
-messenger = []  # uses raw requests to Meta Graph API (requests already a core dep)
-googlechat = ["google-auth>=2.29.0"]
 msal = ["msal>=1.30.0"]
 adapters = [
     "discord-py>=2.4.0",
     "python-telegram-bot>=21.0",
-    "tweepy>=4.14.0",
     "slack-sdk>=3.27.0",
     "matrix-nio>=0.25.0",
-    "atproto>=0.0.34",
-    "Mastodon.py>=1.8.0",
-    "praw>=7.7.0",
-    "google-auth>=2.29.0",
 ]
 
 [tool.uv]

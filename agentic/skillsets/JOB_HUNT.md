@@ -1,113 +1,75 @@
 ---
 id: JOB_HUNT
 name: Job Hunt
-summary: Search configured job boards, filter, format, and save/post job listings through a graph playbook. Each step is a separate node — inspect, modify, or reorder independently.
-triggers: job, jobs, hiring, job posting, job search, find me a job, openings, vacancy, job post, draft job, daily job
-tools: search_searxng, parse_jobs, filter_jobs, format_job_post, dedupe_postings, gen_job_search_plan, execute_job_search_plan, draft_job_posts_from_results, save_or_post_job_drafts, report_job_run
+summary: Fetch configured RSS feeds, filter for tech jobs available today, and save a single human-reviewed Threads teaser-list draft.
+triggers: job, jobs, hiring, job posting, job search, openings, vacancy, job post, draft job, daily job
+tools: search_jobs, gen_job_search_plan, execute_job_search_plan, draft_job_posts_from_results, save_or_post_job_drafts, report_job_run
 ---
 
-# Job Hunt — Graph Playbook
+# Job Hunt — RSS-only Lane D Playbook
 
-The daily job post workflow runs as a **6-node graph** defined in the `daily_job_post` playbook (`agentic/schema.py`). Each node is a tool registered in the graph executor.
+The daily job post workflow runs as a draft-first graph. It fetches configured RSS feeds, keeps items dated today in the local bioclock timezone, filters by configurable tech keywords, dedupes by link/guid, and writes one teaser-list draft for human review.
+
+No web-search, scraping, or multi-board fallback path is part of the current design.
 
 ## Graph nodes
 
-```
-plan → search → draft → save → report
-         │
-     (parallel fan-out per query category)
+```text
+plan → RSS fetch → teaser draft → save → report
 ```
 
 ### Node 1 — `gen_job_search_plan`
-Reads `job_hunt.json` config + user prompt, emits a structured plan as JSON.
-
-**Config keys used:**
-- `queries` — list of `{category, query, job_type}` dicts
-- `default_location` — fallback location
-- `min_salary_hourly`, `min_salary_annual` — salary floors
-- `max_age_days` — posting age limit
-- `max_results` — max postings per search
-- `post_template` — format string (see below)
-- `auto_post` — whether to post without human review
-
-**Prompt overrides** (parsed automatically):
-- `in <city>` / `near <city>` / `vicinity of <city>` → location
-- `higher than $X/hr` / `>$X/yr` → salary floor
-- `auto post` / `no review` / `human review` → auto_post flag
+Reads `job_hunt.json` / env config and emits the RSS feed URLs, tech keywords, result cap, and default location.
 
 ### Node 2 — `execute_job_search_plan`
-Takes the plan, searches each query category through SearXNG in parallel (one thread per category), applies configured salary/age/specialty filters, deduplicates, and returns structured results.
+Fetches only the configured RSS feeds and returns postings that are:
 
-Performs fallback to default `JOB_SITES` (Greenhouse/Lever/Ashby/RemoteOK/WeWorkRemotely/Wellfound) when config sites return zero results.
+- dated today in the local bioclock timezone,
+- matched by `TECH_JOB_KEYWORDS` / `tech_job_keywords`, and
+- deduped by link/guid.
 
 ### Node 3 — `draft_job_posts_from_results`
-Formats each valid posting using the configured `post_template`. Template supports these placeholders:
-`{date}`, `{organization}`, `{title}`, `{employment_type}`, `{location}`, `{salary}`, `{experience}`, `{close_date}`, `{url}`
+Creates one Threads teaser-list draft:
 
-Default template (bilingual Chinese + English):
+```text
+Tech jobs available today (YYYY-MM-DD):
+- Title — Org: https://example/job
 ```
-Job Post - {date}
-機構：{organization}
-職位：{title}
-類別：{employment_type}
-地區：{location}
-薪金：{salary}
-經驗：{experience}
-截止日期：{close_date}
 
-*請入以下連結參看詳情
-{url}
-```
+The list is capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft.
 
 ### Node 4 — `save_or_post_job_drafts`
-Saves each draft under `<job_post_root>/<date>/<category>/` with:
-- `draft_post.txt` — the formatted text
-- `review.md` — human review checklist
-- `draft.json` — metadata (including `human_approved: false`)
+Saves the draft under `<job_post_root>/<date>/tech_jobs_today/` with:
 
-If `auto_post` is true, attempts to post to Meta Threads immediately.
+- `draft_post.txt` — teaser list only
+- `review.md` — human review checklist
+- `draft.json` — metadata with `human_approved: false`
+
+Posting happens only after the normal human approval gate via `post_job_post_draft` / `post_job_post_social`.
 
 ### Node 5 — `report_job_run`
-Generates a detailed audit report covering all 4 preceding steps, including errors.
+Generates a compact audit report for the RSS run.
 
 ## Configuration
 
 Config file lookup order:
+
 1. `JOB_HUNT_CONFIG_PATH` env var
 2. `<user_state>/skillsets/job_hunt.json` (per-user)
 3. `<workspace>/agentic/skillsets/job_hunt.json` (fallback)
 
-### Example config in `<user_state>/skillsets/job_hunt.json`
+### Example config
 
 ```json
 {
-  "default_location": "Vancouver, BC, Canada",
-  "nearby_locations": ["Burnaby, BC", "Richmond, BC"],
-  "queries": [
-    {"category": "tech", "query": "software engineer developer", "job_type": ""},
-    {"category": "admin", "query": "administrative assistant office", "job_type": ""},
-    {"category": "food_qa", "query": "food quality assurance inspector", "job_type": ""}
+  "default_location": "Canada",
+  "rss_feeds": [
+    "https://www.civicjobs.ca/rss/region?id=9&region=Lower+Mainland+-+BC",
+    "https://www.jobbank.gc.ca/jobsearch/feed/jobSearchRSSfeed?d=250&fage=2&mid=39070&sort=D&rows=100&fskl=%C2%AC15141&fcat=1"
   ],
-  "job_sites": [
-    "site:boards.greenhouse.io",
-    "site:ca.indeed.com"
-  ],
-  "min_salary_hourly": 20,
-  "min_salary_annual": 45000,
-  "max_age_days": 30,
+  "tech_job_keywords": ["software", "developer", "cloud", "cybersecurity"],
   "max_results": 30,
-  "include_remote": true,
-  "auto_post": false,
-  "post_template": "Job Post - {date}\n機構：{organization}\n職位：{title}\n..."
+  "max_jobs_per_draft": 5,
+  "auto_post": false
 }
 ```
-
-## Primitives (building blocks in `agentic/toolkit/job_hunt.py`)
-
-| Function | What it does |
-|---|---|
-| `search_searxng(query)` | Bare SearXNG search, returns raw results |
-| `parse_jobs(raw_results, location)` | Parse raw results into structured postings |
-| `filter_jobs(postings, max_age, min_hr, min_yr)` | Filter by age/salary/specialty |
-| `format_job_post(posting, template)` | Format posting as social text |
-| `dedupe_postings(postings)` | Collapse near-duplicates by URL/title |

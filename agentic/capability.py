@@ -92,7 +92,7 @@ _CAPABILITY_KEYWORDS: dict[str, tuple[str, ...]] = {
     "photo": ("photo", "photos", "image", "images", "camera", "ingest", "inbox"),
     "repo": ("repo", "repository", "source file", "codebase", "refactor", "debug", "patch", "implement", "unit test"),
     "job_hunt": ("job", "jobs", "job boards", "role", "remote", "hiring"),
-    "social": ("instagram", "youtube", "threads", "twitter", "post", "publish", "social"),
+    "social": ("youtube", "threads", "twitter", "x", "bluesky", "mastodon", "reddit", "pixelset", "post", "publish", "social"),
 }
 
 

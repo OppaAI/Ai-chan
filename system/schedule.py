@@ -587,8 +587,8 @@ def ensure_workspace_knowledge_job(timezone: str | None = None, user_id: str | N
 # the registration and seeding described in this comment automatically.
 
 WEEKLY_SOCIAL_JOB_TITLE = "weekly_social_post"
-# Runs once per week, the morning after a Sun-Sat window closes. The handler
-# itself (run_scheduled_weekly_social) is idempotent per calendar week
+# Runs once per week on Saturday evening. The handler
+# itself (run_scheduled_weekly_social) is idempotent per Patreon post
 # (generate_weekly_draft skips if a draft already exists), so a slightly
 # early/late fire here is harmless.
 WEEKLY_SOCIAL_TIME_OF_DAY = os.getenv("WEEKLY_SOCIAL_TIME_OF_DAY", "18:00")
@@ -658,11 +658,11 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
 
 
 def ensure_weekly_social_retry_job(timezone: str | None = None, user_id: str | None = None) -> None:
-    """Idempotently seed the Sunday-bounded retry check for Lane A.
+    """Idempotently seed the Saturday-bounded retry check for Lane A.
 
     Fires every WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS regardless of day; the
     handler itself (retry_weekly_social_if_needed) is what limits action to
-    Sundays, so there's nothing day-specific to seed here.
+    Saturdays, so there's nothing day-specific to seed here.
     """
     existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
     if WEEKLY_SOCIAL_RETRY_JOB_TITLE in existing_titles:

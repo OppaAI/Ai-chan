@@ -16,7 +16,6 @@ Usage:
 This module only parses arguments and dispatches to the right front end:
     - interface/webui/webui.py  -> run_webui(args)   (default)
     - interface/cli/cli.py      -> run_cli(args)     (--cli)
-    - interface/adapter/     -> run_adapter(args)  (--adapter <platform>)
 Both front ends converge on the same shared boot/turn-loop logic in
 system/orchestrate.py:run_session(ui, args) — see that module for the
 actual session orchestration (subsystem boot, main loop, commands,
@@ -26,17 +25,16 @@ Flow:
 
                                       parse_args()
                                           │
-        ┌────────────────┼────────────────┼──────────────┼─────────────────┐
-        ▼                ▼                ▼              ▼                 ▼
-   --clear-mem       --logout        --adapter         --cli           (default)
-        │                │                │              │                 │
-        ▼                ▼                ▼              ▼                 ▼
-  AikoMemorize()    handle_logout()  run_adapter(args) run_cli(args)  run_webui(args)
-     .clear()            │                │              │                 │
-        │                ▼                ▼              ▼                 ▼
-        ▼              sys.exit(0)  adapter runs   → orchestrate.py  → orchestrate.py
-   sys.exit(0)                      until Ctrl+C      run_session()    run_session()
-                             (no orchestrate session loop)
+        ┌────────────────┼────────────────┼─────────────────┐
+        ▼                ▼                ▼                 ▼
+   --clear-mem       --logout          --cli           (default)
+        │                │              │                 │
+        ▼                ▼              ▼                 ▼
+  AikoMemorize()    handle_logout()  run_cli(args)  run_webui(args)
+     .clear()            │              │                 │
+        │                ▼              ▼                 ▼
+        ▼              sys.exit(0)  → orchestrate.py  → orchestrate.py
+   sys.exit(0)                         run_session()    run_session()
 
 Front-end imports are deferred into main() rather than done at module load,
 so that --clear-mem and --logout (which don't need FastAPI, uvicorn,
@@ -89,9 +87,6 @@ def parse_args():
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
-    p.add_argument("--adapter", type=str, default="",             # legacy messaging adapter daemon
-                   choices=["discord", "telegram", "slack", "matrix"],
-                   help="legacy standalone two-way messenger adapter daemon; prefer AIKO_MESSENGER_ADAPTERS with WebUI/CLI")
     return p.parse_args()                                         # return namespace of the arguments
 
 
@@ -114,10 +109,7 @@ def main():
         handle_logout()                                 # logout user session
         sys.exit(0)                                     # exit code 0
 
-    if args.adapter:                                    # if adapter argument set
-        from interface.adapter import run_adapter       # load adapter runner
-        run_adapter(args.adapter, args)                 # launch adapter
-    elif args.cli:                                      # if CLI argument set
+    if args.cli:                                       # if CLI argument set
         from interface.cli.cli import run_cli           # load CLI with set arguments
         run_cli(args)                                   # launch CLI 
     else:                                               # otherwise,
