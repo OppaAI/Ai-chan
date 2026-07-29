@@ -15,38 +15,6 @@ ADAPTER_REGISTRY: dict[str, type[AdapterBase]] = {
 }
 
 
-def _bootstrap_adapter(adapter_name: str) -> tuple:
-    """Boot Aiko subsystems needed by adapters.
-
-    Returns (think, memorize) — both may be None on failure.
-    """
-    import threading
-    import time
-    import os
-
-    from system.wakeup import AikoWakeup
-    from system.userspace import set_current_user_id, set_current_display_name
-
-    # Set a default identity for adapter sessions
-    uid = os.getenv("AIKO_USER_ID", f"adapter_{adapter_name}")
-    set_current_user_id(uid)
-    set_current_display_name(uid)
-
-    # Boot all subsystems
-    result = AikoWakeup().boot(
-        on_loading=lambda key: print(f"    [{key}] loading..."),
-        on_done=lambda key: print(f"    [{key}] done"),
-        on_skip=lambda key: print(f"    [{key}] skipped"),
-    )
-
-    if result.think is None:
-        print(f"  [adapter] CRITICAL: AikoThink failed to boot.")
-        return None, None
-
-    return result.think, result.memorize
-
-
-
 def start_background_adapters(think, memorize, names: list[str] | None = None) -> list[AdapterBase]:
     """Start configured two-way messenger adapters beside WebUI/CLI sessions.
 
