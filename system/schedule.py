@@ -619,13 +619,13 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
         old_builtin = (
             job.get("frequency") == "weekly"
             and str(job.get("time_of_day") or "") == "08:00"
-            and _normalize_weekdays(job.get("days_of_week")) == ["sun"]
+            and _normalize_weekdays(job.get("days_of_week")) == [6]
             and (job.get("handler") == "weekly_social" or job.get("kind") == "system_weekly_social")
             and (job.get("action") in {None, "agentic"})
         )
         if old_builtin:
             job["time_of_day"] = WEEKLY_SOCIAL_TIME_OF_DAY
-            job["days_of_week"] = ["sat"]
+            job["days_of_week"] = [5]
             job["timezone"] = timezone or job.get("timezone")
             job["action"] = "agentic"
             job["handler"] = "weekly_social"
