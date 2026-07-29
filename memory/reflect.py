@@ -2,7 +2,7 @@
 memory/reflect.py
 Aiko's nightly experience-summary writer.
 
-Called after dream() completes at 00:00. Pulls the day's chat turns and
+Called at 00:00 and then dream() starts afterwards. Pulls the day's chat turns and
 memory snippets, asks the local llama-server to write a factual daily summary, pins that
 summary to persistent memory, then pushes a Hugo-format markdown post to
 GitHub via the REST API (no local clone needed).
@@ -122,10 +122,12 @@ _DAILY_SUMMARY_UNLOCK = textwrap.dedent("""
     Rules:
     - Preserve important facts: dates, deadlines, commitments, projects, events, incidents, losses, decisions, names, preferences, and user-stated goals.
     - Include mundane details only when they explain a meaningful pattern, risk, or follow-up need. A meal usually does not matter; repeated exhaustion, sleeping only four hours, or losing a wallet does.
-    - Prefer concrete events, tasks, decisions, bugs, plans, moods, and repeated themes.
+    - Prefer concrete actors, dates, decisions, projects, bugs, tasks, and repeated themes.
     - Use first person as Aiko when describing Aiko's experience.
     - Mention uncertainty plainly if the inputs are thin.
     - Do not invent details, outcomes, dates, or feelings not supported by the inputs.
+    - No metaphor, atmosphere-only writing, or invented feelings.
+    - Only events supported by the provided snippets.
     - No mention of vectors, embeddings, databases, or internal memory implementation.
     - Keep Aiko's tone calm, direct, lightly dry, and quietly affectionate toward {USER_ID}.
 
@@ -146,32 +148,33 @@ _REFLECTION_USER = textwrap.dedent("""
 """).strip()
 
 _DAILY_FACTS_PROMPT = textwrap.dedent("""
-    Rewrite this day's narrative summary as a list of short, atomic factual
-    statements about {USER_ID}'s activities, decisions, and events that day.
+    Extract short, atomic factual statements about {USER_ID}'s activities,
+    decisions, and events that day.
+
+    Primary source = Additional raw notes (snippets).
+    Narrative is secondary; never invent a fact that is only implied by
+    poetic wording in the narrative.
 
     Rules:
-    - Distill the narrative's real content (projects, bugs, decisions, plans,
-      names, deadlines) into plain factual statements — even if the source
-      text is written in a stylized or metaphorical voice.
-    - Strip flavor language, mood-setting, and metaphor; keep only the
-      underlying events and facts.
-    - Do not invent details, outcomes, or facts not supported by the narrative
-      — only translate what's actually there into plainer language.
+    - Prefer concrete events, decisions, bugs, plans, names, and deadlines
+      from the raw notes.
+    - You may use the narrative only to clarify or order facts already
+      supported by the notes.
+    - Strip flavor language, mood-setting, and metaphor.
+    - Do not invent details, outcomes, or feelings.
     - One fact per line, third person, about {USER_ID}.
-    - Each fact must be self-contained and short (readable without the
-      day's context).
-    - If the narrative genuinely contains no concrete events (pure mood/
-      atmosphere with nothing happening), return: []
+    - Each fact must be self-contained and short.
+    - If there are no concrete events, return: []
 
     Return ONLY a JSON array of short strings. No markdown, no explanation.
 
     Date: {date_str}
 
-    Narrative:
-    {prose}
-
-    Additional raw notes:
+    Additional raw notes (primary):
     {notes}
+
+    Narrative (secondary):
+    {prose}
 """).strip()
 
 def _extract_json_arrays(raw: str) -> list[list]:
@@ -386,7 +389,7 @@ def _generate_reflection(snippets: list[str], date: datetime, display_name: str 
         date_str=date.strftime("%Y-%m-%d"),
         snippets=bullet_list,
     )
-    return _llm_chat(_build_reflection_system(display_name), user_prompt, max_tokens=500, temperature=0.85)
+    return _llm_chat(_build_reflection_system(display_name), user_prompt, max_tokens=500, temperature=0.25)
 
 
 def _generate_feelings(prose: str, display_name: str | None = None) -> str:
@@ -814,6 +817,12 @@ def generate_and_post(
         except Exception as e:
             log.error(f"Daily fact extraction failed: {e}")
             facts = []
+        _SKIP = ("dry_run", "pytest", "test user", "as an ai", "hallucin")
+        facts = [
+            f for f in facts
+            if f and len(f) <= 200
+            and not any(s in f.casefold() for s in _SKIP)
+        ]
         for fact in facts:
             try:
                 if memorize.add_raw(f"{date_tag} {fact}", user_id=uid, pinned=True):
