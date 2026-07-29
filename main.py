@@ -8,7 +8,7 @@ Usage:
     python main.py --text        # WebUI, keyboard input + TTS/ASR toggled off
     python main.py --no-asr      # WebUI, keyboard input but keep TTS on
     python main.py --cli         # plain no-curses CLI, for local testing only
-    python main.py --adapter discord   # messaging bot adapter (discord, telegram, …)
+    # Two-way messenger adapters run beside WebUI/CLI when AIKO_MESSENGER_ADAPTERS is set.
     python main.py --debug       # show memory debug info each turn
     python main.py --clear-mem   # wipe all stored memories and exit
     python main.py --logout      # clear stored CLI (GitHub OAuth) auth token and exit
@@ -89,11 +89,9 @@ def parse_args():
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
-    p.add_argument("--adapter", type=str, default="",             # messaging/social platform adapter
-                   choices=["discord", "telegram", "slack", "matrix",
-                            "bluesky", "mastodon", "reddit", "youtube",
-                            "messenger", "googlechat"],
-                   help="run as a bot adapter (discord, telegram, slack, matrix, bluesky, mastodon, reddit, youtube, messenger, googlechat)")
+    p.add_argument("--adapter", type=str, default="",             # legacy messaging adapter daemon
+                   choices=["discord", "telegram", "slack", "matrix"],
+                   help="legacy standalone two-way messenger adapter daemon; prefer AIKO_MESSENGER_ADAPTERS with WebUI/CLI")
     return p.parse_args()                                         # return namespace of the arguments
 
 

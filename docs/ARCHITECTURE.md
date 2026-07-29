@@ -263,3 +263,13 @@ Aiko does **not** yet have a fully independent, long-running autonomous sub-agen
 Intent-routing examples are authored as text in `cognition/router_prompts.json`, their embedding matrix is cached on disk. The cache is keyed by the examples, instruct string, embedding backend metadata, and `EMBED_DIMS`, and is stored as a NumPy `.npz` archive loaded with `allow_pickle=False`.
 
 Graph playbooks are currently matched by trigger and capability metadata, so there are no graph vectors to precompute yet. If graph matching becomes semantic, the same pattern should be used: stable JSON/YAML plan specs as the source of truth, plus generated vector-cache artifacts that are safe to delete and rebuild.
+
+## Aiko social lanes (updated)
+
+- Two-way messenger adapters are native background services for WebUI/CLI sessions; only Telegram, Discord, Matrix, and Slack are supported for conversational ingress/egress. Standalone `--adapter` remains legacy-only for those four services.
+- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to Reddit r/OppaAI and the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. Lane A2 manual posting remains out of Aiko.
+- Lane B is the curated photo pipeline for Pixelset/Pixelfed-compatible posting through the social MCP server; Instagram is no longer a target.
+- Lane C YouTube video posting continues to use the existing MCP posting pipeline.
+- Lane D creates one tech-job Threads draft per night at 23:00 instead of multiple daily drafts, using the graph job-hunt playbook and web search results when available.
+- Removed social targets: LinkedIn, Facebook, Messenger, Google Chat, Instagram, and one-way Slack/Telegram MCP posting. Bluesky, Mastodon, Reddit, and YouTube are one-way posting tools only, not two-way adapters.
+- Nightly reflection remains native GitHub/Hugo publishing rather than MCP.

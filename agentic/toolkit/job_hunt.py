@@ -626,7 +626,7 @@ def execute_job_search_plan(plan_json: str) -> str:
 def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
     """Node 3: Format results into social media draft posts."""
     results = json.loads(results_json)
-    postings = results.get("postings", [])
+    postings = results.get("postings", [])[:1]
     if not postings:
         return json.dumps({"success": False, "reason": "no_postings", "drafts": []}, ensure_ascii=False)
 
@@ -643,6 +643,7 @@ def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
     return json.dumps({
         "success": True,
         "total_drafts": len(drafts),
+        "draft_policy": "one_tech_job_per_day",
         "location": loc,
         "date": today,
         "drafts": drafts,
@@ -663,7 +664,7 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
     base_dir = job_post_social_root() / date_str
     saved = []
 
-    for i, draft in enumerate(drafts_data.get("drafts", [])):
+    for i, draft in enumerate(drafts_data.get("drafts", [])[:1]):
         cat = draft.get("category", f"post_{i}")
         draft_dir = base_dir / cat
         draft_dir.mkdir(parents=True, exist_ok=True)

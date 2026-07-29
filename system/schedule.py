@@ -51,8 +51,8 @@ sleep loop begins.
     current month doesn't match on startup and we're not still waiting
     for this month's scheduled window, one catch-up run fires.
 
-Other system-style behaviors (e.g. weekly_social, photo_social, video_social,
-deep_study_start/stop, workspace_knowledge_scan) live entirely in
+Other system-style behaviors (e.g. weekly_dev_repost, photo_social, video_social,
+daily_job_post_social, deep_study_start/stop, workspace_knowledge_scan) live entirely in
 schedule.json as ordinary jobs, but instead of routing through on_due/chat,
 they name a "handler" — a Python callable registered once at startup via
 register_system_handler(). schedule.json can only ever select a handler
@@ -573,7 +573,7 @@ def ensure_workspace_knowledge_job(timezone: str | None = None, user_id: str | N
 
 
 # ── social folder-monitoring job seeding ──────────────────────────────────────
-# Lane A (weekly postcard) is a true weekly cadence job, not a folder scan —
+# Lane A1 (weekly Patreon dev-post syndication) is a true weekly cadence job, not a folder scan —
 # see ensure_weekly_social_job below, and agentic/toolkit/social.py's module
 # docstring for why it stays out of the agent tool loop entirely.
 #
@@ -591,7 +591,7 @@ WEEKLY_SOCIAL_JOB_TITLE = "weekly_social_post"
 # itself (run_scheduled_weekly_social) is idempotent per calendar week
 # (generate_weekly_draft skips if a draft already exists), so a slightly
 # early/late fire here is harmless.
-WEEKLY_SOCIAL_TIME_OF_DAY = os.getenv("WEEKLY_SOCIAL_TIME_OF_DAY", "08:00")
+WEEKLY_SOCIAL_TIME_OF_DAY = os.getenv("WEEKLY_SOCIAL_TIME_OF_DAY", "18:00")
 WEEKLY_SOCIAL_RETRY_JOB_TITLE = "weekly_social_retry_check"
 WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS = int(os.getenv("WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS", str(30 * 60)))
 
@@ -606,7 +606,7 @@ JOB_POST_SOCIAL_TIME_OF_DAY = "23:00"
 
 
 def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
-    """Idempotently seed the weekly memory-postcard job (Lane A).
+    """Idempotently seed the weekly Patreon dev-post syndication job (Lane A1).
 
     Fires once a week; the handler itself decides which completed Sun-Sat
     window to draft from (see agentic.toolkit.social.last_completed_sunday_saturday),
@@ -622,11 +622,11 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
         time_of_day=WEEKLY_SOCIAL_TIME_OF_DAY,
         frequency="weekly",
         timezone=timezone,
-        days_of_week=["sun"],
+        days_of_week=["sat"],
         action="agentic",
         handler="weekly_social",
     )
-    log.info("Seeded weekly social job (Sundays at %s)", WEEKLY_SOCIAL_TIME_OF_DAY)
+    log.info("Seeded weekly social job (Saturdays at %s)", WEEKLY_SOCIAL_TIME_OF_DAY)
 
 
 def ensure_weekly_social_retry_job(timezone: str | None = None, user_id: str | None = None) -> None:
@@ -641,7 +641,7 @@ def ensure_weekly_social_retry_job(timezone: str | None = None, user_id: str | N
         return
     schedule_job_record(
         title=WEEKLY_SOCIAL_RETRY_JOB_TITLE,
-        task="Retry the weekly postcard if it hasn't posted yet (Sundays only)",
+        task="Retry the weekly dev-post syndication if it has not posted yet (Saturdays only)",
         time_of_day="00:00",
         frequency="interval",
         timezone=timezone,
@@ -692,7 +692,7 @@ def ensure_video_social_job(timezone: str | None = None, user_id: str | None = N
 
 
 def ensure_daily_job_post_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
-    """Idempotently seed the daily Vancouver-area Meta Threads job-post draft job."""
+    """Idempotently seed the daily one-draft tech job-post social job."""
     jobs = _read_all(user_id=user_id)
     for job in jobs:
         if job.get("title") == JOB_POST_SOCIAL_JOB_TITLE:

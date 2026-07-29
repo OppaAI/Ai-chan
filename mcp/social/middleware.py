@@ -6,21 +6,14 @@ from typing import Any, Callable
 
 from social.db import get_db
 
+LOW_TRAFFIC_LIMIT = {"per_hour": 6, "per_day": 10}
 RATE_LIMITS: dict[str, dict[str, int]] = {
-    "post_x": {"per_hour": 50, "per_day": 300},
-    "post_threads": {"per_hour": 24, "per_day": 100},
-    "post_instagram": {"per_hour": 10, "per_day": 50},
-    "post_youtube": {"per_hour": 6, "per_day": 10},
-    "post_reddit": {"per_hour": 6, "per_day": 30},
-    "post_bluesky": {"per_hour": 48, "per_day": 300},
-    "post_mastodon": {"per_hour": 30, "per_day": 100},
-    "post_discord": {"per_hour": 30, "per_day": 200},
-    "post_telegram": {"per_hour": 30, "per_day": 200},
-    "post_slack": {"per_hour": 60, "per_day": 500},
-    "post_linkedin": {"per_hour": 10, "per_day": 50},
-    "post_facebook": {"per_hour": 10, "per_day": 50},
-    "send_email": {"per_hour": 50, "per_day": 300},
-    "read_emails": {"per_hour": 60, "per_day": 500},
+    name: LOW_TRAFFIC_LIMIT
+    for name in (
+        "post_x", "post_threads", "post_youtube", "post_reddit",
+        "post_bluesky", "post_mastodon", "post_pixelset", "post_discord",
+        "post_social", "send_email", "read_emails",
+    )
 }
 
 

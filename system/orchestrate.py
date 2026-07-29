@@ -989,6 +989,23 @@ def run_session(ui, args) -> None:
     if memorize is None:
         ui.add_message('sys', '⚠️ Memory backend failed to load — check logs. Running without persistent memory this session.')
 
+    background_adapters = []
+    if think is not None:
+        try:
+            from interface.adapter import start_background_adapters
+            background_adapters = start_background_adapters(think, memorize)
+            if background_adapters:
+                import atexit
+                def _stop_background_adapters() -> None:
+                    for adapter in background_adapters:
+                        try:
+                            adapter.stop()
+                        except Exception:
+                            log.exception("Failed to stop background messenger adapter %s", adapter.name)
+                atexit.register(_stop_background_adapters)
+        except Exception:
+            log.exception("Failed to start background messenger adapters.")
+
     if speak and hasattr(ui, "broadcast_audio_bytes"):
         speak.set_audio_sink(ui.broadcast_audio_bytes)
         if hasattr(ui, "set_viseme"):

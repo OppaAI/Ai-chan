@@ -112,12 +112,12 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Feature | Status |
 |---|---|
-| Social account connectors — X, Threads, Instagram, YouTube | ✅ Done |
+| Social account connectors — X, Threads, Pixelset, YouTube, Reddit, Bluesky, Mastodon | ✅ Done |
 | Draft-first posting workflow — Aiko prepares posts, owner approves before publish | ✅ Done |
 | Platform-specific safety rules baked into drafting prompts (no private details, no engagement bait, per-platform length limits) | ✅ Done |
-| Workspace photo picker for Instagram (vision-captioned, LLM-selected, public-safe filter) | ✅ Done |
+| Workspace photo picker for Pixelset (vision-captioned, LLM-selected, public-safe filter, MCP posted) | ✅ Done |
 | YouTube video queue — description-grounded posting, no auto-selection, human writes the source note | ✅ Done |
-| Long-lived token auto-refresh (Threads, Instagram) | ✅ Done |
+| Long-lived token auto-refresh (Threads) | ✅ Done |
 | Discord server introduction posting with rate limits and community rules checks | 🔲 Planned |
 | Social identity/persona card for public introductions | 🔲 Planned |
 | Post history archive — consolidated view across drafts (links, timestamps, captions, media) | 🟡 Partial — per-draft `draft.json`/`posted.json` exist; no cross-draft archive view yet |
@@ -128,15 +128,15 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Platform | Roadmap stance | Reason |
 |---|---|---|
-| X | ✅ Active | Live via AIsa relay; weekly memory postcard lane |
-| Threads | ✅ Active | Live; weekly memory postcard lane, image posting via imgbb |
-| Instagram | ✅ Active | Live; photo-gated curated showcase, images only |
+| X | ✅ Active | Live via AIsa relay; weekly Patreon dev-post teaser fanout |
+| Threads | ✅ Active | Live; weekly Patreon dev-post teaser fanout, image posting via imgbb |
+| Pixelset | ✅ Active | Lane B curated photo showcase via MCP |
 | YouTube | ✅ Active | Live; video lane, description-grounded — you choose the video, Aiko only polishes the write-up |
-| Discord | 🔲 Planned | Controlled server-by-server introductions; good fit for a bot-style presence in a community you already trust |
-| Bluesky | ❌ Not prioritized | Community has expressed it doesn't want AI-posted content |
-| Mastodon | ❌ Not prioritized | Community has expressed it doesn't want AI-posted content |
-| Pixelfed | ❌ Not prioritized | Community has expressed it doesn't want AI-posted content |
-| Reddit | ❌ Not prioritized | Subreddit rules and anti-promotion norms too heavy for the return; dropped from roadmap |
+| Discord | ✅ Active | Two-way messenger adapter plus one-way #aiko_dev MCP webhook/channel posting |
+| Bluesky | ✅ Active | One-way Lane A1 teaser fanout only; no two-way adapter |
+| Mastodon | ✅ Active | One-way Lane A1 teaser fanout only; no two-way adapter |
+| Pixelfed | ✅ Active | Pixelset-compatible Lane B photo target via MCP |
+| Reddit | ✅ Active | Full Lane A1 repost to r/OppaAI via MCP |
 | Facebook | ❌ Not prioritized | Older social graph and lower value for Aiko's public identity experiments |
 | Flickr | ❌ Not prioritized | Mostly archival/photo-community use; not a strong discovery channel for Aiko |
 
@@ -315,3 +315,13 @@ The `dream()` consolidation system runs across all phases and improves continuou
 - Phase numbering is mostly fixed; half-phases such as 1.5 and 2.5 are used when a major enabling layer belongs between two visible product phases.
 - Hardware target throughout: **Jetson Orin Nano** (8 GB), with x86 as secondary.
 - This roadmap reflects the Aiko-chan standalone project. The broader cognitive architecture lives in [GRACE / AuRoRA](https://github.com/OppaAI/AGi).
+
+## Aiko social lanes (updated)
+
+- Two-way messenger adapters are native background services for WebUI/CLI sessions; only Telegram, Discord, Matrix, and Slack are supported for conversational ingress/egress. Standalone `--adapter` remains legacy-only for those four services.
+- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to Reddit r/OppaAI and the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. Lane A2 manual posting remains out of Aiko.
+- Lane B is the curated photo pipeline for Pixelset/Pixelfed-compatible posting through the social MCP server; Instagram is no longer a target.
+- Lane C YouTube video posting continues to use the existing MCP posting pipeline.
+- Lane D creates one tech-job Threads draft per night at 23:00 instead of multiple daily drafts, using the graph job-hunt playbook and web search results when available.
+- Removed social targets: LinkedIn, Facebook, Messenger, Google Chat, Instagram, and one-way Slack/Telegram MCP posting. Bluesky, Mastodon, Reddit, and YouTube are one-way posting tools only, not two-way adapters.
+- Nightly reflection remains native GitHub/Hugo publishing rather than MCP.
