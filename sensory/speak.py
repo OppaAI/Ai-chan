@@ -463,28 +463,21 @@ class AikoSpeak:
         try:
             sd = self._load_sd()
             rate, data = wav_io.read(io.BytesIO(wav_bytes))
-            
-            # Always resample to 48000 Hz for USB device stability
+            device = MIOTTS_DEVICE if MIOTTS_DEVICE >= 0 else None
+
+            # Always resample to 48000 Hz (device requirement)
             if rate != 48000:
                 from scipy.signal import resample
-                print(f"[speak DEBUG] Resampling from {rate} to 48000 Hz")
                 num_samples = int(len(data) * 48000 / rate)
                 data = resample(data, num_samples).astype(data.dtype)
                 rate = 48000
-            
-            device = MIOTTS_DEVICE if MIOTTS_DEVICE >= 0 else None
-            print(f"[speak DEBUG] Playing {len(data)} samples at {rate} Hz on device {device}")
-            
+
             sd.play(data, rate, device=device)
-            while sd.get_stream().active:
-                if self._stop_flag.is_set():
-                    sd.stop()
-                    break
-                time.sleep(0.05)
+            sd.wait()  # Wait until playback finishes
+            if self._stop_flag.is_set():
+                sd.stop()
         except Exception as e:
             log.error(f"[speak] playback error: {e}")
-            import traceback
-            traceback.print_exc()
         finally:
             try:
                 sd = self._load_sd()
