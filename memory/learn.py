@@ -898,5 +898,8 @@ def register_deep_study_handlers(client=None, model=None, timezone: str | None =
         functools.partial(deep_study_window_start, client=client, model=model),
     )
     _schedule.register_system_handler("deep_study_stop", deep_study_window_stop)
-    _schedule.ensure_deep_study_window_jobs(timezone=timezone or os.getenv("DEEP_STUDY_WINDOW_TIMEZONE", ""))
+    _schedule.ensure_deep_study_window_jobs(
+        timezone=timezone or os.getenv("DEEP_STUDY_WINDOW_TIMEZONE", ""),
+        user_id=user_id,
+    )
     log.info("[deep_study_window] handlers registered and window jobs ensured.")
