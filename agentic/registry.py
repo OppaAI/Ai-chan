@@ -12,7 +12,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
+
+try:
+    from pydantic import BaseModel, ValidationError
+except Exception:  # pragma: no cover - pydantic is optional at import time
+    BaseModel = None  # type: ignore[assignment]
+    ValidationError = None  # type: ignore[assignment]
 
 from system.config import load_yaml
 
@@ -26,6 +32,8 @@ class ToolSpec:
     handler: Optional[Callable[..., Any]] = None
     props: Dict[str, Any] = field(default_factory=dict)
     required: List[str] = field(default_factory=list)
+    args_model: Type[BaseModel] | None = None
+    output_model: Type[BaseModel] | None = None
     domain: Optional[str] = None  # capability routing (research, scheduling, etc.)
     always_on: bool = False  # always included in tool list regardless of capability match
     # Execution modes - which backends can execute this tool
@@ -34,17 +42,49 @@ class ToolSpec:
     wiki: bool = False   # wiki workflow
     skill: bool = False  # skill workflow
 
+    def _model_json_schema(self, model: Type[BaseModel] | None) -> dict[str, Any] | None:
+        if model is None:
+            return None
+        if BaseModel is None:
+            raise RuntimeError("pydantic is required for ToolSpec args_model/output_model")
+        schema = model.model_json_schema()
+        schema.setdefault("type", "object")
+        return schema
+
+
+    def validate_args(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Validate/coerce tool arguments using args_model when configured."""
+        if self.args_model is None:
+            return args
+        if BaseModel is None:
+            raise RuntimeError("pydantic is required for ToolSpec args_model validation")
+        model = self.args_model.model_validate(args)
+        return model.model_dump(mode="json", exclude_none=False)
+
+    def validate_output(self, output: Any) -> Any:
+        """Validate/coerce a structured tool/final output when configured."""
+        if self.output_model is None:
+            return output
+        if BaseModel is None:
+            raise RuntimeError("pydantic is required for ToolSpec output_model validation")
+        if isinstance(output, str):
+            model = self.output_model.model_validate_json(output)
+        else:
+            model = self.output_model.model_validate(output)
+        return model.model_dump(mode="json", exclude_none=False)
+
     def to_openai_schema(self) -> dict[str, Any]:
         """Convert ToolSpec to OpenAI function schema format."""
+        parameters = self._model_json_schema(self.args_model) or {"type": "object", "properties": self.props or {}}
         s = {
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                "parameters": {"type": "object", "properties": self.props or {}},
+                "parameters": parameters,
             },
         }
-        if self.required:
+        if self.required and not self.args_model:
             s["function"]["parameters"]["required"] = list(self.required)
         return s
 
@@ -88,6 +128,8 @@ class ToolRegistry:
         graph: bool = False,
         wiki: bool = False,
         skill: bool = False,
+        args_model: Type[BaseModel] | None = None,
+        output_model: Type[BaseModel] | None = None,
     ) -> ToolSpec:
         spec = ToolSpec(
             name=name,
@@ -101,6 +143,8 @@ class ToolRegistry:
             graph=graph,
             wiki=wiki,
             skill=skill,
+            args_model=args_model,
+            output_model=output_model,
         )
         self._tools[name] = spec
         return spec
@@ -192,6 +236,10 @@ class ToolRegistry:
                 entry["wiki"] = spec.wiki
             if spec.skill:
                 entry["skill"] = spec.skill
+            if spec.args_model is not None:
+                entry["args_model"] = f"{spec.args_model.__module__}:{spec.args_model.__name__}"
+            if spec.output_model is not None:
+                entry["output_model"] = f"{spec.output_model.__module__}:{spec.output_model.__name__}"
             tools.append(entry)
         return {"tools": tools}
 
@@ -212,6 +260,8 @@ def tool(
     graph: bool = False,   # Must opt-in for graph engine
     wiki: bool = False,    # Must opt-in for wiki workflow
     skill: bool = False,   # Must opt-in for skill workflow
+    args_model: Type[BaseModel] | None = None,
+    output_model: Type[BaseModel] | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorator to register a function as an agentic tool.
 
@@ -239,6 +289,8 @@ def tool(
             graph=graph,
             wiki=wiki,
             skill=skill,
+            args_model=args_model,
+            output_model=output_model,
         )
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -254,6 +306,8 @@ def tool(
             graph=spec.graph,
             wiki=spec.wiki,
             skill=spec.skill,
+            args_model=spec.args_model,
+            output_model=spec.output_model,
         )
         return fn
     return decorator
@@ -271,6 +325,8 @@ def register_tool_schema(
     graph: bool = True,
     wiki: bool = False,
     skill: bool = False,
+    args_model: Type[BaseModel] | None = None,
+    output_model: Type[BaseModel] | None = None,
 ) -> ToolSpec:
     """Register a tool schema whose execution is handled elsewhere.
 
@@ -290,4 +346,6 @@ def register_tool_schema(
         graph=graph,
         wiki=wiki,
         skill=skill,
+        args_model=args_model,
+        output_model=output_model,
     )

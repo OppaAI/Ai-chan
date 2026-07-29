@@ -183,6 +183,7 @@ class PlanNode:
     args: dict[str, Any]
     depends_on: tuple[str, ...] = ()
     run_if: dict[str, Any] | None = None
+    when: dict[str, Any] | None = None
     loop_to: str | None = None
     loop_condition: dict[str, Any] | None = None
     max_visits: int = 1
@@ -709,15 +710,15 @@ def _default_playbooks() -> list[dict[str, Any]]:
         },
         {
             "id": "gen_job_post",
-            "name": "Search, draft, and save job listings from configured boards",
+            "name": "Fetch, draft, and save job listings from configured RSS feeds",
             "triggers": [
                 "job post", "post job", "draft job", "job listing",
                 "daily job", "job hunt post", "job posting", "find jobs",
             ],
             "semantic_triggers": [
                 "draft a job posting for social media",
-                "search and post jobs",
-                "create job posts from search results",
+                "fetch and post jobs from RSS",
+                "create job posts from RSS results",
                 "run the daily job post pipeline",
             ],
             "requires_any": ["job", "jobs", "posting", "hiring", "career"],
@@ -741,7 +742,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
 def _default_playbook_definitions() -> list[dict[str, Any]]:
     """Full default playbook definitions, used to seed playbook.json on first boot.
 
-    Same as _default_playbooks(), but the gen_job_post entry gets a
+    Same as _default_playbooks(), but the gen_job_post RSS entry gets a
     `trigger` field added for automatic scheduling (no duplicate entry).
     """
     defaults = _default_playbooks()
@@ -936,6 +937,7 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
             args=dict(raw.get("args") or {}),
             depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
             run_if=dict(raw["run_if"]) if isinstance(raw.get("run_if"), dict) else None,
+            when=dict(raw["when"]) if isinstance(raw.get("when"), dict) else None,
             loop_to=str(raw["loop_to"]) if raw.get("loop_to") else None,
             loop_condition=dict(raw["loop_condition"]) if isinstance(raw.get("loop_condition"), dict) else None,
             max_visits=int(raw.get("max_visits", 1) or 1),
@@ -984,6 +986,7 @@ def run_subgraph(graph_json: str = "{}", goal: str = "",
             args=dict(raw.get("args") or {}),
             depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
             run_if=dict(raw["run_if"]) if isinstance(raw.get("run_if"), dict) else None,
+            when=dict(raw["when"]) if isinstance(raw.get("when"), dict) else None,
             loop_to=str(raw["loop_to"]) if raw.get("loop_to") else None,
             loop_condition=dict(raw["loop_condition"]) if isinstance(raw.get("loop_condition"), dict) else None,
             max_visits=int(raw.get("max_visits", 1) or 1),
@@ -1229,14 +1232,36 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
     )
 
 
-def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult]) -> bool:
-    if not node.run_if:
-        return True
-    ref = node.run_if.get("node")
-    if ref not in results:
-        return False
-    actual = (results[ref].content or "").strip().lower()
-    return _check_condition(node.run_if, actual)
+def _run_if_satisfied(node: PlanNode, results: dict[str, NodeResult], state: GraphState | None = None) -> bool:
+    """Evaluate node gates against prior node output and/or shared graph state.
+
+    ``run_if`` keeps the older node-output contract. ``when`` is a lightweight
+    LangGraph-style conditional edge: use {"state": "key", ...condition...}
+    to gate on GraphState without introducing a full workflow DSL.
+    """
+    for cond in (node.run_if, node.when):
+        if not cond:
+            continue
+        actual = _condition_actual(cond, results, state)
+        if actual is None or not _check_condition(cond, actual):
+            return False
+    return True
+
+
+def _condition_actual(cond: dict[str, Any], results: dict[str, NodeResult], state: GraphState | None = None) -> str | None:
+    if "state" in cond:
+        if state is None:
+            return None
+        value = state.get(str(cond["state"]))
+        if isinstance(value, (dict, list, tuple)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value if value is not None else "")
+    ref = cond.get("node")
+    if ref is not None:
+        if ref not in results:
+            return None
+        return (results[ref].content or "").strip().lower()
+    return ""
 
 
 def _check_condition(cond: dict[str, Any], actual: str) -> bool:
@@ -1363,7 +1388,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
             for node in ready:
                 if not all(results[dep].ok for dep in node.depends_on):
                     blocked.append(node)
-                elif not _run_if_satisfied(node, results):
+                elif not _run_if_satisfied(node, results, state):
                     skipped.append(node)
                 else:
                     runnable.append(node)

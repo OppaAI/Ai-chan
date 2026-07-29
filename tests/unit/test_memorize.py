@@ -41,6 +41,7 @@ from memory.memorize import (
     _sanitize_fts_query,
     _normalize_memory_text,
     _first_json_array,
+    vacuum_memory_db,
 )
 from system import userspace
 
@@ -502,3 +503,29 @@ class TestWriteWindowTiming:
         memo._wait_for_write_window(fake_is_active, lambda: 0.0)
         # should exit via the max-wait deadline branch, not hang forever
         assert state["calls"] >= 4
+
+
+def test_vacuum_memory_db_opens_user_store_and_runs_maintenance(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeConn:
+        def execute(self, sql):
+            calls.append(("execute", sql))
+        def commit(self):
+            calls.append(("commit", None))
+        def close(self):
+            calls.append(("close", None))
+
+    def fake_initialize(path, ddl, user_id=None, vector=True):
+        calls.append(("initialize", str(path), user_id, vector))
+        return FakeConn()
+
+    monkeypatch.setattr("memory.memorize.resolve_user_db_path", lambda path, user_id=None: tmp_path / user_id / "memory.db")
+    monkeypatch.setattr("memory.memorize.initialize_store_db", fake_initialize)
+
+    vacuum_memory_db("alice")
+
+    assert calls[0] == ("initialize", str(tmp_path / "alice" / "memory.db"), "alice", True)
+    assert ("execute", "VACUUM") in calls
+    assert ("execute", "ANALYZE") in calls
+    assert calls[-1] == ("close", None)

@@ -293,7 +293,7 @@ def _is_trivial_input(text: str) -> bool:
 
 # Cosine similarity threshold for near-duplicate detection during dream pass
 # and dedup-on-write. 0.95 on write is tight (near-identical only).
-# 0.92 on dream merge catches slightly more semantic duplicates.
+# 0.88 on dream merge catches slightly more semantic duplicates without being too aggressive.
 DREAM_MERGE_THRESHOLD = float(os.getenv("DREAM_MERGE_THRESHOLD", 0.88))
 WRITE_DEDUP_THRESHOLD = float(os.getenv("WRITE_DEDUP_THRESHOLD", 0.95))
 
@@ -1126,6 +1126,24 @@ class _MemoryBackend:
         self._conn.commit()
 
 
+def _memory_db_path_for_user(uid: str) -> str:
+    if uid == "guest":
+        return _guest_memory_db()
+    return os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
+
+
+def vacuum_memory_db(user_id: str | None = None) -> None:
+    """Reclaim space after bulk memory deletes during maintenance."""
+    uid = user_id or current_user_id()
+    conn = initialize_store_db(_memory_db_path_for_user(uid), _DDL, user_id=uid, vector=True)
+    try:
+        conn.execute("VACUUM")
+        conn.execute("ANALYZE")
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ── memorize ──────────────────────────────────────────────────────────────────
 
 class AikoMemorize:
@@ -1177,10 +1195,8 @@ class AikoMemorize:
         # Use a .pending path for pre-auth boot so user-space dirs are never
         # created before a real user logs in via the web UI.
         uid = current_user_id()
-        if uid == "guest":
-            db_path = _guest_memory_db()   # tempfile-backed to avoid unbounded heap growth
-        else:
-            db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
+        db_path = _memory_db_path_for_user(uid)
+        # Guest remains tempfile-backed to avoid unbounded heap growth.
         if not silent:
             log.info("Opening sqlite-vec memory store for %s ...", uid)
         self._mem = _MemoryBackend(
@@ -1201,10 +1217,7 @@ class AikoMemorize:
     def _open(self, uid: str | None = None) -> None:
         """Open (or reopen) the sqlite-vec store for a given user_id."""
         uid = uid or self._user_id_override or current_user_id()
-        if uid == "guest":
-            db_path = _guest_memory_db()
-        else:
-            db_path = os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
+        db_path = _memory_db_path_for_user(uid)
         if not self._silent:
             log.info("Opening sqlite-vec memory store for %s ...", uid)
         self._mem = _MemoryBackend(
@@ -1427,7 +1440,7 @@ class AikoMemorize:
             if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
                 self._search_cache.move_to_end(cache_key)
                 results = [dict(r) for r in cached[1]]
-                log.debug("[memory] cache hit, scores=%s", [r.get("_recall_score") for r in results])  # temp
+                log.debug("[memory] cache hit, scores=%s", [r.get("_recall_score") for r in results])
                 self._touch_memories(results)
                 return results
             if cached:
@@ -1813,7 +1826,7 @@ class AikoMemorize:
     ) -> dict:
         """
         Prune decayed memories below threshold score.
-        Grace period (default 21 days) protects newly created memories.
+        Grace period (default 35 days) protects newly created memories.
         Pinned memories are unconditionally kept.
 
         _all_mems: internal — when called from dream(), the already-fetched
@@ -1953,17 +1966,6 @@ class AikoMemorize:
         self._mem.delete(memory_id)
         self._clear_search_cache()
 
-    def vacuum_memory_db(user_id: str | None = None) -> None:
-      """Reclaim space after bulk deletes (monthly maintenance)."""
-      from system.userspace import current_user_id
-      uid = user_id or current_user_id()
-      conn = _connect(uid)  # ← Use private method inside the module only
-      try:
-          conn.execute("VACUUM")
-          conn.execute("ANALYZE")
-          conn.commit()
-      finally:
-          conn.close()
 
     def clear(self, user_id: str | None = None) -> None:
         """Wipe all memories for a user. Use carefully."""

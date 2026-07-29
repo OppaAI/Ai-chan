@@ -40,6 +40,7 @@ from agentic.agentic import (
     _owner_embedder,
     dispatch_tool,
     dispatch_tool_checked,
+    execute_tool_with_policy,
     _max_attempts_for,
     run_agentic_chat,
     AGENT_EXECUTOR_MODE,
@@ -508,3 +509,50 @@ class TestSaveNoteContentTruncation:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+def test_validate_args_uses_registered_pydantic_model():
+    from pydantic import BaseModel, Field
+    from agentic.registry import registry
+
+    class StrictArgs(BaseModel):
+        limit: int = Field(ge=1, le=5)
+
+    registry.register(
+        name="typed_validation_test",
+        description="typed validation test",
+        args_model=StrictArgs,
+        react=True,
+    )
+    _TOOLS["typed_validation_test"] = (registry.get("typed_validation_test").to_openai_schema(), None)
+
+    args = {"limit": "3"}
+    assert _validate_args("typed_validation_test", args) is None
+    assert args == {"limit": 3}
+
+    bad = _validate_args("typed_validation_test", {"limit": 99})
+    assert bad is not None
+    assert bad.error_type == "schema_validation_failed"
+    assert bad.retryable is True
+
+
+def test_execute_tool_with_policy_applies_research_budget_guardrail():
+    state = TaskState(goal="research budget")
+    state.record(ToolResult(ok=True, tool="adaptive_search", args={"query": "first"}, content="done"))
+
+    result = execute_tool_with_policy("deep_research", {"query": "again"}, state)
+
+    assert result.ok is False
+    assert result.error_type == "research_limit_reached"
+    assert result.retryable is False
+
+
+def test_verify_final_answer_uses_post_answer_guardrails_for_saved_path(monkeypatch):
+    monkeypatch.setattr("agentic.agentic.AGENT_VERIFY_LLM_MODE", "off")
+    owner = MockOwner()
+    state = TaskState(goal="save note")
+    state.record(ToolResult(ok=True, tool="save_note", args={"title": "x"}, content="note saved"))
+
+    verdict = _verify_final_answer(owner, "save this", "Done.", state)
+
+    assert verdict.ok is False
+    assert "does not mention where it was saved" in verdict.feedback

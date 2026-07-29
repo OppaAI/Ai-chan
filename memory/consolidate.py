@@ -55,7 +55,7 @@ from openai import OpenAI
 
 from system import bioclock
 from system.log import get_logger
-from system.userspace import current_user_id, user_state_path
+from system.userspace import current_display_name, current_user_id, user_state_path
 from memory.reflect import _extract_json_arrays, _salvage_truncated_facts
 
 log = get_logger(__name__)
@@ -171,7 +171,7 @@ def _bounded_lines(items: list[str]) -> str:
 #    applied at month scope instead of day scope) ────────────────────────────
 
 _MONTHLY_FACTS_SYSTEM = textwrap.dedent("""
-    You are compressing a month's worth of daily memory facts about Oppa into
+    You are compressing a month's worth of daily memory facts about {USER_ID} into
     a smaller set of durable long-term facts, for monthly archival. This is
     how long-term memory works: routine, repeated activity fades into a
     general sense of "this was going on that month," while genuinely
@@ -188,8 +188,8 @@ _MONTHLY_FACTS_SYSTEM = textwrap.dedent("""
     - CRITICAL: for any fact describing a genuinely date-specific occasion —
       a birthday, anniversary, one-off event, deadline hit or missed, a
       notable incident, a release/milestone date — keep the EXACT date
-      written directly in the fact's own text (e.g. "On June 3rd, Oppa
-      celebrated his birthday with fruit tarts."). The specific date will
+      written directly in the fact's own text (e.g. "On June 3rd, {USER_ID}
+      celebrated a birthday with fruit tarts."). The specific date will
       NOT be preserved anywhere else after this — if it is not in the text,
       it is permanently lost. When in doubt about whether something counts
       as date-significant, err on the side of keeping the date.
@@ -199,7 +199,7 @@ _MONTHLY_FACTS_SYSTEM = textwrap.dedent("""
       pipeline.").
     - Do not invent details, outcomes, dates, or facts not supported by the
       source material.
-    - One fact per line, third person, about Oppa.
+    - One fact per line, third person, about {USER_ID}.
     - Each fact must be self-contained and short, readable without needing
       the surrounding month's context.
 
@@ -215,7 +215,7 @@ _MONTHLY_FACTS_USER = textwrap.dedent("""
 """).strip()
 
 _MONTHLY_MERGE_SYSTEM = textwrap.dedent("""
-    You are merging several partial lists of monthly facts about Oppa into
+    You are merging several partial lists of monthly facts about {USER_ID} into
     ONE final deduplicated list for permanent archival.
 
     Rules:
@@ -227,7 +227,7 @@ _MONTHLY_MERGE_SYSTEM = textwrap.dedent("""
       not be diluted or combined with unrelated material.
     - Drop exact or near-exact duplicates.
     - Do not invent anything not present in the source lists.
-    - One fact per line, third person, about Oppa.
+    - One fact per line, third person, about {USER_ID}.
 
     Return ONLY a JSON array of short strings. No markdown, no explanation.
 """).strip()
@@ -265,7 +265,7 @@ def _extract_monthly_facts_chunk(month_key: str, facts: list[str], idx: int, tot
         total=total,
         facts=_bounded_lines([f"- {f}" for f in facts]),
     )
-    raw = _chat(_MONTHLY_FACTS_SYSTEM, user_prompt, max_tokens=900, temperature=0.1)
+    raw = _chat(_MONTHLY_FACTS_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=900, temperature=0.1)
     return _parse_fact_array(raw)
 
 
@@ -277,7 +277,7 @@ def _merge_monthly_facts(month_key: str, chunk_facts: list[list[str]]) -> list[s
         for i, facts in enumerate(chunk_facts)
     )
     user_prompt = _MONTHLY_MERGE_USER.format(month_key=month_key, chunks=chunks_text)
-    raw = _chat(_MONTHLY_MERGE_SYSTEM, user_prompt, max_tokens=1200, temperature=0.1)
+    raw = _chat(_MONTHLY_MERGE_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=1200, temperature=0.1)
     merged = _parse_fact_array(raw)
     return merged or [f for facts in chunk_facts for f in facts]  # fallback: concatenate if merge parse fails
 
