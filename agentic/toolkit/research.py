@@ -1013,8 +1013,8 @@ def _session_add_seen(session_id: str, urls: set[str]) -> None:
 
 
 def _session_end(session_id: str) -> None:
-    # TTLCache auto-expires entries; explicit removal not needed.
-    pass
+    if session_id:
+        _session_cache.delete(session_id)
 
 
 def deep_fetch_round(prompt: str = "", num_searches: str = "1", num_fetches: str = "4",
