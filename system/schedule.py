@@ -373,14 +373,7 @@ def _read_raw(path: Path) -> list[dict]:
         return []
 
 
-def _read_all(user_id: str | None = None) -> list[dict]:
-    """Read scheduled jobs for the active user (cached)."""
-    if _schedule_cache is not None:
-        return _schedule_cache
-    return _read_and_cache(user_id=user_id)
-
 _schedule_cache: dict[str, list[dict]] = {}
-
 
 def _cache_key(user_id: str | None = None) -> str:
     return user_id or current_user_id() or ""
@@ -895,6 +888,7 @@ def bootstrap_non_system_jobs(
                 client=getattr(think, "_client", None),
                 model=getattr(think, "_llm_model", None),
                 timezone=timezone,
+                user_id=user_id,
             )
         except Exception:
             log.exception("Failed to bootstrap deep-study schedule jobs.")
@@ -945,7 +939,7 @@ def ensure_deep_study_window_jobs(timezone: str | None = None, user_id: str | No
             days_of_week=days,
             action="agentic",
             handler=handler,
-            user_id=user_id
+            user_id=user_id,
         )
         log.info("Seeded deep-study window job %r (%s, %s)", title, time_of_day, days)
 
@@ -1216,12 +1210,12 @@ class ScheduleRunner:
             # ── sleep until soonest next target ──────────────────────────────
             user_jobs = [
                 datetime.fromisoformat(j["next_due"])
-                for j in _read_all()
-                if j.get("enabled", True)
+                for j in _read_all(user_id=self._user_id)
+                if j.get("enabled", True) and j.get("next_due")
             ]
             graph_times = [
                 datetime.fromisoformat(g["next_due"])
-                for g in _read_schedule_graphs()
+                for g in _read_schedule_graphs(user_id=self._user_id)
                 if g.get("enabled", True) and g.get("next_due")
             ]
             candidates = [self._next_daily, self._next_monthly, *user_jobs, *graph_times]
