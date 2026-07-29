@@ -755,7 +755,7 @@
     {
       "handler": "agentic.toolkit.job_hunt:search_jobs",
       "name": "search_jobs",
-      "description": "Search configured job boards for a role. If location is omitted, uses the job_hunt skill default location. Deduped automatically.",
+      "description": "Return today's tech job postings from configured RSS feeds (query/location args are ignored by design).",
       "props": {
         "query": {
           "type": "string"
