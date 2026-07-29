@@ -860,7 +860,12 @@ def deep_study_window_stop(memorize) -> None:
     _deep_study_manager.stop(memorize)
 
 
-def register_deep_study_handlers(client=None, model=None, timezone: str | None = None) -> None:
+def register_deep_study_handlers(
+    client=None,
+    model=None,
+    timezone: str | None = None,
+    user_id: str | None = None,
+) -> None:
     """Call once at app startup to wire deep_studying into the scheduler's
     window (weekdays 05:00-18:00, weekends 05:00-10:00 by default) and seed
     the four recurring jobs that bound it.
@@ -885,14 +890,12 @@ def register_deep_study_handlers(client=None, model=None, timezone: str | None =
     """
 
     from system import schedule as _schedule
-
     # Read study topic from config if not already set
     study_topic = os.getenv("DEEP_STUDY_TOPIC", "").strip()
     if study_topic:
         # Set as pending topic for the next window start
         # This will be picked up by _pick_window_topic
         pass  # handled by wakeup or direct assignment
-
     _schedule.register_system_handler(
         "deep_study_start",
         functools.partial(deep_study_window_start, client=client, model=model),
