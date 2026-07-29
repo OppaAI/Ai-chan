@@ -379,11 +379,23 @@ def _read_all(user_id: str | None = None) -> list[dict]:
         return _schedule_cache
     return _read_and_cache(user_id=user_id)
 
-_schedule_cache: list[dict] | None = None
-_schedule_dirty: bool = True
+_schedule_cache: dict[str, list[dict]] = {}
+
+
+def _cache_key(user_id: str | None = None) -> str:
+    return user_id or current_user_id() or ""
+
+
+def _read_all(user_id: str | None = None) -> list[dict]:
+    """Read scheduled jobs for the active user (cached)."""
+    key = _cache_key(user_id)
+    if key in _schedule_cache:
+        return _schedule_cache[key]
+    return _read_and_cache(user_id=user_id)
+
 
 def _read_and_cache(user_id: str | None = None) -> list[dict]:
-    global _schedule_cache, _schedule_dirty
+    key = _cache_key(user_id)
     path = schedule_path(user_id=user_id)
     data = _read_raw(path)
     # One-time migration from older schedule locations.
@@ -399,19 +411,20 @@ def _read_and_cache(user_id: str | None = None) -> list[dict]:
                 data = legacy_data
                 log.info("Migrated schedule from %s to %s (%s)", legacy_path, path, legacy_label)
                 break
-    _schedule_cache = data
-    _schedule_dirty = False
+    _schedule_cache[key] = data
     return data
 
-def _invalidate_cache() -> None:
-    global _schedule_cache, _schedule_dirty
-    _schedule_cache = None
-    _schedule_dirty = True
+
+def _invalidate_cache(user_id: str | None = None) -> None:
+    if user_id is None:
+        _schedule_cache.clear()
+    else:
+        _schedule_cache.pop(_cache_key(user_id), None)
 
 
 def _write_all(jobs: list[dict], user_id: str | None = None) -> None:
     """Persist scheduled jobs atomically enough for a single local process."""
-    _invalidate_cache()
+    _invalidate_cache(user_id)
     path = schedule_path(user_id=user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -425,26 +438,28 @@ def _write_all(jobs: list[dict], user_id: str | None = None) -> None:
 # Each entry has: id, trigger (time/frequency), nodes (graph DAG), next_due,
 # last_ran_at, enabled.
 
-_graphs_cache: list[dict] | None = None
+_graphs_cache: dict[str, list[dict]] = {}
 
 
 def _read_schedule_graphs(user_id: str | None = None) -> list[dict]:
-    global _graphs_cache
-    if _graphs_cache is not None:
-        return _graphs_cache
+    key = _cache_key(user_id)
+    if key in _graphs_cache:
+        return _graphs_cache[key]
     path = schedule_graphs_path(user_id=user_id)
     data = _read_raw(path)
-    _graphs_cache = data
+    _graphs_cache[key] = data
     return data
 
 
-def _invalidate_graphs_cache() -> None:
-    global _graphs_cache
-    _graphs_cache = None
+def _invalidate_graphs_cache(user_id: str | None = None) -> None:
+    if user_id is None:
+        _graphs_cache.clear()
+    else:
+        _graphs_cache.pop(_cache_key(user_id), None)
 
 
 def _write_schedule_graphs(graphs: list[dict], user_id: str | None = None) -> None:
-    _invalidate_graphs_cache()
+    _invalidate_graphs_cache(user_id)
     path = schedule_graphs_path(user_id=user_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
