@@ -524,14 +524,10 @@ def _maintenance_run(user_id: str | None = None, memorize=None) -> dict:
     except Exception as exc:
         log.warning("vacuum_knowledge failed: %s", exc)
         results["vacuum_knowledge"] = {"error": str(exc)}
-
+    
     try:
-        from memory import memorize
-        # memorize uses SQLite, vacuum it
-        conn = memorize._connect(uid)
-        conn.execute("VACUUM")
-        conn.execute("ANALYZE")
-        conn.close()
+        from memory.memorize import vacuum_memory_db  # ← NEW PUBLIC IMPORT
+        vacuum_memory_db(uid)
         results["vacuum_memory"] = "ok"
     except Exception as exc:
         log.warning("vacuum_memory failed: %s", exc)
