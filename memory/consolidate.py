@@ -411,7 +411,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
 
     # Run monthly maintenance (archive reports, prune KB, vacuum)
     try:
-        maintenance_results = _maintenance_run(user_id)
+        maintenance_results = _maintenance_run(user_id, memorize=memorize)
         log.info("monthly_maintenance complete: %s", maintenance_results)
     except Exception as exc:
         log.warning("monthly_maintenance failed: %s", exc)
@@ -467,8 +467,25 @@ def _archive_reports(user_id: str | None = None, keep_days: int = 90) -> dict:
 
     return {"moved": moved, "errors": errors}
 
+def _resolve_embedder(memorize=None):
+    """Best-effort embedder for maintenance (dedupe)."""
+    # Try to get embedder from memorize's internal state
+    if memorize is not None:
+        try:
+            emb = getattr(getattr(memorize, "_mem", None), "_embedder", None)
+            if emb is not None and hasattr(emb, "embed_query"):
+                return emb
+        except Exception:
+            pass
+    
+    # Fallback: load from reason module (your semantic caching source)
+    try:
+        from cognition import reason
+        return reason.load_embedder()
+    except Exception:
+        return None
 
-def _maintenance_run(user_id: str | None = None) -> dict:
+def _maintenance_run(user_id: str | None = None, memorize=None) -> dict:
     """Run monthly maintenance: archive reports, prune KB, vacuum DBs."""
     uid = user_id or current_user_id()
     results = {}
@@ -483,7 +500,7 @@ def _maintenance_run(user_id: str | None = None) -> dict:
     # 2. Prune knowledge DB (archive cold, delete never-used, dedupe)
     try:
         from memory.knowledge import prune_knowledge
-        # Note: embedder would be passed in production; skipping dedupe without it
+        emb = _resolve_embedder(memorize)  # ← GET THE EMBEDDER
         results["prune_knowledge"] = prune_knowledge(
             keep_days=30,
             min_access=2,
@@ -491,8 +508,10 @@ def _maintenance_run(user_id: str | None = None) -> dict:
             delete_days=180,
             dedupe_threshold=0.95,
             user_id=uid,
-            embedder=None,  # Pass embedder to enable dedupe
+            embedder=emb,  # ← PASS IT
         )
+        if emb is None:
+            results["prune_knowledge_note"] = "dedupe skipped (no embedder)"
     except Exception as exc:
         log.warning("prune_knowledge failed: %s", exc)
         results["prune_knowledge"] = {"error": str(exc)}
