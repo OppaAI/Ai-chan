@@ -519,6 +519,7 @@ def schedule_job_record(
     interval_seconds: int | str | None = None,
     tool_call: dict[str, Any] | None = None,
     skill: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """Create and persist a scheduled job record, returning the stored dict.
 
