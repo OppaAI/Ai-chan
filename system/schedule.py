@@ -624,18 +624,17 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
             and (job.get("action") in {None, "agentic"})
         )
         if old_builtin:
-            tz_name = timezone or job.get("timezone")
             job["time_of_day"] = WEEKLY_SOCIAL_TIME_OF_DAY
-            job["days_of_week"] = [5]  # Saturday (normalized int form)
-            job["timezone"] = tz_name
+            job["days_of_week"] = [5]  # Saturday
+            job["timezone"] = timezone or job.get("timezone")
             job["action"] = "agentic"
             job["handler"] = "weekly_social"
             job.pop("kind", None)
             job["next_due"] = calculate_next_due(
                 WEEKLY_SOCIAL_TIME_OF_DAY,
                 "weekly",
-                tz_name,
-                [5],
+                job["timezone"],
+                job["days_of_week"],
             ).isoformat()
             _write_all(jobs, user_id=user_id)
             log.info(
