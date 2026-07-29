@@ -82,7 +82,7 @@ load_config()
 from cognition import reason
 from agentic.toolkit.ingest import _check_host_ssrf
 from agentic.toolkit.websearch import web_search, web_fetch
-from agentic.toolkit.research import deep_research
+from agentic.toolkit.research import adaptive_search, deep_research
 from agentic.toolkit.common import ask_llm_json as _ask_llm_json
 
 from system.log import get_logger
@@ -238,7 +238,7 @@ def idle_learner_loop(owner, check_interval: float = IDLE_LEARNER_CHECK_INTERVAL
             owner._memorize.add([
                 {"role": "system", "content": learned_tag},
                 {"role": "assistant", "content": result[:800]},
-            ])
+            ], user_id=study_uid)
             log.info("[learner] learned about %r — summary: %s", topic, result[:300].replace("\n", " "))
         except Exception as e:
             log.error(f"[learner] Autonomous learning failed: {e}")
@@ -890,12 +890,6 @@ def register_deep_study_handlers(
     """
 
     from system import schedule as _schedule
-    # Read study topic from config if not already set
-    study_topic = os.getenv("DEEP_STUDY_TOPIC", "").strip()
-    if study_topic:
-        # Set as pending topic for the next window start
-        # This will be picked up by _pick_window_topic
-        pass  # handled by wakeup or direct assignment
     _schedule.register_system_handler(
         "deep_study_start",
         functools.partial(deep_study_window_start, client=client, model=model),
