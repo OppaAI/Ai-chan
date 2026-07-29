@@ -6,9 +6,7 @@ Plus deep_read: a single-known-URL fetch with content-type routing.
 
 Both adaptive_search and deep_research build and run their OWN small
 PlanGraph instances via graph_engine.py's execute_graph(). This means they plug
-into graph_engine._tool_map() as single opaque tools — so any playbook that
-currently calls "deep_research" can switch to "deep_research" with a
-one-line args change.
+into graph_engine._tool_map() as single opaque tools — playbooks call "deep_research"
 
 deep_read is NOT a PlanGraph — a single known URL has no "escalate: widen the
 candidate pool" move the way a search does, so there's nothing here that
@@ -43,6 +41,7 @@ from typing import Any
 
 import numpy as np
 
+from cognition import reason
 from system.log import get_logger
 from agentic.graph_engine import PlanGraph, PlanNode, execute_graph
 from agentic.registry import TOOLS, tool
@@ -305,7 +304,6 @@ def fetch_and_condense_ranked(candidates_json: str = "[]", prompt: str = "",
     if not pages:
         return "[no pages fetched successfully]"
 
-    fresh = str(freshness_bias).lower() == "true"
     boosted = []
     for score, url, chunk in scored_chunks:
         bonus = next((c["quality"] for c in candidates if c.get("url") == url), 0.0)
@@ -548,8 +546,6 @@ def deep_read(
 # ── evidence condensation ──────────────────────────────────────────────
 # These helpers score, dedupe, filter, and format evidence chunks.
 # Moved here from websearch.py to keep research logic in the research module.
-
-from cognition import reason
 
 def _apply_corroboration_bonus(
     scored_chunks: list[tuple[float, str, str]],
