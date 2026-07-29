@@ -1314,6 +1314,17 @@ def post_job_post_social(draft_dir: str) -> dict[str, Any]:
     return post_job_post_draft(path)
 
 
+@tool(TOOLS["post_to_social"])
+def post_to_social(text: str, services: str, image_path: str | None = None) -> dict[str, Any]:
+    """Post text and optional image to one or more social platforms.
+    
+    services is a comma-separated list of platform names, e.g. 'bluesky,mastodon'.
+    Supported: x, threads, bluesky, mastodon, reddit, discord.
+    Does NOT require human approval — use for direct posting requests.
+    """
+    return _call_social_mcp("post_social", services=services, text=text, image_path=image_path)
+
+
 def draft_weekly_social(*, force: bool = False) -> dict[str, Any]:
     """Agent-tool wrapper for Lane A draft generation. Constructs its own
     AikoMemorize instance so the LLM never sees that dependency directly."""

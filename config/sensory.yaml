@@ -61,7 +61,7 @@ ACTIVATION_TIMEOUT_S: "3600"  # Idle seconds before requiring wake word / trigge
 # Controls MioTTS synthesis endpoint, voice preset, output device, and text pacing.
 
 # -- MioTTS --
-MIOTTS_API_URL: "http://localhost:8001"  # MioTTS synthesis API base URL.
+MIOTTS_API_URL: "http://localhost:18089"  # MioTTS synthesis API base URL.
 MIOTTS_MODEL: "MioTTS-0.4B-Q4_K_M"  # Display/model label for the TTS model served externally.
 MIOTTS_PRESET: "aiko_flat"  # Voice preset name registered in MioTTS; examples: jp_female, en_female, custom preset.
 MIOTTS_DEVICE: "-1"  # sounddevice output index; -1 means system default.

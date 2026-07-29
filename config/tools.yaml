@@ -911,6 +911,34 @@
       "graph": true,
       "wiki": false,
       "skill": false
+    },
+    {
+      "handler": "agentic.toolkit.social:post_to_social",
+      "name": "post_to_social",
+      "description": "Post text and optional image to one or more social platforms. services is a comma-separated list e.g. 'bluesky,mastodon'. Supported platforms: x, threads, bluesky, mastodon, reddit, discord. Does NOT require human approval.",
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "The text content to post."
+        },
+        "services": {
+          "type": "string",
+          "description": "Comma-separated list of target platforms, e.g. 'bluesky,mastodon'."
+        },
+        "image_path": {
+          "type": "string",
+          "description": "Optional absolute path to an image file to attach."
+        }
+      },
+      "required": [
+        "text",
+        "services"
+      ],
+      "domain": "social",
+      "react": true,
+      "graph": true,
+      "wiki": true,
+      "skill": false
     }
   ]
 }

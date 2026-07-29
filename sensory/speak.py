@@ -1,14 +1,19 @@
 """
 sensory/speak.py
 
-Aiko's voice output via MioTTS inference server.
-Preset-based voice reference: "jp_female", "en_female", or a custom registered preset.
+Aiko's voice output via MioTTS synthesis.
+Preset-based voice reference: "jp_female", "aiko_flat", or a custom registered preset.
 
 Server setup (run separately):
-    # 1. Start the local OpenAI-compatible model server with the miotts model.
-    # 2. Start MioTTS synthesis API:
-    python run_server.py --llm-base-url http://localhost:8080/v1 \
-        --llm-model "miotts"
+    # Using mmnga/mio-tts-cpp (C++ implementation):
+    ./build/mio-tts-server \
+      -m ~/Aiko-chan/models/miotts/MioTTS-0.4B-Q4_K_M.gguf \
+      -mv ~/Aiko-chan/models/miotts/miocodec.gguf \
+      --tts-wavlm-model ~/Aiko-chan/models/miotts/wavlm_base_plus_2l_f32.gguf \
+      --reference-file-json '[{"key":"jp_female","path":"~/Aiko-chan/models/miotts/jp_female.emb.gguf"},{"key":"aiko_flat","path":"~/Aiko-chan/models/miotts/aiko_flat.emb.gguf"}]'
+    
+    # Or via systemd:
+    sudo systemctl start miotts
 
 Standalone test:
     python sensory/speak.py
@@ -17,7 +22,6 @@ Standalone test:
     python sensory/speak.py --wait "Block until done."
     python sensory/speak.py --synced --wait "Watch the words land with the voice."
 """
-
 from __future__ import annotations
 
 import base64
@@ -362,33 +366,26 @@ class AikoSpeak:
 
     def _synthesize(self, text: str) -> bytes | None:
         """
-        POST to MioTTS /v1/tts and return raw WAV bytes.
+        POST to MioTTS /mio/tts and return raw WAV bytes.
         Returns None on failure.
         """
         import json
         import urllib.request
         if len(text) > 300:
             log.warning(f"[speak] truncating oversized TTS chunk: {len(text)} chars")
-            text = text[:300]  # MioTTS hard limit
+            text = text[:300]
+        
         payload = json.dumps({
             "text": text,
-            "reference": {"type": "preset", "preset_id": MIOTTS_PRESET},
-            "llm": {
-                "temperature": MIOTTS_TEMPERATURE,
-                "top_p": MIOTTS_TOP_P,
-                "max_tokens": MIOTTS_MAX_TOKENS,
-                "repetition_penalty": MIOTTS_REPETITION_PENALTY,
-                "presence_penalty": MIOTTS_PRESENCE_PENALTY,
-                "frequency_penalty": MIOTTS_FREQUENCY_PENALTY,
-            },
-            "best_of_n": {
-                "enabled": MIOTTS_BEST_OF_N_ENABLED,
-                "n": MIOTTS_BEST_OF_N,
-            },
-            "output": {"format": "base64"},
+            "reference_key": MIOTTS_PRESET,
+            "temp": MIOTTS_TEMPERATURE,
+            "top_p": MIOTTS_TOP_P,
+            "n_predict": MIOTTS_MAX_TOKENS,
+            "repeat_penalty": MIOTTS_REPETITION_PENALTY,
         }).encode()
+        
         req = urllib.request.Request(
-            f"{MIOTTS_API_URL}/v1/tts",
+            f"{MIOTTS_API_URL}/mio/tts",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -397,10 +394,20 @@ class AikoSpeak:
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 body = json.loads(r.read())
-                if "audio" not in body:
+                if "output_file" not in body:
                     log.error(f"[speak] unexpected TTS response keys: {list(body.keys())}")
                     return None
-                return base64.b64decode(body["audio"])
+                # Read the WAV file that was written
+                wav_path = body["output_file"]
+                with open(wav_path, 'rb') as f:
+                    wav_bytes = f.read()
+                # Clean up temp file
+                try:
+                    import os
+                    os.remove(wav_path)
+                except Exception as e:
+                    log.warning(f"[speak] failed to delete temp file {wav_path}: {e}")
+                return wav_bytes
         except Exception as e:
             log.error(f"[speak] synthesis error: {e}")
             return None
