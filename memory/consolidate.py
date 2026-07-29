@@ -70,7 +70,7 @@ def consolidation_state_path(user_id: str | None = None) -> Path:
     override = os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
     if override:
         return Path(override).expanduser()
-    return user_state_path("memory/monthly_consolidation_state.jsonl", user_id or current_user_id())
+    return user_state_path("memory/monthly_consolidation_state.json", user_id or current_user_id())
 
 
 
@@ -453,7 +453,7 @@ def _archive_reports(user_id: str | None = None, keep_days: int = 90) -> dict:
             continue
         try:
             mtime = datetime.fromtimestamp(report_file.stat().st_mtime)
-            if mtime < datetime.now() - timedelta(days=keep_days):
+            if mtime < cutoff:
                 dest = archive_dir / report_file.name
                 if dest.exists():
                     # Rename with timestamp to avoid collision
