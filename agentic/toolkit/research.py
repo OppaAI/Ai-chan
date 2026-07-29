@@ -145,60 +145,6 @@ _EFFORT_TIERS = {
 }
 
 
-# ── Crawl4AI batch fetch (deep_research / deep_read) ────────────────────────
-
-async def _crawl4ai_fetch_many_async(urls: list[str], max_chars: int) -> dict[str, str]:
-    """Fetch many URLs in ONE Crawl4AI session (single browser launch,
-    concurrent pages via arun_many) instead of one browser per URL.
-    Returns {} on any failure or when crawl4ai isn't installed.
-    """
-    if not urls or importlib.util.find_spec("crawl4ai") is None:
-        return {}
-
-    allowed_urls = [u for u in urls if _source_agreement_allows(u)] if RESEARCH_RESPECT_ROBOTS else list(urls)
-    if not allowed_urls:
-        return {}
-
-    try:
-        crawl4ai = importlib.import_module("crawl4ai")
-        AsyncWebCrawler = crawl4ai.AsyncWebCrawler
-        CrawlerRunConfig = crawl4ai.CrawlerRunConfig
-        CacheMode = crawl4ai.CacheMode
-
-        config = CrawlerRunConfig(
-            cache_mode=CacheMode.BYPASS,
-            page_timeout=CRAWL4AI_TIMEOUT_MS,
-            word_count_threshold=CRAWL4AI_WORD_COUNT_THRESHOLD,
-            excluded_tags=["nav", "footer", "header", "aside", "form"],
-            exclude_external_links=True,
-            exclude_social_media_links=True,
-        )
-        out: dict[str, str] = {}
-        async with AsyncWebCrawler() as crawler:
-            results = await crawler.arun_many(
-                urls=allowed_urls, config=config,
-                max_concurrent=CRAWL4AI_MAX_CONCURRENT,
-            )
-            for r in results:
-                if not r or not getattr(r, "success", False):
-                    continue
-                md = getattr(r, "markdown", None)
-                text = getattr(md, "fit_markdown", None) or md or ""
-                text = str(text).strip()
-                if text:
-                    out[getattr(r, "url", "")] = text[:max_chars]
-        return out
-    except Exception as e:
-        log.info("[crawl4ai] batch fetch failed for %d url(s): %s", len(urls), e)
-        return {}
-
-
-def _crawl4ai_fetch_many(urls: list[str], max_chars: int) -> dict[str, str]:
-    """Synchronous wrapper for _crawl4ai_fetch_many_async."""
-    import asyncio
-    return asyncio.run(_crawl4ai_fetch_many_async(urls, max_chars))
-
-
 # ── robots.txt compliance ("source agreement" to be crawled) ─────────────────
 
 _robots_cache = TTLCache(ttl_seconds=ROBOTS_CACHE_TTL_SECONDS)
