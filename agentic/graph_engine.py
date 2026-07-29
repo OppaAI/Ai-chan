@@ -740,40 +740,15 @@ def _default_playbooks() -> list[dict[str, Any]]:
 
 def _default_playbook_definitions() -> list[dict[str, Any]]:
     """Full default playbook definitions, used to seed playbook.json on first boot.
-    
-    Same as _default_playbooks() but includes the gen_job_post entry with a
-    trigger for automatic scheduling.
+
+    Same as _default_playbooks(), but the gen_job_post entry gets a
+    `trigger` field added for automatic scheduling (no duplicate entry).
     """
     defaults = _default_playbooks()
-    defaults.append({
-        "id": "gen_job_post",
-        "name": "Search, draft, and save job listings from configured boards",
-        "trigger": {"time": "23:00", "frequency": "daily"},
-        "triggers": [
-            "job post", "post job", "draft job", "job listing",
-            "daily job", "job hunt post", "job posting", "find jobs",
-        ],
-        "semantic_triggers": [
-            "draft a job posting for social media",
-            "search and post jobs",
-            "create job posts from search results",
-            "run the daily job post pipeline",
-        ],
-        "requires_any": ["job", "jobs", "posting", "hiring", "career"],
-        "capabilities": ["research"],
-        "nodes": [
-            {"id": "plan",   "tool": "gen_job_search_plan",   "args": {"prompt": "$prompt", "config_source": ""}},
-            {"id": "search", "tool": "execute_job_search_plan", "depends_on": ["plan"],
-             "args": {"plan_json": "$result:plan"}},
-            {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search"],
-             "args": {"results_json": "$result:search", "template": ""}},
-            {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
-             "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
-            {"id": "report", "tool": "report_job_run", "depends_on": ["save"],
-             "args": {"plan": "$result:plan", "search": "$result:search",
-                      "draft": "$result:draft", "save": "$result:save"}},
-        ],
-    })
+    for pb in defaults:
+        if pb.get("id") == "gen_job_post":
+            pb["trigger"] = {"time": "23:00", "frequency": "daily"}
+            break
     return defaults
 
 
