@@ -18,7 +18,7 @@ Aiko's social publishing workflows, combined into one module. Four lanes:
 
   Lane D — Nightly tech job-post draft:
     run the graph job-hunt playbook, use web search results when available,
-    and save one Threads draft per nightly run for review.
+    and save one Threads teaser-list draft for tech jobs available today from RSS.
 
 Posting remains human-review gated via draft.json["human_approved"] for every
 lane. One-way social posting belongs in the MCP server; two-way conversational
@@ -955,6 +955,30 @@ def _push_a1_hugo_post(slug: str, content: str) -> dict[str, Any]:
         return {"ok": False, "provider": "github_hugo", "error": str(e)}
 
 
+
+def _download_a1_image(post: dict[str, Any], draft_dir: Path) -> Path | None:
+    """Download a Patreon teaser/embed image into the draft bundle when present."""
+    image_url = str(post.get("image_url") or "").strip()
+    if not image_url:
+        return None
+    try:
+        resp = requests.get(image_url, timeout=30)
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        ext = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or Path(image_url.split("?", 1)[0]).suffix or ".png"
+        if ext.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            ext = ".png"
+        image_path = draft_dir / f"image{ext}"
+        image_path.write_bytes(resp.content)
+        canonical = draft_dir / "image.png"
+        if image_path != canonical and ext.lower() == ".png":
+            shutil.copyfile(image_path, canonical)
+            return canonical
+        return image_path
+    except Exception as e:
+        log.warning("Lane A1 Patreon image download failed: %s", e)
+        return None
+
 def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: datetime | None = None) -> dict[str, Any]:
     """Create a Lane A1 Patreon dev-post syndication draft bundle."""
     post = _fetch_latest_patreon_post()
@@ -972,7 +996,8 @@ def generate_weekly_draft(memorize: AikoMemorize, *, force: bool = False, now: d
     (draft_dir / "full_post.md").write_text(str(post.get("body") or "").strip() + "\n", encoding="utf-8")
     (draft_dir / "teaser.txt").write_text(teaser + "\n", encoding="utf-8")
     (draft_dir / "hugo.md").write_text(hugo, encoding="utf-8")
-    meta = {"success": True, "lane": "A1", "source": "patreon", "patreon_post": post, "hugo_slug": slug, "human_approved": False, "posted": False, "created_at": datetime.now(timezone.utc).isoformat()}
+    image_path = _download_a1_image(post, draft_dir)
+    meta = {"success": True, "lane": "A1", "source": "patreon", "patreon_post": post, "hugo_slug": slug, "human_approved": False, "posted": False, "image_path": str(image_path) if image_path else "", "created_at": datetime.now(timezone.utc).isoformat()}
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return {"success": True, "draft_dir": str(draft_dir), "meta": meta}
 
@@ -982,7 +1007,12 @@ def _read_weekly_draft(draft_dir: Path) -> tuple[str, Path | None, dict[str, Any
     text_path = draft_dir / "teaser.txt"
     text = text_path.read_text(encoding="utf-8").strip() if text_path.exists() else _teaser_for_post(meta.get("patreon_post", {}))
     image_path = draft_dir / "image.png"
-    return text, image_path if image_path.exists() else None, meta
+    if image_path.exists():
+        return text, image_path, meta
+    for candidate in draft_dir.glob("image.*"):
+        if candidate.is_file():
+            return text, candidate, meta
+    return text, None, meta
 
 
 def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
@@ -1286,7 +1316,7 @@ def _post_pixelset(selections: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
-_MEDIA_PROVIDERS_REGISTRY["pixelset"] = _post_pixelset
+_MEDIA_PROVIDERS_REGISTRY: dict[str, Callable[[list[dict[str, Any]]], dict[str, Any]]] = {"pixelset": _post_pixelset}
 
 
 def post_photo_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:

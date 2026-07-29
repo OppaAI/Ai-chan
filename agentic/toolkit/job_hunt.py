@@ -26,6 +26,8 @@ import json
 import os
 import re
 import threading
+import email.utils
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -63,6 +65,18 @@ _SPECIALTY_RE = re.compile(
     r"\b(senior|lead|principal|manager|director|nurse|doctor|engineer iii|security clearance)\b",
     re.IGNORECASE,
 )
+
+
+DEFAULT_TECH_JOB_FEEDS = [
+    "https://www.civicjobs.ca/rss",
+    "https://www.jobbank.gc.ca/rss/jobsearch.xml?searchstring=software+developer&locationstring=Canada",
+]
+DEFAULT_TECH_JOB_KEYWORDS = [
+    "software", "developer", "programmer", "engineer", "devops", "cloud",
+    "data", "database", "systems", "network", "cybersecurity", "security",
+    "it ", "information technology", "web", "frontend", "backend", "full stack",
+    "qa", "quality assurance", "technical support",
+]
 
 JOB_SITES = [
     "site:boards.greenhouse.io",
@@ -175,6 +189,102 @@ def _similarity(a: str, b: str) -> float:
         return 0.0
     return len(words_a & words_b) / len(words_a | words_b)
 
+
+
+def _config_list(config: dict[str, Any], key: str, env_key: str, default: list[str]) -> list[str]:
+    env = os.getenv(env_key, "").strip()
+    if env:
+        return [item.strip() for item in env.split(",") if item.strip()]
+    value = config.get(key)
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return default
+
+
+def _max_jobs_per_draft(config: dict[str, Any]) -> int:
+    raw = os.getenv("MAX_JOBS_PER_DRAFT", config.get("max_jobs_per_draft", 5))
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 5
+
+
+def _parse_rss_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=local_now().tzinfo)
+    return dt.astimezone(local_now().tzinfo)
+
+
+def _rss_text(element: ET.Element, names: tuple[str, ...]) -> str:
+    for name in names:
+        found = element.find(name)
+        if found is not None and found.text:
+            return found.text.strip()
+        found = element.find(f"{{*}}{name}")
+        if found is not None and found.text:
+            return found.text.strip()
+    return ""
+
+
+def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict]:
+    """Fetch CivicJobs/Job Bank RSS feeds, keeping only today's tech postings."""
+    config = config or _job_config()
+    feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)
+    keywords = [kw.casefold() for kw in _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS)]
+    today = local_now().date()
+    kept: list[dict] = []
+    seen_ids: set[str] = set()
+    for feed_url in feeds:
+        try:
+            resp = requests.get(feed_url, timeout=30, headers={"User-Agent": "Aiko-chan job RSS/1.0"})
+            resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+        except Exception:
+            continue
+        entries = list(root.findall(".//item")) or list(root.findall(".//{*}entry"))
+        for entry in entries:
+            title = _rss_text(entry, ("title",))
+            link = _rss_text(entry, ("link",))
+            if not link:
+                link_el = entry.find("{*}link")
+                if link_el is not None:
+                    link = link_el.attrib.get("href", "").strip()
+            guid = _rss_text(entry, ("guid", "id")) or link
+            summary = _rss_text(entry, ("description", "summary"))
+            org = _rss_text(entry, ("author", "creator"))
+            published = _rss_text(entry, ("pubDate", "published", "updated"))
+            posted = _parse_rss_datetime(published)
+            if not posted or posted.date() != today:
+                continue
+            blob = f"{title} {summary}".casefold()
+            if keywords and not any(kw in blob for kw in keywords):
+                continue
+            dedupe_key = (link or guid).split("?", 1)[0].rstrip("/").casefold()
+            guid_key = guid.casefold()
+            if dedupe_key in seen_ids or guid_key in seen_ids:
+                continue
+            seen_ids.update({dedupe_key, guid_key})
+            kept.append({
+                "title": re.sub(r"\s+", " ", title).strip(),
+                "organization": org,
+                "url": link,
+                "guid": guid,
+                "posted_date": posted.isoformat(),
+                "source_feed": feed_url,
+                "_category": "tech",
+            })
+    return dedupe_postings(kept)
 
 # ── Primitives ──
 
@@ -547,7 +657,25 @@ def _direct_job_search(site: str, query: str, location: str, max_results: int) -
 
 
 def execute_job_search_plan(plan_json: str) -> str:
-    """Node 2: Execute a job search plan → search + parse + filter results JSON."""
+    """Node 2: Execute the Lane D RSS-only tech job search plan."""
+    plan = json.loads(plan_json)
+    config = _job_config()
+    location = plan.get("location", "")
+    postings = fetch_today_tech_jobs_from_rss(config)
+    max_results = int(plan.get("max_results") or config.get("max_results") or 30)
+    postings = postings[:max_results]
+    result = {
+        "location": location,
+        "total_found": len(postings),
+        "queries_executed": ["rss_today_tech_jobs"],
+        "sources": _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS),
+        "postings": postings,
+    }
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _execute_job_search_plan_legacy_search(plan_json: str) -> str:
+    """Legacy web-search/scrape path retained for manual debugging; Lane D does not call it."""
     plan = json.loads(plan_json)
     location = plan.get("location", "")
     min_hr = float(plan.get("min_salary_hourly", 20))
@@ -624,29 +752,35 @@ def execute_job_search_plan(plan_json: str) -> str:
 
 
 def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
-    """Node 3: Format results into social media draft posts."""
+    """Node 3: Build one teaser-list Threads draft for today's tech RSS jobs."""
     results = json.loads(results_json)
-    postings = results.get("postings", [])[:1]
+    config = _job_config()
+    postings = results.get("postings", [])
     if not postings:
-        return json.dumps({"success": False, "reason": "no_postings", "drafts": []}, ensure_ascii=False)
+        return json.dumps({"success": False, "reason": "no_tech_jobs_today", "drafts": []}, ensure_ascii=False)
 
     loc = results.get("location", "")
     today = local_now().strftime("%Y-%m-%d")
-    drafts = []
-    for posting in postings:
-        text = format_job_post(posting, date_text=today)
-        drafts.append({
-            "text": text,
-            "posting": posting,
-            "category": posting.get("_category", "general"),
-        })
+    max_jobs = _max_jobs_per_draft(config)
+    selected = postings[:max_jobs]
+    lines = [f"Tech jobs available today ({today}):"]
+    for posting in selected:
+        title = str(posting.get("title") or "Untitled role").strip()
+        org = str(posting.get("organization") or "").strip()
+        link = str(posting.get("url") or "").strip()
+        label = f"{title} — {org}" if org else title
+        lines.append(f"- {label}: {link}" if link else f"- {label}")
+    if len(postings) > len(selected):
+        lines.append(f"(+{len(postings) - len(selected)} more in today's RSS results)")
+    text = "\n".join(lines)
     return json.dumps({
         "success": True,
-        "total_drafts": len(drafts),
-        "draft_policy": "one_tech_job_per_day",
+        "total_drafts": 1,
+        "draft_policy": "tech_jobs_available_today",
+        "max_jobs_per_draft": max_jobs,
         "location": loc,
         "date": today,
-        "drafts": drafts,
+        "drafts": [{"text": text, "postings": selected, "category": "tech_jobs_today"}],
     }, ensure_ascii=False)
 
 
@@ -664,7 +798,7 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
     base_dir = job_post_social_root() / date_str
     saved = []
 
-    for i, draft in enumerate(drafts_data.get("drafts", [])[:1]):
+    for i, draft in enumerate(drafts_data.get("drafts", [])):
         cat = draft.get("category", f"post_{i}")
         draft_dir = base_dir / cat
         draft_dir.mkdir(parents=True, exist_ok=True)
@@ -689,6 +823,7 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
             "draft_dir": str(draft_dir),
             "provider": "threads",
             "posting": draft.get("posting"),
+            "postings": draft.get("postings"),
             "created_at": datetime.now().isoformat(),
             "posted": False,
             "human_approved": False,
