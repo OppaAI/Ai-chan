@@ -619,19 +619,29 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
         old_builtin = (
             job.get("frequency") == "weekly"
             and str(job.get("time_of_day") or "") == "08:00"
-            and _normalize_weekdays(job.get("days_of_week")) == [6]
+            and _normalize_weekdays(job.get("days_of_week")) == [6]  # Sunday
             and (job.get("handler") == "weekly_social" or job.get("kind") == "system_weekly_social")
             and (job.get("action") in {None, "agentic"})
         )
         if old_builtin:
             job["time_of_day"] = WEEKLY_SOCIAL_TIME_OF_DAY
-            job["days_of_week"] = [5]
+            job["days_of_week"] = [5]  # Saturday
             job["timezone"] = timezone or job.get("timezone")
             job["action"] = "agentic"
             job["handler"] = "weekly_social"
             job.pop("kind", None)
+            job["next_due"] = calculate_next_due(
+                WEEKLY_SOCIAL_TIME_OF_DAY,
+                "weekly",
+                job["timezone"],
+                job["days_of_week"],
+            ).isoformat()
             _write_all(jobs, user_id=user_id)
-            log.info("Migrated weekly social job from old Sunday 08:00 builtin to Saturdays at %s", WEEKLY_SOCIAL_TIME_OF_DAY)
+            log.info(
+                "Migrated weekly social job from old Sunday 08:00 builtin to Saturdays at %s (next_due=%s)",
+                WEEKLY_SOCIAL_TIME_OF_DAY,
+                job["next_due"],
+            )
         return
     schedule_job_record(
         title=WEEKLY_SOCIAL_JOB_TITLE,
@@ -642,6 +652,7 @@ def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = 
         days_of_week=["sat"],
         action="agentic",
         handler="weekly_social",
+        user_id=user_id,
     )
     log.info("Seeded weekly social job (Saturdays at %s)", WEEKLY_SOCIAL_TIME_OF_DAY)
 
