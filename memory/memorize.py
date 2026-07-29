@@ -605,8 +605,9 @@ class _MemoryBackend:
       - search() collapses exact-text duplicates before final ranking,
         keeping only the most recently created row per duplicate cluster;
         runs a tiered quick/wide candidate pass; applies a recency-among-
-        relevant rerank; and finishes with a pinned-slot reserve. See
-        module docstring for the full stage breakdown.
+        relevant rerank. Pinned rows only get MEMORY_RANK_PINNED_WEIGHT as
+        a mild score bonus (no reserved slots). See module docstring for
+        the full stage breakdown.
     """
 
     def __init__(
@@ -888,9 +889,9 @@ class _MemoryBackend:
         3. Score every surviving id: RRF fusion + recency/access/pinned bonuses.
 
         Returns (ids sorted best-first by score, {id: score}, {id: row}).
-        Recency-among-relevant reranking and pinned-reserve are applied
-        afterward by the caller (search()), not here — this method only
-        produces the base score-ordered list.
+        Recency-among-relevant reranking is applied afterward by the
+        caller (search()), not here — this method only produces the base
+        score-ordered list (RRF + recency + access + pinned weight).
         """
         all_ids = set(rank_knn) | set(rank_fts)
         if not all_ids:
@@ -989,7 +990,8 @@ class _MemoryBackend:
     def search(self, query: str, user_id: str, limit: int = 5, vector: list[float] | None = None) -> list[dict]:
         """
         KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate
-        pass, recency-among-relevant reranking, and a pinned-slot reserve.
+        pass and recency-among-relevant reranking. Pinned status is only a
+        MEMORY_RANK_PINNED_WEIGHT score tiebreaker (no reserved slots).
         See module docstring for the full stage-by-stage description.
 
         1. Embed the query once (_embed) — this is the dominant cost
@@ -1002,8 +1004,8 @@ class _MemoryBackend:
             pool from scratch (rank positions shift when the pool grows, so
             this is a fresh scoring pass, not a merge with the quick pass).
         4. Reorder the resulting candidates by recency-among-relevant.
-        5. Apply the pinned rows only get MEMORY_RANK_PINNED_WEIGHT as a mild score bonus.
-        6. Truncate to `limit` and return as payload dicts.
+        5. Truncate to `limit` and return as payload dicts.
+           (Pinned is already folded into scores in step 2 via MEMORY_RANK_PINNED_WEIGHT.)
 
         vector — pre-computed query embedding; skips the _embed HTTP call.
         """
@@ -1140,9 +1142,10 @@ class AikoMemorize:
 
     Pinned memories:
         Created via pin() — the pinned=1 column flag makes them
-        immune to cleanup(), dream prune, and dream merge (as the loser),
-        and eligible for the pinned-slot reserve at recall time (see
-        _MemoryBackend.search() stage 4).
+        immune to cleanup(), dream prune, and dream merge (as the loser).
+        At recall they compete on the same blended score as everything
+        else, with only MEMORY_RANK_PINNED_WEIGHT as a mild tiebreaker
+        (the old stage-4 reserved-slot path was removed).
         Recall-time dedup (in _MemoryBackend.search) still collapses
         multiple pinned rows with identical text down to the most recent
         one, since dream() structurally cannot do this for pinned rows.
@@ -1450,9 +1453,7 @@ class AikoMemorize:
         eat multiple slots of the broad-recall result set.
 
         Note: this is a separate code path from _MemoryBackend.search() and
-        was already pinned-first (ORDER BY pinned DESC, ...) before the
-        pinned-reserve / recency-rerank stages were added there — it is
-        untouched by those changes.
+        uses ORDER BY pinned DESC, ... rather than RRF + MEMORY_RANK_PINNED_WEIGHT.
         """
         # Fetch a wider candidate window than `limit` so dedup doesn't
         # leave fewer than `limit` results when duplicates are present.
