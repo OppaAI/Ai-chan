@@ -4,10 +4,10 @@ toolkit/research.py
 Adaptive search + deep research, expressed as bounded-unroll subgraphs.
 Plus deep_read: a single-known-URL fetch with content-type routing.
 
-Both adaptive_search and deep_research_graph build and run their OWN small
+Both adaptive_search and deep_research build and run their OWN small
 PlanGraph instances via graph_engine.py's execute_graph(). This means they plug
 into graph_engine._tool_map() as single opaque tools — so any playbook that
-currently calls "deep_research" can switch to "deep_research_graph" with a
+currently calls "deep_research" can switch to "deep_research" with a
 one-line args change.
 
 deep_read is NOT a PlanGraph — a single known URL has no "escalate: widen the
@@ -20,7 +20,7 @@ underneath.
 
 Public API:
   - adaptive_search:     snippet-only → fetch only if judge says ESCALATE
-  - deep_research_graph: multi-round fetch + combine + synthesize
+  - deep_research: multi-round fetch + combine + synthesize (PlanGraph under the hood)
   - deep_read:            known URL → content-type routed fetch (+ condense)
   - condense_evidence:    relevance-score and filter evidence chunks
   - fetch_urls_and_score: batch fetch + score URLs outside deep_research context
@@ -549,11 +549,7 @@ def deep_read(
 # These helpers score, dedupe, filter, and format evidence chunks.
 # Moved here from websearch.py to keep research logic in the research module.
 
-import hashlib
-import concurrent.futures
-
 from cognition import reason
-
 
 def _apply_corroboration_bonus(
     scored_chunks: list[tuple[float, str, str]],
@@ -904,6 +900,32 @@ def _deep_search_impl(
     if not urls_to_fetch:
         return snippet_bundle, set()
 
+    # --- robots gate (was passed but unused) ---
+    if respect_robots:
+        urls_to_fetch = [u for u in urls_to_fetch if _source_agreement_allows(u)]
+        if not urls_to_fetch:
+            return (
+                f"{snippet_bundle}\n\n[robots.txt blocked all candidate URLs for this pass]",
+                set(),
+            )
+
+    # --- optional sitemap expansion (was passed but unused) ---
+    if expand_sitemap:
+        origins: set[str] = set()
+        for u in list(urls_to_fetch):
+            p = urlparse(u)
+            if p.scheme and p.netloc:
+                origins.add(f"{p.scheme}://{p.netloc}")
+        extra: list[str] = []
+        for origin in origins:
+            for su in _discover_sitemap_urls(origin, query_hint=query, max_urls=sitemap_max_urls):
+                if su not in (exclude_urls or set()) and su not in urls_to_fetch:
+                    if not respect_robots or _source_agreement_allows(su):
+                        extra.append(su)
+        # keep total fetch budget honest: candidates already sized to num_fetches
+        room = max(0, num_fetches - len(urls_to_fetch))
+        urls_to_fetch.extend(extra[:room])
+
     # Score/fetch pipeline
     scored_chunks, pages, url_outcomes = _fetch_and_score_pipeline(
         urls_to_fetch,
@@ -963,7 +985,7 @@ def _format_url_manifest(url_outcomes: list[tuple[str, str]]) -> str:
 
 
 # ── session-scoped cross-round URL dedup ─────────────────────────────────
-# Keyed on a short random session id generated once per deep_research_graph()
+# Keyed on a short random session id generated once per deep_research()
 # run, not on anything derived from the query — so two concurrent deep
 # research runs never share (or collide on) a dedup set. Swept by TTL as a
 # safety net in case a run dies before reaching combine_research_rounds's
