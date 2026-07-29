@@ -661,6 +661,7 @@ def ensure_workspace_knowledge_job(timezone: str | None = None, user_id: str | N
         action="agentic",
         handler="workspace_knowledge_scan",
         interval_seconds=max(60, WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS),
+        user_id=user_id,
     )
     log.info("Seeded workspace knowledge scan job every %ss", max(60, WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS))
 
@@ -929,6 +930,7 @@ def ensure_deep_study_window_jobs(timezone: str | None = None, user_id: str | No
             days_of_week=days,
             action="agentic",
             handler=handler,
+            user_id=user_id
         )
         log.info("Seeded deep-study window job %r (%s, %s)", title, time_of_day, days)
 
