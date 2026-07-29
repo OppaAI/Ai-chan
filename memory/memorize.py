@@ -1813,7 +1813,7 @@ class AikoMemorize:
     ) -> dict:
         """
         Prune decayed memories below threshold score.
-        Grace period (14 days) protects newly created memories.
+        Grace period (default 21 days) protects newly created memories.
         Pinned memories are unconditionally kept.
 
         _all_mems: internal — when called from dream(), the already-fetched
