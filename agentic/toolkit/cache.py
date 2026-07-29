@@ -254,6 +254,16 @@ class TTLCache:
             # Store value with current monotonic timestamp
             self._cache[key] = (time.monotonic(), value)
 
+    def delete(self, key: str) -> bool:
+        """Remove a key if present. Returns True when something was removed."""
+        with self._lock:
+            return self._cache.pop(key, None) is not None
+    
+    def clear(self) -> None:
+        """Drop every entry."""
+        with self._lock:
+            self._cache.clear()
+  
     def __len__(self) -> int:
         """Return the current number of entries in the cache (approximate).
 
