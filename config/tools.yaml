@@ -755,29 +755,30 @@
     {
       "handler": "agentic.toolkit.job_hunt:search_jobs",
       "name": "search_jobs",
-      "description": "Return today's tech job postings from configured RSS feeds (query/location args are ignored by design).",
+      "description": "Return today's tech job postings from configured RSS feeds only. query, location, max_age_days, and job_type are accepted for compatibility but ignored; use max_results to cap output.",
       "props": {
         "query": {
-          "type": "string"
+          "type": "string",
+          "description": "Ignored; RSS feed selection is configured in job_hunt settings."
         },
         "location": {
           "type": "string",
-          "description": "Optional override. Defaults to the job_hunt skill location."
+          "description": "Ignored; RSS feed selection is configured in job_hunt settings."
         },
         "max_results": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Maximum number of RSS postings to return."
         },
         "max_age_days": {
-          "type": "integer"
+          "type": "integer",
+          "description": "Ignored; this tool only returns jobs posted today."
         },
         "job_type": {
           "type": "string",
-          "description": "Optional employment type filter from the user prompt, e.g. full-time, contract, remote."
+          "description": "Ignored; keyword filtering comes from job_hunt settings."
         }
       },
-      "required": [
-        "query"
-      ],
+      "required": [],
       "domain": "jobs",
       "react": false,
       "graph": true,

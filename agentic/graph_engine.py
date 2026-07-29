@@ -710,15 +710,15 @@ def _default_playbooks() -> list[dict[str, Any]]:
         },
         {
             "id": "gen_job_post",
-            "name": "Search, draft, and save job listings from configured boards",
+            "name": "Fetch, draft, and save job listings from configured RSS feeds",
             "triggers": [
                 "job post", "post job", "draft job", "job listing",
                 "daily job", "job hunt post", "job posting", "find jobs",
             ],
             "semantic_triggers": [
                 "draft a job posting for social media",
-                "search and post jobs",
-                "create job posts from search results",
+                "fetch and post jobs from RSS",
+                "create job posts from RSS results",
                 "run the daily job post pipeline",
             ],
             "requires_any": ["job", "jobs", "posting", "hiring", "career"],
@@ -742,7 +742,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
 def _default_playbook_definitions() -> list[dict[str, Any]]:
     """Full default playbook definitions, used to seed playbook.json on first boot.
 
-    Same as _default_playbooks(), but the gen_job_post entry gets a
+    Same as _default_playbooks(), but the gen_job_post RSS entry gets a
     `trigger` field added for automatic scheduling (no duplicate entry).
     """
     defaults = _default_playbooks()

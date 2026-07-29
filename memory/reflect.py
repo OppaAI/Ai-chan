@@ -15,7 +15,7 @@ Environment variables required:
 
 Optional:
   SOUL_PATH           — path to SOUL.md (default "persona/SOUL.md")
-  REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 20)
+  REFLECT_MAX_MEMS    — max memory snippets to feed the LLM (default 50)
   REFLECT_TAGS        — comma-separated Hugo tags (default "daily-reflection,ai-journal,aiko")
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
@@ -256,10 +256,10 @@ def _generate_daily_facts(
     if _retry:
         prompt_template += (
             "\n\nIMPORTANT: Only return [] if the narrative truly describes "
-            "nothing but atmosphere with zero concrete events. If any "
-            "activity, decision, bug, plan, or interaction is mentioned — "
-            "even briefly or metaphorically — extract at least one fact "
-            "from it."
+            "nothing but atmosphere with zero concrete events. Extract only "
+            "concrete activities, decisions, bugs, plans, or interactions "
+            "explicitly supported by the prose or snippets; do not turn "
+            "metaphor or mood into invented narrative facts."
         )
     user_prompt = prompt_template.format(
         date_str=date.strftime("%Y-%m-%d"),
