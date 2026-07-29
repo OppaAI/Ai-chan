@@ -1096,18 +1096,12 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
         log.debug("repo tools unavailable for graph executor: %s", exc)
     try:
         from agentic.toolkit.job_hunt import (
-            search_searxng, parse_jobs, filter_jobs, format_job_post,
-            search_jobs, dedupe_postings,
+            search_jobs,
             gen_job_search_plan, execute_job_search_plan,
             draft_job_posts_from_results, save_or_post_job_drafts, report_job_run,
         )
         mapping.update({
-            "search_searxng": search_searxng,
-            "parse_jobs": parse_jobs,
-            "filter_jobs": filter_jobs,
-            "format_job_post": format_job_post,
             "search_jobs": search_jobs,
-            "dedupe_postings": dedupe_postings,
             "gen_job_search_plan": gen_job_search_plan,
             "execute_job_search_plan": execute_job_search_plan,
             "draft_job_posts_from_results": draft_job_posts_from_results,
