@@ -82,7 +82,7 @@ load_config()
 from cognition import reason
 from agentic.toolkit.ingest import _check_host_ssrf
 from agentic.toolkit.websearch import web_search, web_fetch
-from agentic.toolkit.research import adaptive_search, deep_research
+from agentic.toolkit.research import deep_research
 from agentic.toolkit.common import ask_llm_json as _ask_llm_json
 
 from system.log import get_logger
@@ -124,8 +124,8 @@ def quick_studying(
     model: str | None = None,
     embedder=None,
 ) -> str:
-    return adaptive_search(topic, client=client, model=model, embedder=embedder,
-                            max_rounds=QUICK_STUDY_MAX_ROUNDS)
+    return deep_research(topic, client=client, model=model, embedder=embedder,
+                          max_rounds=QUICK_STUDY_MAX_ROUNDS, tool_mode=True)
 
 
 # ── idle learner loop ─────────────────────────────────────────────────────────
