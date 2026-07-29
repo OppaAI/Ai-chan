@@ -753,16 +753,35 @@ def _default_playbook_definitions() -> list[dict[str, Any]]:
 
 
 def load_playbooks() -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for p in _default_playbooks():
+        pid = p.get("id")
+        if isinstance(p, dict) and pid:
+            by_id[str(pid)] = dict(p)
+
     path = _playbook_file()
-    plans = _default_playbooks()
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, list):
-                plans.extend(p for p in data if isinstance(p, dict))
+                for p in data:
+                    if not isinstance(p, dict):
+                        continue
+                    pid = p.get("id")
+                    if not pid:
+                        by_id[f"_anon_{len(by_id)}"] = p
+                        continue
+                    pid = str(pid)
+                    if pid in by_id:
+                        merged = dict(by_id[pid])
+                        merged.update(p)
+                        by_id[pid] = merged
+                    else:
+                        by_id[pid] = p
         except Exception as exc:
             log.warning("failed to load graph playbooks from %s: %s", path, exc)
-    return plans
+
+    return list(by_id.values())
 
 
 def ensure_playbooks(user_id: str | None = None) -> None:
