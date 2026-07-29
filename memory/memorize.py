@@ -200,13 +200,9 @@ MEMORY_RECALL_SCORE_THRESHOLD = float(os.getenv("MEMORY_RECALL_SCORE_THRESHOLD",
 MEMORY_RANK_RECENCY_WEIGHT = float(os.getenv("MEMORY_RANK_RECENCY_WEIGHT", "0.004"))
 MEMORY_RANK_RECENCY_HALF_LIFE_DAYS = float(os.getenv("MEMORY_RANK_RECENCY_HALF_LIFE_DAYS", "30"))
 MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"))
-# Bumped from 0.002 -> 0.01: at the old weight, pinned status barely moved
-# ranking relative to RRF terms (~0.016 at rank 1), so pinned facts weren't
-# reliably outranking unpinned ones of similar relevance. 0.01 makes pinned
-# status a meaningful tiebreaker while staying below a full RRF rank-1 term,
-# so a highly relevant unpinned memory can still beat a barely-relevant
-# pinned one. The hard guarantee for pinned visibility now lives in
-MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.002"))
+# Bumped from 0.002 -> 0.01 so pinned status is a meaningful tiebreaker
+# under RRF (~0.016 at rank 1), without beating a clearly better unpinned hit.
+MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01"))
 MEMORY_SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 MEMORY_SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -1006,7 +1002,7 @@ class _MemoryBackend:
             pool from scratch (rank positions shift when the pool grows, so
             this is a fresh scoring pass, not a merge with the quick pass).
         4. Reorder the resulting candidates by recency-among-relevant.
-        5. Apply the pinned-slot reserve as a final guarantee.
+        5. Apply the pinned rows only get MEMORY_RANK_PINNED_WEIGHT as a mild score bonus.
         6. Truncate to `limit` and return as payload dicts.
 
         vector — pre-computed query embedding; skips the _embed HTTP call.
