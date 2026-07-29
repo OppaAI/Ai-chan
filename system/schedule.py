@@ -112,6 +112,11 @@ def schedule_path(user_id: str | None = None) -> Path:
         return Path(override).expanduser().resolve()
     return user_state_path("tasks/schedule.json", user_id=user_id).resolve()
 
+
+def schedule_graphs_path(user_id: str | None = None) -> Path:
+    """Resolve the schedule-graphs path (DAG-based scheduled workflows)."""
+    return user_state_path("tasks/schedule_graphs.json", user_id=user_id).resolve()
+
 # System job timing — env overridable, not user-modifiable via schedule.json
 DAILY_JOB_HOUR   = int(os.getenv("DAILY_JOB_HOUR",   "0"))
 DAILY_JOB_MINUTE = int(os.getenv("DAILY_JOB_MINUTE", "0"))
@@ -412,6 +417,99 @@ def _write_all(jobs: list[dict], user_id: str | None = None) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+# ── schedule-graphs I/O ────────────────────────────────────────────────────────
+# Schedule graphs are DAG-based workflows with integrated triggers. Stored in a
+# separate file from schedule.json so the two systems coexist during migration.
+# Each entry has: id, trigger (time/frequency), nodes (graph DAG), next_due,
+# last_ran_at, enabled.
+
+_graphs_cache: list[dict] | None = None
+
+
+def _read_schedule_graphs(user_id: str | None = None) -> list[dict]:
+    global _graphs_cache
+    if _graphs_cache is not None:
+        return _graphs_cache
+    path = schedule_graphs_path(user_id=user_id)
+    data = _read_raw(path)
+    _graphs_cache = data
+    return data
+
+
+def _invalidate_graphs_cache() -> None:
+    global _graphs_cache
+    _graphs_cache = None
+
+
+def _write_schedule_graphs(graphs: list[dict], user_id: str | None = None) -> None:
+    _invalidate_graphs_cache()
+    path = schedule_graphs_path(user_id=user_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(graphs, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _schedule_graph_next_due(graph_def: dict, after: datetime | None = None) -> datetime:
+    trigger = graph_def.get("trigger", {})
+    return calculate_next_due(
+        time_of_day=trigger.get("time", "08:00"),
+        frequency=trigger.get("frequency", "daily"),
+        timezone=trigger.get("timezone"),
+        days_of_week=trigger.get("days_of_week"),
+        after=after,
+        interval_seconds=trigger.get("interval_seconds"),
+    )
+
+
+def _default_schedule_graphs() -> list[dict]:
+    return [
+        {
+            "id": "daily_job_post_social",
+            "trigger": {"time": "23:00", "frequency": "daily"},
+            "next_due": "",
+            "last_ran_at": None,
+            "goal": "Run the daily job post pipeline",
+            "nodes": [
+                {"id": "plan",   "tool": "gen_job_search_plan",   "args": {"prompt": "$prompt", "config_source": ""}},
+                {"id": "search", "tool": "execute_job_search_plan", "depends_on": ["plan"],
+                 "args": {"plan_json": "$result:plan"}},
+                {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search"],
+                 "args": {"results_json": "$result:search", "template": ""}},
+                {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
+                 "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
+                {"id": "report", "tool": "report_job_run", "depends_on": ["save"],
+                 "args": {"plan": "$result:plan", "search": "$result:search",
+                          "draft": "$result:draft", "save": "$result:save"}},
+            ],
+        },
+    ]
+
+
+def ensure_schedule_graphs(user_id: str | None = None) -> None:
+    path = schedule_graphs_path(user_id=user_id)
+    if path.exists():
+        return
+    graphs = _default_schedule_graphs()
+    now = bioclock.local_now()
+    for g in graphs:
+        g["next_due"] = _schedule_graph_next_due(g, after=now).isoformat()
+    _write_schedule_graphs(graphs, user_id=user_id)
+    log.info("Seeded schedule graphs: %s", [g["id"] for g in graphs])
+
+    # Disable the migrated schedule.json entry so there's no double-fire.
+    jobs = _read_all(user_id=user_id)
+    changed = False
+    for job in jobs:
+        if job.get("title") == JOB_POST_SOCIAL_JOB_TITLE and job.get("enabled", True):
+            job["enabled"] = False
+            job["migrated_to"] = "schedule_graph"
+            changed = True
+            log.info("Migrated %r from schedule.json to schedule_graphs.json", job.get("title"))
+    if changed:
+        _write_all(jobs, user_id=user_id)
 
 
 def schedule_job_record(
@@ -787,6 +885,10 @@ def register_social_handlers(timezone: str | None = None, user_id: str | None = 
 
     log.info("Registered social handlers and seeded social jobs; daily_job_post_social uses a schedule.json tool_call.")
 
+    # Schedule-graphs (DAG-based scheduled workflows) — migrated out of
+    # schedule.json one lane at a time.  Currently seeds Lane D only.
+    ensure_schedule_graphs(user_id=user_id)
+
 
 def bootstrap_non_system_jobs(
     *,
@@ -1126,13 +1228,21 @@ class ScheduleRunner:
             # ── fire overdue user jobs ────────────────────────────────────────
             self._fire_due_user_jobs()
 
+            # ── fire overdue schedule graphs ──────────────────────────────────
+            self._fire_due_schedule_graphs()
+
             # ── sleep until soonest next target ──────────────────────────────
             user_jobs = [
                 datetime.fromisoformat(j["next_due"])
                 for j in _read_all()
                 if j.get("enabled", True)
             ]
-            candidates = [self._next_daily, self._next_monthly, *user_jobs]
+            graph_times = [
+                datetime.fromisoformat(g["next_due"])
+                for g in _read_schedule_graphs()
+                if g.get("enabled", True) and g.get("next_due")
+            ]
+            candidates = [self._next_daily, self._next_monthly, *user_jobs, *graph_times]
             next_target = min(candidates)
 
             delta = (next_target - bioclock.local_now()).total_seconds()
@@ -1313,6 +1423,67 @@ class ScheduleRunner:
                     self._on_due(event)
                 except Exception:
                     log.exception("Scheduled job handler failed for %s", event.get("title", event.get("id", "?")))
+
+    # ── schedule-graph runner ───────────────────────────────────────────────────
+
+    def _fire_due_schedule_graphs(self) -> None:
+        graphs = _read_schedule_graphs(user_id=self._user_id)
+        changed = False
+        now = bioclock.local_now()
+
+        for g in graphs:
+            if not g.get("enabled", True):
+                continue
+            tz_name = bioclock.timezone_name(g.get("trigger", {}).get("timezone"))
+            try:
+                due = datetime.fromisoformat(g["next_due"])
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=bioclock.get_timezone(tz_name))
+            except Exception:
+                due = _schedule_graph_next_due(g)
+                g["next_due"] = due.isoformat()
+                changed = True
+
+            if due <= now:
+                self._run_schedule_graph(g)
+                g["last_ran_at"] = now.isoformat()
+                g["next_due"] = _schedule_graph_next_due(g, after=now).isoformat()
+                changed = True
+
+        if changed:
+            _write_schedule_graphs(graphs, user_id=self._user_id)
+
+    def _run_schedule_graph(self, graph_def: dict) -> None:
+        from agentic.graph_engine import PlanNode, PlanGraph, execute_graph
+
+        nodes = []
+        for raw in graph_def.get("nodes", []):
+            if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
+                nodes.append(PlanNode(
+                    id=str(raw["id"]),
+                    tool=str(raw["tool"]),
+                    args=dict(raw.get("args", {})),
+                    depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
+                ))
+        if not nodes:
+            log.warning("Schedule graph %s has no valid nodes — skipping", graph_def.get("id"))
+            return
+
+        graph = PlanGraph(
+            id=graph_def.get("id", "schedule_graph"),
+            name=graph_def.get("id", "Schedule Graph"),
+            goal=graph_def.get("goal", f"Scheduled run: {graph_def.get('id', 'unknown')}"),
+            nodes=tuple(nodes),
+        )
+
+        try:
+            result = execute_graph(graph)
+            log.info(
+                "Schedule graph %s completed — ok=%s, nodes=%d",
+                graph.id, all(r.ok for r in result.results), len(result.results),
+            )
+        except Exception as e:
+            log.error("Schedule graph %s failed: %s", graph_def.get("id", "?"), e)
 
 
 def start_scheduler(
