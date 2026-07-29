@@ -1956,6 +1956,18 @@ class AikoMemorize:
         self._mem.delete(memory_id)
         self._clear_search_cache()
 
+    def vacuum_memory_db(user_id: str | None = None) -> None:
+      """Reclaim space after bulk deletes (monthly maintenance)."""
+      from system.userspace import current_user_id
+      uid = user_id or current_user_id()
+      conn = _connect(uid)  # ← Use private method inside the module only
+      try:
+          conn.execute("VACUUM")
+          conn.execute("ANALYZE")
+          conn.commit()
+      finally:
+          conn.close()
+
     def clear(self, user_id: str | None = None) -> None:
         """Wipe all memories for a user. Use carefully."""
         user_id = self._resolve_user_id(user_id)
