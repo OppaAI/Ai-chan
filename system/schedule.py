@@ -465,25 +465,19 @@ def _schedule_graph_next_due(graph_def: dict, after: datetime | None = None) -> 
 
 
 def _default_schedule_graphs() -> list[dict]:
+    """Seed entries that reference playbook IDs.
+    
+    Each entry has: id, trigger (timing), graph_id (playbook to execute),
+    plus runtime state (next_due, last_ran_at, enabled).
+    """
     return [
         {
             "id": "daily_job_post_social",
             "trigger": {"time": "23:00", "frequency": "daily"},
+            "graph_id": "gen_job_post",
             "next_due": "",
             "last_ran_at": None,
-            "goal": "Run the daily job post pipeline",
-            "nodes": [
-                {"id": "plan",   "tool": "gen_job_search_plan",   "args": {"prompt": "$prompt", "config_source": ""}},
-                {"id": "search", "tool": "execute_job_search_plan", "depends_on": ["plan"],
-                 "args": {"plan_json": "$result:plan"}},
-                {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search"],
-                 "args": {"results_json": "$result:search", "template": ""}},
-                {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
-                 "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
-                {"id": "report", "tool": "report_job_run", "depends_on": ["save"],
-                 "args": {"plan": "$result:plan", "search": "$result:search",
-                          "draft": "$result:draft", "save": "$result:save"}},
-            ],
+            "enabled": True,
         },
     ]
 
@@ -817,35 +811,6 @@ def ensure_video_social_job(timezone: str | None = None, user_id: str | None = N
     log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
 
 
-def ensure_daily_job_post_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
-    """Idempotently seed the daily one-draft tech job-post social job."""
-    jobs = _read_all(user_id=user_id)
-    for job in jobs:
-        if job.get("title") == JOB_POST_SOCIAL_JOB_TITLE:
-            # Upgrade older handler-backed records without overriding a user
-            # change unless it is the former built-in handler format.
-            if job.get("handler") == "daily_job_post_social":
-                job.update({
-                    "frequency": "daily",
-                    "action": "tool",
-                    "handler": None,
-                    "tool_call": {"name": "run_job_post_playbook", "arguments": {"prompt": ""}},
-                })
-                _write_all(jobs, user_id=user_id)
-            return
-    schedule_job_record(
-        title=JOB_POST_SOCIAL_JOB_TITLE,
-        task="Run the daily job post graph playbook",
-        time_of_day=JOB_POST_SOCIAL_TIME_OF_DAY,
-        frequency="daily",
-        timezone=timezone,
-        action="tool",
-        tool_call={"name": "run_job_post_playbook", "arguments": {"prompt": ""}},
-        user_id=user_id,
-    )
-    log.info("Seeded daily job-post social job at %s", JOB_POST_SOCIAL_TIME_OF_DAY)
-
-
 def register_social_handlers(timezone: str | None = None, user_id: str | None = None) -> None:
     """Register the weekly/photo/video social handlers and seed their jobs.
 
@@ -881,13 +846,12 @@ def register_social_handlers(timezone: str | None = None, user_id: str | None = 
     ensure_photo_social_job(timezone, user_id=user_id)
     ensure_video_social_job(timezone, user_id=user_id)
     ensure_weekly_social_retry_job(timezone, user_id=user_id)
-    ensure_daily_job_post_social_job(timezone, user_id=user_id)
-
-    log.info("Registered social handlers and seeded social jobs; daily_job_post_social uses a schedule.json tool_call.")
 
     # Schedule-graphs (DAG-based scheduled workflows) — migrated out of
     # schedule.json one lane at a time.  Currently seeds Lane D only.
     ensure_schedule_graphs(user_id=user_id)
+
+    log.info("Registered social handlers and seeded social jobs; Lane D uses schedule_graphs.json.")
 
 
 def bootstrap_non_system_jobs(
@@ -1454,10 +1418,16 @@ class ScheduleRunner:
             _write_schedule_graphs(graphs, user_id=self._user_id)
 
     def _run_schedule_graph(self, graph_def: dict) -> None:
-        from agentic.graph_engine import PlanNode, PlanGraph, execute_graph
+        from agentic.graph_engine import PlanNode, PlanGraph, execute_graph, get_playbook_by_id
+
+        graph_id = graph_def.get("graph_id") or graph_def.get("id", "")
+        playbook = get_playbook_by_id(graph_id)
+        if playbook is None:
+            log.warning("Schedule graph %r references unknown playbook %r — skipping", graph_def.get("id"), graph_id)
+            return
 
         nodes = []
-        for raw in graph_def.get("nodes", []):
+        for raw in playbook.get("nodes", []):
             if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
                 nodes.append(PlanNode(
                     id=str(raw["id"]),
@@ -1466,13 +1436,13 @@ class ScheduleRunner:
                     depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
                 ))
         if not nodes:
-            log.warning("Schedule graph %s has no valid nodes — skipping", graph_def.get("id"))
+            log.warning("Playbook %r has no valid nodes — skipping", graph_id)
             return
 
         graph = PlanGraph(
-            id=graph_def.get("id", "schedule_graph"),
-            name=graph_def.get("id", "Schedule Graph"),
-            goal=graph_def.get("goal", f"Scheduled run: {graph_def.get('id', 'unknown')}"),
+            id=graph_id,
+            name=playbook.get("name", graph_id),
+            goal=playbook.get("goal", f"Scheduled run: {graph_id}"),
             nodes=tuple(nodes),
         )
 
@@ -1499,8 +1469,11 @@ def start_scheduler(
     This keeps wakeup.py free of scheduler wiring so it only boots the live
     subsystems and then delegates the rest here.
     """
+    from agentic.graph_engine import ensure_playbooks
     from memory.reflect import generate_and_post
     from memory.consolidate import maybe_run_consolidation
+
+    ensure_playbooks(user_id=user_id)
 
     scheduler = ScheduleRunner(
         on_due=on_due,

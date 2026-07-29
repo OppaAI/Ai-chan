@@ -536,45 +536,6 @@ class VerificationResult:
     score: float = 1.0
 
 
-def _run_job_post_playbook(prompt: str = "") -> str:
-    """Run the daily_job_post graph playbook directly by ID."""
-    try:
-        from agentic.graph_engine import load_playbooks, PlanGraph, PlanNode, execute_graph
-        playbooks = load_playbooks()
-        playbook = None
-        for p in playbooks:
-            if p.get("id") == "gen_job_post":
-                playbook = p
-                break
-        if not playbook:
-            return json.dumps({"success": False, "error": "gen_job_post playbook not found"}, ensure_ascii=False)
-
-        nodes = []
-        for raw in playbook.get("nodes", []):
-            if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
-                nodes.append(PlanNode(
-                    id=str(raw["id"]),
-                    tool=str(raw["tool"]),
-                    args=dict(raw.get("args") or {}),
-                    depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
-                ))
-        graph = PlanGraph(
-            id="gen_job_post",
-            name=playbook.get("name", "Job Post"),
-            goal=prompt or "Draft job posts from config",
-            nodes=tuple(nodes),
-        )
-        result = execute_graph(graph)
-        return json.dumps({
-            "success": all(r.ok for r in result.results),
-            "graph_id": result.graph.id,
-            "results": [{"node": r.node_id, "tool": r.tool, "ok": r.ok, "error_type": r.error_type} for r in result.results],
-            "final_answer": result.final_answer,
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-
-
 def tool_schemas() -> list[dict]:
     """Return OpenAI-compatible tool schemas for autonomous task mode."""
     return [schema for schema, _handler in _TOOLS.values()]
@@ -594,10 +555,6 @@ def final_answer(answer: str) -> str:
     return answer
 
 
-def run_job_post_playbook(prompt: str = "") -> str:
-    return _run_job_post_playbook(prompt)
-
-
 def _register_agentic_local_tools() -> None:
     register_tool_schema(
         "learn_knowledge",
@@ -611,13 +568,6 @@ def _register_agentic_local_tools() -> None:
         },
         required=["title"],
         domain="kb",
-    )
-    registry.register(
-        name="run_job_post_playbook",
-        description="Run the daily job post graph playbook: search jobs, draft posts, save/flag them. Uses config from job_hunt.json. Pass a prompt to override defaults (e.g. location, salary).",
-        handler=run_job_post_playbook,
-        props={"prompt": {"type": "string", "description": "Optional prompt with overrides like location, salary, categories. Empty = use job_hunt.json defaults."}},
-        domain="graph",
     )
 
 

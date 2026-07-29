@@ -738,6 +738,45 @@ def _default_playbooks() -> list[dict[str, Any]]:
     ]
 
 
+def _default_playbook_definitions() -> list[dict[str, Any]]:
+    """Full default playbook definitions, used to seed playbook.json on first boot.
+    
+    Same as _default_playbooks() but includes the gen_job_post entry with a
+    trigger for automatic scheduling.
+    """
+    defaults = _default_playbooks()
+    defaults.append({
+        "id": "gen_job_post",
+        "name": "Search, draft, and save job listings from configured boards",
+        "trigger": {"time": "23:00", "frequency": "daily"},
+        "triggers": [
+            "job post", "post job", "draft job", "job listing",
+            "daily job", "job hunt post", "job posting", "find jobs",
+        ],
+        "semantic_triggers": [
+            "draft a job posting for social media",
+            "search and post jobs",
+            "create job posts from search results",
+            "run the daily job post pipeline",
+        ],
+        "requires_any": ["job", "jobs", "posting", "hiring", "career"],
+        "capabilities": ["research"],
+        "nodes": [
+            {"id": "plan",   "tool": "gen_job_search_plan",   "args": {"prompt": "$prompt", "config_source": ""}},
+            {"id": "search", "tool": "execute_job_search_plan", "depends_on": ["plan"],
+             "args": {"plan_json": "$result:plan"}},
+            {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search"],
+             "args": {"results_json": "$result:search", "template": ""}},
+            {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
+             "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
+            {"id": "report", "tool": "report_job_run", "depends_on": ["save"],
+             "args": {"plan": "$result:plan", "search": "$result:search",
+                      "draft": "$result:draft", "save": "$result:save"}},
+        ],
+    })
+    return defaults
+
+
 def load_playbooks() -> list[dict[str, Any]]:
     path = _playbook_file()
     plans = _default_playbooks()
@@ -749,6 +788,26 @@ def load_playbooks() -> list[dict[str, Any]]:
         except Exception as exc:
             log.warning("failed to load graph playbooks from %s: %s", path, exc)
     return plans
+
+
+def ensure_playbooks(user_id: str | None = None) -> None:
+    """Seed playbook.json with full defaults if it doesn't exist yet."""
+    path = _playbook_file()
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(_default_playbook_definitions(), ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    log.info("Seeded playbook.json with %d defaults", len(_default_playbook_definitions()))
+
+
+def get_playbook_by_id(playbook_id: str) -> dict[str, Any] | None:
+    """Look up a playbook by ID across both code defaults and the file."""
+    for pb in load_playbooks():
+        if pb.get("id") == playbook_id:
+            return pb
+    return None
 
 
 def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = None,

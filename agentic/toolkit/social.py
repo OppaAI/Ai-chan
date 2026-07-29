@@ -1196,17 +1196,42 @@ def run_scheduled_video_social() -> dict[str, Any]:
 # ══════════════════════════════════════════════════════════════════════════
 # Lane D — Daily job-post draft for Meta Threads
 # ══════════════════════════════════════════════════════════════════════════
-# Delegates to the RSS-only graph playbook (daily_job_post) via job_hunt primitives.
+# The scheduled execution is handled by schedule_graphs.json → _run_schedule_graph
+# (see system/schedule.py). The agent tool below is the on-demand path that
+# reads the same gen_job_post playbook from playbook.json and executes it.
 
 JOB_POST_SOCIAL_AUTODRAFT = os.getenv("JOB_POST_SOCIAL_AUTODRAFT", "1").lower() in {"1", "true", "yes", "on"}
 JOB_POST_SOCIAL_AUTOPOST = os.getenv("JOB_POST_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
 
 
-def generate_daily_job_post_draft(*, force: bool = False) -> dict[str, Any]:
-    """Run the RSS-only Lane D graph playbook."""
-    from agentic.agentic import _run_job_post_playbook
-    result_json = _run_job_post_playbook("")
-    return json.loads(result_json)
+def _run_gen_job_post_playbook() -> dict[str, Any]:
+    """Load and execute the gen_job_post playbook from the shared playbook system."""
+    from agentic.graph_engine import get_playbook_by_id, PlanNode, PlanGraph, execute_graph
+    playbook = get_playbook_by_id("gen_job_post")
+    if playbook is None:
+        return {"success": False, "error": "gen_job_post playbook not found"}
+    nodes = []
+    for raw in playbook.get("nodes", []):
+        if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
+            nodes.append(PlanNode(
+                id=str(raw["id"]), tool=str(raw["tool"]),
+                args=dict(raw.get("args", {})),
+                depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
+            ))
+    graph = PlanGraph(
+        id="gen_job_post", name=playbook.get("name", "Job Post"),
+        goal="Draft job posts from config", nodes=tuple(nodes),
+    )
+    try:
+        result = execute_graph(graph)
+        return {
+            "success": all(r.ok for r in result.results),
+            "graph_id": result.graph.id,
+            "results": [{"node": r.node_id, "tool": r.tool, "ok": r.ok, "error_type": r.error_type} for r in result.results],
+            "final_answer": result.final_answer,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 def post_job_post_draft(draft_dir: str | Path) -> dict[str, Any]:
@@ -1233,13 +1258,6 @@ def post_job_post_draft(draft_dir: str | Path) -> dict[str, Any]:
         meta["post_results"] = [result]
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return post_meta
-
-
-def run_scheduled_daily_job_post_social(_memorize: Any = None) -> dict[str, Any]:
-    """Scheduled RSS-only Lane D graph playbook handler."""
-    from agentic.agentic import _run_job_post_playbook
-    result_json = _run_job_post_playbook("")
-    return json.loads(result_json)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1282,7 +1300,7 @@ from agentic.registry import TOOLS, tool
 @tool(TOOLS["draft_job_post_social"])
 def draft_job_post_social(*, force: bool = False) -> dict[str, Any]:
     """Create a daily Vancouver-area job-post draft for Meta Threads review."""
-    return generate_daily_job_post_draft(force=force)
+    return _run_gen_job_post_playbook()
 
 
 @tool(TOOLS["post_job_post_social"])
