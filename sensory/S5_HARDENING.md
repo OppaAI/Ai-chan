@@ -1,7 +1,6 @@
-# S5 — ASR / voice hardening (optional)
+# ASR / voice hardening (optional)
 
 **Status:** backlog / decide later  
-**Depends on:** S0–S4 (core voice) done  
 **Not required** for normal solo use with headphones and barge off.
 
 Use this doc as a todo checklist. Pick items only when real pain shows up.
@@ -10,11 +9,9 @@ Use this doc as a todo checklist. Pick items only when real pain shows up.
 
 ## Purpose
 
-S0–S4 made barge, endpointing, names, and echo-guard product-correct, and locked dual-VAD policy (energy client + server Silero).
+This hardening plan is industrial-style polish the audit called out as gaps vs pro stacks:
 
-**S5** is industrial-style polish the audit called out as gaps vs pro stacks:
-
-| Gap | S5 item |
+| Gap | Action items |
 |-----|---------|
 | Little production telemetry | Metrics |
 | Weak local AEC (speakers → mic) | Local AEC with TTS reference |
@@ -40,13 +37,13 @@ None of these require abandoning SenseVoice for the final transcript.
 - Replacing `parec` with WebRTC for local mic  
 - Dropping server Silero or dual-VAD policy (see `VAD_POLICY.md`)  
 - Contact-center grade confidence / hotword servers  
-- Mixing S5 into memory M-* PRs  
+- Mixing into memory M-* PRs  
 
 ---
 
 ## Decision guide — do I need this?
 
-| Your situation | Suggested S5 |
+| Your situation | Suggestions |
 |----------------|--------------|
 | Solo, headphones, `BARGE_IN_ENABLED=0` | **None** |
 | Want numbers to tune yaml | **Metrics only** |
@@ -54,7 +51,7 @@ None of these require abandoning SenseVoice for the final transcript.
 | Slow uplink / remote WebUI | **Opus** |
 | “Feels laggy” waiting for silence + full decode | **Streaming partials** (largest project) |
 
-**Default recommendation:** leave S5 closed until one of the middle rows is true.
+**Default recommendation:** leave it closed until one of the middle rows is true.
 
 ---
 
@@ -140,51 +137,22 @@ Mic → Silero still endpoints
 
 ---
 
-## Suggested implementation order (if you open S5)
-
-```text
-S5a  Metrics hooks + log summary
-S5b  Local AEC only if speakers + barge still fail
-S5c  Opus only if bandwidth measured as a problem
-S5d  Streaming partials as a dedicated project (own branch, long runway)
-```
-
-Ship **S5a** as its own small PR. Do not bundle AEC + streaming in one PR.
-
----
-
-## Relation to S0–S4
-
-| Phase | Role |
-|-------|------|
-| S0 | `BARGE_IN_ENABLED`, speaker gate |
-| S1 | Longer pre-roll (~700 ms) |
-| S2 | Post-ASR name corrections (no finetune) |
-| S3 | Echo guard + stricter barge |
-| S4 | Dual-VAD policy docs (energy + server Silero) |
-| **S5** | This file — optional hardening |
-
-Core product voice = **S0–S4**. S5 is ops / full-duplex / latency theater.
-
----
-
 ## Explicit non-goals (for now)
 
 - Finetune SenseVoice for “Aiko” / “OppaAI” (S2 is enough until proven otherwise)  
 - Double Silero in the browser  
 - WebRTC as the only transport for local mic  
-- Requiring S5 before memory M-B/C/D/E  
 
 ---
 
 ## Todo checklist (copy into your list)
 
 ```text
-[ ] Decide: any S5 pain after a week of real use?
-[ ] S5a Metrics — empty rate, RTF, barge rate, speaker scores
-[ ] S5b Local AEC — only if speakers + barge still bad
-[ ] S5c Opus on WS — only if uplink bandwidth hurts
-[ ] S5d Streaming partials — only if felt latency is the main complaint
+[ ] Decide: any pain after a week of real use?
+[ ] a) Metrics — empty rate, RTF, barge rate, speaker scores
+[ ] b) Local AEC — only if speakers + barge still bad
+[ ] c) Opus on WS — only if uplink bandwidth hurts
+[ ] d) Streaming partials — only if felt latency is the main complaint
 [ ] Revisit SenseVoice finetune only if S1+S2 still fail on names
 ```
 
@@ -192,7 +160,7 @@ Core product voice = **S0–S4**. S5 is ops / full-duplex / latency theater.
 
 ## References
 
-- Dual VAD policy: `sensory/VAD_POLICY.md`  
+- Dual VAD policy: `sensory/DUAL_VAD_POLICY.md`  
 - Debug checklist: `docs/DEBUG_AUDIO.md`  
 - Config: `config/sensory.yaml`  
 - Capture / barge / ASR: `sensory/listen.py`, `interface/webui/static/vad.js`  
