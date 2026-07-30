@@ -1,4 +1,4 @@
-# S4 — Dual VAD policy
+# Dual VAD policy
 
 Locked architecture for Aiko voice input. **No code change required** — this documents what S0–S3 already implement.
 
@@ -30,7 +30,7 @@ If browser energy is noisy on a bad device, tune `ENERGY_START_RMS` / min frames
 
 ## Related knobs
 
-See `config/sensory.yaml` and `docs/DEBUG_AUDIO.md`.
+See `config/sensory.yaml` and `docs/asr/DEBUG_AUDIO.md`.
 
 | Area | Keys / files |
 |------|----------------|
