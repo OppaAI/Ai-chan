@@ -40,7 +40,7 @@ WEBUI_BROWSER_VAD_GATE = os.getenv("WEBUI_BROWSER_VAD_GATE", "1").lower() in {"1
 
 def _barge_in_enabled() -> bool:
     try:
-        from sensory.voice_gates import barge_in_enabled
+        from sensory.listen_native import barge_in_enabled
         return barge_in_enabled()
     except Exception:
         return os.getenv("BARGE_IN_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
