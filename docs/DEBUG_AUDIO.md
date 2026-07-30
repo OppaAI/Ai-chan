@@ -8,12 +8,12 @@ exactly which file to open and what to add/check.
 ## Dual VAD policy (S4)
 
 **Canonical setup:** browser **energy** gate + server **Silero** authority.
-Do **not** run Silero in the browser on top of server Silero, and do **not**
+Browser Silero is **intentionally absent** (`vad.js` is energy-only). Do **not**
 unload Jetson Silero to save RAM. Full write-up: [`sensory/VAD_POLICY.md`](../sensory/VAD_POLICY.md).
 
 | Path | Client | Server |
 |------|--------|--------|
-| WebUI | Energy (`vad.js`) filters uplink | Silero decides speech |
+| WebUI | Energy (`vad.js`) filters uplink | Silero scores every **received** chunk |
 | Local `parec` | — | Silero only |
 
 ---
@@ -64,25 +64,19 @@ if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
 
 ---
 
-## Step 3 — Static asset routing (worklet + VAD files reachable)
+## Step 3 — Static asset routing (worklet reachable)
 
 **File:** `webui.js` — `startMic()`:
 ```js
 await micContext.audioWorklet.addModule('./pcm-worklet.js');
 ```
-**File:** `webui.js` — `loadOptionalOrt()`:
-```js
-const required = [
-  './ort.min.js', './silero_vad.onnx',
-  './ort-wasm-simd-threaded.jsep.mjs', './ort-wasm-simd-threaded.jsep.wasm',
-];
-```
 
-- [ ] DevTools → Network tab → filter each filename above → all `200 OK`.
+- [ ] DevTools → Network tab → `pcm-worklet.js` → `200 OK`.
 - ❌ 404 on `pcm-worklet.js` → tunnel/proxy isn't routing static paths correctly
   (check whatever fronts `webui.py`'s HTTP server, e.g. Cloudflare Tunnel/DuckDNS config).
-- ❌ 404 on any ORT/onnx file → files missing from `interface/webui/static/` on the
-  Jetson — copy them there.
+
+(Legacy ORT / `silero_vad.onnx` browser assets are **not** part of the canonical
+S4 path — browser VAD is energy-only in `vad.js`.)
 
 ---
 
@@ -141,31 +135,23 @@ console.log('[mic] streaming enabled, gate=', browserVadGate);
 
 ---
 
-## Step 6 — VAD model loaded (Silero vs. fallback)
+## Step 6 — Browser energy VAD ready
 
-**File:** `webui.js` — `loadOptionalOrt().then(() => initVAD())...` block near top
+**File:** `vad.js` — `initVAD()` returns `{ mode: 'energy', ready: true }`
 
-- [ ] Console/UI shows `vad ready` (Silero loaded), not `vad fallback`.
-- ❌ Fallback unexpectedly → re-check Step 3 (missing ORT/onnx assets).
+- [ ] Console/UI shows energy VAD ready (browser path is **energy-only** by design).
+- [ ] Server-side Silero remains the authority for speech/silence on every
+      **received** chunk — independent of the browser gate.
 
-**Note (S4):** Server Silero is still the authority even when the browser
-falls back to energy-only gating. Client Silero assets are optional polish;
-the canonical Web path is **energy filter + server Silero**.
+**Note (S4):** Client/browser Silero is **intentionally absent**. The canonical
+Web path is **energy filter + server Silero**. Do not expect “Silero loaded” in
+the browser.
 
 ---
 
-## Step 7 — VAD is actually detecting your speech
+## Step 7 — Energy VAD is detecting your speech
 
-**File:** `vad.js` — inside `processVADFrame` (Silero path), right after:
-```js
-const prob = out.output.data[0];
-```
-add:
-```js
-console.log('[vad] prob=', prob, '_speaking=', _speaking);
-```
-
-**File:** `vad.js` — inside `processEnergyVADFrame` (fallback path), right after:
+**File:** `vad.js` — inside `processEnergyVADFrame`, right after:
 ```js
 const rms = _rms(frame);
 ```
@@ -174,8 +160,7 @@ add:
 console.log('[vad] rms=', rms, '_speaking=', _speaking);
 ```
 
-- [ ] Value clearly crosses `VAD_THRESHOLD = 0.5` (Silero) or
-      `ENERGY_START_RMS` (fallback / current energy path) when you talk.
+- [ ] Value clearly crosses `ENERGY_START_RMS` / dynamic start threshold when you talk.
 - ❌ Never crosses → mic gain too low. Try setting `autoGainControl: false`
   in **`webui.js`** → `startMic()`:
   ```js
