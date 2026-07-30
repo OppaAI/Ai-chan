@@ -65,10 +65,10 @@ def _user_skillsets_path() -> Path:
     (almost always "guest", since AikoThink/agentic boot ahead of any real
     login — same root cause as the persona bug). Resolving here instead
     means each call sees the real logged-in user's own
-    ~/.aiko/<user_id>/skillsets/ folder.
+    <home>/.aiko/<user_id>/skillsets/ folder.
     """
     override = os.getenv("USER_SKILLSETS_PATH")
-    return Path(override) if override else user_state_dir() / "skillsets"
+    return Path(override).expanduser() if override else user_state_dir() / "skillsets"
 
 
 def _embed_source_text(doc: "SkillDoc") -> str:

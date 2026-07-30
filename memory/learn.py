@@ -262,10 +262,10 @@ DEEP_STUDY_SEED_QUERIES = int(os.getenv("DEEP_STUDY_SEED_QUERIES", 6))
 # authoritative domain (e.g. a project's own GitHub) repeatedly.
 DEEP_STUDY_PER_HOST_MIN_INTERVAL = float(os.getenv("DEEP_STUDY_PER_HOST_MIN_INTERVAL", 3.0))
 
-DEEP_STUDY_SCRATCH_DIR = os.getenv(
+DEEP_STUDY_SCRATCH_DIR = os.path.expanduser(os.getenv(
     "DEEP_STUDY_SCRATCH_DIR",
     str(Path.home() / ".aiko" / "dream"),
-)
+))
 
 DEEP_STUDY_DECISION_MAX_TOKENS = int(os.getenv("DEEP_STUDY_DECISION_MAX_TOKENS", 250))
 DEEP_STUDY_SYNTHESIS_MAX_TOKENS = int(os.getenv("DEEP_STUDY_SYNTHESIS_MAX_TOKENS", 900))

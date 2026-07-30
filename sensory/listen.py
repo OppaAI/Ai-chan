@@ -130,7 +130,7 @@ BARGE_IN_ALWAYS_ON     = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "
 # Aiko has exactly one "owner" voice to check against.
 
 SPEAKER_VERIFY_ENABLED   = os.getenv("SPEAKER_VERIFY_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
-SPEAKER_MODEL_PATH       = os.getenv("SPEAKER_MODEL_PATH", "")            # path to embedding .onnx
+SPEAKER_MODEL_PATH       = os.path.expanduser(os.getenv("SPEAKER_MODEL_PATH", ""))            # path to embedding .onnx
 SPEAKER_VERIFY_THRESHOLD = float(os.getenv("SPEAKER_VERIFY_THRESHOLD", "0.5"))  # cosine sim cutoff
 SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 

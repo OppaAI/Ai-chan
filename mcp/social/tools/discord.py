@@ -26,7 +26,8 @@ def load_tools(mcp):
                 if image_path:
                     p = Path(image_path)
                     if p.exists():
-                        files = {"file": (p.name, open(p, "rb"))}
+                        with open(p, "rb") as f:
+                            files = {"file": (p.name, f.read())}
                 resp = requests.post(webhook_url, data=data, files=files, timeout=30)
                 ok = 200 <= resp.status_code < 300
                 return {"ok": ok, "provider": "discord", "method": "webhook", "status_code": resp.status_code, "response": resp.text[:500]}
@@ -40,27 +41,26 @@ def load_tools(mcp):
 
                 payload = {"content": text}
                 files = None
+                raw_data = None
                 if image_path:
                     p = Path(image_path)
                     if p.exists():
                         mime = mimetypes.guess_type(str(p))[0] or "image/png"
                         with open(p, "rb") as f:
-                            b64_data = base64.b64encode(f.read()).decode()
+                            raw_data = f.read()
+                        b64_data = base64.b64encode(raw_data).decode()
                         payload["attachments"] = [{"id": "0", "filename": p.name}]
                         payload["file"] = b64_data
                         headers.pop("Content-Type", None)
-                        resp = requests.post(
-                            f"{api_base}/channels/{channel_id}/messages",
-                            headers={"Authorization": f"Bot {bot_token}"},
-                            data={"payload_json": str(payload)},
-                            files={"0": (p.name, open(p, "rb"), mime)},
-                            timeout=30,
-                        )
-                    else:
-                        resp = requests.post(
-                            f"{api_base}/channels/{channel_id}/messages",
-                            headers=headers, json=payload, timeout=30,
-                        )
+                        files = {"0": (p.name, raw_data, mime)}
+                if files:
+                    resp = requests.post(
+                        f"{api_base}/channels/{channel_id}/messages",
+                        headers={"Authorization": f"Bot {bot_token}"},
+                        data={"payload_json": str(payload)},
+                        files=files,
+                        timeout=30,
+                    )
                 else:
                     resp = requests.post(
                         f"{api_base}/channels/{channel_id}/messages",

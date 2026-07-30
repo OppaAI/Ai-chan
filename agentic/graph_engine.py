@@ -1862,6 +1862,7 @@ def append_playbook_from_experience(goal: str, steps: list[dict[str, Any]], *, n
         tmp_path = path.with_suffix(".tmp")
         tmp_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_path.replace(path)
+        return path
 
 
 from agentic.registry import TOOLS, register_tool_schema, tool

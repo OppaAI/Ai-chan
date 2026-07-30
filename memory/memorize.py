@@ -626,6 +626,7 @@ class _MemoryBackend:
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
         self._embedder = HarrierEmbedder()
         self._conn = self._connect()
+        self._db_lock = threading.RLock()
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
@@ -771,41 +772,42 @@ class _MemoryBackend:
             log.warning(f"Batch embedding failed, aborting write: {e}")
             return []
 
-        try:
-            for fact, vector in zip(facts, vectors):
-                mem_id = str(uuid.uuid4())
-                # dedup check — skip if near-identical vector already exists
-                existing = _sqlite_knn_search(
-                    self._conn, vector, user_id,
-                    limit=1, threshold=WRITE_DEDUP_THRESHOLD,
-                )
-                if existing:
-                    log.debug(f"Skipping near-duplicate fact: {fact!r}")
-                    continue
+        with self._db_lock:
+            try:
+                for fact, vector in zip(facts, vectors):
+                    mem_id = str(uuid.uuid4())
+                    # dedup check — skip if near-identical vector already exists
+                    existing = _sqlite_knn_search(
+                        self._conn, vector, user_id,
+                        limit=1, threshold=WRITE_DEDUP_THRESHOLD,
+                    )
+                    if existing:
+                        log.debug(f"Skipping near-duplicate fact: {fact!r}")
+                        continue
 
-                # insert canonical record — FTS5 trigger fires automatically
-                self._conn.execute(
-                    """
-                    INSERT INTO memories
-                        (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
-                    VALUES (?, ?, ?, ?, 0, 'never', 0)
-                    """,
-                    (mem_id, user_id, fact, now),
-                )
+                    # insert canonical record — FTS5 trigger fires automatically
+                    self._conn.execute(
+                        """
+                        INSERT INTO memories
+                            (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
+                        VALUES (?, ?, ?, ?, 0, 'never', 0)
+                        """,
+                        (mem_id, user_id, fact, now),
+                    )
 
-                # insert embedding into vec0 table
-                self._conn.execute(
-                    "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
-                    (mem_id, sqlite_vec.serialize_float32(vector)),
-                )
+                    # insert embedding into vec0 table
+                    self._conn.execute(
+                        "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
+                        (mem_id, sqlite_vec.serialize_float32(vector)),
+                    )
 
-                ids.append(mem_id)
+                    ids.append(mem_id)
 
-            self._conn.commit()
-        except Exception as e:
-            log.warning(f"Failed to upsert fact batch: {e}")
-            self._conn.rollback()
-            return []
+                self._conn.commit()
+            except Exception as e:
+                log.warning(f"Failed to upsert fact batch: {e}")
+                self._conn.rollback()
+                return []
 
         return ids
 
@@ -824,37 +826,38 @@ class _MemoryBackend:
         text = (memory or "").strip()
         if not text:
             return None
-        try:
-            vector = self._embed(text)
+        with self._db_lock:
+            try:
+                vector = self._embed(text)
 
-            existing = _sqlite_knn_search(
-                self._conn, vector, user_id,
-                limit=1, threshold=WRITE_DEDUP_THRESHOLD,
-            )
-            if existing:
-                log.debug(f"Skipping near-duplicate raw memory: {text[:80]!r}")
+                existing = _sqlite_knn_search(
+                    self._conn, vector, user_id,
+                    limit=1, threshold=WRITE_DEDUP_THRESHOLD,
+                )
+                if existing:
+                    log.debug(f"Skipping near-duplicate raw memory: {text[:80]!r}")
+                    return None
+
+                mem_id = str(uuid.uuid4())
+                now = datetime.now(timezone.utc).isoformat()
+                self._conn.execute(
+                    """
+                    INSERT INTO memories
+                        (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
+                    VALUES (?, ?, ?, ?, 0, 'never', ?)
+                    """,
+                    (mem_id, user_id, text, now, 1 if pinned else 0),
+                )
+                self._conn.execute(
+                    "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
+                    (mem_id, sqlite_vec.serialize_float32(vector)),
+                )
+                self._conn.commit()
+                return mem_id
+            except Exception as e:
+                log.warning("Failed to insert raw memory: %s", e)
+                self._conn.rollback()
                 return None
-
-            mem_id = str(uuid.uuid4())
-            now = datetime.now(timezone.utc).isoformat()
-            self._conn.execute(
-                """
-                INSERT INTO memories
-                    (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
-                VALUES (?, ?, ?, ?, 0, 'never', ?)
-                """,
-                (mem_id, user_id, text, now, 1 if pinned else 0),
-            )
-            self._conn.execute(
-                "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
-                (mem_id, sqlite_vec.serialize_float32(vector)),
-            )
-            self._conn.commit()
-            return mem_id
-        except Exception as e:
-            log.warning("Failed to insert raw memory: %s", e)
-            self._conn.rollback()
-            return None
 
     # ── read ──────────────────────────────────────────────────────────────────
 
@@ -1013,8 +1016,8 @@ class _MemoryBackend:
             vector = self._embed(query, query=True)
         fts_query = _sanitize_fts_query(query)
 
-        # ── quick pass ──────────────────────────────────────────────────────
-        quick_knn_rows = _sqlite_knn_search(self._conn, vector, user_id, QUICK_KNN_LIMIT)
+        with self._db_lock:
+            quick_knn_rows = _sqlite_knn_search(self._conn, vector, user_id, QUICK_KNN_LIMIT)
         rank_knn_q = {row["id"]: i + 1 for i, row in enumerate(quick_knn_rows)}
         quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT)
         rank_fts_q = {row["id"]: i + 1 for i, row in enumerate(quick_fts_rows)}
@@ -1067,33 +1070,23 @@ class _MemoryBackend:
                 yield {"id": row["id"], "memory": row["memory"], "created_at": row["created_at"]}
 
     def get_all(self, user_id: str) -> list[dict]:
-        """
-        Return memory records for a user.
-
-        Projected to (id, memory, created_at) only — the three fields
-        actually read off get_all() results anywhere in this codebase.
-        access_count/last_accessed_at/pinned are intentionally NOT included
-        here; callers that need fresh values for those fetch them via
-        _sqlite_batch_get_payloads()/_sqlite_is_pinned() instead, since
-        get_all() snapshots can be stale by the time those checks run.
-        """
-        return list(self.iter_all(user_id=user_id))
+        with self._db_lock:
+            return list(self.iter_all(user_id=user_id))
 
     def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
-        """Return memories created on or after `since`, newest first."""
         user_id = user_id or self._user_id
-        rows = self._conn.execute(
-            """
-            SELECT * FROM memories
-            WHERE user_id = ? AND created_at >= ?
-            ORDER BY created_at DESC
-            """,
-            (user_id, since.isoformat()),
-        ).fetchall()
+        with self._db_lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM memories
+                WHERE user_id = ? AND created_at >= ?
+                ORDER BY created_at DESC
+                """,
+                (user_id, since.isoformat()),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     def get_between(self, start: datetime, end: datetime, user_id: str | None = None, limit: int = 0) -> list[dict]:
-        """Return memories created in [start, end), oldest first."""
         user_id = user_id or self._user_id
         sql = """
             SELECT * FROM memories
@@ -1104,32 +1097,32 @@ class _MemoryBackend:
         if limit > 0:
             sql += " LIMIT ?"
             params.append(limit)
-        rows = self._conn.execute(sql, params).fetchall()
+        with self._db_lock:
+            rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
     # ── delete ────────────────────────────────────────────────────────────────
 
     def delete(self, memory_id: str) -> None:
-        """Delete a memory from all three tables."""
-        self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        self._conn.execute("DELETE FROM memories_vec WHERE id = ?", (memory_id,))
-        self._conn.commit()
+        with self._db_lock:
+            self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            self._conn.execute("DELETE FROM memories_vec WHERE id = ?", (memory_id,))
+            self._conn.commit()
 
     def delete_all(self, user_id: str) -> None:
-        """Delete every memory for a user from all three tables."""
-        self._conn.execute(
-            "DELETE FROM memories_vec WHERE id IN (SELECT id FROM memories WHERE user_id = ?)",
-            (user_id,),
-        )
-        self._conn.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
-
-        self._conn.commit()
+        with self._db_lock:
+            self._conn.execute(
+                "DELETE FROM memories_vec WHERE id IN (SELECT id FROM memories WHERE user_id = ?)",
+                (user_id,),
+            )
+            self._conn.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
+            self._conn.commit()
 
 
 def _memory_db_path_for_user(uid: str) -> str:
     if uid == "guest":
         return _guest_memory_db()
-    return os.getenv("SQLITE_MEMORY_PATH") or str(resolve_user_db_path("memory/memory.db", user_id=uid))
+    return os.path.expanduser(os.getenv("SQLITE_MEMORY_PATH")) or str(resolve_user_db_path("memory/memory.db", user_id=uid))
 
 
 def vacuum_memory_db(user_id: str | None = None) -> None:
@@ -1232,16 +1225,16 @@ class AikoMemorize:
             log.info("Memory store ready for %s.", uid)
 
     def switch_user(self, user_id: str) -> None:
-        """Switch to a different user's memory store. Re-opens DB."""
         self._user_id_override = user_id
         self._display_name = None
         if self._conn:
-            try:
-                self._conn.execute("PRAGMA optimize")
-                self._conn.commit()
-                self._conn.close()
-            except Exception:
-                pass
+            with self._mem._db_lock:
+                try:
+                    self._conn.execute("PRAGMA optimize")
+                    self._conn.commit()
+                    self._conn.close()
+                except Exception:
+                    pass
         self._open(user_id)
 
     def get_user_id(self) -> str:
@@ -1321,7 +1314,8 @@ class AikoMemorize:
                 return False
 
             for mem_id in ids:
-                _sqlite_set_payload(self._conn, mem_id, {"pinned": 1})
+                with self._mem._db_lock:
+                    _sqlite_set_payload(self._conn, mem_id, {"pinned": 1})
 
             self._clear_search_cache()
             log.info(f"Pinned {len(ids)} memories: {ids}")
@@ -1457,21 +1451,9 @@ class AikoMemorize:
         return results
 
     def _recent_or_important_memories(self, user_id: str, limit: int) -> list[dict]:
-        """
-        Return useful memories for broad recall prompts.
-
-        Deduplicated by normalized text (keeping the most recently created
-        row per duplicate cluster) before the LIMIT is applied, so pinned
-        duplicate rows (e.g. several identical daily-record pins) can't
-        eat multiple slots of the broad-recall result set.
-
-        Note: this is a separate code path from _MemoryBackend.search() and
-        uses ORDER BY pinned DESC, ... rather than RRF + MEMORY_RANK_PINNED_WEIGHT.
-        """
-        # Fetch a wider candidate window than `limit` so dedup doesn't
-        # leave fewer than `limit` results when duplicates are present.
         fetch_n = max(int(limit) * 4, int(limit) + 10)
-        rows = self._conn.execute(
+        with self._mem._db_lock:
+            rows = self._conn.execute(
             """
             SELECT *
             FROM memories
@@ -1502,27 +1484,27 @@ class AikoMemorize:
         return out
 
     def _touch_memories(self, results: list[dict]) -> None:
-        """Update decay access metadata for a search result set."""
         if not results:
             return
         now = datetime.now(timezone.utc).isoformat()
         mem_ids = [str(r.get("id", "")) for r in results if r.get("id")]
         if not mem_ids:
             return
-        try:
-            placeholders = ",".join("?" * len(mem_ids))
-            self._conn.execute(
-                f"""
-                UPDATE memories
-                SET access_count = MIN(access_count + 1, 255),
-                    last_accessed_at = ?
-                WHERE id IN ({placeholders})
-                """,
-                [now] + mem_ids,
-            )
-            self._conn.commit()
-        except Exception as e:
-            log.warning(f"Access tracking failed for {mem_ids}: {e}")
+        with self._mem._db_lock:
+            try:
+                placeholders = ",".join("?" * len(mem_ids))
+                self._conn.execute(
+                    f"""
+                    UPDATE memories
+                    SET access_count = MIN(access_count + 1, 255),
+                        last_accessed_at = ?
+                    WHERE id IN ({placeholders})
+                    """,
+                    [now] + mem_ids,
+                )
+                self._conn.commit()
+            except Exception as e:
+                log.warning(f"Access tracking failed for {mem_ids}: {e}")
 
     MIN_CLEAR_INTERVAL: float = 0.5  # seconds — debounce window for cache invalidation
 
@@ -1622,14 +1604,16 @@ class AikoMemorize:
                 continue
             mem_ids.extend(batch_ids)
             payload_map = self._batch_get_payloads(batch_ids)
-            pinned_ids = _sqlite_pinned_ids(self._conn, batch_ids)
+            with self._mem._db_lock:
+                pinned_ids = _sqlite_pinned_ids(self._conn, batch_ids)
             boosted += self._dream_boost(batch, payload_map, pinned_ids=pinned_ids, dry_run=dry_run)
 
         if not mem_ids:
             log.info("No memories found — nothing to do.")
             return {"boosted": 0, "merged": 0, "pruned": 0, "duration_s": 0.0}
 
-        pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
+        with self._mem._db_lock:
+            pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
         merged = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
         prune_result = self.cleanup(user_id=user_id, dry_run=dry_run)
         pruned = prune_result.get("deleted", 0)
@@ -1689,21 +1673,22 @@ class AikoMemorize:
             boost_ids.append(mem_id)
 
         if boost_ids and not dry_run:
-            try:
-                placeholders = ",".join("?" * len(boost_ids))
-                self._conn.execute(
-                    f"""
-                    UPDATE memories
-                    SET access_count = MIN(access_count + ?, 255)
-                    WHERE id IN ({placeholders})
-                    """,
-                    [DREAM_BOOST_AMOUNT] + boost_ids,
-                )
-                self._conn.commit()
-            except Exception as e:
-                log.warning(f"Batch boost failed for {len(boost_ids)} memories: {e}")
-                self._conn.rollback()
-                return 0
+            with self._mem._db_lock:
+                try:
+                    placeholders = ",".join("?" * len(boost_ids))
+                    self._conn.execute(
+                        f"""
+                        UPDATE memories
+                        SET access_count = MIN(access_count + ?, 255)
+                        WHERE id IN ({placeholders})
+                        """,
+                        [DREAM_BOOST_AMOUNT] + boost_ids,
+                    )
+                    self._conn.commit()
+                except Exception as e:
+                    log.warning(f"Batch boost failed for {len(boost_ids)} memories: {e}")
+                    self._conn.rollback()
+                    return 0
 
         boosted = len(boost_ids)
         if boosted:
@@ -1733,17 +1718,19 @@ class AikoMemorize:
             if mem_id in pinned_ids:
                 continue
 
-            vector = _sqlite_get_vector(self._conn, mem_id)
+            with self._mem._db_lock:
+                vector = _sqlite_get_vector(self._conn, mem_id)
             if not vector:
                 continue
 
-            try:
-                neighbor_rows = _sqlite_knn_search(
-                    self._conn, vector, user_id, limit=4, threshold=threshold
-                )
-            except Exception as e:
-                log.warning(f"Similarity search failed for {mem_id}: {e}")
-                continue
+            with self._mem._db_lock:
+                try:
+                    neighbor_rows = _sqlite_knn_search(
+                        self._conn, vector, user_id, limit=4, threshold=threshold
+                    )
+                except Exception as e:
+                    log.warning(f"Similarity search failed for {mem_id}: {e}")
+                    continue
 
             for row in neighbor_rows:
                 neighbor_id = row["id"]
@@ -1772,11 +1759,6 @@ class AikoMemorize:
         pinned_ids: set[str] | None = None,
         dry_run: bool = False,
     ) -> bool:
-        """
-        Compare two near-duplicate memories and delete the weaker one.
-        Pinned memories are never deleted. Tie goes to id_a (query origin).
-        Returns True if a deletion occurred.
-        """
         pinned_ids = pinned_ids or set()
         if id_a in pinned_ids or id_b in pinned_ids:
             log.info(f"Skipping merge: one or both of ({id_a}, {id_b}) is pinned.")
@@ -1785,12 +1767,13 @@ class AikoMemorize:
         payload_map = self._batch_get_payloads([id_a, id_b])
         ac_a, _     = payload_map.get(id_a, (0, "never"))
         ac_b, _     = payload_map.get(id_b, (0, "never"))
-        row_map = {
-            row["id"]: row["created_at"]
-            for row in self._conn.execute(
-                "SELECT id, created_at FROM memories WHERE id IN (?, ?)", (id_a, id_b)
-            ).fetchall()
-        }
+        with self._mem._db_lock:
+            row_map = {
+                row["id"]: row["created_at"]
+                for row in self._conn.execute(
+                    "SELECT id, created_at FROM memories WHERE id IN (?, ?)", (id_a, id_b)
+                ).fetchall()
+            }
         if ac_a == ac_b:
             loser = id_b if row_map.get(id_a, "") >= row_map.get(id_b, "") else id_a
         else:
@@ -1897,7 +1880,8 @@ class AikoMemorize:
     ) -> tuple[int, list[dict]]:
         mem_ids     = [str(m.get("id", "")) for m in all_mems if m.get("id")]
         payload_map = self._batch_get_payloads(mem_ids)
-        pinned_ids  = _pinned_ids if _pinned_ids is not None else _sqlite_pinned_ids(self._conn, mem_ids)
+        with self._mem._db_lock:
+            pinned_ids  = _pinned_ids if _pinned_ids is not None else _sqlite_pinned_ids(self._conn, mem_ids)
 
         candidates = []
         kept       = 0
@@ -1927,12 +1911,12 @@ class AikoMemorize:
         return kept, candidates
 
     def optimize(self) -> None:
-        """Run SQLite's lightweight planner/index maintenance hook."""
-        try:
-            self._conn.execute("PRAGMA optimize")
-            self._conn.commit()
-        except Exception as e:
-            log.debug(f"SQLite optimize skipped: {e}")
+        with self._mem._db_lock:
+            try:
+                self._conn.execute("PRAGMA optimize")
+                self._conn.commit()
+            except Exception as e:
+                log.debug(f"SQLite optimize skipped: {e}")
 
     # ── debug ─────────────────────────────────────────────────────────────────
 

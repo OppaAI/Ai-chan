@@ -52,7 +52,7 @@ DEEP_STUDY_CHUNK_CHARS: "500"  # Chunk size fetched pages are split into before 
 DEEP_STUDY_MIN_SCORE: "0.15"  # Minimum relevance score for a chunk to survive into distillation. Falls back to web.yaml's CONDENSE_MIN_SCORE if unset.
 DEEP_STUDY_TOP_K_FOR_DISTILLATION: "40"  # Max ranked chunks handed to the final synthesis call, scored against the ORIGINAL topic (not individual sub-queries). Lower this if 40 excerpts is more than DEEP_STUDY_SYNTHESIS_MAX_TOKENS can meaningfully use.
 DEEP_STUDY_PER_HOST_MIN_INTERVAL: "3.0"  # Minimum seconds between fetches to the same host across the whole session — politeness guard so many iterations can't hammer one domain (e.g. a project's own GitHub) repeatedly.
-DEEP_STUDY_SCRATCH_DIR: "~/.aiko/dream"  # Disk-backed scratch SQLite location for the duration of ONE deep_studying() call. Deleted when the call returns — not a persistent index. Long-term storage of results is the caller's job via the on_distilled hook.
+DEEP_STUDY_SCRATCH_DIR: ""  # Disk-backed scratch SQLite location for the duration of ONE deep_studying() call. Deleted when the call returns — not a persistent index. Long-term storage of results is the caller's job via the on_distilled hook.
 DEEP_STUDY_DECISION_MAX_TOKENS: "250"  # Token budget for each "what's the next sub-query, or should we stop" decision call.
 DEEP_STUDY_SYNTHESIS_MAX_TOKENS: "900"  # Token budget for the final distillation/synthesis call over the top-K ranked chunks.
 

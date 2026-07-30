@@ -55,7 +55,7 @@ from agentic.toolkit.photography import scan_photo_workspace, scan_video_workspa
 
 log = get_logger(__name__)
 
-SOCIAL_PERSONA_PATH = os.getenv("SOCIAL_PERSONA_PATH", "persona/SOCIAL.md")
+SOCIAL_PERSONA_PATH = os.path.expanduser(os.getenv("SOCIAL_PERSONA_PATH", "persona/SOCIAL.md"))
 
 
 def _load_social_persona() -> str:

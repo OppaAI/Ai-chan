@@ -949,7 +949,8 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
                 f"Review the draft at {draft_dir} and approve it outside this "
                 f"conversation, then reply with approve {ctx.run_id} to run {name}."
             )
-        result = ToolResult(ok=False, tool=name, args=args, content=json.dumps(wait_payload, ensure_ascii=False), error_type="needs_approval", retryable=False, metadata={"run_id": ctx.run_id, "checkpoint": state.summary()})        state.record(result)
+        result = ToolResult(ok=False, tool=name, args=args, content=json.dumps(wait_payload, ensure_ascii=False), error_type="needs_approval", retryable=False, metadata={"run_id": ctx.run_id, "checkpoint": state.summary()})
+        state.record(result)
         _append_step_trace(ctx, "approval_wait", {"tool": name, "args": args})
         _append_step_trace(ctx, "tool_result", {"tool": name, "ok": False, "error_type": "needs_approval"})
         return result

@@ -61,7 +61,7 @@ def close_db() -> None:
 
 class MCPDatabase:
     def __init__(self, db_path: str = ""):
-        path = db_path or os.getenv("SOCIAL_MCP_DB_PATH", "")
+        path = db_path or os.path.expanduser(os.getenv("SOCIAL_MCP_DB_PATH", ""))
         if not path:
             base = Path(__file__).parent.resolve()
             path = str(base / "mcp.social.db")
@@ -78,8 +78,8 @@ class MCPDatabase:
             self._conn = sqlcipher.connect(str(self._path))
             key = os.getenv("DATA_KEY_SECRET", "")
             if key:
-                safe_key = key.replace("'", "''")
-            self._conn.execute(f"PRAGMA key = '{safe_key}'")
+                key_bytes = key.encode("utf-8") if isinstance(key, str) else key
+                self._conn.execute(f"PRAGMA key = x'{key_bytes.hex()}'")
             self._conn.execute("PRAGMA cipher_use_hmac = OFF")
             self._conn.execute("PRAGMA cipher_page_size = 4096")
         else:

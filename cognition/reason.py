@@ -353,7 +353,7 @@ def cache_vector_path(
         digest = hashlib.sha256(
             json.dumps(key_payload, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()[:24]
-        raw_dir = Path(os.environ.get(cache_dir_env, default_dir))
+        raw_dir = Path(os.environ.get(cache_dir_env, default_dir)).expanduser()
         if per_user and not raw_dir.is_absolute():
             from system.userspace import current_user_id, user_state_dir
             base = user_state_dir(current_user_id()) / raw_dir

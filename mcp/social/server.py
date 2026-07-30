@@ -22,7 +22,7 @@ mcp = FastMCP("Aiko Social MCP Server", host=HOST, port=PORT)
 
 def _decrypt_env_age() -> None:
     env_age = Path(".env.age")
-    identity = Path(os.getenv("AGE_IDENTITY_PATH", "key.txt"))
+    identity = Path(os.getenv("AGE_IDENTITY_PATH", "key.txt")).expanduser()
     if not env_age.exists():
         return
     try:

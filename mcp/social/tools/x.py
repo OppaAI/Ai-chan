@@ -29,7 +29,8 @@ def load_tools(mcp):
             p = Path(image_path)
             if p.exists():
                 mime = mimetypes.guess_type(str(p))[0] or "image/png"
-                files = {"media_files": (p.name, open(p, "rb"), mime)}
+                with open(p, "rb") as f:
+                    files = {"media_files": (p.name, f.read(), mime)}
 
         try:
             if files:

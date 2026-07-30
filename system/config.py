@@ -206,7 +206,7 @@ def load_config(*, override: bool = False) -> None:
     # AGE_KEY / ENV_AGE_PATH may be bare filenames (e.g. from identity.yaml);
     # resolve them under USER_STATE_ROOT unless they're already absolute,
     # so an explicit absolute override (env var or YAML) still wins outright.
-    state_root = Path(os.environ.get("USER_STATE_ROOT", "~/.aiko")).expanduser()
+    state_root = Path(os.environ.get("USER_STATE_ROOT", str(Path.home() / ".aiko"))).expanduser()
 
     def _resolve_under(base: Path, value: str) -> Path:
         candidate = Path(value).expanduser()
