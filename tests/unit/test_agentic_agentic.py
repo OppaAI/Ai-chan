@@ -556,12 +556,17 @@ def test_verify_final_answer_uses_post_answer_guardrails_for_saved_path(monkeypa
 
 
 def test_handoff_profile_maps_capabilities():
-    from agentic.agentic import _handoff_profile_for
+    from agentic.capability import resolve_handoff
+    from agentic.agentic import MAX_AGENT_ITER, AGENT_RESEARCH_MAX_CALLS
 
-    profile = _handoff_profile_for(["social", "scheduling"])
-    assert "social" in profile["tool_domains"]
-    assert "scheduling" in profile["tool_domains"]
-    assert profile["max_iter"] <= 5
+    profile = resolve_handoff(
+        ["social", "scheduling"],
+        default_max_iter=MAX_AGENT_ITER,
+        default_research_budget=AGENT_RESEARCH_MAX_CALLS,
+    )
+    assert "social" in profile.tool_domains
+    assert "scheduling" in profile.tool_domains
+    assert profile.max_iter <= 5
 
 
 def test_needs_approval_returns_wait_result_and_checkpoint(monkeypatch, tmp_path):
@@ -625,13 +630,21 @@ def test_skill_proposal_written_for_multistep_run(monkeypatch, tmp_path):
 
 
 def test_handoff_profile_includes_additional_domains():
-    from agentic.agentic import _handoff_profile_for
+    from agentic.capability import resolve_handoff
+    from agentic.agentic import MAX_AGENT_ITER, AGENT_RESEARCH_MAX_CALLS
 
-    profile = _handoff_profile_for(["job_hunt", "photo", "kb_proposal"])
-    assert "job_hunt" in profile["tool_domains"]
-    assert "photo" in profile["tool_domains"]
-    assert "kb" in profile["tool_domains"]
-
+    profile = resolve_handoff(
+        ["job_hunt", "photo", "kb_proposal"],
+        default_max_iter=MAX_AGENT_ITER,
+        default_research_budget=AGENT_RESEARCH_MAX_CALLS,
+    )
+    # job_hunt's registry domain is "jobs" (not "job_hunt") — this is the
+    # exact mismatch the resolve_handoff wiring fix corrects.
+    assert "jobs" in profile.tool_domains
+    assert "social" in profile.tool_domains  # from both job_hunt and photo
+    assert "photo" in profile.tool_domains
+    assert "kb" in profile.tool_domains
+    assert "skills" in profile.tool_domains  # kb_proposal also pulls in skills
 
 def test_approval_resume_does_not_mutate_registry_flag(monkeypatch, tmp_path):
     from agentic.agentic import AgentContext, TaskState, execute_tool_with_policy, _maybe_resume_approval
