@@ -43,7 +43,7 @@ from cognition import reason
 from cognition import CONTEXT_POOL
 from agentic.skills import list_skillsets, load_skillset, load_skills, search_skillsets_json, skill_context_for
 from agentic.wiki import wiki_agentic_contexts_for
-from agentic.capability import match_capabilities, filtered_tool_schemas
+from agentic.capability import match_capabilities, filtered_tool_schemas, resolve_handoff
 from agentic.guardrails import DEFAULT_POST_ANSWER_GUARDRAILS, default_pre_tool_guardrails
 from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from agentic import experience, skill_learning
@@ -295,31 +295,12 @@ _RESEARCH_TOOLS = {"adaptive_search", "deep_research", "deep_read"}
 _PRE_TOOL_GUARDRAILS = default_pre_tool_guardrails(AGENT_RESEARCH_MAX_CALLS)
 _POST_ANSWER_GUARDRAILS = DEFAULT_POST_ANSWER_GUARDRAILS
 
-_CAPABILITY_HANDOFF_PROFILES: dict[str, dict[str, Any]] = {
-    "research": {"tool_domains": ["research", "kb"], "system_overlay": "Research thoroughly, cite evidence, then synthesize.", "max_iter": MAX_AGENT_ITER, "research_budget": AGENT_RESEARCH_MAX_CALLS},
-    "scheduling": {"tool_domains": ["scheduling"], "system_overlay": "Prefer schedule/reminder tools and confirm persisted ids.", "max_iter": min(MAX_AGENT_ITER, 4), "research_budget": 0},
-    "social": {"tool_domains": ["social"], "system_overlay": "Draft/post social content only under explicit request and approval gates.", "max_iter": min(MAX_AGENT_ITER, 5), "research_budget": 0},
-    "repo": {"tool_domains": ["repo"], "system_overlay": "Inspect repository files before proposing code or architecture changes.", "max_iter": MAX_AGENT_ITER, "research_budget": 0},
-    "job_hunt": {"tool_domains": ["job_hunt", "social"], "system_overlay": "Prefer job-hunt tools; social posting still requires approval.", "max_iter": min(MAX_AGENT_ITER, 6), "research_budget": 1},
-    "photo": {"tool_domains": ["photo", "social"], "system_overlay": "Use photo workspace tools first; posting requires approval.", "max_iter": min(MAX_AGENT_ITER, 6), "research_budget": 0},
-    "kb_proposal": {"tool_domains": ["kb"], "system_overlay": "Write durable knowledge through learn_knowledge or proposal artifacts; do not edit trusted wiki/skills directly.", "max_iter": min(MAX_AGENT_ITER, 5), "research_budget": 1},
-}
-
-
-def _handoff_profile_for(capabilities: list[str] | set[str] | tuple[str, ...]) -> dict[str, Any]:
-    profile: dict[str, Any] = {"tool_domains": [], "system_overlay": "", "max_iter": MAX_AGENT_ITER, "research_budget": AGENT_RESEARCH_MAX_CALLS}
-    domains: list[str] = []
-    overlays: list[str] = []
-    for cap in capabilities or []:
-        data = _CAPABILITY_HANDOFF_PROFILES.get(str(cap), {})
-        domains.extend(data.get("tool_domains", []))
-        if data.get("system_overlay"):
-            overlays.append(str(data["system_overlay"]))
-        profile["max_iter"] = min(int(profile["max_iter"]), int(data.get("max_iter", profile["max_iter"])))
-        profile["research_budget"] = min(int(profile["research_budget"]), int(data.get("research_budget", profile["research_budget"])))
-    profile["tool_domains"] = sorted(set(domains))
-    profile["system_overlay"] = "\n".join(overlays)
-    return profile
+# Capability -> turn policy (tool_domains, system_overlay, max_iter,
+# research_budget) is now resolved exclusively via
+# agentic.capability.resolve_handoff(), which reads the single
+# CAPABILITIES table in capability.py. Do not reintroduce a second,
+# hand-maintained profile table here — that was the source of the
+# job_hunt/reports domain mismatch bug.
 
 
 _TOOLS: dict[str, tuple[dict, object]] = {}
@@ -1304,19 +1285,27 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     # No match -> filtered_tool_schemas returns everything unchanged, so this
     # can only shrink the list, never regress a turn.
     _matched_caps = match_capabilities(user_input, embedder=_embedder, query_vector=_cap_vec)
-    handoff_profile = _handoff_profile_for(_matched_caps)
+    handoff_profile = resolve_handoff(
+        _matched_caps,
+        default_max_iter=MAX_AGENT_ITER,
+        default_research_budget=AGENT_RESEARCH_MAX_CALLS,
+    )
     trace_ctx = _agent_context(owner, run_id=f"run-{int(time.time() * 1000)}")
-    _append_step_trace(trace_ctx, "llm_step", {"step": 0, "matched_capabilities": _matched_caps, "handoff_profile": handoff_profile})
-    tools = filtered_tool_schemas(tool_schemas(), _matched_caps)
-    if handoff_profile.get("tool_domains"):
-        allowed_domains = set(handoff_profile["tool_domains"])
-        filtered = []
-        for schema_def in tools:
-            tool_name = schema_def.get("function", {}).get("name")
-            spec = registry.get(tool_name) if tool_name else None
-            if spec is None or spec.always_on or spec.domain in allowed_domains or tool_name == "final_answer":
-                filtered.append(schema_def)
-        tools = filtered or tools
+    _append_step_trace(trace_ctx, "llm_step", {
+        "step": 0,
+        "matched_capabilities": _matched_caps,
+        "handoff_profile": {
+            "tool_domains": sorted(handoff_profile.tool_domains),
+            "system_overlay": handoff_profile.system_overlay,
+            "max_iter": handoff_profile.max_iter,
+            "research_budget": handoff_profile.research_budget,
+            "capability_ids": list(handoff_profile.capability_ids),
+        },
+    })
+    # filtered_tool_schemas is the ONLY domain filter pass now — it derives
+    # its domain set from the same CAPABILITIES table resolve_handoff just
+    # used, so there is nothing left to reconcile with a second pass.
+    tools = filtered_tool_schemas(tool_schemas(), list(handoff_profile.capability_ids))
 
     # Graph-first executor: known playbook workflows can run without an LLM
     # planning loop. Novel/ambiguous tasks return None and fall back to the
@@ -1522,7 +1511,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
         f"{agentic_policy_context}\n\n"
         f"{wiki_context}\n\n"
         f"{TASK_MODE_CORE}\n\n"
-        f"{handoff_profile.get('system_overlay', '')}\n\n"
+        f"{handoff_profile.system_overlay}\n\n"
         f"{memory_context}\n\n"
         f"{skill_context}\n\n"
         f"{knowledge_context}\n\n"
@@ -1567,9 +1556,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     last_verdict: VerificationResult | None = None
     used_incomplete_fallback = False
 
-    turn_guards = default_pre_tool_guardrails(int(handoff_profile.get("research_budget", AGENT_RESEARCH_MAX_CALLS)))
+    turn_guards = default_pre_tool_guardrails(handoff_profile.research_budget)
 
-    for step in range(int(handoff_profile.get("max_iter") or MAX_AGENT_ITER)):
+    for step in range(handoff_profile.max_iter):
         if token_callback:
             token_callback("__THINKING__\n")
 
