@@ -15,7 +15,7 @@ import email.utils
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +75,14 @@ def _config_list(config: dict[str, Any], key: str, env_key: str, default: list[s
     return default
 
 
+def _max_days_back(config: dict[str, Any]) -> int:
+    raw = os.getenv("JOB_HUNT_DATE_RANGE_DAYS", config.get("date_range_days", 1))
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
 def _max_jobs_per_draft(config: dict[str, Any]) -> int:
     raw = os.getenv("MAX_JOBS_PER_DRAFT", config.get("max_jobs_per_draft", 5))
     try:
@@ -119,7 +127,12 @@ def _dedupe_key(link: str, guid: str) -> tuple[str, str]:
 
 
 def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict]:
-    """Fetch configured RSS feeds, keeping only today's tech postings."""
+    """Fetch configured RSS feeds, keeping tech postings from the last N days.
+
+    N is controlled by JOB_HUNT_DATE_RANGE_DAYS env var or the date_range_days
+    config key (default: 1 = today only). Widening this lets you catch jobs
+    from the past week when a day's feed has no matches.
+    """
     config = config or _job_config()
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)
     keywords = [kw.casefold() for kw in _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS)]
@@ -142,7 +155,8 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
             summary = _rss_text(entry, ("description", "summary"))
             org = _rss_text(entry, ("author", "creator"))
             posted = _parse_rss_datetime(_rss_text(entry, ("pubDate", "published", "updated")))
-            if not posted or posted.date() != today:
+            max_days = _max_days_back(config)
+            if not posted or posted.date() < today - timedelta(days=max_days - 1):
                 continue
             if keywords and not any(kw in f"{title} {summary}".casefold() for kw in keywords):
                 continue
@@ -216,15 +230,28 @@ def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
     today = local_now().strftime("%Y-%m-%d")
     max_jobs = _max_jobs_per_draft(config)
     selected = postings[:max_jobs]
-    lines = [f"Tech jobs available today ({today}):"]
+    date_str = today
+    count = len(selected)
+
+    template_str = template or config.get("draft_template") or os.getenv(
+        "JOB_HUNT_DRAFT_TEMPLATE",
+        "Tech jobs available today ({date}):\n{items}",
+    )
+    template_str = template_str.replace("\\n", "\n")
+
+    item_lines = []
     for posting in selected:
         title = str(posting.get("title") or "Untitled role").strip()
         org = str(posting.get("organization") or "").strip()
         link = str(posting.get("url") or "").strip()
         label = f"{title} — {org}" if org else title
-        lines.append(f"- {label}: {link}" if link else f"- {label}")
+        item_lines.append(f"- {label}: {link}" if link else f"- {label}")
+
     if len(postings) > len(selected):
-        lines.append(f"(+{len(postings) - len(selected)} more in today's RSS results)")
+        item_lines.append(f"(+{len(postings) - len(selected)} more in this week's RSS results)")
+
+    items = "\n".join(item_lines)
+    text = template_str.format(date=date_str, items=items, count=count)
     return json.dumps({
         "success": True,
         "total_drafts": 1,
@@ -232,7 +259,7 @@ def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
         "max_jobs_per_draft": max_jobs,
         "location": results.get("location", ""),
         "date": today,
-        "drafts": [{"text": "\n".join(lines), "postings": selected, "category": "tech_jobs_today"}],
+        "drafts": [{"text": text, "postings": selected, "category": "tech_jobs_today"}],
     }, ensure_ascii=False)
 
 
