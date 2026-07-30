@@ -47,7 +47,7 @@ def propose_skill_from_run(goal: str, steps: list[dict[str, Any]], final_text: s
         "status": status,
         "score": score,
         "tools": tools,
-        "steps": steps,
+        "steps": [{**s, "args": str(s.get("args"))[:500]} for s in steps],
         "final_preview": (final_text or "")[:1000],
     }
     with path.open("a", encoding="utf-8") as f:
