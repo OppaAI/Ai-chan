@@ -4,6 +4,7 @@ Aiko-chan's browser-based UI backend — drop-in replacement for AikoTUI.
 
 (S0: barge_in WebSocket messages are ignored when BARGE_IN_ENABLED is off;
 mic start payload includes barge_in_enabled for the browser.)
+(S3: mic start also includes echo_guard_ms for browser barge echo guard.)
 """
 
 from __future__ import annotations
@@ -43,6 +44,13 @@ def _barge_in_enabled() -> bool:
         return barge_in_enabled()
     except Exception:
         return os.getenv("BARGE_IN_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _echo_guard_ms() -> int:
+    try:
+        return max(0, int(os.getenv("BARGE_IN_ECHO_GUARD_MS", "450")))
+    except ValueError:
+        return 450
 
 
 def _load_stored_display_name(uid: str) -> str:
@@ -164,7 +172,7 @@ class AikoWeb:
         scheme = "https" if self._ssl_context else "http"
 
         from interface.webui.auth import app as auth_app
-        from fastapi.staticfiles import StaticFiles
+        from svelte.staticfiles import StaticFiles
 
         has_static = False
         for route in auth_app.routes:
@@ -565,6 +573,7 @@ class AikoWeb:
             "bytes_per_chunk": BYTES_PER_CHUNK,
             "browser_vad_gate": WEBUI_BROWSER_VAD_GATE,
             "barge_in_enabled": _barge_in_enabled(),
+            "echo_guard_ms": _echo_guard_ms(),
         })
 
         threading.Thread(target=_run, daemon=True).start()
