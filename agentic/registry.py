@@ -115,7 +115,8 @@ def _attach_builtin_arg_models() -> None:
     try:
         from agentic.tool_models import (
             DirectSocialPostArgs, DraftJobPostSocialArgs, DraftPhotoSocialArgs, DraftVideoSocialArgs,
-            LearnKnowledgeArgs, PostPhotoSocialArgs, PostSocialDraftArgs, PostVideoSocialArgs,
+            DeepReadArgs, LearnKnowledgeArgs, PostPhotoSocialArgs, PostSocialDraftArgs, PostVideoSocialArgs,
+            RepoFileTreeArgs, RepoReadFileArgs, RepoSearchTextArgs, ResearchQueryArgs,
             SaveNoteArgs, ScheduleJobArgs, ScheduleReminderArgs, WriteReportArgs,
         )
     except Exception as exc:  # pragma: no cover - import-time optional dependency fallback
@@ -127,6 +128,12 @@ def _attach_builtin_arg_models() -> None:
         "schedule_reminder": ScheduleReminderArgs,
         "learn_knowledge": LearnKnowledgeArgs,
         "write_report": WriteReportArgs,
+        "adaptive_search": ResearchQueryArgs,
+        "deep_research": ResearchQueryArgs,
+        "deep_read": DeepReadArgs,
+        "repo_file_tree": RepoFileTreeArgs,
+        "repo_read_file": RepoReadFileArgs,
+        "repo_search_text": RepoSearchTextArgs,
         "draft_job_post_social": DraftJobPostSocialArgs,
         "post_job_post_social": PostSocialDraftArgs,
         "post_to_social": DirectSocialPostArgs,
@@ -138,9 +145,15 @@ def _attach_builtin_arg_models() -> None:
     for name, model in mapping.items():
         if name in TOOLS:
             TOOLS[name].args_model = model
+    for name in ("post_job_post_social", "post_photo_social", "post_video_social"):
+        if name in TOOLS:
+            TOOLS[name].needs_approval = True
 
 
 _attach_builtin_arg_models()
+for _approval_tool in ("post_job_post_social", "post_photo_social", "post_video_social"):
+    if _approval_tool in TOOLS:
+        TOOLS[_approval_tool].needs_approval = True
 
 
 class ToolRegistry:

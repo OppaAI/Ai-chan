@@ -140,8 +140,17 @@ def test_high_churn_tools_have_pydantic_arg_models():
 
     for name in [
         "save_note", "schedule_job", "schedule_reminder", "write_report",
+        "adaptive_search", "deep_research", "deep_read", "repo_file_tree", "repo_read_file", "repo_search_text",
         "draft_job_post_social", "post_job_post_social", "post_to_social",
         "draft_photo_social", "post_photo_social", "draft_video_social", "post_video_social",
     ]:
         assert TOOLS[name].args_model is not None
         assert TOOLS[name].to_openai_schema()["function"]["parameters"]["type"] == "object"
+
+
+def test_social_post_tools_require_hitl_approval():
+    from agentic.registry import TOOLS
+
+    assert TOOLS["post_job_post_social"].needs_approval is True
+    assert TOOLS["post_photo_social"].needs_approval is True
+    assert TOOLS["post_video_social"].needs_approval is True

@@ -586,5 +586,41 @@ def test_agent_context_passed_to_dispatch(monkeypatch):
     assert dispatch_tool("adaptive_search", {"query": "q"}, owner=ctx) == "ok"
     assert seen == {"client": "c", "model": "m", "embedder": "e"}
 
+
+def test_resume_approval_runs_pending_tool(monkeypatch, tmp_path):
+    from agentic.agentic import AgentContext, TaskState, execute_tool_with_policy, _maybe_resume_approval
+    from agentic.registry import registry
+
+    calls = []
+    def handler(**kwargs):
+        calls.append(kwargs)
+        return "posted"
+
+    registry.register("resume_approval_test", "approval test", handler=handler, needs_approval=True, react=True)
+    monkeypatch.setattr("agentic.agentic.user_state_dir", lambda user_id=None: tmp_path)
+    monkeypatch.setattr("agentic.agentic.user_workspace_root", lambda user_id=None: tmp_path / "workspace")
+    owner = MockOwner()
+    state = TaskState(goal="approval")
+    wait = execute_tool_with_policy("resume_approval_test", {"draft_dir": "d"}, state, ctx=AgentContext(run_id="r2"))
+    assert wait.error_type == "needs_approval"
+
+    resumed = _maybe_resume_approval(owner, "yes approve r2")
+    assert resumed is not None
+    assert calls == [{"draft_dir": "d"}]
+
+
+def test_skill_proposal_written_for_multistep_run(monkeypatch, tmp_path):
+    from agentic.skill_learning import propose_skill_from_run
+
+    monkeypatch.setattr("agentic.skill_learning.user_workspace_root", lambda user_id=None: tmp_path)
+    path = propose_skill_from_run(
+        "Summarize docs",
+        [{"tool": "repo_file_tree", "ok": True}, {"tool": "repo_read_file", "ok": True}],
+        "done",
+        verified_ok=True,
+        score=0.95,
+    )
+    assert path is not None
+    assert "Reusable tool order" in path.read_text(encoding="utf-8")
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

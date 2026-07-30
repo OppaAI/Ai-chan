@@ -87,3 +87,28 @@ class PostPhotoSocialArgs(PostSocialDraftArgs):
 
 class PostVideoSocialArgs(PostSocialDraftArgs):
     providers: tuple[Literal["youtube"], ...] | None = None
+
+
+class ResearchQueryArgs(BaseModel):
+    query: str = Field(min_length=1)
+
+
+class DeepReadArgs(BaseModel):
+    url: str = Field(min_length=1)
+    query: str = ""
+
+
+class RepoFileTreeArgs(BaseModel):
+    prefix: str = ""
+    limit: int = Field(default=200, ge=1, le=2000)
+
+
+class RepoReadFileArgs(BaseModel):
+    relative_path: str = Field(min_length=1)
+    max_chars: int = Field(default=20000, ge=1, le=200000)
+
+
+class RepoSearchTextArgs(BaseModel):
+    query: str = Field(min_length=1)
+    prefix: str = ""
+    limit: int = Field(default=50, ge=1, le=500)
