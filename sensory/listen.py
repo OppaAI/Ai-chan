@@ -592,7 +592,14 @@ class AikoListen:
 
     def _barge_in_loop(self) -> None:
         """
-        Always-on VAD monitor via parec. Pauses while _record() is active.
+        Always-on VAD monitor via parec. Pauses *scoring* while _record() is
+        active or unarmed — but keeps reading (and discarding) from the
+        pipe throughout, since parec keeps writing whether or not anyone
+        reads. If we stopped reading during a pause (the old behavior), the
+        OS pipe buffer fills with stale audio that gets scored first once
+        we resume, delaying real barge-in detection right when
+        responsiveness matters most. A blocking read also naturally paces
+        this loop at real-time audio rate, so no separate sleep is needed.
 
         No-ops entirely (idles until stop_barge_in_monitor()) when
         BARGE_IN_ENABLED=0 — this is the master switch; no parec process is
@@ -609,14 +616,17 @@ class AikoListen:
             proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
             consecutive = 0
             while self._barge_in_active:
-                if self._recording.is_set() or (not BARGE_IN_ALWAYS_ON and not self._barge_in_armed.is_set()):
-                    time.sleep(0.05)
-                    consecutive = 0
-                    continue
-
                 raw = proc.stdout.read(bytes_per_chunk)
                 if len(raw) < bytes_per_chunk:
                     break
+
+                paused = (
+                    self._recording.is_set()
+                    or (not BARGE_IN_ALWAYS_ON and not self._barge_in_armed.is_set())
+                )
+                if paused:
+                    consecutive = 0
+                    continue
 
                 if self._barge_in_event.is_set():
                     consecutive = 0
