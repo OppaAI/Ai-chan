@@ -5,16 +5,9 @@
  * the backend runs Silero VAD as the authoritative check on whatever this
  * forwards (see listen.py _record()).
  *
- * Default flow (browser VAD gate on):
- *   pcm-worklet -> Float32Array frame -> processVADFrame(frame, ws, true)
- *     silence  -> kept locally, not sent to the server
- *     speech   -> ws.send(binary frame)
- *     on start -> ws.send({type:'vad', event:'start'}) + pre-speech context
- *     on end   -> ws.send({type:'vad', event:'end'})
- *
- * Diagnostic flow (browser VAD gate off):
- *   processVADFrame(frame, ws, false) forwards every PCM frame so server-side
- *   VAD can be evaluated in isolation.
+ * Barge-in: only when window.AIKO_BARGE_IN_ENABLED is true (set from server
+ * mic-start / config). Default false until the server says otherwise so a
+ * stale tab cannot cut TTS after BARGE_IN_ENABLED=0.
  */
 
 // -- tunables -----------------------------------------------------------------
@@ -22,35 +15,30 @@
 const SILENCE_TIMEOUT = 1200;   // ms of silence before utterance ends
 const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
 
-// Energy VAD tunables — values below are your tuned optimum. Conservative
-// enough to avoid streaming normal room tone.
-// NOTE: If voice input never transcribes (mic blinks, says "listening" but
-// nothing happens), lower ENERGY_START_RMS. Check console for "[vad]" logs.
 const ENERGY_START_RMS = 0.008;
 const ENERGY_END_RMS = 0.005;
 const ENERGY_MIN_FRAMES = 2;
 
-// Adaptive noise tracking: running minimum RMS when not speaking, used as end-of-speech floor.
 let _noiseFloor = 0.015;
 
 // -- state --------------------------------------------------------------------
 
 let _speaking = false;
 let _silTimer = null;
-let _preBuf = [];     // circular pre-speech context
+let _preBuf = [];
 let _energyHits = 0;
 let _vadEpoch = 0;
-let _lastBargeSent = 0;   // timestamp of last barge_in sent, for throttling
-let _bargeHits = 0
+let _lastBargeSent = 0;
+let _bargeHits = 0;
 
 const BARGE_IN_CONFIRM_FRAMES = 2;
 
-// -- init ---------------------------------------------------------------------
+function _bargeInEnabled() {
+    // Server sets window.AIKO_BARGE_IN_ENABLED on mic start. Default off.
+    return window.AIKO_BARGE_IN_ENABLED === true || window.AIKO_BARGE_IN_ENABLED === 1
+        || window.AIKO_BARGE_IN_ENABLED === "1";
+}
 
-/**
- * No model loading needed for energy VAD — kept as an async function so
- * callers (index.html) that await initVAD() don't need to change.
- */
 async function initVAD() {
     _resetState();
     return { mode: 'energy', ready: true, fallback: false };
@@ -65,21 +53,11 @@ function _resetState() {
     _preBuf = [];
     _speaking = false;
     _energyHits = 0;
-    _bargeHits = 0;      // NEW
+    _bargeHits = 0;
     _lastBargeSent = 0;
     if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
 }
 
-// -- main entry point ---------------------------------------------------------
-
-/**
- * Process one PCM frame from pcm-worklet.js.
- * Sends binary frames + VAD sentinel JSON messages over `ws`.
- * @param {Float32Array} frame  - PCM samples at 16 kHz mono
- * @param {WebSocket}    ws     - live WebSocket to Jetson
- * @param {boolean}      gate   - true: browser VAD gates network audio;
- *                                false: diagnostic raw PCM passthrough
- */
 async function processVADFrame(frame, ws, gate = true) {
     const epoch = _vadEpoch;
     if (!_canSend(ws, epoch)) return;
@@ -92,6 +70,25 @@ function _calcThresholds() {
     return { startThresh, endThresh };
 }
 
+function _maybeBargeIn(ws, rms, startThresh) {
+    if (!_bargeInEnabled()) return;
+    if (!window.aikoIsSpeaking) return;
+    if (rms < startThresh) {
+        _bargeHits = 0;
+        return;
+    }
+    _bargeHits++;
+    if (_bargeHits < BARGE_IN_CONFIRM_FRAMES) return;
+    const now = performance.now();
+    if (now - _lastBargeSent <= 300) return;
+    _lastBargeSent = now;
+    _bargeHits = 0;
+    if (window.stopTtsPlayback) window.stopTtsPlayback();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'barge_in' }));
+    }
+}
+
 function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
     if (!_canSend(ws, epoch)) return;
     if (!gate) {
@@ -101,12 +98,10 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
 
     const { startThresh } = _calcThresholds();
 
-    // Adaptive noise floor: track the minimum RMS when not speaking
     if (!_speaking) {
         if (rms < _noiseFloor) {
             _noiseFloor = rms;
         } else {
-            // Slowly decay up so we track changes in background noise
             _noiseFloor += (rms - _noiseFloor) * 0.001;
         }
     }
@@ -119,17 +114,14 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
             if (gate) _pushPreSpeech(frame);
             return;
         }
-    
+
         _speaking = true;
         _energyHits = 0;
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
         if (!_canSend(ws, epoch)) return;
-    
-        // Barge-in: cut Aiko's audio locally with zero network round-trip,
-        // then tell the backend separately so it aborts generation/synthesis
-        // instead of continuing to stream chunks that would just refill the
-        // queue we already cleared.
-        if (window.aikoIsSpeaking) {
+
+        // Onset barge (only if enabled)
+        if (_bargeInEnabled() && window.aikoIsSpeaking) {
             const now = performance.now();
             if (now - _lastBargeSent > 300) {
                 _lastBargeSent = now;
@@ -137,8 +129,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
                 ws.send(JSON.stringify({ type: 'barge_in' }));
             }
         }
-    
-        // Edge-triggered log: one line when speech is detected, not one per frame.
+
         console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}`);
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
         if (gate) {
@@ -159,28 +150,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
             ws.send(frame.buffer.slice(0));
         }
 
-        // Barge-in during active speech: user may have been speaking from a
-        // previous segment (VAD state didn't reset) or started speaking while
-        // TTS was already playing. The speech-onset barge-in above only fires
-        // on the false→true transition, so this handles the ongoing case.
-        // Requires BARGE_IN_CONFIRM_FRAMES consecutive over-threshold frames
-        // (not just one) since a single echo-bleed frame from imperfect AEC
-        // shouldn't be enough to cut Aiko off — real speech sustains, echo
-        // residue tends to be a transient blip.
-        if (window.aikoIsSpeaking && rms >= startThresh) {
-            _bargeHits++;
-            if (_bargeHits >= BARGE_IN_CONFIRM_FRAMES) {
-                const now = performance.now();
-                if (now - _lastBargeSent > 300) {
-                    _lastBargeSent = now;
-                    if (window.stopTtsPlayback) window.stopTtsPlayback();
-                    ws.send(JSON.stringify({ type: 'barge_in' }));
-                }
-                _bargeHits = 0;
-            }
-        } else {
-            _bargeHits = 0;
-        }
+        _maybeBargeIn(ws, rms, startThresh);
 
         if (rms > endThresh) {
             if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
@@ -194,7 +164,6 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
                 _speaking = false;
                 _energyHits = 0;
                 if (!_canSend(ws, epoch)) return;
-                // Edge-triggered log: one line when speech ends, not one per frame.
                 console.log(`[vad] speech END  floor=${_noiseFloor.toFixed(5)}`);
                 ws.send(JSON.stringify({ type: 'vad', event: 'end' }));
             }, SILENCE_TIMEOUT);

@@ -20,16 +20,20 @@ LISTEN_MAX_SECONDS: "30"  # Hard cap on one recording length in seconds.
 LISTEN_DEVICE: ""  # sounddevice input index; blank means system default.
 
 # -- Speaker verification --
-SPEAKER_VERIFY_ENABLED: "0"  # Enable enrolled-speaker verification; options: 1/0, true/false, yes/no, on/off.
+SPEAKER_VERIFY_ENABLED: "0"  # Load enrollment model and score each utterance; options: 1/0, true/false, yes/no, on/off.
+SPEAKER_VERIFY_GATE: "0"  # When 1 with verify enabled: drop utterances that fail cosine match (other voices do not run the agent). When 0: score is metadata only (legacy).
 SPEAKER_MODEL_PATH: "models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"  # Path to sherpa-onnx speaker embedding .onnx model.
-SPEAKER_VERIFY_THRESHOLD: "0.5"  # Cosine similarity cutoff for speaker match; range 0.0-1.0.
+SPEAKER_VERIFY_THRESHOLD: "0.5"  # Cosine similarity cutoff for speaker match; range 0.0-1.0. Raise to 0.65–0.75 if strangers still pass when gating.
 SPEAKER_NUM_THREADS: "1"  # CPU threads for speaker embedding extraction.
 
 # -- Barge-in --
-BARGE_IN_THRESHOLD: "0.95"  # Speech probability threshold to interrupt TTS; range 0.0-1.0.
-BARGE_IN_CONFIRM_CHUNKS: "2"  # Consecutive chunks above threshold before barge-in fires.
+# Master switch: when 0, browser and Jetson must not interrupt TTS (no stopTtsPlayback, no barge event).
+BARGE_IN_ENABLED: "0"  # Master barge-in on/off; options: 1/0, true/false, yes/no, on/off.
+BARGE_IN_THRESHOLD: "0.95"  # Speech probability threshold to interrupt TTS (local Silero monitor); range 0.0-1.0.
+BARGE_IN_CONFIRM_CHUNKS: "2"  # Consecutive chunks above threshold before local barge-in fires.
 BARGE_IN_COOLDOWN_MS: "800"  # Cooldown in milliseconds before another barge-in event can fire.
-BARGE_IN_ALWAYS_ON: "0"  # Monitor barge-in outside TTS playback; options: 1/0, true/false, yes/no, on/off.
+# Only meaningful when BARGE_IN_ENABLED=1. When 0, local monitor runs only while TTS wait is armed.
+BARGE_IN_ALWAYS_ON: "0"  # Also monitor outside TTS wait; options: 1/0, true/false, yes/no, on/off.
 
 # -- Wake word --
 # Fuzzy-matched (not exact substring) against the leading words of each
@@ -41,18 +45,14 @@ WAKE_WORD_ALIASES: ""  # "|"-separated extra candidate phrases for observed ASR 
 WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
 
 # -- Trigger phrase --
-# Only takes effect when SPEAKER_VERIFY_ENABLED is also "1". Can be said
-# standalone or right after the wake word, e.g. "Hey Aiko here is Oppa ...".
-# Blank disables trigger-phrase gating.
-TRIGGER_PHRASE: ""  # Phrase required (with speaker verification) to activate Aiko, e.g. "here is oppa". "" disables.
-TRIGGER_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a trigger-phrase hit.
-TRIGGER_REQUIRE_SPEAKER_MATCH: "1"  # Trigger phrase alone isn't enough — cosine-sim speaker check must also pass; options: 1/0, true/false, yes/no, on/off.
+# Optional second phrase (e.g. with speaker verify). For single-user home use,
+# leave blank — wake word alone (or no wake word) is enough.
+TRIGGER_PHRASE: ""  # Extra phrase; "" disables. Prefer empty unless multi-user lock is required.
+TRIGGER_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) for trigger phrase.
+TRIGGER_REQUIRE_SPEAKER_MATCH: "1"  # If trigger is used, require speaker match too.
 
 # -- Activation session --
-# Once woken/triggered, Aiko stays "active" (no phrase required, proactive
-# behavior allowed) until this many seconds pass with no further utterance.
-# After that she goes back to sleep and requires the configured phrase(s) again.
-ACTIVATION_TIMEOUT_S: "3600"  # Idle seconds before requiring wake word / trigger phrase again.
+ACTIVATION_TIMEOUT_S: "3600"  # Idle seconds before requiring wake word again.
 
 
 # Speak config
