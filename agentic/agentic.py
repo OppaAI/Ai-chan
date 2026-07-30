@@ -960,8 +960,15 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
 
     if spec and spec.needs_approval and name not in ctx.approval_bypass:
         _persist_pending_approval(ctx, name, args, state)
-        result = ToolResult(ok=False, tool=name, args=args, content=json.dumps({"status": "waiting_for_approval", "run_id": ctx.run_id, "instruction": f"Reply with approve {ctx.run_id} to run {name}."}, ensure_ascii=False), error_type="needs_approval", retryable=False, metadata={"run_id": ctx.run_id, "checkpoint": state.summary()})
-        state.record(result)
+        draft_dir = args.get("draft_dir") if isinstance(args, dict) else None
+        wait_payload = {"status": "waiting_for_approval", "run_id": ctx.run_id, "instruction": f"Reply with approve {ctx.run_id} to run {name}."}
+        if draft_dir:
+            wait_payload["draft_dir"] = draft_dir
+            wait_payload["instruction"] = (
+                f"Review the draft at {draft_dir} and approve it outside this "
+                f"conversation, then reply with approve {ctx.run_id} to run {name}."
+            )
+        result = ToolResult(ok=False, tool=name, args=args, content=json.dumps(wait_payload, ensure_ascii=False), error_type="needs_approval", retryable=False, metadata={"run_id": ctx.run_id, "checkpoint": state.summary()})        state.record(result)
         _append_step_trace(ctx, "approval_wait", {"tool": name, "args": args})
         _append_step_trace(ctx, "tool_result", {"tool": name, "ok": False, "error_type": "needs_approval"})
         return result
