@@ -74,8 +74,3 @@ def correct_asr_text(text: str) -> str:
         pattern = re.compile(rf"(?i)(?<!\w){re.escape(src)}(?!\w)")
         out = pattern.sub(dst, out)
     return out
-
-
-def install_asr_correct_hooks() -> None:
-    """Deprecated no-op; correction is applied inside AikoListen._transcribe."""
-    return None
