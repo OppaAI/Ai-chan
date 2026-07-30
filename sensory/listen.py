@@ -8,7 +8,8 @@ Aiko's speech-to-text input layer.
     client-side (see static/vad.js) to decide "loud enough to bother sending" —
     it is NOT a speech/silence judgment. Silero here is what actually decides
     what is speech, on every chunk, regardless of source.
-  - Transcribes via SenseVoice (sherpa-onnx, int8 ONNX) in a background thread
+  - Transcribes via SenseVoice (sherpa-onnx, int8 ONNX) in a background thread,
+    then applies post-ASR name/phrase corrections (see correct_asr_text below)
   - Optionally verifies the speaker against one enrolled voice embedding
     (sherpa-onnx SpeakerEmbeddingExtractor) on the same buffered audio, run
     in parallel with transcription — see SPEAKER_VERIFY_ENABLED below
@@ -21,6 +22,15 @@ Aiko's speech-to-text input layer.
   - Always-on barge-in VAD monitor: start_barge_in_monitor() runs a
     lightweight Silero-only daemon that sets _barge_in_event when speech is
     detected during TTS playback, enabling speak.wait_or_barge_in()
+
+Barge-in, the speaker-verify drop-gate, and post-ASR corrections are native
+to this module (see barge_in_enabled() / speaker_verify_gate() /
+correct_asr_text() below) — there is no external monkeypatch layer and no
+separate bind-at-boot step (formerly sensory/voice_gates.py, then
+sensory/listen_native.py). BARGE_IN_ENABLED=0 (the default) is enforced
+directly inside trigger_barge_in() / _barge_in_loop() / listen(), so the
+switch is load-bearing by construction rather than depending on some other
+module getting imported and run first.
 
 Dependencies:
     pip install sherpa-onnx numpy silero-vad scipy huggingface_hub rapidfuzz
@@ -36,9 +46,12 @@ Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     2. Set SPEAKER_MODEL_PATH in .env to point at it
     3. Enroll your voice: python -m util.enroll_speak
     4. Set SPEAKER_VERIFY_ENABLED=1 in .env
+    SPEAKER_VERIFY_GATE=1 additionally drops utterances that fail the cosine
+    match (see speaker_verify_gate() / listen() below); default 0 keeps the
+    score as metadata only (legacy behavior).
 
-Wake word / trigger phrase (optional — see config/listen.yaml):
-    WAKE_WORD ("hey aiko" by default off / "" disables): SenseVoice mangles
+Wake word / trigger phrase (optional — see config/sensory.yaml):
+    WAKE_WORD ("" by default, disabled): SenseVoice mangles
     "Aiko" unpredictably since it's not a normal English word, so matching is
     fuzzy (rapidfuzz ratio) against the leading words of the transcript, not
     an exact substring check. WAKE_WORD_ALIASES lets you hardcode observed
@@ -51,6 +64,14 @@ Wake word / trigger phrase (optional — see config/listen.yaml):
     subsystems (e.g. suppress proactive/unsolicited behavior while asleep),
     and AikoListen.sleep_now() to force it inactive (e.g. an explicit
     "go to sleep" command).
+
+Post-ASR name / phrase corrections (S2, no finetune):
+    Lightweight ordered phrase replacements applied after every transcript
+    (see correct_asr_text() below), for names ASR reliably mangles (e.g.
+    "Aiko", "OppaAI"). Configure extra pairs via ASR_CORRECTIONS in .env:
+      "op ai->OppaAI|hey iko->hey Aiko|my project x->Project X"
+    Built-in defaults already cover Aiko / OppaAI; user map is applied on
+    top and wins on same key. Longest phrase matches first.
 """
 from __future__ import annotations
 
@@ -58,6 +79,7 @@ import onnxruntime as _ort
 if hasattr(_ort, "set_default_logger_severity"):
     _ort.set_default_logger_severity(3)
 
+from functools import lru_cache
 from huggingface_hub import hf_hub_download
 from silero_vad import load_silero_vad
 from system.userspace import user_state_path
@@ -65,6 +87,7 @@ import json
 import logging as _logging
 import numpy as np
 import os
+import re
 
 log = _logging.getLogger(__name__)
 
@@ -98,7 +121,7 @@ BOOT_LABELS = {
 
 # ── config ────────────────────────────────────────────────────────────────────
 
-ASR_DEVICE      = os.getenv("ASR_DEVICE", "cpu")       # resolved from config/listen.yaml via load_config()
+ASR_DEVICE      = os.getenv("ASR_DEVICE", "cpu")       # resolved from config/sensory.yaml via load_config()
 ASR_LANGUAGE    = os.getenv("ASR_LANGUAGE", "auto")    # auto, zh, en, ja, ko, yue, nospeech
 ASR_NUM_THREADS = int(os.getenv("ASR_NUM_THREADS", "4"))
 
@@ -116,12 +139,12 @@ LISTEN_DEVICE       = os.getenv("LISTEN_DEVICE", None)              # None = def
 
 CHUNK_DURATION_MS   = int(os.getenv("LISTEN_CHUNK_MS",         30))  # Silero minimum
 VAD_THRESHOLD       = float(os.getenv("LISTEN_VAD_THRESHOLD", 0.5))  # Silero speech prob cutoff
-SILENCE_CHUNKS      = int(os.getenv("LISTEN_SILENCE_CHUNKS",   20))
+SILENCE_CHUNKS      = int(os.getenv("LISTEN_SILENCE_CHUNKS",   66))  # matches config/sensory.yaml default
 MIN_SPEECH_CHUNKS   = int(os.getenv("LISTEN_MIN_CHUNKS",       10))
 MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))
 
-BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.65"))
-BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "2"))
+BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.95"))  # matches config/sensory.yaml default
+BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "4"))     # matches config/sensory.yaml default
 BARGE_IN_COOLDOWN_MS   = int(os.getenv("BARGE_IN_COOLDOWN_MS",     "800"))
 BARGE_IN_ALWAYS_ON     = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "true", "yes", "on"}
 
@@ -142,7 +165,7 @@ WAKE_WORD             = os.getenv("WAKE_WORD", "").strip().lower()
 WAKE_WORD_ALIASES     = [w.strip().lower() for w in os.getenv("WAKE_WORD_ALIASES", "").split("|") if w.strip()]
 WAKE_FUZZY_THRESHOLD  = float(os.getenv("WAKE_FUZZY_THRESHOLD", "70"))
 
-ACTIVATION_TIMEOUT_S = float(os.getenv("ACTIVATION_TIMEOUT_S", "30"))
+ACTIVATION_TIMEOUT_S = float(os.getenv("ACTIVATION_TIMEOUT_S", "3600"))  # matches config/sensory.yaml default
 
 _CHUNK_SAMPLES_VAD = 512                                             # at 16 kHz, ~32 ms
 _MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / CHUNK_DURATION_MS)
@@ -155,6 +178,102 @@ _PAREC_CMD = [
     "--format=float32le",
     "--latency-msec=30",
 ]
+
+
+# ── native gate flags (formerly sensory/voice_gates.py, then listen_native.py) ─
+# Master switches, read live from env (not cached at import) and enforced
+# directly inside AikoListen methods below — no external bind step.
+
+def _env_bool(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def barge_in_enabled() -> bool:
+    """Master barge-in switch (browser + Jetson)."""
+    return _env_bool("BARGE_IN_ENABLED", "0")
+
+
+def barge_in_always_on() -> bool:
+    """Local Silero monitor outside TTS wait — only meaningful if
+    barge_in_enabled() is also True."""
+    return barge_in_enabled() and _env_bool("BARGE_IN_ALWAYS_ON", "0")
+
+
+def speaker_verify_gate() -> bool:
+    """When True (and verification is active), a failed cosine match drops
+    the utterance in listen(). When False, the score is metadata only."""
+    return _env_bool("SPEAKER_VERIFY_GATE", "0")
+
+
+# ── post-ASR name / phrase corrections (S2, no finetune) ────────────────────
+# Pipe-separated "heard->fixed" pairs via ASR_CORRECTIONS. Applied after
+# SenseVoice (longest match first). Built-in defaults cover Aiko / OppaAI
+# mangling; user map is applied on top and wins on same key.
+
+_DEFAULT_ASR_PAIRS: tuple[tuple[str, str], ...] = (
+    ("hey aiko", "hey Aiko"),
+    ("hey iko", "hey Aiko"),
+    ("hey eco", "hey Aiko"),
+    ("hey ecko", "hey Aiko"),
+    ("hey echo", "hey Aiko"),
+    ("hey ico", "hey Aiko"),
+    ("hey aico", "hey Aiko"),
+    ("hi aiko", "hi Aiko"),
+    ("hi iko", "hi Aiko"),
+    ("aiko", "Aiko"),
+    ("oppaai", "OppaAI"),
+    ("oppa ai", "OppaAI"),
+    ("op ai", "OppaAI"),
+    ("oppa a i", "OppaAI"),
+    ("opper ai", "OppaAI"),
+    ("opa ai", "OppaAI"),
+)
+
+
+def _parse_asr_user_map(raw: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for part in (raw or "").split("|"):
+        part = part.strip()
+        if not part or "->" not in part:
+            continue
+        src, dst = part.split("->", 1)
+        src, dst = src.strip(), dst.strip()
+        if src and dst:
+            out.append((src.lower(), dst))
+    return out
+
+
+@lru_cache(maxsize=4)
+def _pairs_cached(user_raw: str) -> tuple[tuple[str, str], ...]:
+    user = _parse_asr_user_map(user_raw)
+    # User entries first so they override defaults when sources collide
+    seen: set[str] = set()
+    merged: list[tuple[str, str]] = []
+    for src, dst in list(user) + list(_DEFAULT_ASR_PAIRS):
+        key = src.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append((src, dst))
+    # Longest source first so "hey aiko" wins over "aiko"
+    merged.sort(key=lambda p: len(p[0]), reverse=True)
+    return tuple(merged)
+
+
+def correction_pairs() -> tuple[tuple[str, str], ...]:
+    return _pairs_cached(os.getenv("ASR_CORRECTIONS", "").strip())
+
+
+def correct_asr_text(text: str) -> str:
+    """Apply name/phrase corrections; preserves non-matched regions."""
+    if not text or not text.strip():
+        return text
+    out = text
+    for src, dst in correction_pairs():
+        # Word-boundary-ish match, case-insensitive
+        pattern = re.compile(rf"(?i)(?<!\w){re.escape(src)}(?!\w)")
+        out = pattern.sub(dst, out)
+    return out
 
 
 def _resolve_sense_voice_files() -> tuple[str, str]:
@@ -239,6 +358,11 @@ class AikoListen:
     Silero VAD gates recording for robust, noise-resilient speech detection,
     for every audio source (local mic and WebUI alike).
 
+    Barge-in, the speaker-verify drop-gate, and post-ASR corrections are
+    native (see module docstring) — trigger_barge_in(), _barge_in_loop(),
+    listen(), and _transcribe() all enforce their respective switches
+    directly, with no external bind step required.
+
     When chunk_source is provided (WebUI path), the caller may set
     vad_presegmented=True to indicate that the browser has already applied a
     lightweight energy-RMS gate client-side (see static/vad.js) — this is
@@ -257,6 +381,7 @@ class AikoListen:
     Barge-in monitor (call after join_warmup):
         listen.start_barge_in_monitor()
         Pauses automatically while _record() is active to avoid mic conflicts.
+        No-ops (idles until stopped) when BARGE_IN_ENABLED=0.
 
     Wake word / trigger phrase gating (see module docstring for config):
         listen.is_active()   — True if currently awake/triggered
@@ -317,14 +442,14 @@ class AikoListen:
         if not SPEAKER_VERIFY_ENABLED:
             return
         if not SPEAKER_MODEL_PATH or not os.path.isfile(SPEAKER_MODEL_PATH):
-            logging.getLogger(__name__).warning(
+            log.warning(
                 f"[listen] SPEAKER_VERIFY_ENABLED=1 but SPEAKER_MODEL_PATH "
                 f"is missing or invalid ({SPEAKER_MODEL_PATH!r}); verification disabled."
             )
             return
         enroll_path = self.speaker_enroll_path()
         if not os.path.isfile(enroll_path):
-            logging.getLogger(__name__).warning(
+            log.warning(
                 f"[listen] SPEAKER_VERIFY_ENABLED=1 but no enrollment found at "
                 f"{enroll_path!r}; run enroll_speaker.py first. Verification disabled."
             )
@@ -450,7 +575,7 @@ class AikoListen:
 
     def stop_barge_in_monitor(self) -> None:
         self._barge_in_active = False
-      
+
     def trigger_barge_in(self) -> None:
         """
         Externally signal a barge-in, bypassing the local-mic Silero monitor.
@@ -458,11 +583,26 @@ class AikoListen:
         during TTS playback and reports it over the websocket as a 'barge_in'
         message — this lets that message interrupt speak.wait_or_barge_in()
         exactly as if the physical Jetson mic had detected it.
+
+        No-op when BARGE_IN_ENABLED=0 (master switch — see barge_in_enabled()).
         """
+        if not barge_in_enabled():
+            return
         self._barge_in_event.set()
-  
+
     def _barge_in_loop(self) -> None:
-        """Always-on VAD monitor via parec. Pauses while _record() is active."""
+        """
+        Always-on VAD monitor via parec. Pauses while _record() is active.
+
+        No-ops entirely (idles until stop_barge_in_monitor()) when
+        BARGE_IN_ENABLED=0 — this is the master switch; no parec process is
+        even spawned in that case.
+        """
+        if not barge_in_enabled():
+            while self._barge_in_active:
+                time.sleep(0.5)
+            return
+
         bytes_per_chunk = _CHUNK_SAMPLES_VAD * 4
 
         try:
@@ -523,7 +663,10 @@ class AikoListen:
           - False if it didn't match
         info also carries "speaker_score" (float or None) for logging/tuning.
         Verification never blocks or fails transcription — it's metadata
-        attached alongside the text, not a gate in front of it.
+        attached alongside the text. If SPEAKER_VERIFY_GATE=1 (see
+        speaker_verify_gate()) and the match failed, the utterance is
+        dropped and ("", info) is returned instead — same shape as "no
+        speech detected".
 
         info additionally carries "woke" (bool|None):
           - None means wake word gate wasn't configured / not evaluated
@@ -534,6 +677,12 @@ class AikoListen:
             "no speech detected" — so callers that already treat empty text
             as "nothing to do" handle this for free. Any matched wake word
             prefix is stripped from the returned text.
+
+        If speak is playing and BARGE_IN_ENABLED=0, this blocks with a plain
+        poll loop until playback finishes (no barge interrupt is possible —
+        trigger_barge_in()/_barge_in_loop() are no-ops in that state anyway).
+        If BARGE_IN_ENABLED=1, it waits via speak.wait_or_barge_in() so a
+        detected barge can interrupt the wait early.
 
         chunk_source: optional callable(bytes_per_chunk) -> bytes | None,
             forwarded to _record(). See _record() docstring. None (default)
@@ -547,14 +696,21 @@ class AikoListen:
             applied. See _record() for details.
         """
         if speak is not None and speak.is_playing():
-            _cb(status_callback, "__WAITING__")
-            self._barge_in_armed.set()
-            try:
-                interrupted = speak.wait_or_barge_in(self._barge_in_event)
-            finally:
-                self._barge_in_armed.clear()
-            if interrupted:
-                self._barge_in_event.clear()
+            if not barge_in_enabled():
+                _cb(status_callback, "__WAITING__")
+                while speak.is_playing():
+                    time.sleep(0.05)
+                speak = None
+                wait_fn = None  # already waited out TTS; avoid double wait_fn
+            else:
+                _cb(status_callback, "__WAITING__")
+                self._barge_in_armed.set()
+                try:
+                    interrupted = speak.wait_or_barge_in(self._barge_in_event)
+                finally:
+                    self._barge_in_armed.clear()
+                if interrupted:
+                    self._barge_in_event.clear()
         elif wait_fn is not None:
             wait_fn()
 
@@ -604,6 +760,18 @@ class AikoListen:
         info["woke"] = gate_info["woke"]
 
         _cb(status_callback, "__IDLE__")
+
+        if (
+            speaker_verify_gate()
+            and self.speaker_verify_active()
+            and info.get("verified") is False
+        ):
+            log.info(
+                "[gate] speaker verify failed (score=%s) — dropping utterance",
+                info.get("speaker_score"),
+            )
+            return "", info
+
         if gated_text is None:
             return "", info
         return gated_text, info
@@ -734,8 +902,10 @@ class AikoListen:
     # ── transcription ─────────────────────────────────────────────────────────
 
     def _transcribe(self, audio: np.ndarray) -> str:
-        """Transcribe float32 16kHz audio using SenseVoice via sherpa-onnx."""
-        import re
+        """
+        Transcribe float32 16kHz audio using SenseVoice via sherpa-onnx,
+        then apply post-ASR name/phrase corrections (see correct_asr_text).
+        """
         with self._lock:
             stream = self._model.create_stream()
             stream.accept_waveform(SAMPLE_RATE, audio)
@@ -745,6 +915,10 @@ class AikoListen:
             # SenseVoice prepends language/emotion tags like <|en|><|NEUTRAL|><|Speech|><|withitn|>
             # Strip them for clean output
             text = re.sub(r'<\|[^|]+\|>', '', text).strip()
+
+        try:
+            return correct_asr_text(text)
+        except Exception:
             return text
 
     # ── warmup ────────────────────────────────────────────────────────────────
