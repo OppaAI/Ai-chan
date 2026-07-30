@@ -507,9 +507,6 @@ class TestSaveNoteContentTruncation:
         assert "note saved" in result.lower()
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
-
 def test_validate_args_uses_registered_pydantic_model():
     from pydantic import BaseModel, Field
     from agentic.registry import registry
@@ -556,3 +553,99 @@ def test_verify_final_answer_uses_post_answer_guardrails_for_saved_path(monkeypa
 
     assert verdict.ok is False
     assert "does not mention where it was saved" in verdict.feedback
+
+
+def test_handoff_profile_maps_capabilities():
+    from agentic.agentic import _handoff_profile_for
+
+    profile = _handoff_profile_for(["social", "scheduling"])
+    assert "social" in profile["tool_domains"]
+    assert "scheduling" in profile["tool_domains"]
+    assert profile["max_iter"] <= 5
+
+
+def test_needs_approval_returns_wait_result_and_checkpoint(monkeypatch, tmp_path):
+    from agentic.agentic import AgentContext, TaskState, execute_tool_with_policy
+    from agentic.registry import registry
+
+    registry.register("approval_test", "approval test", needs_approval=True, react=True)
+    monkeypatch.setattr("agentic.agentic.user_state_dir", lambda user_id=None: tmp_path)
+    state = TaskState(goal="approval")
+    result = execute_tool_with_policy("approval_test", {}, state, ctx=AgentContext(run_id="r1"))
+    assert result.error_type == "needs_approval"
+    assert result.metadata["run_id"] == "r1"
+    assert (tmp_path / "agentic" / "traces" / "r1.jsonl").exists()
+
+
+def test_agent_context_passed_to_dispatch(monkeypatch):
+    from agentic.agentic import AgentContext, dispatch_tool
+
+    seen = {}
+    monkeypatch.setattr("agentic.agentic.adaptive_search", lambda query, client=None, model=None, embedder=None: seen.update(client=client, model=model, embedder=embedder) or "ok")
+    ctx = AgentContext(client="c", llm_model="m", embedder="e")
+    assert dispatch_tool("adaptive_search", {"query": "q"}, owner=ctx) == "ok"
+    assert seen == {"client": "c", "model": "m", "embedder": "e"}
+
+
+def test_resume_approval_runs_pending_tool(monkeypatch, tmp_path):
+    from agentic.agentic import AgentContext, TaskState, execute_tool_with_policy, _maybe_resume_approval
+    from agentic.registry import registry
+
+    calls = []
+    def handler(**kwargs):
+        calls.append(kwargs)
+        return "posted"
+
+    registry.register("resume_approval_test", "approval test", handler=handler, needs_approval=True, react=True)
+    monkeypatch.setattr("agentic.agentic.user_state_dir", lambda user_id=None: tmp_path)
+    monkeypatch.setattr("agentic.agentic.user_workspace_root", lambda user_id=None: tmp_path / "workspace")
+    owner = MockOwner()
+    state = TaskState(goal="approval")
+    wait = execute_tool_with_policy("resume_approval_test", {"draft_dir": "d"}, state, ctx=AgentContext(run_id="r2"))
+    assert wait.error_type == "needs_approval"
+
+    resumed = _maybe_resume_approval(owner, "yes approve r2")
+    assert resumed is not None
+    assert calls == [{"draft_dir": "d"}]
+
+
+def test_skill_proposal_written_for_multistep_run(monkeypatch, tmp_path):
+    from agentic.skill_learning import propose_skill_from_run
+
+    monkeypatch.setattr("agentic.skill_learning.user_workspace_root", lambda user_id=None: tmp_path)
+    path = propose_skill_from_run(
+        "Summarize docs",
+        [{"tool": "repo_file_tree", "ok": True}, {"tool": "repo_read_file", "ok": True}],
+        "done",
+        verified_ok=True,
+        score=0.95,
+    )
+    assert path is not None
+    assert "Reusable tool order" in path.read_text(encoding="utf-8")
+
+
+def test_handoff_profile_includes_additional_domains():
+    from agentic.agentic import _handoff_profile_for
+
+    profile = _handoff_profile_for(["job_hunt", "photo", "kb_proposal"])
+    assert "job_hunt" in profile["tool_domains"]
+    assert "photo" in profile["tool_domains"]
+    assert "kb" in profile["tool_domains"]
+
+
+def test_approval_resume_does_not_mutate_registry_flag(monkeypatch, tmp_path):
+    from agentic.agentic import AgentContext, TaskState, execute_tool_with_policy, _maybe_resume_approval
+    from agentic.registry import registry
+
+    registry.register("race_safe_approval_test", "approval test", handler=lambda **kwargs: "ok", needs_approval=True, react=True)
+    monkeypatch.setattr("agentic.agentic.user_state_dir", lambda user_id=None: tmp_path)
+    owner = MockOwner()
+    wait = execute_tool_with_policy("race_safe_approval_test", {}, TaskState(goal="approval"), ctx=AgentContext(run_id="r3"))
+    assert wait.error_type == "needs_approval"
+    assert registry.get("race_safe_approval_test").needs_approval is True
+    assert _maybe_resume_approval(owner, "approve r3") is not None
+    assert registry.get("race_safe_approval_test").needs_approval is True
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

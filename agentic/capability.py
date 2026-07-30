@@ -4,11 +4,15 @@ agentic/capability.py
 Capability routing for Aiko's agentic tool loop.
 
 A capability holds no content of its own — it's a lookup that says, for a
-given turn, which tool-schema domains should reach the LLM. Prose retrieval
-(wiki/skill excerpts) is untouched and still goes through wiki_context_for /
-skill_context_for exactly as before. This module only narrows the `tools=`
-list passed to chat.completions.create(), which today is the full fixed
-_TOOL_SCHEMAS set on every single turn regardless of what the turn needs.
+given turn, which tool-schema domains should reach the LLM, plus the turn
+policy (system overlay, max_iter, research_budget) that used to live in a
+second, hand-maintained table in agentic.py. Capability is now the single
+source of truth for all of that; agentic.py just calls resolve_handoff()
+and applies the result. Prose retrieval (wiki/skill excerpts) is untouched
+and still goes through wiki_context_for / skill_context_for exactly as
+before. This module only narrows the `tools=` list passed to
+chat.completions.create(), which used to be the full fixed _TOOL_SCHEMAS
+set on every single turn regardless of what the turn needs.
 
 Safe-by-default: if no capability matches, or embedding fails, the full
 tool list is returned unchanged — this can only narrow, never break, an
@@ -17,7 +21,7 @@ existing turn.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 import hashlib
@@ -43,19 +47,67 @@ class Capability:
     id: str
     triggers: tuple[str, ...]        # full example phrases for semantic/keyword match
     tool_domains: tuple[str, ...] = ()
+    system_overlay: str = ""
+    max_iter: int | None = None          # None -> use global MAX_AGENT_ITER
+    research_budget: int | None = None   # None -> use global AGENT_RESEARCH_MAX_CALLS
 
 
-# Tool domains and always-on flags are derived from the central registry.
+@dataclass(frozen=True)
+class HandoffProfile:
+    """Resolved turn policy for one or more matched capabilities."""
+
+    tool_domains: frozenset[str]
+    system_overlay: str
+    max_iter: int
+    research_budget: int
+    capability_ids: tuple[str, ...]
+
+
+# Tool domains and turn policy are derived from the central registry / this
+# module. Kept in Python since these are code-level capability -> domain
+# mappings, not user-editable data.
 from agentic.registry import registry
-# Kept in Python since these are code-level capability -> domain mappings.
+
 _CAPABILITY_TOOL_DOMAINS: dict[str, tuple[str, ...]] = {
     "research": ("research", "kb", "reports"),
     "scheduling": ("scheduling",),
     "kb_proposal": ("kb", "skills"),
-    "photo": ("photo",),
+    "photo": ("photo", "social"),
     "repo": ("repo", "skills", "reports"),
-    "job_hunt": ("jobs",),
+    "job_hunt": ("jobs", "social"),
     "social": ("social",),
+}
+
+# Per-capability system overlay injected into the agentic system prompt
+# when that capability is matched. Empty string -> no overlay contribution.
+_CAPABILITY_SYSTEM_OVERLAYS: dict[str, str] = {
+    "research": "Research thoroughly, cite evidence, then synthesize.",
+    "scheduling": "Prefer schedule/reminder tools and confirm persisted ids.",
+    "kb_proposal": "Write durable knowledge through learn_knowledge or proposal artifacts; do not edit trusted wiki/skills directly.",
+    "photo": "Use photo workspace tools first; posting requires approval.",
+    "repo": "Inspect repository files before proposing code or architecture changes.",
+    "job_hunt": "Prefer job-hunt tools; social posting still requires approval.",
+    "social": "Draft/post social content only under explicit request and approval gates.",
+}
+
+# Per-capability turn caps. Omitted / None -> fall back to the global
+# MAX_AGENT_ITER / AGENT_RESEARCH_MAX_CALLS default passed into
+# resolve_handoff() by the caller.
+_CAPABILITY_MAX_ITER: dict[str, int] = {
+    "scheduling": 4,
+    "social": 5,
+    "job_hunt": 6,
+    "photo": 6,
+    "kb_proposal": 5,
+}
+
+_CAPABILITY_RESEARCH_BUDGET: dict[str, int] = {
+    "scheduling": 0,
+    "social": 0,
+    "repo": 0,
+    "job_hunt": 1,
+    "photo": 0,
+    "kb_proposal": 1,
 }
 
 
@@ -74,9 +126,51 @@ CAPABILITIES: dict[str, Capability] = {
         id=cap_id,
         triggers=_TRIGGERS[cap_id],
         tool_domains=_CAPABILITY_TOOL_DOMAINS[cap_id],
+        system_overlay=_CAPABILITY_SYSTEM_OVERLAYS.get(cap_id, ""),
+        max_iter=_CAPABILITY_MAX_ITER.get(cap_id),
+        research_budget=_CAPABILITY_RESEARCH_BUDGET.get(cap_id),
     )
     for cap_id in _TRIGGERS
 }
+
+
+def resolve_handoff(
+    cap_ids: list[str],
+    *,
+    default_max_iter: int,
+    default_research_budget: int,
+) -> HandoffProfile:
+    """Resolve matched capability ids into one turn policy.
+
+    Unknown ids are dropped silently (mirrors the old filtered_tool_schemas
+    behavior). Multiple matched capabilities combine as: union of tool
+    domains, newline-joined overlays (in CAPABILITIES iteration order via
+    cap_ids order), and the MIN of any per-capability max_iter/research_budget
+    override versus the running default — i.e. the most restrictive
+    capability wins, never the most permissive.
+    """
+    valid = [cid for cid in cap_ids if cid in CAPABILITIES]
+    domains: set[str] = set()
+    overlays: list[str] = []
+    max_iter = default_max_iter
+    research_budget = default_research_budget
+    for cid in valid:
+        cap = CAPABILITIES[cid]
+        domains.update(cap.tool_domains)
+        if cap.system_overlay:
+            overlays.append(cap.system_overlay)
+        if cap.max_iter is not None:
+            max_iter = min(max_iter, cap.max_iter)
+        if cap.research_budget is not None:
+            research_budget = min(research_budget, cap.research_budget)
+    return HandoffProfile(
+        tool_domains=frozenset(domains),
+        system_overlay="\n".join(overlays),
+        max_iter=max_iter,
+        research_budget=research_budget,
+        capability_ids=tuple(valid),
+    )
+
 
 # High-signal keyword fallback for environments where the embedder is
 # unavailable (tests, degraded boots, or cold startup failures). The old
@@ -228,7 +322,14 @@ def filtered_tool_schemas(all_schemas: list[dict], cap_ids: list[str]) -> list[d
     """Narrow the full tool schema list to always-on tools plus whatever
     domains the matched capabilities pull in. No match -> return everything
     unchanged, so this can only reduce tool-list size, never regress a turn
-    that the old keyword/semantic matching would have handled fine."""
+    that the old keyword/semantic matching would have handled fine.
+
+    This is the ONLY domain filter pass — callers should not apply a second,
+    separate domain filter on top of this one (see resolve_handoff's
+    tool_domains, which is derived from the same CAPABILITIES table and is
+    provided for callers that need the resolved domain set without
+    re-deriving it, not for a second filtering pass).
+    """
     if not cap_ids:
         return all_schemas
     # Filter out unknown capability IDs to avoid KeyError
