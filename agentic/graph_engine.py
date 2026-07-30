@@ -192,6 +192,7 @@ class PlanNode:
     max_retries: int = 0
     retry_backoff_seconds: float = 1.0
     fallback_to: str | None = None
+    needs_approval: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1167,12 +1168,21 @@ def _tool_params(fn: Callable[..., Any]) -> frozenset[str]:
 
 def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
                embedder=None, llm_client=None, llm_model: str | None = None,
-               extras: dict[str, Any] | None = None, state: GraphState | None = None) -> NodeResult:
+               extras: dict[str, Any] | None = None, state: GraphState | None = None,
+               run_id: str | None = None) -> NodeResult:
     tools = _tool_map()
     fn = tools.get(node.tool)
     args = _substitute(node.args, prompt, results, extras)
     if fn is None:
         return NodeResult(node.id, node.tool, False, f"unknown graph tool: {node.tool}", args=args, error_type="unknown_tool")
+    try:
+        from agentic.registry import registry
+        spec = registry.get(node.tool)
+    except Exception:
+        spec = None
+    if node.needs_approval or (spec is not None and getattr(spec, "needs_approval", False)):
+        content = json.dumps({"status": "waiting_for_approval", "run_id": run_id, "node_id": node.id, "tool": node.tool}, ensure_ascii=False)
+        return NodeResult(node.id, node.tool, False, content, args=args, error_type="needs_approval")
     if node.tool == "save_note":
         args["content"] = str(args.get("content", ""))[:AGENT_NOTE_MAX_CHARS]
 
@@ -1416,7 +1426,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 continue
             future_map = {}
             for node in runnable:
-                future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state)] = node
+                future_map[pool.submit(_run_node, node, graph.goal, results, embedder, llm_client, llm_model, extras, state, run_id)] = node
             for fut in as_completed(future_map):
                 node = future_map[fut]
                 try:

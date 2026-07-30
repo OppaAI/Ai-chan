@@ -24,6 +24,8 @@ from system.config import load_yaml
 
 log = logging.getLogger(__name__)
 
+APPROVAL_REQUIRED_TOOLS = ("post_job_post_social", "post_photo_social", "post_video_social", "post_to_social")
+
 
 @dataclass
 class ToolSpec:
@@ -145,13 +147,10 @@ def _attach_builtin_arg_models() -> None:
     for name, model in mapping.items():
         if name in TOOLS:
             TOOLS[name].args_model = model
-    for name in ("post_job_post_social", "post_photo_social", "post_video_social"):
-        if name in TOOLS:
-            TOOLS[name].needs_approval = True
 
 
 _attach_builtin_arg_models()
-for _approval_tool in ("post_job_post_social", "post_photo_social", "post_video_social"):
+for _approval_tool in APPROVAL_REQUIRED_TOOLS:
     if _approval_tool in TOOLS:
         TOOLS[_approval_tool].needs_approval = True
 

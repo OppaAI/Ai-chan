@@ -622,5 +622,30 @@ def test_skill_proposal_written_for_multistep_run(monkeypatch, tmp_path):
     )
     assert path is not None
     assert "Reusable tool order" in path.read_text(encoding="utf-8")
+
+
+def test_handoff_profile_includes_additional_domains():
+    from agentic.agentic import _handoff_profile_for
+
+    profile = _handoff_profile_for(["job_hunt", "photo", "kb_proposal"])
+    assert "job_hunt" in profile["tool_domains"]
+    assert "photo" in profile["tool_domains"]
+    assert "kb" in profile["tool_domains"]
+
+
+def test_approval_resume_does_not_mutate_registry_flag(monkeypatch, tmp_path):
+    from agentic.agentic import AgentContext, TaskState, execute_tool_with_policy, _maybe_resume_approval
+    from agentic.registry import registry
+
+    registry.register("race_safe_approval_test", "approval test", handler=lambda **kwargs: "ok", needs_approval=True, react=True)
+    monkeypatch.setattr("agentic.agentic.user_state_dir", lambda user_id=None: tmp_path)
+    owner = MockOwner()
+    wait = execute_tool_with_policy("race_safe_approval_test", {}, TaskState(goal="approval"), ctx=AgentContext(run_id="r3"))
+    assert wait.error_type == "needs_approval"
+    assert registry.get("race_safe_approval_test").needs_approval is True
+    assert _maybe_resume_approval(owner, "approve r3") is not None
+    assert registry.get("race_safe_approval_test").needs_approval is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

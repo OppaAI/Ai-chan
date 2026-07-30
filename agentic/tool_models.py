@@ -25,6 +25,14 @@ class ScheduleJobArgs(BaseModel):
     skill: str | None = None
     user_id: str | None = None
 
+    @model_validator(mode="after")
+    def require_conditional_schedule_fields(self) -> "ScheduleJobArgs":
+        if self.action == "tool" and not self.tool_call:
+            raise ValueError("tool_call is required when action='tool'")
+        if self.frequency == "custom_weekdays" and not self.days_of_week:
+            raise ValueError("days_of_week is required when frequency='custom_weekdays'")
+        return self
+
 
 class ScheduleReminderArgs(BaseModel):
     title: str = Field(min_length=1)

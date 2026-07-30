@@ -148,6 +148,5 @@ DEFAULT_POST_ANSWER_GUARDRAILS: tuple[PostAnswerGuard, ...] = (
 
 def default_pre_tool_guardrails(max_research_calls: int) -> tuple[PreToolGuard, ...]:
     return (
-        social_post_requires_review_bundle,
         research_budget_guard(max_research_calls),
     )

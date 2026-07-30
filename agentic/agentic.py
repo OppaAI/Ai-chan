@@ -285,7 +285,7 @@ _ERROR_PREFIX_RE = re.compile(r"^\[(?P<label>[^:\]]+)(?::\s*(?P<detail>.*))?\]$"
 # Tools that can genuinely post to a real public account. When one of these
 # ran and succeeded this turn, an answer describing a real "posted" action
 # is not a hallucinated external action — see _verify_final_answer.
-_SOCIAL_POST_TOOLS = {"post_job_post_social", "post_photo_social", "post_video_social"}
+_SOCIAL_POST_TOOLS = {"post_job_post_social", "post_photo_social", "post_video_social", "post_to_social"}
 # Any tool message over this length gets compacted to a preview once a
 # later assistant message has arrived — generalized from a research-only
 # rule to cover every bulky tool (repo_read_file, search_jobs, etc.), since
@@ -300,6 +300,9 @@ _CAPABILITY_HANDOFF_PROFILES: dict[str, dict[str, Any]] = {
     "scheduling": {"tool_domains": ["scheduling"], "system_overlay": "Prefer schedule/reminder tools and confirm persisted ids.", "max_iter": min(MAX_AGENT_ITER, 4), "research_budget": 0},
     "social": {"tool_domains": ["social"], "system_overlay": "Draft/post social content only under explicit request and approval gates.", "max_iter": min(MAX_AGENT_ITER, 5), "research_budget": 0},
     "repo": {"tool_domains": ["repo"], "system_overlay": "Inspect repository files before proposing code or architecture changes.", "max_iter": MAX_AGENT_ITER, "research_budget": 0},
+    "job_hunt": {"tool_domains": ["job_hunt", "social"], "system_overlay": "Prefer job-hunt tools; social posting still requires approval.", "max_iter": min(MAX_AGENT_ITER, 6), "research_budget": 1},
+    "photo": {"tool_domains": ["photo", "social"], "system_overlay": "Use photo workspace tools first; posting requires approval.", "max_iter": min(MAX_AGENT_ITER, 6), "research_budget": 0},
+    "kb_proposal": {"tool_domains": ["kb"], "system_overlay": "Write durable knowledge through learn_knowledge or proposal artifacts; do not edit trusted wiki/skills directly.", "max_iter": min(MAX_AGENT_ITER, 5), "research_budget": 1},
 }
 
 
@@ -489,6 +492,7 @@ class AgentContext:
     user_id: str | None = None
     workspace: Path | None = None
     run_id: str | None = None
+    approval_bypass: frozenset[str] = frozenset()
 
 
 def _agent_context(owner=None, *, run_id: str | None = None) -> AgentContext:
@@ -510,13 +514,36 @@ def _context_attr(owner_or_ctx, name: str, default=None):
     return getattr(owner_or_ctx, legacy, default)
 
 
+def _context_embedder(owner_or_ctx):
+    if isinstance(owner_or_ctx, AgentContext):
+        return owner_or_ctx.embedder
+    return _owner_embedder(owner_or_ctx)
+
+
+AGENT_TRACE_MAX_BYTES = int(os.getenv("AGENT_TRACE_MAX_BYTES", "1048576"))
+AGENT_TRACE_MAX_FILES = int(os.getenv("AGENT_TRACE_MAX_FILES", "50"))
+
+
+def _trim_trace_dir(trace_dir: Path) -> None:
+    files = sorted(trace_dir.glob("*.jsonl*"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for old in files[AGENT_TRACE_MAX_FILES:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
 def _append_step_trace(ctx: AgentContext | None, event: str, payload: dict[str, Any]) -> None:
     try:
         trace_dir = user_state_dir(ctx.user_id if ctx else None) / "agentic" / "traces"
         trace_dir.mkdir(parents=True, exist_ok=True)
         run_id = (ctx.run_id if ctx and ctx.run_id else "default")
+        trace_path = trace_dir / f"{run_id}.jsonl"
+        if trace_path.exists() and trace_path.stat().st_size >= AGENT_TRACE_MAX_BYTES:
+            trace_path.rename(trace_dir / f"{run_id}.{int(time.time())}.jsonl")
+        _trim_trace_dir(trace_dir)
         record = {"ts": time.time(), "event": event, "run_id": run_id, **payload}
-        with (trace_dir / f"{run_id}.jsonl").open("a", encoding="utf-8") as f:
+        with trace_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
     except Exception as exc:  # pragma: no cover - tracing must never break tools
         log.debug("failed to append agentic trace: %s", exc)
@@ -534,22 +561,32 @@ def _persist_pending_approval(ctx: AgentContext, tool: str, args: dict[str, Any]
 
 
 def _maybe_resume_approval(owner, user_input: str, token_callback=None) -> str | None:
-    match = re.search(r"\b(run-[0-9]+|r[0-9A-Za-z_-]+)\b", user_input or "")
-    if not match or not re.search(r"\b(yes|confirm|approve|approved|resume|continue)\b", user_input or "", re.I):
+    if not re.search(r"\b(yes|confirm|approve|approved|resume|continue)\b", user_input or "", re.I):
         return None
-    ctx = _agent_context(owner, run_id=match.group(1))
+    base_ctx = _agent_context(owner)
+    match = re.search(r"\b(run-[0-9]+|r[0-9A-Za-z_-]+)\b", user_input or "")
+    if match:
+        run_id = match.group(1)
+    else:
+        pending_root = user_state_dir(base_ctx.user_id) / "agentic" / "pending_approvals"
+        pending = sorted(pending_root.glob("*.json"), key=lambda path: path.stat().st_mtime, reverse=True) if pending_root.exists() else []
+        if len(pending) != 1:
+            return None
+        run_id = pending[0].stem
+    ctx = _agent_context(owner, run_id=run_id)
     path = _pending_approval_path(ctx)
     if not path.exists():
         return None
     data = json.loads(path.read_text(encoding="utf-8"))
     tool_name = str(data.get("tool") or "")
-    spec = registry.get(tool_name)
-    if spec is not None:
-        spec.needs_approval = False
     state = TaskState(goal=f"resume approval {ctx.run_id}")
-    result = execute_tool_with_policy(tool_name, dict(data.get("args") or {}), state, ctx=ctx)
-    if spec is not None:
-        spec.needs_approval = True
+    resume_ctx = AgentContext(
+        client=ctx.client, llm_model=ctx.llm_model, embedder=ctx.embedder,
+        user_id=ctx.user_id, workspace=ctx.workspace, run_id=ctx.run_id,
+        approval_bypass=frozenset({tool_name}),
+    )
+    _append_step_trace(resume_ctx, "approval_resume", {"tool": tool_name})
+    result = execute_tool_with_policy(tool_name, dict(data.get("args") or {}), state, ctx=resume_ctx)
     if result.ok:
         try:
             path.unlink()
@@ -807,26 +844,26 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
             args.get("query", ""),
             client=_context_attr(owner, "client"),
             model=_context_attr(owner, "llm_model"),
-            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+            embedder=_context_embedder(owner),
         )
     if name == "deep_research":
         return deep_research(
             args.get("query", ""),
             client=_context_attr(owner, "client"),
             model=_context_attr(owner, "llm_model"),
-            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+            embedder=_context_embedder(owner),
         )
     if name == "deep_read":
         return deep_read(
             args.get("url", ""),
             query=args.get("query", ""),
-            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+            embedder=_context_embedder(owner),
         )
     if name == "run_playbook":
         return schema.run_playbook_json(
             args.get("task", ""),
             cap_ids=args.get("cap_ids") if isinstance(args.get("cap_ids"), list) else None,
-            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+            embedder=_context_embedder(owner),
             llm_client=_context_attr(owner, "client"),
             llm_model=_context_attr(owner, "llm_model"),
         )
@@ -836,7 +873,7 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
                 args.get("relative_path", ""),
                 title=args.get("title") or None,
                 kind=args.get("kind", "ingested"),
-                embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+                embedder=_context_embedder(owner),
             )
         else:
             doc_id = ingest_knowledge_text(
@@ -844,14 +881,14 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
                 args.get("text", ""),
                 source=args.get("source", ""),
                 kind=args.get("kind", "ingested"),
-                embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+                embedder=_context_embedder(owner),
             )
         return json.dumps({"ok": bool(doc_id), "doc_id": doc_id}, ensure_ascii=False)
     if name == "search_skillsets":
         return search_skillsets_json(
             args.get("query", ""),
             int(args.get("limit", 3) or 3),
-            embedder=owner.embedder if isinstance(owner, AgentContext) else _owner_embedder(owner),
+            embedder=_context_embedder(owner),
         )
     if name == "write_report":
         return write_report(
@@ -921,10 +958,11 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
         state.record(validation)
         return validation
 
-    if spec and spec.needs_approval:
+    if spec and spec.needs_approval and name not in ctx.approval_bypass:
         _persist_pending_approval(ctx, name, args, state)
-        result = ToolResult(ok=False, tool=name, args=args, content=json.dumps({"status": "waiting_for_approval", "run_id": ctx.run_id}, ensure_ascii=False), error_type="needs_approval", retryable=False, metadata={"run_id": ctx.run_id, "checkpoint": state.summary()})
+        result = ToolResult(ok=False, tool=name, args=args, content=json.dumps({"status": "waiting_for_approval", "run_id": ctx.run_id, "instruction": f"Reply with approve {ctx.run_id} to run {name}."}, ensure_ascii=False), error_type="needs_approval", retryable=False, metadata={"run_id": ctx.run_id, "checkpoint": state.summary()})
         state.record(result)
+        _append_step_trace(ctx, "approval_wait", {"tool": name, "args": args})
         _append_step_trace(ctx, "tool_result", {"tool": name, "ok": False, "error_type": "needs_approval"})
         return result
 
