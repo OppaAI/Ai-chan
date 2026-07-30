@@ -39,8 +39,12 @@ WEBUI_BROWSER_VAD_GATE = os.getenv("WEBUI_BROWSER_VAD_GATE", "1").lower() in {"1
 
 
 def _barge_in_enabled() -> bool:
+    # sensory.listen_native was removed — barge-in is native to sensory.listen
+    # now (see that module's docstring). The bare env-parsing fallback below
+    # only remains as a last resort if sensory.listen itself is unavailable
+    # for some reason (e.g. import-order edge case at boot).
     try:
-        from sensory.listen_native import barge_in_enabled
+        from sensory.listen import barge_in_enabled
         return barge_in_enabled()
     except Exception:
         return os.getenv("BARGE_IN_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
@@ -557,12 +561,19 @@ class AikoWeb:
             set_current_user_id(self._current_user_id)
             set_current_display_name(self._current_display_name)
             os.environ["AIKO_USER_ID"] = self._current_user_id
+            # NOTE (audit fix #1): vad_presegmented was removed here — it is
+            # not a parameter of AikoListen.listen(), so every WebUI voice
+            # turn was raising TypeError before reaching _record(). Silero
+            # in listen.py already scores every chunk regardless of source
+            # (see that module's docstring); WEBUI_BROWSER_VAD_GATE only
+            # controls the browser's own energy pre-filter (static/vad.js)
+            # and whether the WS 'vad'/end sentinel is forwarded below — it
+            # was never meant to bypass server-side Silero scoring.
             result_holder[0] = listen.listen(
                 status_callback=_status_cb,
                 speak=speak,
                 wait_fn=wait_fn,
                 chunk_source=_chunk_source,
-                vad_presegmented=WEBUI_BROWSER_VAD_GATE,
             )
             done_event.set()
 
