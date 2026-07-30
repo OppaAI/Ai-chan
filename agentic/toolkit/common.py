@@ -11,6 +11,8 @@ This module provides utilities used across multiple toolkit modules:
   - slugify()         — stable file slug generation from text
   - safe_path()       — path resolution with traversal prevention
   - json_block()      — formatted JSON output for tool results
+  - llm_timeout_seconds() / chat_completions_create()
+                      — global LLM_TIMEOUT for agentic completions
 
 All functions respect the per-user isolation provided by system/userspace.py.
 """
@@ -28,6 +30,10 @@ from system.userspace import user_workspace_root
 
 MAX_WRITE_CHARS = int(os.getenv("MAX_WRITE_CHARS", 50_000))
 MAX_READ_CHARS = int(os.getenv("MAX_READ_CHARS", 12_000))
+
+# Global default for agentic chat.completions calls (seconds).
+# Override via config/agentic.yaml LLM_TIMEOUT or env LLM_TIMEOUT.
+_DEFAULT_LLM_TIMEOUT = 30.0
 
 
 def workspace_root() -> Path:
@@ -67,10 +73,40 @@ def json_block(title: str, payload: dict[str, Any]) -> str:
     return f"[{title}]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def llm_timeout_seconds(default: float = _DEFAULT_LLM_TIMEOUT) -> float:
+    """Per-request timeout for agentic LLM completions (seconds).
+
+    Reads LLM_TIMEOUT from env / config yaml (via load_config). Falls back
+    to ``default`` when unset or invalid. Minimum 1 second.
+    """
+    raw = os.getenv("LLM_TIMEOUT", str(default))
+    try:
+        return max(1.0, float(raw))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def chat_completions_create(client, **kwargs: Any):
+    """client.chat.completions.create with global LLM_TIMEOUT applied.
+
+    Passes ``timeout=llm_timeout_seconds()`` unless the caller already set
+    ``timeout``. If the SDK/client rejects the timeout kwarg (TypeError),
+    retries once without it so local OpenAI-compatible servers still work.
+    """
+    if "timeout" not in kwargs:
+        kwargs = {**kwargs, "timeout": llm_timeout_seconds()}
+    try:
+        return client.chat.completions.create(**kwargs)
+    except TypeError:
+        kwargs = {k: v for k, v in kwargs.items() if k != "timeout"}
+        return client.chat.completions.create(**kwargs)
+
+
 def ask_llm_json(client, model: str, prompt: str, max_tokens: int) -> dict | None:
     """Best-effort structured LLM call returning parsed JSON or None."""
     try:
-        resp = client.chat.completions.create(
+        resp = chat_completions_create(
+            client,
             model=model,
             messages=[{"role": "user", "content": prompt}],
             stream=False,
@@ -78,7 +114,6 @@ def ask_llm_json(client, model: str, prompt: str, max_tokens: int) -> dict | Non
             temperature=0.0,
         )
         raw = (resp.choices[0].message.content or "").strip()
-        import re, json
         match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
         return json.loads(match.group(0) if match else raw)
     except Exception:
