@@ -11,7 +11,6 @@ Design constraints:
 from __future__ import annotations
 
 import json
-import os
 import re
 import sqlite3
 from typing import Any
@@ -35,9 +34,6 @@ SOURCE_PIN = "pin"
 SOURCE_IMPORT = "import"
 SOURCE_LEGACY = "legacy"
 
-# Near-dup band uses existing WRITE_DEDUP_THRESHOLD in memorize.py.
-# Classification is rule-only (no second KNN, no LLM).
-
 _WS_RE = re.compile(r"\s+")
 
 
@@ -48,7 +44,7 @@ def normalize_memory_text(text: str) -> str:
 def entities_to_json(entities: list[str] | None) -> str:
     if not entities:
         return "[]"
-    cleaned = []
+    cleaned: list[str] = []
     seen: set[str] = set()
     for e in entities:
         s = str(e).strip()
@@ -99,7 +95,6 @@ def classify_write_op(
     return "supersede"
 
 
-# Columns Phase A adds to memories (name → SQL type + default fragment for ALTER).
 _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("status", "TEXT NOT NULL DEFAULT 'active'"),
     ("supersedes_id", "TEXT"),
@@ -111,7 +106,6 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
 
 def existing_columns(conn: sqlite3.Connection, table: str = "memories") -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    # row[1] is name for both tuple and sqlite3.Row
     return {str(r[1]) for r in rows}
 
 
@@ -130,10 +124,8 @@ def ensure_phase_a_schema(conn: sqlite3.Connection) -> list[str]:
             conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {decl}")
             added.append(name)
         except sqlite3.OperationalError as e:
-            # Concurrent migrate or already present
             if "duplicate column" not in str(e).casefold():
                 raise
-    # Partial indexes are fine; plain index keeps queries simple and fast.
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_memories_user_status "
         "ON memories(user_id, status)"
