@@ -1,14 +1,16 @@
 ---
 id: JOB_HUNT
 name: Job Hunt
-summary: Fetch configured RSS feeds, filter for tech jobs available today, and save structured human-reviewed Threads drafts using post_fields.
+summary: Fetch configured RSS feeds, filter for tech jobs available today, and save structured human-reviewed Threads drafts using post_fields from job_hunt.json.
 triggers: job, jobs, hiring, job posting, job search, openings, vacancy, job post, draft job, daily job
 tools: search_jobs, gen_job_search_plan, execute_job_search_plan, draft_job_posts_from_results, save_or_post_job_drafts, report_job_run
 ---
 
 # Job Hunt — RSS-only Lane D Playbook
 
-The daily job post workflow runs as a draft-first graph. It fetches configured RSS feeds, keeps items dated today in the local bioclock timezone, filters by configurable tech keywords, dedupes by link/guid, and writes structured drafts (one per job) for human review using `post_fields` / `post_signature` from config.
+The daily job post workflow runs as a draft-first graph. It fetches configured RSS feeds, keeps items dated today in the local bioclock timezone, filters by configurable tech keywords, dedupes by link/guid, and writes structured drafts (one per job) for human review.
+
+**Draft layout is not hardcoded.** `format_job_post` reads `post_fields` and `post_signature` from `job_hunt.json` only. If `post_fields` is missing or empty, drafting fails with `missing_post_fields`.
 
 No web-search, scraping, or multi-board fallback path is part of the current design.
 
@@ -29,9 +31,9 @@ Fetches only the configured RSS feeds and returns postings that are:
 - deduped by link/guid.
 
 ### Node 3 — `draft_job_posts_from_results`
-Creates one structured Threads draft **per job** via `format_job_post`, using `post_fields` and `post_signature` from config. Empty fields are skipped.
+Creates one structured Threads draft **per job** via `format_job_post`, using `post_fields` and `post_signature` from the resolved `job_hunt.json`. Empty field values are skipped.
 
-Example (with available RSS fields):
+Example (when those keys are present in RSS data):
 
 ```text
 Job Post - 2026-07-30
@@ -45,7 +47,7 @@ https://example/job
 - 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)
 ```
 
-The list is capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft. RSS sources often only supply title, org, and URL — salary/type/experience/close stay blank and are omitted.
+Capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft. RSS sources often only supply title, org, and URL — other keys stay blank and are omitted.
 
 ### Node 4 — `save_or_post_job_drafts`
 Saves each draft under `<job_post_root>/<date>/tech_jobs_today[/slug]/` with:
@@ -57,15 +59,18 @@ Saves each draft under `<job_post_root>/<date>/tech_jobs_today[/slug]/` with:
 Posting happens only after the normal human approval gate via `post_job_post_draft` / `post_job_post_social`.
 
 ### Node 5 — `report_job_run`
-Generates a compact audit report for the RSS run.
+Generates a compact audit report for the RSS run (includes resolved config path).
 
 ## Configuration
 
 Config file lookup order:
 
-1. `JOB_HUNT_CONFIG_PATH` env var
-2. `<user_state>/skillsets/job_hunt.json` (per-user)
-3. `<workspace>/agentic/skillsets/job_hunt.json` (fallback)
+1. `JOB_HUNT_CONFIG_PATH` env var (absolute, or relative to workspace)
+2. `USER_SKILLSETS_PATH/job_hunt.json` if `USER_SKILLSETS_PATH` is set
+3. `<USER_SPACE_ROOT>/<user_id>/skillsets/job_hunt.json` (per-user; first priority when no env overrides)
+4. `<workspace>/agentic/skillsets/job_hunt.json` (repo fallback)
+
+The folder you keep under user space is **`skillsets/`** — same as other per-user skillset overrides.
 
 ### Example config
 
