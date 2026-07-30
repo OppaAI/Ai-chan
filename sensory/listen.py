@@ -72,6 +72,18 @@ Post-ASR name / phrase corrections (S2, no finetune):
       "op ai->OppaAI|hey iko->hey Aiko|my project x->Project X"
     Built-in defaults already cover Aiko / OppaAI; user map is applied on
     top and wins on same key. Longest phrase matches first.
+
+Known architectural limitation (audit item #7, not fixed here):
+    _transcribe() runs SenseVoice as a single full-utterance batch decode
+    after Silero declares silence — there are no interim/partial
+    transcripts while the user is still speaking, and end-of-turn latency
+    is bounded below by SILENCE_CHUNKS * ~32ms (~2.1s default) regardless of
+    how clearly the sentence ended. SenseVoice itself is non-streaming, so
+    fixing this means adding a second, cheaper streaming ASR model in front
+    (fast draft for interim UI display, SenseVoice still used for the final
+    transcript) — a real feature addition with its own model-loading and
+    latency-budget tradeoffs on the Jetson, not something to fold into a
+    bug-fix pass blind. Left as a scoped follow-up.
 """
 from __future__ import annotations
 
@@ -132,8 +144,18 @@ ASR_MODEL = os.getenv(
     "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
 )
 
-VAD_SILENCE_MS      = int(os.getenv("LISTEN_VAD_SILENCE_MS", 300))
-VAD_PAD_MS          = int(os.getenv("LISTEN_VAD_PAD_MS",     100))
+# LISTEN_VAD_SILENCE_MS / LISTEN_VAD_PAD_MS were removed from here — they were
+# read from sensory.yaml but never wired into any actual behavior (the real
+# silence timeout is SILENCE_CHUNKS * _CHUNK_MS_ACTUAL below, ~2.1s by
+# default, not the 300ms the old yaml comment implied). Rather than silently
+# retargeting SILENCE_CHUNKS to match the misleading 300ms default — a
+# behavior change that needs testing on hardware, not a blind patch — the
+# dead keys have been dropped from sensory.yaml. If you want silence timeout
+# configurable in milliseconds again, derive SILENCE_CHUNKS from a real ms
+# value explicitly: SILENCE_CHUNKS = round(VAD_SILENCE_MS / _CHUNK_MS_ACTUAL).
+# LISTEN_VAD_PAD_MS was never implemented for the local-mic path at all —
+# only the WebUI gets pre-speech padding, via vad.js's PRE_SPEECH_BUFS
+# (client-side, hardcoded ~700ms, independent of this config).
 
 SAMPLE_RATE         = 16000                                          # ASR + Silero target
 LISTEN_DEVICE       = os.getenv("LISTEN_DEVICE", None)              # None = default
@@ -147,7 +169,9 @@ MAX_RECORD_SECONDS  = int(os.getenv("LISTEN_MAX_SECONDS",      30))
 BARGE_IN_THRESHOLD     = float(os.getenv("BARGE_IN_THRESHOLD",     "0.95"))  # matches config/sensory.yaml default
 BARGE_IN_CONFIRM       = int(os.getenv("BARGE_IN_CONFIRM_CHUNKS",  "4"))     # matches config/sensory.yaml default
 BARGE_IN_COOLDOWN_MS   = int(os.getenv("BARGE_IN_COOLDOWN_MS",     "800"))
-BARGE_IN_ALWAYS_ON     = os.getenv("BARGE_IN_ALWAYS_ON", "0").lower() in {"1", "true", "yes", "on"}
+# BARGE_IN_ALWAYS_ON is intentionally NOT cached here — see barge_in_always_on()
+# below. It must be read live, like BARGE_IN_ENABLED and SPEAKER_VERIFY_GATE,
+# so it can be toggled at runtime without a process restart.
 
 # ── speaker verification config ──────────────────────────────────────────────
 # Single-enrollment 1:1 verification (not multi-speaker identification) —
@@ -169,7 +193,13 @@ WAKE_FUZZY_THRESHOLD  = float(os.getenv("WAKE_FUZZY_THRESHOLD", "70"))
 ACTIVATION_TIMEOUT_S = float(os.getenv("ACTIVATION_TIMEOUT_S", "3600"))  # matches config/sensory.yaml default
 
 _CHUNK_SAMPLES_VAD = 512                                             # at 16 kHz, ~32 ms
-_MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / CHUNK_DURATION_MS)
+_CHUNK_MS_ACTUAL   = (_CHUNK_SAMPLES_VAD / SAMPLE_RATE) * 1000.0      # 32.0 ms — the real, non-configurable chunk size
+_MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / _CHUNK_MS_ACTUAL)
+# NOTE: CHUNK_DURATION_MS (LISTEN_CHUNK_MS in sensory.yaml) is NOT used to
+# compute _MAX_CHUNKS anymore — Silero's chunk size is fixed at 512 samples
+# (32ms @ 16kHz) regardless of that config value, so using it here silently
+# drifted MAX_RECORD_SECONDS off its configured value. CHUNK_DURATION_MS is
+# kept only as a documented constant; see sensory.yaml comment.
 
 # parec command — captures at 16kHz mono float32, uses default PulseAudio source
 _PAREC_CMD = [
@@ -609,7 +639,7 @@ class AikoListen:
             consecutive = 0
             paused = False
             while self._barge_in_active:
-                if self._recording.is_set() or (not BARGE_IN_ALWAYS_ON and not self._barge_in_armed.is_set()):
+                if self._recording.is_set() or (not barge_in_always_on() and not self._barge_in_armed.is_set()):
                     time.sleep(0.05)
                     consecutive = 0
                     paused = True
@@ -791,7 +821,26 @@ class AikoListen:
     # ── recording ─────────────────────────────────────────────────────────────
 
     def _score_chunk(self, chunk: np.ndarray) -> float:
-        """Run Silero VAD on a 512-sample float32 chunk at 16kHz."""
+        """
+        Run Silero VAD on a 512-sample float32 chunk at 16kHz.
+
+        NOTE (audit item #6): load_silero_vad(onnx=True) returns an
+        ONNX-backed wrapper — inference itself runs through onnxruntime,
+        not torch — but the `silero-vad` pip package's wrapper still expects
+        a torch.Tensor as input and manages its own recurrent state as torch
+        tensors internally, so `torch` stays a hard dependency here (the
+        `no_grad()` context below is a genuine no-op for an onnxruntime call,
+        kept only because removing torch as a dependency requires it).
+        Fully dropping torch means moving this VAD onto sherpa_onnx's own
+        VoiceActivityDetector (same Silero ONNX weights, pure onnxruntime,
+        no torch) — see BOOT_LABELS module docstring discussion. That's a
+        state-machine-level change: sherpa_onnx's VAD is segment-oriented
+        (accept_waveform + is_speech_detected()/front()), not a per-chunk
+        probability score, so _record()'s and _barge_in_loop()'s hangover /
+        confirm-frame counters would need to be rewritten against that API
+        rather than swapped in place. Left as a follow-up requiring hardware
+        testing on AuRoRA rather than folded into this bug-fix pass.
+        """
         if len(chunk) < _CHUNK_SAMPLES_VAD:
             chunk = np.pad(chunk, (0, _CHUNK_SAMPLES_VAD - len(chunk)))
         else:
