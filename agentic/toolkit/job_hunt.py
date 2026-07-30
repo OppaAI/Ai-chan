@@ -242,34 +242,36 @@ def _llm_chat_completion(client, *, model: str, messages: list[dict[str, str]], 
     on local OpenAI-compatible servers). Raises on other failures so the
     caller can log and skip enrichment for that posting.
     """
-    kwargs: dict[str, Any] = {
+    base: dict[str, Any] = {
         "model": model,
         "messages": messages,
         "stream": False,
         "max_tokens": max_tokens,
         "temperature": 0.0,
         "timeout": _LLM_TIMEOUT_SECONDS,
+        "response_format": {"type": "json_object"},
     }
+
+    def _call(kwargs: dict[str, Any]):
+        return client.chat.completions.create(**kwargs)
+
     try:
-        return client.chat.completions.create(
-            **kwargs,
-            response_format={"type": "json_object"},
-        )
+        return _call(base)
     except TypeError:
-        # Client/SDK build does not accept response_format or timeout kw.
-        kwargs.pop("timeout", None)
+        # SDK build may not accept timeout and/or response_format.
+        slim = dict(base)
+        slim.pop("timeout", None)
         try:
-            return client.chat.completions.create(
-                **kwargs,
-                response_format={"type": "json_object"},
-            )
+            return _call(slim)
         except TypeError:
-            return client.chat.completions.create(**kwargs)
+            slim.pop("response_format", None)
+            return _call(slim)
     except Exception as e:
         label = str(e).casefold()
         if "response_format" in label or "json_object" in label:
-            kwargs.pop("response_format", None)
-            return client.chat.completions.create(**kwargs)
+            retry = dict(base)
+            retry.pop("response_format", None)
+            return _call(retry)
         raise
 
 
