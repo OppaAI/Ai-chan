@@ -9,6 +9,11 @@ ASR_LANGUAGE: "auto"  # Transcription language; options: auto, en, ja, zh, ko, y
 ASR_NUM_THREADS: "4"  # CPU inference threads for ASR.
 ASR_MODEL: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"  # sherpa-onnx SenseVoice model id/path; first run may download files.
 
+# -- Post-ASR name / phrase fixes (S2, no finetune) --
+# Pipe-separated "heard->fixed" pairs. Applied after SenseVoice (longest match first).
+# Built-in defaults already cover Aiko / OppaAI mangling; extend here as you observe errors.
+ASR_CORRECTIONS: ""  # e.g. "op ai->OppaAI|hey iko->hey Aiko|my project x->Project X"
+
 # -- Voice activity detection --
 LISTEN_VAD_SILENCE_MS: "300"  # Silence duration before ending an utterance, in milliseconds.
 LISTEN_VAD_PAD_MS: "100"  # Audio padding around detected speech, in milliseconds.
@@ -41,7 +46,8 @@ BARGE_IN_ALWAYS_ON: "0"  # Also monitor outside TTS wait; options: 1/0, true/fal
 # English word). Blank disables wake-word gating entirely — Aiko responds
 # to every utterance as before.
 WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
-WAKE_WORD_ALIASES: ""  # "|"-separated extra candidate phrases for observed ASR mishearings, e.g. "hey iko|hey eco|hey ecko".
+# Suggested aliases when WAKE_WORD is set (SenseVoice often mangles "Aiko"):
+WAKE_WORD_ALIASES: "hey iko|hey eco|hey ecko|hey echo|hey ico|hey aico|hi aiko|hi iko"
 WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
 
 # -- Trigger phrase --
