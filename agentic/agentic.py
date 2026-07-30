@@ -564,7 +564,7 @@ def _maybe_resume_approval(owner, user_input: str, token_callback=None) -> str |
     if not re.search(r"\b(yes|confirm|approve|approved|resume|continue)\b", user_input or "", re.I):
         return None
     base_ctx = _agent_context(owner)
-    match = re.search(r"\b(run-[0-9]+|r[0-9A-Za-z_-]+)\b", user_input or "")
+    match = re.search(r"\b(run-[0-9]+|r\d[0-9A-Za-z_-]*)\b", user_input or "")
     if match:
         run_id = match.group(1)
     else:
