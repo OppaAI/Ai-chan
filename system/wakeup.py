@@ -179,12 +179,6 @@ class AikoWakeup:
         listen: AikoListen | None = None
         try:
             listen = AikoListen()
-            try:
-                from sensory.listen_native import bind_native_gates
-                from sensory import listen as listen_mod
-                bind_native_gates(listen_mod)
-            except Exception:
-                log.exception("[wakeup] native voice gates failed — continuing without them")
         except Exception:
             log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")
 
