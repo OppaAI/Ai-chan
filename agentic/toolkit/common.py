@@ -20,6 +20,7 @@ All functions respect the per-user isolation provided by system/userspace.py.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from system.bioclock import local_now, timezone_name
@@ -77,11 +78,14 @@ def llm_timeout_seconds(default: float = _DEFAULT_LLM_TIMEOUT) -> float:
     """Per-request timeout for agentic LLM completions (seconds).
 
     Reads LLM_TIMEOUT from env / config yaml (via load_config). Falls back
-    to ``default`` when unset or invalid. Minimum 1 second.
+    to ``default`` when unset, invalid, or non-finite. Minimum 1 second.
     """
     raw = os.getenv("LLM_TIMEOUT", str(default))
     try:
-        return max(1.0, float(raw))
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError("timeout must be finite")
+        return max(1.0, value)
     except (TypeError, ValueError):
         return float(default)
 
@@ -90,14 +94,18 @@ def chat_completions_create(client, **kwargs: Any):
     """client.chat.completions.create with global LLM_TIMEOUT applied.
 
     Passes ``timeout=llm_timeout_seconds()`` unless the caller already set
-    ``timeout``. If the SDK/client rejects the timeout kwarg (TypeError),
-    retries once without it so local OpenAI-compatible servers still work.
+    ``timeout``. If the SDK/client rejects the injected timeout kwarg
+    (TypeError), retries once without it so local OpenAI-compatible servers
+    still work. Caller-provided timeout is never stripped.
     """
-    if "timeout" not in kwargs:
+    injected_timeout = "timeout" not in kwargs
+    if injected_timeout:
         kwargs = {**kwargs, "timeout": llm_timeout_seconds()}
     try:
         return client.chat.completions.create(**kwargs)
-    except TypeError:
+    except TypeError as exc:
+        if not injected_timeout or "timeout" not in str(exc).casefold():
+            raise
         kwargs = {k: v for k, v in kwargs.items() if k != "timeout"}
         return client.chat.completions.create(**kwargs)
 
