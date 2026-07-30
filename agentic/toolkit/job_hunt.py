@@ -51,7 +51,7 @@ def _job_config_path() -> Path:
         if user_path.exists():
             return user_path
     except Exception:
-        pass
+        log.warning("job_hunt: failed to resolve per-user config path")
     return Path(__file__).resolve().parents[2] / "agentic" / "skillsets" / "job_hunt.json"
 
 

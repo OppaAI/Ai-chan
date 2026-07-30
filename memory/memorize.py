@@ -1234,7 +1234,7 @@ class AikoMemorize:
                     self._conn.commit()
                     self._conn.close()
                 except Exception:
-                    pass
+                    log.warning("memorize: PRAGMA optimize failed")
         self._open(user_id)
 
     def get_user_id(self) -> str:
@@ -1659,7 +1659,7 @@ class AikoMemorize:
                     ts        = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     is_recent = (now - ts).days <= 7
                 except Exception:
-                    pass
+                    log.warning("memorize: failed to parse created_at")
 
             is_salient = (
                 bool(_SALIENCE_RE.search(text))

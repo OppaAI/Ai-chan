@@ -82,7 +82,7 @@ class TelegramAdapter(AdapterBase):
                     self._app.stop(), self._app.loop
                 )
             except Exception:
-                pass
+                log.warning("telegram: async app stop failed")
 
     def send_message(self, conversation_id: str, text: str) -> None:
         if not self._app:

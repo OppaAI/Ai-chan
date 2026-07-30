@@ -77,7 +77,7 @@ def _load_stored_display_name(uid: str) -> str:
             if stored:
                 return stored
     except Exception:
-        pass
+        log.warning("webui: failed to read cli_name.txt")
     return ""
 
 
@@ -509,7 +509,7 @@ class AikoWeb:
             else:
                 await ws.send_text(raw)
         except Exception:
-            pass
+            log.warning("webui: failed to send ws message")
 
     # ------------------------------------------------------------------
     # ── TUI-compatible draw API ──────────────────────────────────────────

@@ -280,7 +280,7 @@ def _count_tokens(text: str) -> int:
             if isinstance(tokens, list):
                 return len(tokens)
     except Exception:
-        pass
+        log.warning("orchestrate: tokenizer failed, falling back to word count")
     # crude fallback — roughly ~0.75 tokens/word for English text
     return max(1, int(len(text.split()) * 1.3))
 

@@ -839,8 +839,7 @@ def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = N
                 elif best >= 0.35:
                     score += 1
         except Exception:
-            pass
-    return score
+            log.warning("graph_engine: keyword scoring embedding failed")
 
 
 def _title(prompt: str) -> str:
@@ -872,7 +871,7 @@ def _placeholder_extras(prompt: str) -> dict[str, Any]:
         if subjects:
             out["$compare_subjects"] = subjects
     except Exception:
-        pass
+        log.warning("graph_engine: failed to extract comparison subjects from prompt")
     return out
 
 
@@ -1379,7 +1378,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 try:
                     state.data.update(json.loads(restored_state))
                 except Exception:
-                    pass
+                    log.warning("graph_engine: failed to restore checkpoint state")
             results[prior.node_id] = prior
             ordered.append(prior)
             pending.pop(prior.node_id, None)
@@ -1668,8 +1667,7 @@ def _score_goal_achievement(goal: str, results: tuple[NodeResult, ...],
             else:
                 reasons.append(f"semantic_low:{cos:.2f}")
         except Exception:
-            pass
-
+            log.warning("graph_engine: semantic scoring failed")
     total = max(0.0, min(1.0, sum(scores) / max(len(scores), 1)))
     return total, reasons
 
@@ -1725,7 +1723,7 @@ def _record_goal_engram(goal: str, score: float, reasons: list[str],
                           final_answer=f"score={score:.2f} reasons={'; '.join(reasons)}",
                           verified_ok=score >= 0.6, score=score)
     except Exception:
-        pass
+        log.warning("graph_engine: experience recording failed")
 
 
 def run_schema_agent(user_input: str, cap_ids: list[str] | None = None, embedder=None,

@@ -504,7 +504,7 @@ class AikoListen:
                 proc.terminate()
                 proc.wait(timeout=5)
             except Exception:
-                pass
+                log.warning("listen: failed to terminate barge-in monitor process")
 
     # ── public api ────────────────────────────────────────────────────────────
 
@@ -717,7 +717,7 @@ class AikoListen:
                     proc.terminate()
                     proc.wait(timeout=5)
                 except Exception:
-                    pass
+                    log.warning("listen: failed to terminate record process")
 
         if not audio_chunks:
             return None
@@ -759,7 +759,7 @@ class AikoListen:
             with torch.no_grad():
                 self._vad_model(tensor, SAMPLE_RATE)
         except Exception:
-            pass
+            log.warning("listen: warmup failed")
         finally:
             self._warmup_done.set()
 
@@ -771,4 +771,4 @@ def _cb(callback, msg: str) -> None:
         try:
             callback(msg)
         except Exception:
-            pass
+            log.warning("listen: callback raised")

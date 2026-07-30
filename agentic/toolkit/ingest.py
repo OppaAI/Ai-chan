@@ -29,6 +29,9 @@ import time
 from urllib.parse import urlparse
 
 from agentic.registry import TOOLS, tool
+from system.log import get_logger
+
+log = get_logger(__name__)
 
 FETCH_URL_USER_AGENT = os.getenv(
     "FETCH_URL_USER_AGENT",
@@ -181,7 +184,7 @@ def _sniff_content_type(url: str) -> str:
             if ctype.startswith("text/html") or ctype.startswith("application/xhtml"):
                 return "html"
         except Exception:
-            pass
+            log.warning("ingest: content-type detection failed")
 
     return _MARKITDOWN_EXTENSION_MAP.get(ext, "html")
 

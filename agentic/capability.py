@@ -67,6 +67,9 @@ class HandoffProfile:
 # module. Kept in Python since these are code-level capability -> domain
 # mappings, not user-editable data.
 from agentic.registry import registry
+from system.log import get_logger
+
+log = get_logger(__name__)
 
 _CAPABILITY_TOOL_DOMAINS: dict[str, tuple[str, ...]] = {
     "research": ("research", "kb", "reports"),
@@ -264,7 +267,7 @@ def _get_trigger_embedding(cap: Capability, embedder: Embedder) -> np.ndarray:
             _trigger_embed_cache[cap.id] = vec
             return vec
         except Exception:
-            pass  # fall through to recompute; corrupt/stale cache is not fatal
+            log.warning("capability: failed to load cached trigger embedding")
 
     text = " | ".join(cap.triggers)
     vec = reason.normalize_vec(np.asarray(embedder.embed_query(text), dtype=np.float32))
@@ -275,7 +278,7 @@ def _get_trigger_embedding(cap: Capability, embedder: Embedder) -> np.ndarray:
             with disk_path.open("wb") as f:
                 np.savez(f, vector=vec)
         except Exception:
-            pass  # cache write failure shouldn't break the turn
+            log.warning("capability: failed to write trigger embedding cache")
 
     if len(_trigger_embed_cache) >= _TRIGGER_EMBED_CACHE_MAX:
         _trigger_embed_cache.pop(next(iter(_trigger_embed_cache)))
@@ -309,8 +312,7 @@ def match_capabilities(
                     matched.append(cap.id)
             return matched
         except Exception:
-            pass
-
+            log.warning("capability: embedding matching failed, falling back to phrase matching")
     folded = user_input.casefold()
     phrase_matches = [cap.id for cap in CAPABILITIES.values() if _capability_text_matches(folded, cap.triggers)]
     if phrase_matches:

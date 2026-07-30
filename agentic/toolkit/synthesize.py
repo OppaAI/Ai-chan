@@ -509,7 +509,7 @@ def synthesize_report(
                     "total_tokens": u.total_tokens,
                 })
             except Exception:
-                pass
+                log.warning("synthesize: failed to record usage stats")
     except Exception as e:
         log.warning("[synthesize.synthesize_report] LLM call failed: %s", e)
         text = ""

@@ -483,7 +483,7 @@ class AikoSpeak:
                 sd = self._load_sd()
                 sd.stop()
             except Exception:
-                pass
+                log.warning("speak: sd.stop() failed in playback")
 
     def _speak_thread(self, text: str) -> None:
         """Split into sentence chunks ≤300 chars, synthesize and play each."""
@@ -820,7 +820,7 @@ class AikoSpeak:
             sd = self._load_sd()
             sd.stop()
         except Exception:
-            pass
+            log.warning("speak: sd.stop() failed in stop_stream")
 
         if self._stream_thread is not None:
             if self._stream_thread.is_alive():

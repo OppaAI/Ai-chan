@@ -216,8 +216,7 @@ def _discover_sitemap_urls(origin: str, query_hint: str = "", max_urls: int = RE
                 if line.lower().startswith("sitemap:"):
                     candidates.append(line.split(":", 1)[1].strip())
     except Exception:
-        pass
-    if not candidates:
+        log.warning("research: failed to parse robots.txt for sitemap candidates")
         candidates.append(f"{origin}/sitemap.xml")
 
     urls: list[str] = []
@@ -618,7 +617,7 @@ def _score_url_chunks(
                 scores = reason.batch_cosine_scores(query_vec, chunk_vecs)
                 return [(float(scores[i]), url_chunks[i][0], url_chunks[i][1]) for i in range(len(url_chunks))]
         except Exception:
-            pass  # fall through to keyword scoring below
+            log.warning("research: semantic scoring failed, falling through to keyword scoring")
     return [(reason.keyword_overlap_score(query, c), u, c) for u, c in url_chunks]
 
 

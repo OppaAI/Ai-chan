@@ -16,10 +16,13 @@ import os
 from pathlib import Path
 
 from system.userspace import current_user_id, user_state_path
+from system.log import get_logger
 import platform
 import re
 import subprocess
 import time
+
+log = get_logger(__name__)
 
 _DB_SIZE_CACHE: tuple[float, str] = (0.0, "? mem")
 _DB_SIZE_TTL = float(os.getenv("DB_SIZE_TTL", "1.0"))
@@ -48,7 +51,7 @@ def _read_sys_info() -> dict:
                     info["cpu"] = line.split(":", 1)[1].strip()
                     break
     except Exception:
-        pass
+        log.warning("health: failed to read /proc/cpuinfo")
     if not info.get("cpu"):
         info["cpu"] = platform.processor() or platform.machine() or "unknown"
 
@@ -153,7 +156,7 @@ def _db_size_str() -> str:
             try:
                 conn.close()
             except Exception:
-                pass
+                log.warning("health: failed to close db connection")
 
     _DB_SIZE_CACHE = (now, value)
     return value

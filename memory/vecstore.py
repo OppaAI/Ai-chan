@@ -226,13 +226,13 @@ def connect_sqlite_vec(path: str | os.PathLike[str], *, user_id: str | None = No
     try:
         conn.enable_load_extension(True)
     except Exception:
-        pass
+        log.warning("vecstore: enable_load_extension(True) failed")
     import sqlite_vec
     sqlite_vec.load(conn)
     try:
         conn.enable_load_extension(False)
     except Exception:
-        pass
+        log.warning("vecstore: enable_load_extension(False) failed")
     return conn
 
 

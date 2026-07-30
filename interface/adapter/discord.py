@@ -80,7 +80,7 @@ class DiscordAdapter(AdapterBase):
                     self._client.close(), self._client.loop
                 )
             except Exception:
-                pass
+                log.warning("discord: async client close failed")
 
     def send_message(self, conversation_id: str, text: str) -> None:
         if not self._client or not self._client.is_ready():

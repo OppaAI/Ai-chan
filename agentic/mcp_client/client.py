@@ -88,7 +88,7 @@ class MCPClient:
                     log.info("[mcp] Injected %d env vars to MCP server", data.get("injected", 0))
                     return True
                 except Exception:
-                    pass
+                    log.info("[mcp] Env injection JSON parse failed (expected on first connect)")
         except Exception as e:
             log.debug("[mcp] Env injection skipped (expected on first connect): %s", e)
         return False
@@ -142,17 +142,17 @@ class MCPClient:
             if self._session is not None:
                 await self._session.__aexit__(None, None, None)
         except Exception:
-            pass
+            log.warning("[mcp] session close failed")
         try:
             if self._transport is not None:
                 await self._transport.__aexit__(None, None, None)
         except Exception:
-            pass
+            log.warning("[mcp] transport close failed")
         try:
             if self._http_client is not None:
                 await self._http_client.aclose()
         except Exception:
-            pass
+            log.warning("[mcp] http client close failed")
         self._session = None
         self._transport = None
         self._http_client = None
@@ -190,5 +190,5 @@ def shutdown_mcp_client() -> None:
         try:
             anyio.run(_MCP_CLIENT.close)
         except Exception:
-            pass
+            log.warning("[mcp] shutdown close failed")
         _MCP_CLIENT = None

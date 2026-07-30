@@ -251,7 +251,7 @@ def select_relevant_chunks(
                         break
                 return out
         except Exception:
-            pass  # fall through to keyword scoring below
+            log.warning("reason: embedding scoring failed, falling through to keyword scoring")
 
     scored = [(keyword_overlap_score(query, c), c) for c in chunks]
     scored = [(s, c) for s, c in scored if s > 0]

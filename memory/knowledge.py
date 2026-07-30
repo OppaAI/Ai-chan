@@ -291,7 +291,7 @@ def _xlsx_text(path: Path) -> str:
                     try:
                         value = shared[int(value)]
                     except Exception:
-                        pass
+                        log.warning("knowledge: failed to decode shared string")
                 out.append(str(value))
     return "\n".join(out)
 
@@ -326,7 +326,7 @@ def extract_text_from_file(relative_path: str, *, user_id: str | None = None, ma
                 import trafilatura  # type: ignore
                 raw = trafilatura.extract(raw, include_links=False, include_tables=False) or raw
             except Exception:
-                pass
+                log.warning("knowledge: trafilatura extraction failed")
         return _sanitize_text(raw, max_chars), str(path.relative_to(user_workspace_root(user_id)))
     if suffix == ".docx":
         text = _xml_text_from_zip(path, ["word/document.xml"])

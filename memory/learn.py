@@ -398,7 +398,7 @@ class _ScratchStore:
         try:
             self._conn.close()
         except Exception:
-            pass
+            log.warning("deep_study: failed to close scratch store")
         try:
             self.path.unlink(missing_ok=True)
         except Exception as e:
@@ -686,7 +686,7 @@ def deep_studying(
                 try:
                     query_vec = embedder.embed_query(current_query)
                 except Exception:
-                    pass
+                    log.warning("deep_study: embed_query failed")
 
             for url in new_urls:
                 if stop_event is not None and stop_event.is_set():

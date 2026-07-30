@@ -74,6 +74,7 @@ Requires Modal secrets:
 
 import io
 import base64
+import logging
 import modal
 
 # ---------------------------------------------------------------------------
@@ -295,11 +296,11 @@ def _evict_all(pipe):
     try:
         _pipe_to(pipe, "cpu")
     except Exception:
-        pass
+        logging.getLogger(__name__).warning("krea2: pipe_to(cpu) failed during eviction")
     try:
         _sync_and_clear()
     except Exception:
-        pass
+        logging.getLogger(__name__).warning("krea2: sync_and_clear failed during eviction")
 
 
 # ---------------------------------------------------------------------------

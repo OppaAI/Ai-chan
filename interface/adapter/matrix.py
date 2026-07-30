@@ -121,7 +121,7 @@ class MatrixAdapter(AdapterBase):
                     self._client.close(), self._loop
                 )
             except Exception:
-                pass
+                log.warning("matrix: async client close failed")
 
     def send_message(self, conversation_id: str, text: str) -> None:
         if not self._client or not self._loop:

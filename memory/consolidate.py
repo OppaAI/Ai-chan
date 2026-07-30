@@ -476,7 +476,7 @@ def _resolve_embedder(memorize=None):
             if emb is not None and hasattr(emb, "embed_query"):
                 return emb
         except Exception:
-            pass
+            log.warning("consolidate: failed to get embedder from memorize")
     
     # Fallback: load from reason module (your semantic caching source)
     try:

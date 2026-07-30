@@ -97,7 +97,7 @@ class SlackAdapter(AdapterBase):
             try:
                 self._socket_client.disconnect()
             except Exception:
-                pass
+                log.warning("slack: socket disconnect failed")
 
     def send_message(self, conversation_id: str, text: str) -> None:
         if not self._web_client:
