@@ -2,7 +2,6 @@
 system/wakeup.py
 
 Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
-(S0: installs sensory.voice_gates hooks after AikoListen is constructed.)
 """
 
 from __future__ import annotations
@@ -180,12 +179,11 @@ class AikoWakeup:
         listen: AikoListen | None = None
         try:
             listen = AikoListen()
-            # S0: barge master switch + speaker verify gate hooks
             try:
-                from sensory.voice_gates import install_listen_s0_hooks
-                install_listen_s0_hooks(listen)
+                from sensory.voice_gates import install_listen_hooks
+                install_listen_hooks(listen)
             except Exception:
-                log.exception("[wakeup] S0 voice gate hooks failed — continuing without them")
+                log.exception("[wakeup] voice gate hooks failed — continuing without them")
         except Exception:
             log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")
 
