@@ -8,12 +8,15 @@
  * Barge-in: only when window.AIKO_BARGE_IN_ENABLED is true (set from server
  * mic-start / config). Default false until the server says otherwise so a
  * stale tab cannot cut TTS after BARGE_IN_ENABLED=0.
+ *
+ * S1: PRE_SPEECH_BUFS ~700ms so soft onsets ("Hey…") are not clipped.
  */
 
 // -- tunables -----------------------------------------------------------------
 
 const SILENCE_TIMEOUT = 1200;   // ms of silence before utterance ends
-const PRE_SPEECH_BUFS = 10;     // ~320 ms of context kept before speech starts
+// ~32ms/frame at 512 samples @ 16kHz → 22 frames ≈ 700ms pre-roll
+const PRE_SPEECH_BUFS = 22;
 
 const ENERGY_START_RMS = 0.008;
 const ENERGY_END_RMS = 0.005;
@@ -34,7 +37,6 @@ let _bargeHits = 0;
 const BARGE_IN_CONFIRM_FRAMES = 2;
 
 function _bargeInEnabled() {
-    // Server sets window.AIKO_BARGE_IN_ENABLED on mic start. Default off.
     return window.AIKO_BARGE_IN_ENABLED === true || window.AIKO_BARGE_IN_ENABLED === 1
         || window.AIKO_BARGE_IN_ENABLED === "1";
 }
@@ -120,7 +122,6 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
         if (!_canSend(ws, epoch)) return;
 
-        // Onset barge (only if enabled)
         if (_bargeInEnabled() && window.aikoIsSpeaking) {
             const now = performance.now();
             if (now - _lastBargeSent > 300) {
