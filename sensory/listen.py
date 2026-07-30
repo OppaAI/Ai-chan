@@ -92,6 +92,7 @@ import re
 log = _logging.getLogger(__name__)
 
 from scipy.signal import resample_poly
+import select
 import sherpa_onnx
 import subprocess
 import threading
@@ -363,13 +364,11 @@ class AikoListen:
     listen(), and _transcribe() all enforce their respective switches
     directly, with no external bind step required.
 
-    When chunk_source is provided (WebUI path), the caller may set
-    vad_presegmented=True to indicate that the browser has already applied a
-    lightweight energy-RMS gate client-side (see static/vad.js) — this is
-    only a "loud enough to send" filter, not a speech/silence decision. Silero
-    still scores every chunk that arrives via chunk_source; vad_presegmented
-    only changes how the *minimum utterance length* gate is interpreted (see
-    _record() docstring).
+    When chunk_source is provided (WebUI path), the browser has already
+    applied a lightweight energy-RMS gate client-side (see static/vad.js) —
+    this is only a "loud enough to send" filter, not a speech/silence
+    decision. Silero scores every chunk that arrives via chunk_source
+    exactly as it does for the local-mic path — no separate flag needed.
 
     Staged init:
         listen = AikoListen()    # no heavy loading
@@ -592,14 +591,7 @@ class AikoListen:
 
     def _barge_in_loop(self) -> None:
         """
-        Always-on VAD monitor via parec. Pauses *scoring* while _record() is
-        active or unarmed — but keeps reading (and discarding) from the
-        pipe throughout, since parec keeps writing whether or not anyone
-        reads. If we stopped reading during a pause (the old behavior), the
-        OS pipe buffer fills with stale audio that gets scored first once
-        we resume, delaying real barge-in detection right when
-        responsiveness matters most. A blocking read also naturally paces
-        this loop at real-time audio rate, so no separate sleep is needed.
+        Always-on VAD monitor via parec. Pauses while _record() is active.
 
         No-ops entirely (idles until stop_barge_in_monitor()) when
         BARGE_IN_ENABLED=0 — this is the master switch; no parec process is
@@ -615,18 +607,24 @@ class AikoListen:
         try:
             proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
             consecutive = 0
+            paused = False
             while self._barge_in_active:
+                if self._recording.is_set() or (not BARGE_IN_ALWAYS_ON and not self._barge_in_armed.is_set()):
+                    time.sleep(0.05)
+                    consecutive = 0
+                    paused = True
+                    continue
+
+                if paused:
+                    # parec kept writing into the pipe the whole time we
+                    # weren't reading — discard the backlog so the next
+                    # score is against live audio, not ~1s of stale buffer.
+                    _drain_stale_audio(proc.stdout, bytes_per_chunk)
+                    paused = False
+
                 raw = proc.stdout.read(bytes_per_chunk)
                 if len(raw) < bytes_per_chunk:
                     break
-
-                paused = (
-                    self._recording.is_set()
-                    or (not BARGE_IN_ALWAYS_ON and not self._barge_in_armed.is_set())
-                )
-                if paused:
-                    consecutive = 0
-                    continue
 
                 if self._barge_in_event.is_set():
                     consecutive = 0
@@ -664,7 +662,6 @@ class AikoListen:
         wait_fn=None,
         speak=None,
         chunk_source=None,
-        vad_presegmented: bool = False,
     ) -> tuple[str, dict]:
         """
         Returns (text, info). info always has a "verified" key:
@@ -696,14 +693,10 @@ class AikoListen:
 
         chunk_source: optional callable(bytes_per_chunk) -> bytes | None,
             forwarded to _record(). See _record() docstring. None (default)
-            preserves the existing local-mic (parec) behavior.
-
-        vad_presegmented: when True, the browser has already applied a
-            lightweight energy-RMS gate (static/vad.js) before forwarding
-            chunks — a "loud enough to send" filter, not a speech decision.
-            Silero still scores every chunk in _record() regardless; this
-            flag only affects how the minimum-utterance-length check is
-            applied. See _record() for details.
+            preserves the existing local-mic (parec) behavior. Silero scores
+            every chunk regardless of source — including chunks the browser
+            has already pre-filtered client-side (static/vad.js) — so there
+            is no separate flag needed for that path.
         """
         if speak is not None and speak.is_playing():
             if not barge_in_enabled():
@@ -729,7 +722,6 @@ class AikoListen:
         audio = self._record(
             status_callback,
             chunk_source=chunk_source,
-            vad_presegmented=vad_presegmented,
         )
         recording_stopped_at = time.monotonic()
         if audio is None:
@@ -814,7 +806,6 @@ class AikoListen:
         self,
         status_callback=None,
         chunk_source=None,
-        vad_presegmented: bool = False,
     ) -> np.ndarray | None:
         """
         Capture audio until silence after speech detected. Silero VAD scores
@@ -829,15 +820,11 @@ class AikoListen:
             WebSocket. Must return exactly `bytes_per_chunk` bytes of
             float32LE PCM, or None to signal end-of-stream (e.g. the browser
             energy-VAD sentinel b"" was received, or client disconnected).
-
-        vad_presegmented: when True, chunks arrived after the browser's
+            Chunks arriving this way have already passed the browser's
             client-side energy-RMS gate (static/vad.js) — a coarse "loud
-            enough to send" filter, not a speech/silence decision, so Silero
-            still scores every chunk exactly as it does for the local-mic
-            path. The only thing vad_presegmented changes is downstream
-            bookkeeping is identical to the non-presegmented path now that
-            Silero is genuinely gating — kept as a named parameter for
-            clarity and in case source-specific tuning is needed later.
+            enough to send" filter, not a speech/silence decision — so
+            Silero still scores every chunk exactly as it does for the
+            local-mic path below.
         """
         audio_chunks   = []
         silence_count  = 0
@@ -869,8 +856,8 @@ class AikoListen:
                 chunk = np.frombuffer(raw, dtype=np.float32).copy()
 
                 # Silero scores every chunk from every source — the browser's
-                # energy gate (when vad_presegmented) only decided whether to
-                # forward the chunk at all, not whether it's speech.
+                # energy gate (for the WebUI chunk_source path) only decided
+                # whether to forward the chunk at all, not whether it's speech.
                 is_speech = self._score_chunk(chunk) >= VAD_THRESHOLD
 
                 if is_speech:
@@ -949,6 +936,29 @@ class AikoListen:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _drain_stale_audio(stream, chunk_size: int, max_iters: int = 64) -> None:
+    """
+    Non-blocking discard of any backlog sitting in a pipe's OS buffer.
+
+    parec keeps writing continuously even while _barge_in_loop stops reading
+    (e.g. while paused for _record() or while disarmed) — on typical Linux
+    pipe buffers (~64KB) that's roughly a second of stale audio. Call this
+    right before resuming reads so the first score after a pause is against
+    live audio, not backlog.
+    """
+    fd = stream.fileno()
+    for _ in range(max_iters):
+        ready, _, _ = select.select([fd], [], [], 0)
+        if not ready:
+            break
+        try:
+            chunk = os.read(fd, chunk_size)
+        except OSError:
+            break
+        if not chunk:
+            break
+
 
 def _cb(callback, msg: str) -> None:
     if callback:
