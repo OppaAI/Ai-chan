@@ -5,6 +5,19 @@ exactly which file to open and what to add/check.
 
 ---
 
+## Dual VAD policy (S4)
+
+**Canonical setup:** browser **energy** gate + server **Silero** authority.
+Do **not** run Silero in the browser on top of server Silero, and do **not**
+unload Jetson Silero to save RAM. Full write-up: [`sensory/VAD_POLICY.md`](../sensory/VAD_POLICY.md).
+
+| Path | Client | Server |
+|------|--------|--------|
+| WebUI | Energy (`vad.js`) filters uplink | Silero decides speech |
+| Local `parec` | — | Silero only |
+
+---
+
 ## Step 0 — Environment & connectivity sanity
 
 **Files:** none yet — just DevTools
@@ -135,6 +148,10 @@ console.log('[mic] streaming enabled, gate=', browserVadGate);
 - [ ] Console/UI shows `vad ready` (Silero loaded), not `vad fallback`.
 - ❌ Fallback unexpectedly → re-check Step 3 (missing ORT/onnx assets).
 
+**Note (S4):** Server Silero is still the authority even when the browser
+falls back to energy-only gating. Client Silero assets are optional polish;
+the canonical Web path is **energy filter + server Silero**.
+
 ---
 
 ## Step 7 — VAD is actually detecting your speech
@@ -158,7 +175,7 @@ console.log('[vad] rms=', rms, '_speaking=', _speaking);
 ```
 
 - [ ] Value clearly crosses `VAD_THRESHOLD = 0.5` (Silero) or
-      `ENERGY_START_RMS = 0.018` (fallback) when you talk.
+      `ENERGY_START_RMS` (fallback / current energy path) when you talk.
 - ❌ Never crosses → mic gain too low. Try setting `autoGainControl: false`
   in **`webui.js`** → `startMic()`:
   ```js
