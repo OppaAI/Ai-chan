@@ -56,6 +56,10 @@ _LLM_FILLABLE_KEYS = frozenset({
     "salary", "experience", "close_date",
 })
 
+# Bound each enrichment call so a stalled backend cannot hang the draft node
+# for the OpenAI SDK default (~600s) across MAX_JOBS_PER_DRAFT postings.
+_LLM_TIMEOUT_SECONDS = float(os.getenv("JOB_HUNT_LLM_TIMEOUT", "30"))
+
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -231,6 +235,44 @@ def _missing_fillable(posting: dict, keys: list[str]) -> list[str]:
     return out
 
 
+def _llm_chat_completion(client, *, model: str, messages: list[dict[str, str]], max_tokens: int = 400):
+    """One chat completion with bounded timeout; prefer JSON object mode.
+
+    Falls back without response_format when the backend rejects it (common
+    on local OpenAI-compatible servers). Raises on other failures so the
+    caller can log and skip enrichment for that posting.
+    """
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": 0.0,
+        "timeout": _LLM_TIMEOUT_SECONDS,
+    }
+    try:
+        return client.chat.completions.create(
+            **kwargs,
+            response_format={"type": "json_object"},
+        )
+    except TypeError:
+        # Client/SDK build does not accept response_format or timeout kw.
+        kwargs.pop("timeout", None)
+        try:
+            return client.chat.completions.create(
+                **kwargs,
+                response_format={"type": "json_object"},
+            )
+        except TypeError:
+            return client.chat.completions.create(**kwargs)
+    except Exception as e:
+        label = str(e).casefold()
+        if "response_format" in label or "json_object" in label:
+            kwargs.pop("response_format", None)
+            return client.chat.completions.create(**kwargs)
+        raise
+
+
 def enrich_posting_fields_with_llm(
     posting: dict[str, Any],
     field_keys: list[str],
@@ -276,15 +318,14 @@ def enrich_posting_fields_with_llm(
     )
 
     try:
-        resp = client.chat.completions.create(
+        resp = _llm_chat_completion(
+            client,
             model=model,
             messages=[
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
             ],
-            stream=False,
             max_tokens=400,
-            temperature=0.0,
         )
         raw = (resp.choices[0].message.content or "").strip()
     except Exception as e:
