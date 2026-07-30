@@ -1,21 +1,21 @@
 ---
 id: JOB_HUNT
 name: Job Hunt
-summary: Fetch configured RSS feeds, filter for tech jobs available today, and save a single human-reviewed Threads teaser-list draft.
+summary: Fetch configured RSS feeds, filter for tech jobs available today, and save structured human-reviewed Threads drafts using post_fields.
 triggers: job, jobs, hiring, job posting, job search, openings, vacancy, job post, draft job, daily job
 tools: search_jobs, gen_job_search_plan, execute_job_search_plan, draft_job_posts_from_results, save_or_post_job_drafts, report_job_run
 ---
 
 # Job Hunt — RSS-only Lane D Playbook
 
-The daily job post workflow runs as a draft-first graph. It fetches configured RSS feeds, keeps items dated today in the local bioclock timezone, filters by configurable tech keywords, dedupes by link/guid, and writes one teaser-list draft for human review.
+The daily job post workflow runs as a draft-first graph. It fetches configured RSS feeds, keeps items dated today in the local bioclock timezone, filters by configurable tech keywords, dedupes by link/guid, and writes structured drafts (one per job) for human review using `post_fields` / `post_signature` from config.
 
 No web-search, scraping, or multi-board fallback path is part of the current design.
 
 ## Graph nodes
 
 ```text
-plan → RSS fetch → teaser draft → save → report
+plan → RSS fetch → structured draft → save → report
 ```
 
 ### Node 1 — `gen_job_search_plan`
@@ -29,19 +29,28 @@ Fetches only the configured RSS feeds and returns postings that are:
 - deduped by link/guid.
 
 ### Node 3 — `draft_job_posts_from_results`
-Creates one Threads teaser-list draft:
+Creates one structured Threads draft **per job** via `format_job_post`, using `post_fields` and `post_signature` from config. Empty fields are skipped.
+
+Example (with available RSS fields):
 
 ```text
-Tech jobs available today (YYYY-MM-DD):
-- Title — Org: https://example/job
+Job Post - 2026-07-30
+Organization: City of Vancouver
+Position: Software Developer
+Location: Canada
+
+See details at:
+https://example/job
+
+- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)
 ```
 
-The list is capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft.
+The list is capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft. RSS sources often only supply title, org, and URL — salary/type/experience/close stay blank and are omitted.
 
 ### Node 4 — `save_or_post_job_drafts`
-Saves the draft under `<job_post_root>/<date>/tech_jobs_today/` with:
+Saves each draft under `<job_post_root>/<date>/tech_jobs_today[/slug]/` with:
 
-- `draft_post.txt` — teaser list only
+- `draft_post.txt` — structured post from `post_fields`
 - `review.md` — human review checklist
 - `draft.json` — metadata with `human_approved: false`
 
@@ -70,6 +79,19 @@ Config file lookup order:
   "tech_job_keywords": ["software", "developer", "cloud", "cybersecurity"],
   "max_results": 30,
   "max_jobs_per_draft": 5,
-  "auto_post": false
+  "auto_post": false,
+  "post_fields": [
+    {"label": "Job Post - ", "key": "date"},
+    {"label": "Organization: ", "key": "organization"},
+    {"label": "Position: ", "key": "title"},
+    {"label": "Type: ", "key": "employment_type"},
+    {"label": "Location: ", "key": "location"},
+    {"label": "Salary: ", "key": "salary"},
+    {"label": "Experience: ", "key": "experience"},
+    {"label": "Close: ", "key": "close_date"},
+    {"label": "", "key": ""},
+    {"label": "See details at:\n", "key": "url"}
+  ],
+  "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)"
 }
 ```
