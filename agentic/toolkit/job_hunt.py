@@ -7,6 +7,12 @@ Lane D fetches configured CivicJobs.ca / Job Bank Canada RSS feeds, keeps
 items dated today in the local bioclock timezone, filters by tech keywords,
 dedupes by link/guid, and produces structured Threads drafts (one per job)
 using post_fields / post_signature from job_hunt.json for human review.
+
+Config lookup order:
+  1. JOB_HUNT_CONFIG_PATH env
+  2. USER_SKILLSETS_PATH/job_hunt.json (or <USER_SPACE_ROOT>/<user_id>/skillsets/)
+  3. <workspace>/agentic/skillsets/job_hunt.json
+
 No web search or scraping path is kept in this module.
 """
 
@@ -16,7 +22,7 @@ import email.utils
 import json
 import os
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,30 +46,23 @@ DEFAULT_TECH_JOB_KEYWORDS = [
     "qa", "quality assurance", "technical support",
 ]
 
-# Fallback when job_hunt.json has no post_fields.
-_DEFAULT_POST_FIELDS = [
-    {"label": "Job Post - ", "key": "date"},
-    {"label": "Organization: ", "key": "organization"},
-    {"label": "Position: ", "key": "title"},
-    {"label": "Type: ", "key": "employment_type"},
-    {"label": "Location: ", "key": "location"},
-    {"label": "Salary: ", "key": "salary"},
-    {"label": "Experience: ", "key": "experience"},
-    {"label": "Close: ", "key": "close_date"},
-    {"label": "", "key": ""},
-    {"label": "See details at:\n", "key": "url"},
-]
-_DEFAULT_POST_SIGNATURE = "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)"
+
+def _user_skillsets_dir() -> Path:
+    """Per-user skillsets folder: USER_SKILLSETS_PATH or <user_state>/skillsets."""
+    override = os.getenv("USER_SKILLSETS_PATH", "").strip()
+    if override:
+        return Path(override).expanduser()
+    from system.userspace import user_state_dir
+    return user_state_dir() / "skillsets"
 
 
 def _job_config_path() -> Path:
-    env_path = os.getenv("JOB_HUNT_CONFIG_PATH")
+    env_path = os.getenv("JOB_HUNT_CONFIG_PATH", "").strip()
     if env_path:
         p = Path(env_path).expanduser()
         return p if p.is_absolute() else Path(__file__).resolve().parents[2] / p
     try:
-        from system.userspace import user_state_dir
-        user_path = user_state_dir() / "skillsets" / "job_hunt.json"
+        user_path = _user_skillsets_dir() / "job_hunt.json"
         if user_path.exists():
             return user_path
     except Exception:
@@ -142,14 +141,24 @@ def _dedupe_key(link: str, guid: str) -> tuple[str, str]:
     return (link or guid).split("?", 1)[0].rstrip("/").casefold(), guid.casefold()
 
 
-def format_job_post(posting: dict, date_text: str | None = None) -> str:
-    """Format a single job posting using config post_fields; skip empty values."""
-    config = _job_config()
+def format_job_post(posting: dict, date_text: str | None = None, config: dict[str, Any] | None = None) -> str:
+    """Format one posting from job_hunt.json post_fields; skip empty values.
+
+    Raises ValueError if post_fields is missing or empty in config.
+    """
+    config = config if config is not None else _job_config()
     if date_text is None:
         date_text = local_now().strftime("%Y-%m-%d")
 
-    fields = config.get("post_fields") or _DEFAULT_POST_FIELDS
-    signature = config.get("post_signature", _DEFAULT_POST_SIGNATURE)
+    fields = config.get("post_fields")
+    if not isinstance(fields, list) or not fields:
+        raise ValueError(
+            "job_hunt.json must define a non-empty post_fields list "
+            f"(config path: {_job_config_path()})"
+        )
+    signature = config.get("post_signature")
+    if signature is None:
+        signature = ""
 
     def value_for(key: str) -> str:
         if key == "date":
@@ -181,8 +190,7 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
     """Fetch configured RSS feeds, keeping tech postings from the last N days.
 
     N is controlled by JOB_HUNT_DATE_RANGE_DAYS env var or the date_range_days
-    config key (default: 1 = today only). Widening this lets you catch jobs
-    from the past week when a day's feed has no matches.
+    config key (default: 1 = today only).
     """
     config = config or _job_config()
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)
@@ -276,13 +284,22 @@ def execute_job_search_plan(plan_json: str) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
-    """Node 3: Build one structured Threads draft per job using post_fields."""
+def draft_job_posts_from_results(results_json: str) -> str:
+    """Node 3: Build one structured draft per job using post_fields from JSON."""
     results = json.loads(results_json)
     config = _job_config()
     postings = results.get("postings", [])
     if not postings:
         return json.dumps({"success": False, "reason": "no_tech_jobs_today", "drafts": []}, ensure_ascii=False)
+
+    fields = config.get("post_fields")
+    if not isinstance(fields, list) or not fields:
+        return json.dumps({
+            "success": False,
+            "reason": "missing_post_fields",
+            "config_path": str(_job_config_path()),
+            "drafts": [],
+        }, ensure_ascii=False)
 
     today = local_now().strftime("%Y-%m-%d")
     max_jobs = _max_jobs_per_draft(config)
@@ -290,8 +307,10 @@ def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
 
     drafts = []
     for i, posting in enumerate(selected):
-        text = format_job_post(posting, date_text=today)
-        # Unique category so each job gets its own draft folder under the date.
+        try:
+            text = format_job_post(posting, date_text=today, config=config)
+        except ValueError as e:
+            return json.dumps({"success": False, "reason": str(e), "drafts": []}, ensure_ascii=False)
         slug_src = str(posting.get("title") or f"job_{i}")
         slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or f"job_{i}"
         drafts.append({
@@ -305,6 +324,7 @@ def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
         "success": True,
         "total_drafts": len(drafts),
         "draft_policy": "post_fields",
+        "config_path": str(_job_config_path()),
         "max_jobs_per_draft": max_jobs,
         "location": results.get("location", ""),
         "date": today,
@@ -366,5 +386,7 @@ def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str 
     lines.append(f"- Feeds: {len(plan_data.get('rss_feeds', []))}")
     lines.append(f"- Results found today: {search_data.get('total_found', 0)}")
     lines.append(f"- Draft policy: {draft_data.get('draft_policy', draft_data.get('reason', 'n/a'))}")
+    if draft_data.get("config_path"):
+        lines.append(f"- Config: {draft_data.get('config_path')}")
     lines.append(f"- Drafts saved: {save_data.get('total_saved', 0)}")
     return "\n".join(lines)
