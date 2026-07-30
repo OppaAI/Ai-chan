@@ -38,11 +38,3 @@ See `config/sensory.yaml` and `docs/DEBUG_AUDIO.md`.
 | Browser gate | `interface/webui/static/vad.js` (`ENERGY_*`, `PRE_SPEECH_BUFS`) — energy only |
 | Barge | `BARGE_IN_ENABLED`, `BARGE_IN_ALWAYS_ON`, `BARGE_IN_ECHO_GUARD_MS`, … |
 | Web gate flag | `WEBUI_BROWSER_VAD_GATE` in `webui.py` |
-
-## S0–S5 map
-
-| Phase | Role |
-|-------|------|
-| S0–S3 | Barge, pre-roll, name correct, echo guard — **done** |
-| **S4** | This policy (docs only) |
-| S5 | Optional metrics / Opus / streaming / local AEC |
