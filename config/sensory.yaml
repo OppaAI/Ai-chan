@@ -35,8 +35,10 @@ SPEAKER_NUM_THREADS: "1"  # CPU threads for speaker embedding extraction.
 # Master switch: when 0, browser and Jetson must not interrupt TTS (no stopTtsPlayback, no barge event).
 BARGE_IN_ENABLED: "0"  # Master barge-in on/off; options: 1/0, true/false, yes/no, on/off.
 BARGE_IN_THRESHOLD: "0.95"  # Speech probability threshold to interrupt TTS (local Silero monitor); range 0.0-1.0.
-BARGE_IN_CONFIRM_CHUNKS: "2"  # Consecutive chunks above threshold before local barge-in fires.
+BARGE_IN_CONFIRM_CHUNKS: "4"  # Consecutive chunks above threshold before local barge-in fires (S3: was 2).
 BARGE_IN_COOLDOWN_MS: "800"  # Cooldown in milliseconds before another barge-in event can fire.
+# S3: ignore barge-in for this many ms after TTS starts (speaker echo / AEC settling).
+BARGE_IN_ECHO_GUARD_MS: "450"
 # Only meaningful when BARGE_IN_ENABLED=1. When 0, local monitor runs only while TTS wait is armed.
 BARGE_IN_ALWAYS_ON: "0"  # Also monitor outside TTS wait; options: 1/0, true/false, yes/no, on/off.
 

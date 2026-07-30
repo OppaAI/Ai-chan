@@ -10,6 +10,9 @@
  *   - TTS playback: binary WAV frames → decode → analyser RMS → lip-sync blendshapes
  *   - chat: text input or voice transcription → user_input message → token streaming
  *   - gestures: server sends expression/viseme/pose → window.aikoSetX() → vrm.js
+ *
+ * S3: sets AIKO_TTS_STARTED_AT on TTS start + AIKO_BARGE_ECHO_GUARD_MS on mic start
+ *      so vad.js can ignore self-echo barge for BARGE_IN_ECHO_GUARD_MS after TTS begins.
  */
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -124,7 +127,7 @@ const EMOJI_EXPRESSIONS = {
 };
 
 function esc(s) {
-  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return (s || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/\"/g, '"').replace(/'/g, '&#39;');
 }
 
 function parseMarkdown(text) {
@@ -352,6 +355,7 @@ async function playNextTts() {
   if (!buf) { ttsPlaying = false; window.aikoIsSpeaking = false; return; }
   ttsPlaying = true;
   window.aikoIsSpeaking = true;
+  window.AIKO_TTS_STARTED_AT = performance.now();  // S3 echo guard
   try {
     const ctx = getTtsContext();
     const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
@@ -593,6 +597,8 @@ function connectWS() {
           browserVadGate = msg.browser_vad_gate !== false;
           // S0: master barge-in switch from server (BARGE_IN_ENABLED)
           window.AIKO_BARGE_IN_ENABLED = !!msg.barge_in_enabled;
+          // S3: echo guard window from server (BARGE_IN_ECHO_GUARD_MS)
+          window.AIKO_BARGE_ECHO_GUARD_MS = msg.echo_guard_ms ?? 450;
           startMic().then((ok) => {
             if (!ok || seq !== micCommandSeq) return;
             if (window.resetVADState) window.resetVADState();
