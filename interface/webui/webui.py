@@ -50,3 +50,55 @@ def _echo_guard_ms() -> int:
         return max(0, int(os.getenv("BARGE_IN_ECHO_GUARD_MS", "450")))
     except ValueError:
         return 450
+
+
+def _load_stored_display_name(uid: str) -> str:
+    try:
+        from system.userspace import user_state_dir
+        name_file = user_state_dir(uid) / "cli_name.txt"
+        if name_file.exists():
+            stored = name_file.read_text(encoding="utf-8").strip()
+            if stored:
+                return stored
+    except Exception:
+        log.warning("webui: failed to read cli_name.txt")
+    return ""
+
+
+def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
+    if not WEBUI_HTTPS:
+        return None
+
+    cert_path = Path(SSL_CERT) if SSL_CERT else Path(__file__).parent / ".cert" / "webui.crt"
+    key_path = Path(SSL_KEY) if SSL_KEY else Path(__file__).parent / ".cert" / "webui.key"
+
+    if not cert_path.exists() or not key_path.exists():
+        cert_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path.parent.mkdir(parents=True, exist_ok=True)
+        alt_names = ["DNS:localhost", f"DNS:{hostname}", "IP:127.0.0.1"]
+        if host_ip and host_ip != "127.0.0.1":
+            alt_names.append(f"IP:{host_ip}")
+        try:
+            subprocess.run(
+                [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+                    "-keyout", str(key_path),
+                    "-out", str(cert_path),
+                    "-days", "3650",
+                    "-subj", f"/CN:{hostname}",
+                    "-addext", f"subjectAltName={','.join(alt_names)}",
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            log.info("[aiko-web] generated self-signed TLS cert at %s", cert_path)
+        except Exception as exp:
+            raise RuntimeError(
+                "WEBUI_HTTPS=1 requires openssl or SSL_CERT/SSL_KEY pointing at an existing certificate."
+            ) from exp
+
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+    ctx.set_alpn_protocols(["http/1.1"])
+    return ctx
