@@ -5,8 +5,9 @@ RSS-only Lane D tech-job drafting.
 
 Lane D fetches configured CivicJobs.ca / Job Bank Canada RSS feeds, keeps
 items dated today in the local bioclock timezone, filters by tech keywords,
-dedupes by link/guid, and produces one teaser-list Threads draft for human
-review. No web search or scraping path is kept in this module.
+dedupes by link/guid, and produces structured Threads drafts (one per job)
+using post_fields / post_signature from job_hunt.json for human review.
+No web search or scraping path is kept in this module.
 """
 
 from __future__ import annotations
@@ -38,6 +39,21 @@ DEFAULT_TECH_JOB_KEYWORDS = [
     "it ", "information technology", "web", "frontend", "backend", "full stack",
     "qa", "quality assurance", "technical support",
 ]
+
+# Fallback when job_hunt.json has no post_fields.
+_DEFAULT_POST_FIELDS = [
+    {"label": "Job Post - ", "key": "date"},
+    {"label": "Organization: ", "key": "organization"},
+    {"label": "Position: ", "key": "title"},
+    {"label": "Type: ", "key": "employment_type"},
+    {"label": "Location: ", "key": "location"},
+    {"label": "Salary: ", "key": "salary"},
+    {"label": "Experience: ", "key": "experience"},
+    {"label": "Close: ", "key": "close_date"},
+    {"label": "", "key": ""},
+    {"label": "See details at:\n", "key": "url"},
+]
+_DEFAULT_POST_SIGNATURE = "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)"
 
 
 def _job_config_path() -> Path:
@@ -126,6 +142,41 @@ def _dedupe_key(link: str, guid: str) -> tuple[str, str]:
     return (link or guid).split("?", 1)[0].rstrip("/").casefold(), guid.casefold()
 
 
+def format_job_post(posting: dict, date_text: str | None = None) -> str:
+    """Format a single job posting using config post_fields; skip empty values."""
+    config = _job_config()
+    if date_text is None:
+        date_text = local_now().strftime("%Y-%m-%d")
+
+    fields = config.get("post_fields") or _DEFAULT_POST_FIELDS
+    signature = config.get("post_signature", _DEFAULT_POST_SIGNATURE)
+
+    def value_for(key: str) -> str:
+        if key == "date":
+            return date_text
+        if key == "":
+            return "\n"
+        return str(posting.get(key, "") or "").strip()
+
+    lines: list[str] = []
+    for fd in fields:
+        if not isinstance(fd, dict):
+            continue
+        key = str(fd.get("key", ""))
+        label = str(fd.get("label", ""))
+        val = value_for(key)
+        if key == "":
+            lines.append("")
+        elif val:
+            lines.append(f"{label}{val}")
+
+    if signature:
+        lines.append("")
+        lines.append(str(signature))
+
+    return "\n".join(lines).rstrip("\n")
+
+
 def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict]:
     """Fetch configured RSS feeds, keeping tech postings from the last N days.
 
@@ -137,6 +188,7 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)
     keywords = [kw.casefold() for kw in _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS)]
     today = local_now().date()
+    default_location = str(config.get("default_location") or "").strip()
     kept: list[dict] = []
     seen_ids: set[str] = set()
     for feed_url in feeds:
@@ -169,6 +221,11 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
                 "organization": org,
                 "url": link,
                 "guid": guid,
+                "location": default_location,
+                "employment_type": "",
+                "salary": "",
+                "experience": "",
+                "close_date": "",
                 "posted_date": posted.isoformat(),
                 "source_feed": feed_url,
                 "_category": "tech_jobs_today",
@@ -220,7 +277,7 @@ def execute_job_search_plan(plan_json: str) -> str:
 
 
 def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
-    """Node 3: Build one teaser-list Threads draft for today's tech RSS jobs."""
+    """Node 3: Build one structured Threads draft per job using post_fields."""
     results = json.loads(results_json)
     config = _job_config()
     postings = results.get("postings", [])
@@ -230,41 +287,33 @@ def draft_job_posts_from_results(results_json: str, template: str = "") -> str:
     today = local_now().strftime("%Y-%m-%d")
     max_jobs = _max_jobs_per_draft(config)
     selected = postings[:max_jobs]
-    date_str = today
-    count = len(selected)
 
-    template_str = template or config.get("draft_template") or os.getenv(
-        "JOB_HUNT_DRAFT_TEMPLATE",
-        "Tech jobs available today ({date}):\n{items}",
-    )
-    template_str = template_str.replace("\\n", "\n")
+    drafts = []
+    for i, posting in enumerate(selected):
+        text = format_job_post(posting, date_text=today)
+        # Unique category so each job gets its own draft folder under the date.
+        slug_src = str(posting.get("title") or f"job_{i}")
+        slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or f"job_{i}"
+        drafts.append({
+            "text": text,
+            "posting": posting,
+            "postings": [posting],
+            "category": f"tech_jobs_today/{slug}" if len(selected) > 1 else "tech_jobs_today",
+        })
 
-    item_lines = []
-    for posting in selected:
-        title = str(posting.get("title") or "Untitled role").strip()
-        org = str(posting.get("organization") or "").strip()
-        link = str(posting.get("url") or "").strip()
-        label = f"{title} — {org}" if org else title
-        item_lines.append(f"- {label}: {link}" if link else f"- {label}")
-
-    if len(postings) > len(selected):
-        item_lines.append(f"(+{len(postings) - len(selected)} more in this week's RSS results)")
-
-    items = "\n".join(item_lines)
-    text = template_str.format(date=date_str, items=items, count=count)
     return json.dumps({
         "success": True,
-        "total_drafts": 1,
-        "draft_policy": "tech_jobs_available_today",
+        "total_drafts": len(drafts),
+        "draft_policy": "post_fields",
         "max_jobs_per_draft": max_jobs,
         "location": results.get("location", ""),
         "date": today,
-        "drafts": [{"text": text, "postings": selected, "category": "tech_jobs_today"}],
+        "drafts": drafts,
     }, ensure_ascii=False)
 
 
 def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
-    """Node 4: Save one Lane D draft for human review; posting happens after approval."""
+    """Node 4: Save Lane D draft(s) for human review; posting happens after approval."""
     from agentic.toolkit.social import job_post_social_root
 
     drafts_data = json.loads(drafts_json)
@@ -286,8 +335,8 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
             f"# Job Post Draft — {date_str} ({cat})\n\n"
             f"## Draft post\n\n{text}\n\n"
             "## Review checklist\n\n"
-            "- [ ] Job teaser list is accurate\n"
-            "- [ ] Links open to the source postings\n"
+            "- [ ] Job details look correct\n"
+            "- [ ] Link opens to the source posting\n"
             "- [ ] Approved to post to Meta Threads\n",
             encoding="utf-8",
         )
@@ -295,6 +344,7 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
             "success": True,
             "draft_dir": str(draft_dir),
             "provider": "threads",
+            "posting": draft.get("posting"),
             "postings": draft.get("postings"),
             "created_at": datetime.now().isoformat(),
             "posted": False,
