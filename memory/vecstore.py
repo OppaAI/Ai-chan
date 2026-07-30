@@ -226,13 +226,13 @@ def connect_sqlite_vec(path: str | os.PathLike[str], *, user_id: str | None = No
     try:
         conn.enable_load_extension(True)
     except Exception:
-        log.warning("vecstore: enable_load_extension(True) failed")
+        pass
     import sqlite_vec
     sqlite_vec.load(conn)
     try:
         conn.enable_load_extension(False)
     except Exception:
-        log.warning("vecstore: enable_load_extension(False) failed")
+        pass
     return conn
 
 
@@ -321,11 +321,24 @@ def initialize_store_db(
 
     Store modules pass their own env-configured path and schema. Relative paths
     live under the active user's state directory; absolute paths are respected.
+
+    When the DDL defines the personal ``memories`` table, Phase A columns are
+    ensured (idempotent ALTER) and write/recall hooks are installed once.
     """
     uid = user_id or current_user_id()
     path = store_db_path(path_value, user_id=uid)
     init = initialize_sqlite_vec_db if vector else initialize_sqlite_db
-    return init(path, ddl, user_id=uid)
+    conn = init(path, ddl, user_id=uid)
+    # Phase A: lightweight schema migrate + hooks for personal memory only.
+    if "memories_vec" in (ddl or "") or "CREATE TABLE IF NOT EXISTS memories" in (ddl or ""):
+        try:
+            from memory.memory_meta import ensure_phase_a_schema, install_phase_a_hooks
+            ensure_phase_a_schema(conn)
+            install_phase_a_hooks()
+        except Exception:
+            # Never block boot on optional Phase A wiring.
+            pass
+    return conn
 
 
 def sqlite_vec_blob(vector: object) -> bytes:
