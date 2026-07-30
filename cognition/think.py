@@ -226,7 +226,7 @@ def _load_user_context() -> tuple[str, str]:
     try:
         _user_context_cache[uid] = (user_path.stat().st_mtime, user_block)
     except OSError:
-        pass
+        log.debug("think: user context cache write failed")
     return display_name, user_block
 
 

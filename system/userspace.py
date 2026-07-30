@@ -37,6 +37,9 @@ import contextvars
 import os
 from pathlib import Path
 import re
+from system.log import get_logger
+
+log = get_logger(__name__)
 
 _DEFAULT_USER_ID = "guest"
 _SAFE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -132,7 +135,7 @@ def user_state_dir(user_id: str | None = None) -> Path:
     try:
         os.chmod(path, 0o700)
     except OSError:
-        pass
+        log.warning("userspace: chmod 0o700 failed for %s", path)
     return path
 
 

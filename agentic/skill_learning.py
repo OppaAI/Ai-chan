@@ -197,7 +197,7 @@ def _promotion_args_for_step(tool: str, step: dict[str, Any]) -> dict[str, Any]:
             if isinstance(parsed, dict) and parsed:
                 return {str(k): "$prompt" for k in parsed}
         except json.JSONDecodeError:
-            pass
+            log.debug("skill_learning: args_str is not JSON, treating as literal")
     return {}
 
 

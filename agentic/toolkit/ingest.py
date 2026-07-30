@@ -135,7 +135,7 @@ def ingest_from_url(
                     if int(content_length) > max_bytes:
                         return None, "[fetch failed: page too large]"
                 except ValueError:
-                    pass
+                    log.debug("ingest: content-length is not an int, skipping size check")
 
             buf = io.BytesIO()
             total = 0

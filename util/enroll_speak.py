@@ -38,7 +38,7 @@ try:
     from system.config import load_config
     load_config()
 except ImportError:
-    pass
+    print("[enroll_speak] config load skipped (optional dep)")
 
 SAMPLE_RATE = 16000
 _PAREC_CMD = [

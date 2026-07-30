@@ -373,7 +373,7 @@ class _ScratchStore:
                 )
                 self._conn.commit()
             except sqlite3.IntegrityError:
-                pass  # duplicate chunk_hash — already have this exact chunk, skip
+                log.debug("deep_study: duplicate chunk_hash, skipping")
 
     def all_chunks(self, limit: int = 0, desc: bool = False) -> list[tuple[str, str, list[float] | None]]:
         sql = "SELECT url, chunk, embedding FROM chunks"

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
@@ -41,7 +44,7 @@ def _decrypt_env_age() -> None:
                 if key and val and key not in os.environ:
                     os.environ[key] = val
     except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+        log.debug("mcp/social: dotenv load skipped")
 
 
 # ── DB + middleware ───────────────────────────────────────────────────────

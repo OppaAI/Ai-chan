@@ -419,7 +419,7 @@ async def logout(request: Request):
             session_id = signer.loads(cookie_value, max_age=SESSION_MAX_AGE_SECONDS)
             sessions.pop(session_id, None)
         except (BadSignature, SignatureExpired):
-            pass  # already invalid/expired, nothing to clean up
+            log.debug("auth: session cookie invalid/expired, nothing to clean up")
     response = RedirectResponse(url="/")
     response.delete_cookie("session_id")
     return response

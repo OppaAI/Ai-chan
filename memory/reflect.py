@@ -228,7 +228,7 @@ def _extract_json_arrays(raw: str) -> list[list]:
             if isinstance(parsed, list):
                 arrays.append(parsed)
         except json.JSONDecodeError:
-            pass
+            log.debug("reflect: failed to parse candidate JSON array")
         i = end + 1
     return arrays
 

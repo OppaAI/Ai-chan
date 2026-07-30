@@ -379,7 +379,7 @@ class AikoWeb:
                         try:
                             self._audio_q.put_nowait(raw_bytes)
                         except queue.Full:
-                            pass
+                            log.debug("webui: audio queue full, dropping frame")
                     continue
 
                 raw_text = message.get("text")
@@ -793,7 +793,7 @@ class AikoWeb:
                     done_event.wait()       # Wait for the listen thread to exit
                     break
                 except queue.Empty:
-                    pass
+                    log.debug("webui: voice input queue empty, retrying")
         finally:
             self._broadcast({"type": "voice", "status": "idle"})
 
@@ -802,7 +802,7 @@ class AikoWeb:
             try:
                 text_input = self._input_q.get_nowait()
             except queue.Empty:
-                pass
+                log.debug("webui: final voice input queue empty")
 
         if text_input is not None:
             if isinstance(text_input, tuple):

@@ -226,9 +226,9 @@ def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | N
             if "last_accessed" not in archive_cols:
                 conn.execute("ALTER TABLE learned_chunks_archive ADD COLUMN last_accessed TEXT")
         except sqlite3.OperationalError:
-            pass  # column might not exist yet
+            log.debug("knowledge: archive column migration failed (expected on first run)")
     except sqlite3.OperationalError:
-        pass  # table might not exist yet
+        log.debug("knowledge: archive table does not exist yet")
 
     conn.commit()
 
@@ -272,7 +272,7 @@ def _xlsx_text(path: Path) -> str:
             root = DET.fromstring(zf.read("xl/sharedStrings.xml"))
             shared = [" ".join(t.strip() for t in si.itertext() if t and t.strip()) for si in root]
         except KeyError:
-            pass
+            log.debug("knowledge: xlsx has no shared strings")
         out: list[str] = []
         for name in sorted(n for n in zf.namelist() if n.startswith("xl/worksheets/") and n.endswith(".xml")):
             root = DET.fromstring(zf.read(name))

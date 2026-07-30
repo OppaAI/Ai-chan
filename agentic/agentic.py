@@ -511,7 +511,7 @@ def _trim_trace_dir(trace_dir: Path) -> None:
         try:
             old.unlink()
         except OSError:
-            pass
+            log.debug("agentic: failed to unlink old trace file")
 
 
 def _append_step_trace(ctx: AgentContext | None, event: str, payload: dict[str, Any]) -> None:
@@ -572,7 +572,7 @@ def _maybe_resume_approval(owner, user_input: str, token_callback=None) -> str |
         try:
             path.unlink()
         except OSError:
-            pass
+            log.debug("agentic: failed to unlink approval pause file")
     final = result.observation()
     if token_callback:
         token_callback(final)

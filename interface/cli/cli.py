@@ -288,7 +288,7 @@ def _cli_display_name(args) -> str:
                 name_path.write_text(raw, encoding="utf-8")
             return raw
     except (EOFError, KeyboardInterrupt):
-        pass
+        log.debug("cli: user cancelled name prompt")
     return "guest"
 
 
