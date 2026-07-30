@@ -1,30 +1,26 @@
 /**
  * vad.js
  * Browser-side VAD between pcm-worklet.js and the WebSocket.
- * Energy-gate only. Browser VAD is a coarse "is this worth sending" filter;
- * the backend runs Silero VAD as the authoritative check on whatever this
- * forwards (see listen.py _record()).
+ * Energy-gate only. Backend Silero is authoritative.
  *
- * Barge-in: only when window.AIKO_BARGE_IN_ENABLED is true (set from server
- * mic-start / config). Default false until the server says otherwise so a
- * stale tab cannot cut TTS after BARGE_IN_ENABLED=0.
- *
- * S1: PRE_SPEECH_BUFS ~700ms so soft onsets ("Hey…") are not clipped.
+ * S0: barge only if window.AIKO_BARGE_IN_ENABLED
+ * S1: PRE_SPEECH_BUFS ~700ms
+ * S3: echo guard after TTS start + stricter barge confirm / energy
  */
 
-// -- tunables -----------------------------------------------------------------
-
-const SILENCE_TIMEOUT = 1200;   // ms of silence before utterance ends
-// ~32ms/frame at 512 samples @ 16kHz → 22 frames ≈ 700ms pre-roll
+const SILENCE_TIMEOUT = 1200;
 const PRE_SPEECH_BUFS = 22;
 
 const ENERGY_START_RMS = 0.008;
 const ENERGY_END_RMS = 0.005;
 const ENERGY_MIN_FRAMES = 2;
 
-let _noiseFloor = 0.015;
+// S3 barge: need more sustained energy than plain speech-onset
+const BARGE_IN_CONFIRM_FRAMES = 4;
+const BARGE_RMS_MULT = 1.5;  // barge threshold = speech start * this
+const DEFAULT_ECHO_GUARD_MS = 450;
 
-// -- state --------------------------------------------------------------------
+let _noiseFloor = 0.015;
 
 let _speaking = false;
 let _silTimer = null;
@@ -34,11 +30,23 @@ let _vadEpoch = 0;
 let _lastBargeSent = 0;
 let _bargeHits = 0;
 
-const BARGE_IN_CONFIRM_FRAMES = 2;
-
 function _bargeInEnabled() {
     return window.AIKO_BARGE_IN_ENABLED === true || window.AIKO_BARGE_IN_ENABLED === 1
         || window.AIKO_BARGE_IN_ENABLED === "1";
+}
+
+function _echoGuardMs() {
+    const v = window.AIKO_BARGE_ECHO_GUARD_MS;
+    if (typeof v === "number" && v >= 0) return v;
+    if (typeof v === "string" && v !== "" && !Number.isNaN(Number(v))) return Number(v);
+    return DEFAULT_ECHO_GUARD_MS;
+}
+
+function _inEchoGuard() {
+    // Set by webui.js when TTS playback starts
+    const t0 = window.AIKO_TTS_STARTED_AT;
+    if (typeof t0 !== "number" || !t0) return false;
+    return (performance.now() - t0) < _echoGuardMs();
 }
 
 async function initVAD() {
@@ -72,15 +80,10 @@ function _calcThresholds() {
     return { startThresh, endThresh };
 }
 
-function _maybeBargeIn(ws, rms, startThresh) {
+function _fireBarge(ws) {
     if (!_bargeInEnabled()) return;
     if (!window.aikoIsSpeaking) return;
-    if (rms < startThresh) {
-        _bargeHits = 0;
-        return;
-    }
-    _bargeHits++;
-    if (_bargeHits < BARGE_IN_CONFIRM_FRAMES) return;
+    if (_inEchoGuard()) return;
     const now = performance.now();
     if (now - _lastBargeSent <= 300) return;
     _lastBargeSent = now;
@@ -89,6 +92,23 @@ function _maybeBargeIn(ws, rms, startThresh) {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'barge_in' }));
     }
+}
+
+function _maybeBargeIn(ws, rms, startThresh) {
+    if (!_bargeInEnabled()) return;
+    if (!window.aikoIsSpeaking) return;
+    if (_inEchoGuard()) {
+        _bargeHits = 0;
+        return;
+    }
+    const bargeThresh = startThresh * BARGE_RMS_MULT;
+    if (rms < bargeThresh) {
+        _bargeHits = 0;
+        return;
+    }
+    _bargeHits++;
+    if (_bargeHits < BARGE_IN_CONFIRM_FRAMES) return;
+    _fireBarge(ws);
 }
 
 function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
@@ -122,14 +142,8 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
         if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
         if (!_canSend(ws, epoch)) return;
 
-        if (_bargeInEnabled() && window.aikoIsSpeaking) {
-            const now = performance.now();
-            if (now - _lastBargeSent > 300) {
-                _lastBargeSent = now;
-                if (window.stopTtsPlayback) window.stopTtsPlayback();
-                ws.send(JSON.stringify({ type: 'barge_in' }));
-            }
-        }
+        // Onset barge: still requires echo guard + higher energy path via _maybeBargeIn
+        _maybeBargeIn(ws, rms, startThresh);
 
         console.log(`[vad] speech START  rms=${rms.toFixed(5)}  floor=${_noiseFloor.toFixed(5)}  start≥${startThresh.toFixed(5)}`);
         ws.send(JSON.stringify({ type: 'vad', event: 'start' }));
