@@ -101,7 +101,7 @@ def workspace_root() -> Path:
 
 def user_state_root() -> Path:
     """Resolve the active user state root lazily."""
-    override = os.getenv("USER_STATE_ROOT")
+    override = os.getenv("USER_SPACE_ROOT")
     return (Path(override).expanduser() if override else Path.home() / ".aiko").resolve()
 
 

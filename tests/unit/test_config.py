@@ -51,7 +51,7 @@ def reset_loaded_flag(monkeypatch):
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     for var in (
-        "USER_STATE_ROOT", "AGE_KEY", "ENV_AGE_PATH",
+        "USER_SPACE_ROOT", "AGE_KEY", "ENV_AGE_PATH",
         "SOME_KEY", "NESTED_A_B", "LIST_KEY", "OVERRIDE_ME", "SECRET_ONLY_KEY",
     ):
         monkeypatch.delenv(var, raising=False)
@@ -356,7 +356,7 @@ class TestLoadConfigYamlPrecedence:
 class TestLoadConfigSecretsPrecedence:
     def test_env_age_fills_gap_yaml_did_not_set(self, fake_root, monkeypatch):
         state_root = fake_root / "state"
-        monkeypatch.setenv("USER_STATE_ROOT", str(state_root))
+        monkeypatch.setenv("USER_SPACE_ROOT", str(state_root))
         _write_yaml(fake_root, "a.yaml", "some_key: from_yaml\n")
 
         state_root.mkdir(parents=True, exist_ok=True)
@@ -382,7 +382,7 @@ class TestLoadConfigSecretsPrecedence:
         This is implementation behavior worth pinning down explicitly so
         a future refactor doesn't silently flip which one wins."""
         state_root = fake_root / "state"
-        monkeypatch.setenv("USER_STATE_ROOT", str(state_root))
+        monkeypatch.setenv("USER_SPACE_ROOT", str(state_root))
         _write_yaml(fake_root, "a.yaml", "some_key: from_yaml\n")
 
         state_root.mkdir(parents=True, exist_ok=True)
@@ -398,7 +398,7 @@ class TestLoadConfigSecretsPrecedence:
 
     def test_relative_age_key_resolved_under_user_state_root(self, fake_root, monkeypatch):
         state_root = fake_root / "state"
-        monkeypatch.setenv("USER_STATE_ROOT", str(state_root))
+        monkeypatch.setenv("USER_SPACE_ROOT", str(state_root))
         monkeypatch.setenv("AGE_KEY", "my-key.txt")  # relative -- should resolve under state_root
         state_root.mkdir(parents=True, exist_ok=True)
         (state_root / ".env.age").write_text("dummy")
@@ -420,7 +420,7 @@ class TestLoadConfigSecretsPrecedence:
         absolute_key.write_text("dummy-key")
 
         state_root = fake_root / "state"
-        monkeypatch.setenv("USER_STATE_ROOT", str(state_root))
+        monkeypatch.setenv("USER_SPACE_ROOT", str(state_root))
         monkeypatch.setenv("AGE_KEY", str(absolute_key))
         state_root.mkdir(parents=True, exist_ok=True)
         (state_root / ".env.age").write_text("dummy")
@@ -443,7 +443,7 @@ class TestLoadConfigSecretsPrecedence:
         set up .env.age locally."""
         pytest.importorskip("dotenv")
         state_root = fake_root / "state"
-        monkeypatch.setenv("USER_STATE_ROOT", str(state_root))
+        monkeypatch.setenv("USER_SPACE_ROOT", str(state_root))
         (fake_root / ".env").write_text("DOTENV_FALLBACK_KEY=from_plain_dotenv\n")
         load_config()
         assert os.environ["DOTENV_FALLBACK_KEY"] == "from_plain_dotenv"

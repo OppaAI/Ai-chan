@@ -72,7 +72,7 @@ def _load_social_persona() -> str:
 def weekly_social_root() -> Path:
     """Resolve the active user weekly social output root lazily.
 
-    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/weekly. Holds
+    Defaults to <USER_SPACE_ROOT>/<user_id>/workspace/social/weekly. Holds
     draft bundles for weekly Patreon dev-post syndication bundles, including full posts,
     teaser text, Hugo markdown, and downloaded teaser images.
     """
@@ -85,7 +85,7 @@ def weekly_social_root() -> Path:
 def photo_social_root() -> Path:
     """Resolve the active user photo-social output root lazily.
 
-    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/photo.
+    Defaults to <USER_SPACE_ROOT>/<user_id>/workspace/social/photo.
     """
     override = os.getenv("PHOTO_SOCIAL_ROOT")
     if override:
@@ -96,7 +96,7 @@ def photo_social_root() -> Path:
 def job_post_social_root() -> Path:
     """Resolve the active user job-post draft output root lazily.
 
-    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/job_posts.
+    Defaults to <USER_SPACE_ROOT>/<user_id>/workspace/social/job_posts.
     Holds daily Meta Threads job-post drafts for human review.
     """
     override = os.getenv("JOB_POST_SOCIAL_ROOT")
@@ -108,7 +108,7 @@ def job_post_social_root() -> Path:
 def video_social_root() -> Path:
     """Resolve the active user video-social output root lazily.
 
-    Defaults to <USER_STATE_ROOT>/<user_id>/workspace/social/video.
+    Defaults to <USER_SPACE_ROOT>/<user_id>/workspace/social/video.
     """
     override = os.getenv("VIDEO_SOCIAL_ROOT")
     if override:

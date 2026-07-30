@@ -147,7 +147,6 @@ CREATE TABLE IF NOT EXISTS learned_chunks (
 CREATE INDEX IF NOT EXISTS idx_learned_docs_user ON learned_docs(user_id);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_doc ON learned_chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_user ON learned_chunks(user_id);
-CREATE INDEX IF NOT EXISTS idx_learned_chunks_access ON learned_chunks(access_count, last_accessed);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_created ON learned_chunks(created_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_fts USING fts5(
@@ -203,8 +202,7 @@ def _connect(user_id: str | None = None) -> sqlite3.Connection:
 
 
 def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | None = None) -> None:
-    """Add missing columns to knowledge tables if they don't exist."""
-    # Check learned_chunks table for access_count and last_accessed
+    """Add missing columns and indexes to knowledge tables."""
     cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks)").fetchall()]
     if "access_count" not in cols:
         conn.execute("ALTER TABLE learned_chunks ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0")
@@ -215,6 +213,8 @@ def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | N
     if "archived_at" not in cols:
         conn.execute("ALTER TABLE learned_chunks ADD COLUMN archived_at TEXT")
         log.info("[knowledge] Added missing archived_at column to learned_chunks")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_learned_chunks_access ON learned_chunks(access_count, last_accessed)")
 
     # Check learned_chunks_archive table
     try:

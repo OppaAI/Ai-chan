@@ -14,7 +14,7 @@ AI_NAME: "Aiko"
 # AGE_KEY and ENV_AGE_PATH below are resolved relative to this root too,
 # since they're plain filenames, not absolute paths.
 #
-USER_STATE_ROOT: "/home/oppa-ai/.aiko"
+USER_SPACE_ROOT: "/home/oppa-ai/.aiko"
 
 # -- Secrets Key --
 # These are SERVICE-level secrets (one shared LLM/OAuth config for all

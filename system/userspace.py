@@ -4,7 +4,7 @@ system/userspace.py
 Helpers for per-user runtime paths and identifiers.
  
 This module provides utilities for managing per-user state in a multi-user
-environment. All user-specific data is stored under <USER_STATE_ROOT>/<user_id>/ with
+environment. All user-specific data is stored under <USER_SPACE_ROOT>/<user_id>/ with
 subdirectories:
  
   memory/         — SQLite memory DB, embeddings, consolidation state
@@ -15,7 +15,7 @@ subdirectories:
 
 Key functions:
   - current_user_id()     — get the active user ID from session or env
-  - user_state_dir()      — resolve <USER_STATE_ROOT>/<user_id> for a user
+  - user_state_dir()      — resolve <USER_SPACE_ROOT>/<user_id> for a user
   - user_state_path()     — resolve a file path under user state
   - user_workspace_root() — resolve workspace root for a user
   - user_profile_path()   — resolve profile path (defaults to profile/USER.md)
@@ -97,14 +97,15 @@ def normalize_user_id(provider: str | None, user_id: object) -> str:
 def _user_state_root_value() -> str:
     """Return the configured root for per-user mutable state.
 
-    USER_STATE_ROOT is the canonical name. AIKO_USER_STATE_ROOT and the older
-    USER_SPACE_ROOT are accepted as compatibility aliases so deployments and
-    docs that used those names still point Aiko at the same per-user files.
+    USER_SPACE_ROOT is the canonical name. USER_STATE_ROOT and
+    AIKO_USER_STATE_ROOT are accepted as compatibility aliases so
+    deployments and docs that used those names still point Aiko at
+    the same per-user files.
     """
     return (
-        os.getenv("USER_STATE_ROOT")
+        os.getenv("USER_SPACE_ROOT")
+        or os.getenv("USER_STATE_ROOT")
         or os.getenv("AIKO_USER_STATE_ROOT")
-        or os.getenv("USER_SPACE_ROOT")
         or str(Path.home() / ".aiko")
     )
 
@@ -112,7 +113,7 @@ def _user_state_root_value() -> str:
 def user_state_dir(user_id: str | None = None) -> Path:
     """Root directory for user-private mutable state.
 
-    Resolves to <USER_STATE_ROOT>/<user_id>. For a real authenticated
+    Resolves to <USER_SPACE_ROOT>/<user_id>. For a real authenticated
     user_id, creates it (locked to owner-only) if missing. For the guest
     sentinel (no one authenticated yet), returns the path WITHOUT creating
     it — callers doing existence checks (e.g. profile lookup) correctly
@@ -149,7 +150,7 @@ def user_workspace_root(user_id: str | None = None) -> Path:
 def user_profile_path(user_id: str | None = None) -> Path:
     """Per-user editable profile/bio markdown path.
 
-    Defaults to <USER_STATE_ROOT>/<user_id>/profile/USER.md. The profile stores
+    Defaults to <USER_SPACE_ROOT>/<user_id>/profile/USER.md. The profile stores
     user-provided biographical information, preferences, and identity
     details that Aiko can use to personalize responses.
     """

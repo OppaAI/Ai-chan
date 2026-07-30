@@ -20,10 +20,10 @@ Optional:
   LLM_MODEL           — reuses the main chat model (already in VRAM)
   LLM_BASE_URL        — default http://localhost:8080/v1
   IMAGEGEN_URL        — Modal FLUX endpoint
-  REFERENCE_IMAGE — path to Aiko reference PNG (default <USER_STATE_ROOT>/aiko.png)
-  USER_REFERENCE_IMAGE — path to user reference PNG (default <USER_STATE_ROOT>/<USER_ID>/profile/user.png)
+  REFERENCE_IMAGE — path to Aiko reference PNG (default <USER_SPACE_ROOT>/aiko.png)
+  USER_REFERENCE_IMAGE — path to user reference PNG (default <USER_SPACE_ROOT>/<USER_ID>/profile/user.png)
   HUGO_IMAGES_PATH    — path inside repo for images, default "static/images"
-  USER_STATE_ROOT — root directory for user state (default: <home>/.aiko)
+  USER_SPACE_ROOT — root directory for user state (default: <home>/.aiko)
 
 Idempotency:
   generate_and_post() pins daily atomic facts to memory.db and the faithful
@@ -81,10 +81,10 @@ REFLECT_MAX_MEMS  = int(os.getenv("REFLECT_MAX_MEMS", 50))
 REFLECT_TAGS      = os.getenv("REFLECT_TAGS", "daily-reflection,ai-journal,aiko")
 REFLECT_BLOG_POST_ENABLED = os.getenv("REFLECT_BLOG_POST_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
 
-_USER_STATE_ROOT = str(Path.home() / ".aiko")
+_USER_SPACE_ROOT = str(Path.home() / ".aiko")
 
 IMAGEGEN_URL          = os.getenv("IMAGEGEN_URL", "")
-REFERENCE_IMAGE  = os.path.expanduser(os.getenv("REFERENCE_IMAGE", os.path.join(_USER_STATE_ROOT, "aiko.png")))
+REFERENCE_IMAGE  = os.path.expanduser(os.getenv("REFERENCE_IMAGE", os.path.join(_USER_SPACE_ROOT, "aiko.png")))
 
 def _user_reference_image_path() -> str:
     """Resolve the current user's reference-image path fresh, per call —
@@ -94,7 +94,7 @@ def _user_reference_image_path() -> str:
     override = os.getenv("USER_REFERENCE_IMAGE")
     if override:
         return os.path.expanduser(override)
-    root = os.path.expanduser(os.getenv("USER_STATE_ROOT") or _USER_STATE_ROOT)
+    root = os.path.expanduser(os.getenv("USER_SPACE_ROOT") or _USER_SPACE_ROOT)
     return os.path.join(root, current_user_id(), "profile", "user.png")
 
 def _reference_image_path() -> str:

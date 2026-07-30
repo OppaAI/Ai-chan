@@ -27,10 +27,10 @@ SKILL_CHUNKS_PER_MATCH: "4"  # Max relevant chunks kept per matched skill doc.
 SKILL_CHUNK_MIN_SCORE: "0.30"  # Min relevance score to keep a chunk; below this the skill falls back to its first chunk.
 
 # -- user skillsets --
-USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <USER_STATE_ROOT>/<user_id>/skillsets/.
+USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <USER_SPACE_ROOT>/<user_id>/skillsets/.
 
 # -- job hunt config path --
-JOB_HUNT_CONFIG_PATH: ""  # Path to job_hunt.json config file. Can be absolute or relative to workspace. Defaults to <USER_STATE_ROOT>/<user_id>/skillsets/job_hunt.json if exists, otherwise <workspace>/agentic/skillsets/job_hunt.json.
+JOB_HUNT_CONFIG_PATH: ""  # Path to job_hunt.json config file. Can be absolute or relative to workspace. Defaults to <USER_SPACE_ROOT>/<user_id>/skillsets/job_hunt.json if exists, otherwise <workspace>/agentic/skillsets/job_hunt.json.
 
 # Agentic config
 #

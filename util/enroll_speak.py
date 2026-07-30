@@ -4,7 +4,7 @@ enroll_speaker.py
 One-time enrollment for Aiko's speaker verification (listen.py).
 Records a few seconds of your voice via parec, computes a speaker
 embedding with the same sherpa-onnx model listen.py uses at runtime,
-and saves it to SPEAKER_ENROLL_PATH (default: <USER_STATE_ROOT>/<user_id>/profile/speaker_enrollment.json).
+and saves it to SPEAKER_ENROLL_PATH (default: <USER_SPACE_ROOT>/<user_id>/profile/speaker_enrollment.json).
 
 Usage:
     python enroll_speaker.py
@@ -16,7 +16,7 @@ pointing at a sherpa-onnx speaker embedding .onnx file:
     https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models
 e.g. 3dspeaker_speech_eres2net_base_sv_en_voxceleb_16k.onnx (~28MB)
 
-Saves to <USER_STATE_ROOT>/<user_id>/profile/speaker_enrollment.json (matches listen.py's lookup) —
+Saves to <USER_SPACE_ROOT>/<user_id>/profile/speaker_enrollment.json (matches listen.py's lookup) —
 no separate env var needed, just set USER_ID like the rest of Aiko's config.
 
 Re-running this script overwrites any existing enrollment.
@@ -55,7 +55,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default=os.getenv("SPEAKER_MODEL_PATH", ""),
         help="Path to sherpa-onnx speaker embedding .onnx model")
     parser.add_argument("--out", default=str(user_state_path("profile/speaker_enrollment.json")),
-        help="Where to save the enrollment JSON (default: <USER_STATE_ROOT>/<user_id>/profile/speaker_enrollment.json)")
+        help="Where to save the enrollment JSON (default: <USER_SPACE_ROOT>/<user_id>/profile/speaker_enrollment.json)")
     parser.add_argument("--seconds", type=float, default=6.0,
         help="How long to record (seconds). 5-8s of normal speech works well.")
     parser.add_argument("--name", default=os.getenv("USER_ID", "owner"),

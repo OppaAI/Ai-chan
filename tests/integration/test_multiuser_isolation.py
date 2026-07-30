@@ -78,13 +78,13 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for var in ("AIKO_USER_ID", "CURRENT_DISPLAY_NAME", "USER_STATE_ROOT", "SQLITE_MEMORY_PATH"):
+    for var in ("AIKO_USER_ID", "CURRENT_DISPLAY_NAME", "USER_SPACE_ROOT", "SQLITE_MEMORY_PATH"):
         monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture
 def state_root(tmp_path, monkeypatch):
-    monkeypatch.setenv("USER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("USER_SPACE_ROOT", str(tmp_path))
     return tmp_path
 
 

@@ -20,7 +20,7 @@ OAuth is the source of identity; `persona/SOUL.md` remains Aiko's identity only 
   - `MONTHLY_CONSOLIDATION_STATE_PATH`
   - `SCHEDULE_PATH`
   - `WORKSPACE_ROOT`
-  - `USER_STATE_ROOT` (canonical), plus compatibility aliases `AIKO_USER_STATE_ROOT` and `USER_SPACE_ROOT`
+  - `USER_SPACE_ROOT` (canonical), plus compatibility aliases `USER_STATE_ROOT` and `AIKO_USER_STATE_ROOT`
 
 ## sqlite-vec per user
 
@@ -40,7 +40,7 @@ Do **not** derive an encryption key from only the OAuth user id. User ids are no
 
 For a simple online tester tier, prefer encrypting the storage layer instead of encrypting individual files in application code:
 
-1. Put `USER_STATE_ROOT` on an encrypted persistent volume.
+1. Put `USER_SPACE_ROOT` on an encrypted persistent volume.
 2. Restrict permissions to the service account.
 3. Keep each user in a separate directory.
 4. Avoid writing secrets into workspace files.

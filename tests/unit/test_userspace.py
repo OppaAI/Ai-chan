@@ -10,7 +10,7 @@ Focus areas:
     servers where a stale contextvar leaking across requests would put one
     user's data under another user's path)
   - env var fallback chain and override precedence (WORKSPACE_ROOT,
-    USER_PROFILE_PATH, USER_STATE_ROOT aliases)
+    USER_PROFILE_PATH, USER_SPACE_ROOT aliases)
   - current_display_name() fallback chain, since this is exactly what
     memory/memorize.py leans on to know who it's talking to
 """
@@ -40,8 +40,8 @@ from system.userspace import (
 def clean_env(monkeypatch):
     """Make sure no ambient env vars leak between tests."""
     for var in (
-        "AIKO_USER_ID", "CURRENT_DISPLAY_NAME", "USER_STATE_ROOT",
-        "AIKO_USER_STATE_ROOT", "USER_SPACE_ROOT", "WORKSPACE_ROOT",
+        "AIKO_USER_ID", "CURRENT_DISPLAY_NAME", "USER_SPACE_ROOT",
+        "USER_STATE_ROOT", "AIKO_USER_STATE_ROOT", "WORKSPACE_ROOT",
         "USER_PROFILE_PATH",
     ):
         monkeypatch.delenv(var, raising=False)
@@ -49,7 +49,7 @@ def clean_env(monkeypatch):
 
 @pytest.fixture
 def state_root(tmp_path, monkeypatch):
-    monkeypatch.setenv("USER_STATE_ROOT", str(tmp_path))
+    monkeypatch.setenv("USER_SPACE_ROOT", str(tmp_path))
     return tmp_path
 
 
