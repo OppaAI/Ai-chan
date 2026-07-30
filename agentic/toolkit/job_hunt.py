@@ -8,6 +8,10 @@ items dated today in the local bioclock timezone, filters by tech keywords,
 dedupes by link/guid, and produces structured Threads drafts (one per job)
 using post_fields / post_signature from job_hunt.json for human review.
 
+When the graph executor injects an LLM client/model, draft_job_posts_from_results
+enriches sparse postings by extracting post_fields keys from title + summary
+before formatting. Values are never invented beyond the source text.
+
 Config lookup order:
   1. JOB_HUNT_CONFIG_PATH env
   2. USER_SKILLSETS_PATH/job_hunt.json (or <USER_SPACE_ROOT>/<user_id>/skillsets/)
@@ -45,6 +49,19 @@ DEFAULT_TECH_JOB_KEYWORDS = [
     "it ", "information technology", "web", "frontend", "backend", "full stack",
     "qa", "quality assurance", "technical support",
 ]
+
+# Keys the LLM is allowed to fill. Never invent; only extract from source text.
+_LLM_FILLABLE_KEYS = frozenset({
+    "organization", "title", "employment_type", "location",
+    "salary", "experience", "close_date",
+})
+
+# Bound each enrichment call so a stalled backend cannot hang the draft node
+# for the OpenAI SDK default (~600s) across MAX_JOBS_PER_DRAFT postings.
+_LLM_TIMEOUT_SECONDS = float(os.getenv("JOB_HUNT_LLM_TIMEOUT", "30"))
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
 
 
 def _user_skillsets_dir() -> Path:
@@ -141,6 +158,16 @@ def _dedupe_key(link: str, guid: str) -> tuple[str, str]:
     return (link or guid).split("?", 1)[0].rstrip("/").casefold(), guid.casefold()
 
 
+def _strip_html(text: str, max_chars: int = 2500) -> str:
+    """Best-effort plain text from RSS description HTML."""
+    if not text:
+        return ""
+    plain = _HTML_TAG_RE.sub(" ", text)
+    plain = plain.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    plain = _WS_RE.sub(" ", plain).strip()
+    return plain[:max_chars]
+
+
 def format_job_post(posting: dict, date_text: str | None = None, config: dict[str, Any] | None = None) -> str:
     """Format one posting from job_hunt.json post_fields; skip empty values.
 
@@ -186,6 +213,161 @@ def format_job_post(posting: dict, date_text: str | None = None, config: dict[st
     return "\n".join(lines).rstrip("\n")
 
 
+def _field_keys_from_config(config: dict[str, Any]) -> list[str]:
+    fields = config.get("post_fields") or []
+    keys: list[str] = []
+    for fd in fields:
+        if not isinstance(fd, dict):
+            continue
+        key = str(fd.get("key", "")).strip()
+        if key and key not in ("date", "url") and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _missing_fillable(posting: dict, keys: list[str]) -> list[str]:
+    out: list[str] = []
+    for k in keys:
+        if k not in _LLM_FILLABLE_KEYS:
+            continue
+        if not str(posting.get(k, "") or "").strip():
+            out.append(k)
+    return out
+
+
+def _llm_chat_completion(client, *, model: str, messages: list[dict[str, str]], max_tokens: int = 400):
+    """One chat completion with bounded timeout; prefer JSON object mode.
+
+    Falls back without response_format when the backend rejects it (common
+    on local OpenAI-compatible servers). Raises on other failures so the
+    caller can log and skip enrichment for that posting.
+    """
+    base: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": 0.0,
+        "timeout": _LLM_TIMEOUT_SECONDS,
+        "response_format": {"type": "json_object"},
+    }
+
+    def _call(kwargs: dict[str, Any]):
+        return client.chat.completions.create(**kwargs)
+
+    try:
+        return _call(base)
+    except TypeError:
+        # SDK build may not accept timeout and/or response_format.
+        slim = dict(base)
+        slim.pop("timeout", None)
+        try:
+            return _call(slim)
+        except TypeError:
+            slim.pop("response_format", None)
+            return _call(slim)
+    except Exception as e:
+        label = str(e).casefold()
+        if "response_format" in label or "json_object" in label:
+            retry = dict(base)
+            retry.pop("response_format", None)
+            return _call(retry)
+        raise
+
+
+def enrich_posting_fields_with_llm(
+    posting: dict[str, Any],
+    field_keys: list[str],
+    *,
+    client=None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Fill empty post_fields keys from title + summary via one LLM call.
+
+    Only extracts values supported by the source text. Does not invent salary,
+    location, or other facts. Returns a shallow copy of posting with any
+    newly extracted keys set. No-op when client/model is missing or nothing
+    is missing.
+    """
+    missing = _missing_fillable(posting, field_keys)
+    if not missing or client is None or not model:
+        return dict(posting)
+
+    title = str(posting.get("title") or "").strip()
+    summary = str(posting.get("summary") or posting.get("description") or "").strip()
+    org = str(posting.get("organization") or "").strip()
+    source_blob = f"Title: {title}\nOrganization: {org}\nDescription:\n{summary}".strip()
+    if len(source_blob) < 20:
+        return dict(posting)
+
+    system_msg = (
+        "You extract structured job-posting fields from RSS title/description text.\n"
+        "Rules:\n"
+        "- Return ONLY a JSON object with the requested keys.\n"
+        "- Use only facts present in the source text. Do not invent or guess.\n"
+        "- If a value is not clearly present, set that key to an empty string.\n"
+        "- Keep values short (one line). No markdown, no commentary.\n"
+        "- employment_type examples: Full-time, Part-time, Contract, Temporary.\n"
+        "- location: city/region/country only if stated.\n"
+        "- salary: only if a figure or range is stated.\n"
+        "- experience: years or level only if stated.\n"
+        "- close_date: application deadline only if stated.\n"
+        "- organization / title: refine only if the source clearly supports it.\n"
+    )
+    user_msg = (
+        f"Keys to fill: {json.dumps(missing)}\n\n"
+        f"Source text:\n{source_blob[:3000]}"
+    )
+
+    try:
+        resp = _llm_chat_completion(
+            client,
+            model=model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=400,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        log.warning("job_hunt: LLM field enrichment failed: %s", e)
+        return dict(posting)
+
+    if not raw:
+        return dict(posting)
+
+    # Tolerate fenced JSON from smaller models
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE | re.DOTALL).strip()
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        # Try to salvage a {...} substring
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if not m:
+            log.debug("job_hunt: LLM enrichment returned non-JSON: %s", raw[:200])
+            return dict(posting)
+        try:
+            parsed = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return dict(posting)
+
+    if not isinstance(parsed, dict):
+        return dict(posting)
+
+    enriched = dict(posting)
+    for key in missing:
+        val = parsed.get(key)
+        if val is None:
+            continue
+        text = str(val).strip()
+        if text and text.lower() not in {"n/a", "none", "unknown", "null"}:
+            enriched[key] = text[:200]
+    return enriched
+
+
 def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict]:
     """Fetch configured RSS feeds, keeping tech postings from the last N days.
 
@@ -212,7 +394,8 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
             title = re.sub(r"\s+", " ", _rss_text(entry, ("title",))).strip()
             link = _rss_link(entry)
             guid = _rss_text(entry, ("guid", "id")) or link
-            summary = _rss_text(entry, ("description", "summary"))
+            summary_raw = _rss_text(entry, ("description", "summary"))
+            summary = _strip_html(summary_raw)
             org = _rss_text(entry, ("author", "creator"))
             posted = _parse_rss_datetime(_rss_text(entry, ("pubDate", "published", "updated")))
             max_days = _max_days_back(config)
@@ -229,6 +412,7 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
                 "organization": org,
                 "url": link,
                 "guid": guid,
+                "summary": summary,
                 "location": default_location,
                 "employment_type": "",
                 "salary": "",
@@ -284,8 +468,19 @@ def execute_job_search_plan(plan_json: str) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
-def draft_job_posts_from_results(results_json: str) -> str:
-    """Node 3: Build one structured draft per job using post_fields from JSON."""
+def draft_job_posts_from_results(
+    results_json: str,
+    template: str = "",
+    *,
+    client=None,
+    model: str | None = None,
+) -> str:
+    """Node 3: Enrich fields (optional LLM) then format one draft per job.
+
+    When the graph executor injects client/model, empty post_fields keys are
+    filled from each posting's title + RSS summary before format_job_post.
+    Falls back to pure mapping when no LLM is available.
+    """
     results = json.loads(results_json)
     config = _job_config()
     postings = results.get("postings", [])
@@ -304,26 +499,32 @@ def draft_job_posts_from_results(results_json: str) -> str:
     today = local_now().strftime("%Y-%m-%d")
     max_jobs = _max_jobs_per_draft(config)
     selected = postings[:max_jobs]
+    field_keys = _field_keys_from_config(config)
+    used_llm = client is not None and bool(model)
 
     drafts = []
     for i, posting in enumerate(selected):
+        enriched = enrich_posting_fields_with_llm(
+            posting, field_keys, client=client, model=model,
+        ) if used_llm else dict(posting)
         try:
-            text = format_job_post(posting, date_text=today, config=config)
+            text = format_job_post(enriched, date_text=today, config=config)
         except ValueError as e:
             return json.dumps({"success": False, "reason": str(e), "drafts": []}, ensure_ascii=False)
-        slug_src = str(posting.get("title") or f"job_{i}")
+        slug_src = str(enriched.get("title") or posting.get("title") or f"job_{i}")
         slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or f"job_{i}"
         drafts.append({
             "text": text,
-            "posting": posting,
-            "postings": [posting],
+            "posting": enriched,
+            "postings": [enriched],
             "category": f"tech_jobs_today/{slug}" if len(selected) > 1 else "tech_jobs_today",
+            "llm_enriched": used_llm and enriched != posting,
         })
 
     return json.dumps({
         "success": True,
         "total_drafts": len(drafts),
-        "draft_policy": "post_fields",
+        "draft_policy": "post_fields_llm" if used_llm else "post_fields",
         "config_path": str(_job_config_path()),
         "max_jobs_per_draft": max_jobs,
         "location": results.get("location", ""),
@@ -366,6 +567,7 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
             "provider": "threads",
             "posting": draft.get("posting"),
             "postings": draft.get("postings"),
+            "llm_enriched": bool(draft.get("llm_enriched")),
             "created_at": datetime.now().isoformat(),
             "posted": False,
             "human_approved": False,

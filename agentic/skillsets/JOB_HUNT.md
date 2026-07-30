@@ -1,24 +1,28 @@
 ---
 id: JOB_HUNT
 name: Job Hunt
-summary: Fetch configured RSS feeds, filter for tech jobs available today, and save structured human-reviewed Threads drafts using post_fields from job_hunt.json.
+summary: Fetch configured RSS feeds, filter for tech jobs available today, optionally enrich post_fields with an LLM from title/summary, and save structured human-reviewed Threads drafts using post_fields from job_hunt.json.
 triggers: job, jobs, hiring, job posting, job search, openings, vacancy, job post, draft job, daily job
 tools: search_jobs, gen_job_search_plan, execute_job_search_plan, draft_job_posts_from_results, save_or_post_job_drafts, report_job_run
 ---
 
 # Job Hunt — RSS-only Lane D Playbook
 
-The daily job post workflow runs as a draft-first graph. It fetches configured RSS feeds, keeps items dated today in the local bioclock timezone, filters by configurable tech keywords, dedupes by link/guid, and writes structured drafts (one per job) for human review.
+The daily job post workflow runs as a draft-first graph. It fetches configured RSS feeds, keeps items dated today in the local bioclock timezone, filters by configurable tech keywords, dedupes by link/guid, optionally enriches sparse fields with an LLM, and writes structured drafts (one per job) for human review.
 
 **Draft layout is not hardcoded.** `format_job_post` reads `post_fields` and `post_signature` from `job_hunt.json` only. If `post_fields` is missing or empty, drafting fails with `missing_post_fields`.
+
+**LLM field fill (optional).** When the graph executor injects `client`/`model` into `draft_job_posts_from_results`, empty fillable keys (`organization`, `title`, `employment_type`, `location`, `salary`, `experience`, `close_date`) are extracted from each posting’s title + RSS summary. The model must not invent facts; unsupported keys stay blank and are omitted from the draft. Without an LLM, behavior is pure key mapping (RSS-only).
 
 No web-search, scraping, or multi-board fallback path is part of the current design.
 
 ## Graph nodes
 
 ```text
-plan → RSS fetch → structured draft → save → report
+plan → RSS fetch → (LLM enrich fields) → structured draft → save → report
 ```
+
+The enrich step is implemented inside Node 3 (`draft_job_posts_from_results`) so the DAG stays five nodes; the graph engine auto-injects `client`/`model` because the tool signature declares them.
 
 ### Node 1 — `gen_job_search_plan`
 Reads `job_hunt.json` / env config and emits the RSS feed URLs, tech keywords, result cap, and default location.
@@ -30,10 +34,13 @@ Fetches only the configured RSS feeds and returns postings that are:
 - matched by `TECH_JOB_KEYWORDS` / `tech_job_keywords`, and
 - deduped by link/guid.
 
-### Node 3 — `draft_job_posts_from_results`
-Creates one structured Threads draft **per job** via `format_job_post`, using `post_fields` and `post_signature` from the resolved `job_hunt.json`. Empty field values are skipped.
+Each posting includes `summary` (plain text from the RSS description) for downstream enrichment.
 
-Example (when those keys are present in RSS data):
+### Node 3 — `draft_job_posts_from_results`
+1. **LLM enrich (optional):** for each selected posting, fill empty `post_fields` keys from title + summary when `client`/`model` are present.
+2. **Format:** create one structured Threads draft **per job** via `format_job_post`, using `post_fields` and `post_signature` from the resolved `job_hunt.json`. Empty field values are skipped.
+
+Example (when those keys are present after RSS + optional LLM):
 
 ```text
 Job Post - 2026-07-30
@@ -47,19 +54,21 @@ https://example/job
 - 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)
 ```
 
-Capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft. RSS sources often only supply title, org, and URL — other keys stay blank and are omitted.
+Capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft. RSS sources often only supply title, org, and URL — other keys stay blank and are omitted unless the LLM can extract them from the summary.
+
+`draft_policy` in the node result is `post_fields_llm` when enrichment ran, otherwise `post_fields`.
 
 ### Node 4 — `save_or_post_job_drafts`
-Saves each draft under `<job_post_root>/<date>/tech_jobs_today[/slug]/` with:
+Saves each draft under `<job_post_root>/<date>/tech_jobs_today[/slug]` with:
 
 - `draft_post.txt` — structured post from `post_fields`
 - `review.md` — human review checklist
-- `draft.json` — metadata with `human_approved: false`
+- `draft.json` — metadata with `human_approved: false` (and `llm_enriched` when applicable)
 
 Posting happens only after the normal human approval gate via `post_job_post_draft` / `post_job_post_social`.
 
 ### Node 5 — `report_job_run`
-Generates a compact audit report for the RSS run (includes resolved config path).
+Generates a compact audit report for the RSS run (includes resolved config path and draft policy).
 
 ## Configuration
 
