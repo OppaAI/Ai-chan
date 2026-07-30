@@ -1,4 +1,4 @@
-"""Shared ASR/voice gate flags + S0 hooks for AikoListen (S0)."""
+"""Shared ASR/voice gate flags + S0/S2 hooks for AikoListen."""
 from __future__ import annotations
 
 import os
@@ -41,7 +41,7 @@ def speaker_verify_gate() -> bool:
 
 
 def install_listen_s0_hooks(listen: Any = None) -> None:
-    """Patch AikoListen barge + speaker-gate behavior (idempotent)."""
+    """Patch AikoListen barge + speaker-gate + S2 ASR correct (idempotent)."""
     global _HOOKS_INSTALLED
     if _HOOKS_INSTALLED:
         return
@@ -72,7 +72,6 @@ def install_listen_s0_hooks(listen: Any = None) -> None:
         chunk_source=None,
         vad_presegmented: bool = False,
     ):
-        # When barge disabled, do not wait on barge event during TTS — just wait for playback.
         if speak is not None and speak.is_playing() and not barge_in_enabled():
             if status_callback:
                 try:
@@ -81,7 +80,7 @@ def install_listen_s0_hooks(listen: Any = None) -> None:
                     pass
             while speak.is_playing():
                 time.sleep(0.05)
-            speak = None  # skip wait_or_barge_in path inside original
+            speak = None
 
         text, info = _orig_listen(
             self,
@@ -104,24 +103,26 @@ def install_listen_s0_hooks(listen: Any = None) -> None:
 
     cls.listen = listen_wrapped
 
-    # Barge monitor loop: skip work when master switch off
     _orig_loop = cls._barge_in_loop
 
     def _barge_in_loop(self) -> None:
         if not barge_in_enabled() and not barge_in_always_on():
-            # Still run loop structure but never set event when disabled —
-            # cheapest: sleep until stopped.
             while getattr(self, "_barge_in_active", False):
                 time.sleep(0.5)
             return
-        # Patch module-level ALWAYS_ON check by temporarily wrapping armed logic
-        # inside original: when not barge_in_enabled(), clear armed so loop idles.
         _orig_loop(self)
 
     cls._barge_in_loop = _barge_in_loop
 
+    # S2: post-ASR name/phrase corrections
+    try:
+        from sensory.asr_correct import install_asr_correct_hooks
+        install_asr_correct_hooks()
+    except Exception:
+        _log().exception("S2 ASR correct hooks failed")
+
     _HOOKS_INSTALLED = True
-    _log().info("ASR S0 hooks installed (BARGE_IN_ENABLED / SPEAKER_VERIFY_GATE)")
+    _log().info("ASR S0/S2 hooks installed (barge / speaker gate / asr_correct)")
 
     if listen is not None:
-        pass  # instance methods resolved from class
+        pass
