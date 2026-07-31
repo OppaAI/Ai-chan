@@ -19,8 +19,35 @@ import numpy as np
 import pytest
 
 os.environ.setdefault("WORKSPACE_ROOT", "/tmp/aiko_test_workspace")
-
 sys.path.insert(0, "/home/oppa-ai/jetson")
+
+import pytest
+from agentic.registry import registry, ToolSpec
+
+# Test fixtures for registry testing
+@pytest.fixture
+def _reg():
+    """Mock registry with a sample tool for testing."""
+    from agentic.registry import ToolRegistry
+    reg = ToolRegistry()
+    reg.register("test_tool", "A test tool", handler=lambda x: f"ok: {x}")
+    return reg
+
+@pytest.fixture
+def _reg_no_handler():
+    """Mock registry entry without a handler."""
+    from agentic.registry import ToolRegistry, ToolSpec
+    reg = ToolRegistry()
+    spec = ToolSpec(
+        name="no_handler_tool",
+        description="Tool without a handler",
+        handler=None,  # Intentionally None
+        needs_approval=False,
+        react=True,
+    )
+    # Manually add without going through register() if needed
+    return spec
+
 from system.config import load_config
 load_config()
 
@@ -32,8 +59,6 @@ from agentic.agentic import (
     _TOOL_DEFS,
     _SOCIAL_POST_TOOLS,
     _RESEARCH_TOOLS,
-    _reg,
-    _reg_no_handler,
     _required_args_for,
     _validate_args,
     _classify_result,

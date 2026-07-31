@@ -263,6 +263,8 @@ class AikoWeb:
         os.environ["AIKO_USER_ID"] = uid
         if self._memorize:
             self._memorize.switch_user(uid)
+            if self._current_display_name:
+                self._memorize.set_display_name(self._current_display_name)
         await ws.accept()
 
         with self._clients_lock:
@@ -304,6 +306,8 @@ class AikoWeb:
                             os.environ["AIKO_USER_ID"] = uid
                             if self._memorize:
                                 self._memorize.switch_user(uid)
+                                if self._current_display_name:
+                                    self._memorize.set_display_name(self._current_display_name)
                             self._input_q.put((text, uid, self._current_display_name))
 
                     elif mtype == "vad":
