@@ -77,7 +77,7 @@ def entities_from_json(raw: Any) -> list[str]:
         return []
     if not isinstance(data, list):
         return []
-    return [str(x).strip() for x in data if str(x).strip()]
+    return [str(x).strip() for x in raw if str(x).strip()]
 
 
 def classify_write_op(
