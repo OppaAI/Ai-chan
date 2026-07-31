@@ -2017,6 +2017,7 @@ def switch_user(self, user_id: str) -> None:
         """
         user_id = self._resolve_user_id(user_id)
         if _is_trivial_input(query or ""):
+            return []  
             log.debug(f"Skipping search for trivial input: {query!r}")
             return []
 
@@ -2053,7 +2054,22 @@ def switch_user(self, user_id: str) -> None:
             vector=query_vector,
             include_history=include_history,
         )
+      
+        # Entity-aware rerank (optional, feature-gated)
+        if os.getenv("AIKO_ENTITY_BOOST"):
+            query_entities = self._extract_query_entities(query)
+            if query_entities:
+                results = self._boost_by_entity_relations(query_entities, results)
+                log.debug(f"Boosted results by entities: {query_entities}")
+    
         self._touch_memories(results)
+      
+        # Search replay logging
+        if os.getenv("REPLAY_SEARCHES"):
+            self._write_search_replay(query, results, user_id)
+        
+        return results
+
         log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
 
         with self._search_cache_lock:
@@ -2062,7 +2078,31 @@ def switch_user(self, user_id: str) -> None:
                 self._search_cache.popitem(last=False)
 
         return results
-
+      
+    def _write_search_replay(self, query: str, results: list[dict], user_id: str) -> None:
+        """Append search to replay log (debug/tuning, env-gated)."""
+        try:
+            replay_path = Path.home() / ".aiko" / "search_replay.jsonl"
+            replay_path.parent.mkdir(parents=True, exist_ok=True)
+            record = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "user_id": user_id,
+                "query": query[:200],
+                "result_count": len(results),
+                "results": [
+                    {
+                        "id": r["id"],
+                        "score": round(r.get("_recall_score", 0.0), 6),
+                        "text": r["memory"][:100],
+                    }
+                    for r in results
+                ],
+            }
+            with open(replay_path, "a") as f:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.debug(f"search replay write failed: {e}")
+      
     def _recent_or_important_memories(self, user_id: str, limit: int, include_history: bool = False) -> list[dict]:
         """
         FIX 3: status filtering (active-only, unless include_history) is now
@@ -2215,7 +2255,50 @@ def switch_user(self, user_id: str) -> None:
         if len(block) > MEMORY_CONTEXT_TOTAL_CHARS:
             block = block[:MEMORY_CONTEXT_TOTAL_CHARS].rstrip() + "\n</memory_context>"
         return block
-
+  
+    # ── entity-aware recall ───────────────────────────────────────────────────
+      
+    def _extract_query_entities(self, query: str) -> list[str]:
+        """Extract entities mentioned in the query using the same rules as _insert_row."""
+        from memory.memorize import extract_entities
+        return extract_entities(query, max_entities=5)
+    
+    def _boost_by_entity_relations(self, query_entities: list[str], results: list[dict]) -> list[dict]:
+        """
+        Rerank results: memories that co-mention query entities rank higher.
+        Runs after RRF ranking but before return.
+        """
+        if not query_entities or not results:
+            return results
+        
+        # Fetch all memories related to query entities
+        with self._mem._db_lock:
+            placeholders = ",".join("?" * len(query_entities))
+            rows = self._conn.execute(
+                f"""
+                SELECT DISTINCT memory_id, SUM(weight) as relation_weight
+                FROM entity_relations
+                WHERE user_id = ? 
+                  AND (entity_a IN ({placeholders}) OR entity_b IN ({placeholders}))
+                  AND memory_id IS NOT NULL
+                GROUP BY memory_id
+                ORDER BY relation_weight DESC
+                """,
+                [self.get_user_id()] + query_entities + query_entities,
+            ).fetchall()
+        
+        related_ids = {str(row["memory_id"]): row["relation_weight"] for row in rows}
+        
+        # Rerank: memories with entity overlap float to top, preserving RRF order otherwise
+        def entity_boost_score(result: dict) -> tuple[int, float]:
+            mid = str(result.get("id", ""))
+            if mid in related_ids:
+                return (0, -related_ids[mid])  # (0, ...) sorts before (1, ...), negated weight for descending
+            return (1, 0)
+        
+        reranked = sorted(results, key=entity_boost_score)
+        return reranked
+  
     # ── dream pass ────────────────────────────────────────────────────────────
 
     def dream(
