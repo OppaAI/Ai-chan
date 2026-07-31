@@ -2054,6 +2054,7 @@ def switch_user(self, user_id: str) -> None:
             include_history=include_history,
         )
         self._touch_memories(results)
+        log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
 
         with self._search_cache_lock:
             self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
