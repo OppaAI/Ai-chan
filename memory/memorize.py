@@ -775,11 +775,17 @@ def _sqlite_get_vector(conn: sqlite3.Connection, mem_id: str) -> list[float]:
     row = conn.execute(
         "SELECT embedding FROM memories_vec WHERE id = ?", (mem_id,)
     ).fetchone()
-    if row and row[0]:
-        raw = row[0]
-        n   = len(raw) // 4
-        return list(struct.unpack(f"{n}f", raw))
-    return []
+  if row and row[0]:
+      raw = row[0]
+      if len(raw) % 4 != 0:  # not divisible by float32 size
+          log.warning(f"Corrupted vector for {mem_id}, dropping")
+          return []
+      try:
+          n = len(raw) // 4
+          return list(struct.unpack(f"{n}f", raw))
+      except struct.error as e:
+          log.error(f"Vector deserialization failed: {e}")
+          return []
 
 
 def _sqlite_is_pinned(conn: sqlite3.Connection, mem_id: str) -> bool:
@@ -1812,8 +1818,11 @@ class AikoMemorize:
         if not self._silent:
             log.info("Memory store ready for %s.", uid)
 
-    def switch_user(self, user_id: str) -> None:
-        self._user_id_override = user_id
+def switch_user(self, user_id: str) -> None:
+    # Drain any pending writes first
+    self.wait_for_writes(timeout=5.0)
+    
+    self._user_id_override = user_id
         self._display_name = None
         if self._conn:
             with self._mem._db_lock:
