@@ -1204,7 +1204,11 @@ JOB_POST_SOCIAL_AUTODRAFT = os.getenv("JOB_POST_SOCIAL_AUTODRAFT", "1").lower() 
 JOB_POST_SOCIAL_AUTOPOST = os.getenv("JOB_POST_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
 
 
-def _run_gen_job_post_playbook() -> dict[str, Any]:
+def _run_gen_job_post_playbook(
+    *,
+    client=None,
+    model: str | None = None,
+) -> dict[str, Any]:
     """Load and execute the gen_job_post playbook from the shared playbook system."""
     from agentic.graph_engine import get_playbook_by_id, PlanNode, PlanGraph, execute_graph
     playbook = get_playbook_by_id("gen_job_post")
@@ -1223,7 +1227,7 @@ def _run_gen_job_post_playbook() -> dict[str, Any]:
         goal="Draft job posts from config", nodes=tuple(nodes),
     )
     try:
-        result = execute_graph(graph)
+        result = execute_graph(graph, llm_client=client, llm_model=model)
         return {
             "success": all(r.ok for r in result.results),
             "graph_id": result.graph.id,
@@ -1298,9 +1302,9 @@ from agentic.registry import TOOLS, tool
 
 
 @tool(TOOLS["draft_job_post_social"])
-def draft_job_post_social(*, force: bool = False) -> dict[str, Any]:
+def draft_job_post_social(*, force: bool = False, client=None, model: str | None = None) -> dict[str, Any]:
     """Create a daily Vancouver-area job-post draft for Meta Threads review."""
-    return _run_gen_job_post_playbook()
+    return _run_gen_job_post_playbook(client=client, model=model)
 
 
 @tool(TOOLS["post_job_post_social"])
