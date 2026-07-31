@@ -127,7 +127,17 @@ const EMOJI_EXPRESSIONS = {
 };
 
 function esc(s) {
-  return (s || '').replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>').replace(/\"/g, '"').replace(/'/g, '&#39;');
+  // Previous implementation replaced &, <, >, and " with themselves
+  // (identity regex substitutions — no-ops), leaving only the apostrophe
+  // actually escaped. Since this feeds innerHTML in addMessage() and
+  // renderAikoContent() for both the user's own echoed text and Aiko's
+  // responses, any "<", ">", "&", or '"' in chat text — including an ASR
+  // transcript, tool output, or a search-result summary — rendered as
+  // live HTML. Using textContent to build the escaped string sidesteps
+  // hand-writing an entity map entirely and can't get this wrong again.
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
 }
 
 function parseMarkdown(text) {
