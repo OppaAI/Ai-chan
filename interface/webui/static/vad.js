@@ -174,6 +174,7 @@ function processEnergyVADFrame(frame, ws, epoch = _vadEpoch, gate = true) {
 
         if (rms > endThresh) {
             if (_silTimer) { clearTimeout(_silTimer); _silTimer = null; }
+            _energyHits = 0;  // Reset sustained-noise counter on high-energy frame (S4: state machine consistency)
             return;
         }
 
