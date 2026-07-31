@@ -840,54 +840,43 @@ class AikoListen:
 
     # ── public api ────────────────────────────────────────────────────────────
 
-    def listen(
-        self,
-        status_callback=None,
-        wait_fn=None,
-        speak=None,
-        chunk_source=None,
-    ) -> tuple[str, dict]:
-        """
-        Returns (text, info). info always has a "verified" key:
-          - None  if speaker verification is disabled / not loaded
-          - True  if the buffered audio matched the enrolled voice
-          - False if it didn't match
-        info also carries "speaker_score" (float or None) for logging/tuning.
-        Verification never blocks or fails transcription — it's metadata
-        attached alongside the text. If SPEAKER_VERIFY_GATE=1 (see
-        speaker_verify_gate()) and the match failed, the utterance is
-        dropped and ("", info) is returned instead — same shape as "no
-        speech detected".
-
-        info additionally carries "woke" (bool|None):
-          - None means wake word gate wasn't configured / not evaluated
-            this call (e.g. the session was already active, so no phrase
-            check ran)
-          - If wake word gating IS configured and the required phrase was
-            not detected, this method returns ("", info) — same shape as
-            "no speech detected" — so callers that already treat empty text
-            as "nothing to do" handle this for free.
-          - With the acoustic engine (self._wake_model loaded — see
-            load_wakeword()), wake detection happens on raw audio inside
-            _record(), before ASR ever runs; no text stripping is needed
-            since the pre-wake audio was never buffered for transcription
-            in the first place. With the fuzzy fallback engine, any matched
-            wake word prefix is stripped from the returned text instead
-            (see _apply_activation_gate() / _strip_prefix_phrase()).
-
-        If speak is playing and BARGE_IN_ENABLED=0, this blocks with a plain
-        poll loop until playback finishes (no barge interrupt is possible —
-        trigger_barge_in()/_barge_in_loop() are no-ops in that state anyway).
-        If BARGE_IN_ENABLED=1, it waits via speak.wait_or_barge_in() so a
-        detected barge can interrupt the wait early.
-
-        chunk_source: optional callable(bytes_per_chunk) -> bytes | None,
-            forwarded to _record(). See _record() docstring. None (default)
-            preserves the existing local-mic (parec) behavior. Silero scores
-            every chunk regardless of source — including chunks the browser
-            has already pre-filtered client-side (static/vad.js) — so there
-            is no separate flag needed for that path.
-        """
+    def listen(self, status_callback=None, speak=None, wait_fn=None, chunk_source=None):
+      """
+      Record and transcribe a single utterance (local mic or WebUI chunk stream).
+      
+      Performs full audio capture via Silero VAD scoring, then passes audio to SenseVoice
+      for transcription. Handles speaker verification, wake-word gating, and post-ASR
+      corrections based on configuration.
+      
+      Args:
+          status_callback (callable, optional): Callback(msg: str) invoked with status tokens
+              (__LISTENING__, __TRANSCRIBING__, __IDLE__, etc.) for UI updates.
+          speak (Speak, optional): Speak instance for barge-in coordination. If provided,
+              enables speaker-interrupt detection during TTS playback.
+          wait_fn (callable, optional): Optional synchronization function; passed to
+              internal wait logic (rarely used).
+          chunk_source (callable, optional): For WebUI integration only. Callable(n_bytes)
+              that returns raw audio bytes from browser pcm-worklet. If None, uses local
+              PulseAudio (parec) for microphone input.
+      
+      Returns:
+          tuple[str, bool]: (transcript, woke_this_call)
+              - transcript: Recognized text, or empty string if no speech detected / failed
+              - woke_this_call: True if a wake-word session was triggered this call
+                (only relevant when WAKE_WORD gating is enabled)
+      
+      Notes:
+          - Silero VAD is authoritative for speech/silence detection on ALL audio,
+            regardless of source (local mic or WebUI chunk_source path).
+          - WEBUI_BROWSER_VAD_GATE (browser energy pre-filter in static/vad.js) only
+            controls pre-forwarding, not server-side gating.
+          - Breaking change: vad_presegmented parameter was removed. Silero now scores
+            every chunk, making pre-segmentation obsolete.
+          - If speaker_verify_gate() is enabled, utterances from unrecognized speakers
+            are dropped silently (see SPEAKER_VERIFY_GATE in config).
+          - If a wake-word gate is configured, utterances are held until wake phrase
+            detected (either acoustic model or fuzzy ASR-text match).
+      """
         if speak is not None and speak.is_playing():
             if not barge_in_enabled():
                 _cb(status_callback, "__WAITING__")
