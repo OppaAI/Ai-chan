@@ -198,10 +198,7 @@ def export_memory_graph(
         # Phase D: entity ↔ entity co-mentions
         if include_entities:
             try:
-                from memory.entity_graph import (
-                    ensure_entity_relations_schema,
-                    relations_as_graph_edges,
-                )
+                from memory.memorize import ensure_entity_relations_schema
 
                 ensure_entity_relations_schema(conn)
                 for e in relations_as_graph_edges(
@@ -248,3 +245,50 @@ def export_memory_graph(
                 conn.close()
             except Exception:
                 pass
+
+
+# ── entity relation reads (Studio-facing) ────────────────────────────────────
+# The write side (upsert_co_mentions, schema) lives in memory/memorize.py;
+# these read-only helpers serve the Studio's edge export.
+
+def list_entity_relations(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    from memory.memorize import ensure_entity_relations_schema
+
+    ensure_entity_relations_schema(conn)
+    rows = conn.execute(
+        """
+        SELECT entity_a, entity_b, relation, weight, memory_id, updated_at
+        FROM entity_relations
+        WHERE user_id = ?
+        ORDER BY weight DESC, updated_at DESC
+        LIMIT ?
+        """,
+        (user_id, int(limit)),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def relations_as_graph_edges(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    """Emit edges compatible with Memory Graph Studio (entity node ids)."""
+    edges = []
+    for rel in list_entity_relations(conn, user_id=user_id, limit=limit):
+        a = rel["entity_a"]
+        b = rel["entity_b"]
+        edges.append({
+            "id": f"rel:{a.casefold()}::{b.casefold()}::{rel['relation']}",
+            "source": f"ent:{a.casefold()}",
+            "target": f"ent:{b.casefold()}",
+            "type": rel["relation"] or "related_to",
+            "weight": float(rel.get("weight") or 1.0),
+        })
+    return edges

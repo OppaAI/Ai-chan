@@ -1,11 +1,12 @@
 """
-memory/search_memory.py
+memory/studio/backend/search_memory.py
 
 Phase B unified recall facade over personal memory + learned knowledge.
 
-Keeps each store's own ranking; merges results with a simple interleave by
-normalized score. No second embedding model — callers may pass a shared
-query_vector for personal memory and an embedder for knowledge.
+Studio-facing read helper (user search across mem + KB). Keeps each store's
+own ranking; merges results with a simple interleave by normalized score.
+No second embedding model — callers may pass a shared query_vector for
+personal memory and an embedder for knowledge.
 """
 from __future__ import annotations
 
@@ -27,8 +28,7 @@ def _escape_like(value: str) -> str:
 
 
 def _normalize_personal_hit(row: dict, query: str = "") -> dict[str, Any]:
-    from memory.entities import entity_overlap_score
-    from memory.memory_meta import entities_from_json
+    from memory.memorize import entities_from_json, entity_overlap_score
 
     entities = entities_from_json(row.get("entities"))
     base = float(row.get("_recall_score") or row.get("score") or 0.0)

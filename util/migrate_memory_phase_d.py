@@ -24,8 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    from memory.entity_graph import ensure_entity_relations_schema, rebuild_entity_relations
-    from memory.memory_meta import ensure_phase_a_schema
+    from memory.memorize import ensure_entity_relations_schema, ensure_phase_a_schema, rebuild_entity_relations
     from memory.vecstore import initialize_store_db, resolve_user_db_path
     from system.userspace import current_user_id
 

@@ -329,12 +329,13 @@ def initialize_store_db(
     path = store_db_path(path_value, user_id=uid)
     init = initialize_sqlite_vec_db if vector else initialize_sqlite_db
     conn = init(path, ddl, user_id=uid)
-    # Phase A: lightweight schema migrate + hooks for personal memory only.
+    # Phase A: lightweight schema migrate for personal memory only.
+    # (Write/recall hooks are now native methods on memorize._MemoryBackend —
+    #  no runtime monkey-patching needed.)
     if "memories_vec" in (ddl or "") or "CREATE TABLE IF NOT EXISTS memories" in (ddl or ""):
         try:
-            from memory.memory_meta import ensure_phase_a_schema, install_phase_a_hooks
+            from memory.memorize import ensure_phase_a_schema
             ensure_phase_a_schema(conn)
-            install_phase_a_hooks()
         except Exception:
             # Never block boot on optional Phase A wiring.
             pass

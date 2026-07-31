@@ -28,7 +28,7 @@ async def get_graph(
     include_history: bool = Query(True, description="Include superseded memories"),
     include_entities: bool = Query(True, description="Add entity hub nodes"),
 ):
-    from memory.graph_export import export_memory_graph
+    from memory.studio.backend.graph_export import export_memory_graph
     from system.userspace import current_user_id
 
     uid = (user_id or "").strip() or current_user_id()
@@ -43,6 +43,51 @@ async def get_graph(
 @app.get("/api/health")
 async def health():
     return {"ok": True, "service": "memory-graph-studio"}
+
+
+@app.get("/api/search")
+async def search(
+    q: str = Query(..., description="Search query across memory + knowledge"),
+    user_id: str | None = Query(None, description="User id (default: current_user_id)"),
+    limit: int = Query(10, ge=1, le=100),
+    include_history: bool = Query(False, description="Include superseded memories"),
+):
+    from memory.studio.backend.search_memory import search_memory
+    from system.userspace import current_user_id
+
+    uid = (user_id or "").strip() or current_user_id()
+    query = (q or "").strip()
+    if not query:
+        return {"query": "", "hits": [], "meta": {"user_id": uid}}
+
+    try:
+        from memory.memorize import AikoMemorize
+
+        memorize = AikoMemorize(silent=True)
+    except Exception as e:
+        return {"query": query, "hits": [], "meta": {"user_id": uid, "error": str(e)}}
+
+    try:
+        hits = search_memory(
+            query,
+            limit=limit,
+            memorize=memorize,
+            user_id=uid,
+            include_history=include_history,
+        )
+    except Exception as e:
+        return {"query": query, "hits": [], "meta": {"user_id": uid, "error": str(e)}}
+
+    return {
+        "query": query,
+        "hits": hits,
+        "meta": {
+            "user_id": uid,
+            "count": len(hits),
+            "include_history": include_history,
+            "limit": limit,
+        },
+    }
 
 
 @app.get("/")

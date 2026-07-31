@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Local imports after path setup so `uv run python -m util...` works from repo root.
-    from memory.memory_meta import _PHASE_A_COLUMNS, ensure_phase_a_schema, existing_columns
+    from memory.memorize import _PHASE_A_COLUMNS, ensure_phase_a_schema, existing_columns
     from memory.vecstore import initialize_store_db, resolve_user_db_path
     from system.userspace import current_user_id
 

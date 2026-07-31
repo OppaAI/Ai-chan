@@ -3,6 +3,11 @@ memory/memorize.py
 Aiko's persistent memory — custom backend via sqlite-vec + HarrierEmbedder (GGUF/llama.cpp).
 Abstracts all memory calls so think.py stays clean.
 
+Phase A/B memory metadata (formerly memory/memory_meta.py) is merged in here
+as native methods: status/supersedes/kind/source/entities columns, write-time
+dedup+supersede, rule-based entity tags, and active-only recall. No runtime
+monkey-patching.
+
 Memory lifecycle:
   - Every search() call increments access_count and updates last_accessed_at
     in the memories table, enabling Ebbinghaus-style exponential decay scoring.
@@ -129,6 +134,8 @@ from __future__ import annotations
 import json
 import os
 from collections import OrderedDict
+from itertools import combinations
+from typing import Any, Iterable
 import queue
 import threading
 import re
@@ -390,6 +397,277 @@ def _normalize_memory_text(text: str) -> str:
     """
     return " ".join((text or "").split()).lower()
 
+
+# ── Phase A/B memory metadata ─────────────────────────────────────────────────
+# Rule-based entity tags + kind, write-op classification (add/supersede/noop),
+# and additive schema columns. Zero extra LLM calls — latency-safe on Jetson.
+
+STATUS_ACTIVE = "active"
+STATUS_SUPERSEDED = "superseded"
+
+KIND_FACT = "fact"
+SOURCE_CHAT = "chat"
+SOURCE_PIN = "pin"
+SOURCE_LEGACY = "legacy"
+
+_WS_RE = re.compile(r"\s+")
+
+_PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("status", "TEXT NOT NULL DEFAULT 'active'"),
+    ("supersedes_id", "TEXT"),
+    ("kind", "TEXT NOT NULL DEFAULT 'fact'"),
+    ("source", "TEXT NOT NULL DEFAULT 'legacy'"),
+    ("entities", "TEXT NOT NULL DEFAULT '[]'"),
+)
+
+# ── Phase B: entity tagging (formerly memory/entities.py) ────────────────────
+# Pure regex / heuristics — no LLM, no NER model. Runs on already-extracted
+# fact strings at write time so the hot path stays Jetson-friendly.
+
+# Multi-word Proper Case spans: "Hugging Face", "San Francisco"
+_PROPER_SPAN_RE = re.compile(
+    r"\b([A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+){0,4})\b"
+)
+# Short ALLCAPS tokens often used as project codes: GRACE, ROS2, API
+_ALLCAPS_RE = re.compile(r"\b([A-Z]{2,12}[0-9]*)\b")
+# Quoted names: "Max", 'Aiko'
+_QUOTED_RE = re.compile(r"[\"']([^\"']{2,40})[\"']")
+# Explicit name patterns: called X, named X, project X
+_CALLED_RE = re.compile(
+    r"\b(?:called|named|project|robot|dog|cat|company|team)\s+([A-Z][\w.-]{1,40})",
+    re.IGNORECASE,
+)
+
+_STOP_ENTITIES = frozenset({
+    "the", "a", "an", "and", "or", "but", "for", "with", "from", "into",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+    "today", "yesterday", "tomorrow", "user", "assistant", "aiko",
+    "he", "she", "they", "his", "her", "their", "this", "that",
+})
+
+# Kind heuristics (keyword → kind). First match wins.
+_KIND_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("identity", ("name is", "birthday", "lives in", "nationality", "age is", "is from ")),
+    ("preference", ("likes", "loves", "hates", "dislikes", "prefers", "favorite", "favourite")),
+    ("plan", ("deadline", "due ", "will ", "going to", "plans to", "wants to")),
+    ("event", ("hackathon", "interview", "meeting", "appointment", "lost ", "joined")),
+)
+
+
+def _clean_entity(raw: str) -> str | None:
+    s = (raw or "").strip(" .,;:!?()[]{}").strip()
+    if len(s) < 2 or len(s) > 80:
+        return None
+    if s.casefold() in _STOP_ENTITIES:
+        return None
+    # Drop pure numbers
+    if s.isdigit():
+        return None
+    return s
+
+
+def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
+    """Extract entity-like tokens from a memory fact string.
+
+    Deterministic and cheap. Prefer precision over recall — empty is fine.
+    """
+    if not (text or "").strip():
+        return []
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str) -> None:
+        ent = _clean_entity(raw)
+        if not ent:
+            return
+        key = ent.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(ent)
+
+    for m in _QUOTED_RE.finditer(text):
+        _add(m.group(1))
+    for m in _CALLED_RE.finditer(text):
+        _add(m.group(1))
+    for m in _PROPER_SPAN_RE.finditer(text):
+        span = m.group(1)
+        # Sentence-initial single word is usually grammar capitalization, not an entity.
+        if m.start() == 0 and " " not in span:
+            continue
+        _add(span)
+    for m in _ALLCAPS_RE.finditer(text):
+        _add(m.group(1))
+
+    return found[:max_entities]
+
+
+def classify_kind(text: str, default: str = "fact") -> str:
+    """Heuristic memory kind from fact text. No LLM."""
+    low = (text or "").casefold()
+    for kind, needles in _KIND_RULES:
+        if any(n in low for n in needles):
+            return kind
+    return default
+
+
+def entity_overlap_score(query: str, entities: Iterable[str]) -> float:
+    """Return 0..1 fraction of entities mentioned in the query (casefold)."""
+    ents = [e for e in entities if e]
+    if not ents:
+        return 0.0
+    q = (query or "").casefold()
+    hits = sum(1 for e in ents if e.casefold() in q)
+    return hits / len(ents)
+
+
+def normalize_memory_text(text: str) -> str:
+    """Normalize for write-op classification (lowercase, collapse whitespace)."""
+    return _WS_RE.sub(" ", (text or "").strip()).lower()
+
+
+def entities_to_json(entities: list[str] | None) -> str:
+    """Serialize a deduped entity list into a JSON string column value."""
+    if not entities:
+        return "[]"
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for e in entities:
+        s = str(e).strip()
+        if not s:
+            continue
+        key = s.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(s[:80])
+        if len(cleaned) >= 16:
+            break
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
+def entities_from_json(raw: Any) -> list[str]:
+    """Parse an entities column value (JSON string or raw list) back to list."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(x).strip() for x in data if str(x).strip()]
+
+
+def classify_write_op(
+    *,
+    similarity: float | None,
+    new_text: str,
+    old_text: str | None,
+    dedup_threshold: float,
+) -> str:
+    """Return 'noop' | 'supersede' | 'add' — rule-only, no LLM."""
+    if similarity is None or similarity < dedup_threshold:
+        return "add"
+    if normalize_memory_text(new_text) == normalize_memory_text(old_text or ""):
+        return "noop"
+    return "supersede"
+
+
+def existing_columns(conn: sqlite3.Connection, table: str = "memories") -> set[str]:
+    """Return the set of column names present on a table (for additive ALTERs)."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {str(r[1]) for r in rows}
+
+
+def ensure_phase_a_schema(conn: sqlite3.Connection) -> list[str]:
+    """Idempotent ALTER TABLE for Phase A columns + status index."""
+    try:
+        cols = existing_columns(conn)
+    except sqlite3.Error:
+        return []
+    if "id" not in cols and "memory" not in cols:
+        return []
+
+    added: list[str] = []
+    for name, decl in _PHASE_A_COLUMNS:
+        if name in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {decl}")
+            added.append(name)
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).casefold():
+                raise
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_user_status "
+            "ON memories(user_id, status)"
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        log.debug("memory Phase A index: %s", e)
+    if added:
+        log.info("memory Phase A schema: added columns %s", added)
+    return added
+
+
+def _active_sql(active_only: bool) -> str:
+    """SQL fragment to restrict a query to active (non-superseded) memories."""
+    if not active_only:
+        return ""
+    return " AND (m.status = 'active' OR m.status IS NULL)"
+
+
+def backfill_entities(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str | None = None,
+    limit: int = 0,
+    only_empty: bool = True,
+) -> int:
+    """Fill entities/kind for existing rows using rule-based extractors.
+
+    No re-embed. Returns number of rows updated.
+    """
+    ensure_phase_a_schema(conn)
+    cols = existing_columns(conn)
+    if "entities" not in cols:
+        return 0
+
+    sql = "SELECT id, memory, entities, kind FROM memories WHERE 1=1"
+    params: list[Any] = []
+    if user_id:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    if only_empty:
+        sql += " AND (entities IS NULL OR entities = '' OR entities = '[]')"
+    sql += " ORDER BY created_at DESC"
+    if limit and limit > 0:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+
+    rows = conn.execute(sql, params).fetchall()
+    updated = 0
+    for row in rows:
+        text = row["memory"] or ""
+        ents = extract_entities(text)
+        kind = classify_kind(text, default=str(row["kind"] or KIND_FACT))
+        conn.execute(
+            "UPDATE memories SET entities = ?, kind = ? WHERE id = ?",
+            (entities_to_json(ents), kind, row["id"]),
+        )
+        updated += 1
+    if updated:
+        conn.commit()
+        log.info("memory Phase B backfill: updated %d rows", updated)
+    return updated
+
 # ── schema ────────────────────────────────────────────────────────────────────
 
 _DDL = """
@@ -520,39 +798,42 @@ def _sqlite_knn_search(
     user_id: str,
     limit: int,
     threshold: float | None = None,
+    active_only: bool = True,
 ) -> list[sqlite3.Row]:
     """
     KNN cosine search against memories_vec, filtered by user_id.
     When threshold is supplied, only rows with dist <= (1 - threshold) are returned.
+    When active_only, superseded memories (status = 'superseded') are excluded.
     """
     vec_blob = sqlite_vec.serialize_float32(vector)
+    status_sql = _active_sql(active_only)
     if threshold is not None:
         dist_ceil = 1.0 - threshold
-        rows = conn.execute(
+        return conn.execute(
             """
             SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
             FROM memories_vec v
             JOIN memories m ON m.id = v.id
             WHERE m.user_id = ?
               AND vec_distance_cosine(v.embedding, ?) <= ?
+              {status_sql}
             ORDER BY dist ASC
             LIMIT ?
-            """,
+            """.format(status_sql=status_sql),
             (vec_blob, user_id, vec_blob, dist_ceil, limit),
         ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
-            FROM memories_vec v
-            JOIN memories m ON m.id = v.id
-            WHERE m.user_id = ?
-            ORDER BY dist ASC
-            LIMIT ?
-            """,
-            (vec_blob, user_id, limit),
-        ).fetchall()
-    return rows
+    return conn.execute(
+        """
+        SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
+        FROM memories_vec v
+        JOIN memories m ON m.id = v.id
+        WHERE m.user_id = ?
+          {status_sql}
+        ORDER BY dist ASC
+        LIMIT ?
+        """.format(status_sql=status_sql),
+        (vec_blob, user_id, limit),
+    ).fetchall()
 
 
 def _first_json_array(raw: str) -> str | None:
@@ -745,14 +1026,104 @@ class _MemoryBackend:
 
     # ── write ─────────────────────────────────────────────────────────────────
 
+    def _insert_row(
+        self,
+        *,
+        mem_id: str,
+        user_id: str,
+        text: str,
+        now: str,
+        vector: list[float],
+        pinned: int = 0,
+        source: str = SOURCE_CHAT,
+        supersedes_id: str | None = None,
+        kind: str | None = None,
+        entities: list[str] | None = None,
+    ) -> None:
+        """Insert one memory row (Phase A columns when present) + its vector,
+        and best-effort co-mention edges for the entity graph."""
+        cols = existing_columns(self._conn)
+        kind_val = kind or classify_kind(text, default=KIND_FACT)
+        ents_list = entities if entities is not None else extract_entities(text)
+        ents_json = entities_to_json(ents_list)
+        if "status" in cols:
+            self._conn.execute(
+                """
+                INSERT INTO memories
+                    (id, user_id, memory, created_at, access_count, last_accessed_at, pinned,
+                     status, supersedes_id, kind, source, entities)
+                VALUES (?, ?, ?, ?, 0, 'never', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    mem_id, user_id, text, now, pinned,
+                    STATUS_ACTIVE, supersedes_id, kind_val, source, ents_json,
+                ),
+            )
+        else:
+            self._conn.execute(
+                """
+                INSERT INTO memories
+                    (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
+                VALUES (?, ?, ?, ?, 0, 'never', ?)
+                """,
+                (mem_id, user_id, text, now, pinned),
+            )
+        self._conn.execute(
+            "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
+            (mem_id, sqlite_vec.serialize_float32(vector)),
+        )
+
+        # Phase D: live co-mention edges (best-effort; never fail the write)
+        try:
+            if ents_list and len([e for e in ents_list if str(e).strip()]) >= 2:
+                upsert_co_mentions(
+                    self._conn,
+                    user_id=user_id,
+                    entities=ents_list,
+                    memory_id=mem_id,
+                    updated_at=now if isinstance(now, str) else None,
+                )
+        except Exception as e:
+            log.debug("entity_relations upsert skipped: %s", e)
+
+    def _maybe_supersede_neighbor(
+        self, user_id: str, vector: list[float], text: str
+    ) -> tuple[str, str | None]:
+        """Classify the write op against the nearest existing memory: 'add',
+        'noop' (near-duplicate, skip), or 'supersede' (replace old_id)."""
+        existing = _sqlite_knn_search(
+            self._conn, vector, user_id,
+            limit=1, threshold=WRITE_DEDUP_THRESHOLD, active_only=True,
+        )
+        if not existing:
+            return "add", None
+        sim = 1.0 - float(existing[0]["dist"])
+        old_id = str(existing[0]["id"])
+        row = self._conn.execute(
+            "SELECT memory, pinned FROM memories WHERE id = ?", (old_id,)
+        ).fetchone()
+        old_text = (row["memory"] if row else "") or ""
+        pinned = bool(row and row["pinned"])
+        op = classify_write_op(
+            similarity=sim,
+            new_text=text,
+            old_text=old_text,
+            dedup_threshold=WRITE_DEDUP_THRESHOLD,
+        )
+        if op == "supersede" and pinned:
+            return "add", None
+        if op == "supersede":
+            return "supersede", old_id
+        return op, None
+
     def add(self, messages: list[dict], user_id: str, display_name: str | None = None) -> list[str]:
         """
         Extract facts and persist each as a row in memories + memories_vec.
 
-        Dedup-on-write: before inserting each fact, a KNN search checks for
-        a near-identical vector already in the store (cosine >= WRITE_DEDUP_THRESHOLD).
-        Duplicates are skipped to prevent redundant entries that compound into
-        false confidence during recall.
+        Write-path dedup/supersede: before inserting each fact, a KNN search
+        checks for a near-identical vector already in the store. Near-duplicate
+        text is skipped ('noop'); text that changed but is semantically the same
+        supersedes the older row (status -> 'superseded').
 
         Embeddings for all extracted facts are computed in a single batched
         call rather than one-by-one.
@@ -764,93 +1135,92 @@ class _MemoryBackend:
             return []
 
         now = bioclock.local_now()
-        ids = []
+        if not isinstance(now, str):
+            now = now.isoformat() if hasattr(now, "isoformat") else str(now)
+        ids: list[str] = []
 
         try:
             vectors = self._embed_batch(facts)
         except Exception as e:
-            log.warning(f"Batch embedding failed, aborting write: {e}")
+            log.warning("Batch embedding failed, aborting write: %s", e)
             return []
 
         with self._db_lock:
             try:
+                ensure_phase_a_schema(self._conn)
                 for fact, vector in zip(facts, vectors):
-                    mem_id = str(uuid.uuid4())
-                    # dedup check — skip if near-identical vector already exists
-                    existing = _sqlite_knn_search(
-                        self._conn, vector, user_id,
-                        limit=1, threshold=WRITE_DEDUP_THRESHOLD,
-                    )
-                    if existing:
-                        log.debug(f"Skipping near-duplicate fact: {fact!r}")
+                    op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, fact)
+                    if op == "noop":
+                        log.debug("Skipping near-duplicate fact: %r", fact)
                         continue
-
-                    # insert canonical record — FTS5 trigger fires automatically
-                    self._conn.execute(
-                        """
-                        INSERT INTO memories
-                            (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
-                        VALUES (?, ?, ?, ?, 0, 'never', 0)
-                        """,
-                        (mem_id, user_id, fact, now),
+                    if op == "supersede" and supersedes_id:
+                        cols = existing_columns(self._conn)
+                        if "status" in cols:
+                            self._conn.execute(
+                                "UPDATE memories SET status = ? WHERE id = ?",
+                                (STATUS_SUPERSEDED, supersedes_id),
+                            )
+                            log.info("Superseded memory %s with new fact", supersedes_id)
+                    mem_id = str(uuid.uuid4())
+                    self._insert_row(
+                        mem_id=mem_id,
+                        user_id=user_id,
+                        text=fact,
+                        now=now,
+                        vector=vector,
+                        pinned=0,
+                        source=SOURCE_CHAT,
+                        supersedes_id=supersedes_id,
                     )
-
-                    # insert embedding into vec0 table
-                    self._conn.execute(
-                        "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
-                        (mem_id, sqlite_vec.serialize_float32(vector)),
-                    )
-
                     ids.append(mem_id)
-
                 self._conn.commit()
             except Exception as e:
-                log.warning(f"Failed to upsert fact batch: {e}")
+                log.warning("Failed to upsert fact batch: %s", e)
                 self._conn.rollback()
                 return []
-
         return ids
 
     def add_raw(self, memory: str, user_id: str, *, pinned: bool = False) -> str | None:
         """
         Persist one already-curated memory string without LLM extraction.
 
-        Now runs the same write-time dedup check as add(): if a near-identical
-        vector already exists (cosine >= WRITE_DEDUP_THRESHOLD), the insert is
-        skipped and None is returned. This closes the gap that previously let
-        repeated calls (e.g. a daily-record pin job re-running for the same
-        day) accumulate unbounded duplicate rows — especially dangerous for
-        pinned=True inserts, since dream()'s merge pass can never delete a
-        pinned memory even as a duplicate loser.
+        Runs the same write-time dedup/supersede check as add(): near-duplicates
+        are skipped; semantically-equal-but-changed text supersedes the older
+        row. This closes the gap that previously let repeated calls (e.g. a
+        daily-record pin job re-running for the same day) accumulate unbounded
+        duplicate rows — especially dangerous for pinned=True inserts, since
+        dream()'s merge pass can never delete a pinned memory even as a
+        duplicate loser.
         """
         text = (memory or "").strip()
         if not text:
             return None
         with self._db_lock:
             try:
+                ensure_phase_a_schema(self._conn)
                 vector = self._embed(text)
-
-                existing = _sqlite_knn_search(
-                    self._conn, vector, user_id,
-                    limit=1, threshold=WRITE_DEDUP_THRESHOLD,
-                )
-                if existing:
-                    log.debug(f"Skipping near-duplicate raw memory: {text[:80]!r}")
+                op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, text)
+                if op == "noop":
+                    log.debug("Skipping near-duplicate raw memory: %r", text[:80])
                     return None
-
+                if op == "supersede" and supersedes_id:
+                    cols = existing_columns(self._conn)
+                    if "status" in cols:
+                        self._conn.execute(
+                            "UPDATE memories SET status = ? WHERE id = ?",
+                            (STATUS_SUPERSEDED, supersedes_id),
+                        )
                 mem_id = str(uuid.uuid4())
                 now = datetime.now(timezone.utc).isoformat()
-                self._conn.execute(
-                    """
-                    INSERT INTO memories
-                        (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
-                    VALUES (?, ?, ?, ?, 0, 'never', ?)
-                    """,
-                    (mem_id, user_id, text, now, 1 if pinned else 0),
-                )
-                self._conn.execute(
-                    "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
-                    (mem_id, sqlite_vec.serialize_float32(vector)),
+                self._insert_row(
+                    mem_id=mem_id,
+                    user_id=user_id,
+                    text=text,
+                    now=now,
+                    vector=vector,
+                    pinned=1 if pinned else 0,
+                    source=SOURCE_PIN if pinned else SOURCE_CHAT,
+                    supersedes_id=supersedes_id,
                 )
                 self._conn.commit()
                 return mem_id
@@ -861,10 +1231,11 @@ class _MemoryBackend:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    def _fts_pass(self, fts_query: str | None, user_id: str, fts_limit: int) -> list[sqlite3.Row]:
+    def _fts_pass(self, fts_query: str | None, user_id: str, fts_limit: int, active_only: bool = True) -> list[sqlite3.Row]:
         """Run one FTS5 BM25 pass. Returns [] if fts_query is None (nothing usable to match)."""
         if fts_query is None:
             return []
+        status_sql = _active_sql(active_only)
         return self._conn.execute(
             """
             SELECT f.id
@@ -872,9 +1243,10 @@ class _MemoryBackend:
             JOIN memories m ON m.id = f.id
             WHERE memories_fts MATCH ?
             AND m.user_id = ?
+            {status_sql}
             ORDER BY rank
             LIMIT ?
-            """,
+            """.format(status_sql=status_sql),
             (fts_query, user_id, fts_limit),
         ).fetchall()
 
@@ -990,7 +1362,7 @@ class _MemoryBackend:
         rest = [mid for mid in scored_ids if mid not in relevant_set]
         return relevant_sorted + rest
 
-    def search(self, query: str, user_id: str, limit: int = 5, vector: list[float] | None = None) -> list[dict]:
+    def search(self, query: str, user_id: str, limit: int = 5, vector: list[float] | None = None, include_history: bool = False) -> list[dict]:
         """
         KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate
         pass and recency-among-relevant reranking. Pinned status is only a
@@ -1011,15 +1383,19 @@ class _MemoryBackend:
            (Pinned is already folded into scores in step 2 via MEMORY_RANK_PINNED_WEIGHT.)
 
         vector — pre-computed query embedding; skips the _embed HTTP call.
+        include_history — when False (default), superseded memories are excluded.
         """
         if vector is None:
             vector = self._embed(query, query=True)
         fts_query = _sanitize_fts_query(query)
+        active_only = not include_history
 
         with self._db_lock:
-            quick_knn_rows = _sqlite_knn_search(self._conn, vector, user_id, QUICK_KNN_LIMIT)
+            quick_knn_rows = _sqlite_knn_search(
+                self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
+            )
         rank_knn_q = {row["id"]: i + 1 for i, row in enumerate(quick_knn_rows)}
-        quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT)
+        quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT, active_only=active_only)
         rank_fts_q = {row["id"]: i + 1 for i, row in enumerate(quick_fts_rows)}
 
         scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q)
@@ -1031,9 +1407,11 @@ class _MemoryBackend:
 
         # ── widen only if the quick pass was under-filled or under-confident ──
         if not confident:
-            wide_knn_rows = _sqlite_knn_search(self._conn, vector, user_id, KNN_LIMIT)
+            wide_knn_rows = _sqlite_knn_search(
+                self._conn, vector, user_id, KNN_LIMIT, active_only=active_only
+            )
             rank_knn_w = {row["id"]: i + 1 for i, row in enumerate(wide_knn_rows)}
-            wide_fts_rows = self._fts_pass(fts_query, user_id, FTS_LIMIT)
+            wide_fts_rows = self._fts_pass(fts_query, user_id, FTS_LIMIT, active_only=active_only)
             rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
             scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w)
 
@@ -1119,6 +1497,137 @@ class _MemoryBackend:
             self._conn.commit()
 
 
+# ── Phase D: entity co-mention relations ─────────────────────────────────────
+# Thin entity-relation layer (not a full graph DB): one ``entity_relations``
+# table storing co-mention / explicit links between entity labels. Built
+# primarily from co-occurrence on the same memory fact; no vector changes,
+# no LLM. Write side lives here; read/export for the Studio lives in
+# memory/studio/backend/graph_export.py.
+
+RELATION_CO_MENTION = "co_mentions"
+RELATION_RELATED = "related_to"
+
+_ENTITY_RELATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS entity_relations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    entity_a    TEXT NOT NULL,
+    entity_b    TEXT NOT NULL,
+    relation    TEXT NOT NULL DEFAULT 'co_mentions',
+    weight      REAL NOT NULL DEFAULT 1.0,
+    memory_id   TEXT,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_rel_user ON entity_relations(user_id);
+CREATE INDEX IF NOT EXISTS idx_entity_rel_a ON entity_relations(user_id, entity_a);
+CREATE INDEX IF NOT EXISTS idx_entity_rel_b ON entity_relations(user_id, entity_b);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_rel_pair
+    ON entity_relations(user_id, entity_a, entity_b, relation);
+"""
+
+
+def _norm_entity(e: str) -> str:
+    return (e or "").strip()
+
+
+def _ordered_pair(a: str, b: str) -> tuple[str, str]:
+    """Canonical unordered pair key (casefold order, display preserves first-seen casing via callers)."""
+    aa, bb = _norm_entity(a), _norm_entity(b)
+    if aa.casefold() <= bb.casefold():
+        return aa, bb
+    return bb, aa
+
+
+def ensure_entity_relations_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(_ENTITY_RELATIONS_DDL)
+    conn.commit()
+
+
+def upsert_co_mentions(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    entities: Iterable[str],
+    memory_id: str | None = None,
+    updated_at: str | None = None,
+) -> int:
+    """Record co-mention pairs for entities on one memory. Returns pairs touched."""
+    from memory.vecstore import utc_now_iso
+
+    ents = []
+    seen: set[str] = set()
+    for e in entities:
+        n = _norm_entity(e)
+        if not n:
+            continue
+        key = n.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ents.append(n)
+    if len(ents) < 2:
+        return 0
+
+    ensure_entity_relations_schema(conn)
+    now = updated_at or utc_now_iso()
+    touched = 0
+    for a, b in combinations(ents, 2):
+        ea, eb = _ordered_pair(a, b)
+        if ea.casefold() == eb.casefold():
+            continue
+        conn.execute(
+            """
+            INSERT INTO entity_relations (user_id, entity_a, entity_b, relation, weight, memory_id, updated_at)
+            VALUES (?, ?, ?, ?, 1.0, ?, ?)
+            ON CONFLICT(user_id, entity_a, entity_b, relation) DO UPDATE SET
+                weight = entity_relations.weight + 1.0,
+                memory_id = COALESCE(excluded.memory_id, entity_relations.memory_id),
+                updated_at = excluded.updated_at
+            """,
+            (user_id, ea, eb, RELATION_CO_MENTION, memory_id, now),
+        )
+        touched += 1
+    return touched
+
+
+def rebuild_entity_relations(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    clear: bool = True,
+) -> dict[str, int]:
+    """Rebuild co-mention edges from memories.entities JSON for one user."""
+    ensure_entity_relations_schema(conn)
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(memories)").fetchall()}
+    if "entities" not in cols:
+        return {"pairs": 0, "memories": 0, "note": 1}
+
+    if clear:
+        conn.execute(
+            "DELETE FROM entity_relations WHERE user_id = ? AND relation = ?",
+            (user_id, RELATION_CO_MENTION),
+        )
+
+    rows = conn.execute(
+        """
+        SELECT id, entities FROM memories
+        WHERE user_id = ?
+          AND (status IS NULL OR status = 'active')
+        """,
+        (user_id,),
+    ).fetchall()
+
+    pairs = 0
+    for row in rows:
+        ents = entities_from_json(row["entities"])
+        pairs += upsert_co_mentions(
+            conn, user_id=user_id, entities=ents, memory_id=str(row["id"])
+        )
+    conn.commit()
+    log.info("entity_relations rebuild user=%s memories=%d pairs=%d", user_id, len(rows), pairs)
+    return {"pairs": pairs, "memories": len(rows)}
+
+
 def _memory_db_path_for_user(uid: str) -> str:
     if uid == "guest":
         return _guest_memory_db()
@@ -1182,7 +1691,7 @@ class AikoMemorize:
         self._user_id_override = None
         self._silent = silent
         self._display_name: str | None = None
-        self._search_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
+        self._search_cache: OrderedDict[tuple[str, str, int, bool], tuple[float, list[dict]]] = OrderedDict()
         self._search_cache_lock = threading.RLock()
         self._llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
         self._model = os.getenv("EXTRACT_MODEL") or os.getenv("LLM_MODEL", "ministral")
@@ -1403,7 +1912,7 @@ class AikoMemorize:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    def search(self, query: str, user_id: str | None = None, limit: int = 5, query_vector: list[float] | None = None) -> list[dict]:
+    def search(self, query: str, user_id: str | None = None, limit: int = 5, query_vector: list[float] | None = None, include_history: bool = False) -> list[dict]:
         """
         Retrieve top-k memories relevant to the current query.
         Side-effect: increments access_count and updates last_accessed_at
@@ -1418,6 +1927,7 @@ class AikoMemorize:
 
         query_vector — pre-computed _QUERY_INSTRUCT embedding; avoids a
         redundant HTTP call inside _MemoryBackend.search().
+        include_history — when False (default), superseded memories are excluded.
         """
         user_id = self._resolve_user_id(user_id)
         if _is_trivial_input(query or ""):
@@ -1426,10 +1936,15 @@ class AikoMemorize:
 
         if _BROAD_RECALL_RE.search(query or ""):
             results = self._recent_or_important_memories(user_id=user_id, limit=limit)
+            if not include_history:
+                results = [
+                    r for r in results
+                    if str(r.get("status") or STATUS_ACTIVE) == STATUS_ACTIVE
+                ]
             self._touch_memories(results)
-            return results
+            return results[:int(limit)]
 
-        cache_key = (user_id, " ".join((query or "").lower().split()), int(limit))
+        cache_key = (user_id, " ".join((query or "").lower().split()), int(limit), bool(include_history))
         now_s = time.monotonic()
 
         with self._search_cache_lock:
@@ -1443,7 +1958,13 @@ class AikoMemorize:
             if cached:
                 self._search_cache.pop(cache_key, None)
 
-        results = self._mem.search(query, user_id=user_id, limit=limit, vector=query_vector)
+        results = self._mem.search(
+            query,
+            user_id=user_id,
+            limit=limit,
+            vector=query_vector,
+            include_history=include_history,
+        )
         self._touch_memories(results)
 
         with self._search_cache_lock:

@@ -71,6 +71,10 @@
   </header>
   <div class="body">
     <aside class="sidebar">
+      <h2>Search</h2>
+      <label>Query <input type="text" id="search-q" placeholder="e.g. ROS2, OppaAI…" /></label>
+      <button class="btn btn-primary" id="search-btn" style="width:100%;margin-top:4px">Search mem + KB</button>
+      <div class="stat" id="search-stats">—</div>
       <h2>Filters</h2>
       <label>User id <input type="text" id="user-id" placeholder="(current)" /></label>
       <label>Limit <input type="number" id="limit" value="200" min="1" max="2000" /></label>
@@ -159,6 +163,35 @@
       return d.innerHTML;
     }
 
+    async function runSearch() {
+      const q = document.getElementById('search-q').value.trim();
+      const box = document.getElementById('search-stats');
+      if (!q) { box.textContent = 'type a query'; return; }
+      box.textContent = 'Searching…';
+      try {
+        const p = new URLSearchParams();
+        p.set('q', q);
+        const uid = document.getElementById('user-id').value.trim();
+        if (uid) p.set('user_id', uid);
+        p.set('limit', '10');
+        const resp = await fetch('/api/search?' + p.toString());
+        const data = await resp.json();
+        const hits = data.hits || [];
+        if (!hits.length) { box.textContent = 'No hits'; return; }
+        box.innerHTML = hits.map(h =>
+          `<div style="margin-bottom:10px;padding:8px;border:1px solid var(--dim);border-radius:4px;background:#120a1c">
+             <div style="color:var(--pink);text-transform:uppercase;font-size:9px;letter-spacing:.1em">
+               ${escapeHtml(h.store)} · ${escapeHtml(h.kind)} · ${h.score.toFixed(3)}
+             </div>
+             <div style="margin-top:4px;color:var(--text)">${escapeHtml(h.text)}</div>
+           </div>`
+        ).join('');
+      } catch (e) {
+        box.textContent = 'Search failed';
+        console.error(e);
+      }
+    }
+
     function render() {
       const svg = d3.select('#canvas');
       svg.selectAll('*').remove();
@@ -228,6 +261,8 @@
 
     document.getElementById('refresh').onclick = loadGraph;
     document.getElementById('apply').onclick = loadGraph;
+    document.getElementById('search-btn').onclick = runSearch;
+    document.getElementById('search-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
     document.getElementById('export').onclick = () => {
       const blob = new Blob([JSON.stringify(graph, null, 2)], { type: 'application/json' });
       const a = document.createElement('a');
