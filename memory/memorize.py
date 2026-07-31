@@ -195,7 +195,9 @@ Async write queue:
     caller's turn-tracking state directly.
 
 Dependencies:
-  pip install sqlite-vec llama-cpp-python tokenizers
+  pip install sqlite-vec llama-cpp-python tokenizers openai
+  (HarrierEmbedder, imported from memory.vecstore, pulls in its own model/
+  tokenizer deps separately — see that module for its requirements.)
 """
 from __future__ import annotations
 
@@ -1047,6 +1049,11 @@ class _MemoryBackend:
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
         self._embedder = HarrierEmbedder()
+        # Tri-state: None = not yet probed, True/False = known after the
+        # first _extract_facts call. Lets us stop paying for a failed
+        # response_format attempt every single turn once we know the
+        # server in front of us doesn't support it (see _extract_facts).
+        self._json_schema_supported: bool | None = None
         self._conn = self._connect()
         self._db_lock = threading.RLock()
         # Super-node cache for entity-graph fusion (see _refresh_high_freq_entities /
@@ -1099,6 +1106,12 @@ class _MemoryBackend:
           - Post-parse hedge filter: facts containing uncertain language
             (_HEDGE_RE, word-boundary matched) are dropped before returning.
           - Only user/assistant turns with real content are sent.
+          - response_format=json_schema is tried first (grammar-constrained,
+            no fences/preamble possible); if the server rejects it, we fall
+            back to an unconstrained call + _first_json_array salvage and
+            remember the server doesn't support it for the rest of this
+            instance's life, so we stop paying for a failing attempt every
+            turn.
         """
         if not self._should_extract(messages):
             return []
@@ -1133,39 +1146,71 @@ class _MemoryBackend:
 
         prompt = _EXTRACT_PROMPT.format(conversation=convo, user_name=user_name)
 
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                stream=False,
-                max_tokens=_EXTRACT_MAX_TOKENS,
-                temperature=0.0,  # deterministic — reduces hallucinated facts
-                timeout=_EXTRACT_TIMEOUT,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "facts",
-                        "schema": {"type": "array", "items": {"type": "string"}},
-                    },
+        base_kwargs = dict(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            max_tokens=_EXTRACT_MAX_TOKENS,
+            temperature=0.0,  # deterministic — reduces hallucinated facts
+            timeout=_EXTRACT_TIMEOUT,
+        )
+        schema_kwargs = {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "facts",
+                    "schema": {"type": "array", "items": {"type": "string"}},
                 },
-            )
-            raw = (resp.choices[0].message.content or "").strip()
-        except Exception as e:
-            log.warning(f"Extraction LLM call failed: {e}")
-            return []
+            }
+        }
 
-        # Grammar-constrained output: no markdown fences, no repeated arrays,
-        # no <think> preamble possible (schema forces token 0 to be '[').
-        # Parsing is a plain json.loads — the old fence-strip/first-array
-        # salvage logic is no longer needed for this call site.
+        raw = None
+        used_schema = False
+        if self._json_schema_supported is not False:
+            # Grammar-constrained output: no markdown fences, no repeated
+            # arrays, no <think> preamble possible (schema forces token 0
+            # to be '['). Try this first unless we've already learned this
+            # server rejects the param.
+            try:
+                resp = self._client.chat.completions.create(**base_kwargs, **schema_kwargs)
+                raw = (resp.choices[0].message.content or "").strip()
+                used_schema = True
+                self._json_schema_supported = True
+            except Exception as e:
+                if self._json_schema_supported is None:
+                    log.warning(
+                        f"Server rejected response_format=json_schema ({e}); "
+                        "falling back to unconstrained output + salvage parsing "
+                        "for the rest of this session."
+                    )
+                    self._json_schema_supported = False
+                else:
+                    log.warning(f"Extraction LLM call failed: {e}")
+                    return []
+
+        if raw is None:
+            # Either we already know this server doesn't support
+            # response_format, or the schema attempt just failed for the
+            # first time — retry once, unconstrained.
+            try:
+                resp = self._client.chat.completions.create(**base_kwargs)
+                raw = (resp.choices[0].message.content or "").strip()
+            except Exception as e:
+                log.warning(f"Extraction LLM call failed: {e}")
+                return []
+
+        # With schema enforcement, parsing is a plain json.loads. Without
+        # it (fallback path), the model may wrap the array in markdown
+        # fences or add a preamble, so salvage the first top-level JSON
+        # array before parsing.
         try:
-            facts = json.loads(raw)
+            facts = json.loads(raw if used_schema else (_first_json_array(raw) or raw))
             if isinstance(facts, list):
                 facts = [f.strip() for f in facts if isinstance(f, str) and f.strip()]
             else:
                 return []
         except json.JSONDecodeError:
-            log.warning(f"Failed to parse extraction JSON despite schema constraint: {raw[:200]!r}")
+            log.warning(f"Failed to parse extraction JSON: {raw[:200]!r}")
             return []
 
         # drop facts containing hedging/uncertain language (word-boundary match)
@@ -1884,9 +1929,10 @@ def upsert_co_mentions(
     now = updated_at or utc_now_iso()
     touched = 0
     for a, b in combinations(ents, 2):
+        # No casefold-equality guard needed here: `ents` was already
+        # deduped by casefold via `seen` above, so combinations() can
+        # never hand us a == b.
         ea, eb = _ordered_pair(a, b)
-        if ea.casefold() == eb.casefold():
-            continue
         conn.execute(
             """
             INSERT INTO entity_relations (user_id, entity_a, entity_b, relation, weight, memory_id, updated_at)
@@ -2034,7 +2080,6 @@ class AikoMemorize:
             embed_cache=self._embed_cache,
             user_id=uid,
         )
-        self._conn = self._mem._conn
         self._write_queue: "queue.Queue[tuple]" = queue.Queue()
         self._write_worker = threading.Thread(target=self._write_loop, daemon=True)
         self._write_worker.start()
@@ -2055,9 +2100,30 @@ class AikoMemorize:
             embed_cache=self._embed_cache,
             user_id=uid,
         )
-        self._conn = self._mem._conn
         if not self._silent:
             log.info("Memory store ready for %s.", uid)
+
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        """Single reach-through point into the backend's connection.
+
+        Was previously copied into self._conn separately in __init__ and
+        _open(); collapsing both into one property means a future change
+        to _MemoryBackend's connection ownership (e.g. a pool, or a
+        different sqlite-vec binding) only needs updating here, not at
+        every call site that currently reads self._conn directly.
+        """
+        return self._mem._conn
+
+    def _exec(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+        """Thin wrapper for one-off statements against the backend's
+        connection. Prefer this for new code over reaching into
+        self._conn directly."""
+        return self._conn.execute(sql, params)
+
+    def _commit(self) -> None:
+        """Thin wrapper mirroring _exec — commit through the same seam."""
+        self._conn.commit()
 
     def switch_user(self, user_id: str) -> None:
         # Drain any pending writes first
@@ -2136,6 +2202,15 @@ class AikoMemorize:
             ids = self._mem.add(messages, user_id=user_id, display_name=display_name)
 
             if not ids:
+                # add() returns [] almost exclusively because every extracted
+                # fact was a no-op/supersede against something already in the
+                # store (see _maybe_supersede_neighbor) — not because nothing
+                # relevant exists. Re-searching on the same text and pinning
+                # the top hits recovers the (already-present) memory the
+                # caller meant to pin, rather than silently failing. This is
+                # not a substitute for write-time dedup skipping a near-
+                # duplicate write; it's recovering the row that write-time
+                # dedup correctly decided not to duplicate.
                 query = "\n".join(
                     (m.get("content") or "").strip()
                     for m in messages
