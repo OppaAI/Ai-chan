@@ -47,11 +47,33 @@ BARGE_IN_ECHO_GUARD_MS: "450"
 BARGE_IN_ALWAYS_ON: "0"  # Also monitor outside TTS wait; options: 1/0, true/false, yes/no, on/off.
 
 # -- Wake word --
-# Fuzzy-matched (not exact substring) against the leading words of each
-# transcript, since SenseVoice mangles "Aiko" unpredictably (not a normal
-# English word). Blank disables wake-word gating entirely — Aiko responds
-# to every utterance as before.
-WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
+# Blank WAKE_WORD disables wake-word gating entirely — Aiko responds to
+# every utterance as before. When set, two engines are available; listen.py
+# picks automatically (see sensory/listen.py module docstring "Wake word"):
+#
+#   1. Acoustic (preferred) — set WAKE_WORD_MODEL_PATH below to a trained
+#      livekit-wakeword ONNX classifier. Runs frame-by-frame on raw audio
+#      before ASR, so SenseVoice never runs just to check the wake word.
+#      No pre-trained "hey Aiko" model exists — you must train one, e.g.:
+#        pip install "livekit-wakeword[train,eval,export]"
+#        # hey_aiko.yaml: model_name: hey_aiko / target_phrases: ["hey aiko"]
+#        livekit-wakeword setup --config hey_aiko.yaml
+#        livekit-wakeword run hey_aiko.yaml
+#      See https://docs.livekit.io/agents/multimodality/audio/wakeword/
+#   2. Fuzzy ASR-text (fallback) — used automatically if WAKE_WORD_MODEL_PATH
+#      is blank, the file is missing, or livekit-wakeword isn't installed.
+#      Fuzzy-matched (not exact substring) against the leading words of each
+#      transcript, since SenseVoice mangles "Aiko" unpredictably (not a
+#      normal English word). Still runs full ASR on every utterance while
+#      asleep, same as before.
+WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables both engines.
+
+# -- Wake word: acoustic engine (livekit-wakeword) --
+WAKE_WORD_MODEL_PATH: ""  # Path to trained hey-aiko.onnx. "" = use the fuzzy engine below instead.
+WAKE_WORD_THRESHOLD: "0.5"  # Wake model score (0.0-1.0) required per-frame; lower = more sensitive, more false positives.
+WAKE_WORD_CONFIRM_FRAMES: "3"  # Consecutive frames above threshold before the wake word fires (~32ms per frame).
+
+# -- Wake word: fuzzy ASR-text engine (fallback) --
 # Suggested aliases when WAKE_WORD is set (SenseVoice often mangles "Aiko"):
 WAKE_WORD_ALIASES: "hey iko|hey eco|hey ecko|hey echo|hey ico|hey aico|hi aiko|hi iko"
 WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
