@@ -1049,6 +1049,12 @@ class _MemoryBackend:
         self._embedder = HarrierEmbedder()
         self._conn = self._connect()
         self._db_lock = threading.RLock()
+        # Super-node cache for entity-graph fusion (see _refresh_high_freq_entities /
+        # _graph_pass). Initialized here rather than lazily via getattr — this
+        # class owns its own __init__, so there's no reason to defend against
+        # the attribute not existing yet.
+        self._high_freq_entities: set[str] = set()
+        self._high_freq_computed_at: float = 0.0
         # FIX 1: migrate Phase A schema immediately, not lazily inside
         # add()/add_raw(). Otherwise a read-only path (search() on a fresh
         # boot or a DB that hasn't been written to yet) hits `_active_sql()`
