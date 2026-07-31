@@ -2003,39 +2003,22 @@ def switch_user(self, user_id: str) -> None:
         Retrieve top-k memories relevant to the current query.
         Side-effect: increments access_count and updates last_accessed_at
         for all returned memories in a single batched UPDATE.
-
-        Trivial-input skip: turns that are nothing but filler (a greeting,
-        an ack, the assistant's wake-word alone) return [] immediately,
-        before the cache lookup or the embedding call. This is the single
-        choke point every caller (CLI, WebUI, voice, think.py) goes
-        through, so the skip applies everywhere without duplication. Any
-        message with real content attached always searches normally.
-
-        query_vector — pre-computed _QUERY_INSTRUCT embedding; avoids a
-        redundant HTTP call inside _MemoryBackend.search().
-        include_history — when False (default), superseded memories are excluded.
         """
         user_id = self._resolve_user_id(user_id)
         if _is_trivial_input(query or ""):
-            return []  
             log.debug(f"Skipping search for trivial input: {query!r}")
             return []
-
+    
         if _BROAD_RECALL_RE.search(query or ""):
-            # FIX 3: status filtering now happens INSIDE
-            # _recent_or_important_memories (before it truncates to `limit`),
-            # not after. Filtering post-truncation could silently return
-            # fewer than `limit` results even when enough active candidates
-            # existed in the wider fetch window.
             results = self._recent_or_important_memories(
                 user_id=user_id, limit=limit, include_history=include_history
             )
             self._touch_memories(results)
             return results[:int(limit)]
-
+    
         cache_key = (user_id, " ".join((query or "").lower().split()), int(limit), bool(include_history))
         now_s = time.monotonic()
-
+    
         with self._search_cache_lock:
             cached = self._search_cache.get(cache_key)
             if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
@@ -2046,7 +2029,8 @@ def switch_user(self, user_id: str) -> None:
                 return results
             if cached:
                 self._search_cache.pop(cache_key, None)
-
+    
+        # Run the core RRF search
         results = self._mem.search(
             query,
             user_id=user_id,
@@ -2054,7 +2038,7 @@ def switch_user(self, user_id: str) -> None:
             vector=query_vector,
             include_history=include_history,
         )
-      
+    
         # Entity-aware rerank (optional, feature-gated)
         if os.getenv("AIKO_ENTITY_BOOST"):
             query_entities = self._extract_query_entities(query)
@@ -2063,20 +2047,18 @@ def switch_user(self, user_id: str) -> None:
                 log.debug(f"Boosted results by entities: {query_entities}")
     
         self._touch_memories(results)
-      
-        # Search replay logging
-        if os.getenv("REPLAY_SEARCHES"):
-            self._write_search_replay(query, results, user_id)
-        
-        return results
-
         log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
-
+    
+        # Search replay logging (optional, feature-gated)
+        if os.getenv("AIKO_REPLAY_SEARCHES"):
+            self._write_search_replay(query, results, user_id)
+    
+        # Cache and return
         with self._search_cache_lock:
             self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
             while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
                 self._search_cache.popitem(last=False)
-
+    
         return results
       
     def _write_search_replay(self, query: str, results: list[dict], user_id: str) -> None:
