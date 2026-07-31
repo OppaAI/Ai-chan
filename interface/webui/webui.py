@@ -176,7 +176,7 @@ class AikoWeb:
         scheme = "https" if self._ssl_context else "http"
 
         from interface.webui.auth import app as auth_app
-        from svelte.staticfiles import StaticFiles
+        from starlette.staticfiles import StaticFiles
 
         has_static = False
         for route in auth_app.routes:

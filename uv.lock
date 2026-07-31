@@ -29,6 +29,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "itsdangerous" },
     { name = "lark" },
+    { name = "livekit-wakeword" },
     { name = "markitdown" },
     { name = "numpy" },
     { name = "onnxruntime-gpu" },
@@ -102,6 +103,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1.21.0" },
     { name = "itsdangerous", specifier = ">=2.2.0" },
     { name = "lark", specifier = ">=1.3.1" },
+    { name = "livekit-wakeword", specifier = ">=0.2.1" },
     { name = "markitdown", specifier = ">=0.1.6" },
     { name = "mastodon-py", marker = "extra == 'mastodon'", specifier = ">=1.8.0" },
     { name = "matrix-nio", marker = "extra == 'adapters'", specifier = ">=0.25.0" },
@@ -849,6 +851,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c6/80/7f782cb5eed106d7106c79d130c8accd3e8ce52408563cdaba44f0ff4f76/libipld-3.4.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e89653a4bfb4b526dd72a481d1c1015bdc49a8eb80b366bc7ce24bcd8440ec51", size = 275567, upload-time = "2026-05-27T17:40:54.138Z" },
     { url = "https://files.pythonhosted.org/packages/d6/39/0d461b23d7339352dcc77236665dae6ebc7afdcd07595d1905f88cc20a64/libipld-3.4.1-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:293796b9e0156a9cc6b24ce93383ada5946da5df62cf502878c5f924b374579f", size = 452151, upload-time = "2026-05-27T17:41:02.689Z" },
     { url = "https://files.pythonhosted.org/packages/4e/a3/63fde6d2646f755c9ba44a06df7e1b3b8fdc33c263bd2c7d7699e8f35ec3/libipld-3.4.1-cp312-cp312-win_arm64.whl", hash = "sha256:268ba6cdeab5bfa66eba007990a71cc91421154857c77e7c947d48c5df37c80c", size = 150779, upload-time = "2026-05-27T17:41:08.549Z" },
+]
+
+[[package]]
+name = "livekit-wakeword"
+version = "0.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "onnxruntime", marker = "sys_platform == 'ignore_this_marker'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/29/30cadc7d03635f76dfe7aeb0359cd0e2fdccaf08ed101936dac0c26dc6f7/livekit_wakeword-0.2.1.tar.gz", hash = "sha256:cf2d9cf4867812c06788f64c15e49abd909d9d6291f0a13f1c3f9cb649fa6127", size = 1891150, upload-time = "2026-05-20T22:47:23.94Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/ee/47127a539b73361e141d578ab0e3afdeae16918048359f378cf1c7116a2e/livekit_wakeword-0.2.1-py3-none-any.whl", hash = "sha256:9576e103b6777619342ef9cce1d47727c39f1d6b7b564238f3467ace4d10a99a", size = 1911465, upload-time = "2026-05-20T22:47:21.824Z" },
 ]
 
 [[package]]
