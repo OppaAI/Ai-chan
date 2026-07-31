@@ -103,7 +103,6 @@ import re
 
 log = _logging.getLogger(__name__)
 
-from scipy.signal import resample_poly
 import select
 import sherpa_onnx
 import subprocess
@@ -158,7 +157,6 @@ ASR_MODEL = os.getenv(
 # (client-side, hardcoded ~700ms, independent of this config).
 
 SAMPLE_RATE         = 16000                                          # ASR + Silero target
-LISTEN_DEVICE       = os.getenv("LISTEN_DEVICE", None)              # None = default
 
 CHUNK_DURATION_MS   = int(os.getenv("LISTEN_CHUNK_MS",         30))  # Silero minimum
 VAD_THRESHOLD       = float(os.getenv("LISTEN_VAD_THRESHOLD", 0.5))  # Silero speech prob cutoff
@@ -303,7 +301,13 @@ def correct_asr_text(text: str) -> str:
     for src, dst in correction_pairs():
         # Word-boundary-ish match, case-insensitive
         pattern = re.compile(rf"(?i)(?<!\w){re.escape(src)}(?!\w)")
-        out = pattern.sub(dst, out)
+        # dst is passed through a replacer function, not directly to
+        # pattern.sub() — re.sub() interprets backslash sequences (\1,
+        # \g<name>) in a raw replacement string, so a user-configured
+        # ASR_CORRECTIONS pair like "foo->\1bar" would silently be treated
+        # as a backreference instead of literal text. The lambda makes dst
+        # a plain literal replacement regardless of its contents.
+        out = pattern.sub(lambda _m, _dst=dst: _dst, out)
     return out
 
 
@@ -557,8 +561,6 @@ class AikoListen:
         with self._activation_lock:
             self._active_until = time.monotonic() + ACTIVATION_TIMEOUT_S
 
-    _extend_activation = extend_activation  # compat alias
-
     def _apply_activation_gate(self, text: str, verified: bool | None) -> tuple[str | None, dict]:
         """
         Enforce wake-word gating on a freshly transcribed utterance.
@@ -578,7 +580,7 @@ class AikoListen:
             return text, {"woke": None}
 
         if self.is_active():
-            self._extend_activation()
+            self.extend_activation()
             return text, {"woke": None}
 
         matched, remainder = _strip_prefix_phrase(
@@ -588,7 +590,7 @@ class AikoListen:
             log.debug("[gate] wake word %r NOT matched in %r — dropping", WAKE_WORD, text)
             return None, {"woke": False}
 
-        self._extend_activation()
+        self.extend_activation()
         return remainder.strip(), {"woke": True}
 
     # ── barge-in monitor ──────────────────────────────────────────────────────
@@ -623,66 +625,72 @@ class AikoListen:
         """
         Always-on VAD monitor via parec. Pauses while _record() is active.
 
-        No-ops entirely (idles until stop_barge_in_monitor()) when
-        BARGE_IN_ENABLED=0 — this is the master switch; no parec process is
-        even spawned in that case.
+        Idles (checking BARGE_IN_ENABLED roughly every 0.5s, no parec
+        process spawned) while disabled — this is the master switch. The
+        check happens on every idle tick and again on every scoring
+        iteration, not just once when the thread starts (audit fix: the
+        previous version checked barge_in_enabled() a single time before
+        entering its main loop, so toggling BARGE_IN_ENABLED live had no
+        effect on an already-running monitor thread until it was stopped
+        and restarted).
         """
-        if not barge_in_enabled():
-            while self._barge_in_active:
-                time.sleep(0.5)
-            return
-
         bytes_per_chunk = _CHUNK_SAMPLES_VAD * 4
 
-        try:
-            proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
-            consecutive = 0
-            paused = False
-            while self._barge_in_active:
-                if self._recording.is_set() or (not barge_in_always_on() and not self._barge_in_armed.is_set()):
-                    time.sleep(0.05)
-                    consecutive = 0
-                    paused = True
-                    continue
+        while self._barge_in_active:
+            if not barge_in_enabled():
+                time.sleep(0.5)
+                continue
 
-                if paused:
-                    # parec kept writing into the pipe the whole time we
-                    # weren't reading — discard the backlog so the next
-                    # score is against live audio, not ~1s of stale buffer.
-                    _drain_stale_audio(proc.stdout, bytes_per_chunk)
-                    paused = False
-
-                raw = proc.stdout.read(bytes_per_chunk)
-                if len(raw) < bytes_per_chunk:
-                    break
-
-                if self._barge_in_event.is_set():
-                    consecutive = 0
-                    continue
-
-                chunk = np.frombuffer(raw, dtype=np.float32).copy()
-                score = self._score_chunk(chunk)
-
-                if score >= BARGE_IN_THRESHOLD:
-                    consecutive += 1
-                    if consecutive >= BARGE_IN_CONFIRM:
-                        self._barge_in_event.set()
-                        consecutive = 0
-                        threading.Timer(
-                            BARGE_IN_COOLDOWN_MS / 1000.0,
-                            self._barge_in_event.clear,
-                        ).start()
-                else:
-                    consecutive = 0
-        except Exception as exc:
-            import logging as _log
-            _log.getLogger(__name__).warning(f"Barge-in monitor died: {exc}")
-        finally:
+            proc = None
             try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                log.warning("listen: failed to terminate barge-in monitor process")
+                proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
+                consecutive = 0
+                paused = False
+                while self._barge_in_active and barge_in_enabled():
+                    if self._recording.is_set() or (not barge_in_always_on() and not self._barge_in_armed.is_set()):
+                        time.sleep(0.05)
+                        consecutive = 0
+                        paused = True
+                        continue
+
+                    if paused:
+                        # parec kept writing into the pipe the whole time we
+                        # weren't reading — discard the backlog so the next
+                        # score is against live audio, not ~1s of stale buffer.
+                        _drain_stale_audio(proc.stdout, bytes_per_chunk)
+                        paused = False
+
+                    raw = proc.stdout.read(bytes_per_chunk)
+                    if len(raw) < bytes_per_chunk:
+                        break
+
+                    if self._barge_in_event.is_set():
+                        consecutive = 0
+                        continue
+
+                    chunk = np.frombuffer(raw, dtype=np.float32).copy()
+                    score = self._score_chunk(chunk)
+
+                    if score >= BARGE_IN_THRESHOLD:
+                        consecutive += 1
+                        if consecutive >= BARGE_IN_CONFIRM:
+                            self._barge_in_event.set()
+                            consecutive = 0
+                            threading.Timer(
+                                BARGE_IN_COOLDOWN_MS / 1000.0,
+                                self._barge_in_event.clear,
+                            ).start()
+                    else:
+                        consecutive = 0
+            except Exception as exc:
+                log.warning("listen: barge-in monitor died: %s", exc)
+            finally:
+                if proc is not None:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=5)
+                    except Exception:
+                        log.warning("listen: failed to terminate barge-in monitor process")
 
     # ── public api ────────────────────────────────────────────────────────────
 
@@ -846,7 +854,13 @@ class AikoListen:
         else:
             chunk = chunk[:_CHUNK_SAMPLES_VAD]
 
-        tensor = torch.from_numpy(chunk.copy()).unsqueeze(0)
+        # NOTE: no .copy() here — both callers (_record(), _barge_in_loop())
+        # already hand in owned memory via np.frombuffer(...).copy(), and
+        # the inference below runs under torch.no_grad() with no in-place
+        # ops, so sharing the buffer with torch.from_numpy() is safe. The
+        # previous extra .copy() here was a redundant full-buffer copy on
+        # every single 32ms chunk.
+        tensor = torch.from_numpy(chunk).unsqueeze(0)
         with torch.no_grad():
             prob = self._vad_model(tensor, SAMPLE_RATE).item()
         return prob
