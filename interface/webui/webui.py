@@ -561,14 +561,12 @@ class AikoWeb:
             set_current_user_id(self._current_user_id)
             set_current_display_name(self._current_display_name)
             os.environ["AIKO_USER_ID"] = self._current_user_id
-            # NOTE (audit fix #1): vad_presegmented was removed here — it is
-            # not a parameter of AikoListen.listen(), so every WebUI voice
-            # turn was raising TypeError before reaching _record(). Silero
-            # in listen.py already scores every chunk regardless of source
-            # (see that module's docstring); WEBUI_BROWSER_VAD_GATE only
-            # controls the browser's own energy pre-filter (static/vad.js)
-            # and whether the WS 'vad'/end sentinel is forwarded below — it
-            # was never meant to bypass server-side Silero scoring.
+            # Call listen() with WebUI chunk source. See sensory.listen.AikoListen.listen()
+            # docstring for full parameter contract. Key points:
+            #   - vad_presegmented parameter was removed (no longer supported)
+            #   - Silero VAD scores ALL chunks regardless of source (local mic or WebUI)
+            #   - WEBUI_BROWSER_VAD_GATE only controls pre-gating in browser (static/vad.js),
+            #     not server-side Silero scoring (which is authoritative)
             result_holder[0] = listen.listen(
                 status_callback=_status_cb,
                 speak=speak,
