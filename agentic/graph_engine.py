@@ -841,8 +841,11 @@ def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = N
         except Exception:
             log.warning("graph_engine: keyword scoring embedding failed")
 
+    return score
+
 
 def _title(prompt: str) -> str:
+    """Extract a short title from a prompt."""
     cleaned = re.sub(r"[^\w\s-]", "", prompt).strip()
     words = cleaned.split()[:8]
     return " ".join(words) or "Aiko task"

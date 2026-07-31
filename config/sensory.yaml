@@ -2,57 +2,84 @@
 #
 # Settings for sensory/listen.py.
 # Controls ASR model/provider, Silero VAD thresholds, barge-in, speaker
-# verification, and wake word / trigger phrase activation gating.
+# verification, and wake word activation gating. (Trigger-phrase gating was
+# removed — wake word is the sole activation mechanism.)
 # -- ASR --
 ASR_DEVICE: "cuda"  # sherpa-onnx execution provider; options usually cpu or cuda.
 ASR_LANGUAGE: "auto"  # Transcription language; options: auto, en, ja, zh, ko, yue, nospeech.
 ASR_NUM_THREADS: "4"  # CPU inference threads for ASR.
 ASR_MODEL: "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"  # sherpa-onnx SenseVoice model id/path; first run may download files.
 
+# -- Post-ASR name / phrase fixes (S2, no finetune) --
+# Pipe-separated "heard->fixed" pairs. Applied after SenseVoice (longest match first).
+# Built-in defaults already cover Aiko / OppaAI mangling; extend here as you observe errors.
+ASR_CORRECTIONS: ""  # e.g. "op ai->OppaAI|hey iko->hey Aiko|my project x->Project X"
+
 # -- Voice activity detection --
-LISTEN_VAD_SILENCE_MS: "300"  # Silence duration before ending an utterance, in milliseconds.
-LISTEN_VAD_PAD_MS: "100"  # Audio padding around detected speech, in milliseconds.
-LISTEN_CHUNK_MS: "30"  # Audio chunk size for VAD, in milliseconds; Silero minimum is around 30.
+# LISTEN_VAD_SILENCE_MS and LISTEN_VAD_PAD_MS were removed (audit #4): they
+# were read at import but never wired into any actual behavior. The real
+# silence timeout is LISTEN_SILENCE_CHUNKS below (66 chunks * ~32ms ≈ 2.1s
+# by default) — tune that instead. There is currently no configurable
+# pre/post-speech padding on the local-mic path at all (the WebUI has its
+# own separate, hardcoded ~700ms pre-speech buffer in static/vad.js).
+LISTEN_CHUNK_MS: "30"  # Documentation only — actual VAD chunk size is fixed at 512 samples (32ms @ 16kHz) and is not configurable via this key (audit #5).
 LISTEN_VAD_THRESHOLD: "0.5"  # Silero speech probability threshold; range 0.0-1.0.
-LISTEN_SILENCE_CHUNKS: "66"  # Consecutive silent chunks before utterance ends.
+LISTEN_SILENCE_CHUNKS: "66"  # Consecutive silent chunks before utterance ends — this is the authoritative silence-timeout knob (~32ms per chunk).
 LISTEN_MIN_CHUNKS: "10"  # Minimum speech chunks required to accept audio and filter noise.
 LISTEN_MAX_SECONDS: "30"  # Hard cap on one recording length in seconds.
-LISTEN_DEVICE: ""  # sounddevice input index; blank means system default.
 
 # -- Speaker verification --
-SPEAKER_VERIFY_ENABLED: "0"  # Enable enrolled-speaker verification; options: 1/0, true/false, yes/no, on/off.
+SPEAKER_VERIFY_ENABLED: "0"  # Load enrollment model and score each utterance; options: 1/0, true/false, yes/no, on/off.
+SPEAKER_VERIFY_GATE: "0"  # When 1 with verify enabled: drop utterances that fail cosine match (other voices do not run the agent). When 0: score is metadata only (legacy).
 SPEAKER_MODEL_PATH: "models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx"  # Path to sherpa-onnx speaker embedding .onnx model.
-SPEAKER_VERIFY_THRESHOLD: "0.5"  # Cosine similarity cutoff for speaker match; range 0.0-1.0.
+SPEAKER_VERIFY_THRESHOLD: "0.5"  # Cosine similarity cutoff for speaker match; range 0.0-1.0. Raise to 0.65–0.75 if strangers still pass when gating.
 SPEAKER_NUM_THREADS: "1"  # CPU threads for speaker embedding extraction.
 
 # -- Barge-in --
-BARGE_IN_THRESHOLD: "0.95"  # Speech probability threshold to interrupt TTS; range 0.0-1.0.
-BARGE_IN_CONFIRM_CHUNKS: "2"  # Consecutive chunks above threshold before barge-in fires.
+# Master switch: when 0, browser and Jetson must not interrupt TTS (no stopTtsPlayback, no barge event).
+BARGE_IN_ENABLED: "0"  # Master barge-in on/off; options: 1/0, true/false, yes/no, on/off.
+BARGE_IN_THRESHOLD: "0.95"  # Speech probability threshold to interrupt TTS (local Silero monitor); range 0.0-1.0.
+BARGE_IN_CONFIRM_CHUNKS: "4"  # Consecutive chunks above threshold before local barge-in fires (S3: was 2).
 BARGE_IN_COOLDOWN_MS: "800"  # Cooldown in milliseconds before another barge-in event can fire.
-BARGE_IN_ALWAYS_ON: "0"  # Monitor barge-in outside TTS playback; options: 1/0, true/false, yes/no, on/off.
+# S3: ignore barge-in for this many ms after TTS starts (speaker echo / AEC settling).
+BARGE_IN_ECHO_GUARD_MS: "450"
+# Only meaningful when BARGE_IN_ENABLED=1. When 0, local monitor runs only while TTS wait is armed.
+BARGE_IN_ALWAYS_ON: "0"  # Also monitor outside TTS wait; options: 1/0, true/false, yes/no, on/off.
 
 # -- Wake word --
-# Fuzzy-matched (not exact substring) against the leading words of each
-# transcript, since SenseVoice mangles "Aiko" unpredictably (not a normal
-# English word). Blank disables wake-word gating entirely — Aiko responds
-# to every utterance as before.
-WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
-WAKE_WORD_ALIASES: ""  # "|"-separated extra candidate phrases for observed ASR mishearings, e.g. "hey iko|hey eco|hey ecko".
+# Blank WAKE_WORD disables wake-word gating entirely — Aiko responds to
+# every utterance as before. When set, two engines are available; listen.py
+# picks automatically (see sensory/listen.py module docstring "Wake word"):
+#
+#   1. Acoustic (preferred) — set WAKE_WORD_MODEL_PATH below to a trained
+#      livekit-wakeword ONNX classifier. Runs frame-by-frame on raw audio
+#      before ASR, so SenseVoice never runs just to check the wake word.
+#      No pre-trained "hey Aiko" model exists — you must train one, e.g.:
+#        pip install "livekit-wakeword[train,eval,export]"
+#        # hey_aiko.yaml: model_name: hey_aiko / target_phrases: ["hey aiko"]
+#        livekit-wakeword setup --config hey_aiko.yaml
+#        livekit-wakeword run hey_aiko.yaml
+#      See https://docs.livekit.io/agents/multimodality/audio/wakeword/
+#   2. Fuzzy ASR-text (fallback) — used automatically if WAKE_WORD_MODEL_PATH
+#      is blank, the file is missing, or livekit-wakeword isn't installed.
+#      Fuzzy-matched (not exact substring) against the leading words of each
+#      transcript, since SenseVoice mangles "Aiko" unpredictably (not a
+#      normal English word). Still runs full ASR on every utterance while
+#      asleep, same as before.
+WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables both engines.
+
+# -- Wake word: acoustic engine (livekit-wakeword) --
+WAKE_WORD_MODEL_PATH: ""  # Path to trained hey-aiko.onnx. "" = use the fuzzy engine below instead.
+WAKE_WORD_THRESHOLD: "0.5"  # Wake model score (0.0-1.0) required per-frame; lower = more sensitive, more false positives.
+WAKE_WORD_CONFIRM_FRAMES: "3"  # Consecutive frames above threshold before the wake word fires (~32ms per frame).
+
+# -- Wake word: fuzzy ASR-text engine (fallback) --
+# Suggested aliases when WAKE_WORD is set (SenseVoice often mangles "Aiko"):
+WAKE_WORD_ALIASES: "hey iko|hey eco|hey ecko|hey echo|hey ico|hey aico|hi aiko|hi iko"
 WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
 
-# -- Trigger phrase --
-# Only takes effect when SPEAKER_VERIFY_ENABLED is also "1". Can be said
-# standalone or right after the wake word, e.g. "Hey Aiko here is Oppa ...".
-# Blank disables trigger-phrase gating.
-TRIGGER_PHRASE: ""  # Phrase required (with speaker verification) to activate Aiko, e.g. "here is oppa". "" disables.
-TRIGGER_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a trigger-phrase hit.
-TRIGGER_REQUIRE_SPEAKER_MATCH: "1"  # Trigger phrase alone isn't enough — cosine-sim speaker check must also pass; options: 1/0, true/false, yes/no, on/off.
-
 # -- Activation session --
-# Once woken/triggered, Aiko stays "active" (no phrase required, proactive
-# behavior allowed) until this many seconds pass with no further utterance.
-# After that she goes back to sleep and requires the configured phrase(s) again.
-ACTIVATION_TIMEOUT_S: "3600"  # Idle seconds before requiring wake word / trigger phrase again.
+ACTIVATION_TIMEOUT_S: "3600"  # Idle seconds before requiring wake word again.
 
 
 # Speak config

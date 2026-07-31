@@ -10,6 +10,9 @@
  *   - TTS playback: binary WAV frames → decode → analyser RMS → lip-sync blendshapes
  *   - chat: text input or voice transcription → user_input message → token streaming
  *   - gestures: server sends expression/viseme/pose → window.aikoSetX() → vrm.js
+ *
+ *      sets AIKO_TTS_STARTED_AT on TTS start + AIKO_BARGE_ECHO_GUARD_MS on mic start
+ *      so vad.js can ignore self-echo barge for BARGE_IN_ECHO_GUARD_MS after TTS begins.
  */
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -40,9 +43,10 @@ const vMode = document.getElementById('v-mode');
 const AUTO_MIC = false;
 let autoListenRequested = false;
 
+// Default barge-in off until server mic.start sets it (S0).
+window.AIKO_BARGE_IN_ENABLED = false;
+
 // ── viewport height fix (mobile browser toolbar collapse/expand) ─────────
-// dvh units are unreliable on Firefox Android; visualViewport tracks the
-// true visible area after the toolbar/keyboard resizes it.
 function setAppHeight() {
   const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
   document.documentElement.style.setProperty('--app-height', `${h}px`);
@@ -68,8 +72,6 @@ tickClock();
 setInterval(tickClock, 1000);
 
 // ── VAD init ──────────────────────────────────────────────────────────────
-// Browser runs a lightweight energy-RMS gate (vad.js) only — no model to load.
-// Backend Silero VAD is the authoritative speech/silence check.
 initVAD().then((status) => {
   vadDot.className = 'dot on';
   vadStatus.textContent = 'vad ready';
@@ -125,7 +127,17 @@ const EMOJI_EXPRESSIONS = {
 };
 
 function esc(s) {
-  return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  // Previous implementation replaced &, <, >, and " with themselves
+  // (identity regex substitutions — no-ops), leaving only the apostrophe
+  // actually escaped. Since this feeds innerHTML in addMessage() and
+  // renderAikoContent() for both the user's own echoed text and Aiko's
+  // responses, any "<", ">", "&", or '"' in chat text — including an ASR
+  // transcript, tool output, or a search-result summary — rendered as
+  // live HTML. Using textContent to build the escaped string sidesteps
+  // hand-writing an entity map entirely and can't get this wrong again.
+  const div = document.createElement('div');
+  div.textContent = s || '';
+  return div.innerHTML;
 }
 
 function parseMarkdown(text) {
@@ -144,7 +156,6 @@ function parseAikoMessage(rawText) {
   let text = rawText || '';
   let emoji = null;
 
-  // Extract leading emoji header if present (e.g. "😊:", "😒:", etc.)
   const emojiHeaderRegex = /^\s*(?:([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF])|:([a-zA-Z0-9_-]+):)?\s*:\s*/u;
   const match = text.match(emojiHeaderRegex);
   if (match) {
@@ -152,7 +163,6 @@ function parseAikoMessage(rawText) {
     text = text.replace(emojiHeaderRegex, '');
   }
 
-  // Extract non-verbal cues (actions, inner thoughts, feelings)
   const nonVerbalParts = [];
 
   text = text.replace(/\*([^*]+)\*/g, (m, p1) => {
@@ -328,8 +338,6 @@ function startMouthAnalyserLoop() {
       target = Math.max(0, Math.min(1, (rms - 0.012) * 9.5));
     }
 
-    // Fast attack, slower release. Pauses from punctuation naturally drop
-    // the analyser RMS, closing the mouth instead of racing ahead of audio.
     const coeff = target > ttsMouthLevel ? 0.65 : 0.28;
     ttsMouthLevel += (target - ttsMouthLevel) * coeff;
     if (window.aikoSetMouthOpen) window.aikoSetMouthOpen(ttsMouthLevel);
@@ -356,7 +364,8 @@ async function playNextTts() {
   const buf = ttsQueue.shift();
   if (!buf) { ttsPlaying = false; window.aikoIsSpeaking = false; return; }
   ttsPlaying = true;
-  window.aikoIsSpeaking = true;          // exposed for vad.js to read
+  window.aikoIsSpeaking = true;
+  window.AIKO_TTS_STARTED_AT = performance.now();  // S3 echo guard
   try {
     const ctx = getTtsContext();
     const audioBuffer = await ctx.decodeAudioData(buf.slice(0));
@@ -386,10 +395,6 @@ function stopTtsPlayback() {
 window.stopTtsPlayback = stopTtsPlayback;
 
 // ── mic capture ───────────────────────────────────────────────────────────
-// Opened/closed by server mic.start / mic.stop messages.
-// Frames go through processVADFrame() in vad.js. By default browser VAD gates
-// network audio; WEBUI_BROWSER_VAD_GATE=0 asks the browser to stream raw PCM
-// for diagnostics so server-side VAD can be tested.
 let micStream = null;
 let micContext = null;
 let micSource = null;
@@ -400,9 +405,17 @@ let browserVadGate = true;
 let micCommandSeq = 0;
 let micSecureContextWarned = false;
 
+let micStartPromise = null;
+
 async function startMic() {
   if (micContext) return true;
-  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+  if (micStartPromise) return micStartPromise;   // <- dedupe concurrent callers
+  micStartPromise = _startMicInner().finally(() => { micStartPromise = null; });
+  return micStartPromise;
+}
+
+async function _startMicInner() {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     console.error('[mic] microphone requires localhost or HTTPS');
     if (!micSecureContextWarned) {
       micSecureContextWarned = true;
@@ -419,25 +432,17 @@ async function startMic() {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
     });
     micContext = new AudioContext({ sampleRate: 16000 });
-    // Resume if suspended (happens when AudioContext is created outside a user
-    // gesture, e.g. from a WebSocket message handler on a reconnected session).
     if (micContext.state === 'suspended') {
       await micContext.resume();
       console.log('[mic] AudioContext was suspended — resumed');
     }
     micSource = micContext.createMediaStreamSource(micStream);
 
-    // ── Serialised VAD processing queue ───────────────────────────────────
-    // Energy VAD is synchronous math, but keeping this queue ensures frames
-    // are always sent to the server in strict arrival order.
     let _vadQueue = Promise.resolve();
     function pushVADFrame(frame) {
       _vadQueue = _vadQueue.then(() => processVADFrame(frame, ws, browserVadGate)).catch(e => console.error('[mic] VAD error:', e));
     }
 
-    // ── AudioWorklet (preferred) ──────────────────────────────────────────
-    // Falls back to ScriptProcessorNode if the worklet module cannot be
-    // loaded (e.g. MIME-type issues with the static file server).
     let awok = false;
     try {
       await micContext.audioWorklet.addModule('./pcm-worklet.js');
@@ -453,23 +458,21 @@ async function startMic() {
         }
       };
       micSource.connect(micWorklet);
-      micWorklet.connect(micContext.destination);  // required so the audio graph processes real samples
+      micWorklet.connect(micContext.destination);
       awok = true;
       console.log('[mic] using AudioWorklet capture');
     } catch (awErr) {
       console.warn('[mic] AudioWorklet failed, falling back to ScriptProcessorNode:', awErr);
     }
 
-    // ── ScriptProcessorNode fallback ──────────────────────────────────────
     if (!awok) {
-      const bufSize = 2048;  // 2048 samples = 128 ms at 16 kHz — supported everywhere
+      const bufSize = 2048;
       const frameSamples = 512;
       let _spBuf = new Float32Array(0);
       const spNode = micContext.createScriptProcessor(bufSize, 1, 1);
       spNode.onaudioprocess = (e) => {
         if (!wsReady() || !micStreamingEnabled) return;
         const input = e.inputBuffer.getChannelData(0);
-        // Accumulate until we have full 512-sample frames
         let combined = new Float32Array(_spBuf.length + input.length);
         combined.set(_spBuf);
         combined.set(input, _spBuf.length);
@@ -481,8 +484,8 @@ async function startMic() {
         }
       };
       micSource.connect(spNode);
-      spNode.connect(micContext.destination);  // required by spec (silent output)
-      micWorklet = spNode;  // reuse micWorklet ref for cleanup
+      spNode.connect(micContext.destination);
+      micWorklet = spNode;
       console.log('[mic] using ScriptProcessorNode capture');
     }
 
@@ -538,14 +541,9 @@ micBtn.addEventListener('click', async () => {
   const asrEnabled = vMode.textContent.includes('ASR');
 
   if (micContext) {
-    // Mic is already open: close it and disable ASR so the backend stops
-    // waiting for browser voice frames.
     stopMic();
     if (asrEnabled) ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
   } else {
-    // Mic is closed: open it first. If ASR was already on at startup, do
-    // not send /listen because that would toggle ASR off right as the
-    // browser starts capturing.
     const ok = await startMic();
     if (!ok) return;
     if (!asrEnabled) ws.send(JSON.stringify({ type: 'user_input', text: '/listen' }));
@@ -567,17 +565,14 @@ function websocketURL() {
     ? protoOverride + ":"
     : location.protocol === "https:" ? "wss:" : "ws:";
 
-  // If accessed via Tailscale (.ts.net), use path-based routing (no port)
   if (wsHost.endsWith(".ts.net")) {
     return wsProto + "//" + wsHost + "/ws";
   }
 
-  // If custom ws port is specified explicitly, connect there
   if (wsPortParam) {
     return wsProto + "//" + wsHost + ":" + wsPortParam + "/";
   }
 
-  // Default to path-based routing on same port as page
   const portPart = location.port ? ":" + location.port : "";
   return wsProto + "//" + wsHost + portPart + "/ws";
 }
@@ -601,14 +596,6 @@ function connectWS() {
     let msg;
     try { msg = JSON.parse(e.data); } catch (_) { return; }
 
-    // Only real conversation content should force an early switch out of the
-    // splash screen (this fallback exists for a browser reconnecting mid-chat
-    // after boot already completed, since no further 'phase' broadcast will
-    // ever arrive for that new connection). 'vitals' must NOT be in this list:
-    // spin_loop() broadcasts vitals every ~250ms starting the instant the
-    // browser connects — well before AikoWakeup().boot() has actually finished
-    // loading subsystems — which was hiding the splash almost immediately
-    // while the real multi-minute boot silently continued underneath.
     if (!chatPhaseActive && ['chat', 'token'].includes(msg.type)) {
       switchToChat();
     }
@@ -626,6 +613,10 @@ function connectWS() {
         if (msg.action === 'start') {
           const seq = ++micCommandSeq;
           browserVadGate = msg.browser_vad_gate !== false;
+          // S0: master barge-in switch from server (BARGE_IN_ENABLED)
+          window.AIKO_BARGE_IN_ENABLED = !!msg.barge_in_enabled;
+          // S3: echo guard window from server (BARGE_IN_ECHO_GUARD_MS)
+          window.AIKO_BARGE_ECHO_GUARD_MS = msg.echo_guard_ms ?? 450;
           startMic().then((ok) => {
             if (!ok || seq !== micCommandSeq) return;
             if (window.resetVADState) window.resetVADState();
@@ -676,15 +667,12 @@ async function checkAuth() {
     if (res.ok) {
       let data = {};
       try { data = await res.json(); } catch (_) { /* no body / non-JSON */ }
-      // Displayed chat-label username (falls back to 'you' if session has none).
       window.currentUsername = data.username || 'You';
       const aiNameEl = document.getElementById('vrm-ai-name');
       if (aiNameEl) aiNameEl.textContent = data.ai_name || 'Aiko';
       const userNameEl = document.getElementById('vrm-user-name');
       if (userNameEl) userNameEl.textContent = window.currentUsername;
       hideAuthOverlay();
-      // If the backend reports the user hasn't accepted the current terms
-      // version, gate on the terms modal before opening the WebSocket.
       if (data.accepted_terms === false) {
         showTermsOverlay();
       } else {
@@ -713,9 +701,6 @@ function loginPatreon() {
   window.location.href = '/auth/patreon/login';
 }
 
-// ── Terms / guidelines modal ───────────────────────────────────────────────
-// FIX: previously nothing in this file referenced these elements at all, so
-// the checkbox never enabled the Continue button and clicking it did nothing.
 const termsOverlay = document.getElementById('terms-overlay');
 const termsCheckbox = document.getElementById('terms-checkbox');
 const termsContinueBtn = document.getElementById('terms-continue');
@@ -751,7 +736,6 @@ termsContinueBtn.addEventListener('click', async () => {
   connectWS();
 });
 
-// Load config and check auth
 fetch('/api/auth/config')
   .then(r => {
     if (!r.ok) throw new Error('Failed to load auth config');
@@ -762,9 +746,6 @@ fetch('/api/auth/config')
     return checkAuth();
   })
   .then(authenticated => {
-    // checkAuth() already hides the login overlay and either opens the
-    // terms modal or connects the WebSocket when authenticated — only the
-    // "not authenticated" branch needs handling here.
     if (!authenticated) {
       authOverlay.classList.remove('hidden');
       setAuthStatus('Authentication required. Please log in.');

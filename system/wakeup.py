@@ -105,10 +105,10 @@ from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting st
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
 from memory.memorize import AikoMemorize                    # for initiating memory system
-from cognition.think import AikoThink                       # for initiating cognitive core
-from sensory.speak import AikoSpeak                         # for initiating speaking module
-from sensory.listen import AikoListen                       # for initiating listening module
-from system.schedule import (                               # for initiating scheduler system
+from cognition.think import AikoThink                        # for initiating cognitive core
+from sensory.speak import AikoSpeak                          # for initiating speaking module
+from sensory.listen import AikoListen                        # for initiating listening module
+from system.schedule import (                                # for initiating scheduler system
     start_scheduler,
 )
 
@@ -283,7 +283,7 @@ class AikoWakeup:
         with ThreadPoolExecutor(max_workers=2) as ex:                                         # start thread pool with 2 worker threads (for loading memory system and cognitive core concurrently)
             mem_future = ex.submit(init_memorize)                                             # start memory system boots on thread 1
             think_future = ex.submit(init_think, lambda: mem_future.result())                 # start cognitive core boots on thread 2
-            
+
             # memorize's .result() never raises — init_memorize() always returns something
             # (None on failure, logged internally), so no try/except needed here.
             # think's .result() DOES re-raise on failure — caught below so we can still

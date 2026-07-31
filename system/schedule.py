@@ -1067,11 +1067,15 @@ class ScheduleRunner:
         generate_and_post_fn: Callable | None = None,
         consolidate_fn: Callable | None = None,
         user_id: str | None = None,
+        llm_client=None,
+        llm_model: str | None = None,
     ) -> None:
         self._on_due               = on_due
         self._memorize             = memorize
         self._generate_and_post_fn = generate_and_post_fn
         self._consolidate_fn       = consolidate_fn
+        self._llm_client           = llm_client
+        self._llm_model            = llm_model
         self._user_id              = user_id or (memorize.get_user_id() if memorize and memorize.get_user_id() else None) or current_user_id()
         self._wakeup               = threading.Event()
         self._stop                 = threading.Event()
@@ -1459,7 +1463,11 @@ class ScheduleRunner:
         )
 
         try:
-            result = execute_graph(graph)
+            result = execute_graph(
+                graph,
+                llm_client=self._llm_client,
+                llm_model=self._llm_model,
+            )
             log.info(
                 "Schedule graph %s completed — ok=%s, nodes=%d",
                 graph.id, all(r.ok for r in result.results), len(result.results),
@@ -1493,6 +1501,8 @@ def start_scheduler(
         generate_and_post_fn=generate_and_post,
         consolidate_fn=maybe_run_consolidation,
         user_id=user_id,
+        llm_client=getattr(think, "_client", None),
+        llm_model=getattr(think, "_llm_model", None),
     )
     register_scheduler(scheduler)
     scheduler.start()
