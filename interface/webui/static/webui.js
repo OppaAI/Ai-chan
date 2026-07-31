@@ -11,7 +11,7 @@
  *   - chat: text input or voice transcription → user_input message → token streaming
  *   - gestures: server sends expression/viseme/pose → window.aikoSetX() → vrm.js
  *
- * S3: sets AIKO_TTS_STARTED_AT on TTS start + AIKO_BARGE_ECHO_GUARD_MS on mic start
+ *      sets AIKO_TTS_STARTED_AT on TTS start + AIKO_BARGE_ECHO_GUARD_MS on mic start
  *      so vad.js can ignore self-echo barge for BARGE_IN_ECHO_GUARD_MS after TTS begins.
  */
 
@@ -405,9 +405,17 @@ let browserVadGate = true;
 let micCommandSeq = 0;
 let micSecureContextWarned = false;
 
+let micStartPromise = null;
+
 async function startMic() {
   if (micContext) return true;
-  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+  if (micStartPromise) return micStartPromise;   // <- dedupe concurrent callers
+  micStartPromise = _startMicInner().finally(() => { micStartPromise = null; });
+  return micStartPromise;
+}
+
+async function _startMicInner() {
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     console.error('[mic] microphone requires localhost or HTTPS');
     if (!micSecureContextWarned) {
       micSecureContextWarned = true;
