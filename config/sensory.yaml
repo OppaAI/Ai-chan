@@ -2,7 +2,8 @@
 #
 # Settings for sensory/listen.py.
 # Controls ASR model/provider, Silero VAD thresholds, barge-in, speaker
-# verification, and wake word / trigger phrase activation gating.
+# verification, and wake word activation gating. (Trigger-phrase gating was
+# removed — wake word is the sole activation mechanism.)
 # -- ASR --
 ASR_DEVICE: "cuda"  # sherpa-onnx execution provider; options usually cpu or cuda.
 ASR_LANGUAGE: "auto"  # Transcription language; options: auto, en, ja, zh, ko, yue, nospeech.
@@ -26,7 +27,6 @@ LISTEN_VAD_THRESHOLD: "0.5"  # Silero speech probability threshold; range 0.0-1.
 LISTEN_SILENCE_CHUNKS: "66"  # Consecutive silent chunks before utterance ends — this is the authoritative silence-timeout knob (~32ms per chunk).
 LISTEN_MIN_CHUNKS: "10"  # Minimum speech chunks required to accept audio and filter noise.
 LISTEN_MAX_SECONDS: "30"  # Hard cap on one recording length in seconds.
-LISTEN_DEVICE: ""  # sounddevice input index; blank means system default.
 
 # -- Speaker verification --
 SPEAKER_VERIFY_ENABLED: "0"  # Load enrollment model and score each utterance; options: 1/0, true/false, yes/no, on/off.
@@ -55,13 +55,6 @@ WAKE_WORD: ""  # Phrase that wakes Aiko from idle, e.g. "hey aiko". "" disables.
 # Suggested aliases when WAKE_WORD is set (SenseVoice often mangles "Aiko"):
 WAKE_WORD_ALIASES: "hey iko|hey eco|hey ecko|hey echo|hey ico|hey aico|hi aiko|hi iko"
 WAKE_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) required to count as a wake-word hit.
-
-# -- Trigger phrase --
-# Optional second phrase (e.g. with speaker verify). For single-user home use,
-# leave blank — wake word alone (or no wake word) is enough.
-TRIGGER_PHRASE: ""  # Extra phrase; "" disables. Prefer empty unless multi-user lock is required.
-TRIGGER_FUZZY_THRESHOLD: "70"  # Fuzzy match score (0-100) for trigger phrase.
-TRIGGER_REQUIRE_SPEAKER_MATCH: "1"  # If trigger is used, require speaker match too.
 
 # -- Activation session --
 ACTIVATION_TIMEOUT_S: "3600"  # Idle seconds before requiring wake word again.
