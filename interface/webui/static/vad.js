@@ -76,7 +76,12 @@ async function processVADFrame(frame, ws, gate = true) {
 
 function _calcThresholds() {
     const startThresh = Math.max(ENERGY_START_RMS, _noiseFloor * 2.2);
-    const endThresh = Math.min(_noiseFloor * 1.5, 0.5);
+    // ENERGY_END_RMS was declared but never actually applied here — endThresh
+    // had no floor at all, only the 0.5 ceiling. In practice this rarely
+    // bites (the 0.5 ceiling only engages once _noiseFloor exceeds ~0.33
+    // RMS, i.e. near-clipping ambient noise), but it's still a real gap:
+    // add the floor back so endThresh can't collapse toward 0 either.
+    const endThresh = Math.max(ENERGY_END_RMS, Math.min(_noiseFloor * 1.5, 0.5));
     return { startThresh, endThresh };
 }
 
