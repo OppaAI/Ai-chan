@@ -117,6 +117,18 @@ Custom backend (replaces Qdrant + mem0):
     insert unbounded duplicate rows that dream()'s merge pass could never
     clean up once pinned=1 was set.
 
+Clock convention:
+  - created_at is ALWAYS stored as datetime.now(timezone.utc).isoformat() —
+    every write path (add(), add_raw(), pin()) agrees on this, and every
+    reader (_rank_and_score's recency scoring, _dream_boost's is_recent
+    check, get_since()/get_between()'s string range comparisons) depends
+    on that consistency. Do not reintroduce a local-time write path here.
+  - format_for_context()'s user-facing age labels ("today", "yesterday",
+    "N days ago") are the one place local time still matters: they convert
+    the UTC created_at into the local day before diffing against
+    bioclock.local_now(), so "today"/"yesterday" reflect the person's
+    calendar day rather than UTC's.
+
 Async write queue:
   - AikoMemorize.queue_write() lets a caller (think.py's chat/webchat
     turns) enqueue a fire-and-forget memory write without blocking the
@@ -905,6 +917,19 @@ class _MemoryBackend:
       - `iter_all()` now takes the lock around each page fetch (not held
         across the yield, to avoid blocking other threads for the whole
         duration a caller spends processing a batch).
+      - `add()`'s created_at now uses datetime.now(timezone.utc).isoformat(),
+        matching add_raw()/_touch_memories()/pin(). It previously used
+        bioclock.local_now(), which produced two incompatible clock
+        formats in the same column depending on write path — skewing
+        _rank_and_score's recency scoring, silently breaking _dream_boost's
+        is_recent check (naive-vs-aware subtraction raised, was swallowed
+        by a bare except), and making get_since()/get_between()'s raw
+        string range comparisons sort inconsistently.
+      - `_wait_for_write_window()`'s hard-cap check no longer requires
+        `not is_active_turn()` to also be true. The deadline now overrides
+        a turn state stuck "active" forever — which is the exact scenario
+        MEMORY_WRITE_MAX_WAIT exists to guard against, so gating the cap on
+        that same condition meant it could never fire when it mattered.
     """
 
     def __init__(
@@ -1156,9 +1181,13 @@ class _MemoryBackend:
         if not facts:
             return []
 
-        now = bioclock.local_now()
-        if not isinstance(now, str):
-            now = now.isoformat() if hasattr(now, "isoformat") else str(now)
+        # created_at is UTC everywhere (matches add_raw()/_touch_memories()/
+        # pin()) — see the class docstring's "Fixes applied" note. Mixing
+        # local_now() here and UTC elsewhere broke every downstream
+        # comparison: _rank_and_score's recency scoring, _dream_boost's
+        # is_recent check, and get_since()/get_between()'s string range
+        # comparisons.
+        now = datetime.now(timezone.utc).isoformat()
         ids: list[str] = []
 
         try:
@@ -1933,11 +1962,12 @@ class AikoMemorize:
             idle_for = time.time() - idle_since()
             if not is_active_turn() and idle_for >= MEMORY_WRITE_IDLE_GRACE:
                 return
-            if (
-                MEMORY_WRITE_MAX_WAIT > 0
-                and time.monotonic() >= deadline
-                and not is_active_turn()
-            ):
+            # FIX: the hard cap now overrides is_active_turn() outright,
+            # instead of requiring it to also be False. The old
+            # `and not is_active_turn()` gate meant the cap could never
+            # fire in exactly the scenario it exists for — a turn state
+            # stuck "active" forever — letting the wait spin indefinitely.
+            if MEMORY_WRITE_MAX_WAIT > 0 and time.monotonic() >= deadline:
                 return
             sleep_for = min(0.5, max(0.05, MEMORY_WRITE_IDLE_GRACE - idle_for))
             time.sleep(sleep_for)
@@ -2114,11 +2144,26 @@ class AikoMemorize:
         """
         Format retrieved memories into a compact string for injection
         into the conversation context. Returns None if nothing to inject.
+
+        created_at is always stored in UTC (see _MemoryBackend.add()/
+        add_raw()), but the age labels here ("today", "yesterday", "N days
+        ago") should reflect the person's local calendar day, not UTC's.
+        So each row's UTC created_at is converted into local time before
+        diffing against bioclock.local_now() — diffing the raw UTC
+        timestamp against a local "now" would misplace the day boundary
+        by whatever the local UTC offset is (e.g. a memory from 11pm local
+        last night could read as "today" or vice versa near midnight).
         """
         if not memories:
             return None
 
-        now   = bioclock.local_now()
+        now = bioclock.local_now()
+        # Local tz offset used to convert stored UTC timestamps into the
+        # same local frame as `now`, regardless of whether bioclock returns
+        # a naive or tz-aware datetime.
+        local_tz = datetime.now().astimezone().tzinfo
+        now_is_aware = isinstance(now, datetime) and now.tzinfo is not None
+
         lines = [
             "<memory_context>",
             "Facts about the person you are speaking with — not a separate person. Use silently. Never quote or reference this block directly.",
@@ -2133,8 +2178,15 @@ class AikoMemorize:
             created_at = m.get("created_at")
             if created_at:
                 try:
-                    ts    = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                    delta = now - ts
+                    ts = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        # legacy rows written before the UTC-everywhere fix —
+                        # treat as UTC rather than silently mismatching.
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    ts_local = ts.astimezone(local_tz)
+                    if not now_is_aware:
+                        ts_local = ts_local.replace(tzinfo=None)
+                    delta = now - ts_local
                     days  = delta.days
                     if days == 0:
                         age = "today"
