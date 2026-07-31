@@ -84,11 +84,15 @@ MEMORY_WRITE_IDLE_GRACE: "3.0"  # Seconds of idle chat before background memory 
 MEMORY_WRITE_MAX_WAIT: "45.0"  # Max seconds memory writer waits before forcing the write.
 
 # -- Phase A metadata (auto-migrated; no rebuild) --
-# Columns added on first open: status, supersedes_id, kind, source, entities.
-# Existing rows default status=active. Offline migrate:
-#   uv run python -m util.migrate_memory_phase_a
-#   uv run python -m util.migrate_memory_phase_a --dry-run
-# Recall filters status=active by default (include_history=True to see superseded).
+# Columns: status, supersedes_id, kind, source, entities.
+# Offline migrate: uv run python -m util.migrate_memory_phase_a
+
+# -- Phase B entity tags + unified search (no rebuild, no extra LLM) --
+# Rule-based entity extract + kind on write. Optional backfill:
+#   uv run python -m util.migrate_memory_phase_b --dry-run
+#   uv run python -m util.migrate_memory_phase_b
+# Unified facade: from memory import search_memory
+MEMORY_ENTITY_BOOST: "0.003"  # Soft score boost when query text mentions a tagged entity on a personal memory.
 
 # -- Decay and dream merge --
 FORGET_HALF_LIFE_DAYS: "21"  # Days until memory retention score halves.

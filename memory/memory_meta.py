@@ -1,13 +1,14 @@
 """
 memory/memory_meta.py
 
-Phase A memory metadata: schema ensure, write-op classification, runtime hooks.
+Phase A/B memory metadata: schema ensure, write-op classification, runtime hooks.
 
 Design constraints:
   - Zero extra LLM calls (latency-safe on Jetson / local models).
   - Additive SQLite columns only — no vector rebuild.
   - Idempotent migration (boot + CLI).
   - Hooks install once into memory.memorize without requiring a full file rewrite.
+  - Phase B: rule-based entity tags + kind on write.
 """
 from __future__ import annotations
 
@@ -65,6 +66,20 @@ def entities_to_json(entities: list[str] | None) -> str:
     return json.dumps(cleaned, ensure_ascii=False)
 
 
+def entities_from_json(raw: Any) -> list[str]:
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(x).strip() for x in raw if str(x).strip()]
+
+
 def classify_write_op(
     *,
     similarity: float | None,
@@ -117,10 +132,56 @@ def ensure_phase_a_schema(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
+def backfill_entities(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str | None = None,
+    limit: int = 0,
+    only_empty: bool = True,
+) -> int:
+    """Fill entities/kind for existing rows using rule-based extractors.
+
+    No re-embed. Returns number of rows updated.
+    """
+    from memory.entities import classify_kind, extract_entities
+
+    ensure_phase_a_schema(conn)
+    cols = existing_columns(conn)
+    if "entities" not in cols:
+        return 0
+
+    sql = "SELECT id, memory, entities, kind FROM memories WHERE 1=1"
+    params: list[Any] = []
+    if user_id:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    if only_empty:
+        sql += " AND (entities IS NULL OR entities = '' OR entities = '[]')"
+    sql += " ORDER BY created_at DESC"
+    if limit and limit > 0:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+
+    rows = conn.execute(sql, params).fetchall()
+    updated = 0
+    for row in rows:
+        text = row["memory"] or ""
+        ents = extract_entities(text)
+        kind = classify_kind(text, default=str(row["kind"] or KIND_FACT))
+        conn.execute(
+            "UPDATE memories SET entities = ?, kind = ? WHERE id = ?",
+            (entities_to_json(ents), kind, row["id"]),
+        )
+        updated += 1
+    if updated:
+        conn.commit()
+        log.info("memory Phase B backfill: updated %d rows", updated)
+    return updated
+
+
 def _active_sql(active_only: bool) -> str:
     if not active_only:
         return ""
-    # NULL treated as active for partially migrated rows
     return " AND (m.status = 'active' OR m.status IS NULL)"
 
 
@@ -140,8 +201,7 @@ def install_phase_a_hooks() -> None:
         return
 
     import sqlite_vec
-
-    orig_knn = m._sqlite_knn_search
+    from memory.entities import classify_kind, extract_entities
 
     def _sqlite_knn_search(
         conn: sqlite3.Connection,
@@ -184,10 +244,6 @@ def install_phase_a_hooks() -> None:
     m._sqlite_knn_search = _sqlite_knn_search
 
     _Backend = m._MemoryBackend
-    _orig_fts = _Backend._fts_pass
-    _orig_add = _Backend.add
-    _orig_add_raw = _Backend.add_raw
-    _orig_search = _Backend.search
 
     def _fts_pass(self, fts_query, user_id, fts_limit, active_only=True):
         if fts_query is None:
@@ -218,20 +274,23 @@ def install_phase_a_hooks() -> None:
         pinned: int = 0,
         source: str = SOURCE_CHAT,
         supersedes_id: str | None = None,
-        kind: str = KIND_FACT,
+        kind: str | None = None,
+        entities: list[str] | None = None,
     ) -> None:
         cols = existing_columns(self._conn)
+        kind_val = kind or classify_kind(text, default=KIND_FACT)
+        ents_json = entities_to_json(entities if entities is not None else extract_entities(text))
         if "status" in cols:
             self._conn.execute(
                 """
                 INSERT INTO memories
                     (id, user_id, memory, created_at, access_count, last_accessed_at, pinned,
                      status, supersedes_id, kind, source, entities)
-                VALUES (?, ?, ?, ?, 0, 'never', ?, ?, ?, ?, ?, '[]')
+                VALUES (?, ?, ?, ?, 0, 'never', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     mem_id, user_id, text, now, pinned,
-                    STATUS_ACTIVE, supersedes_id, kind, source,
+                    STATUS_ACTIVE, supersedes_id, kind_val, source, ents_json,
                 ),
             )
         else:
@@ -251,7 +310,6 @@ def install_phase_a_hooks() -> None:
     def _maybe_supersede_neighbor(
         self, user_id: str, vector: list[float], text: str
     ) -> tuple[str, str | None]:
-        """Return (op, supersedes_id). op in noop|add|supersede."""
         existing = m._sqlite_knn_search(
             self._conn, vector, user_id,
             limit=1, threshold=m.WRITE_DEDUP_THRESHOLD, active_only=True,
@@ -272,7 +330,6 @@ def install_phase_a_hooks() -> None:
             dedup_threshold=m.WRITE_DEDUP_THRESHOLD,
         )
         if op == "supersede" and pinned:
-            # Never retire pinned facts; keep both.
             return "add", None
         if op == "supersede":
             return "supersede", old_id
@@ -414,9 +471,6 @@ def install_phase_a_hooks() -> None:
     _Backend.add_raw = add_raw
     _Backend.search = search
 
-    # Public search: thread include_history; cache key includes it.
-    _orig_public_search = m.AikoMemorize.search
-
     def public_search(
         self,
         query: str,
@@ -476,4 +530,4 @@ def install_phase_a_hooks() -> None:
     m.AikoMemorize.search = public_search
     m._PHASE_A_HOOKS = True
     _PHASE_A_INSTALLED = True
-    log.info("memory Phase A hooks installed (active recall + supersede writes)")
+    log.info("memory Phase A/B hooks installed (active recall + supersede + entities)")
