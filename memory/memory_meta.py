@@ -9,6 +9,7 @@ Design constraints:
   - Idempotent migration (boot + CLI).
   - Hooks install once into memory.memorize without requiring a full file rewrite.
   - Phase B: rule-based entity tags + kind on write.
+  - Phase D polish: live co-mention upsert on write (best-effort).
 """
 from __future__ import annotations
 
@@ -279,7 +280,8 @@ def install_phase_a_hooks() -> None:
     ) -> None:
         cols = existing_columns(self._conn)
         kind_val = kind or classify_kind(text, default=KIND_FACT)
-        ents_json = entities_to_json(entities if entities is not None else extract_entities(text))
+        ents_list = entities if entities is not None else extract_entities(text)
+        ents_json = entities_to_json(ents_list)
         if "status" in cols:
             self._conn.execute(
                 """
@@ -306,6 +308,21 @@ def install_phase_a_hooks() -> None:
             "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
             (mem_id, sqlite_vec.serialize_float32(vector)),
         )
+
+        # Phase D: live co-mention edges (best-effort; never fail the write)
+        try:
+            from memory.entity_graph import upsert_co_mentions
+
+            if ents_list and len([e for e in ents_list if str(e).strip()]) >= 2:
+                upsert_co_mentions(
+                    self._conn,
+                    user_id=user_id,
+                    entities=ents_list,
+                    memory_id=mem_id,
+                    updated_at=now if isinstance(now, str) else None,
+                )
+        except Exception as e:
+            log.debug("entity_relations upsert skipped: %s", e)
 
     def _maybe_supersede_neighbor(
         self, user_id: str, vector: list[float], text: str
