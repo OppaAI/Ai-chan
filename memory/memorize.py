@@ -2064,7 +2064,8 @@ def switch_user(self, user_id: str) -> None:
     def _write_search_replay(self, query: str, results: list[dict], user_id: str) -> None:
         """Append search to replay log (debug/tuning, env-gated)."""
         try:
-            replay_path = Path.home() / ".aiko" / "memory" / "search_replay.jsonl"
+            db_path = Path(_memory_db_path_for_user(user_id))
+            replay_path = db_path.parent / "search_replay.jsonl"
             replay_path.parent.mkdir(parents=True, exist_ok=True)
             record = {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
