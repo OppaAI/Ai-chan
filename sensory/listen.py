@@ -2,8 +2,10 @@
 sensory/listen.py
 
 Aiko's speech-to-text input layer.
-  - Captures microphone audio; Silero VAD (neural) is the single authoritative
-    speech/silence gate for ALL audio sources, local mic or WebUI.
+  - Captures microphone audio; Silero VAD (neural, pure onnxruntime via
+    sherpa_onnx — no torch, see "VAD backend" below) is the single
+    authoritative speech/silence gate for ALL audio sources, local mic or
+    WebUI.
   - For the WebUI path, the browser only runs a lightweight energy-RMS gate
     client-side (see static/vad.js) to decide "loud enough to bother sending" —
     it is NOT a speech/silence judgment. Silero here is what actually decides
@@ -13,12 +15,12 @@ Aiko's speech-to-text input layer.
   - Optionally verifies the speaker against one enrolled voice embedding
     (sherpa-onnx SpeakerEmbeddingExtractor) on the same buffered audio, run
     in parallel with transcription — see SPEAKER_VERIFY_ENABLED below
-  - Optionally gates responses behind a wake word ("Hey Aiko") and/or a
-    trigger phrase said alongside speaker verification ("Here is Oppa") —
-    see WAKE_WORD below
+  - Optionally gates responses behind a wake word ("Hey Aiko"), either
+    acoustically (livekit-wakeword, real-time, no torch) or via fuzzy
+    post-ASR text match (legacy fallback) — see "Wake word" below
   - Exposes listen() (blocking) and listen_async() (callback) for UI
-  - Staged init: load_asr() → load_vad() → load_speaker_id() → join_warmup()
-    for granular boot progress reporting via wakeup.py
+  - Staged init: load_asr() → load_vad() → load_wakeword() → load_speaker_id()
+    → join_warmup() for granular boot progress reporting via wakeup.py
   - Always-on barge-in VAD monitor: start_barge_in_monitor() runs a
     lightweight Silero-only daemon that sets _barge_in_event when speech is
     detected during TTS playback, enabling speak.wait_or_barge_in()
@@ -32,12 +34,60 @@ directly inside trigger_barge_in() / _barge_in_loop() / listen(), so the
 switch is load-bearing by construction rather than depending on some other
 module getting imported and run first.
 
+VAD backend (torch removed):
+    Previously load_vad() used the `silero-vad` pip package
+    (load_silero_vad(onnx=True)) — its inference ran through onnxruntime,
+    but its Python wrapper still required `torch.Tensor` in/out and managed
+    the model's recurrent state as torch tensors, so `torch` (~1GB+ install)
+    stayed a hard dependency purely for tensor plumbing, not compute.
+    VAD now runs through sherpa_onnx.VoiceActivityDetector instead — same
+    Silero ONNX weights, pure onnxruntime, zero torch. That API is
+    segment-oriented (accept_waveform() + is_speech_detected()) rather than
+    a bare per-chunk probability, so _score_chunk() has been replaced with
+    _is_speech() (see there for the two-instance-vs-two-threshold note) and
+    _record()/_barge_in_loop() were adjusted to call it. Torch is no longer
+    imported anywhere in this module.
+
+Wake word (see config/sensory.yaml):
+    WAKE_WORD ("" by default, disabled) turns wake-word gating on. Two
+    engines are supported, chosen automatically:
+
+    1. Acoustic (preferred) — set WAKE_WORD_MODEL_PATH to a trained
+       livekit-wakeword ONNX classifier (see util/train_wakeword.py or the
+       livekit-wakeword CLI: https://docs.livekit.io/agents/multimodality/audio/wakeword/).
+       Detection runs frame-by-frame on raw audio *during* _record(), before
+       any ASR — so unlike the old approach, SenseVoice never has to run
+       just to check whether the wake word was said, and "asleep" utterances
+       never get transcribed at all. Requires `pip install livekit-wakeword`
+       (numpy + onnxruntime only, no torch) and a trained model — there is
+       no pre-trained "hey Aiko" model, you must train one.
+    2. Fuzzy ASR-text (legacy fallback) — used automatically if
+       WAKE_WORD_MODEL_PATH is unset, the file is missing, or livekit-wakeword
+       isn't installed. SenseVoice mangles "Aiko" unpredictably since it's
+       not a normal English word, so matching is fuzzy (rapidfuzz ratio)
+       against the leading words of the *transcribed* text, not an exact
+       substring check — see _strip_prefix_phrase() / _apply_activation_gate().
+       WAKE_WORD_ALIASES lets you hardcode observed mishearings
+       ("hey iko|hey eco|hey ecko") as extra candidates. This engine still
+       runs full ASR on every utterance while asleep, same as before.
+
+    Once woken/triggered (either engine), Aiko stays "active" (no phrase
+    required) until ACTIVATION_TIMEOUT_S seconds pass with no further
+    utterance, at which point the session goes back to sleep and the
+    configured phrase(s) are required again. Use AikoListen.is_active() to
+    check this from other subsystems (e.g. suppress proactive/unsolicited
+    behavior while asleep), and AikoListen.sleep_now() to force it inactive
+    (e.g. an explicit "go to sleep" command).
+
 Dependencies:
-    pip install sherpa-onnx numpy silero-vad scipy huggingface_hub rapidfuzz
-    Model: auto-downloaded to HF cache on first use (see ASR_MODEL in .env)
+    pip install sherpa-onnx numpy huggingface_hub rapidfuzz
+    pip install livekit-wakeword   # optional — acoustic wake word engine
+    Models: SenseVoice + Silero VAD auto-downloaded to HF cache on first use
+    (see ASR_MODEL in .env; the VAD weights come from csukuangfj/vad on HF).
     parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
     rapidfuzz is optional — falls back to stdlib difflib if not installed,
-    just slower.
+    just slower (only exercised by the fuzzy wake-word fallback now, not
+    the VAD path).
 
 Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     1. Download a speaker embedding model (.onnx) from
@@ -49,21 +99,6 @@ Speaker verification (optional — see SPEAKER_VERIFY_ENABLED in .env):
     SPEAKER_VERIFY_GATE=1 additionally drops utterances that fail the cosine
     match (see speaker_verify_gate() / listen() below); default 0 keeps the
     score as metadata only (legacy behavior).
-
-Wake word / trigger phrase (optional — see config/sensory.yaml):
-    WAKE_WORD ("" by default, disabled): SenseVoice mangles
-    "Aiko" unpredictably since it's not a normal English word, so matching is
-    fuzzy (rapidfuzz ratio) against the leading words of the transcript, not
-    an exact substring check. WAKE_WORD_ALIASES lets you hardcode observed
-    mishearings ("hey iko|hey eco|hey ecko") as extra candidates.
-
-    Once woken/triggered, Aiko stays "active" (no phrase required) until
-    ACTIVATION_TIMEOUT_S seconds pass with no further utterance, at which
-    point the session goes back to sleep and the configured phrase(s) are
-    required again. Use AikoListen.is_active() to check this from other
-    subsystems (e.g. suppress proactive/unsolicited behavior while asleep),
-    and AikoListen.sleep_now() to force it inactive (e.g. an explicit
-    "go to sleep" command).
 
 Post-ASR name / phrase corrections (S2, no finetune):
     Lightweight ordered phrase replacements applied after every transcript
@@ -93,7 +128,6 @@ if hasattr(_ort, "set_default_logger_severity"):
 
 from functools import lru_cache
 from huggingface_hub import hf_hub_download
-from silero_vad import load_silero_vad
 from system.userspace import user_state_path
 import json
 import logging as _logging
@@ -108,7 +142,6 @@ import sherpa_onnx
 import subprocess
 import threading
 import time
-import torch
 import warnings
 
 try:
@@ -116,6 +149,11 @@ try:
 except ImportError:
     _fuzz = None
     import difflib as _difflib
+
+try:
+    from livekit.wakeword import WakeWordModel as _WakeWordModel
+except ImportError:
+    _WakeWordModel = None  # acoustic wake engine unavailable — falls back to fuzzy ASR-text matching
 
 warnings.filterwarnings("ignore")
 _logging.getLogger("sherpa_onnx").setLevel(_logging.ERROR)
@@ -125,6 +163,7 @@ _logging.getLogger("sherpa_onnx").setLevel(_logging.ERROR)
 BOOT_LABELS = {
     'listen_asr':     'Loading SenseVoice ASR model...',
     'listen_silero':  'Loading Silero VAD...',
+    'listen_wake':    'Loading wake word model...',
     'listen_speaker': 'Loading speaker verification...',
     'listen_warmup':  'Warming up ASR pipeline...',
     'listen_ready':   'Microphone ready',
@@ -187,6 +226,13 @@ SPEAKER_NUM_THREADS      = int(os.getenv("SPEAKER_NUM_THREADS", "1"))
 WAKE_WORD             = os.getenv("WAKE_WORD", "").strip().lower()
 WAKE_WORD_ALIASES     = [w.strip().lower() for w in os.getenv("WAKE_WORD_ALIASES", "").split("|") if w.strip()]
 WAKE_FUZZY_THRESHOLD  = float(os.getenv("WAKE_FUZZY_THRESHOLD", "70"))
+
+# Acoustic wake engine (livekit-wakeword) — used instead of the fuzzy
+# ASR-text engine above when a trained model is configured and available.
+# See module docstring "Wake word" section.
+WAKE_WORD_MODEL_PATH     = os.path.expanduser(os.getenv("WAKE_WORD_MODEL_PATH", ""))
+WAKE_WORD_THRESHOLD      = float(os.getenv("WAKE_WORD_THRESHOLD", "0.5"))
+WAKE_WORD_CONFIRM_FRAMES = int(os.getenv("WAKE_WORD_CONFIRM_FRAMES", "3"))
 
 ACTIVATION_TIMEOUT_S = float(os.getenv("ACTIVATION_TIMEOUT_S", "3600"))  # matches config/sensory.yaml default
 
@@ -323,6 +369,52 @@ def _resolve_sense_voice_files() -> tuple[str, str]:
     return model_path, tokens_path
 
 
+def _resolve_silero_vad_file() -> str:
+    """
+    Resolve the standalone Silero VAD ONNX weights from HF cache (downloads
+    on first use, idempotent thereafter — same pattern as
+    _resolve_sense_voice_files()). This is the raw onnxruntime-only weight
+    file (no torch involved anywhere in obtaining or running it), mirrored
+    by the sherpa-onnx maintainer at csukuangfj/vad on the HF hub — the same
+    file the sherpa-onnx project's own README points at via a GitHub release
+    asset (github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx).
+    """
+    return hf_hub_download(repo_id="csukuangfj/vad", filename="silero_vad.onnx")
+
+
+def _build_vad(threshold: float) -> sherpa_onnx.VoiceActivityDetector:
+    """
+    Build a sherpa_onnx.VoiceActivityDetector (pure onnxruntime, no torch)
+    at a given speech-probability threshold. See the "VAD backend" section
+    of the module docstring and the comment on AikoListen._vad_model /
+    _barge_vad_model for why threshold is baked in per-instance rather than
+    passed per-call.
+
+    min_silence_duration / min_speech_duration are set to one chunk
+    (_CHUNK_MS_ACTUAL, ~32ms) rather than sherpa_onnx's own defaults
+    (0.5s / 0.25s) — the old torch-based _score_chunk() returned a raw
+    per-chunk probability with no built-in hangover/smoothing at all, and
+    _record()'s SILENCE_CHUNKS / _barge_in_loop()'s BARGE_IN_CONFIRM
+    counters are what implement hangover in this codebase. Keeping the
+    detector's own internal smoothing near-zero preserves that division of
+    responsibility instead of layering two independent hangover mechanisms
+    on top of each other.
+    """
+    min_dur_s = _CHUNK_MS_ACTUAL / 1000.0
+    config = sherpa_onnx.VadModelConfig()
+    config.silero_vad.model               = _resolve_silero_vad_file()
+    config.silero_vad.threshold           = threshold
+    config.silero_vad.min_silence_duration = min_dur_s
+    config.silero_vad.min_speech_duration  = min_dur_s
+    config.silero_vad.max_speech_duration  = float(MAX_RECORD_SECONDS)
+    config.silero_vad.window_size          = _CHUNK_SAMPLES_VAD
+    config.sample_rate = SAMPLE_RATE
+    config.num_threads  = 1  # VAD is tiny; not worth multithreading
+    config.provider     = "cpu"  # tiny model — CUDA EP dispatch overhead isn't worth it
+    config.debug        = False
+    return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=30)
+
+
 def _load_sense_voice_recognizer() -> sherpa_onnx.OfflineRecognizer:
     """Load SenseVoice as a sherpa-onnx OfflineRecognizer via factory method."""
     model_path, tokens_path = _resolve_sense_voice_files()
@@ -407,7 +499,8 @@ class AikoListen:
     Staged init:
         listen = AikoListen()    # no heavy loading
         listen.load_asr()        # loads the SenseVoice model
-        listen.load_vad()        # loads Silero VAD + kicks off warmup thread
+        listen.load_vad()        # loads Silero VAD (x2, see _vad_model/_barge_vad_model) + kicks off warmup thread
+        listen.load_wakeword()   # loads acoustic wake model if configured (no-op otherwise — see module docstring)
         listen.load_speaker_id() # loads embedding model + enrolled vector (no-op if disabled)
         listen.join_warmup()     # blocks until warmup completes
 
@@ -423,7 +516,23 @@ class AikoListen:
 
     def __init__(self) -> None:
         self._model:      sherpa_onnx.OfflineRecognizer | None = None
-        self._vad_model:  object | None       = None
+        # Two separate VoiceActivityDetector instances: sherpa_onnx bakes
+        # the speech-probability threshold into the detector at construction
+        # time (unlike the old torch-wrapper callable, which took a raw
+        # threshold-free probability out and let callers each apply their
+        # own cutoff). _record() and _barge_in_loop() want different
+        # thresholds (VAD_THRESHOLD vs the much stricter BARGE_IN_THRESHOLD),
+        # so they get their own instance rather than sharing one. They never
+        # run concurrently anyway (_barge_in_loop() pauses while
+        # self._recording is set), so this isn't about thread-safety, just
+        # keeping the two threshold configs independent.
+        self._vad_model:       sherpa_onnx.VoiceActivityDetector | None = None
+        self._barge_vad_model: sherpa_onnx.VoiceActivityDetector | None = None
+        # Acoustic wake word (livekit-wakeword) — None if not configured/
+        # installed, in which case listen() falls back to the fuzzy
+        # post-ASR text engine (_apply_activation_gate / _strip_prefix_phrase).
+        self._wake_model:      object | None = None  # a livekit.wakeword.WakeWordModel, if loaded
+        self._wake_model_name: str | None = None
         self._lock        = threading.Lock()
         self._warmup_done = threading.Event()
         self._warmup_thread: threading.Thread | None = None
@@ -452,10 +561,43 @@ class AikoListen:
         self._model = _load_sense_voice_recognizer()
 
     def load_vad(self) -> None:
-        self._vad_model = load_silero_vad(onnx=True)
-        # self._vad_model.eval()  # PyTorch-only, not needed for OnnxWrapper
+        self._vad_model       = _build_vad(VAD_THRESHOLD)
+        self._barge_vad_model = _build_vad(BARGE_IN_THRESHOLD)
         self._warmup_thread = threading.Thread(target=self._warmup, daemon=True)
         self._warmup_thread.start()
+
+    def load_wakeword(self) -> None:
+        """
+        Load the acoustic wake-word model, if configured. No-ops (leaving
+        self._wake_model = None) if WAKE_WORD isn't set, WAKE_WORD_MODEL_PATH
+        is unset/missing, or livekit-wakeword isn't installed — listen()
+        falls back to the fuzzy post-ASR text engine in every one of those
+        cases, so this is always safe to call and never raises.
+        """
+        if not self.gate_enabled():
+            return
+        if not WAKE_WORD_MODEL_PATH:
+            log.info("[listen] WAKE_WORD is set but WAKE_WORD_MODEL_PATH is empty — "
+                     "using fuzzy ASR-text wake matching.")
+            return
+        if not os.path.isfile(WAKE_WORD_MODEL_PATH):
+            log.warning("[listen] WAKE_WORD_MODEL_PATH=%r not found — "
+                        "falling back to fuzzy ASR-text wake matching.",
+                        WAKE_WORD_MODEL_PATH)
+            return
+        if _WakeWordModel is None:
+            log.warning("[listen] WAKE_WORD_MODEL_PATH is set but livekit-wakeword isn't "
+                        "installed (`pip install livekit-wakeword`) — falling back to "
+                        "fuzzy ASR-text wake matching.")
+            return
+        try:
+            self._wake_model = _WakeWordModel(models=[WAKE_WORD_MODEL_PATH])
+            self._wake_model_name = os.path.splitext(os.path.basename(WAKE_WORD_MODEL_PATH))[0]
+        except Exception:
+            log.exception("[listen] failed to load acoustic wake word model — "
+                          "falling back to fuzzy ASR-text wake matching.")
+            self._wake_model = None
+            self._wake_model_name = None
 
     @staticmethod
     def speaker_enroll_path() -> str:
@@ -657,7 +799,11 @@ class AikoListen:
                         # parec kept writing into the pipe the whole time we
                         # weren't reading — discard the backlog so the next
                         # score is against live audio, not ~1s of stale buffer.
+                        # Also reset the VAD's own internal state (hangover
+                        # window / pending segment) so it doesn't carry over
+                        # from whatever it was scoring before the pause.
                         _drain_stale_audio(proc.stdout, bytes_per_chunk)
+                        self._barge_vad_model.reset()
                         paused = False
 
                     raw = proc.stdout.read(bytes_per_chunk)
@@ -669,9 +815,9 @@ class AikoListen:
                         continue
 
                     chunk = np.frombuffer(raw, dtype=np.float32).copy()
-                    score = self._score_chunk(chunk)
+                    is_speech = self._is_speech(self._barge_vad_model, chunk)
 
-                    if score >= BARGE_IN_THRESHOLD:
+                    if is_speech:
                         consecutive += 1
                         if consecutive >= BARGE_IN_CONFIRM:
                             self._barge_in_event.set()
@@ -720,8 +866,14 @@ class AikoListen:
           - If wake word gating IS configured and the required phrase was
             not detected, this method returns ("", info) — same shape as
             "no speech detected" — so callers that already treat empty text
-            as "nothing to do" handle this for free. Any matched wake word
-            prefix is stripped from the returned text.
+            as "nothing to do" handle this for free.
+          - With the acoustic engine (self._wake_model loaded — see
+            load_wakeword()), wake detection happens on raw audio inside
+            _record(), before ASR ever runs; no text stripping is needed
+            since the pre-wake audio was never buffered for transcription
+            in the first place. With the fuzzy fallback engine, any matched
+            wake word prefix is stripped from the returned text instead
+            (see _apply_activation_gate() / _strip_prefix_phrase()).
 
         If speak is playing and BARGE_IN_ENABLED=0, this blocks with a plain
         poll loop until playback finishes (no barge interrupt is possible —
@@ -757,7 +909,7 @@ class AikoListen:
 
         _cb(status_callback, "__LISTENING__")
         listen_started_at = time.monotonic()
-        audio = self._record(
+        audio, woke_acoustic = self._record(
             status_callback,
             chunk_source=chunk_source,
         )
@@ -767,7 +919,11 @@ class AikoListen:
             return "", {
                 "verified": None,
                 "speaker_score": None,
-                "woke": None,
+                # Acoustic engine may have woken the session even though no
+                # (or too-short) speech followed within this same call —
+                # extend_activation() already ran inside _record() in that
+                # case, so reflect it here rather than reporting None.
+                "woke": True if woke_acoustic else None,
                 "listen_started_at": listen_started_at,
                 "recording_stopped_at": recording_stopped_at,
             }
@@ -796,8 +952,17 @@ class AikoListen:
         else:
             text = self._transcribe(audio)
 
-        gated_text, gate_info = self._apply_activation_gate(text, info.get("verified"))
-        info["woke"] = gate_info["woke"]
+        if self._wake_model is not None:
+            # Acoustic engine owns wake gating end-to-end: if we got this far
+            # with audio at all, either the session was already active or
+            # _record() just confirmed the wake word acoustically (both
+            # cases mean this utterance is a real command) — no post-ASR
+            # text stripping needed, so skip the fuzzy engine entirely.
+            gated_text = text
+            info["woke"] = True if woke_acoustic else None
+        else:
+            gated_text, gate_info = self._apply_activation_gate(text, info.get("verified"))
+            info["woke"] = gate_info["woke"]
 
         _cb(status_callback, "__IDLE__")
 
@@ -828,48 +993,60 @@ class AikoListen:
 
     # ── recording ─────────────────────────────────────────────────────────────
 
-    def _score_chunk(self, chunk: np.ndarray) -> float:
+    def _is_speech(self, vad: sherpa_onnx.VoiceActivityDetector, chunk: np.ndarray) -> bool:
         """
-        Run Silero VAD on a 512-sample float32 chunk at 16kHz.
+        Feed a 512-sample float32 chunk at 16kHz into a sherpa_onnx
+        VoiceActivityDetector and report whether it currently considers
+        this position speech. Pure onnxruntime under the hood — no torch
+        (see "VAD backend" in the module docstring). Replaces the old
+        torch-based _score_chunk(), which returned a raw probability;
+        threshold is now baked into `vad` at construction (_build_vad()),
+        so this returns a bool directly instead of a float to compare.
 
-        NOTE (audit item #6): load_silero_vad(onnx=True) returns an
-        ONNX-backed wrapper — inference itself runs through onnxruntime,
-        not torch — but the `silero-vad` pip package's wrapper still expects
-        a torch.Tensor as input and manages its own recurrent state as torch
-        tensors internally, so `torch` stays a hard dependency here (the
-        `no_grad()` context below is a genuine no-op for an onnxruntime call,
-        kept only because removing torch as a dependency requires it).
-        Fully dropping torch means moving this VAD onto sherpa_onnx's own
-        VoiceActivityDetector (same Silero ONNX weights, pure onnxruntime,
-        no torch) — see BOOT_LABELS module docstring discussion. That's a
-        state-machine-level change: sherpa_onnx's VAD is segment-oriented
-        (accept_waveform + is_speech_detected()/front()), not a per-chunk
-        probability score, so _record()'s and _barge_in_loop()'s hangover /
-        confirm-frame counters would need to be rewritten against that API
-        rather than swapped in place. Left as a follow-up requiring hardware
-        testing on AuRoRA rather than folded into this bug-fix pass.
+        `vad` is whichever detector the caller owns (self._vad_model for
+        _record(), self._barge_vad_model for _barge_in_loop()) — see the
+        comment on those two attributes in __init__ for why there are two.
         """
         if len(chunk) < _CHUNK_SAMPLES_VAD:
             chunk = np.pad(chunk, (0, _CHUNK_SAMPLES_VAD - len(chunk)))
         else:
             chunk = chunk[:_CHUNK_SAMPLES_VAD]
 
-        # NOTE: no .copy() here — both callers (_record(), _barge_in_loop())
-        # already hand in owned memory via np.frombuffer(...).copy(), and
-        # the inference below runs under torch.no_grad() with no in-place
-        # ops, so sharing the buffer with torch.from_numpy() is safe. The
-        # previous extra .copy() here was a redundant full-buffer copy on
-        # every single 32ms chunk.
-        tensor = torch.from_numpy(chunk).unsqueeze(0)
-        with torch.no_grad():
-            prob = self._vad_model(tensor, SAMPLE_RATE).item()
-        return prob
+        vad.accept_waveform(chunk)
+        is_speech = vad.is_speech_detected()
+
+        # VoiceActivityDetector buffers completed speech segments internally
+        # (front()/pop()) for callers that want it to do their audio
+        # buffering for them. We do our own buffering in _record() instead
+        # (audio_chunks list, built from the raw chunks we already have), so
+        # drain and discard its internal queue here — otherwise it grows
+        # unbounded over a long session (e.g. the always-on barge-in
+        # monitor) up to buffer_size_in_seconds before wrapping.
+        while not vad.empty():
+            vad.pop()
+
+        return is_speech
+
+    def _score_wake(self, chunk: np.ndarray) -> float:
+        """
+        Score a raw audio chunk against the loaded acoustic wake-word model.
+        Only called when self._wake_model is not None (see load_wakeword()).
+        Feeds our existing 512-sample (32ms) chunks directly — livekit-
+        wakeword's predict() takes 16kHz int16/float32 frames and buffers
+        internally, per its docs; if this turns out to need a specific
+        frame size on hardware (openWakeWord-family models traditionally
+        window in 80ms/1280-sample steps), adjust by accumulating chunks
+        into a small ring buffer before calling predict(). Not verified on
+        AuRoRA hardware yet — flag if wake accuracy looks off.
+        """
+        scores = self._wake_model.predict(chunk)
+        return float(scores.get(self._wake_model_name, 0.0))
 
     def _record(
         self,
         status_callback=None,
         chunk_source=None,
-    ) -> np.ndarray | None:
+    ) -> tuple[np.ndarray | None, bool]:
         """
         Capture audio until silence after speech detected. Silero VAD scores
         every chunk here, regardless of source — it is the single
@@ -888,12 +1065,28 @@ class AikoListen:
             enough to send" filter, not a speech/silence decision — so
             Silero still scores every chunk exactly as it does for the
             local-mic path below.
+
+        Returns (audio, woke). `woke` is True iff the acoustic wake engine
+        (self._wake_model) fired during this call — see listen() for how
+        that's threaded into the returned "woke" info key. Always False
+        when the acoustic engine isn't loaded (fuzzy-text engine, or gating
+        disabled, or session already active).
         """
         audio_chunks   = []
         silence_count  = 0
         speech_count   = 0
         hearing_speech = False
         bytes_per_chunk = _CHUNK_SAMPLES_VAD * 4
+
+        # Acoustic wake gate: only relevant if a wake model is loaded AND
+        # the session isn't already active. If either is false, wake_needed
+        # is False and every chunk goes straight into VAD scoring below,
+        # same as the original unconditional behavior — the fuzzy post-ASR
+        # engine (if configured instead) still runs afterwards in
+        # listen()/_apply_activation_gate() exactly as before.
+        wake_needed = self._wake_model is not None and self.gate_enabled() and not self.is_active()
+        woke_this_call = False
+        wake_hits = 0
 
         _cb(status_callback, "__LISTENING__")
         self._recording.set()
@@ -904,6 +1097,8 @@ class AikoListen:
         try:
             if not use_external:
                 proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
+
+            self._vad_model.reset()
 
             for _ in range(_MAX_CHUNKS):
                 if use_external:
@@ -918,10 +1113,28 @@ class AikoListen:
 
                 chunk = np.frombuffer(raw, dtype=np.float32).copy()
 
+                if wake_needed:
+                    # Asleep and using the acoustic engine: score for the
+                    # wake word instead of accumulating into the transcript
+                    # buffer. Pre-wake audio is never buffered or
+                    # transcribed — this is the point of the acoustic
+                    # engine over the fuzzy-text one, which had to run full
+                    # SenseVoice on every utterance just to check.
+                    if self._score_wake(chunk) >= WAKE_WORD_THRESHOLD:
+                        wake_hits += 1
+                    else:
+                        wake_hits = 0
+                    if wake_hits >= WAKE_WORD_CONFIRM_FRAMES:
+                        wake_needed = False
+                        woke_this_call = True
+                        self.extend_activation()
+                        self._vad_model.reset()  # start VAD fresh from the wake point
+                    continue
+
                 # Silero scores every chunk from every source — the browser's
                 # energy gate (for the WebUI chunk_source path) only decided
                 # whether to forward the chunk at all, not whether it's speech.
-                is_speech = self._score_chunk(chunk) >= VAD_THRESHOLD
+                is_speech = self._is_speech(self._vad_model, chunk)
 
                 if is_speech:
                     hearing_speech = True
@@ -937,7 +1150,7 @@ class AikoListen:
 
         except Exception:
             _cb(status_callback, "__IDLE__")
-            return None
+            return None, False
         finally:
             self._recording.clear()
             if proc is not None:
@@ -948,16 +1161,16 @@ class AikoListen:
                     log.warning("listen: failed to terminate record process")
 
         if not audio_chunks:
-            return None
+            return None, woke_this_call
 
         # ── utterance length gate ─────────────────────────────────────────────
         # Silero has genuinely scored every chunk regardless of source, so
         # speech_count reflects real detected speech — no reason to bypass
         # this for the WebUI path anymore.
         if speech_count < MIN_SPEECH_CHUNKS:
-            return None
+            return None, woke_this_call
 
-        return np.concatenate(audio_chunks).astype(np.float32)
+        return np.concatenate(audio_chunks).astype(np.float32), woke_this_call
 
     # ── transcription ─────────────────────────────────────────────────────────
 
@@ -989,9 +1202,15 @@ class AikoListen:
             stream  = self._model.create_stream()
             stream.accept_waveform(SAMPLE_RATE, silence)
             self._model.decode_stream(stream)  # decode_stream in sherpa-onnx >= 1.13.3
-            tensor = torch.zeros(1, _CHUNK_SAMPLES_VAD)
-            with torch.no_grad():
-                self._vad_model(tensor, SAMPLE_RATE)
+
+            warm_chunk = np.zeros(_CHUNK_SAMPLES_VAD, dtype=np.float32)
+            self._is_speech(self._vad_model, warm_chunk)
+            self._is_speech(self._barge_vad_model, warm_chunk)
+            self._vad_model.reset()
+            self._barge_vad_model.reset()
+
+            if self._wake_model is not None:
+                self._score_wake(warm_chunk)
         except Exception:
             log.warning("listen: warmup failed")
         finally:
