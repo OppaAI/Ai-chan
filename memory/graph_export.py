@@ -2,6 +2,7 @@
 memory/graph_export.py
 
 Phase C: export personal memory as a node/edge graph for visualization.
+Phase D polish: merge entity co-mention edges from entity_relations.
 
 Read-only. Tolerates pre-Phase-A DBs (missing status/entities columns).
 """
@@ -66,6 +67,7 @@ def export_memory_graph(
     Edge types:
       - supersedes: newer memory → older memory it replaced
       - mentions: memory → entity
+      - co_mentions: entity → entity (Phase D entity_relations)
     """
     uid = user_id or current_user_id()
     owns_conn = conn is None
@@ -192,6 +194,40 @@ def export_memory_graph(
             e for e in edges
             if e["type"] != "supersedes" or e["target"] in mem_ids
         ]
+
+        # Phase D: entity ↔ entity co-mentions
+        if include_entities:
+            try:
+                from memory.entity_graph import (
+                    ensure_entity_relations_schema,
+                    relations_as_graph_edges,
+                )
+
+                ensure_entity_relations_schema(conn)
+                for e in relations_as_graph_edges(
+                    conn, user_id=uid, limit=max(int(limit) * 2, 500)
+                ):
+                    for endpoint in (e["source"], e["target"]):
+                        if endpoint not in entity_ids and endpoint not in mem_ids:
+                            label = endpoint.removeprefix("ent:")
+                            entity_ids.add(endpoint)
+                            nodes.append({
+                                "id": endpoint,
+                                "type": "entity",
+                                "label": label,
+                                "text": label,
+                                "status": "active",
+                                "kind": "entity",
+                                "source": "",
+                                "pinned": False,
+                                "access_count": 0,
+                                "created_at": None,
+                                "entities": [],
+                                "supersedes_id": None,
+                            })
+                    edges.append(e)
+            except Exception as ex:
+                log.debug("graph_export: entity_relations skipped: %s", ex)
 
         return {
             "nodes": nodes,

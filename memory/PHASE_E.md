@@ -20,7 +20,16 @@ block = core_profile_for_context(memorize)
 - `CORE_PROFILE_MAX_CHARS` (default 900)
 - `CORE_PROFILE_PATH` optional override path
 
+## Also in this PR (Phase D polish)
+- **Live co-mentions:** `memory_meta._insert_row` calls `upsert_co_mentions` after each write (best-effort; no LLM).
+- **Studio edges:** `graph_export.export_memory_graph` merges `relations_as_graph_edges` when `include_entities=True`.
+
+Offline rebuild still available:
+```bash
+uv run python -m util.migrate_memory_phase_d
+```
+
 ## Notes
 - No extra LLM
 - Wire into `think.py` / context assembly when ready (not required to merge module)
-- Best after Phase A (status) + Phase B (kind tags)
+- Best after Phase A (status) + Phase B (kind tags) + Phase D (entity_relations table)
