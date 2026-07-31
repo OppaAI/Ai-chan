@@ -36,7 +36,7 @@ _STOP_ENTITIES = frozenset({
 
 # Kind heuristics (keyword → kind). First match wins.
 _KIND_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("identity", ("name is", "birthday", "lives in", "from ", "nationality", "age is")),
+    ("identity", ("name is", "birthday", "lives in", "nationality", "age is", "is from ")),
     ("preference", ("likes", "loves", "hates", "dislikes", "prefers", "favorite", "favourite")),
     ("plan", ("deadline", "due ", "will ", "going to", "plans to", "wants to")),
     ("event", ("hackathon", "interview", "meeting", "appointment", "lost ", "joined")),
@@ -81,7 +81,11 @@ def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
     for m in _CALLED_RE.finditer(text):
         _add(m.group(1))
     for m in _PROPER_SPAN_RE.finditer(text):
-        _add(m.group(1))
+        span = m.group(1)
+        # Sentence-initial single word is usually grammar capitalization, not an entity.
+        if m.start() == 0 and " " not in span:
+            continue
+        _add(span)
     for m in _ALLCAPS_RE.finditer(text):
         _add(m.group(1))
 

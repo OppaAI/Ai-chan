@@ -70,7 +70,7 @@ def entities_from_json(raw: Any) -> list[str]:
     if raw is None or raw == "":
         return []
     if isinstance(raw, list):
-        return [str(x) for x in raw if str(x).strip()]
+        return [str(x).strip() for x in raw if str(x).strip()]
     try:
         data = json.loads(raw) if isinstance(raw, str) else raw
     except (TypeError, json.JSONDecodeError):

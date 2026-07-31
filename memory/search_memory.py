@@ -21,6 +21,11 @@ log = get_logger(__name__)
 MEMORY_ENTITY_BOOST = float(os.getenv("MEMORY_ENTITY_BOOST", "0.003"))
 
 
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE wildcards so entity tokens match literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _normalize_personal_hit(row: dict, query: str = "") -> dict[str, Any]:
     from memory.entities import entity_overlap_score
     from memory.memory_meta import entities_from_json
@@ -200,19 +205,17 @@ def memories_for_entity(
         lock = memorize._mem._db_lock
     except Exception:
         return []
-    status_sql = "" if include_history else "AND (status = 'active' OR status IS NULL)"
-    # Match entity as a JSON string token; escape LIKE wildcards loosely
-    like = f'%"{needle.replace("%", "").replace("_", "")}"%'
+    # status_sql is one of two hardcoded literals (not user input).
+    status_clause = "" if include_history else "AND (status = 'active' OR status IS NULL)"
+    like = f'%"{_escape_like(needle)}"%'
+    sql = (
+        "SELECT * FROM memories "
+        "WHERE user_id = ? "
+        "AND entities LIKE ? ESCAPE '\\' "
+        f"{status_clause} "
+        "ORDER BY created_at DESC "
+        "LIMIT ?"
+    )
     with lock:
-        rows = conn.execute(
-            f"""
-            SELECT * FROM memories
-            WHERE user_id = ?
-              AND entities LIKE ?
-              {status_sql}
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (uid, like, int(limit)),
-        ).fetchall()
+        rows = conn.execute(sql, (uid, like, int(limit))).fetchall()
     return [_normalize_personal_hit(dict(r), needle) for r in rows]
