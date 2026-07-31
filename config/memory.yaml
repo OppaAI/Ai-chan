@@ -62,7 +62,7 @@ DEEP_STUDY_SYNTHESIS_MAX_TOKENS: "900"  # Token budget for the final distillatio
 # Tune local sqlite memory, embedding model behavior, memory decay, and monthly consolidation here.
 
 # -- Storage and embedding endpoint --
-SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory.db.
+SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory/memory.db.
 EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by memory/vecstore.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.

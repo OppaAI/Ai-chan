@@ -1122,8 +1122,11 @@ class _MemoryBackend:
 def _memory_db_path_for_user(uid: str) -> str:
     if uid == "guest":
         return _guest_memory_db()
-    return os.path.expanduser(os.getenv("SQLITE_MEMORY_PATH")) or str(resolve_user_db_path("memory/memory.db", user_id=uid))
-
+    env_path = os.getenv("SQLITE_MEMORY_PATH", "").strip()
+    if env_path:
+        return os.path.expanduser(env_path)
+    return str(resolve_user_db_path("memory/memory.db", user_id=uid))
+    
 
 def vacuum_memory_db(user_id: str | None = None) -> None:
     """Reclaim space after bulk memory deletes during maintenance."""
