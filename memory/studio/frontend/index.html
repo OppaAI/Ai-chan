@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiko Memory Graph</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg: #0a0a0f; --bg2: #0e0e17; --border: #1e1428;
+      --pink: #c651a8; --purple: #a888e8; --cyan: #51d4c8;
+      --dim: #4a3a6a; --text: #cdbfe6; --orange: #e8843a;
+      --glass: rgba(24,16,36,0.55);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: Georgia, serif; height: 100vh; overflow: hidden; }
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--bg2);
+    }
+    header h1 { font-size: 16px; letter-spacing: .15em; text-transform: uppercase; color: var(--purple); }
+    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .btn {
+      background: #1a1028; border: 1px solid var(--dim); color: var(--dim);
+      font-size: 11px; letter-spacing: .08em; padding: 5px 12px; border-radius: 3px;
+      cursor: pointer; text-transform: uppercase;
+    }
+    .btn:hover { color: var(--purple); border-color: var(--purple); }
+    .btn-primary { background: var(--purple); color: var(--bg); border-color: var(--purple); }
+    .body { display: grid; grid-template-columns: 260px 1fr; height: calc(100vh - 48px); }
+    .sidebar { border-right: 1px solid var(--border); background: var(--bg2); padding: 14px; overflow-y: auto; font-size: 12px; }
+    .sidebar h2 { font-size: 10px; letter-spacing: .18em; color: var(--pink); text-transform: uppercase; margin: 12px 0 8px; }
+    .sidebar label { display: flex; gap: 8px; align-items: center; margin: 6px 0; color: var(--dim); }
+    .sidebar input[type=number], .sidebar input[type=text] {
+      width: 100%; background: #120a1c; border: 1px solid var(--dim); color: var(--text);
+      padding: 6px 8px; border-radius: 3px; font-size: 12px;
+    }
+    .stat { color: var(--dim); font-size: 11px; margin-top: 4px; }
+    .canvas-area { position: relative; background: radial-gradient(ellipse at center, #0f0f1a 0%, #0a0a0f 70%); }
+    .canvas-area svg { width: 100%; height: 100%; display: block; }
+    .details {
+      position: absolute; top: 14px; right: 14px; width: 300px; max-height: calc(100% - 28px);
+      overflow-y: auto; background: var(--glass); backdrop-filter: blur(14px);
+      border: 1px solid rgba(200,168,240,.16); border-radius: 8px; padding: 14px; font-size: 12px;
+      display: none;
+    }
+    .details h3 { font-size: 11px; letter-spacing: .12em; color: var(--pink); text-transform: uppercase; margin-bottom: 10px; }
+    .detail-label { color: var(--dim); font-size: 10px; text-transform: uppercase; margin-top: 8px; }
+    .detail-value { margin-top: 2px; word-break: break-word; }
+    .legend { position: absolute; bottom: 12px; left: 14px; display: flex; gap: 12px; font-size: 10px; color: var(--dim); }
+    .legend i { display: inline-block; width: 14px; height: 3px; margin-right: 4px; vertical-align: middle; }
+    .zoom { position: absolute; bottom: 12px; right: 14px; display: flex; flex-direction: column; gap: 4px; }
+    .zoom button { width: 28px; height: 28px; background: var(--glass); border: 1px solid rgba(200,168,240,.16); color: var(--dim); border-radius: 4px; cursor: pointer; }
+    .node-memory { fill: #161022; stroke: var(--purple); stroke-width: 1.5; }
+    .node-memory.superseded { stroke: var(--dim); opacity: .55; }
+    .node-memory.pinned { stroke: var(--cyan); }
+    .node-entity { fill: #1a0e18; stroke: var(--pink); stroke-width: 1.4; }
+    .link-supersedes { stroke: var(--orange); stroke-width: 1.6; }
+    .link-mentions { stroke: var(--dim); stroke-width: 1; stroke-dasharray: 3 3; }
+    .node-label { fill: var(--text); font-size: 10px; pointer-events: none; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Memory Graph</h1>
+    <div class="actions">
+      <span id="status" style="font-size:11px;color:var(--dim)"></span>
+      <button class="btn" id="refresh">Refresh</button>
+      <button class="btn btn-primary" id="export">Export JSON</button>
+    </div>
+  </header>
+  <div class="body">
+    <aside class="sidebar">
+      <h2>Filters</h2>
+      <label>User id <input type="text" id="user-id" placeholder="(current)" /></label>
+      <label>Limit <input type="number" id="limit" value="200" min="1" max="2000" /></label>
+      <label><input type="checkbox" id="include-history" checked /> Include superseded</label>
+      <label><input type="checkbox" id="include-entities" checked /> Entity hubs</label>
+      <button class="btn btn-primary" id="apply" style="width:100%;margin-top:10px">Apply</button>
+      <h2>Stats</h2>
+      <div class="stat" id="stats">—</div>
+      <h2>Legend</h2>
+      <div class="stat">Purple ring — active memory</div>
+      <div class="stat">Dim ring — superseded</div>
+      <div class="stat">Cyan ring — pinned</div>
+      <div class="stat">Pink circle — entity</div>
+      <div class="stat">Orange link — supersedes</div>
+      <div class="stat">Dashed — mentions</div>
+    </aside>
+    <div class="canvas-area" id="canvas-area">
+      <svg id="canvas"></svg>
+      <div class="details" id="details"></div>
+      <div class="legend">
+        <span><i style="background:var(--orange)"></i>supersedes</span>
+        <span><i style="background:var(--dim);height:0;border-top:1px dashed var(--dim)"></i>mentions</span>
+      </div>
+      <div class="zoom">
+        <button id="zoom-in">+</button>
+        <button id="zoom-out">−</button>
+        <button id="zoom-fit">⊡</button>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script>
+    let graph = { nodes: [], edges: [], meta: {} };
+    let simulation = null;
+    let zoomBehavior = null;
+
+    function qs() {
+      const p = new URLSearchParams();
+      const uid = document.getElementById('user-id').value.trim();
+      if (uid) p.set('user_id', uid);
+      p.set('limit', document.getElementById('limit').value || '200');
+      p.set('include_history', document.getElementById('include-history').checked);
+      p.set('include_entities', document.getElementById('include-entities').checked);
+      return p.toString();
+    }
+
+    async function loadGraph() {
+      document.getElementById('status').textContent = 'Loading…';
+      try {
+        const resp = await fetch('/api/graph?' + qs());
+        graph = await resp.json();
+        const m = graph.meta || {};
+        document.getElementById('stats').innerHTML =
+          `memories: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>edges: ${m.edge_count ?? 0}`;
+        document.getElementById('status').textContent =
+          `${(graph.nodes||[]).length} nodes · ${(graph.edges||[]).length} edges`;
+        render();
+      } catch (e) {
+        document.getElementById('status').textContent = 'Load failed';
+        console.error(e);
+      }
+    }
+
+    function showDetails(d) {
+      const el = document.getElementById('details');
+      el.style.display = 'block';
+      const rows = [
+        ['type', d.type],
+        ['id', d.id],
+        ['kind', d.kind],
+        ['status', d.status],
+        ['pinned', d.pinned ? 'yes' : 'no'],
+        ['created', d.created_at || '—'],
+        ['entities', (d.entities || []).join(', ') || '—'],
+        ['supersedes', d.supersedes_id || '—'],
+        ['text', d.text || d.label || ''],
+      ];
+      el.innerHTML = '<h3>Node</h3>' + rows.map(([k,v]) =>
+        `<div class="detail-label">${k}</div><div class="detail-value">${escapeHtml(String(v))}</div>`
+      ).join('');
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function render() {
+      const svg = d3.select('#canvas');
+      svg.selectAll('*').remove();
+      const area = document.getElementById('canvas-area');
+      const w = area.clientWidth || 1000;
+      const h = area.clientHeight || 700;
+      svg.attr('viewBox', `0 0 ${w} ${h}`);
+
+      const nodes = (graph.nodes || []).map(n => ({ ...n }));
+      const links = (graph.edges || []).map(e => ({ ...e }));
+      if (!nodes.length) {
+        svg.append('text').attr('x', w/2).attr('y', h/2).attr('text-anchor','middle')
+          .attr('fill','var(--dim)').text('No memories yet');
+        return;
+      }
+
+      const g = svg.append('g');
+      zoomBehavior = d3.zoom().scaleExtent([0.2, 4]).on('zoom', (ev) => g.attr('transform', ev.transform));
+      svg.call(zoomBehavior);
+
+      const defs = svg.append('defs');
+      defs.append('marker').attr('id','arrow-sup').attr('viewBox','0 0 10 10')
+        .attr('refX',18).attr('refY',5).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto')
+        .append('path').attr('d','M 0 1 L 10 5 L 0 9 Z').attr('fill','var(--orange)');
+
+      const link = g.append('g').selectAll('line').data(links).join('line')
+        .attr('class', d => d.type === 'supersedes' ? 'link-supersedes' : 'link-mentions')
+        .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null);
+
+      const node = g.append('g').selectAll('g').data(nodes).join('g')
+        .call(d3.drag()
+          .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+          .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+        )
+        .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
+
+      node.append('circle')
+        .attr('r', d => d.type === 'entity' ? 10 : 14)
+        .attr('class', d => {
+          if (d.type === 'entity') return 'node-entity';
+          let c = 'node-memory';
+          if (d.status === 'superseded') c += ' superseded';
+          if (d.pinned) c += ' pinned';
+          return c;
+        });
+
+      node.append('text').attr('class','node-label').attr('dy', 28).attr('text-anchor','middle')
+        .text(d => {
+          const t = d.label || d.id;
+          return t.length > 28 ? t.slice(0, 26) + '…' : t;
+        });
+
+      simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.type === 'mentions' ? 50 : 90).strength(0.4))
+        .force('charge', d3.forceManyBody().strength(-180))
+        .force('center', d3.forceCenter(w/2, h/2))
+        .force('collision', d3.forceCollide().radius(d => d.type === 'entity' ? 22 : 30))
+        .on('tick', () => {
+          link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+              .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+          node.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+
+      svg.on('click', () => { document.getElementById('details').style.display = 'none'; });
+    }
+
+    document.getElementById('refresh').onclick = loadGraph;
+    document.getElementById('apply').onclick = loadGraph;
+    document.getElementById('export').onclick = () => {
+      const blob = new Blob([JSON.stringify(graph, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'memory-graph.json';
+      a.click();
+    };
+    document.getElementById('zoom-in').onclick = () => d3.select('#canvas').transition().call(zoomBehavior.scaleBy, 1.3);
+    document.getElementById('zoom-out').onclick = () => d3.select('#canvas').transition().call(zoomBehavior.scaleBy, 0.7);
+    document.getElementById('zoom-fit').onclick = () => {
+      d3.select('#canvas').transition().duration(400).call(zoomBehavior.transform, d3.zoomIdentity);
+    };
+
+    loadGraph();
+  </script>
+</body>
+</html>
