@@ -40,12 +40,14 @@ Storage layout (single .db file):
 Recall strategy — Reciprocal Rank Fusion (RRF), tiered quick/wide, with
 recency-among-relevant reranking:
 
-  score = 1/(k + rank_knn) + 1/(k + rank_fts)
+  score = 1/(k + rank_knn) + 1/(k + rank_fts) + 1/(k + rank_graph)
   k=60 (standard RRF constant — dampens outlier ranks)
 
   KNN catches semantic similarity ("I love cats" <-> "I adore cats")
   FTS5 catches exact token matches ("Max", "birthday", proper nouns)
-  RRF fuses both without weighting either arbitrarily.
+  Graph catches entity-connected memories that neither KNN nor FTS
+    surfaced on their own (see "Entity graph fusion" below)
+  RRF fuses all three without weighting any of them arbitrarily.
 
   Stage 1 — tiered candidate fetch:
     Search runs a narrow "quick" pass first (QUICK_KNN_LIMIT/QUICK_FTS_LIMIT
@@ -66,6 +68,10 @@ recency-among-relevant reranking:
         tiebreaker only. There is no separate guarantee stage anymore:
         pinned candidates compete purely on this blended score like
         everything else.
+      - a small graph bonus (MEMORY_RANK_GRAPH_WEIGHT / (RRF_K + rank)) —
+        also a mild tiebreaker, folded into the same RRF-style term as
+        KNN/FTS rather than applied as a post-hoc override. See "Entity
+        graph fusion" below.
 
   Stage 3 — recency-among-relevant rerank (MEMORY_RECENCY_RERANK_ENABLED):
     Candidates whose score clears MEMORY_RECENCY_RERANK_THRESHOLD are
@@ -74,7 +80,7 @@ recency-among-relevant reranking:
     that didn't clear the bar. This is a genuine reorder — not another
     additive weight — so among several similarly-relevant memories, the
     newest one surfaces first rather than whichever happened to score
-    marginally higher on RRF/access/pinned terms.
+    marginally higher on RRF/access/pinned/graph terms.
 
   Stage 4 — removed (previously: pinned reserve via
     MEMORY_PINNED_RESERVED_SLOTS). Pinned candidates now compete on the
@@ -93,6 +99,31 @@ recency-among-relevant reranking:
   so a duplicate that slipped through either of those (most commonly:
   pinned duplicates, which dream() can never delete) still can't occupy
   more than one of the returned slots.
+
+Entity graph fusion:
+  Phase D's entity_relations table (co-mention edges between entity
+  strings, recorded at write time in _insert_row) is now a genuine third
+  candidate source at recall time, not just a write-only side table and
+  not just a post-hoc rerank of already-truncated results.
+
+  _MemoryBackend._graph_pass() extracts entities from the query text
+  (same rule-based extractor used at write time) and looks up memory_ids
+  connected to those entities via entity_relations, ordered by summed
+  edge weight. Those ids are folded into the same RRF-style scoring as
+  KNN/FTS in _rank_and_score(): a memory that only the graph pass found
+  can now actually enter the candidate pool (all_ids = knn | fts | graph),
+  not just get reordered after the fact — and its contribution is a small
+  additive term (MEMORY_RANK_GRAPH_WEIGHT), not an override, so a strong
+  vector/lexical match can never be buried by a weak co-mention edge the
+  way the old post-hoc rerank could.
+
+  This replaces the old AikoMemorize._boost_by_entity_relations() /
+  _extract_query_entities() path, which reranked results AFTER they'd
+  already been truncated to `limit` by _mem.search() — meaning it could
+  only reorder what vector+FTS already surfaced, never expand the
+  candidate pool. That path (and the AIKO_ENTITY_BOOST env gate) has been
+  removed; graph participation is now controlled by MEMORY_RANK_GRAPH_WEIGHT
+  (set to 0 to disable without touching call sites).
 
 Trivial-input skip:
   AikoMemorize.search() short-circuits to [] for turns that are nothing
@@ -213,8 +244,10 @@ EMBED_QUERY_INSTRUCT = os.getenv("EMBED_QUERY_INSTRUCT", "Retrieve relevant memo
 RRF_K       = 60          # standard RRF constant — dampens outlier ranks
 KNN_LIMIT   = 20          # candidates fetched before RRF re-rank (wide pass)
 FTS_LIMIT   = 20          # candidates fetched before RRF re-rank (wide pass)
+GRAPH_LIMIT = 20          # candidates fetched before RRF re-rank (wide pass)
 QUICK_KNN_LIMIT = int(os.getenv("QUICK_KNN_LIMIT", "6"))   # narrow first-pass candidate count
 QUICK_FTS_LIMIT = int(os.getenv("QUICK_FTS_LIMIT", "6"))   # narrow first-pass candidate count
+QUICK_GRAPH_LIMIT = int(os.getenv("QUICK_GRAPH_LIMIT", "6"))  # narrow first-pass candidate count
 MEMORY_RECALL_SCORE_THRESHOLD = float(os.getenv("MEMORY_RECALL_SCORE_THRESHOLD", "0.015"))
 MEMORY_RANK_RECENCY_WEIGHT = float(os.getenv("MEMORY_RANK_RECENCY_WEIGHT", "0.004"))
 MEMORY_RANK_RECENCY_HALF_LIFE_DAYS = float(os.getenv("MEMORY_RANK_RECENCY_HALF_LIFE_DAYS", "30"))
@@ -222,6 +255,11 @@ MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"
 # Bumped from 0.002 -> 0.01 so pinned status is a meaningful tiebreaker
 # under RRF (~0.016 at rank 1), without beating a clearly better unpinned hit.
 MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01"))
+# Entity-graph tiebreaker — same scale as MEMORY_RANK_PINNED_WEIGHT by
+# design: a mild nudge for entity-connected memories, never enough to bury
+# a clearly stronger KNN/FTS hit. Set to 0 to disable graph participation
+# in scoring without touching any call sites.
+MEMORY_RANK_GRAPH_WEIGHT = float(os.getenv("MEMORY_RANK_GRAPH_WEIGHT", "0.01"))
 MEMORY_SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 MEMORY_SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -775,17 +813,18 @@ def _sqlite_get_vector(conn: sqlite3.Connection, mem_id: str) -> list[float]:
     row = conn.execute(
         "SELECT embedding FROM memories_vec WHERE id = ?", (mem_id,)
     ).fetchone()
-  if row and row[0]:
-      raw = row[0]
-      if len(raw) % 4 != 0:  # not divisible by float32 size
-          log.warning(f"Corrupted vector for {mem_id}, dropping")
-          return []
-      try:
-          n = len(raw) // 4
-          return list(struct.unpack(f"{n}f", raw))
-      except struct.error as e:
-          log.error(f"Vector deserialization failed: {e}")
-          return []
+    if row and row[0]:
+        raw = row[0]
+        if len(raw) % 4 != 0:  # not divisible by float32 size
+            log.warning(f"Corrupted vector for {mem_id}, dropping")
+            return []
+        try:
+            n = len(raw) // 4
+            return list(struct.unpack(f"{n}f", raw))
+        except struct.error as e:
+            log.error(f"Vector deserialization failed: {e}")
+            return []
+    return []
 
 
 def _sqlite_is_pinned(conn: sqlite3.Connection, mem_id: str) -> bool:
@@ -905,8 +944,10 @@ class _MemoryBackend:
         keeping only the most recently created row per duplicate cluster;
         runs a tiered quick/wide candidate pass; applies a recency-among-
         relevant rerank. Pinned rows only get MEMORY_RANK_PINNED_WEIGHT as
-        a mild score bonus (no reserved slots). See module docstring for
-        the full stage breakdown.
+        a mild score bonus (no reserved slots). Entity-graph candidates
+        (via _graph_pass) are now fused into the same RRF-style scoring
+        as KNN/FTS, with MEMORY_RANK_GRAPH_WEIGHT as their tiebreaker.
+        See module docstring for the full stage breakdown.
 
     Fixes applied:
       - Phase A schema (status/supersedes_id/kind/source/entities columns)
@@ -936,6 +977,17 @@ class _MemoryBackend:
         a turn state stuck "active" forever — which is the exact scenario
         MEMORY_WRITE_MAX_WAIT exists to guard against, so gating the cap on
         that same condition meant it could never fire when it mattered.
+      - `_sqlite_get_vector()` now returns [] explicitly when the row is
+        missing or its embedding column is empty, instead of implicitly
+        returning None — callers (`_dream_merge`) treat a falsy return as
+        "skip this memory", and an implicit None was accidental but is now
+        an explicit, documented contract.
+      - Entity-graph read path: `_graph_pass()` queries `entity_relations`
+        for memories connected to entities extracted from the query text,
+        and those candidates are folded into `_rank_and_score()` alongside
+        KNN/FTS — a memory only the graph pass finds can now actually enter
+        the result set, not just reorder it after the fact (see module
+        docstring, "Entity graph fusion").
     """
 
     def __init__(
@@ -961,6 +1013,7 @@ class _MemoryBackend:
         # referencing `m.status` before that column exists.
         with self._db_lock:
             ensure_phase_a_schema(self._conn)
+            ensure_entity_relations_schema(self._conn)
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
@@ -1310,26 +1363,67 @@ class _MemoryBackend:
             (fts_query, user_id, fts_limit),
         ).fetchall()
 
+    def _graph_pass(
+        self,
+        query_entities: list[str],
+        user_id: str,
+        limit: int,
+        active_only: bool = True,
+    ) -> list[sqlite3.Row]:
+        """
+        Fetch memory_ids connected to query entities via entity_relations,
+        ordered by summed edge weight. Returns [] if the query has no
+        extractable entities. Caller must hold self._db_lock.
+
+        This is the entity-graph read path: candidates from here are folded
+        into _rank_and_score() alongside KNN/FTS, so a memory that only the
+        graph connects to the query can actually enter the result set (not
+        just reorder results that were already found some other way — see
+        module docstring, "Entity graph fusion").
+        """
+        if not query_entities:
+            return []
+        status_sql = _active_sql(active_only).replace("m.status", "mm.status")
+        placeholders = ",".join("?" * len(query_entities))
+        return self._conn.execute(
+            f"""
+            SELECT mm.id AS id, SUM(er.weight) AS w
+            FROM entity_relations er
+            JOIN memories mm ON mm.id = er.memory_id
+            WHERE er.user_id = ?
+              AND (er.entity_a IN ({placeholders}) OR er.entity_b IN ({placeholders}))
+              AND er.memory_id IS NOT NULL
+              {status_sql}
+            GROUP BY mm.id
+            ORDER BY w DESC
+            LIMIT ?
+            """,
+            [user_id] + query_entities + query_entities + [limit],
+        ).fetchall()
+
     def _rank_and_score(
         self,
         rank_knn: dict,
         rank_fts: dict,
+        rank_graph: dict | None = None,
     ) -> tuple[list[str], dict, dict]:
         """
         Dedup + score one candidate pool (from either the quick or wide pass).
         Caller must hold self._db_lock.
 
-        1. Fetch full rows for the union of KNN/FTS candidate ids.
+        1. Fetch full rows for the union of KNN/FTS/graph candidate ids.
         2. Collapse exact-text duplicates, keeping the most recently created
            row per duplicate cluster.
-        3. Score every surviving id: RRF fusion + recency/access/pinned bonuses.
+        3. Score every surviving id: RRF fusion (KNN + FTS + graph) plus
+           recency/access/pinned bonuses.
 
         Returns (ids sorted best-first by score, {id: score}, {id: row}).
         Recency-among-relevant reranking is applied afterward by the
         caller (search()), not here — this method only produces the base
-        score-ordered list (RRF + recency + access + pinned weight).
+        score-ordered list (RRF + recency + access + pinned + graph weight).
         """
-        all_ids = set(rank_knn) | set(rank_fts)
+        rank_graph = rank_graph or {}
+        all_ids = set(rank_knn) | set(rank_fts) | set(rank_graph)
         if not all_ids:
             return [], {}, {}
 
@@ -1371,11 +1465,14 @@ class _MemoryBackend:
         def final_score(mem_id: str) -> float:
             knn = rank_knn.get(mem_id, 0)
             fts = rank_fts.get(mem_id, 0)
+            graph = rank_graph.get(mem_id, 0)
             score = 0.0
             if knn:
                 score += 1.0 / (RRF_K + knn)
             if fts:
                 score += 1.0 / (RRF_K + fts)
+            if graph:
+                score += MEMORY_RANK_GRAPH_WEIGHT / (RRF_K + graph)
 
             row = row_by_id.get(mem_id)
             if row is not None:
@@ -1425,37 +1522,42 @@ class _MemoryBackend:
 
     def search(self, query: str, user_id: str, limit: int = 5, vector: list[float] | None = None, include_history: bool = False) -> list[dict]:
         """
-        KNN + FTS5 -> RRF fusion search, with a tiered quick/wide candidate
-        pass and recency-among-relevant reranking. Pinned status is only a
-        MEMORY_RANK_PINNED_WEIGHT score tiebreaker (no reserved slots).
+        KNN + FTS5 + entity-graph -> RRF fusion search, with a tiered
+        quick/wide candidate pass and recency-among-relevant reranking.
+        Pinned status and graph connectivity are both only mild RRF-style
+        score tiebreakers (no reserved slots, no post-hoc override).
         See module docstring for the full stage-by-stage description.
 
         1. Embed the query once (_embed) — this is the dominant cost
             regardless of which pass runs below, so it is never repeated.
-        2. Quick pass: pull QUICK_KNN_LIMIT / QUICK_FTS_LIMIT candidates,
-            dedup + score them. If that already fills `limit` results and the
-            weakest of them clears MEMORY_RECALL_SCORE_THRESHOLD, use it as-is
-            — most turns stop here and never pay for the wider SQL scan.
-        3. Otherwise widen to KNN_LIMIT / FTS_LIMIT and re-rank the larger
-            pool from scratch (rank positions shift when the pool grows, so
-            this is a fresh scoring pass, not a merge with the quick pass).
-        4. Reorder the resulting candidates by recency-among-relevant.
-        5. Truncate to `limit` and return as payload dicts.
-           (Pinned is already folded into scores in step 2 via MEMORY_RANK_PINNED_WEIGHT.)
+        2. Extract entities from the query text (same rule-based extractor
+            used at write time) for the graph pass.
+        3. Quick pass: pull QUICK_KNN_LIMIT / QUICK_FTS_LIMIT / QUICK_GRAPH_LIMIT
+            candidates, dedup + score them. If that already fills `limit`
+            results and the weakest of them clears MEMORY_RECALL_SCORE_THRESHOLD,
+            use it as-is — most turns stop here and never pay for the wider
+            SQL scan.
+        4. Otherwise widen to KNN_LIMIT / FTS_LIMIT / GRAPH_LIMIT and re-rank
+            the larger pool from scratch (rank positions shift when the pool
+            grows, so this is a fresh scoring pass, not a merge with the
+            quick pass).
+        5. Reorder the resulting candidates by recency-among-relevant.
+        6. Truncate to `limit` and return as payload dicts.
 
         vector — pre-computed query embedding; skips the _embed HTTP call.
         include_history — when False (default), superseded memories are excluded.
 
-        FIX 2: the entire DB-touching portion of this method (both KNN
-        passes, both FTS passes, and the scoring step) now runs under a
-        single `self._db_lock` acquisition. Previously only the first quick
-        KNN call was locked, leaving the FTS pass, the scoring pass (which
+        FIX 2: the entire DB-touching portion of this method (all three
+        candidate passes and the scoring step) now runs under a single
+        `self._db_lock` acquisition. Previously only the first quick KNN
+        call was locked, leaving the FTS pass, the scoring pass (which
         reads the full `memories` rows), and the wide-pass fallback racing
         against the async write-worker thread on the same connection.
         """
         if vector is None:
             vector = self._embed(query, query=True)
         fts_query = _sanitize_fts_query(query)
+        query_entities = extract_entities(query, max_entities=5)
         active_only = not include_history
 
         with self._db_lock:
@@ -1465,8 +1567,10 @@ class _MemoryBackend:
             rank_knn_q = {row["id"]: i + 1 for i, row in enumerate(quick_knn_rows)}
             quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT, active_only=active_only)
             rank_fts_q = {row["id"]: i + 1 for i, row in enumerate(quick_fts_rows)}
+            quick_graph_rows = self._graph_pass(query_entities, user_id, QUICK_GRAPH_LIMIT, active_only=active_only)
+            rank_graph_q = {row["id"]: i + 1 for i, row in enumerate(quick_graph_rows)}
 
-            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q)
+            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q)
 
             confident = (
                 len(scored_ids) >= limit
@@ -1481,7 +1585,9 @@ class _MemoryBackend:
                 rank_knn_w = {row["id"]: i + 1 for i, row in enumerate(wide_knn_rows)}
                 wide_fts_rows = self._fts_pass(fts_query, user_id, FTS_LIMIT, active_only=active_only)
                 rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
-                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w)
+                wide_graph_rows = self._graph_pass(query_entities, user_id, GRAPH_LIMIT, active_only=active_only)
+                rank_graph_w = {row["id"]: i + 1 for i, row in enumerate(wide_graph_rows)}
+                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w)
 
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
         top_ids = ordered_ids[:limit]
@@ -1575,16 +1681,10 @@ class _MemoryBackend:
 # Thin entity-relation layer (not a full graph DB): one ``entity_relations``
 # table storing co-mention / explicit links between entity labels. Built
 # primarily from co-occurrence on the same memory fact; no vector changes,
-# no LLM. Write side lives here; read/export for the Studio lives in
+# no LLM. Write side lives here; read side is now also consulted at recall
+# time via _MemoryBackend._graph_pass() (see module docstring, "Entity
+# graph fusion"). Graph export for the Studio lives in
 # memory/studio/backend/graph_export.py.
-#
-# NOTE: this graph is currently write-only from AikoMemorize's perspective.
-# _MemoryBackend.search() / AikoMemorize.search() (the RRF recall path) do
-# NOT query entity_relations at all — co-mention edges are recorded on
-# every write (_insert_row) but never consulted at recall time. If/when
-# graph-aware recall is wanted, it would need an explicit read step here
-# (e.g. boosting candidates connected to entities in the query) rather than
-# relying on this table being populated as a side effect.
 
 RELATION_CO_MENTION = "co_mentions"
 RELATION_RELATED = "related_to"
@@ -1755,6 +1855,17 @@ class AikoMemorize:
         multiple pinned rows with identical text down to the most recent
         one, since dream() structurally cannot do this for pinned rows.
 
+    Entity graph:
+        entity_relations co-mention edges (written in _insert_row via
+        upsert_co_mentions) are now read at recall time by
+        _MemoryBackend._graph_pass() and fused into the same RRF-style
+        scoring as KNN/FTS. This class no longer does its own separate
+        entity extraction / rerank pass after the fact — that logic
+        (previously _extract_query_entities / _boost_by_entity_relations,
+        gated by AIKO_ENTITY_BOOST) has moved into _MemoryBackend, where
+        it can influence which candidates enter the pool, not just their
+        order within it.
+
     Async write queue:
         queue_write() lets a caller enqueue a fire-and-forget memory write
         (LLM-based fact extraction + persist) that runs on a dedicated
@@ -1818,11 +1929,11 @@ class AikoMemorize:
         if not self._silent:
             log.info("Memory store ready for %s.", uid)
 
-def switch_user(self, user_id: str) -> None:
-    # Drain any pending writes first
-    self.wait_for_writes(timeout=5.0)
-    
-    self._user_id_override = user_id
+    def switch_user(self, user_id: str) -> None:
+        # Drain any pending writes first
+        self.wait_for_writes(timeout=5.0)
+
+        self._user_id_override = user_id
         self._display_name = None
         if self._conn:
             with self._mem._db_lock:
@@ -1841,11 +1952,11 @@ def switch_user(self, user_id: str) -> None:
     def set_display_name(self, name: str) -> None:
         """Set the display name for this user (e.g. GitHub login)."""
         self._display_name = name.strip() if name else None
-    
+
     def get_display_name(self) -> str:
         """Return the display name for this user, or fall back to user_id."""
         return self._display_name or self.get_user_id()
-      
+
     def _resolve_user_id(self, user_id: str | None = None) -> str:
         """Resolve the effective user_id for this call.
 
@@ -2003,22 +2114,26 @@ def switch_user(self, user_id: str) -> None:
         Retrieve top-k memories relevant to the current query.
         Side-effect: increments access_count and updates last_accessed_at
         for all returned memories in a single batched UPDATE.
+
+        Entity-graph fusion happens inside self._mem.search() now (see
+        _MemoryBackend._graph_pass / _rank_and_score) — this method no
+        longer does a separate post-hoc entity rerank pass.
         """
         user_id = self._resolve_user_id(user_id)
         if _is_trivial_input(query or ""):
             log.debug(f"Skipping search for trivial input: {query!r}")
             return []
-    
+
         if _BROAD_RECALL_RE.search(query or ""):
             results = self._recent_or_important_memories(
                 user_id=user_id, limit=limit, include_history=include_history
             )
             self._touch_memories(results)
             return results[:int(limit)]
-    
+
         cache_key = (user_id, " ".join((query or "").lower().split()), int(limit), bool(include_history))
         now_s = time.monotonic()
-    
+
         with self._search_cache_lock:
             cached = self._search_cache.get(cache_key)
             if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
@@ -2029,8 +2144,8 @@ def switch_user(self, user_id: str) -> None:
                 return results
             if cached:
                 self._search_cache.pop(cache_key, None)
-    
-        # Run the core RRF search
+
+        # Run the core RRF search (KNN + FTS + entity graph, fused)
         results = self._mem.search(
             query,
             user_id=user_id,
@@ -2038,29 +2153,22 @@ def switch_user(self, user_id: str) -> None:
             vector=query_vector,
             include_history=include_history,
         )
-    
-        # Entity-aware rerank (optional, feature-gated)
-        if os.getenv("AIKO_ENTITY_BOOST"):
-            query_entities = self._extract_query_entities(query)
-            if query_entities:
-                results = self._boost_by_entity_relations(query_entities, results)
-                log.debug(f"Boosted results by entities: {query_entities}")
-    
+
         self._touch_memories(results)
         log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
-    
+
         # Search replay logging (optional, feature-gated)
         if os.getenv("AIKO_REPLAY_SEARCHES"):
             self._write_search_replay(query, results, user_id)
-    
+
         # Cache and return
         with self._search_cache_lock:
             self._search_cache[cache_key] = (now_s, [dict(r) for r in results])
             while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
                 self._search_cache.popitem(last=False)
-    
+
         return results
-      
+
     def _write_search_replay(self, query: str, results: list[dict], user_id: str) -> None:
         """Append search to replay log (debug/tuning, env-gated)."""
         try:
@@ -2085,7 +2193,7 @@ def switch_user(self, user_id: str) -> None:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
         except Exception as e:
             log.debug(f"search replay write failed: {e}")
-      
+
     def _recent_or_important_memories(self, user_id: str, limit: int, include_history: bool = False) -> list[dict]:
         """
         FIX 3: status filtering (active-only, unless include_history) is now
@@ -2238,50 +2346,7 @@ def switch_user(self, user_id: str) -> None:
         if len(block) > MEMORY_CONTEXT_TOTAL_CHARS:
             block = block[:MEMORY_CONTEXT_TOTAL_CHARS].rstrip() + "\n</memory_context>"
         return block
-  
-    # ── entity-aware recall ───────────────────────────────────────────────────
-      
-    def _extract_query_entities(self, query: str) -> list[str]:
-        """Extract entities mentioned in the query using the same rules as _insert_row."""
-        from memory.memorize import extract_entities
-        return extract_entities(query, max_entities=5)
-    
-    def _boost_by_entity_relations(self, query_entities: list[str], results: list[dict]) -> list[dict]:
-        """
-        Rerank results: memories that co-mention query entities rank higher.
-        Runs after RRF ranking but before return.
-        """
-        if not query_entities or not results:
-            return results
-        
-        # Fetch all memories related to query entities
-        with self._mem._db_lock:
-            placeholders = ",".join("?" * len(query_entities))
-            rows = self._conn.execute(
-                f"""
-                SELECT DISTINCT memory_id, SUM(weight) as relation_weight
-                FROM entity_relations
-                WHERE user_id = ? 
-                  AND (entity_a IN ({placeholders}) OR entity_b IN ({placeholders}))
-                  AND memory_id IS NOT NULL
-                GROUP BY memory_id
-                ORDER BY relation_weight DESC
-                """,
-                [self.get_user_id()] + query_entities + query_entities,
-            ).fetchall()
-        
-        related_ids = {str(row["memory_id"]): row["relation_weight"] for row in rows}
-        
-        # Rerank: memories with entity overlap float to top, preserving RRF order otherwise
-        def entity_boost_score(result: dict) -> tuple[int, float]:
-            mid = str(result.get("id", ""))
-            if mid in related_ids:
-                return (0, -related_ids[mid])  # (0, ...) sorts before (1, ...), negated weight for descending
-            return (1, 0)
-        
-        reranked = sorted(results, key=entity_boost_score)
-        return reranked
-  
+
     # ── dream pass ────────────────────────────────────────────────────────────
 
     def dream(
