@@ -889,6 +889,22 @@ class _MemoryBackend:
         relevant rerank. Pinned rows only get MEMORY_RANK_PINNED_WEIGHT as
         a mild score bonus (no reserved slots). See module docstring for
         the full stage breakdown.
+
+    Fixes applied:
+      - Phase A schema (status/supersedes_id/kind/source/entities columns)
+        is now migrated once at __init__ time, not lazily on first write.
+        Previously a fresh boot or un-migrated DB would hit
+        `search()` before any `add()`/`add_raw()` call and crash with
+        "no such column: m.status", because `_active_sql()` referenced a
+        column that had never been created.
+      - `search()` now holds `self._db_lock` across its entire body (quick
+        pass, wide pass, and the scoring/rank step in between), not just
+        the first KNN call. The connection is shared with the async write
+        worker thread, so partial locking left most of the read path
+        racing against concurrent writes/dream/cleanup.
+      - `iter_all()` now takes the lock around each page fetch (not held
+        across the yield, to avoid blocking other threads for the whole
+        duration a caller spends processing a batch).
     """
 
     def __init__(
@@ -908,6 +924,12 @@ class _MemoryBackend:
         self._embedder = HarrierEmbedder()
         self._conn = self._connect()
         self._db_lock = threading.RLock()
+        # FIX 1: migrate Phase A schema immediately, not lazily inside
+        # add()/add_raw(). Otherwise a read-only path (search() on a fresh
+        # boot or a DB that hasn't been written to yet) hits `_active_sql()`
+        # referencing `m.status` before that column exists.
+        with self._db_lock:
+            ensure_phase_a_schema(self._conn)
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
@@ -1147,7 +1169,6 @@ class _MemoryBackend:
 
         with self._db_lock:
             try:
-                ensure_phase_a_schema(self._conn)
                 for fact, vector in zip(facts, vectors):
                     op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, fact)
                     if op == "noop":
@@ -1195,10 +1216,13 @@ class _MemoryBackend:
         text = (memory or "").strip()
         if not text:
             return None
+        try:
+            vector = self._embed(text)
+        except Exception as e:
+            log.warning("Failed to embed raw memory: %s", e)
+            return None
         with self._db_lock:
             try:
-                ensure_phase_a_schema(self._conn)
-                vector = self._embed(text)
                 op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, text)
                 if op == "noop":
                     log.debug("Skipping near-duplicate raw memory: %r", text[:80])
@@ -1232,7 +1256,8 @@ class _MemoryBackend:
     # ── read ──────────────────────────────────────────────────────────────────
 
     def _fts_pass(self, fts_query: str | None, user_id: str, fts_limit: int, active_only: bool = True) -> list[sqlite3.Row]:
-        """Run one FTS5 BM25 pass. Returns [] if fts_query is None (nothing usable to match)."""
+        """Run one FTS5 BM25 pass. Returns [] if fts_query is None (nothing usable to match).
+        Caller must hold self._db_lock."""
         if fts_query is None:
             return []
         status_sql = _active_sql(active_only)
@@ -1257,6 +1282,7 @@ class _MemoryBackend:
     ) -> tuple[list[str], dict, dict]:
         """
         Dedup + score one candidate pool (from either the quick or wide pass).
+        Caller must hold self._db_lock.
 
         1. Fetch full rows for the union of KNN/FTS candidate ids.
         2. Collapse exact-text duplicates, keeping the most recently created
@@ -1384,6 +1410,13 @@ class _MemoryBackend:
 
         vector — pre-computed query embedding; skips the _embed HTTP call.
         include_history — when False (default), superseded memories are excluded.
+
+        FIX 2: the entire DB-touching portion of this method (both KNN
+        passes, both FTS passes, and the scoring step) now runs under a
+        single `self._db_lock` acquisition. Previously only the first quick
+        KNN call was locked, leaving the FTS pass, the scoring pass (which
+        reads the full `memories` rows), and the wide-pass fallback racing
+        against the async write-worker thread on the same connection.
         """
         if vector is None:
             vector = self._embed(query, query=True)
@@ -1394,26 +1427,26 @@ class _MemoryBackend:
             quick_knn_rows = _sqlite_knn_search(
                 self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
             )
-        rank_knn_q = {row["id"]: i + 1 for i, row in enumerate(quick_knn_rows)}
-        quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT, active_only=active_only)
-        rank_fts_q = {row["id"]: i + 1 for i, row in enumerate(quick_fts_rows)}
+            rank_knn_q = {row["id"]: i + 1 for i, row in enumerate(quick_knn_rows)}
+            quick_fts_rows = self._fts_pass(fts_query, user_id, QUICK_FTS_LIMIT, active_only=active_only)
+            rank_fts_q = {row["id"]: i + 1 for i, row in enumerate(quick_fts_rows)}
 
-        scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q)
+            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q)
 
-        confident = (
-            len(scored_ids) >= limit
-            and scores.get(scored_ids[limit - 1], 0.0) >= MEMORY_RECALL_SCORE_THRESHOLD
-        )
-
-        # ── widen only if the quick pass was under-filled or under-confident ──
-        if not confident:
-            wide_knn_rows = _sqlite_knn_search(
-                self._conn, vector, user_id, KNN_LIMIT, active_only=active_only
+            confident = (
+                len(scored_ids) >= limit
+                and scores.get(scored_ids[limit - 1], 0.0) >= MEMORY_RECALL_SCORE_THRESHOLD
             )
-            rank_knn_w = {row["id"]: i + 1 for i, row in enumerate(wide_knn_rows)}
-            wide_fts_rows = self._fts_pass(fts_query, user_id, FTS_LIMIT, active_only=active_only)
-            rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
-            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w)
+
+            # ── widen only if the quick pass was under-filled or under-confident ──
+            if not confident:
+                wide_knn_rows = _sqlite_knn_search(
+                    self._conn, vector, user_id, KNN_LIMIT, active_only=active_only
+                )
+                rank_knn_w = {row["id"]: i + 1 for i, row in enumerate(wide_knn_rows)}
+                wide_fts_rows = self._fts_pass(fts_query, user_id, FTS_LIMIT, active_only=active_only)
+                rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
+                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w)
 
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
         top_ids = ordered_ids[:limit]
@@ -1428,19 +1461,26 @@ class _MemoryBackend:
         return results
 
     def iter_all(self, user_id: str, batch_size: int = MEMORY_LIFECYCLE_BATCH_SIZE):
-        """Yield memory records for a user in rowid order without one giant list."""
+        """Yield memory records for a user in rowid order without one giant list.
+
+        FIX: each page fetch is now taken under self._db_lock. The lock is
+        NOT held across the yield, so a slow consumer (e.g. dream()/cleanup()
+        processing a batch) doesn't block the write-worker thread for the
+        whole duration — only the actual SQL scan is protected.
+        """
         last_rowid = 0
         while True:
-            rows = self._conn.execute(
-                """
-                SELECT rowid, id, memory, created_at
-                FROM memories
-                WHERE user_id = ? AND rowid > ?
-                ORDER BY rowid ASC
-                LIMIT ?
-                """,
-                (user_id, last_rowid, batch_size),
-            ).fetchall()
+            with self._db_lock:
+                rows = self._conn.execute(
+                    """
+                    SELECT rowid, id, memory, created_at
+                    FROM memories
+                    WHERE user_id = ? AND rowid > ?
+                    ORDER BY rowid ASC
+                    LIMIT ?
+                    """,
+                    (user_id, last_rowid, batch_size),
+                ).fetchall()
             if not rows:
                 break
             for row in rows:
@@ -1448,8 +1488,7 @@ class _MemoryBackend:
                 yield {"id": row["id"], "memory": row["memory"], "created_at": row["created_at"]}
 
     def get_all(self, user_id: str) -> list[dict]:
-        with self._db_lock:
-            return list(self.iter_all(user_id=user_id))
+        return list(self.iter_all(user_id=user_id))
 
     def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
         user_id = user_id or self._user_id
@@ -1503,6 +1542,14 @@ class _MemoryBackend:
 # primarily from co-occurrence on the same memory fact; no vector changes,
 # no LLM. Write side lives here; read/export for the Studio lives in
 # memory/studio/backend/graph_export.py.
+#
+# NOTE: this graph is currently write-only from AikoMemorize's perspective.
+# _MemoryBackend.search() / AikoMemorize.search() (the RRF recall path) do
+# NOT query entity_relations at all — co-mention edges are recorded on
+# every write (_insert_row) but never consulted at recall time. If/when
+# graph-aware recall is wanted, it would need an explicit read step here
+# (e.g. boosting candidates connected to entities in the query) rather than
+# relying on this table being populated as a side effect.
 
 RELATION_CO_MENTION = "co_mentions"
 RELATION_RELATED = "related_to"
@@ -1935,12 +1982,14 @@ class AikoMemorize:
             return []
 
         if _BROAD_RECALL_RE.search(query or ""):
-            results = self._recent_or_important_memories(user_id=user_id, limit=limit)
-            if not include_history:
-                results = [
-                    r for r in results
-                    if str(r.get("status") or STATUS_ACTIVE) == STATUS_ACTIVE
-                ]
+            # FIX 3: status filtering now happens INSIDE
+            # _recent_or_important_memories (before it truncates to `limit`),
+            # not after. Filtering post-truncation could silently return
+            # fewer than `limit` results even when enough active candidates
+            # existed in the wider fetch window.
+            results = self._recent_or_important_memories(
+                user_id=user_id, limit=limit, include_history=include_history
+            )
             self._touch_memories(results)
             return results[:int(limit)]
 
@@ -1974,19 +2023,30 @@ class AikoMemorize:
 
         return results
 
-    def _recent_or_important_memories(self, user_id: str, limit: int) -> list[dict]:
+    def _recent_or_important_memories(self, user_id: str, limit: int, include_history: bool = False) -> list[dict]:
+        """
+        FIX 3: status filtering (active-only, unless include_history) is now
+        applied in SQL, before the dedup+truncate step below — not by the
+        caller after truncation. Previously the caller filtered out
+        superseded rows AFTER this method had already cut the candidate
+        pool down to `limit`, which could return fewer than `limit` results
+        even when the wider fetch window had enough active memories to
+        fill it.
+        """
         fetch_n = max(int(limit) * 4, int(limit) + 10)
+        status_sql = _active_sql(not include_history)
         with self._mem._db_lock:
             rows = self._conn.execute(
-            """
-            SELECT *
-            FROM memories
-            WHERE user_id = ?
-            ORDER BY pinned DESC, created_at DESC, access_count DESC
-            LIMIT ?
-            """,
-            (user_id, fetch_n),
-        ).fetchall()
+                """
+                SELECT *
+                FROM memories m
+                WHERE m.user_id = ?
+                  {status_sql}
+                ORDER BY m.pinned DESC, m.created_at DESC, m.access_count DESC
+                LIMIT ?
+                """.format(status_sql=status_sql),
+                (user_id, fetch_n),
+            ).fetchall()
 
         best_by_text: dict[str, sqlite3.Row] = {}
         order: list[str] = []
