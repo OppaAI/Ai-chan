@@ -101,21 +101,20 @@ recency-among-relevant reranking:
   more than one of the returned slots.
 
 Entity graph fusion:
-  Phase D's entity_relations table (co-mention edges between entity
-  strings, recorded at write time in _insert_row) is now a genuine third
-  candidate source at recall time, not just a write-only side table and
-  not just a post-hoc rerank of already-truncated results.
+  memories.entities (the per-memory entity list, written once at insert
+  time in _insert_row and never overwritten) is a genuine third candidate
+  source at recall time, not just write-only metadata and not just a
+  post-hoc rerank of already-truncated results.
 
   _MemoryBackend._graph_pass() extracts entities from the query text
-  (same rule-based extractor used at write time) and looks up memory_ids
-  connected to those entities via entity_relations, ordered by summed
-  edge weight. Those ids are folded into the same RRF-style scoring as
-  KNN/FTS in _rank_and_score(): a memory that only the graph pass found
-  can now actually enter the candidate pool (all_ids = knn | fts | graph),
-  not just get reordered after the fact — and its contribution is a small
-  additive term (MEMORY_RANK_GRAPH_WEIGHT), not an override, so a strong
-  vector/lexical match can never be buried by a weak co-mention edge the
-  way the old post-hoc rerank could.
+  (same rule-based extractor used at write time) and matches them directly
+  against memories.entities, ranked by overlap count. Those ids are folded
+  into the same RRF-style scoring as KNN/FTS in _rank_and_score(): a memory
+  that only the graph pass found can now actually enter the candidate pool
+  (all_ids = knn | fts | graph), not just get reordered after the fact —
+  and its contribution is a small additive term (MEMORY_RANK_GRAPH_WEIGHT),
+  not an override, so a strong vector/lexical match can never be buried by
+  a weak entity match the way the old post-hoc rerank could.
 
   This replaces the old AikoMemorize._boost_by_entity_relations() /
   _extract_query_entities() path, which reranked results AFTER they'd
@@ -125,24 +124,45 @@ Entity graph fusion:
   removed; graph participation is now controlled by MEMORY_RANK_GRAPH_WEIGHT
   (set to 0 to disable without touching call sites).
 
+  FIX: _graph_pass previously joined through the entity_relations
+  co-mention table instead, via entity_relations.memory_id ordered by
+  summed edge weight. That was recency-biased: upsert_co_mentions'
+  `memory_id = COALESCE(excluded.memory_id, entity_relations.memory_id)`
+  means each (entity_a, entity_b) edge only ever remembers the LAST memory
+  that mentioned that pair, so every earlier memory that also mentioned
+  both entities became permanently unreachable via the graph — the graph
+  pass could only ever surface "whichever memory most recently touched
+  this entity pair," never the full set of connected memories. Reading
+  memories.entities directly (ground truth, one row per memory) fixes this;
+  entity_relations is retained for rebuild_entity_relations tooling and
+  potential future edge-weight features, but is no longer read by
+  _graph_pass or _refresh_high_freq_entities (below).
+
   Graph fusion has three additional correctness guards, all in
   _MemoryBackend:
-    - Entities are stored casefolded in entity_relations (upsert_co_mentions)
-      and query entities are casefolded before matching (_graph_pass), so
-      "GRACE" and "Grace" resolve to one graph node instead of splitting
-      across the (user_id, entity_a, entity_b, relation) unique index.
+    - Query entities are casefolded before matching against
+      memories.entities (LOWER() in SQL) in _graph_pass, so "GRACE" and
+      "Grace" resolve to the same match instead of splitting into two.
+      entity_relations still stores its own edges casefolded too (see
+      upsert_co_mentions), for whatever consumes that table separately.
     - _refresh_high_freq_entities() (TTL-cached, self-recomputing) drops
-      "super-node" entities — anything co-mentioned on more than
+      "super-node" entities — anything mentioned in more than
       MEMORY_GRAPH_SUPER_NODE_FRACTION of the user's active memories —
       from the query entity list before the graph query runs. Without
       this, an entity that appears in most memories (e.g. the assistant's
       own name, or a nickname used in nearly every fact) would make
       _graph_pass return a near-random slice of the whole store instead
-      of a meaningful signal.
+      of a meaningful signal. FIX: this frequency count now also comes
+      from memories.entities directly (COUNT DISTINCT memory id) instead
+      of entity_relations.memory_id, for the same undercounting reason as
+      above — an entity mentioned in many memories alongside a rotating
+      cast of different co-mentioned partners could have its true
+      frequency badly undercounted via the old join, letting a real
+      super-node slip through undetected.
     - delete() (used by both dream()'s merge-loser deletes and cleanup()'s
-      decay deletes) now cascades to entity_relations, so a deleted
-      memory's edges don't linger and get joined against a nonexistent id
-      by every future _graph_pass call.
+      decay deletes) still cascades to entity_relations, so a deleted
+      memory's edges don't linger there even though nothing on the hot
+      read path joins against them anymore.
 
   MEMORY_RANK_GRAPH_WEIGHT's default (0.6, not 0.01) is chosen so the
   term's max value at rank 1 — WEIGHT / (RRF_K + 1) — lands near
@@ -879,8 +899,6 @@ def _sqlite_is_pinned(conn: sqlite3.Connection, mem_id: str) -> bool:
     return bool(row and row[0])
 
 
-
-
 def _sqlite_pinned_ids(conn: sqlite3.Connection, mem_ids: list[str]) -> set[str]:
     """Batch fetch pinned memory IDs from the canonical table."""
     ids = [str(mem_id) for mem_id in mem_ids if mem_id]
@@ -1475,10 +1493,20 @@ class _MemoryBackend:
         enough to run per-call under a TTL guard (two aggregate queries),
         so no separate scheduled job is required — it self-heals as the
         user's memory store grows.
+
+        FIX: this used to count COUNT(DISTINCT memory_id) from
+        entity_relations, which undercounts — see _graph_pass for why
+        entity_relations.memory_id only ever holds the last memory per
+        entity pair. An entity mentioned in 50 memories but always
+        alongside a rotating cast of different co-mentioned partners could
+        have its true frequency badly undercounted, letting a real
+        super-node slip through the filter undetected. Counting distinct
+        memory ids directly from memories.entities (ground truth, one row
+        per memory) fixes this the same way _graph_pass's read path was
+        fixed.
         """
         now = time.monotonic()
-        last = getattr(self, "_high_freq_computed_at", 0.0)
-        if now - last < self._GRAPH_SUPER_NODE_TTL and getattr(self, "_high_freq_entities", None) is not None:
+        if now - self._high_freq_computed_at < self._GRAPH_SUPER_NODE_TTL and self._high_freq_entities is not None:
             return
         try:
             total_row = self._conn.execute(
@@ -1492,14 +1520,12 @@ class _MemoryBackend:
                 return
             rows = self._conn.execute(
                 """
-                SELECT entity, COUNT(DISTINCT memory_id) AS cnt FROM (
-                    SELECT entity_a AS entity, memory_id FROM entity_relations WHERE user_id = ?
-                    UNION ALL
-                    SELECT entity_b AS entity, memory_id FROM entity_relations WHERE user_id = ?
-                )
-                GROUP BY entity
+                SELECT LOWER(je.value) AS entity, COUNT(DISTINCT mm.id) AS cnt
+                FROM memories mm, json_each(mm.entities) je
+                WHERE mm.user_id = ? AND (mm.status = 'active' OR mm.status IS NULL)
+                GROUP BY LOWER(je.value)
                 """,
-                (user_id, user_id),
+                (user_id,),
             ).fetchall()
             self._high_freq_entities = {
                 row["entity"] for row in rows
@@ -1508,7 +1534,7 @@ class _MemoryBackend:
             self._high_freq_computed_at = now
         except Exception as e:
             log.debug("high-freq entity refresh skipped: %s", e)
-            if getattr(self, "_high_freq_entities", None) is None:
+            if self._high_freq_entities is None:
                 self._high_freq_entities = set()
             self._high_freq_computed_at = now
 
@@ -1520,13 +1546,37 @@ class _MemoryBackend:
         active_only: bool = True,
     ) -> list[sqlite3.Row]:
         """
-        Fetch memory_ids connected to query entities via entity_relations,
-        ordered by summed edge weight. Returns [] if the query has no
-        extractable entities, or if every extracted entity is a super-node
-        (see _refresh_high_freq_entities). Caller must hold self._db_lock.
+        Fetch memories whose stored entity list (memories.entities) overlaps
+        the query entities, ranked by overlap count. Returns [] if the query
+        has no extractable entities, or if every extracted entity is a
+        super-node (see _refresh_high_freq_entities). Caller must hold
+        self._db_lock.
 
-        Query entities are casefolded before matching, since edges are now
-        stored casefolded in entity_relations (see upsert_co_mentions).
+        Query entities are casefolded before matching, since memories.entities
+        is compared case-insensitively here (LOWER()) against already-
+        casefolded query entities.
+
+        FIX: this used to join through entity_relations.memory_id ordered by
+        SUM(weight). That's broken: upsert_co_mentions does
+        `memory_id = COALESCE(excluded.memory_id, entity_relations.memory_id)`
+        on conflict, which means each (entity_a, entity_b) edge only ever
+        remembers the LAST memory that mentioned that pair — every earlier
+        memory that also mentioned both entities becomes permanently
+        unreachable via this path, even though it's still active and still
+        genuinely connected. In practice this biased graph recall toward
+        whichever memory most recently touched an entity pair ("graph only
+        finds recent stuff"), not all memories connected to the query.
+
+        memories.entities is the ground-truth per-memory entity list —
+        written once at insert time (_insert_row) and never overwritten —
+        so matching against it directly returns every connected memory, not
+        just the newest one per pair. entity_relations (co-mention edges)
+        is still written at write time and still used by
+        _refresh_high_freq_entities' super-node detection is now also
+        sourced from memories.entities for the same reason; see below.
+        entity_relations itself is retained for rebuild_entity_relations
+        tooling and potential future edge-weight features, but is no longer
+        read on this hot path.
 
         This is the entity-graph read path: candidates from here are folded
         into _rank_and_score() alongside KNN/FTS, so a memory that only the
@@ -1537,7 +1587,7 @@ class _MemoryBackend:
         if not query_entities:
             return []
         self._refresh_high_freq_entities(user_id)
-        super_nodes = getattr(self, "_high_freq_entities", set())
+        super_nodes = self._high_freq_entities
         filtered = [e.casefold() for e in query_entities if e.casefold() not in super_nodes]
         if not filtered:
             return []
@@ -1545,18 +1595,16 @@ class _MemoryBackend:
         placeholders = ",".join("?" * len(filtered))
         return self._conn.execute(
             f"""
-            SELECT mm.id AS id, SUM(er.weight) AS w
-            FROM entity_relations er
-            JOIN memories mm ON mm.id = er.memory_id
-            WHERE er.user_id = ?
-              AND (er.entity_a IN ({placeholders}) OR er.entity_b IN ({placeholders}))
-              AND er.memory_id IS NOT NULL
+            SELECT mm.id AS id, COUNT(*) AS w
+            FROM memories mm, json_each(mm.entities) je
+            WHERE mm.user_id = ?
+              AND LOWER(je.value) IN ({placeholders})
               {status_sql}
             GROUP BY mm.id
             ORDER BY w DESC
             LIMIT ?
             """,
-            [user_id] + filtered + filtered + [limit],
+            [user_id] + filtered + [limit],
         ).fetchall()
 
     def _rank_and_score(
@@ -1772,7 +1820,7 @@ class _MemoryBackend:
             with self._db_lock:
                 rows = self._conn.execute(
                     """
-                    SELECT rowid, id, memory, created_at
+                    SELECT rowid, id, memory, created_at, status
                     FROM memories
                     WHERE user_id = ? AND rowid > ?
                     ORDER BY rowid ASC
@@ -1784,7 +1832,12 @@ class _MemoryBackend:
                 break
             for row in rows:
                 last_rowid = row["rowid"]
-                yield {"id": row["id"], "memory": row["memory"], "created_at": row["created_at"]}
+                yield {
+                    "id": row["id"],
+                    "memory": row["memory"],
+                    "created_at": row["created_at"],
+                    "status": row["status"],
+                }
 
     def get_all(self, user_id: str) -> list[dict]:
         return list(self.iter_all(user_id=user_id))
@@ -1871,6 +1924,10 @@ CREATE TABLE IF NOT EXISTS entity_relations (
 CREATE INDEX IF NOT EXISTS idx_entity_rel_user ON entity_relations(user_id);
 CREATE INDEX IF NOT EXISTS idx_entity_rel_a ON entity_relations(user_id, entity_a);
 CREATE INDEX IF NOT EXISTS idx_entity_rel_b ON entity_relations(user_id, entity_b);
+-- delete() runs "DELETE FROM entity_relations WHERE memory_id = ?" on every
+-- single memory deletion (cleanup's decay sweep, dream()'s merge-loser
+-- deletes) — without this index that's a full table scan every time.
+CREATE INDEX IF NOT EXISTS idx_entity_rel_memory_id ON entity_relations(memory_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_rel_pair
     ON entity_relations(user_id, entity_a, entity_b, relation);
 """
@@ -1991,18 +2048,38 @@ def _memory_db_path_for_user(uid: str) -> str:
         return _guest_memory_db()
     env_path = os.getenv("SQLITE_MEMORY_PATH", "").strip()
     if env_path:
+        # NOTE: when set, every non-guest user shares this exact file path —
+        # there's no per-user substitution here. Every query still filters
+        # by the user_id column, so this doesn't corrupt or leak data across
+        # users, but it does mean all non-guest users' memories live in one
+        # physical .db file rather than one-file-per-user. Fine for a
+        # single-tenant deployment (the common case this env var exists
+        # for); if you're running this multi-tenant, don't set it.
         return os.path.expanduser(env_path)
     return str(resolve_user_db_path("memory/memory.db", user_id=uid))
-    
+
 
 def vacuum_memory_db(user_id: str | None = None) -> None:
     """Reclaim space after bulk memory deletes during maintenance."""
     uid = user_id or current_user_id()
     conn = initialize_store_db(_memory_db_path_for_user(uid), _DDL, user_id=uid, vector=True)
     try:
-        conn.execute("VACUUM")
-        conn.execute("ANALYZE")
+        # VACUUM cannot run inside a transaction. Python's sqlite3 module
+        # implicitly opens one on the first DML statement even under
+        # isolation_level="" (the default), so if initialize_store_db (or
+        # anything else on this connection) issued an uncommitted INSERT/
+        # UPDATE/DELETE before we get here, a bare `conn.execute("VACUUM")`
+        # raises `OperationalError: cannot VACUUM from within a transaction`.
+        # Commit anything pending, then force autocommit mode for the
+        # VACUUM itself, then restore normal isolation.
         conn.commit()
+        prior_isolation = conn.isolation_level
+        conn.isolation_level = None
+        try:
+            conn.execute("VACUUM")
+            conn.execute("ANALYZE")
+        finally:
+            conn.isolation_level = prior_isolation
     finally:
         conn.close()
 
@@ -2118,16 +2195,35 @@ class AikoMemorize:
     def _exec(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         """Thin wrapper for one-off statements against the backend's
         connection. Prefer this for new code over reaching into
-        self._conn directly."""
+        self._conn directly.
+
+        Does NOT take the lock itself — callers doing a read-modify-write
+        sequence (or anything that must be atomic with respect to the
+        async write-worker thread) must still wrap the call(s) in
+        `with self._mem._db_lock:`, same as existing direct self._conn use
+        elsewhere in this class."""
         return self._conn.execute(sql, params)
 
     def _commit(self) -> None:
-        """Thin wrapper mirroring _exec — commit through the same seam."""
+        """Thin wrapper mirroring _exec — commit through the same seam.
+        Same caveat: does not take self._mem._db_lock itself."""
         self._conn.commit()
 
     def switch_user(self, user_id: str) -> None:
-        # Drain any pending writes first
-        self.wait_for_writes(timeout=5.0)
+        # Drain any pending writes first. If a write is still in flight when
+        # we close the connection and reassign self._mem below, the
+        # write-worker thread's in-progress self.add() call can end up
+        # operating on a closed connection (or, worse, silently switch to
+        # the *new* user's connection mid-write). Bail out rather than risk
+        # cross-user data corruption; the caller can retry the switch once
+        # the write actually finishes.
+        if not self.wait_for_writes(timeout=5.0):
+            log.error(
+                f"switch_user({user_id!r}): pending write(s) did not finish "
+                "within 5s — aborting user switch to avoid writing to the "
+                "wrong connection. Try again shortly."
+            )
+            return
 
         self._user_id_override = user_id
         self._display_name = None
@@ -2136,9 +2232,12 @@ class AikoMemorize:
                 try:
                     self._conn.execute("PRAGMA optimize")
                     self._conn.commit()
-                    self._conn.close()
                 except Exception:
                     log.warning("memorize: PRAGMA optimize failed")
+                try:
+                    self._conn.close()
+                except Exception:
+                    log.warning("memorize: closing old connection failed")
         self._open(user_id)
 
     def get_user_id(self) -> str:
@@ -2223,7 +2322,18 @@ class AikoMemorize:
                 ]
 
             if not ids:
-                log.warning("pin(): add succeeded but no memory IDs were found to pin.")
+                # Two genuinely different situations land here, and we can't
+                # tell them apart from this side: (a) add() no-op'd because
+                # every fact was a dedup/supersede (the re-search above
+                # should have recovered something, so reaching this branch
+                # at all is the unusual case), or (b) fact extraction itself
+                # failed/returned nothing, so there was never a row to find.
+                log.warning(
+                    "pin(): no memory IDs found to pin after add()+re-search. "
+                    "Either extraction produced nothing to save, or the "
+                    "re-search missed the deduped row — check upstream logs "
+                    "for an extraction failure before assuming the latter."
+                )
                 return False
 
             for mem_id in ids:
@@ -2287,12 +2397,15 @@ class AikoMemorize:
             idle_for = time.time() - idle_since()
             if not is_active_turn() and idle_for >= MEMORY_WRITE_IDLE_GRACE:
                 return
-            # FIX: the hard cap now overrides is_active_turn() outright,
-            # instead of requiring it to also be False. The old
-            # `and not is_active_turn()` gate meant the cap could never
-            # fire in exactly the scenario it exists for — a turn state
-            # stuck "active" forever — letting the wait spin indefinitely.
-            if MEMORY_WRITE_MAX_WAIT > 0 and time.monotonic() >= deadline:
+            # FIX: was `if MEMORY_WRITE_MAX_WAIT > 0 and time.monotonic() >= deadline`.
+            # Gating the cap on MAX_WAIT > 0 meant setting MEMORY_WRITE_MAX_WAIT=0
+            # to mean "don't wait at all" instead disabled the cap entirely —
+            # the exact scenario it exists for (is_active_turn() stuck True
+            # forever) would then spin indefinitely. `deadline` already bakes
+            # in `max(0.0, MEMORY_WRITE_MAX_WAIT)`, so comparing against it
+            # directly does the right thing for 0 (fires immediately) and
+            # for any positive value, with no separate gate needed.
+            if time.monotonic() >= deadline:
                 return
             sleep_for = min(0.5, max(0.05, MEMORY_WRITE_IDLE_GRACE - idle_for))
             time.sleep(sleep_for)
@@ -2578,13 +2691,30 @@ class AikoMemorize:
         log.info(f"{'(dry-run) ' if dry_run else ''}Starting consolidation pass...")
 
         mem_ids: list[str] = []
+        all_batch_mems: list[dict] = []
         boosted = 0
 
         for batch in self._iter_memory_batches(user_id):
             batch_ids = [str(m.get("id", "")) for m in batch if m.get("id")]
             if not batch_ids:
                 continue
-            mem_ids.extend(batch_ids)
+            all_batch_mems.extend(batch)
+            # FIX: only active memories are eligible as a merge *source*.
+            # _dream_merge's KNN neighbor search is already active_only=True,
+            # but the outer mem_id being probed wasn't filtered — so a
+            # superseded memory could get compared against an active
+            # near-duplicate, and _resolve_duplicate's tie-break (higher
+            # access_count wins, with no status check) could pick the
+            # *active* memory as the loser if the superseded one had
+            # accumulated more accesses before being superseded. Superseded
+            # rows are inert history; they should age out via cleanup()'s
+            # normal decay path, not compete with active memories for
+            # survival in the merge pass.
+            merge_source_ids = [
+                str(m.get("id", "")) for m in batch
+                if m.get("id") and m.get("status") != STATUS_SUPERSEDED
+            ]
+            mem_ids.extend(merge_source_ids)
             payload_map = self._batch_get_payloads(batch_ids)
             with self._mem._db_lock:
                 pinned_ids = _sqlite_pinned_ids(self._conn, batch_ids)
@@ -2597,7 +2727,14 @@ class AikoMemorize:
         with self._mem._db_lock:
             pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
         merged = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
-        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run)
+        # FIX: dream() previously called cleanup() with no _all_mems, so the
+        # "already-fetched memory list is passed through here to avoid a
+        # redundant get_all() scan" claim in cleanup()'s docstring was dead —
+        # cleanup() always re-scanned the whole table from scratch, right
+        # after dream() had just scanned it for the boost stage. Passing the
+        # batches we already fetched above wires up that optimization for
+        # real.
+        prune_result = self.cleanup(user_id=user_id, dry_run=dry_run, _all_mems=all_batch_mems)
         pruned = prune_result.get("deleted", 0)
 
         duration = round(time.perf_counter() - t_start, 2)
