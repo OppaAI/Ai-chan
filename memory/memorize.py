@@ -125,6 +125,31 @@ Entity graph fusion:
   removed; graph participation is now controlled by MEMORY_RANK_GRAPH_WEIGHT
   (set to 0 to disable without touching call sites).
 
+  Graph fusion has three additional correctness guards, all in
+  _MemoryBackend:
+    - Entities are stored casefolded in entity_relations (upsert_co_mentions)
+      and query entities are casefolded before matching (_graph_pass), so
+      "GRACE" and "Grace" resolve to one graph node instead of splitting
+      across the (user_id, entity_a, entity_b, relation) unique index.
+    - _refresh_high_freq_entities() (TTL-cached, self-recomputing) drops
+      "super-node" entities — anything co-mentioned on more than
+      MEMORY_GRAPH_SUPER_NODE_FRACTION of the user's active memories —
+      from the query entity list before the graph query runs. Without
+      this, an entity that appears in most memories (e.g. the assistant's
+      own name, or a nickname used in nearly every fact) would make
+      _graph_pass return a near-random slice of the whole store instead
+      of a meaningful signal.
+    - delete() (used by both dream()'s merge-loser deletes and cleanup()'s
+      decay deletes) now cascades to entity_relations, so a deleted
+      memory's edges don't linger and get joined against a nonexistent id
+      by every future _graph_pass call.
+
+  MEMORY_RANK_GRAPH_WEIGHT's default (0.6, not 0.01) is chosen so the
+  term's max value at rank 1 — WEIGHT / (RRF_K + 1) — lands near
+  MEMORY_RANK_PINNED_WEIGHT's flat +0.01 tiebreaker, since the graph term
+  is RRF-shaped (divided by rank) rather than a flat add; see the constant
+  definition below for the derivation.
+
 Trivial-input skip:
   AikoMemorize.search() short-circuits to [] for turns that are nothing
   but filler (greetings, acks, the assistant's wake-word alone) BEFORE the
@@ -255,11 +280,19 @@ MEMORY_RANK_ACCESS_WEIGHT = float(os.getenv("MEMORY_RANK_ACCESS_WEIGHT", "0.002"
 # Bumped from 0.002 -> 0.01 so pinned status is a meaningful tiebreaker
 # under RRF (~0.016 at rank 1), without beating a clearly better unpinned hit.
 MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01"))
-# Entity-graph tiebreaker — same scale as MEMORY_RANK_PINNED_WEIGHT by
-# design: a mild nudge for entity-connected memories, never enough to bury
-# a clearly stronger KNN/FTS hit. Set to 0 to disable graph participation
-# in scoring without touching any call sites.
-MEMORY_RANK_GRAPH_WEIGHT = float(os.getenv("MEMORY_RANK_GRAPH_WEIGHT", "0.01"))
+# Entity-graph tiebreaker. The term is MEMORY_RANK_GRAPH_WEIGHT / (RRF_K + rank),
+# same shape as the KNN/FTS RRF terms (1.0 / (RRF_K + rank)) rather than a
+# flat add like MEMORY_RANK_PINNED_WEIGHT — so its numerator needs to be
+# larger than 0.01 to land in the same range as a flat 0.01 tiebreaker.
+# At best rank (1), the term maxes out at WEIGHT / (RRF_K + 1) = WEIGHT / 61.
+# To match MEMORY_RANK_PINNED_WEIGHT's flat +0.01 nudge at rank 1, WEIGHT
+# needs to be ~0.01 * 61 ≈ 0.6 — a numerator of 0.01 here (an easy mistake,
+# since it *looks* like the same scale as the pinned weight) actually
+# maxes out around 0.00016, ~100x too small to move any ranking decision.
+# 0.6 keeps graph a mild tiebreaker (never enough to bury a clearly
+# stronger KNN/FTS hit) without being mathematically inert. Set to 0 to
+# disable graph participation in scoring without touching any call sites.
+MEMORY_RANK_GRAPH_WEIGHT = float(os.getenv("MEMORY_RANK_GRAPH_WEIGHT", "0.6"))
 MEMORY_SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 MEMORY_SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -667,11 +700,20 @@ def ensure_phase_a_schema(conn: sqlite3.Connection) -> list[str]:
     return added
 
 
-def _active_sql(active_only: bool) -> str:
-    """SQL fragment to restrict a query to active (non-superseded) memories."""
+def _active_sql(active_only: bool, alias: str = "m") -> str:
+    """SQL fragment to restrict a query to active (non-superseded) memories.
+
+    `alias` is the table alias used for `memories` in the calling query
+    (default "m", matching _sqlite_knn_search/_fts_pass/_recent_or_important_memories).
+    Callers with a different alias (e.g. _graph_pass, which joins memories
+    as "mm") must pass it explicitly rather than string-replacing this
+    function's output — the previous `.replace("m.status", "mm.status")`
+    pattern silently produced broken SQL if this function's default alias
+    or format ever changed.
+    """
     if not active_only:
         return ""
-    return " AND (m.status = 'active' OR m.status IS NULL)"
+    return f" AND ({alias}.status = 'active' OR {alias}.status IS NULL)"
 
 
 def backfill_entities(
@@ -1363,6 +1405,62 @@ class _MemoryBackend:
             (fts_query, user_id, fts_limit),
         ).fetchall()
 
+    # An entity connected to more than this fraction of a user's active
+    # memories is a "super-node" (e.g. the assistant's own name, or a
+    # nickname used in most facts) — matching on it returns a near-random
+    # slice of the whole memory store rather than a meaningful signal, so
+    # _graph_pass drops it from the query entity list before searching.
+    _GRAPH_SUPER_NODE_FRACTION = float(os.getenv("MEMORY_GRAPH_SUPER_NODE_FRACTION", "0.3"))
+    # How long a cached high-frequency-entity set is trusted before recompute.
+    _GRAPH_SUPER_NODE_TTL = float(os.getenv("MEMORY_GRAPH_SUPER_NODE_TTL", "3600"))
+
+    def _refresh_high_freq_entities(self, user_id: str) -> None:
+        """
+        Recompute the set of super-node entities for this user, if the
+        cached set is missing or stale. Caller must hold self._db_lock.
+
+        An entity counts as high-frequency if it co-mentions on more than
+        _GRAPH_SUPER_NODE_FRACTION of the user's active memories. Cheap
+        enough to run per-call under a TTL guard (two aggregate queries),
+        so no separate scheduled job is required — it self-heals as the
+        user's memory store grows.
+        """
+        now = time.monotonic()
+        last = getattr(self, "_high_freq_computed_at", 0.0)
+        if now - last < self._GRAPH_SUPER_NODE_TTL and getattr(self, "_high_freq_entities", None) is not None:
+            return
+        try:
+            total_row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM memories WHERE user_id = ? AND (status = 'active' OR status IS NULL)",
+                (user_id,),
+            ).fetchone()
+            total = int(total_row["n"] or 0) if total_row else 0
+            if total <= 0:
+                self._high_freq_entities = set()
+                self._high_freq_computed_at = now
+                return
+            rows = self._conn.execute(
+                """
+                SELECT entity, COUNT(DISTINCT memory_id) AS cnt FROM (
+                    SELECT entity_a AS entity, memory_id FROM entity_relations WHERE user_id = ?
+                    UNION ALL
+                    SELECT entity_b AS entity, memory_id FROM entity_relations WHERE user_id = ?
+                )
+                GROUP BY entity
+                """,
+                (user_id, user_id),
+            ).fetchall()
+            self._high_freq_entities = {
+                row["entity"] for row in rows
+                if total > 0 and (row["cnt"] or 0) / total > self._GRAPH_SUPER_NODE_FRACTION
+            }
+            self._high_freq_computed_at = now
+        except Exception as e:
+            log.debug("high-freq entity refresh skipped: %s", e)
+            if getattr(self, "_high_freq_entities", None) is None:
+                self._high_freq_entities = set()
+            self._high_freq_computed_at = now
+
     def _graph_pass(
         self,
         query_entities: list[str],
@@ -1373,7 +1471,11 @@ class _MemoryBackend:
         """
         Fetch memory_ids connected to query entities via entity_relations,
         ordered by summed edge weight. Returns [] if the query has no
-        extractable entities. Caller must hold self._db_lock.
+        extractable entities, or if every extracted entity is a super-node
+        (see _refresh_high_freq_entities). Caller must hold self._db_lock.
+
+        Query entities are casefolded before matching, since edges are now
+        stored casefolded in entity_relations (see upsert_co_mentions).
 
         This is the entity-graph read path: candidates from here are folded
         into _rank_and_score() alongside KNN/FTS, so a memory that only the
@@ -1383,8 +1485,13 @@ class _MemoryBackend:
         """
         if not query_entities:
             return []
-        status_sql = _active_sql(active_only).replace("m.status", "mm.status")
-        placeholders = ",".join("?" * len(query_entities))
+        self._refresh_high_freq_entities(user_id)
+        super_nodes = getattr(self, "_high_freq_entities", set())
+        filtered = [e.casefold() for e in query_entities if e.casefold() not in super_nodes]
+        if not filtered:
+            return []
+        status_sql = _active_sql(active_only, alias="mm")
+        placeholders = ",".join("?" * len(filtered))
         return self._conn.execute(
             f"""
             SELECT mm.id AS id, SUM(er.weight) AS w
@@ -1398,7 +1505,7 @@ class _MemoryBackend:
             ORDER BY w DESC
             LIMIT ?
             """,
-            [user_id] + query_entities + query_entities + [limit],
+            [user_id] + filtered + filtered + [limit],
         ).fetchall()
 
     def _rank_and_score(
@@ -1662,9 +1769,18 @@ class _MemoryBackend:
     # ── delete ────────────────────────────────────────────────────────────────
 
     def delete(self, memory_id: str) -> None:
+        """
+        Delete one memory and its vector. Also cascades to entity_relations —
+        without this, a deleted memory's co-mention edges stay behind
+        forever (dream()'s merge-loser deletes and cleanup()'s decay
+        deletes both route through this method), so _graph_pass would keep
+        joining to memory ids that no longer exist, silently degrading
+        results over time instead of erroring.
+        """
         with self._db_lock:
             self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             self._conn.execute("DELETE FROM memories_vec WHERE id = ?", (memory_id,))
+            self._conn.execute("DELETE FROM entity_relations WHERE memory_id = ?", (memory_id,))
             self._conn.commit()
 
     def delete_all(self, user_id: str) -> None:
@@ -1674,6 +1790,7 @@ class _MemoryBackend:
                 (user_id,),
             )
             self._conn.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
+            self._conn.execute("DELETE FROM entity_relations WHERE user_id = ?", (user_id,))
             self._conn.commit()
 
 
@@ -1736,6 +1853,13 @@ def upsert_co_mentions(
     """Record co-mention pairs for entities on one memory. Returns pairs touched."""
     from memory.vecstore import utc_now_iso
 
+    # Store casefolded identity, not display casing: entity_relations is a
+    # traversal index, never shown to the user directly, and the unique
+    # index on (user_id, entity_a, entity_b, relation) is a plain TEXT
+    # comparison — "GRACE" and "Grace" would otherwise collide in `seen`
+    # here (so we'd correctly dedup THIS memory's pairs) but still create
+    # two distinct rows across different memories that used different
+    # casing for the same entity, splitting one node's edges into two.
     ents = []
     seen: set[str] = set()
     for e in entities:
@@ -1746,7 +1870,7 @@ def upsert_co_mentions(
         if key in seen:
             continue
         seen.add(key)
-        ents.append(n)
+        ents.append(key)
     if len(ents) < 2:
         return 0
 
