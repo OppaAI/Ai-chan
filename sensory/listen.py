@@ -841,42 +841,42 @@ class AikoListen:
     # ── public api ────────────────────────────────────────────────────────────
 
     def listen(self, status_callback=None, speak=None, wait_fn=None, chunk_source=None):
-      """
-      Record and transcribe a single utterance (local mic or WebUI chunk stream).
-      
-      Performs full audio capture via Silero VAD scoring, then passes audio to SenseVoice
-      for transcription. Handles speaker verification, wake-word gating, and post-ASR
-      corrections based on configuration.
-      
-      Args:
-          status_callback (callable, optional): Callback(msg: str) invoked with status tokens
-              (__LISTENING__, __TRANSCRIBING__, __IDLE__, etc.) for UI updates.
-          speak (Speak, optional): Speak instance for barge-in coordination. If provided,
-              enables speaker-interrupt detection during TTS playback.
-          wait_fn (callable, optional): Optional synchronization function; passed to
-              internal wait logic (rarely used).
-          chunk_source (callable, optional): For WebUI integration only. Callable(n_bytes)
-              that returns raw audio bytes from browser pcm-worklet. If None, uses local
-              PulseAudio (parec) for microphone input.
-      
-      Returns:
-          tuple[str, bool]: (transcript, woke_this_call)
-              - transcript: Recognized text, or empty string if no speech detected / failed
-              - woke_this_call: True if a wake-word session was triggered this call
-                (only relevant when WAKE_WORD gating is enabled)
-      
-      Notes:
-          - Silero VAD is authoritative for speech/silence detection on ALL audio,
-            regardless of source (local mic or WebUI chunk_source path).
-          - WEBUI_BROWSER_VAD_GATE (browser energy pre-filter in static/vad.js) only
-            controls pre-forwarding, not server-side gating.
-          - Breaking change: vad_presegmented parameter was removed. Silero now scores
-            every chunk, making pre-segmentation obsolete.
-          - If speaker_verify_gate() is enabled, utterances from unrecognized speakers
-            are dropped silently (see SPEAKER_VERIFY_GATE in config).
-          - If a wake-word gate is configured, utterances are held until wake phrase
-            detected (either acoustic model or fuzzy ASR-text match).
-      """
+        """
+        Record and transcribe a single utterance (local mic or WebUI chunk stream).
+
+        Performs full audio capture via Silero VAD scoring, then passes audio to SenseVoice
+        for transcription. Handles speaker verification, wake-word gating, and post-ASR
+        corrections based on configuration.
+
+        Args:
+            status_callback (callable, optional): Callback(msg: str) invoked with status tokens
+                (__LISTENING__, __TRANSCRIBING__, __IDLE__, etc.) for UI updates.
+            speak (Speak, optional): Speak instance for barge-in coordination. If provided,
+                enables speaker-interrupt detection during TTS playback.
+            wait_fn (callable, optional): Optional synchronization function; passed to
+                internal wait logic (rarely used).
+            chunk_source (callable, optional): For WebUI integration only. Callable(n_bytes)
+                that returns raw audio bytes from browser pcm-worklet. If None, uses local
+                PulseAudio (parec) for microphone input.
+
+        Returns:
+            tuple[str, bool]: (transcript, woke_this_call)
+                - transcript: Recognized text, or empty string if no speech detected / failed
+                - woke_this_call: True if a wake-word session was triggered this call
+                  (only relevant when WAKE_WORD gating is enabled)
+
+        Notes:
+            - Silero VAD is authoritative for speech/silence detection on ALL audio,
+              regardless of source (local mic or WebUI chunk_source path).
+            - WEBUI_BROWSER_VAD_GATE (browser energy pre-filter in static/vad.js) only
+              controls pre-forwarding, not server-side gating.
+            - Breaking change: vad_presegmented parameter was removed. Silero now scores
+              every chunk, making pre-segmentation obsolete.
+            - If speaker_verify_gate() is enabled, utterances from unrecognized speakers
+              are dropped silently (see SPEAKER_VERIFY_GATE in config).
+            - If a wake-word gate is configured, utterances are held until wake phrase
+              detected (either acoustic model or fuzzy ASR-text match).
+        """
         if speak is not None and speak.is_playing():
             if not barge_in_enabled():
                 _cb(status_callback, "__WAITING__")
