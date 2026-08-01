@@ -445,11 +445,16 @@
             document.querySelectorAll('.server-item').forEach(el => {
                 el.classList.toggle('active', el.textContent.includes(server.name));
             });
-            
+
             // Show detail panel
             document.getElementById('detail-empty').style.display = 'none';
             document.getElementById('detail-content').style.display = 'block';
-            
+
+            // Derive statusClass locally (was missing, causing a ReferenceError)
+            let statusClass = 'unknown';
+            if (server.status === 'running') statusClass = 'running';
+            else if (server.status === 'stopped') statusClass = 'stopped';
+
             // Populate detail grid
             const grid = document.getElementById('detail-grid');
             grid.innerHTML = `
@@ -457,6 +462,10 @@
                     <div class="detail-label">Name</div>
                     <div class="detail-value">${escapeHTML(server.name)}</div>
                 </div>
+                ${server.description ? `<div class="detail-row">
+                    <div class="detail-label">Description</div>
+                    <div class="detail-value">${escapeHTML(server.description)}</div>
+                </div>` : ''}
                 <div class="detail-row">
                     <div class="detail-label">Path</div>
                     <div class="detail-value"><code>${escapeHTML(server.path)}</code></div>
@@ -476,8 +485,8 @@
                     <div class="detail-value">${server.tools.length}</div>
                 </div>
             `;
-            
-            // Populate tools
+
+            // Populate tools list
             const toolsList = document.getElementById('tools-list');
             if (server.tools.length === 0) {
                 toolsList.innerHTML = '<div style="color:var(--dim);font-size:11px;padding:20px;text-align:center">No tools available or server not running</div>';
@@ -486,7 +495,7 @@
                     <div class="tool-card">
                         <div class="tool-name">${escapeHTML(tool.name || 'Unknown')}</div>
                         <div class="tool-desc">${escapeHTML(tool.description || 'No description')}</div>
-                        <div class="tool-params">${escapeHTML(JSON.stringify(tool.parameters || {}, null, 2))}</div>
+                        ${tool.source_file ? `<div class="tool-params" style="color:var(--dim);font-size:10px">source: ${escapeHTML(tool.source_file)}</div>` : ''}
                     </div>
                 `).join('');
             }

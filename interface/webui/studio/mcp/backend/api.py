@@ -27,74 +27,81 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 
 def _get_mcp_servers() -> list[dict]:
     """Get list of MCP servers from the interface/mcp_server directory."""
+    import re
     mcp_root = Path(__file__).resolve().parents[5] / "interface" / "mcp_server"
     servers = []
-    
+
+    _SKIP = {"__pycache__", "__init__"}
+
     if mcp_root.exists():
-        for server_dir in mcp_root.iterdir():
-            if server_dir.is_dir() and not server_dir.name.startswith("."):
-                server_info = {
-                    "name": server_dir.name,
-                    "path": str(server_dir),
-                    "status": "unknown",
-                    "tools": [],
-                    "port": None,
-                    "pid": None,
-                    "description": "",
-                }
-                
-                # Check for server.py to determine port
-                server_py = server_dir / "server.py"
-                if server_py.exists():
-                    try:
-                        content = server_py.read_text()
-                        # Look for port configuration
-                        for line in content.split('\n'):
-                            if 'port' in line.lower() and ('=' in line or ':' in line):
-                                import re
-                                match = re.search(r'port[^0-9]*([0-9]{3,5})', line)
-                                if match:
-                                    server_info["port"] = int(match.group(1))
-                                    break
-                    except Exception:
-                        pass
-                    
-                    # Get description from server
-                    if "Aiko Social" in content:
-                        server_info["description"] = "Social media posting (X, Threads, Bluesky, Mastodon, Reddit, Discord, YouTube, Pixelset, Email)"
-                
-                # Also check for tools in tools/ directory
-                tools_dir = server_dir / "tools"
-                if tools_dir.exists():
-                    static_tools = _get_static_tools(tools_dir)
-                    server_info["tools"] = static_tools
-                
-                servers.append(server_info)
-    
+        for server_dir in sorted(mcp_root.iterdir()):
+            if not server_dir.is_dir():
+                continue
+            if server_dir.name.startswith(".") or server_dir.name in _SKIP:
+                continue
+
+            server_info = {
+                "name": server_dir.name,
+                "path": str(server_dir),
+                "status": "unknown",
+                "tools": [],
+                "port": None,
+                "pid": None,
+                "description": "",
+            }
+
+            # Parse server.py for port + title
+            server_py = server_dir / "server.py"
+            if server_py.exists():
+                try:
+                    content = server_py.read_text()
+                    # PORT env default: int(os.getenv("...", "8100"))
+                    port_match = re.search(
+                        r'\bPORT\b[^=\n]*=\s*int\([^)]*["\'](\d{2,5})["\']',
+                        content,
+                    )
+                    if port_match:
+                        server_info["port"] = int(port_match.group(1))
+                    # FastMCP("Aiko Social MCP Server", ...)
+                    title_match = re.search(r'FastMCP\s*\(\s*["\']([^"\']+)["\']', content)
+                    if title_match:
+                        server_info["description"] = title_match.group(1)
+                except Exception:
+                    pass
+
+            # Scan tools/ directory
+            tools_dir = server_dir / "tools"
+            if tools_dir.exists():
+                server_info["tools"] = _get_static_tools(tools_dir)
+
+            servers.append(server_info)
+
     return servers
 
 
 def _get_static_tools(tools_dir: Path) -> list[dict]:
-    """Extract tool information from the tools directory."""
+    """Extract tool information by scanning tool files for @mcp.tool decorators."""
+    import re
     tools = []
     try:
-        for tool_file in tools_dir.glob("*.py"):
+        for tool_file in sorted(tools_dir.glob("*.py")):
             if tool_file.name in ("__init__.py", "base.py"):
                 continue
             try:
                 content = tool_file.read_text()
-                # Look for tool name and description
-                import re
-                # Find @mcp.tool or @server.tool decorators
-                for match in re.finditer(r'@(?:mcp|server)\.tool\s*\(\s*name\s*=\s*["\']([^"\']+)["\']', content):
+                # Match @mcp.tool( / @server.tool( at any indentation
+                for match in re.finditer(
+                    r'@(?:mcp|server)\.tool\s*\(\s*name\s*=\s*["\']([^"\']+)["\']',
+                    content,
+                ):
                     tool_name = match.group(1)
-                    # Try to get description
-                    desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', content[match.end():match.end()+500])
-                    description = desc_match.group(1) if desc_match else ""
+                    after = content[match.end(): match.end() + 500]
+                    desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', after)
                     tools.append({
                         "name": tool_name,
-                        "description": description,
-                        "parameters": {}
+                        "description": desc_match.group(1) if desc_match else "",
+                        "parameters": {},
+                        "source_file": tool_file.name,
                     })
             except Exception:
                 pass
