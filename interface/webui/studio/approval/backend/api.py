@@ -21,11 +21,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Serve static files (CSS, JS)
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+
+# Serve static files (CSS, JS)
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
 
 
 def _job_post_social_root() -> Path:
