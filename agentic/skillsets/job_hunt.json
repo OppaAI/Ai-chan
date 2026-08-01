@@ -86,5 +86,6 @@
     "quality assurance",
     "technical support"
   ],
-  "max_jobs_per_draft": 5
+  "max_jobs_per_draft": 5,
+  "date_range_days": 2
 }

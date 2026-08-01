@@ -1,12 +1,13 @@
 """
 toolkit/job_hunt.py
 
-RSS-only Lane D tech-job drafting.
+RSS-only Lane D job drafting.
 
 Lane D fetches configured CivicJobs.ca / Job Bank Canada RSS feeds, keeps
-items dated today in the local bioclock timezone, filters by tech keywords,
-dedupes by link/guid, and produces structured Threads drafts (one per job)
-using post_fields / post_signature from job_hunt.json for human review.
+items dated today in the local bioclock timezone, filters by configured
+keywords, dedupes by link/guid, and produces structured Threads drafts
+(one per job) using post_fields / post_signature from job_hunt.json for
+human review.
 
 When the graph executor injects an LLM client/model, draft_job_posts_from_results
 enriches sparse postings by extracting post_fields keys from title + summary
@@ -397,8 +398,8 @@ def enrich_posting_fields_with_llm(
     return enriched
 
 
-def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict]:
-    """Fetch configured RSS feeds, keeping tech postings from the last N days.
+def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict]:
+    """Fetch configured RSS feeds, keeping postings from the last N days.
 
     N is controlled by JOB_HUNT_DATE_RANGE_DAYS env var or the date_range_days
     config key (default: 1 = today only).
@@ -449,7 +450,6 @@ def fetch_today_tech_jobs_from_rss(config: dict[str, Any] | None = None) -> list
                 "close_date": "",
                 "posted_date": posted.isoformat(),
                 "source_feed": feed_url,
-                "_category": "tech_jobs_today",
             })
     return kept
 
@@ -462,18 +462,19 @@ def search_jobs(
     max_age_days: int | None = None,
     job_type: str = "",
 ) -> list[dict]:
-    """Return today's tech jobs from configured RSS feeds; query args are ignored by design."""
+    """Return today's jobs from configured RSS feeds; query args are ignored by design."""
     config = _job_config()
     limit = int(max_results or config.get("max_results", 30))
-    return fetch_today_tech_jobs_from_rss(config)[:limit]
+    return fetch_today_jobs_from_rss(config)[:limit]
 
 
 def gen_job_search_plan(prompt: str = "", config_source: str = "") -> str:
     """Node 1: Read RSS config into a Lane D execution plan."""
     config = _job_config()
+    queries = config.get("queries", [{"category": "jobs", "query": "jobs available today", "job_type": ""}])
     return json.dumps({
         "location": config.get("default_location", "Canada"),
-        "queries": [{"category": "tech_jobs_today", "query": "tech jobs available today", "job_type": ""}],
+        "queries": queries,
         "max_results": int(config.get("max_results", 30)),
         "rss_feeds": _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS),
         "tech_job_keywords": _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS),
@@ -482,15 +483,16 @@ def gen_job_search_plan(prompt: str = "", config_source: str = "") -> str:
 
 
 def execute_job_search_plan(plan_json: str, *, state=None) -> str:
-    """Node 2: Execute the Lane D RSS-only tech job search plan."""
+    """Node 2: Execute the Lane D RSS-only job search plan."""
     plan = json.loads(plan_json)
     config = _job_config()
-    postings = fetch_today_tech_jobs_from_rss(config)
+    postings = fetch_today_jobs_from_rss(config)
     max_results = int(plan.get("max_results") or config.get("max_results") or 30)
+    queries_executed = [q.get("category", "jobs") for q in plan.get("queries", [])]
     result = {
         "location": plan.get("location", config.get("default_location", "Canada")),
         "total_found": len(postings[:max_results]),
-        "queries_executed": ["rss_today_tech_jobs"],
+        "queries_executed": queries_executed,
         "sources": _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS),
         "postings": postings[:max_results],
     }
@@ -524,7 +526,7 @@ def draft_job_posts_from_results(
     config = _job_config()
     postings = results.get("postings", [])
     if not postings:
-        return json.dumps({"success": False, "reason": "no_tech_jobs_today", "drafts": []}, ensure_ascii=False)
+        return json.dumps({"success": False, "reason": "no_jobs_found", "drafts": []}, ensure_ascii=False)
 
     fields = config.get("post_fields")
     if not isinstance(fields, list) or not fields:

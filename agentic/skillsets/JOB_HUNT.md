@@ -59,7 +59,7 @@ Capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job desc
 `draft_policy` in the node result is `post_fields_llm` when enrichment ran, otherwise `post_fields`.
 
 ### Node 4 — `save_or_post_job_drafts`
-Saves each draft under `<job_post_root>/<date>/tech_jobs_today[/slug]` with:
+Saves each draft under `<job_post_root>/<date>/<category>[/slug]` with:
 
 - `draft_post.txt` — structured post from `post_fields`
 - `review.md` — human review checklist
