@@ -1,0 +1,72 @@
+# Social config
+#
+# Non-secret runtime settings for social, messenger, and media adapters.
+# Secrets (tokens, keys, passwords) live in .env.example.
+#
+
+# -- Weekly workflow --
+WEEKLY_SOCIAL_ENABLED: "1"
+WEEKLY_SOCIAL_AUTODRAFT: "1"
+WEEKLY_SOCIAL_AUTOPOST: "0"
+WEEKLY_SOCIAL_WEEKDAY: "sunday"
+WEEKLY_SOCIAL_TIME: "18:00"
+WEEKLY_SOCIAL_PROVIDERS: "x, threads"
+WEEKLY_SOCIAL_MAX_CHARS: "260"
+SOCIAL_ROOT: ""
+WEEKLY_SOCIAL_IMAGE_URL: ""
+
+# -- X relay metadata --
+TWITTER_RELAY_BASE_URL: "https://api.aisa.one/apis/v1/twitter"
+TWITTER_RELAY_TIMEOUT: "30"
+
+# -- Threads metadata --
+THREADS_ACCESS_TOKEN_EXPIRES_AT: ""
+THREADS_REFRESH_WINDOW_DAYS: "55"
+THREADS_API_BASE: "https://graph.threads.net/v1.0"
+THREADS_TOPIC_TAG: "AI Threads"
+THREADS_PUBLISH_DELAY_SECONDS: "5"
+IMGBB_UPLOAD_TIMEOUT: "30"
+
+# -- Photo social (Lane B — Pixelset) --
+PHOTO_SOCIAL_AUTODRAFT: "0"
+PHOTO_SOCIAL_AUTOPOST: "0"
+PHOTO_SOCIAL_PROVIDERS: "pixelset"
+PHOTO_SOCIAL_INBOX: "photos/inbox"
+PHOTO_SOCIAL_MAX_ITEMS: "3"
+PHOTO_SOCIAL_MAX_CHARS: "260"
+PHOTO_SOCIAL_ROOT: ""
+PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"
+
+# -- Video social (Lane C — YouTube) --
+VIDEO_SOCIAL_AUTODRAFT: "0"
+VIDEO_SOCIAL_AUTOPOST: "0"
+VIDEO_SOCIAL_PROVIDERS: "youtube"
+VIDEO_SOCIAL_INBOX: "videos"
+VIDEO_SOCIAL_ROOT: ""
+VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"
+
+# -- Social scheduling metadata --
+WEEKLY_SOCIAL_TIME_OF_DAY: "18:00"
+WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS: "1800"
+
+# -- Lane A1 Patreon dev-post syndication --
+PATREON_LATEST_POST_URL: ""
+AIKO_DEV_GITHUB_REPO: "OppaAI/aiko-dev"
+AIKO_DEV_GITHUB_BRANCH: "main"
+AIKO_DEV_HUGO_CONTENT_PATH: "content/posts"
+A1_FULL_PROVIDERS: "reddit"
+A1_TEASER_PROVIDERS: "x,bluesky,mastodon,discord,threads"
+A1_REDDIT_SUBREDDIT: "OppaAI"
+
+# -- Social MCP Server --
+SOCIAL_MCP_HOST: "127.0.0.1"
+SOCIAL_MCP_PORT: "8100"
+SOCIAL_MCP_URL: "http://127.0.0.1:8100"
+SOCIAL_MCP_DB_PATH: ""
+
+# -- Messenger adapters --
+AIKO_MESSENGER_ADAPTERS: "discord,telegram"
+
+# -- Vision model (photo captioning) --
+VISION_MODEL: "minicpm-v"
+VISION_BASE_URL: ""

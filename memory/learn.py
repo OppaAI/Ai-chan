@@ -76,6 +76,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from system.config import load_config
+from system.userspace import user_state_path
 
 load_config()
 
@@ -602,6 +603,7 @@ def deep_studying(
     on_distilled=None,
     session_id: str | None = None,
     stop_event: threading.Event | None = None,
+    user_id: str | None = None,
 ) -> str:
     """Autonomous, extended research on a single topic, meant for genuine
     idle time (overnight dream cycles, or a scheduled deep-study window —
@@ -642,7 +644,8 @@ def deep_studying(
     topic = topic.strip()
 
     session_id = session_id or uuid.uuid4().hex[:12]
-    scratch_path = Path(DEEP_STUDY_SCRATCH_DIR) / f"{session_id}.db"
+    scratch_dir = user_state_path("dream", user_id)
+    scratch_path = scratch_dir / f"{session_id}.db"
     store = _ScratchStore(scratch_path)
     rate_limiter = _HostRateLimiter(per_host_min_interval)
 
@@ -790,7 +793,7 @@ class _DeepStudySessionManager:
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
 
-    def start(self, memorize, client=None, model=None, topic: str | None = None) -> None:
+    def start(self, memorize, client=None, model=None, topic: str | None = None, user_id: str | None = None) -> None:
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
                 log.info("[deep_study_window] start requested but a session is already running — skipping.")
@@ -822,6 +825,7 @@ class _DeepStudySessionManager:
                     embedder=embedder,
                     stop_event=stop_event,
                     on_distilled=_on_distilled,
+                    user_id=user_id,
                 )
                 log.info("[deep_study_window] finished — %s", distilled[:200].replace("\n", " "))
             except Exception as e:
@@ -852,7 +856,7 @@ def deep_study_window_start(memorize, client=None, model=None) -> None:
     client/model with functools.partial when registering (see
     register_deep_study_handlers) — the scheduler always calls handlers as
     fn(memorize), so those extra kwargs need to already be bound in."""
-    _deep_study_manager.start(memorize, client=client, model=model)
+    _deep_study_manager.start(memorize, client=client, model=model, user_id=memorize.get_user_id())
 
 
 def deep_study_window_stop(memorize) -> None:

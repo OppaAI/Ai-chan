@@ -84,69 +84,7 @@ AGENT_RESEARCH_MAX_CALLS: "1"  # Max deep_research calls per agentic workflow. (
 MAX_WRITE_CHARS: "50000"  # Max characters allowed when agent saves a note/draft.
 MAX_READ_CHARS: "12000"  # Max characters returned when agent reads a workspace file.
 
-# Social config
-#
-# Settings for agentic/toolkit/social.py.
-# Controls weekly social-memory drafting/posting and provider metadata.
-
-# -- Weekly workflow --
-WEEKLY_SOCIAL_ENABLED: "1"  # Enable weekly social job scheduling; options: 1/0, true/false, yes/no, on/off.
-WEEKLY_SOCIAL_AUTODRAFT: "1"  # Create local draft/image bundle automatically; boolean options.
-WEEKLY_SOCIAL_AUTOPOST: "0"  # Post automatically after drafting; boolean options, keep 0 while testing.
-WEEKLY_SOCIAL_WEEKDAY: "sunday"  # Weekday for weekly draft; options: monday..sunday or mon..sun.
-WEEKLY_SOCIAL_TIME: "18:00"  # Local wall-clock time for weekly draft in HH:MM 24-hour format.
-WEEKLY_SOCIAL_PROVIDERS: "x, threads"  # Comma-separated provider list; options currently include x, threads, bluesky, mastodon.
-WEEKLY_SOCIAL_MAX_CHARS: "260"  # Max post length; keep <= 260 for X with room for metadata/links.
-SOCIAL_ROOT: ""  # Optional override; blank uses per-user <workspace>/social/weekly.
-WEEKLY_SOCIAL_IMAGE_URL: ""  # Optional fallback public image URL for Threads when no local draft image exists; local images upload to ImgBB.
-
-# -- X relay metadata --
-TWITTER_RELAY_BASE_URL: "https://api.aisa.one/apis/v1/twitter"  # AIsa Twitter/X relay base URL.
-TWITTER_RELAY_TIMEOUT: "30"  # Seconds before AIsa relay calls time out.
-
-# -- Threads metadata --
-THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # ISO UTC expiry timestamp for long-lived Threads token; blank if unknown.
-THREADS_REFRESH_WINDOW_DAYS: "55"  # Refresh Threads token when this many days or fewer remain.
-THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Official Threads API base URL.
-THREADS_TOPIC_TAG: "AI Threads"  # Optional Threads topic tag attached above the post; blank disables it.
-THREADS_PUBLISH_DELAY_SECONDS: "5"  # Seconds to wait between Threads media container create and publish.
-IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB draft image upload calls time out.
-
-# -- Photo social (Lane B — Pixelset) --
-PHOTO_SOCIAL_AUTODRAFT: "0"  # Auto-draft from photo inbox; boolean options.
-PHOTO_SOCIAL_AUTOPOST: "0"  # Auto-post after drafting; keep 0 while testing.
-PHOTO_SOCIAL_PROVIDERS: "pixelset"  # Comma-separated provider list; currently only pixelset.
-PHOTO_SOCIAL_INBOX: "photos/inbox"  # Relative path to the photo inbox under workspace.
-PHOTO_SOCIAL_MAX_ITEMS: "3"  # Max photos selected per draft round.
-PHOTO_SOCIAL_MAX_CHARS: "260"  # Max caption length per selected photo.
-PHOTO_SOCIAL_ROOT: ""  # Optional override; blank uses per-user <workspace>/social/photo.
-PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # How often (seconds) the scheduler scans the photo inbox; 21600 = 6h.
-
-# -- Video social (Lane C — YouTube) --
-VIDEO_SOCIAL_AUTODRAFT: "0"  # Auto-draft from video inbox; boolean options.
-VIDEO_SOCIAL_AUTOPOST: "0"  # Auto-post after drafting; keep 0 while testing.
-VIDEO_SOCIAL_PROVIDERS: "youtube"  # Comma-separated provider list; currently only youtube.
-VIDEO_SOCIAL_INBOX: "videos"  # Relative path to the video inbox under workspace.
-VIDEO_SOCIAL_ROOT: ""  # Optional override; blank uses per-user <workspace>/social/video.
-VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # How often (seconds) the scheduler scans the video inbox; 21600 = 6h.
-
-# -- Social scheduling metadata --
-WEEKLY_SOCIAL_TIME_OF_DAY: "18:00"  # Wall-clock time (HH:MM) for the Saturday Patreon dev-post job.
-WEEKLY_SOCIAL_RETRY_INTERVAL_SECONDS: "1800"  # Seconds between Saturday retry checks for an unposted draft; 1800 = 30 min.
-
-# -- YouTube API metadata --
-YOUTUBE_MAX_TITLE_CHARS: "100"  # Max characters for a YouTube video title.
-YOUTUBE_MAX_DESCRIPTION_CHARS: "5000"  # Max characters for a YouTube video description.
-YOUTUBE_TIMEOUT: "120"  # Seconds before YouTube API calls time out (token refresh + resumable upload).
-YOUTUBE_CATEGORY_ID: "22"  # YouTube category ID; 22 = People & Blogs.
-YOUTUBE_PRIVACY_STATUS: "public"  # Privacy status for uploaded videos; options: public, unlisted, private.
-YOUTUBE_MADE_FOR_KIDS: "false"  # Self-declared made-for-kids flag; boolean options.
-
-# -- Vision model (photo captioning) --
-VISION_MODEL: "minicpm-v"  # Vision model for photo captioning.
-VISION_BASE_URL: ""  # Optional separate endpoint for vision model; blank inherits LLM_BASE_URL.
-
-# -- Workspace knowledge scan --
+# -- Workspace tool limits --
 WORKSPACE_KNOWLEDGE_SCAN_INTERVAL_SECONDS: "60"  # How often (seconds) the scheduler scans workspace/knowledge for new RAG documents.
 
 # Web config

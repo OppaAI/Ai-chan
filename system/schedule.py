@@ -472,20 +472,26 @@ def _schedule_graph_next_due(graph_def: dict, after: datetime | None = None) -> 
     )
 
 
-def _default_schedule_graphs() -> list[dict]:
+def _default_schedule_graphs(user_id: str | None = None) -> list[dict]:
     """Seed entries that reference playbook IDs.
-    
+
     Each entry has: id, trigger (timing), graph_id (playbook to execute),
-    plus runtime state (next_due, last_ran_at, enabled).
+    enabled, plus runtime state (next_due, last_ran_at).
+
+    The daily_job_post_social trigger time, graph_id, and enabled state
+    are read from the user's editable schedule.json (see
+    _job_post_social_config) so timing, graph choice, and enablement
+    can be changed without a code change.
     """
+    cfg = _job_post_social_config(user_id)
     return [
         {
             "id": "daily_job_post_social",
-            "trigger": {"time": "23:00", "frequency": "daily"},
-            "graph_id": "gen_job_post",
+            "trigger": {"time": cfg["time"], "frequency": "daily"},
+            "graph_id": cfg["graph_id"],
+            "enabled": cfg["enabled"],
             "next_due": "",
             "last_ran_at": None,
-            "enabled": True,
         },
     ]
 
@@ -493,8 +499,29 @@ def _default_schedule_graphs() -> list[dict]:
 def ensure_schedule_graphs(user_id: str | None = None) -> None:
     path = schedule_graphs_path(user_id=user_id)
     if path.exists():
+        graphs = _read_schedule_graphs(user_id=user_id)
+        # Sync the daily_job_post_social trigger time, graph_id, and
+        # enabled state from schedule.json so edits to schedule.json
+        # take effect on the next fire cycle without a restart.
+        now = bioclock.local_now()
+        changed = False
+        cfg = _job_post_social_config(user_id)
+        for g in graphs:
+            if g.get("id") == JOB_POST_SOCIAL_JOB_TITLE or g.get("graph_id") == "gen_job_post":
+                if g.get("trigger", {}).get("time") != cfg["time"]:
+                    g["trigger"] = dict(g.get("trigger", {}), time=cfg["time"])
+                    g["next_due"] = _schedule_graph_next_due(g, after=now).isoformat()
+                    changed = True
+                if g.get("graph_id") != cfg["graph_id"]:
+                    g["graph_id"] = cfg["graph_id"]
+                    changed = True
+                if g.get("enabled") != cfg["enabled"]:
+                    g["enabled"] = cfg["enabled"]
+                    changed = True
+        if changed:
+            _write_schedule_graphs(graphs, user_id=user_id)
         return
-    graphs = _default_schedule_graphs()
+    graphs = _default_schedule_graphs(user_id=user_id)
     now = bioclock.local_now()
     for g in graphs:
         g["next_due"] = _schedule_graph_next_due(g, after=now).isoformat()
@@ -512,6 +539,10 @@ def ensure_schedule_graphs(user_id: str | None = None) -> None:
             log.info("Migrated %r from schedule.json to schedule_graphs.json", job.get("title"))
     if changed:
         _write_all(jobs, user_id=user_id)
+
+    # Seed a config marker in schedule.json so the user has
+    # an editable time_of_day / graph_id / enabled knob.
+    _ensure_job_post_config_marker(user_id=user_id)
 
 
 def schedule_job_record(
@@ -704,7 +735,69 @@ VIDEO_SOCIAL_JOB_TITLE = "video_social_scan"
 VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
 
 JOB_POST_SOCIAL_JOB_TITLE = "daily_job_post_social"
-JOB_POST_SOCIAL_TIME_OF_DAY = "23:00"
+JOB_POST_SOCIAL_DEFAULT_TIME = "23:00"
+
+
+def _job_post_social_config(user_id: str | None = None) -> dict:
+    """Return the daily job-post config from the user's editable schedule.json.
+
+    Reads the ``daily_job_post_social`` entry for ``time_of_day``,
+    ``graph_id``, and ``enabled``. Falls back to sensible defaults
+    when the entry is absent or malformed.
+    """
+    cfg = {
+        "time": JOB_POST_SOCIAL_DEFAULT_TIME,
+        "graph_id": "gen_job_post",
+        "enabled": True,
+    }
+    try:
+        for job in _read_all(user_id=user_id):
+            if job.get("title") == JOB_POST_SOCIAL_JOB_TITLE:
+                t = str(job.get("time_of_day") or "").strip()
+                if t:
+                    cfg["time"] = t
+                cfg["graph_id"] = str(job.get("graph_id") or cfg["graph_id"])
+                cfg["enabled"] = bool(job.get("enabled", True))
+                break
+    except Exception:
+        pass
+    return cfg
+
+
+def _ensure_job_post_config_marker(user_id: str | None = None) -> None:
+    """Seed a disabled config marker for daily_job_post_social in schedule.json
+    so the user has an editable time_of_day knob. The marker is inert (no
+    registered handler) and never fires — it only stores the configured time."""
+    try:
+        jobs = _read_all(user_id=user_id)
+        existing = None
+        for j in jobs:
+            if j.get("title") == JOB_POST_SOCIAL_JOB_TITLE:
+                existing = j
+                break
+        if existing is None:
+            jobs.append({
+                "id": JOB_POST_SOCIAL_JOB_TITLE,
+                "title": JOB_POST_SOCIAL_JOB_TITLE,
+                "task": JOB_POST_SOCIAL_JOB_TITLE,
+                "time_of_day": JOB_POST_SOCIAL_DEFAULT_TIME,
+                "frequency": "daily",
+                "timezone": "America/Vancouver",
+                "enabled": True,
+                "graph_id": "gen_job_post",
+                "kind": "schedule_config",
+                "note": "Config for the daily job-post schedule graph. Set enabled=false to disable, or change graph_id to swap the playbook.",
+            })
+            _write_all(jobs, user_id=user_id)
+        elif existing.get("kind") == "time_config":
+            # Upgrade old config marker format.
+            existing["enabled"] = True
+            existing["graph_id"] = existing.get("graph_id", "gen_job_post")
+            existing["kind"] = "schedule_config"
+            existing["note"] = "Config for the daily job-post schedule graph. Set enabled=false to disable, or change graph_id to swap the playbook."
+            _write_all(jobs, user_id=user_id)
+    except Exception:
+        log.exception("Failed to seed job-post config marker in schedule.json")
 
 
 def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
@@ -1410,6 +1503,23 @@ class ScheduleRunner:
         graphs = _read_schedule_graphs(user_id=self._user_id)
         changed = False
         now = bioclock.local_now()
+
+        # Keep the daily_job_post_social config in sync with
+        # the user's editable schedule.json so timing, graph_id,
+        # and enabled changes take effect on the next fire cycle.
+        cfg = _job_post_social_config(self._user_id)
+        for g in graphs:
+            if g.get("id") == JOB_POST_SOCIAL_JOB_TITLE or g.get("graph_id") == "gen_job_post":
+                if g.get("trigger", {}).get("time") != cfg["time"]:
+                    g["trigger"] = dict(g.get("trigger", {}), time=cfg["time"])
+                    g["next_due"] = _schedule_graph_next_due(g, after=now).isoformat()
+                    changed = True
+                if g.get("graph_id") != cfg["graph_id"]:
+                    g["graph_id"] = cfg["graph_id"]
+                    changed = True
+                if g.get("enabled") != cfg["enabled"]:
+                    g["enabled"] = cfg["enabled"]
+                    changed = True
 
         for g in graphs:
             if not g.get("enabled", True):

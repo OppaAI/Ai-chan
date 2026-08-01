@@ -569,7 +569,7 @@ def draft_job_posts_from_results(
             "text": text,
             "posting": enriched,
             "postings": [enriched],
-            "category": f"tech_jobs_today/{slug}" if len(selected) > 1 else "tech_jobs_today",
+            "category": slug if len(selected) > 1 else "",
             "llm_enriched": used_llm and enriched != posting,
         })
 
@@ -607,7 +607,7 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false", *, state
 
     for i, draft in enumerate(drafts_data.get("drafts", [])):
         cat = draft.get("category", f"post_{i}")
-        draft_dir = base_dir / cat
+        draft_dir = base_dir / cat if cat else base_dir
         draft_dir.mkdir(parents=True, exist_ok=True)
         text = draft.get("text", "").strip()
         (draft_dir / "draft_post.txt").write_text(text + "\n", encoding="utf-8")

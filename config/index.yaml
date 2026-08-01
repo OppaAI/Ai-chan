@@ -3,7 +3,8 @@
 # system/config.py loads the YAML files listed here, in order.
 # Put new config YAML files in this list when adding them.
 configs:
-- agentic.yaml  # wiki, skillsets, agentic loop, social, web search
+- agentic.yaml  # wiki, skillsets, agentic loop, web search
+- social.yaml  # social, messenger, pixelset, MCP
 - cognition.yaml  # LLM, routing, reflection, proactive
 - memory.yaml  # knowledge, learn, episodic memory, experience
 - system.yaml  # identity, timezone, scheduler, logging
