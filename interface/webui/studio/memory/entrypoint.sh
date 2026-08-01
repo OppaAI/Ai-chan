@@ -51,13 +51,13 @@ def main():
     os.chdir(Path(__file__).parent)
 
     # Run the API server
-    print("Starting Aiko Graph Studio server at http://localhost:8000")
+    print("Starting Aiko Memory Graph Studio server at http://localhost:8001")
     print("Visit the URL to access the studio interface")
 
     import uvicorn
-    from agentic.studio.backend.api import app
+    from interface.webui.studio.memory.backend.api import app
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ This directory contains the frontend and backend for the visual graph editor.
 
 2. Start the backend:
    ```bash
-   python -m agentic.studio.backend.api
+   python -m interface.webui.studio.dag.backend.api
    ```
 
 3. Access the studio at http://localhost:8000

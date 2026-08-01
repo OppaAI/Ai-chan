@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aiko Approval Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --bg: #0a0a0f;
+            --bg2: #0e0e17;
+            --border: #1e1428;
+            --pink: #c651a8;
+            --purple: #a888e8;
+            --mauve: #d8bcff;
+            --cyan: #51d4c8;
+            --dim: #4a3a6a;
+            --dimmer: #2a1a4a;
+            --text: #cdbfe6;
+            --glass-bg: rgba(24, 16, 36, 0.5);
+            --glass-border: rgba(200, 168, 240, 0.16);
+            --glass-highlight: rgba(255, 255, 255, 0.06);
+            --green: #51d48a;
+            --red: #e8516a;
+            --orange: #e8843a;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: var(--bg);
+            font-family: ui-serif, "Iowan Old Style", "Source Serif Pro", Charter, Georgia, "Times New Roman", serif;
+            color: var(--text);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Header */
+        .studio-header {
+            background: linear-gradient(180deg, var(--bg2) 0%, rgba(14,14,23,0.95) 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 10px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .studio-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--purple);
+            letter-spacing: 0.15em;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .studio-header h1::before {
+            content: '';
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--purple);
+            box-shadow: 0 0 8px rgba(168,136,232,0.6);
+        }
+        .studio-header .header-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .studio-header .header-status {
+            font-size: 10px;
+            color: var(--dim);
+            letter-spacing: 0.05em;
+        }
+        .btn {
+            background: var(--dimmer);
+            border: 1px solid var(--dim);
+            color: var(--dim);
+            font-family: var(--font-main, sans-serif);
+            font-size: 11px;
+            letter-spacing: 0.1em;
+            padding: 5px 14px;
+            cursor: pointer;
+            border-radius: 3px;
+            text-transform: uppercase;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            border-color: var(--purple);
+            color: var(--purple);
+            box-shadow: 0 0 8px rgba(168, 136, 232, 0.3);
+        }
+        .btn-primary {
+            background: var(--purple);
+            border-color: var(--purple);
+            color: var(--bg);
+        }
+        .btn-primary:hover {
+            background: #b89cf0;
+            box-shadow: 0 0 12px rgba(168, 136, 232, 0.5);
+        }
+        .btn-success {
+            background: var(--green);
+            border-color: var(--green);
+            color: var(--bg);
+        }
+        .btn-success:hover {
+            background: #6ae0a0;
+            box-shadow: 0 0 12px rgba(81, 212, 138, 0.5);
+        }
+        .btn-danger {
+            background: var(--red);
+            border-color: var(--red);
+            color: var(--bg);
+        }
+        .btn-danger:hover {
+            background: #f07080;
+            box-shadow: 0 0 12px rgba(232, 81, 106, 0.5);
+        }
+
+        /* Main Layout */
+        .studio-body {
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            height: calc(100vh - 49px);
+        }
+
+        /* Sidebar */
+        .sidebar {
+            background: var(--bg2);
+            border-right: 1px solid var(--border);
+            padding: 16px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--dim) transparent;
+        }
+        .sidebar::-webkit-scrollbar { width: 4px; }
+        .sidebar::-webkit-scrollbar-track { background: transparent; }
+        .sidebar::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
+        .sidebar h2 {
+            font-size: 11px;
+            letter-spacing: 0.2em;
+            color: var(--pink);
+            text-transform: uppercase;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .sidebar h2::before {
+            content: '';
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--pink);
+            box-shadow: 0 0 4px rgba(198,81,168,0.5);
+        }
+        .filter-tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .filter-tab {
+            padding: 4px 10px;
+            border-radius: 3px;
+            font-size: 10px;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            cursor: pointer;
+            background: var(--dimmer);
+            border: 1px solid var(--dim);
+            color: var(--dim);
+            transition: all 0.15s;
+        }
+        .filter-tab:hover {
+            border-color: var(--purple);
+            color: var(--purple);
+        }
+        .filter-tab.active {
+            background: var(--purple);
+            border-color: var(--purple);
+            color: var(--bg);
+        }
+        .draft-item {
+            padding: 10px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s;
+            border: 1px solid transparent;
+            margin-bottom: 6px;
+        }
+        .draft-item:hover {
+            background: rgba(168, 136, 232, 0.06);
+            border-color: var(--dim);
+        }
+        .draft-item.active {
+            background: rgba(168, 136, 232, 0.1);
+            border-color: var(--purple);
+        }
+        .draft-item .draft-name {
+            font-size: 13px;
+            color: var(--text);
+            font-weight: 500;
+        }
+        .draft-item .draft-meta {
+            font-size: 10px;
+            color: var(--dim);
+            margin-top: 2px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .draft-item .draft-status {
+            font-size: 10px;
+            margin-top: 4px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .status-badge {
+            padding: 1px 6px;
+            border-radius: 2px;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .status-badge.pending {
+            background: rgba(232, 132, 58, 0.15);
+            color: var(--orange);
+            border: 1px solid rgba(232, 132, 58, 0.3);
+        }
+        .status-badge.approved {
+            background: rgba(81, 212, 138, 0.15);
+            color: var(--green);
+            border: 1px solid rgba(81, 212, 138, 0.3);
+        }
+        .status-badge.posted {
+            background: rgba(136, 136, 232, 0.15);
+            color: var(--purple);
+            border: 1px solid rgba(168, 136, 232, 0.3);
+        }
+        .status-badge.enriched {
+            background: rgba(198, 81, 168, 0.1);
+            color: var(--pink);
+            border: 1px solid rgba(198, 81, 168, 0.2);
+        }
+
+        /* Content Area */
+        .content-area {
+            position: relative;
+            background: radial-gradient(ellipse at center, #0f0f1a 0%, #0a0a0f 70%);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .content-area::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 50% 50%, rgba(168,136,232,0.03) 0%, transparent 60%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Top half - Info panel */
+        .info-panel {
+            flex: 0 0 40%;
+            min-height: 200px;
+            max-height: 50%;
+            padding: 20px;
+            overflow-y: auto;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border-bottom: 1px solid var(--glass-border);
+            position: relative;
+            z-index: 1;
+        }
+        .info-panel h3 {
+            font-size: 11px;
+            letter-spacing: 0.15em;
+            color: var(--pink);
+            text-transform: uppercase;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .info-panel h3::before {
+            content: '';
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--pink);
+            box-shadow: 0 0 4px rgba(198,81,168,0.5);
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .info-row {
+            margin-bottom: 8px;
+        }
+        .info-label {
+            color: var(--dim);
+            font-size: 10px;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+        .info-value {
+            color: var(--text);
+            font-size: 13px;
+            margin-top: 2px;
+            word-break: break-all;
+        }
+        .info-value code {
+            background: rgba(255,255,255,0.05);
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: monospace;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--glass-border);
+        }
+
+        /* Bottom half - Content display */
+        .content-panel {
+            flex: 1;
+            min-height: 300px;
+            padding: 20px;
+            overflow-y: auto;
+            position: relative;
+            z-index: 1;
+        }
+        .content-panel h3 {
+            font-size: 11px;
+            letter-spacing: 0.15em;
+            color: var(--cyan);
+            text-transform: uppercase;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .content-panel h3::before {
+            content: '';
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--cyan);
+            box-shadow: 0 0 4px rgba(81,212,200,0.5);
+        }
+        .content-text {
+            font-family: ui-serif, Georgia, serif;
+            font-size: 14px;
+            line-height: 1.7;
+            color: var(--text);
+            white-space: pre-wrap;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 16px;
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+        }
+        .content-text a {
+            color: var(--cyan);
+            text-decoration: underline;
+        }
+        .content-text a:hover {
+            color: var(--mauve);
+        }
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--dim);
+            text-align: center;
+            padding: 40px;
+        }
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        /* Scrollbars */
+        .info-panel::-webkit-scrollbar,
+        .content-panel::-webkit-scrollbar,
+        .sidebar::-webkit-scrollbar { width: 6px; }
+        .info-panel::-webkit-scrollbar-track,
+        .content-panel::-webkit-scrollbar-track { background: transparent; }
+        .info-panel::-webkit-scrollbar-thumb,
+        .content-panel::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <header class="studio-header">
+        <h1>Aiko Approval Studio</h1>
+        <div class="header-actions">
+            <span class="header-status" id="header-status">Loading drafts…</span>
+            <button id="refresh-btn" class="btn">Refresh</button>
+        </div>
+    </header>
+
+    <div class="studio-body">
+        <aside class="sidebar">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <h2>Job Post Drafts</h2>
+                <span id="draft-count" style="font-size: 11px; color: var(--dim);">0</span>
+            </div>
+            <div class="filter-tabs" id="filter-tabs">
+                <button class="filter-tab active" data-filter="all">All</button>
+                <button class="filter-tab" data-filter="pending">Pending</button>
+                <button class="filter-tab" data-filter="approved">Approved</button>
+                <button class="filter-tab" data-filter="posted">Posted</button>
+            </div>
+            <div id="drafts-list"></div>
+        </aside>
+
+        <div class="content-area">
+            <div class="info-panel" id="info-panel">
+                <div class="empty-state" id="info-empty">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <p>Select a draft from the sidebar to review</p>
+                </div>
+                <div id="info-content" style="display: none;">
+                    <h3>Draft Information</h3>
+                    <div class="info-grid" id="info-grid"></div>
+                    <div class="action-buttons" id="action-buttons"></div>
+                </div>
+            </div>
+            <div class="content-panel" id="content-panel">
+                <div class="empty-state" id="content-empty">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></polyline>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <p>Draft content will appear here</p>
+                </div>
+                <div id="content-text" class="content-text" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentDraft = null;
+        let allDrafts = [];
+
+        function escapeHTML(str) {
+            const d = document.createElement('div');
+            d.textContent = str || '';
+            return d.innerHTML;
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return '—';
+            try {
+                const d = new Date(dateStr);
+                return d.toLocaleString();
+            } catch {
+                return dateStr;
+            }
+        }
+
+        async function loadDrafts() {
+            try {
+                const resp = await fetch('/api/drafts?status=all');
+                const data = await resp.json();
+                allDrafts = data.drafts || [];
+                renderDraftList('all');
+                document.getElementById('header-status').textContent = `${allDrafts.length} drafts`;
+                document.getElementById('draft-count').textContent = allDrafts.length;
+            } catch (err) {
+                console.error('Failed to load drafts:', err);
+                document.getElementById('header-status').textContent = 'Failed to load';
+            }
+        }
+
+        function filterDrafts(filter) {
+            switch (filter) {
+                case 'pending':
+                    return allDrafts.filter(d => !d.human_approved && !d.posted);
+                case 'approved':
+                    return allDrafts.filter(d => d.human_approved && !d.posted);
+                case 'posted':
+                    return allDrafts.filter(d => d.posted);
+                default:
+                    return allDrafts;
+            }
+        }
+
+        function renderDraftList(filter) {
+            const container = document.getElementById('drafts-list');
+            const drafts = filterDrafts(filter);
+            
+            document.querySelectorAll('.filter-tab').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.filter === filter);
+            });
+            
+            if (!drafts.length) {
+                container.innerHTML = '<div style="color:var(--dim);font-size:11px;padding:20px;text-align:center">No drafts found</div>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            drafts.forEach(draft => {
+                const div = document.createElement('div');
+                div.className = 'draft-item' + (currentDraft && currentDraft.draft_dir === draft.draft_dir ? ' active' : '');
+                
+                const statusBadges = [];
+                if (draft.posted) {
+                    statusBadges.push('<span class="status-badge posted">Posted</span>');
+                } else if (draft.human_approved) {
+                    statusBadges.push('<span class="status-badge approved">Approved</span>');
+                } else {
+                    statusBadges.push('<span class="status-badge pending">Pending</span>');
+                }
+                if (draft.llm_enriched) {
+                    statusBadges.push('<span class="status-badge enriched">LLM Enriched</span>');
+                }
+                
+                div.innerHTML = `
+                    <div class="draft-name">${escapeHTML(draft.relative_path)}</div>
+                    <div class="draft-meta">
+                        <span>${formatDate(draft.created_at)}</span>
+                        <span>${escapeHTML(draft.category || 'general')}</span>
+                        <span>${escapeHTML(draft.provider)}</span>
+                    </div>
+                    <div class="draft-status">${statusBadges.join('')}</div>
+                `;
+                div.onclick = () => selectDraft(draft);
+                container.appendChild(div);
+            });
+        }
+
+        function selectDraft(draft) {
+            currentDraft = draft;
+            document.querySelectorAll('.draft-item').forEach(el => {
+                el.classList.toggle('active', el.textContent.includes(draft.relative_path));
+            });
+            
+            // Show info panel
+            document.getElementById('info-empty').style.display = 'none';
+            document.getElementById('info-content').style.display = 'block';
+            
+            // Populate info grid
+            const grid = document.getElementById('info-grid');
+            grid.innerHTML = `
+                <div class="info-row">
+                    <div class="info-label">Path</div>
+                    <div class="info-value"><code>${escapeHTML(draft.relative_path)}</code></div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">Date</div>
+                    <div class="info-value">${escapeHTML(draft.date || '—')}</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">Category</div>
+                    <div class="info-value">${escapeHTML(draft.category || 'general')}</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">Provider</div>
+                    <div class="info-value">${escapeHTML(draft.provider)}</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">Created</div>
+                    <div class="info-value">${formatDate(draft.created_at)}</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">LLM Enriched</div>
+                    <div class="info-value" style="color: ${draft.llm_enriched ? 'var(--green)' : 'var(--dim)'}">${draft.llm_enriched ? 'Yes' : 'No'}</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">Status</div>
+                    <div class="info-value">
+                        ${draft.posted ? '<span class="status-badge posted">Posted</span>' : 
+                          draft.human_approved ? '<span class="status-badge approved">Approved</span>' : 
+                          '<span class="status-badge pending">Pending Review</span>'}
+                    </div>
+                </div>
+            `;
+            
+            // Action buttons
+            const actions = document.getElementById('action-buttons');
+            if (draft.posted) {
+                actions.innerHTML = '<span style="color: var(--dim); font-size: 11px;">This draft has already been posted</span>';
+            } else if (draft.human_approved) {
+                actions.innerHTML = `
+                    <button class="btn btn-danger" onclick="rejectDraft('${escapeHTML(draft.draft_dir)}')">Reject</button>
+                    <button class="btn btn-primary" onclick="postDraft('${escapeHTML(draft.draft_dir)}')">Post to Threads</button>
+                `;
+            } else {
+                actions.innerHTML = `
+                    <button class="btn btn-success" onclick="approveDraft('${escapeHTML(draft.draft_dir)}')">Approve</button>
+                `;
+            }
+            
+            // Load full draft content
+            loadDraftContent(draft.draft_dir);
+        }
+
+        async function loadDraftContent(draftDir) {
+            try {
+                const resp = await fetch(`/api/drafts/${encodeURIComponent(draftDir)}`);
+                if (!resp.ok) throw new Error('Failed to load draft detail');
+                const data = await resp.json();
+                
+                const contentEl = document.getElementById('content-text');
+                const emptyEl = document.getElementById('content-empty');
+                
+                if (data.draft_text) {
+                    contentEl.textContent = data.draft_text;
+                    contentEl.style.display = 'block';
+                    emptyEl.style.display = 'none';
+                } else {
+                    contentEl.style.display = 'none';
+                    emptyEl.style.display = 'flex';
+                    emptyEl.querySelector('p').textContent = 'No draft content available';
+                }
+            } catch (err) {
+                console.error('Failed to load draft content:', err);
+                document.getElementById('content-text').style.display = 'none';
+                document.getElementById('content-empty').style.display = 'flex';
+                document.getElementById('content-empty').querySelector('p').textContent = 'Failed to load content';
+            }
+        }
+
+        async function approveDraft(draftDir) {
+            try {
+                const resp = await fetch(`/api/drafts/${encodeURIComponent(draftDir)}/approve`, {
+                    method: 'POST',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    loadDrafts();
+                    if (currentDraft && currentDraft.draft_dir === draftDir) {
+                        selectDraft({ ...currentDraft, human_approved: true, meta: data.meta });
+                    }
+                } else {
+                    alert('Failed to approve: ' + (data.message || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error('Approve failed:', err);
+                alert('Failed to approve draft');
+            }
+        }
+
+        async function rejectDraft(draftDir) {
+            if (!confirm('Reject this approved draft?')) return;
+            try {
+                const resp = await fetch(`/api/drafts/${encodeURIComponent(draftDir)}/reject`, {
+                    method: 'POST',
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    loadDrafts();
+                    if (currentDraft && currentDraft.draft_dir === draftDir) {
+                        selectDraft({ ...currentDraft, human_approved: false, meta: data.meta });
+                    }
+                } else {
+                    alert('Failed to reject: ' + (data.message || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error('Reject failed:', err);
+                alert('Failed to reject draft');
+            }
+        }
+
+        async function postDraft(draftDir) {
+            if (!confirm('Post this approved draft to Meta Threads?')) return;
+            try {
+                // Use the existing post_job_post_social tool via the agentic system
+                // For now, we'll call the approval studio's approve endpoint which marks it approved
+                // The actual posting would be done via the scheduler or CLI
+                alert('Posting is handled by the scheduler. Use the CLI or wait for the scheduled post.\n\nDraft directory: ' + draftDir);
+            } catch (err) {
+                console.error('Post failed:', err);
+                alert('Failed to post draft');
+            }
+        }
+
+        document.getElementById('refresh-btn').addEventListener('click', loadDrafts);
+
+        // Initial load
+        loadDrafts();
+        setInterval(loadDrafts, 30000);
+    </script>
+</body>
+</html>

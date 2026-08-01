@@ -1905,7 +1905,7 @@ class _MemoryBackend:
 # no LLM. Write side lives here; read side is now also consulted at recall
 # time via _MemoryBackend._graph_pass() (see module docstring, "Entity
 # graph fusion"). Graph export for the Studio lives in
-# memory/studio/backend/graph_export.py.
+# interface/webui/studio/memory/backend/graph_export.py.
 
 RELATION_CO_MENTION = "co_mentions"
 RELATION_RELATED = "related_to"

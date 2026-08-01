@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket
 from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 import httpx
 from dotenv import load_dotenv
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -22,6 +23,35 @@ load_dotenv()
 log = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Mount studio backends
+# Memory Graph Studio
+try:
+    from interface.webui.studio.memory.backend.api import app as memory_studio_app
+    app.mount("/studio/memory", memory_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount memory studio: {e}")
+
+# DAG Studio
+try:
+    from interface.webui.studio.dag.backend.api import app as dag_studio_app
+    app.mount("/studio/dag", dag_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount DAG studio: {e}")
+
+# Approval Studio
+try:
+    from interface.webui.studio.approval.backend.api import app as approval_studio_app
+    app.mount("/studio/approval", approval_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount approval studio: {e}")
+
+# MCP Studio
+try:
+    from interface.webui.studio.mcp.backend.api import app as mcp_studio_app
+    app.mount("/studio/mcp", mcp_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount MCP studio: {e}")
 
 # ── cookie signing ────────────────────────────────────────────────────────────
 # SECRET_KEY signs the session cookie so it can't be forged or edited client-side.
