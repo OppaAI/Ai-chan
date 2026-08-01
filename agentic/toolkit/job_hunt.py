@@ -481,7 +481,7 @@ def gen_job_search_plan(prompt: str = "", config_source: str = "") -> str:
     }, ensure_ascii=False)
 
 
-def execute_job_search_plan(plan_json: str) -> str:
+def execute_job_search_plan(plan_json: str, *, state=None) -> str:
     """Node 2: Execute the Lane D RSS-only tech job search plan."""
     plan = json.loads(plan_json)
     config = _job_config()
@@ -494,7 +494,10 @@ def execute_job_search_plan(plan_json: str) -> str:
         "sources": _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS),
         "postings": postings[:max_results],
     }
-    return json.dumps(result, ensure_ascii=False)
+    result_json = json.dumps(result, ensure_ascii=False)
+    if state is not None:
+        state.data["job_search_json"] = result_json
+    return result_json
 
 
 def draft_job_posts_from_results(
@@ -503,13 +506,20 @@ def draft_job_posts_from_results(
     *,
     client=None,
     model: str | None = None,
+    state=None,
 ) -> str:
     """Node 3: Enrich fields (optional LLM) then format one draft per job.
 
     When the graph executor injects client/model, empty post_fields keys are
-    filled from each posting's title + RSS summary before format_job_post.
-    Falls back to pure mapping when no LLM is available.
+    filled from each posting's title + RSS summary (and its fetched page)
+    before format_job_post. Falls back to pure mapping when no LLM is
+    available. Large results/draft payloads are carried through graph state
+    because $result: substitution truncates node output at 4000 chars.
     """
+    if state is not None:
+        full = state.data.get("job_search_json")
+        if full:
+            results_json = full
     results = json.loads(results_json)
     config = _job_config()
     postings = results.get("postings", [])
@@ -563,7 +573,7 @@ def draft_job_posts_from_results(
             "llm_enriched": used_llm and enriched != posting,
         })
 
-    return json.dumps({
+    result_json = json.dumps({
         "success": True,
         "total_drafts": len(drafts),
         "draft_policy": "post_fields_llm" if used_llm else "post_fields",
@@ -573,12 +583,19 @@ def draft_job_posts_from_results(
         "date": today,
         "drafts": drafts,
     }, ensure_ascii=False)
+    if state is not None:
+        state.data["job_drafts_json"] = result_json
+    return result_json
 
 
-def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
+def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false", *, state=None) -> str:
     """Node 4: Save Lane D draft(s) for human review; posting happens after approval."""
     from agentic.toolkit.social import job_post_social_root
 
+    if state is not None:
+        full = state.data.get("job_drafts_json")
+        if full:
+            drafts_json = full
     drafts_data = json.loads(drafts_json)
     if not drafts_data.get("drafts"):
         return json.dumps({"success": False, "reason": "no_drafts", "saved": []}, ensure_ascii=False)
@@ -603,12 +620,19 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
             "- [ ] Approved to post to Meta Threads\n",
             encoding="utf-8",
         )
+        posting_meta = dict(draft.get("posting") or {})
+        posting_meta.pop("page_content", None)
+        postings_meta = []
+        for p in draft.get("postings") or []:
+            item = dict(p)
+            item.pop("page_content", None)
+            postings_meta.append(item)
         meta = {
             "success": True,
             "draft_dir": str(draft_dir),
             "provider": "threads",
-            "posting": draft.get("posting"),
-            "postings": draft.get("postings"),
+            "posting": posting_meta,
+            "postings": postings_meta,
             "llm_enriched": bool(draft.get("llm_enriched")),
             "created_at": datetime.now().isoformat(),
             "posted": False,
@@ -620,12 +644,22 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false") -> str:
     return json.dumps({"success": True, "total_saved": len(saved), "auto_posted": False, "auto_post_requested": auto_requested, "saved": saved}, ensure_ascii=False)
 
 
+def _safe_json_loads(text: str | None, default: dict | None = None) -> dict:
+    if not text:
+        return dict(default or {})
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else dict(default or {})
+    except Exception:
+        return dict(default or {})
+
+
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     """Node 5: Generate an RSS Lane D audit report."""
-    plan_data = json.loads(plan) if plan else {}
-    search_data = json.loads(search) if search else {}
-    draft_data = json.loads(draft) if draft else {}
-    save_data = json.loads(save) if save else {}
+    plan_data = _safe_json_loads(plan)
+    search_data = _safe_json_loads(search)
+    draft_data = _safe_json_loads(draft)
+    save_data = _safe_json_loads(save)
     lines = ["# Job Post Run Report", "", "## RSS Lane D", ""]
     lines.append(f"- Feeds: {len(plan_data.get('rss_feeds', []))}")
     lines.append(f"- Results found today: {search_data.get('total_found', 0)}")

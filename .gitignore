@@ -223,6 +223,10 @@ __marimo__/
 *.mp4
 *.wav
 
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
 .benchmarks/
 logs/
 models/
@@ -242,3 +246,7 @@ interface/webui/static/ort-wasm-simd-threaded.jsep.wasm
 interface/webui/static/ort-wasm-simd-threaded.jsep.mjs
 interface/webui/static/silero_vad.onnx
 interface/webui/static/silero_vad_op18_ifless.onnx
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
