@@ -307,13 +307,28 @@ body {
 /* ── right panel ────────────────────────────────────────────────── */
 #panel {
   display: grid;
-  grid-template-rows: auto 1fr auto auto auto auto;
+  grid-template-rows: auto auto 1fr auto auto auto auto;
   height: var(--app-height, 100dvh);
   overflow: hidden;
 }
 
+#studio-toolbar {
+  flex-shrink: 0;
+}
+
+#studio-toolbar .studio-btn:hover {
+  border-color: var(--purple);
+  color: var(--purple);
+  box-shadow: 0 0 8px rgba(168, 136, 232, 0.3);
+  background: var(--purple);
+}
+
+#studio-toolbar .studio-btn:hover svg {
+  stroke: var(--bg);
+}
+
 #panel-header {
-  padding: 10px 16px 8px;
+  padding: 4px 16px 4px;
   border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;

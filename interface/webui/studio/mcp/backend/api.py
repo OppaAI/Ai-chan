@@ -8,6 +8,8 @@ from fastapi.responses import FileResponse
 import subprocess
 import json
 import os
+import importlib.util
+import sys
 
 app = FastAPI(title="Aiko MCP Studio")
 
@@ -25,7 +27,7 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 
 def _get_mcp_servers() -> list[dict]:
     """Get list of MCP servers from the interface/mcp_server directory."""
-    mcp_root = Path(__file__).resolve().parents[4] / "interface" / "mcp_server"
+    mcp_root = Path(__file__).resolve().parents[5] / "interface" / "mcp_server"
     servers = []
     
     if mcp_root.exists():
@@ -38,6 +40,7 @@ def _get_mcp_servers() -> list[dict]:
                     "tools": [],
                     "port": None,
                     "pid": None,
+                    "description": "",
                 }
                 
                 # Check for server.py to determine port
@@ -55,10 +58,49 @@ def _get_mcp_servers() -> list[dict]:
                                     break
                     except Exception:
                         pass
+                    
+                    # Get description from server
+                    if "Aiko Social" in content:
+                        server_info["description"] = "Social media posting (X, Threads, Bluesky, Mastodon, Reddit, Discord, YouTube, Pixelset, Email)"
+                
+                # Also check for tools in tools/ directory
+                tools_dir = server_dir / "tools"
+                if tools_dir.exists():
+                    static_tools = _get_static_tools(tools_dir)
+                    server_info["tools"] = static_tools
                 
                 servers.append(server_info)
     
     return servers
+
+
+def _get_static_tools(tools_dir: Path) -> list[dict]:
+    """Extract tool information from the tools directory."""
+    tools = []
+    try:
+        for tool_file in tools_dir.glob("*.py"):
+            if tool_file.name in ("__init__.py", "base.py"):
+                continue
+            try:
+                content = tool_file.read_text()
+                # Look for tool name and description
+                import re
+                # Find @mcp.tool or @server.tool decorators
+                for match in re.finditer(r'@(?:mcp|server)\.tool\s*\(\s*name\s*=\s*["\']([^"\']+)["\']', content):
+                    tool_name = match.group(1)
+                    # Try to get description
+                    desc_match = re.search(r'description\s*=\s*["\']([^"\']+)["\']', content[match.end():match.end()+500])
+                    description = desc_match.group(1) if desc_match else ""
+                    tools.append({
+                        "name": tool_name,
+                        "description": description,
+                        "parameters": {}
+                    })
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return tools
 
 
 def _check_server_status(server: dict) -> dict:
@@ -74,16 +116,6 @@ def _check_server_status(server: dict) -> dict:
             server["status"] = "stopped"
     else:
         server["status"] = "unknown"
-    
-    # Try to get tools from the server
-    if server["status"] == "running" and port:
-        try:
-            import requests
-            resp = requests.get(f"http://localhost:{port}/tools", timeout=2)
-            if resp.status_code == 200:
-                server["tools"] = resp.json().get("tools", [])
-        except Exception:
-            pass
     
     return server
 

@@ -28,7 +28,7 @@ async def get_graph(
     include_history: bool = Query(True, description="Include superseded memories"),
     include_entities: bool = Query(True, description="Add entity hub nodes"),
 ):
-    from memory.studio.backend.graph_export import export_memory_graph
+    from interface.webui.studio.memory.backend.graph_export import export_memory_graph
     from system.userspace import current_user_id
 
     uid = (user_id or "").strip() or current_user_id()
@@ -52,7 +52,7 @@ async def search(
     limit: int = Query(10, ge=1, le=100),
     include_history: bool = Query(False, description="Include superseded memories"),
 ):
-    from memory.studio.backend.search_memory import search_memory
+    from interface.webui.studio.memory.backend.search_memory import search_memory
     from system.userspace import current_user_id
 
     uid = (user_id or "").strip() or current_user_id()

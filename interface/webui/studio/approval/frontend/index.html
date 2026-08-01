@@ -266,10 +266,10 @@
 
         /* Top half - Info panel */
         .info-panel {
-            flex: 0 0 40%;
-            min-height: 200px;
-            max-height: 50%;
-            padding: 20px;
+            flex: 0 0 auto;
+            min-height: 120px;
+            max-height: 35%;
+            padding: 12px 16px;
             overflow-y: auto;
             background: var(--glass-bg);
             backdrop-filter: blur(16px);
@@ -460,10 +460,29 @@
                 </div>
                 <div id="content-text" class="content-text" style="display: none;"></div>
             </div>
+            
+            <!-- URL Content Panel -->
+            <div class="content-panel" id="url-panel" style="border-top: 1px solid var(--glass-border); margin-top: 10px;">
+                <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                    Source URL Content
+                </h3>
+                <div class="empty-state" id="url-empty" style="padding: 20px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                    </svg>
+                    <p>No source URL available for this draft</p>
+                </div>
+                <div id="url-content" style="display: none; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 16px; max-height: 300px; overflow-y: auto;"></div>
+            </div>
         </div>
     </div>
 
     <script>
+        // Detect base path for API calls (studio is mounted at /studio/approval/)
+        const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+
         let currentDraft = null;
         let allDrafts = [];
 
@@ -485,7 +504,7 @@
 
         async function loadDrafts() {
             try {
-                const resp = await fetch('/api/drafts?status=all');
+                const resp = await fetch(`${API_BASE}/drafts?status=all`);
                 const data = await resp.json();
                 allDrafts = data.drafts || [];
                 renderDraftList('all');
@@ -622,7 +641,7 @@
 
         async function loadDraftContent(draftDir) {
             try {
-                const resp = await fetch(`/api/drafts/${encodeURIComponent(draftDir)}`);
+                const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}`);
                 if (!resp.ok) throw new Error('Failed to load draft detail');
                 const data = await resp.json();
                 
@@ -638,6 +657,15 @@
                     emptyEl.style.display = 'flex';
                     emptyEl.querySelector('p').textContent = 'No draft content available';
                 }
+                
+                // Fetch and display URL content if available
+                const posting = data.meta?.posting || data.posting;
+                if (posting && posting.url) {
+                    loadURLContent(posting.url);
+                } else {
+                    document.getElementById('url-content').style.display = 'none';
+                    document.getElementById('url-empty').style.display = 'flex';
+                }
             } catch (err) {
                 console.error('Failed to load draft content:', err);
                 document.getElementById('content-text').style.display = 'none';
@@ -646,9 +674,35 @@
             }
         }
 
+        async function loadURLContent(url) {
+            const urlContentEl = document.getElementById('url-content');
+            const urlEmptyEl = document.getElementById('url-empty');
+            
+            // Show loading
+            urlEmptyEl.style.display = 'none';
+            urlContentEl.style.display = 'block';
+            urlContentEl.innerHTML = '<div style="color: var(--dim); padding: 20px; text-align: center;">Loading URL content...</div>';
+            
+            try {
+                // Use a CORS proxy or try direct fetch
+                const resp = await fetch(`${API_BASE}/fetch-url?url=${encodeURIComponent(url)}`);
+                if (!resp.ok) throw new Error('Failed to fetch URL');
+                const data = await resp.json();
+                
+                if (data.content) {
+                    urlContentEl.innerHTML = `<div style="font-family: ui-serif, Georgia, serif; font-size: 13px; line-height: 1.7; color: var(--text); white-space: pre-wrap;">${escapeHTML(data.content)}</div>`;
+                } else {
+                    urlContentEl.innerHTML = '<div style="color: var(--dim); padding: 20px; text-align: center;">No content extracted from URL</div>';
+                }
+            } catch (err) {
+                console.error('Failed to load URL content:', err);
+                urlContentEl.innerHTML = '<div style="color: var(--dim); padding: 20px; text-align: center;">Failed to load URL content</div>';
+            }
+        }
+
         async function approveDraft(draftDir) {
             try {
-                const resp = await fetch(`/api/drafts/${encodeURIComponent(draftDir)}/approve`, {
+                const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}/approve`, {
                     method: 'POST',
                 });
                 const data = await resp.json();
@@ -669,7 +723,7 @@
         async function rejectDraft(draftDir) {
             if (!confirm('Reject this approved draft?')) return;
             try {
-                const resp = await fetch(`/api/drafts/${encodeURIComponent(draftDir)}/reject`, {
+                const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}/reject`, {
                     method: 'POST',
                 });
                 const data = await resp.json();

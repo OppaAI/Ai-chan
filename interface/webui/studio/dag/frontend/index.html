@@ -531,9 +531,12 @@
         let transform = d3.zoomIdentity;
         let currentZoom = null;
 
+        // Detect base path for API calls (studio is mounted at /studio/dag/)
+        const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+
         async function fetchPlaybooks() {
             try {
-                const resp = await fetch('/api/playbooks');
+                const resp = await fetch(`${API_BASE}/playbooks`);
                 currentPlaybooks = await resp.json();
                 renderPlaybooksList();
             } catch (err) {

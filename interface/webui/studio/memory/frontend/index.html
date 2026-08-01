@@ -107,6 +107,9 @@
   </div>
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script>
+    // Detect base path for API calls (studio is mounted at /studio/memory/)
+    const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+
     let graph = { nodes: [], edges: [], meta: {} };
     let simulation = null;
     let zoomBehavior = null;
@@ -124,7 +127,7 @@
     async function loadGraph() {
       document.getElementById('status').textContent = 'Loading…';
       try {
-        const resp = await fetch('/api/graph?' + qs());
+        const resp = await fetch(`${API_BASE}/graph?` + qs());
         graph = await resp.json();
         const m = graph.meta || {};
         document.getElementById('stats').innerHTML =
@@ -174,7 +177,7 @@
         const uid = document.getElementById('user-id').value.trim();
         if (uid) p.set('user_id', uid);
         p.set('limit', '10');
-        const resp = await fetch('/api/search?' + p.toString());
+        const resp = await fetch(`${API_BASE}/search?` + p.toString());
         const data = await resp.json();
         const hits = data.hits || [];
         if (!hits.length) { box.textContent = 'No hits'; return; }

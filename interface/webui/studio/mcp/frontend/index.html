@@ -379,6 +379,9 @@
     </div>
 
     <script>
+        // Detect base path for API calls (studio is mounted at /studio/mcp/)
+        const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+
         let currentServer = null;
         let allServers = [];
 
@@ -394,7 +397,7 @@
 
         async function loadServers() {
             try {
-                const resp = await fetch('/api/servers');
+                const resp = await fetch(`${API_BASE}/servers`);
                 const data = await resp.json();
                 allServers = data.servers || [];
                 renderServerList();

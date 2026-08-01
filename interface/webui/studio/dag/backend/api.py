@@ -59,7 +59,12 @@ def load_playbooks_refresh() -> list:
 
 
 # Load playbooks on startup (will be refreshed on each API call)
-PLAYBOOKS = load_playbooks_refresh()
+try:
+    PLAYBOOKS = load_playbooks_refresh()
+except Exception as _pb_exc:
+    import logging as _logging
+    _logging.getLogger(__name__).warning("DAG studio: initial playbook load failed: %s", _pb_exc)
+    PLAYBOOKS = []
 
 
 @app.get("/api/playbooks")
