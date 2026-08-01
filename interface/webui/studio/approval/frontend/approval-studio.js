@@ -2,6 +2,7 @@
 document.querySelectorAll('.filter-tab').forEach(tab => {
     tab.addEventListener('click', () => {
         const filter = tab.dataset.filter;
+        currentFilter = filter;
         renderDraftList(filter);
     });
 });
@@ -13,6 +14,7 @@ let currentDraft = null;
 let allDrafts = [];
 let originalDraftText = '';
 let currentSourceUrl = null;
+let currentFilter = 'pending';
 
 function escapeHTML(str) {
     const d = document.createElement('div');
@@ -35,7 +37,7 @@ async function loadDrafts() {
         const resp = await fetch(`${API_BASE}/drafts?status=all`);
         const data = await resp.json();
         allDrafts = data.drafts || [];
-        renderDraftList('pending');
+        renderDraftList(currentFilter);
         document.getElementById('header-status').textContent = `${allDrafts.length} drafts`;
         document.getElementById('draft-count').textContent = allDrafts.length;
     } catch (err) {
