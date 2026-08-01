@@ -425,16 +425,13 @@
     {
       "handler": "agentic.toolkit.social:post_job_post_social",
       "name": "post_job_post_social",
-      "description": "Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation.",
+      "description": "Post an ALREADY HUMAN-APPROVED daily job-post draft to Meta Threads only. Will refuse unless a person has approved this exact draft outside this conversation. When the user asks to post the daily job post without giving a path, call this with NO draft_dir — it posts the most recently approved job-post draft automatically. Do NOT re-draft when an approved draft already exists.",
       "props": {
         "draft_dir": {
           "type": "string",
-          "description": "The draft_dir path returned by draft_job_post_social or given by the user."
+          "description": "OPTIONAL. The draft_dir path returned by draft_job_post_social or given by the user. Omit to auto-post the latest human-approved draft."
         }
       },
-      "required": [
-        "draft_dir"
-      ],
       "domain": "social",
       "react": true,
       "graph": true,

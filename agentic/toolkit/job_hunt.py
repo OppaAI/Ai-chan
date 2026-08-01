@@ -167,6 +167,40 @@ def _strip_html(text: str, max_chars: int = 2500) -> str:
     return plain[:max_chars]
 
 
+def _fetch_job_page_text(url: str, timeout: float = 10.0, max_chars: int = 8000) -> str:
+    """Best-effort plain text from a job listing page; '' on any failure."""
+    url = str(url or "").strip()
+    if not url:
+        return ""
+    try:
+        resp = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Aiko-Chan/1.0 job-post enrichment)"},
+            timeout=timeout,
+        )
+        if not (200 <= resp.status_code < 300):
+            return ""
+        body = resp.text
+    except Exception as e:
+        log.debug("job_hunt: page fetch failed for %s: %s", url, e)
+        return ""
+    # Drop non-visible blocks (CSS, JS, JSON-LD, nav) so the LLM sees the
+    # actual job description instead of boilerplate.
+    body = re.sub(r"<(script|style|head|noscript|iframe|svg|template)[^>]*>.*?</\1\s*>", " ", body, flags=re.IGNORECASE | re.DOTALL)
+    return _strip_html(body, max_chars=max_chars)
+
+
+def _should_fetch_job_page(config: dict[str, Any]) -> bool:
+    """Fetch each posting's URL page for enrichment unless disabled.
+
+    Opt out via JOB_FETCH_JOB_PAGE=0/off or job_hunt.json "fetch_job_page": false.
+    """
+    env = os.getenv("JOB_FETCH_JOB_PAGE", "").strip()
+    if env:
+        return env.lower() in {"1", "true", "yes", "on"}
+    return bool(config.get("fetch_job_page", True))
+
+
 def format_job_post(posting: dict, date_text: str | None = None, config: dict[str, Any] | None = None) -> str:
     """Format one posting from job_hunt.json post_fields; skip empty values.
 
@@ -284,13 +318,18 @@ def enrich_posting_fields_with_llm(
 
     title = str(posting.get("title") or "").strip()
     summary = str(posting.get("summary") or posting.get("description") or "").strip()
+    page_content = str(posting.get("page_content") or "").strip()
     org = str(posting.get("organization") or "").strip()
-    source_blob = f"Title: {title}\nOrganization: {org}\nDescription:\n{summary}".strip()
+    if page_content:
+        source_text = f"{summary}\n\n--- Job listing page ---\n{page_content}".strip()
+    else:
+        source_text = summary
+    source_blob = f"Title: {title}\nOrganization: {org}\nSource text:\n{source_text}".strip()
     if len(source_blob) < 20:
         return dict(posting)
 
     system_msg = (
-        "You extract structured job-posting fields from RSS title/description text.\n"
+        "You extract structured job-posting fields from job listing text.\n"
         "Rules:\n"
         "- Return ONLY a JSON object with the requested keys.\n"
         "- Use only facts present in the source text. Do not invent or guess.\n"
@@ -307,7 +346,7 @@ def enrich_posting_fields_with_llm(
     )
     user_msg = (
         f"Keys to fill: {json.dumps(missing)}\n\n"
-        f"Source text:\n{source_blob[:3000]}"
+        f"Source text:\n{source_blob[:8000]}"
     )
 
     try:
@@ -491,12 +530,25 @@ def draft_job_posts_from_results(
     selected = postings[:max_jobs]
     field_keys = _field_keys_from_config(config)
     used_llm = client is not None and bool(model)
+    fetch_pages = _should_fetch_job_page(config)
+
+    page_texts: list[str] = []
+    if used_llm and fetch_pages:
+        from concurrent.futures import ThreadPoolExecutor
+
+        urls = [str(p.get("url") or "").strip() for p in selected]
+        with ThreadPoolExecutor(max_workers=min(5, len(urls) or 1)) as ex:
+            page_texts = list(ex.map(_fetch_job_page_text, urls))
 
     drafts = []
     for i, posting in enumerate(selected):
-        enriched = enrich_posting_fields_with_llm(
-            posting, field_keys, client=client, model=model,
-        ) if used_llm else dict(posting)
+        enriched = dict(posting)
+        if used_llm:
+            if page_texts and page_texts[i]:
+                enriched["page_content"] = page_texts[i]
+            enriched = enrich_posting_fields_with_llm(
+                enriched, field_keys, client=client, model=model,
+            )
         try:
             text = format_job_post(enriched, date_text=today, config=config)
         except ValueError as e:

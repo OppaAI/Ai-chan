@@ -13,9 +13,8 @@ def _call_mcp(tool: str, **kwargs: Any) -> dict[str, Any]:
     client = get_mcp_client()
     if client is None:
         return {"ok": False, "error": "MCP client not connected"}
-    import anyio
     try:
-        return anyio.run(client.call_tool, tool, kwargs)
+        return client.call_tool_sync(tool, kwargs)
     except Exception as e:
         return {"ok": False, "error": str(e), "tool": tool}
 

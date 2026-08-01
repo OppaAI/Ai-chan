@@ -22,6 +22,7 @@ Context fetch shape:
 from __future__ import annotations
 
 import concurrent.futures
+import inspect
 from collections import OrderedDict
 import json
 import math
@@ -169,6 +170,11 @@ TASK_MODE_GUIDANCE = (
     "drafting, and never assume a draft is approved just because it was "
     "created. If a post_* call comes back ok=false, disclose that plainly; "
     "do not tell the user something was posted unless the tool result says so. "
+    "For the daily job post: when the user asks to post the job post, call "
+    "post_job_post_social with NO draft_dir argument — it auto-posts the most "
+    "recent human-approved draft. Do NOT run the job-search/draft graph "
+    "(gen_job_post) or re-draft when the user wants to post an already-"
+    "approved draft."
     "Use <skill_context>, <knowledge_context>, and <experience_context> when "
     "they match the task. For repeatable workflows, prefer predefined skill "
     "workflow, learned knowledge, wiki operating cards, and successful similar "
@@ -883,10 +889,27 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
     if name == "save_note":
         args["content"] = args.get("content", "")[:AGENT_NOTE_MAX_CHARS]
         args["title"] = args.get("title", "aiko-note")
+    # Inject agent context (LLM client/model/embedder) into any registered
+    # handler whose signature accepts them. Without this, generic tools like
+    # draft_job_post_social receive client=None and silently skip their LLM
+    # steps (enrichment, page fetching, verification). Mirrors the injection
+    # graph_engine._run_node does for graph nodes.
+    call_args = dict(args)
+    handler = spec.handler
     try:
-        return spec.handler(**args)
+        _params = set(inspect.signature(handler).parameters)
+    except (TypeError, ValueError):
+        _params = set()
+    if "client" in _params and "client" not in call_args:
+        call_args["client"] = _context_attr(owner, "client")
+    if "model" in _params and "model" not in call_args:
+        call_args["model"] = _context_attr(owner, "llm_model")
+    if "embedder" in _params and "embedder" not in call_args:
+        call_args["embedder"] = _context_embedder(owner)
+    try:
+        return handler(**call_args)
     except TypeError:
-        return spec.handler(args)
+        return handler(args)
 
 
 def dispatch_tool_checked(name: str, args: dict, owner=None) -> ToolResult:

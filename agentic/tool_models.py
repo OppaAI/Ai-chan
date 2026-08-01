@@ -74,6 +74,13 @@ class PostSocialDraftArgs(BaseModel):
     draft_dir: str = Field(min_length=1)
 
 
+class PostJobPostSocialArgs(BaseModel):
+    draft_dir: str | None = Field(
+        default=None,
+        description="Optional. Path to a specific approved draft dir. Omit to post the most recently approved job-post draft.",
+    )
+
+
 class DirectSocialPostArgs(BaseModel):
     text: str = Field(min_length=1)
     services: str = Field(min_length=1)

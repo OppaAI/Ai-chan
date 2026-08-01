@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import threading
 from typing import Any
 
 from system.log import get_logger
@@ -18,9 +20,8 @@ class MCPToolBridge:
         self.input_schema = input_schema
 
     def __call__(self, **kwargs: Any) -> dict[str, Any]:
-        import anyio
         try:
-            return anyio.run(self._client.call_tool, self.tool_name, kwargs)
+            return self._client.call_tool_sync(self.tool_name, kwargs)
         except Exception as e:
             log.error("[mcp] Bridge call to %s failed: %s", self.tool_name, e)
             return {"ok": False, "error": str(e), "tool": self.tool_name}
@@ -37,17 +38,65 @@ class MCPClient:
         self._session = None
         self._transport = None
         self._http_client = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+        self._loop_ready = threading.Event()
+
+    # ── persistent event loop ────────────────────────────────────────────
+    # The streamable HTTP transport and session spawn background tasks that
+    # must keep running for the life of the connection. Running them inside a
+    # throwaway anyio.run() loop closes them the moment that loop exits, so
+    # every subsequent tool call fails with ClosedResourceError. Instead we
+    # host the session in one dedicated loop thread and dispatch each call
+    # onto it.
+    def _ensure_loop(self) -> None:
+        if self._loop is not None:
+            return
+
+        def _run() -> None:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop_ready.set()
+            try:
+                self._loop.run_forever()
+            finally:
+                try:
+                    self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+                except Exception:
+                    pass
+                self._loop.close()
+
+        self._loop_thread = threading.Thread(
+            target=_run, name="aiko-mcp-client", daemon=True
+        )
+        self._loop_thread.start()
+        if not self._loop_ready.wait(timeout=10):
+            raise TimeoutError("mcp client event loop failed to start")
+
+    def _run_coro(self, coro_factory, timeout: float = 60) -> Any:
+        self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro_factory(), self._loop)
+        return future.result(timeout=timeout)
+
+    def list_tools_sync(self) -> list[dict[str, Any]]:
+        return self._run_coro(self.list_tools)
+
+    def call_tool_sync(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._run_coro(lambda: self.call_tool(name, arguments))
+
+    def close_sync(self) -> None:
+        self._run_coro(self.close)
+
+    # ── session / tools ──────────────────────────────────────────────────
 
     async def _ensure_session(self):
         if self._session is not None:
             return self._session
 
-        from mcp.client.streamable_http import streamable_http_client
+        from mcp.client.streamable_http import streamablehttp_client
         from mcp.client.session import ClientSession
-        import httpx
 
-        self._http_client = httpx.AsyncClient()
-        transport = streamable_http_client(self._mcp_url, http_client=self._http_client)
+        transport = streamablehttp_client(self._mcp_url)
         self._transport = transport
 
         read, write, _get_id = await transport.__aenter__()
@@ -148,14 +197,8 @@ class MCPClient:
                 await self._transport.__aexit__(None, None, None)
         except Exception:
             log.warning("[mcp] transport close failed")
-        try:
-            if self._http_client is not None:
-                await self._http_client.aclose()
-        except Exception:
-            log.warning("[mcp] http client close failed")
         self._session = None
         self._transport = None
-        self._http_client = None
 
 
 def get_mcp_client() -> MCPClient | None:
@@ -165,10 +208,8 @@ def get_mcp_client() -> MCPClient | None:
 def init_mcp_client(server_url: str = "") -> MCPClient | None:
     global _MCP_CLIENT
     try:
-        import anyio
-
         client = MCPClient(server_url=server_url)
-        tools = anyio.run(client.list_tools)
+        tools = client.list_tools_sync()
         if not tools:
             log.warning("[mcp] Connected but no tools discovered")
         else:
@@ -186,9 +227,8 @@ def init_mcp_client(server_url: str = "") -> MCPClient | None:
 def shutdown_mcp_client() -> None:
     global _MCP_CLIENT
     if _MCP_CLIENT is not None:
-        import anyio
         try:
-            anyio.run(_MCP_CLIENT.close)
+            _MCP_CLIENT.close_sync()
         except Exception:
             log.warning("[mcp] shutdown close failed")
         _MCP_CLIENT = None

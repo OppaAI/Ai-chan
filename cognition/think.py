@@ -448,6 +448,18 @@ class AikoThink:
         with self._active_users_lock:
             self._active_user_ids.add(user_id)
         self._note_user_activity()
+        # Approval commands ("approve run-<id>", "yes") must be handled
+        # BEFORE intent classification — the quaternary intent LLM labels
+        # terse commands like "Approve run-…" as chat, which would skip
+        # run_agentic_chat and leave the pending tool permanently stuck.
+        try:
+            from agentic.agentic import _maybe_resume_approval
+            resumed = _maybe_resume_approval(self, user_input, token_callback=token_callback)
+            if resumed is not None:
+                return resumed
+        except Exception as exc:
+            log.debug("[route] approval resume pre-check skipped: %s", exc)
+
         try:
             intent = self._route_intent(user_input)
             log.info("[route] intent=%s", intent)

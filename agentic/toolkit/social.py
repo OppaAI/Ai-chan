@@ -105,6 +105,34 @@ def job_post_social_root() -> Path:
     return (user_workspace_root() / "social" / "job_posts").resolve()
 
 
+def _latest_approved_job_post_draft() -> Path | None:
+    """Return the most recently created human-approved job-post draft dir, or None.
+
+    Scans <job_post_social_root>/<date>/<category>/draft.json and returns the
+    dir whose draft.json has human_approved=True and the newest created_at.
+    Used by post_job_post_social when the model doesn't supply a draft_dir.
+    """
+    root = job_post_social_root()
+    best: tuple[float, Path] | None = None
+    for meta_path in root.glob("*/*/draft.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("human_approved") is not True:
+            continue
+        created = meta.get("created_at") or ""
+        key = 0.0
+        try:
+            dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            key = dt.timestamp()
+        except (ValueError, TypeError):
+            key = float(meta_path.stat().st_mtime)
+        if best is None or key > best[0]:
+            best = (key, meta_path.parent)
+    return best[1] if best else None
+
+
 def video_social_root() -> Path:
     """Resolve the active user video-social output root lazily.
 
@@ -1308,10 +1336,15 @@ def draft_job_post_social(*, force: bool = False, client=None, model: str | None
 
 
 @tool(TOOLS["post_job_post_social"])
-def post_job_post_social(draft_dir: str) -> dict[str, Any]:
+def post_job_post_social(draft_dir: str | None = None) -> dict[str, Any]:
     """Post a human-approved daily job-post draft to Meta Threads only."""
     try:
-        path = _resolve_contained_draft_dir(draft_dir, job_post_social_root())
+        if draft_dir:
+            path = _resolve_contained_draft_dir(draft_dir, job_post_social_root())
+        else:
+            path = _latest_approved_job_post_draft()
+            if path is None:
+                return {"posted": False, "error": "no human-approved job-post draft found to post"}
         _require_approved(path)
     except (ValueError, SocialApprovalError) as e:
         return {"posted": False, "error": str(e)}

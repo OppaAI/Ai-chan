@@ -1,4 +1,3 @@
-from __future__ import annotations
 
 
 def _split_services(services: str | list[str] | tuple[str, ...]) -> list[str]:

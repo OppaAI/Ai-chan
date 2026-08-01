@@ -713,14 +713,15 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "id": "gen_job_post",
             "name": "Fetch, draft, and save job listings from configured RSS feeds",
             "triggers": [
-                "job post", "post job", "draft job", "job listing",
-                "daily job", "job hunt post", "job posting", "find jobs",
+                "draft job", "draft a job posting", "job listing",
+                "daily job", "find jobs", "fetch jobs", "search job listings",
             ],
             "semantic_triggers": [
                 "draft a job posting for social media",
-                "fetch and post jobs from RSS",
-                "create job posts from RSS results",
-                "run the daily job post pipeline",
+                "fetch jobs from RSS feeds",
+                "create draft job posts from RSS results",
+                "run the daily job draft pipeline",
+                "search for job listings",
             ],
             "requires_any": ["job", "jobs", "posting", "hiring", "career"],
             "capabilities": ["research"],
@@ -900,10 +901,36 @@ def _substitute(value: Any, prompt: str, results: dict[str, NodeResult],
     return value
 
 
+# ── Posting-intent guard ──────────────────────────────────────────────
+# The graph-first executor auto-runs a matching playbook for every prompt.
+# Requests to POST/publish an artifact that already exists (a draft, a job
+# post, a note) must NOT auto-run a workflow like gen_job_post, which would
+# re-draft/re-search instead of publishing. Detect that intent here so the
+# prompt falls through to the ReAct loop, where direct social tools are used.
+_POST_ACTION_TERMS = ("post", "publish", "submit", "share", "post now", "upload", "send")
+_POST_CONTENT_TERMS = ("job", "draft", "post", "story", "article", "update",
+                       "content", "note", "message", "listing")
+_DRAFT_ACTION_TERMS = ("draft", "search", "find", "fetch", "create", "make",
+                       "write", "generate", "collect", "scrape", "list",
+                       "run", "schedule", "daily", "look for", "hunt", "scan")
+
+
+def _is_post_existing_content(prompt: str) -> bool:
+    """True when the prompt asks to post/publish something already produced,
+    rather than to draft/search for new content."""
+    t = prompt.casefold()
+    has_action = any(v in t for v in _POST_ACTION_TERMS)
+    has_content = any(n in t for n in _POST_CONTENT_TERMS)
+    has_draft = any(v in t for v in _DRAFT_ACTION_TERMS)
+    return has_action and has_content and not has_draft
+
+
 def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder=None) -> PlanGraph | None:
     if not GRAPH_AGENT_ENABLED:
         return None
     plans = load_playbooks()
+    if _is_post_existing_content(user_input):
+        return None
     prompt_vec = None
     if embedder is not None:
         try:

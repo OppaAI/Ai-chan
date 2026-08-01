@@ -35,7 +35,7 @@ def test_social_media_registry_has_pixelset_only():
 
 
 def test_post_social_dispatches_selected_services():
-    multipost = importlib.import_module("mcp.social.tools.multipost")
+    multipost = importlib.import_module("mcp_server.social.tools.multipost")
 
     calls = []
 
