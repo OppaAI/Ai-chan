@@ -21,6 +21,9 @@
     --red-bright: #ff9aac;
     --orange-bright: #ffbd7a;
     --cyan-bright: #a3f0e6;
+    /* Shared "meta" tone: dimmed-down from --dim-bright, used for draft
+       secondary lines AND (to match) the info-panel field labels + header count */
+    --meta: #9484c2;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -31,6 +34,7 @@ body {
     color: var(--text);
     height: 100vh;
     overflow: hidden;
+    font-size: 17px;
 }
 
 /* Header */
@@ -43,7 +47,7 @@ body {
     align-items: center;
 }
 .studio-header h1 {
-    font-size: 18px;
+    font-size: 19px;
     font-weight: 600;
     color: var(--purple);
     letter-spacing: 0.15em;
@@ -67,8 +71,8 @@ body {
     align-items: center;
 }
 .studio-header .header-status {
-    font-size: 10px;
-    color: var(--dim);
+    font-size: 11px;
+    color: var(--meta);
     letter-spacing: 0.05em;
 }
 
@@ -77,7 +81,7 @@ body {
     border: 1px solid var(--dim);
     color: var(--dim-bright);
     font-family: var(--font-main, sans-serif);
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.1em;
     padding: 5px 14px;
     cursor: pointer;
@@ -162,7 +166,7 @@ body {
     border-left: 1px solid var(--glass-border);
 }
 .sidebar h2 {
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.2em;
     color: var(--pink);
     text-transform: uppercase;
@@ -188,7 +192,7 @@ body {
 .filter-tab {
     padding: 4px 10px;
     border-radius: 3px;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     cursor: pointer;
@@ -223,20 +227,20 @@ body {
     border-color: var(--purple);
 }
 .draft-item .draft-name {
-    font-size: 13px;
+    font-size: 14px;
     color: var(--text);
     font-weight: 500;
 }
 .draft-item .draft-meta {
-    font-size: 10px;
-    color: var(--dim-bright);
+    font-size: 11px;
+    color: var(--meta);
     margin-top: 2px;
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
 }
 .draft-item .draft-status {
-    font-size: 10px;
+    font-size: 11px;
     margin-top: 4px;
     display: flex;
     gap: 8px;
@@ -245,7 +249,7 @@ body {
 .status-badge {
     padding: 1px 6px;
     border-radius: 2px;
-    font-size: 9px;
+    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
@@ -301,7 +305,7 @@ body {
     z-index: 1;
 }
 .info-panel h3 {
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.15em;
     color: var(--pink);
     text-transform: uppercase;
@@ -327,14 +331,14 @@ body {
     margin-bottom: 8px;
 }
 .info-label {
-    color: var(--dim);
-    font-size: 10px;
+    color: var(--meta);
+    font-size: 11px;
     letter-spacing: 0.05em;
     text-transform: uppercase;
 }
 .info-value {
     color: var(--text);
-    font-size: 13px;
+    font-size: 14px;
     margin-top: 2px;
     word-break: break-all;
 }
@@ -342,7 +346,7 @@ body {
     background: rgba(255,255,255,0.05);
     padding: 1px 4px;
     border-radius: 3px;
-    font-size: 11px;
+    font-size: 12px;
     font-family: monospace;
 }
 .action-buttons {
@@ -361,7 +365,7 @@ body {
     z-index: 1;
 }
 .content-panel h3 {
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.15em;
     color: var(--cyan);
     text-transform: uppercase;
@@ -384,7 +388,7 @@ body {
 }
 .content-text {
     font-family: ui-serif, Georgia, serif;
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.7;
     color: var(--text);
     white-space: pre-wrap;
@@ -402,11 +406,64 @@ body {
 .content-text a:hover {
     color: var(--mauve);
 }
+/* Rendered Markdown (from MarkItDown) in the source panel */
+.markdown-body {
+    white-space: normal;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+    color: var(--mauve);
+    margin: 0.8em 0 0.4em;
+    line-height: 1.3;
+}
+.markdown-body h1 { font-size: 1.3em; }
+.markdown-body h2 { font-size: 1.15em; }
+.markdown-body h3 { font-size: 1.05em; }
+.markdown-body p {
+    margin: 0.6em 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+    margin: 0.5em 0 0.5em 1.4em;
+}
+.markdown-body li {
+    margin: 0.2em 0;
+}
+.markdown-body code {
+    background: rgba(255,255,255,0.05);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    font-family: monospace;
+}
+.markdown-body pre {
+    background: rgba(255,255,255,0.05);
+    padding: 10px;
+    border-radius: 6px;
+    overflow-x: auto;
+}
+.markdown-body blockquote {
+    border-left: 2px solid var(--dim);
+    padding-left: 12px;
+    color: var(--dim-bright);
+    margin: 0.6em 0;
+}
+.markdown-body table {
+    border-collapse: collapse;
+    margin: 0.6em 0;
+}
+.markdown-body th,
+.markdown-body td {
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+}
 .job-post-textarea {
     display: block;
     width: 100%;
     font-family: ui-serif, Georgia, serif;
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.7;
     color: var(--text);
     white-space: pre-wrap;
@@ -432,7 +489,7 @@ body {
     margin-top: 10px;
 }
 .edit-status {
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.05em;
     color: var(--dim);
 }
@@ -448,7 +505,7 @@ body {
 .source-panel-link {
     color: var(--orange);
     text-decoration: none;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.05em;
     text-transform: none;
     word-break: break-all;
@@ -459,46 +516,6 @@ body {
 .source-panel-link:hover {
     color: var(--orange-bright);
     text-decoration: underline;
-}
-.source-view-toggle {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 10px;
-}
-.source-view-toggle button {
-    padding: 3px 9px;
-    border-radius: 3px;
-    font-size: 9px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    cursor: pointer;
-    background: var(--dimmer);
-    border: 1px solid var(--dim);
-    color: var(--dim-bright);
-}
-.source-view-toggle button.active {
-    background: rgba(81, 212, 200, 0.14);
-    border-color: var(--cyan);
-    color: var(--cyan-bright);
-}
-.source-iframe-wrap {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-.source-iframe {
-    flex: 1;
-    width: 100%;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: #fff;
-}
-.source-iframe-note {
-    font-size: 10px;
-    color: var(--dim);
-    margin-top: 8px;
-    line-height: 1.5;
 }
 .empty-state {
     display: flex;

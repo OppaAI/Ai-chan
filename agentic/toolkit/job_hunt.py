@@ -63,6 +63,18 @@ _LLM_FILLABLE_KEYS = frozenset({
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
+# Single Threads topic tag (Meta allows exactly one per post, 1-50 chars,
+# no periods or ampersands). Override via job_hunt.json "topic_tag" or
+# JOB_POST_TOPIC_TAG env; defaults to the Vancouver tag.
+DEFAULT_JOB_POST_TOPIC_TAG = "溫哥華溫哥華溫哥華"
+
+
+def _job_post_topic_tag(config: dict[str, Any]) -> str:
+    tag = os.getenv("JOB_POST_TOPIC_TAG", "").strip()
+    if not tag:
+        tag = str(config.get("topic_tag") or DEFAULT_JOB_POST_TOPIC_TAG).strip()
+    tag = tag.replace(".", "").replace("&", "")  # Meta hard limit
+    return tag[:50]
 
 def _user_skillsets_dir() -> Path:
     """Per-user skillsets folder: USER_SKILLSETS_PATH or <user_state>/skillsets."""
@@ -243,6 +255,7 @@ def format_job_post(posting: dict, date_text: str | None = None, config: dict[st
     if signature:
         lines.append("")
         lines.append(str(signature))
+
 
     return "\n".join(lines).rstrip("\n")
 
@@ -573,6 +586,7 @@ def draft_job_posts_from_results(
             "postings": [enriched],
             "category": slug if len(selected) > 1 else "",
             "llm_enriched": used_llm and enriched != posting,
+            "topic_tag": _job_post_topic_tag(config),
         })
 
     result_json = json.dumps({
@@ -639,6 +653,7 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false", *, state
             "created_at": datetime.now().isoformat(),
             "posted": False,
             "human_approved": False,
+            "topic_tag": draft.get("topic_tag", ""),
         }
         (draft_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         saved.append({"category": cat, "draft_dir": str(draft_dir), "auto_posted": False})

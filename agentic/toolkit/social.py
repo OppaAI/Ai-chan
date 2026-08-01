@@ -1282,7 +1282,15 @@ def post_job_post_draft(draft_dir: str | Path) -> dict[str, Any]:
     except (SocialApprovalError, OSError) as e:
         return {"posted": False, "error": str(e)}
 
-    result = _call_social_mcp("post_social", services="threads", text=text)
+    topic_tag = ""
+    meta_path = path / "draft.json"
+    if meta_path.exists():
+        try:
+            topic_tag = str(json.loads(meta_path.read_text(encoding="utf-8")).get("topic_tag") or "").strip()
+        except Exception:
+            pass
+
+    result = _call_social_mcp("post_social", services="threads", text=text, topic_tag=topic_tag or None)
     post_meta = {"posted": bool(result.get("ok")), "posted_at": datetime.now(timezone.utc).isoformat(), "results": [result]}
     (path / "posted.json").write_text(json.dumps(post_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     meta_path = path / "draft.json"

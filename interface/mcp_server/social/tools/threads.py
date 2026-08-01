@@ -88,9 +88,9 @@ def _refresh_token_if_due() -> bool:
 def load_tools(mcp):
     @mcp.tool(
         name="post_threads",
-        description="Post text + optional image to Meta Threads",
+        description="Post text + optional image + optional single topic tag to Meta Threads",
     )
-    def post_threads(text: str, image_path: str | None = None) -> dict:
+    def post_threads(text: str, image_path: str | None = None, topic_tag: str | None = None) -> dict:
         _refresh_token_if_due()
         token = env("THREADS_ACCESS_TOKEN")
         user_id = env("THREADS_USER_ID")
@@ -114,6 +114,8 @@ def load_tools(mcp):
             params.update({"media_type": "IMAGE", "image_url": image_url})
         else:
             params["media_type"] = "TEXT"
+        if topic_tag:
+            params["topic_tag"] = topic_tag[:50]  # Meta hard limit: 1–50 chars, no "." or "&"
 
         try:
             create = requests.post(create_url, data=params, timeout=120)

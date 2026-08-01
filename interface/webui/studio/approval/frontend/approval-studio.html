@@ -22,7 +22,7 @@
         <aside class="sidebar">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <h2>Job Post Drafts</h2>
-                <span id="draft-count" style="font-size: 11px; color: var(--dim);">0</span>
+                <span id="draft-count" style="font-size: 12px; color: var(--dim);">0</span>
             </div>
             <div class="filter-tabs" id="filter-tabs">
                 <button class="filter-tab active" data-filter="all">All</button>
@@ -71,14 +71,10 @@
             </div>
         </div>
 
-        <!-- Moved URL Panel to right end of panel (3rd column of studio-body) -->
+        <!-- Source panel: renders the source webpage as Markdown via MarkItDown -->
         <div class="content-panel right-panel" id="url-panel" style="border-left: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg2);">
             <div style="display: flex; align-items: center; justify-content: flex-start; gap: 10px; margin-bottom: 12px;">
-                <div class="source-view-toggle" id="source-view-toggle" style="display: none; margin-bottom: 0; flex: 0 0 auto;">
-                    <button id="view-rendered-btn" class="active" data-view="rendered">Page</button>
-                    <button id="view-text-btn" data-view="text">Text</button>
-                </div>
-                <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 0; display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+                <h3 style="font-size: 12px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 0; display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="flex: 0 0 auto;"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                     <span id="source-title" class="source-panel-link" style="text-transform: uppercase; letter-spacing: 0.15em; color: var(--orange);">Source Webpage</span>
                 </h3>
@@ -91,17 +87,14 @@
                 <p>No source URL available for this draft</p>
             </div>
 
-            <!-- Fetched Web Content -->
+            <!-- Fetched web content, converted to Markdown by MarkItDown and rendered -->
             <div id="url-content" style="display: none; flex-direction: column; flex: 1; overflow-y: auto; margin-top: 4px; min-height: 0;">
-                <div id="url-rendered" class="source-iframe-wrap">
-                    <iframe id="url-iframe" class="source-iframe" referrerpolicy="no-referrer" sandbox="allow-same-origin allow-scripts allow-popups"></iframe>
-                    <p class="source-iframe-note">Some sites block embedding and will show blank here — use the link above to open in a new tab, or switch to Text view.</p>
-                </div>
-                <div id="url-text" class="content-text" style="display: none; max-height: calc(100% - 40px); overflow-y: auto;"></div>
+                <div id="url-markdown" class="content-text markdown-body" style="max-height: 100%; overflow-y: auto;"></div>
             </div>
         </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
     <script src="static/approval-studio.js"></script>
 </body>
 </html>

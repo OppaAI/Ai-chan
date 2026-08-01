@@ -9,7 +9,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import json
-import re
 
 app = FastAPI(title="Aiko Approval Studio")
 
@@ -200,8 +199,13 @@ async def update_content(draft_dir: str, request: Request):
 
 @app.get("/api/fetch-url")
 async def fetch_url(url: str = Query(..., description="URL to fetch content from")):
-    """Fetch and extract content from a URL."""
-    import requests
+    """Fetch a URL and convert it to Markdown using MarkItDown.
+
+    Replaces the old hand-rolled regex HTML stripper: MarkItDown handles the
+    request, HTML parsing, and conversion to clean Markdown (headings, lists,
+    links, tables, etc. all come through as real Markdown syntax) in one call.
+    Requires: pip install markitdown
+    """
     from urllib.parse import urlparse
 
     # Validate URL
@@ -213,75 +217,20 @@ async def fetch_url(url: str = Query(..., description="URL to fetch content from
         return {"content": "", "error": "Invalid URL"}
 
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; Aiko-Approval/1.0)"
+        from markitdown import MarkItDown
+    except ImportError:
+        return {
+            "content": "",
+            "error": "markitdown is not installed. Run: pip install markitdown",
         }
-        resp = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-        resp.raise_for_status()
 
-        content_type = resp.headers.get("content-type", "")
-        if "text/html" not in content_type and "text/" not in content_type:
-            return {"content": f"[Non-HTML content: {content_type}]", "error": None}
-
-        html = resp.text
-
-        # Extract title
-        title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.IGNORECASE)
-        title = title_match.group(1).strip() if title_match else ""
-
-        # Remove script, style, nav, header, footer, etc.
-        html = re.sub(r'<(script|style|nav|header|footer|aside|noscript|iframe)[^>]*>.*?</\1>', '', html, flags=re.IGNORECASE | re.DOTALL)
-
-        # Remove comments
-        html = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
-
-        # Get main content areas
-        main_patterns = [
-            r'<main[^>]*>(.*?)</main>',
-            r'<article[^>]*>(.*?)</article>',
-            r'<div[^>]*class="[^"]*(content|main|article|post|job)[^"]*"[^>]*>(.*?)</div>',
-        ]
-
-        main_content = ""
-        for pattern in main_patterns:
-            match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
-            if match:
-                main_content = match.group(1) if len(match.groups()) == 1 else match.group(2)
-                break
-
-        if not main_content:
-            # Fallback to body
-            body_match = re.search(r'<body[^>]*>(.*?)</body>', html, re.IGNORECASE | re.DOTALL)
-            if body_match:
-                main_content = body_match.group(1)
-
-        # Clean up remaining HTML
-        if main_content:
-            # Convert some tags to text formatting
-            main_content = re.sub(r'<br\s*/?>', '\n', main_content, flags=re.IGNORECASE)
-            main_content = re.sub(r'<p[^>]*>', '\n\n', main_content, flags=re.IGNORECASE)
-            main_content = re.sub(r'</p>', '', main_content, flags=re.IGNORECASE)
-            main_content = re.sub(r'<h[1-6][^>]*>', '\n\n', main_content, flags=re.IGNORECASE)
-            main_content = re.sub(r'</h[1-6]>', '\n', main_content, flags=re.IGNORECASE)
-            main_content = re.sub(r'<li[^>]*>', '\n• ', main_content, flags=re.IGNORECASE)
-            main_content = re.sub(r'</?(ul|ol|div|section|tr)[^>]*>', '\n', main_content, flags=re.IGNORECASE)
-            main_content = re.sub(r'<[^>]+>', '', main_content)
-            # Decode common HTML entities left behind
-            import html as html_module
-            main_content = html_module.unescape(main_content)
-            # Collapse horizontal whitespace only, keep line breaks intact
-            main_content = re.sub(r'[ \t]+', ' ', main_content)
-            main_content = re.sub(r'[ \t]*\n[ \t]*', '\n', main_content)
-            # Collapse 3+ blank lines down to a single blank line between paragraphs
-            main_content = re.sub(r'\n{3,}', '\n\n', main_content)
-            main_content = main_content.strip()
-
-        if not main_content:
-            main_content = "[Could not extract readable content]"
-
-        result = f"{title}\n\n{main_content}" if title else main_content
-        return {"content": result, "error": None}
-
+    try:
+        converter = MarkItDown()
+        result = converter.convert(url)
+        content = (result.text_content or "").strip()
+        if not content:
+            content = "[Could not extract readable content]"
+        return {"content": content, "error": None}
     except Exception as e:
         return {"content": "", "error": str(e)}
 

@@ -12,7 +12,6 @@ const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
 let currentDraft = null;
 let allDrafts = [];
 let originalDraftText = '';
-let sourceView = 'rendered';
 let currentSourceUrl = null;
 
 function escapeHTML(str) {
@@ -67,7 +66,7 @@ function renderDraftList(filter) {
     });
 
     if (!drafts.length) {
-        container.innerHTML = '<div style="color:var(--dim);font-size:11px;padding:20px;text-align:center">No drafts found</div>';
+        container.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:20px;text-align:center">No drafts found</div>';
         return;
     }
 
@@ -116,16 +115,12 @@ function selectDraft(draft) {
     document.getElementById('info-empty').style.display = 'none';
     document.getElementById('info-content').style.display = 'block';
 
-    // Populate info grid
+    // Populate info grid (Date field removed — Created already covers this)
     const grid = document.getElementById('info-grid');
     grid.innerHTML = `
         <div class="info-row">
             <div class="info-label">Path</div>
             <div class="info-value"><code>${escapeHTML(draft.relative_path)}</code></div>
-        </div>
-        <div class="info-row">
-            <div class="info-label">Date</div>
-            <div class="info-value">${escapeHTML(draft.date || '—')}</div>
         </div>
         <div class="info-row">
             <div class="info-label">Category</div>
@@ -156,7 +151,7 @@ function selectDraft(draft) {
     // Action buttons in the exact order: Approve, Publish, Reject
     const actions = document.getElementById('action-buttons');
     if (draft.posted) {
-        actions.innerHTML = '<span style="color: var(--dim); font-size: 11px;">This draft has already been posted</span>';
+        actions.innerHTML = '<span style="color: var(--dim); font-size: 12px;">This draft has already been posted</span>';
     } else if (draft.human_approved) {
         actions.innerHTML = `
             <button class="btn btn-warning" onclick="toggleApprove('${escapeHTML(draft.draft_dir)}', false)">Unapprove</button>
@@ -222,19 +217,16 @@ async function loadDraftContent(draftDir) {
             emptyEl.querySelector('p').textContent = 'No draft content available';
         }
 
-        // Source webpage panel
+        // Source webpage panel — rendered as Markdown (via MarkItDown on the backend)
         const posting = data.meta?.posting || data.posting;
         const urlContent = document.getElementById('url-content');
         const urlEmpty = document.getElementById('url-empty');
         const sourceTitle = document.getElementById('source-title');
-        const sourceViewToggle = document.getElementById('source-view-toggle');
-        const urlIframe = document.getElementById('url-iframe');
-        const urlText = document.getElementById('url-text');
+        const urlMarkdown = document.getElementById('url-markdown');
 
         if (posting && posting.url) {
             urlEmpty.style.display = 'none';
             urlContent.style.display = 'flex';
-            sourceViewToggle.style.display = 'flex';
 
             sourceTitle.textContent = posting.url;
             sourceTitle.style.textTransform = 'none';
@@ -246,27 +238,26 @@ async function loadDraftContent(draftDir) {
             sourceTitle.style.cursor = 'pointer';
 
             currentSourceUrl = posting.url;
-            urlText.textContent = 'Loading text view…';
+            urlMarkdown.innerHTML = '<p style="color: var(--dim); font-size: 12px;">Loading markdown…</p>';
 
-            // Fetch the scraped text as a fallback / default view
             fetch(`${API_BASE}/fetch-url?url=${encodeURIComponent(posting.url)}`)
                 .then(resp => resp.json())
                 .then(result => {
                     if (result.error) {
-                        urlText.innerHTML = `<p style="color: var(--red); font-size: 11px;">Failed to load: ${escapeHTML(result.error)}</p>`;
+                        urlMarkdown.innerHTML = `<p style="color: var(--red); font-size: 12px;">Failed to load: ${escapeHTML(result.error)}</p>`;
+                    } else if (typeof marked !== 'undefined') {
+                        urlMarkdown.innerHTML = marked.parse(result.content || 'No content available');
                     } else {
-                        urlText.textContent = result.content || 'No content available';
+                        // Fallback if marked.js failed to load — show raw markdown
+                        urlMarkdown.textContent = result.content || 'No content available';
                     }
                 })
                 .catch(err => {
-                    urlText.innerHTML = `<p style="color: var(--red); font-size: 11px;">Error loading URL: ${escapeHTML(err.message)}</p>`;
+                    urlMarkdown.innerHTML = `<p style="color: var(--red); font-size: 12px;">Error loading URL: ${escapeHTML(err.message)}</p>`;
                 });
-
-            applySourceView(sourceView);
         } else {
             urlContent.style.display = 'none';
             urlEmpty.style.display = 'flex';
-            sourceViewToggle.style.display = 'none';
             sourceTitle.textContent = 'Source Webpage';
             sourceTitle.style.textTransform = 'uppercase';
             sourceTitle.style.letterSpacing = '0.15em';
@@ -275,7 +266,7 @@ async function loadDraftContent(draftDir) {
             sourceTitle.onclick = null;
             sourceTitle.style.cursor = 'default';
             currentSourceUrl = null;
-            urlIframe.src = 'about:blank';
+            urlMarkdown.innerHTML = '';
         }
     } catch (err) {
         console.error('Failed to load draft content:', err);
@@ -285,28 +276,6 @@ async function loadDraftContent(draftDir) {
         document.getElementById('content-empty').querySelector('p').textContent = 'Failed to load content';
     }
 }
-
-function applySourceView(view) {
-    sourceView = view;
-    const rendered = document.getElementById('url-rendered');
-    const text = document.getElementById('url-text');
-    const btnRendered = document.getElementById('view-rendered-btn');
-    const btnText = document.getElementById('view-text-btn');
-    rendered.style.display = view === 'rendered' ? 'flex' : 'none';
-    text.style.display = view === 'text' ? 'block' : 'none';
-    btnRendered.classList.toggle('active', view === 'rendered');
-    btnText.classList.toggle('active', view === 'text');
-
-    if (view === 'rendered' && currentSourceUrl) {
-        const urlIframe = document.getElementById('url-iframe');
-        if (urlIframe.src !== currentSourceUrl) {
-            urlIframe.src = currentSourceUrl;
-        }
-    }
-}
-
-document.getElementById('view-rendered-btn').addEventListener('click', () => applySourceView('rendered'));
-document.getElementById('view-text-btn').addEventListener('click', () => applySourceView('text'));
 
 document.getElementById('content-text').addEventListener('input', (e) => {
     autoGrowTextarea(e.target);
