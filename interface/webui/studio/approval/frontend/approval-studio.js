@@ -35,7 +35,7 @@ async function loadDrafts() {
         const resp = await fetch(`${API_BASE}/drafts?status=all`);
         const data = await resp.json();
         allDrafts = data.drafts || [];
-        renderDraftList('all');
+        renderDraftList('pending');
         document.getElementById('header-status').textContent = `${allDrafts.length} drafts`;
         document.getElementById('draft-count').textContent = allDrafts.length;
     } catch (err) {
