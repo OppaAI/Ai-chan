@@ -73,15 +73,15 @@
 
         <!-- Moved URL Panel to right end of panel (3rd column of studio-body) -->
         <div class="content-panel right-panel" id="url-panel" style="border-left: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg2);">
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px;">
+            <div style="display: flex; align-items: center; justify-content: flex-start; gap: 10px; margin-bottom: 12px;">
+                <div class="source-view-toggle" id="source-view-toggle" style="display: none; margin-bottom: 0; flex: 0 0 auto;">
+                    <button id="view-rendered-btn" class="active" data-view="rendered">Page</button>
+                    <button id="view-text-btn" data-view="text">Text</button>
+                </div>
                 <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 0; display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="flex: 0 0 auto;"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                     <span id="source-title" class="source-panel-link" style="text-transform: uppercase; letter-spacing: 0.15em; color: var(--orange);">Source Webpage</span>
                 </h3>
-                <div class="source-view-toggle" id="source-view-toggle" style="display: none; margin-bottom: 0; flex: 0 0 auto;">
-                    <button id="view-text-btn" class="active" data-view="text">Text</button>
-                    <button id="view-rendered-btn" data-view="rendered">Page</button>
-                </div>
             </div>
             <div class="empty-state" id="url-empty" style="padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1;">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">

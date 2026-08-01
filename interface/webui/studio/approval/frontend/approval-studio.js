@@ -12,7 +12,7 @@ const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
 let currentDraft = null;
 let allDrafts = [];
 let originalDraftText = '';
-let sourceView = 'text';
+let sourceView = 'rendered';
 let currentSourceUrl = null;
 
 function escapeHTML(str) {
@@ -239,7 +239,8 @@ async function loadDraftContent(draftDir) {
             sourceTitle.textContent = posting.url;
             sourceTitle.style.textTransform = 'none';
             sourceTitle.style.letterSpacing = 'normal';
-            sourceTitle.style.color = 'var(--cyan)';
+            sourceTitle.style.color = 'var(--orange)';
+            sourceTitle.style.textDecoration = 'underline';
             sourceTitle.title = 'Open in a new tab';
             sourceTitle.onclick = () => window.open(posting.url, '_blank', 'noopener');
             sourceTitle.style.cursor = 'pointer';
@@ -270,6 +271,7 @@ async function loadDraftContent(draftDir) {
             sourceTitle.style.textTransform = 'uppercase';
             sourceTitle.style.letterSpacing = '0.15em';
             sourceTitle.style.color = 'var(--orange)';
+            sourceTitle.style.textDecoration = 'none';
             sourceTitle.onclick = null;
             sourceTitle.style.cursor = 'default';
             currentSourceUrl = null;

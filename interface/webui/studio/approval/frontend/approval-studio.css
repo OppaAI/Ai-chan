@@ -378,6 +378,10 @@ body {
     background: var(--cyan);
     box-shadow: 0 0 4px rgba(81,212,200,0.5);
 }
+#url-panel h3::before {
+    background: var(--orange);
+    box-shadow: 0 0 4px rgba(232,132,58,0.5);
+}
 .content-text {
     font-family: ui-serif, Georgia, serif;
     font-size: 14px;
@@ -442,7 +446,7 @@ body {
     color: var(--red);
 }
 .source-panel-link {
-    color: var(--cyan);
+    color: var(--orange);
     text-decoration: none;
     font-size: 11px;
     letter-spacing: 0.05em;
@@ -453,7 +457,7 @@ body {
     white-space: nowrap;
 }
 .source-panel-link:hover {
-    color: var(--mauve);
+    color: var(--orange-bright);
     text-decoration: underline;
 }
 .source-view-toggle {
