@@ -77,8 +77,8 @@
         /* Info panel spacing */
         .info-panel {
             flex: 0 0 auto;
-            min-height: 120px;
-            max-height: 35%;
+            min-height: 140px;
+            max-height: 40%;
             padding: 12px 16px;
             overflow-y: auto;
             background: var(--glass-bg);
@@ -88,12 +88,20 @@
             position: relative;
             z-index: 1;
         }
+        .info-panel::-webkit-scrollbar { width: 4px; }
+        .info-panel::-webkit-scrollbar-track { background: transparent; }
+        .info-panel::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
+
         .content-panel {
             flex: 1;
+            min-height: 200px;
             overflow-y: auto;
             position: relative;
             z-index: 1;
         }
+        .content-panel::-webkit-scrollbar { width: 6px; }
+        .content-panel::-webkit-scrollbar-track { background: transparent; }
+        .content-panel::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 3px; }
         .btn {
             background: var(--dimmer);
             border: 1px solid var(--dim);
@@ -448,7 +456,7 @@
 <body>
     <header class="studio-header">
         <div style="display: flex; align-items: center; gap: 14px;">
-            <a href="/" title="Return to Chat" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--dimmer); border: 1px solid var(--dim); border-radius: 50%; color: var(--purple); text-decoration: none; transition: all 0.2s; font-weight: bold; font-size: 16px;">←</a>
+            <a href="javascript:history.back();" title="Return to Chat" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--dimmer); border: 1px solid var(--dim); border-radius: 50%; color: var(--purple); text-decoration: none; transition: all 0.2s; font-weight: bold; font-size: 16px;">←</a>
             <h1>Aiko Approval Studio</h1>
         </div>
         <div class="header-actions">
@@ -507,7 +515,7 @@
         
         <!-- Moved URL Panel to right end of panel (3rd column of studio-body) -->
         <div class="content-panel right-panel" id="url-panel" style="border-left: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg2);">
-<h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+            <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                 Source Webpage
             </h3>
@@ -519,8 +527,13 @@
                 <p>No source URL available for this draft</p>
             </div>
             
-            <!-- Web Browser View - Full Width -->
-            <iframe id="url-content-frame" style="display: none; width: 100%; height: 100%; border: 1px solid var(--border); border-radius: 6px; background: #fff; margin-top: 12px;" src="about:blank"></iframe>
+            <!-- Fetched Web Content -->
+            <div id="url-content" style="display: none; flex: 1; overflow-y: auto; margin-top: 12px;">
+                <div style="margin-bottom: 12px;">
+                    <a id="url-link" href="#" target="_blank" rel="noopener" style="color: var(--cyan); font-size: 11px; word-break: break-all;"></a>
+                </div>
+                <div id="url-text" class="content-text" style="max-height: calc(100% - 40px); overflow-y: auto;"></div>
+            </div>
         </div>
     </div>
 
@@ -714,19 +727,35 @@
                     emptyEl.querySelector('p').textContent = 'No draft content available';
                 }
                 
-                // Display URL content in iframe
+                // Display URL content (fetched from server to avoid iframe blocking)
                 const posting = data.meta?.posting || data.posting;
-                const iframe = document.getElementById('url-content-frame');
-                const emptyElUrl = document.getElementById('url-empty');
+                const urlContent = document.getElementById('url-content');
+                const urlEmpty = document.getElementById('url-empty');
+                const urlLink = document.getElementById('url-link');
+                const urlText = document.getElementById('url-text');
 
                 if (posting && posting.url) {
-                    emptyElUrl.style.display = 'none';
-                    iframe.src = posting.url;
-                    iframe.style.display = 'block';
+                    urlEmpty.style.display = 'none';
+                    urlContent.style.display = 'flex';
+                    urlLink.href = posting.url;
+                    urlLink.textContent = posting.url;
+                    
+                    // Fetch the URL content
+                    fetch(`${API_BASE}/fetch-url?url=${encodeURIComponent(posting.url)}`)
+                        .then(resp => resp.json())
+                        .then(result => {
+                            if (result.error) {
+                                urlText.innerHTML = `<p style="color: var(--red); font-size: 11px;">Failed to load: ${escapeHTML(result.error)}</p>`;
+                            } else {
+                                urlText.textContent = result.content || result.content || 'No content available';
+                            }
+                        })
+                        .catch(err => {
+                            urlText.innerHTML = `<p style="color: var(--red); font-size: 11px;">Error loading URL: ${escapeHTML(err.message)}</p>`;
+                        });
                 } else {
-                    iframe.src = 'about:blank';
-                    iframe.style.display = 'none';
-                    emptyElUrl.style.display = 'flex';
+                    urlContent.style.display = 'none';
+                    urlEmpty.style.display = 'flex';
                 }
             } catch (err) {
                 console.error('Failed to load draft content:', err);

@@ -112,10 +112,27 @@
   <script>
     // Detect base path for API calls (studio is mounted at /studio/memory/)
     const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+    
+    // Get the current username for the central user entity
+    let currentUsername = 'OppaAI'; // default fallback
+    
+    async function getCurrentUser() {
+        try {
+            const resp = await fetch('/api/auth/me', { credentials: 'include' });
+            if (resp.ok) {
+                const data = await resp.json();
+                currentUsername = data.username || currentUsername;
+            }
+        } catch (e) {
+            console.debug('Could not fetch user, using default');
+        }
+        return currentUsername;
+    }
 
     let graph = { nodes: [], edges: [], meta: {} };
     let simulation = null;
     let zoomBehavior = null;
+    let userEntityId = null;
 
     function qs() {
       const p = new URLSearchParams();
@@ -137,6 +154,11 @@
           `memories: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>edges: ${m.edge_count ?? 0}`;
         document.getElementById('status').textContent =
           `${(graph.nodes||[]).length} nodes · ${(graph.edges||[]).length} edges`;
+        
+        // Get username and set up user entity for centering
+        await getCurrentUser();
+        userEntityId = `ent:${currentUsername.toLowerCase()}`;
+        
         render();
       } catch (e) {
         document.getElementById('status').textContent = 'Load failed';
@@ -250,6 +272,25 @@
           const t = d.label || d.id;
           return t.length > 28 ? t.slice(0, 26) + '…' : t;
         });
+
+      // Find the user entity and position it in the center-right area
+      const userNode = nodes.find(n => n.id === userEntityId);
+      const centerX = w * 0.65; // Center of right panel area
+      const centerY = h * 0.5;
+      
+      // Set initial positions - user entity goes to center, others scattered
+      nodes.forEach((n, i) => {
+        if (n.id === userEntityId && userNode) {
+          n.x = centerX;
+          n.y = centerY;
+          n.fx = centerX;  // Keep user entity centered
+          n.fy = centerY;
+        } else if (!n.x) {
+          // Random spread for other nodes
+          n.x = Math.random() * (w * 0.6);  // Left side of screen
+          n.y = Math.random() * h;
+        }
+      });
 
       simulation = d3.forceSimulation(nodes)
         .force('link', d3.forceLink(links).id(d => d.id).distance(d => d.type === 'mentions' ? 50 : 90).strength(0.4))
