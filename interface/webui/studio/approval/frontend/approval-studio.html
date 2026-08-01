@@ -62,15 +62,20 @@
                     </svg>
                     <p>Draft content will appear here</p>
                 </div>
-                <div id="content-text" class="content-text" style="display: none; white-space: pre-wrap; font-family: ui-serif, Georgia, serif; line-height: 1.6; padding: 16px; color: var(--text);"></div>
+                <textarea id="content-text" class="job-post-textarea" style="display: none;" spellcheck="false"></textarea>
+                <div id="content-edit-actions" class="content-edit-actions" style="display: none;">
+                    <button id="save-content-btn" class="btn btn-success">Save</button>
+                    <button id="cancel-content-btn" class="btn">Cancel</button>
+                    <span id="edit-status" class="edit-status"></span>
+                </div>
             </div>
         </div>
 
         <!-- Moved URL Panel to right end of panel (3rd column of studio-body) -->
         <div class="content-panel right-panel" id="url-panel" style="border-left: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg2);">
-            <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-                Source Webpage
+            <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; min-width: 0;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="flex: 0 0 auto;"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                <span id="source-title" class="source-panel-link" style="text-transform: uppercase; letter-spacing: 0.15em; color: var(--orange);">Source Webpage</span>
             </h3>
             <div class="empty-state" id="url-empty" style="padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1;">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
@@ -81,11 +86,16 @@
             </div>
 
             <!-- Fetched Web Content -->
-            <div id="url-content" style="display: none; flex: 1; overflow-y: auto; margin-top: 12px;">
-                <div style="margin-bottom: 12px;">
-                    <a id="url-link" href="#" target="_blank" rel="noopener" style="color: var(--cyan); font-size: 11px; word-break: break-all;"></a>
+            <div id="url-content" style="display: none; flex: 1; overflow-y: auto; margin-top: 4px; min-height: 0;">
+                <div class="source-view-toggle">
+                    <button id="view-rendered-btn" class="active" data-view="rendered">Page</button>
+                    <button id="view-text-btn" data-view="text">Text</button>
                 </div>
-                <div id="url-text" class="content-text" style="max-height: calc(100% - 40px); overflow-y: auto;"></div>
+                <div id="url-rendered" class="source-iframe-wrap">
+                    <iframe id="url-iframe" class="source-iframe" referrerpolicy="no-referrer" sandbox="allow-same-origin allow-scripts allow-popups"></iframe>
+                    <p class="source-iframe-note">Some sites block embedding and will show blank here — use the link above to open in a new tab, or switch to Text view.</p>
+                </div>
+                <div id="url-text" class="content-text" style="display: none; max-height: calc(100% - 40px); overflow-y: auto;"></div>
             </div>
         </div>
     </div>

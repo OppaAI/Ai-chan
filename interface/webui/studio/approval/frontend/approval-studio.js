@@ -11,6 +11,8 @@ const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
 
 let currentDraft = null;
 let allDrafts = [];
+let originalDraftText = '';
+let sourceView = 'rendered';
 
 function escapeHTML(str) {
     const d = document.createElement('div');
@@ -100,6 +102,10 @@ function renderDraftList(filter) {
 }
 
 function selectDraft(draft) {
+    if (currentDraft && currentDraft.draft_dir !== draft.draft_dir && isContentDirty()) {
+        const proceed = confirm('You have unsaved changes to this draft. Discard them and switch?');
+        if (!proceed) return;
+    }
     currentDraft = draft;
     document.querySelectorAll('.draft-item').forEach(el => {
         el.classList.toggle('active', el.textContent.includes(draft.relative_path));
@@ -168,6 +174,26 @@ function selectDraft(draft) {
     loadDraftContent(draft.draft_dir);
 }
 
+function autoGrowTextarea(el) {
+    el.style.height = 'auto';
+    el.style.height = el.scrollHeight + 'px';
+}
+
+function isContentDirty() {
+    const contentEl = document.getElementById('content-text');
+    if (contentEl.style.display === 'none') return false;
+    return contentEl.value !== originalDraftText;
+}
+
+function updateEditStatus() {
+    const contentEl = document.getElementById('content-text');
+    const status = document.getElementById('edit-status');
+    const dirty = isContentDirty();
+    contentEl.classList.toggle('dirty', dirty);
+    status.className = 'edit-status' + (dirty ? ' dirty' : '');
+    status.textContent = dirty ? 'Unsaved changes' : '';
+}
+
 async function loadDraftContent(draftDir) {
     try {
         const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}`);
@@ -176,54 +202,146 @@ async function loadDraftContent(draftDir) {
 
         const contentEl = document.getElementById('content-text');
         const emptyEl = document.getElementById('content-empty');
+        const editActions = document.getElementById('content-edit-actions');
 
         if (data.draft_text) {
-            contentEl.textContent = data.draft_text;
+            contentEl.value = data.draft_text;
+            originalDraftText = data.draft_text;
             contentEl.style.display = 'block';
+            editActions.style.display = 'flex';
             emptyEl.style.display = 'none';
+            autoGrowTextarea(contentEl);
+            updateEditStatus();
         } else {
+            contentEl.value = '';
+            originalDraftText = '';
             contentEl.style.display = 'none';
+            editActions.style.display = 'none';
             emptyEl.style.display = 'flex';
             emptyEl.querySelector('p').textContent = 'No draft content available';
         }
 
-        // Display URL content (fetched from server to avoid iframe blocking)
+        // Source webpage panel
         const posting = data.meta?.posting || data.posting;
         const urlContent = document.getElementById('url-content');
         const urlEmpty = document.getElementById('url-empty');
-        const urlLink = document.getElementById('url-link');
+        const sourceTitle = document.getElementById('source-title');
+        const urlIframe = document.getElementById('url-iframe');
         const urlText = document.getElementById('url-text');
 
         if (posting && posting.url) {
             urlEmpty.style.display = 'none';
             urlContent.style.display = 'flex';
-            urlLink.href = posting.url;
-            urlLink.textContent = posting.url;
 
-            // Fetch the URL content
+            sourceTitle.textContent = posting.url;
+            sourceTitle.style.textTransform = 'none';
+            sourceTitle.style.letterSpacing = 'normal';
+            sourceTitle.style.color = 'var(--cyan)';
+            sourceTitle.title = 'Open in a new tab';
+            sourceTitle.onclick = () => window.open(posting.url, '_blank', 'noopener');
+            sourceTitle.style.cursor = 'pointer';
+
+            urlIframe.src = posting.url;
+            urlText.textContent = 'Loading text view…';
+
+            // Fetch the scraped text as a fallback view
             fetch(`${API_BASE}/fetch-url?url=${encodeURIComponent(posting.url)}`)
                 .then(resp => resp.json())
                 .then(result => {
                     if (result.error) {
                         urlText.innerHTML = `<p style="color: var(--red); font-size: 11px;">Failed to load: ${escapeHTML(result.error)}</p>`;
                     } else {
-                        urlText.textContent = result.content || result.content || 'No content available';
+                        urlText.textContent = result.content || 'No content available';
                     }
                 })
                 .catch(err => {
                     urlText.innerHTML = `<p style="color: var(--red); font-size: 11px;">Error loading URL: ${escapeHTML(err.message)}</p>`;
                 });
+
+            applySourceView(sourceView);
         } else {
             urlContent.style.display = 'none';
             urlEmpty.style.display = 'flex';
+            sourceTitle.textContent = 'Source Webpage';
+            sourceTitle.style.textTransform = 'uppercase';
+            sourceTitle.style.letterSpacing = '0.15em';
+            sourceTitle.style.color = 'var(--orange)';
+            sourceTitle.onclick = null;
+            sourceTitle.style.cursor = 'default';
+            urlIframe.src = 'about:blank';
         }
     } catch (err) {
         console.error('Failed to load draft content:', err);
         document.getElementById('content-text').style.display = 'none';
+        document.getElementById('content-edit-actions').style.display = 'none';
         document.getElementById('content-empty').style.display = 'flex';
         document.getElementById('content-empty').querySelector('p').textContent = 'Failed to load content';
     }
 }
+
+function applySourceView(view) {
+    sourceView = view;
+    const rendered = document.getElementById('url-rendered');
+    const text = document.getElementById('url-text');
+    const btnRendered = document.getElementById('view-rendered-btn');
+    const btnText = document.getElementById('view-text-btn');
+    rendered.style.display = view === 'rendered' ? 'flex' : 'none';
+    text.style.display = view === 'text' ? 'block' : 'none';
+    btnRendered.classList.toggle('active', view === 'rendered');
+    btnText.classList.toggle('active', view === 'text');
+}
+
+document.getElementById('view-rendered-btn').addEventListener('click', () => applySourceView('rendered'));
+document.getElementById('view-text-btn').addEventListener('click', () => applySourceView('text'));
+
+document.getElementById('content-text').addEventListener('input', (e) => {
+    autoGrowTextarea(e.target);
+    updateEditStatus();
+});
+
+document.getElementById('cancel-content-btn').addEventListener('click', () => {
+    const contentEl = document.getElementById('content-text');
+    contentEl.value = originalDraftText;
+    autoGrowTextarea(contentEl);
+    updateEditStatus();
+});
+
+document.getElementById('save-content-btn').addEventListener('click', async () => {
+    if (!currentDraft) return;
+    const contentEl = document.getElementById('content-text');
+    const status = document.getElementById('edit-status');
+    const saveBtn = document.getElementById('save-content-btn');
+    const newText = contentEl.value;
+
+    saveBtn.disabled = true;
+    status.className = 'edit-status';
+    status.textContent = 'Saving…';
+
+    try {
+        const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(currentDraft.draft_dir)}/update-content`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ draft_text: newText }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            throw new Error(data.message || 'Save failed');
+        }
+        originalDraftText = newText;
+        status.className = 'edit-status saved';
+        status.textContent = 'Saved';
+        contentEl.classList.remove('dirty');
+        setTimeout(() => {
+            if (status.textContent === 'Saved') status.textContent = '';
+        }, 2500);
+    } catch (err) {
+        console.error('Failed to save draft content:', err);
+        status.className = 'edit-status error';
+        status.textContent = 'Failed to save';
+    } finally {
+        saveBtn.disabled = false;
+    }
+});
 
 async function toggleApprove(draftDir, approve) {
     try {

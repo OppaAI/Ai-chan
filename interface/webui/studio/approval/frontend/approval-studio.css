@@ -66,34 +66,6 @@ body {
     letter-spacing: 0.05em;
 }
 
-/* Info panel spacing */
-.info-panel {
-    flex: 0 0 auto;
-    min-height: 140px;
-    max-height: 40%;
-    padding: 12px 16px;
-    overflow-y: auto;
-    background: var(--glass-bg);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    border-bottom: 1px solid var(--glass-border);
-    position: relative;
-    z-index: 1;
-}
-.info-panel::-webkit-scrollbar { width: 4px; }
-.info-panel::-webkit-scrollbar-track { background: transparent; }
-.info-panel::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
-
-.content-panel {
-    flex: 1;
-    min-height: 200px;
-    overflow-y: auto;
-    position: relative;
-    z-index: 1;
-}
-.content-panel::-webkit-scrollbar { width: 6px; }
-.content-panel::-webkit-scrollbar-track { background: transparent; }
-.content-panel::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 3px; }
 .btn {
     background: var(--dimmer);
     border: 1px solid var(--dim);
@@ -173,7 +145,8 @@ body {
 .content-area {
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 .url-panel {
     border-left: 1px solid var(--glass-border);
@@ -291,7 +264,8 @@ body {
 .content-area {
     position: relative;
     background: radial-gradient(ellipse at center, #0f0f1a 0%, #0a0a0f 70%);
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
 }
@@ -308,9 +282,7 @@ body {
 .info-panel {
     flex: 0 0 auto;
     min-height: 120px;
-    max-height: 35%;
     padding: 12px 16px;
-    overflow-y: auto;
     background: var(--glass-bg);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
@@ -373,10 +345,8 @@ body {
 
 /* Bottom half - Content display */
 .content-panel {
-    flex: 1;
-    min-height: 300px;
+    flex: 0 0 auto;
     padding: 20px;
-    overflow-y: auto;
     position: relative;
     z-index: 1;
 }
@@ -417,6 +387,104 @@ body {
 }
 .content-text a:hover {
     color: var(--mauve);
+}
+.job-post-textarea {
+    display: block;
+    width: 100%;
+    font-family: ui-serif, Georgia, serif;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    resize: vertical;
+    overflow: hidden;
+}
+.job-post-textarea:focus {
+    outline: none;
+    border-color: var(--purple);
+    box-shadow: 0 0 0 1px rgba(168, 136, 232, 0.3);
+}
+.job-post-textarea.dirty {
+    border-color: var(--orange);
+}
+.content-edit-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+.edit-status {
+    font-size: 10px;
+    letter-spacing: 0.05em;
+    color: var(--dim);
+}
+.edit-status.dirty {
+    color: var(--orange);
+}
+.edit-status.saved {
+    color: var(--green);
+}
+.edit-status.error {
+    color: var(--red);
+}
+.source-panel-link {
+    color: var(--cyan);
+    text-decoration: none;
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: none;
+    word-break: break-all;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.source-panel-link:hover {
+    color: var(--mauve);
+    text-decoration: underline;
+}
+.source-view-toggle {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 10px;
+}
+.source-view-toggle button {
+    padding: 3px 9px;
+    border-radius: 3px;
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    background: var(--dimmer);
+    border: 1px solid var(--dim);
+    color: var(--dim);
+}
+.source-view-toggle button.active {
+    background: var(--cyan);
+    border-color: var(--cyan);
+    color: var(--bg);
+}
+.source-iframe-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+.source-iframe {
+    flex: 1;
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #fff;
+}
+.source-iframe-note {
+    font-size: 10px;
+    color: var(--dim);
+    margin-top: 8px;
+    line-height: 1.5;
 }
 .empty-state {
     display: flex;
