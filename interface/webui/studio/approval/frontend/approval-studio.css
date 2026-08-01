@@ -185,21 +185,26 @@ body {
 }
 .filter-tabs {
     display: flex;
-    gap: 4px;
+    gap: 3px;
     margin-bottom: 12px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
 }
+.filter-tabs::-webkit-scrollbar { display: none; }
 .filter-tab {
-    padding: 4px 10px;
+    padding: 3px 6px;
     border-radius: 3px;
-    font-size: 11px;
-    letter-spacing: 0.08em;
+    font-size: 9px;
+    letter-spacing: 0.03em;
     text-transform: uppercase;
     cursor: pointer;
     background: var(--dimmer);
     border: 1px solid var(--dim);
     color: var(--dim-bright);
     transition: all 0.15s;
+    white-space: nowrap;
+    flex: 0 0 auto;
 }
 .filter-tab:hover {
     border-color: var(--purple);
@@ -267,6 +272,11 @@ body {
     background: rgba(136, 136, 232, 0.15);
     color: var(--purple);
     border: 1px solid rgba(168, 136, 232, 0.3);
+}
+.status-badge.rejected {
+    background: rgba(232, 81, 106, 0.15);
+    color: var(--red);
+    border: 1px solid rgba(232, 81, 106, 0.3);
 }
 .status-badge.enriched {
     background: rgba(198, 81, 168, 0.1);

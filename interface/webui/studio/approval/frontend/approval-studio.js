@@ -47,11 +47,13 @@ async function loadDrafts() {
 function filterDrafts(filter) {
     switch (filter) {
         case 'pending':
-            return allDrafts.filter(d => !d.human_approved && !d.posted);
+            return allDrafts.filter(d => !d.human_approved && !d.posted && !d.rejected);
         case 'approved':
-            return allDrafts.filter(d => d.human_approved && !d.posted);
+            return allDrafts.filter(d => d.human_approved && !d.posted && !d.rejected);
         case 'posted':
             return allDrafts.filter(d => d.posted);
+        case 'rejected':
+            return allDrafts.filter(d => d.rejected);
         default:
             return allDrafts;
     }
@@ -78,6 +80,8 @@ function renderDraftList(filter) {
         const statusBadges = [];
         if (draft.posted) {
             statusBadges.push('<span class="status-badge posted">Posted</span>');
+        } else if (draft.rejected) {
+            statusBadges.push('<span class="status-badge rejected">Rejected</span>');
         } else if (draft.human_approved) {
             statusBadges.push('<span class="status-badge approved">Approved</span>');
         } else {
@@ -142,6 +146,7 @@ function selectDraft(draft) {
             <div class="info-label">Status</div>
             <div class="info-value">
                 ${draft.posted ? '<span class="status-badge posted">Posted</span>' :
+                  draft.rejected ? '<span class="status-badge rejected">Rejected</span>' :
                   draft.human_approved ? '<span class="status-badge approved">Approved</span>' :
                   '<span class="status-badge pending">Pending Review</span>'}
             </div>
@@ -152,6 +157,8 @@ function selectDraft(draft) {
     const actions = document.getElementById('action-buttons');
     if (draft.posted) {
         actions.innerHTML = '<span style="color: var(--dim); font-size: 12px;">This draft has already been posted</span>';
+    } else if (draft.rejected) {
+        actions.innerHTML = '<span style="color: var(--dim); font-size: 12px;">This draft has been rejected and archived</span>';
     } else if (draft.human_approved) {
         actions.innerHTML = `
             <button class="btn btn-warning" onclick="toggleApprove('${escapeHTML(draft.draft_dir)}', false)">Unapprove</button>

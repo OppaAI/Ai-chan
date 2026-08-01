@@ -51,40 +51,48 @@ def _resolve_draft_path(draft_dir: str) -> Path:
 
 
 def _scan_all_drafts() -> list[dict]:
-    """Scan all job post drafts from the social root."""
+    """Scan all job post drafts from the social root, including the
+    rejected/ archive (tagged rejected: True, kept separate from the
+    active pending/approved/posted set)."""
     root = _job_post_social_root()
+    rejected_root = root / "rejected"
     drafts = []
 
-    for meta_path in list(root.glob("*/*/draft.json")) + list(root.glob("*/draft.json")):
-        rel_parts = meta_path.relative_to(root).parts
-        if rel_parts and rel_parts[0] == "rejected":
-            continue  # archived by reject_draft — not part of the active list
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
+    def _collect(base: Path, is_rejected: bool, skip_top: set[str] = frozenset()) -> None:
+        for meta_path in list(base.glob("*/*/draft.json")) + list(base.glob("*/draft.json")):
+            if skip_top and meta_path.relative_to(base).parts[0] in skip_top:
+                continue  # e.g. root's own rejected/ subtree, collected separately below
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
 
-        draft_dir = meta_path.parent
-        draft_post_path = draft_dir / "draft_post.txt"
-        draft_text = ""
-        if draft_post_path.exists():
-            draft_text = draft_post_path.read_text(encoding="utf-8").strip()
+            draft_dir = meta_path.parent
+            draft_post_path = draft_dir / "draft_post.txt"
+            draft_text = ""
+            if draft_post_path.exists():
+                draft_text = draft_post_path.read_text(encoding="utf-8").strip()
 
-        drafts.append({
-            "draft_dir": str(draft_dir),
-            "relative_path": str(draft_dir.relative_to(root)),
-            "date": meta.get("date", ""),
-            "category": meta.get("category", ""),
-            "human_approved": meta.get("human_approved", False),
-            "posted": meta.get("posted", False),
-            "created_at": meta.get("created_at", ""),
-            "llm_enriched": meta.get("llm_enriched", False),
-            "provider": meta.get("provider", "threads"),
-            "draft_text": draft_text,
-            "posting": meta.get("posting", {}),
-            "postings": meta.get("postings", []),
-            "meta": meta,
-        })
+            drafts.append({
+                "draft_dir": str(draft_dir),
+                "relative_path": str(draft_dir.relative_to(root)),
+                "date": meta.get("date", ""),
+                "category": meta.get("category", ""),
+                "human_approved": meta.get("human_approved", False),
+                "posted": meta.get("posted", False),
+                "rejected": is_rejected,
+                "created_at": meta.get("created_at", ""),
+                "llm_enriched": meta.get("llm_enriched", False),
+                "provider": meta.get("provider", "threads"),
+                "draft_text": draft_text,
+                "posting": meta.get("posting", {}),
+                "postings": meta.get("postings", []),
+                "meta": meta,
+            })
+
+    _collect(root, is_rejected=False, skip_top={"rejected"})
+    if rejected_root.exists():
+        _collect(rejected_root, is_rejected=True)
 
     # Sort by created_at descending
     drafts.sort(key=lambda d: d.get("created_at", ""), reverse=True)
@@ -94,24 +102,27 @@ def _scan_all_drafts() -> list[dict]:
 @app.get("/api/drafts")
 async def get_drafts(
     user_id: str | None = Query(None, description="User id (default: current_user_id)"),
-    status: str | None = Query(None, description="Filter: pending, approved, posted, all"),
+    status: str | None = Query(None, description="Filter: pending, approved, posted, rejected, all"),
 ):
     """Get all job post drafts for review."""
     drafts = _scan_all_drafts()
 
     if status == "pending":
-        drafts = [d for d in drafts if not d["human_approved"] and not d["posted"]]
+        drafts = [d for d in drafts if not d["human_approved"] and not d["posted"] and not d["rejected"]]
     elif status == "approved":
-        drafts = [d for d in drafts if d["human_approved"] and not d["posted"]]
+        drafts = [d for d in drafts if d["human_approved"] and not d["posted"] and not d["rejected"]]
     elif status == "posted":
         drafts = [d for d in drafts if d["posted"]]
+    elif status == "rejected":
+        drafts = [d for d in drafts if d["rejected"]]
     elif status == "all":
         pass
     else:
-        # Default: show pending first, then approved, then posted
-        drafts = [d for d in drafts if not d["human_approved"] and not d["posted"]] + \
-                 [d for d in drafts if d["human_approved"] and not d["posted"]] + \
-                 [d for d in drafts if d["posted"]]
+        # Default: show pending first, then approved, then posted, then rejected
+        drafts = [d for d in drafts if not d["human_approved"] and not d["posted"] and not d["rejected"]] + \
+                 [d for d in drafts if d["human_approved"] and not d["posted"] and not d["rejected"]] + \
+                 [d for d in drafts if d["posted"]] + \
+                 [d for d in drafts if d["rejected"]]
 
     return {"drafts": drafts, "count": len(drafts)}
 
