@@ -56,6 +56,9 @@ def _scan_all_drafts() -> list[dict]:
     drafts = []
 
     for meta_path in list(root.glob("*/*/draft.json")) + list(root.glob("*/draft.json")):
+        rel_parts = meta_path.relative_to(root).parts
+        if rel_parts and rel_parts[0] == "rejected":
+            continue  # archived by reject_draft — not part of the active list
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -198,6 +201,75 @@ async def update_content(draft_dir: str, request: Request):
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     return {"success": True, "message": "Draft content updated", "meta": meta}
+
+
+@app.post("/api/drafts/{draft_dir:path}/publish")
+async def publish_draft(draft_dir: str):
+    """Publish an approved draft to Meta Threads — posts immediately, no
+    further confirmation step past this call. Refuses unless human_approved
+    is true and the draft hasn't already been posted."""
+    draft_path = _resolve_draft_path(draft_dir)
+
+    meta_path = draft_path / "draft.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    if meta.get("posted"):
+        raise HTTPException(status_code=409, detail="Draft has already been posted")
+    if not meta.get("human_approved"):
+        raise HTTPException(status_code=409, detail="Draft must be approved before publishing")
+
+    try:
+        from agentic.toolkit.social import post_job_post_draft
+    except ImportError as e:
+        raise HTTPException(status_code=500, detail=f"Could not import posting module: {e}")
+
+    result = post_job_post_draft(draft_path)
+    if not result.get("posted"):
+        raise HTTPException(status_code=502, detail=result.get("error") or "Failed to post to Threads")
+
+    updated_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else meta
+    return {"success": True, "message": "Published to Threads", "result": result, "meta": updated_meta}
+
+
+@app.post("/api/drafts/{draft_dir:path}/reject")
+async def reject_draft(draft_dir: str):
+    """Reject a draft — moves its folder into <job_post_social_root>/rejected/
+    instead of deleting it, so rejected drafts stay auditable but drop out
+    of the active pending/approved/posted list. No-op'd for already-posted
+    drafts (those aren't rejectable)."""
+    import shutil
+
+    draft_path = _resolve_draft_path(draft_dir)
+    if not draft_path.exists() or not draft_path.is_dir():
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    root = _job_post_social_root()
+    meta_path = draft_path / "draft.json"
+    if meta_path.exists():
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if meta.get("posted"):
+            raise HTTPException(status_code=409, detail="Cannot reject a draft that has already been posted")
+        meta["rejected_at"] = datetime.now().isoformat()
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    rejected_root = root / "rejected"
+    relative = draft_path.relative_to(root)
+    target = (rejected_root / relative).resolve()
+    try:
+        target.relative_to(rejected_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Invalid draft path")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        # Same relative path already archived (e.g. same date+category
+        # rejected twice) — disambiguate rather than clobber.
+        target = target.parent / f"{target.name}_{datetime.now().strftime('%H%M%S')}"
+
+    shutil.move(str(draft_path), str(target))
+    return {"success": True, "message": "Draft rejected and moved to rejected/", "rejected_dir": str(target)}
 
 
 @app.get("/api/fetch-url")

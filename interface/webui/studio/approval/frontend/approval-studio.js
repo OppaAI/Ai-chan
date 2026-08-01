@@ -326,6 +326,59 @@ document.getElementById('save-content-btn').addEventListener('click', async () =
     }
 });
 
+async function postDraft(draftDir) {
+    try {
+        const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}/publish`, {
+            method: 'POST',
+        });
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            loadDrafts();
+            if (currentDraft && currentDraft.draft_dir === draftDir) {
+                selectDraft({ ...currentDraft, posted: true, meta: data.meta });
+            }
+        } else {
+            alert('Failed to publish: ' + (data.detail || data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('Publish failed:', err);
+        alert('Failed to publish draft');
+    }
+}
+
+async function rejectDraft(draftDir) {
+    const confirmed = confirm(
+        'This will move this draft to the rejected archive and remove it from the active list. Continue?'
+    );
+    if (!confirmed) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}/reject`, {
+            method: 'POST',
+        });
+        const data = await resp.json();
+        if (resp.ok && data.success) {
+            if (currentDraft && currentDraft.draft_dir === draftDir) {
+                currentDraft = null;
+                document.getElementById('info-empty').style.display = 'flex';
+                document.getElementById('info-content').style.display = 'none';
+                document.getElementById('content-empty').style.display = 'flex';
+                document.getElementById('content-empty').querySelector('p').textContent = 'Draft content will appear here';
+                document.getElementById('content-text').style.display = 'none';
+                document.getElementById('content-edit-actions').style.display = 'none';
+                document.getElementById('url-content').style.display = 'none';
+                document.getElementById('url-empty').style.display = 'flex';
+            }
+            loadDrafts();
+        } else {
+            alert('Failed to reject: ' + (data.detail || data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('Reject failed:', err);
+        alert('Failed to reject draft');
+    }
+}
+
 async function toggleApprove(draftDir, approve) {
     try {
         const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}/toggle-approval`, {
