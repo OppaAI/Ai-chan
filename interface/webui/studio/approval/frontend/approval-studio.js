@@ -12,7 +12,8 @@ const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
 let currentDraft = null;
 let allDrafts = [];
 let originalDraftText = '';
-let sourceView = 'rendered';
+let sourceView = 'text';
+let currentSourceUrl = null;
 
 function escapeHTML(str) {
     const d = document.createElement('div');
@@ -158,7 +159,7 @@ function selectDraft(draft) {
         actions.innerHTML = '<span style="color: var(--dim); font-size: 11px;">This draft has already been posted</span>';
     } else if (draft.human_approved) {
         actions.innerHTML = `
-            <button class="btn btn-warning" onclick="toggleApprove('${escapeHTML(draft.draft_dir)}', false)" style="background: var(--orange); border-color: var(--orange); color: var(--bg);">Unapprove</button>
+            <button class="btn btn-warning" onclick="toggleApprove('${escapeHTML(draft.draft_dir)}', false)">Unapprove</button>
             <button class="btn btn-primary" onclick="postDraft('${escapeHTML(draft.draft_dir)}')">Publish</button>
             <button class="btn btn-danger" onclick="rejectDraft('${escapeHTML(draft.draft_dir)}')">Reject</button>
         `;
@@ -226,12 +227,14 @@ async function loadDraftContent(draftDir) {
         const urlContent = document.getElementById('url-content');
         const urlEmpty = document.getElementById('url-empty');
         const sourceTitle = document.getElementById('source-title');
+        const sourceViewToggle = document.getElementById('source-view-toggle');
         const urlIframe = document.getElementById('url-iframe');
         const urlText = document.getElementById('url-text');
 
         if (posting && posting.url) {
             urlEmpty.style.display = 'none';
             urlContent.style.display = 'flex';
+            sourceViewToggle.style.display = 'flex';
 
             sourceTitle.textContent = posting.url;
             sourceTitle.style.textTransform = 'none';
@@ -241,10 +244,10 @@ async function loadDraftContent(draftDir) {
             sourceTitle.onclick = () => window.open(posting.url, '_blank', 'noopener');
             sourceTitle.style.cursor = 'pointer';
 
-            urlIframe.src = posting.url;
+            currentSourceUrl = posting.url;
             urlText.textContent = 'Loading text view…';
 
-            // Fetch the scraped text as a fallback view
+            // Fetch the scraped text as a fallback / default view
             fetch(`${API_BASE}/fetch-url?url=${encodeURIComponent(posting.url)}`)
                 .then(resp => resp.json())
                 .then(result => {
@@ -262,12 +265,14 @@ async function loadDraftContent(draftDir) {
         } else {
             urlContent.style.display = 'none';
             urlEmpty.style.display = 'flex';
+            sourceViewToggle.style.display = 'none';
             sourceTitle.textContent = 'Source Webpage';
             sourceTitle.style.textTransform = 'uppercase';
             sourceTitle.style.letterSpacing = '0.15em';
             sourceTitle.style.color = 'var(--orange)';
             sourceTitle.onclick = null;
             sourceTitle.style.cursor = 'default';
+            currentSourceUrl = null;
             urlIframe.src = 'about:blank';
         }
     } catch (err) {
@@ -289,6 +294,13 @@ function applySourceView(view) {
     text.style.display = view === 'text' ? 'block' : 'none';
     btnRendered.classList.toggle('active', view === 'rendered');
     btnText.classList.toggle('active', view === 'text');
+
+    if (view === 'rendered' && currentSourceUrl) {
+        const urlIframe = document.getElementById('url-iframe');
+        if (urlIframe.src !== currentSourceUrl) {
+            urlIframe.src = currentSourceUrl;
+        }
+    }
 }
 
 document.getElementById('view-rendered-btn').addEventListener('click', () => applySourceView('rendered'));

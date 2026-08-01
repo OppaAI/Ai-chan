@@ -264,8 +264,16 @@ async def fetch_url(url: str = Query(..., description="URL to fetch content from
             main_content = re.sub(r'<h[1-6][^>]*>', '\n\n', main_content, flags=re.IGNORECASE)
             main_content = re.sub(r'</h[1-6]>', '\n', main_content, flags=re.IGNORECASE)
             main_content = re.sub(r'<li[^>]*>', '\n• ', main_content, flags=re.IGNORECASE)
+            main_content = re.sub(r'</?(ul|ol|div|section|tr)[^>]*>', '\n', main_content, flags=re.IGNORECASE)
             main_content = re.sub(r'<[^>]+>', '', main_content)
-            main_content = re.sub(r'\s+', ' ', main_content)
+            # Decode common HTML entities left behind
+            import html as html_module
+            main_content = html_module.unescape(main_content)
+            # Collapse horizontal whitespace only, keep line breaks intact
+            main_content = re.sub(r'[ \t]+', ' ', main_content)
+            main_content = re.sub(r'[ \t]*\n[ \t]*', '\n', main_content)
+            # Collapse 3+ blank lines down to a single blank line between paragraphs
+            main_content = re.sub(r'\n{3,}', '\n\n', main_content)
             main_content = main_content.strip()
 
         if not main_content:
