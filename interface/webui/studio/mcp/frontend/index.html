@@ -343,7 +343,10 @@
 </head>
 <body>
     <header class="studio-header">
-        <h1>Aiko MCP Studio</h1>
+        <div style="display: flex; align-items: center; gap: 14px;">
+            <a href="javascript:history.back();" title="Return to previous page" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: #1a1028; border: 1px solid var(--dim); border-radius: 50%; color: var(--purple); text-decoration: none; transition: all 0.2s; font-weight: bold; font-size: 16px;">←</a>
+            <h1>Aiko MCP Studio</h1>
+        </div>
         <div class="header-actions">
             <span class="header-status" id="header-status">Loading servers…</span>
             <button id="refresh-btn" class="btn">Refresh</button>
