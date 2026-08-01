@@ -9,6 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import json
+import mimetypes
+
+import requests
 
 app = FastAPI(title="Aiko Approval Studio")
 
@@ -201,11 +204,17 @@ async def update_content(draft_dir: str, request: Request):
 async def fetch_url(url: str = Query(..., description="URL to fetch content from")):
     """Fetch a URL and convert it to Markdown using MarkItDown.
 
-    Replaces the old hand-rolled regex HTML stripper: MarkItDown handles the
-    request, HTML parsing, and conversion to clean Markdown (headings, lists,
-    links, tables, etc. all come through as real Markdown syntax) in one call.
+    We fetch the page ourselves (with browser-like headers + a retry) rather
+    than letting MarkItDown's convert(url) fetch it internally: several sites
+    — jobbank.gc.ca among them — return 503 to MarkItDown's default request
+    because it doesn't look like a real browser. Fetching with our own
+    headers first and feeding the bytes into convert_stream() sidesteps that
+    while still getting MarkItDown's HTML → Markdown conversion (headings,
+    lists, links, tables all come through as real Markdown syntax).
     Requires: pip install markitdown
     """
+    import io
+    import time
     from urllib.parse import urlparse
 
     # Validate URL
@@ -224,9 +233,41 @@ async def fetch_url(url: str = Query(..., description="URL to fetch content from
             "error": "markitdown is not installed. Run: pip install markitdown",
         }
 
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,fr;q=0.8",
+    }
+
+    resp = None
+    last_err = ""
+    for attempt in range(2):  # one retry — 503s from gov sites are often transient
+        try:
+            resp = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+            if resp.status_code == 503 and attempt == 0:
+                time.sleep(1.5)
+                continue
+            resp.raise_for_status()
+            last_err = ""
+            break
+        except Exception as e:
+            last_err = str(e)
+            resp = None
+            if attempt == 0:
+                time.sleep(1.5)
+                continue
+
+    if resp is None:
+        return {"content": "", "error": last_err or "Failed to fetch URL"}
+
     try:
         converter = MarkItDown()
-        result = converter.convert(url)
+        content_type = resp.headers.get("content-type", "").split(";", 1)[0].strip()
+        ext = mimetypes.guess_extension(content_type) or ".html"
+        result = converter.convert_stream(io.BytesIO(resp.content), file_extension=ext, url=url)
         content = (result.text_content or "").strip()
         if not content:
             content = "[Could not extract readable content]"
