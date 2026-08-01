@@ -152,7 +152,7 @@
         /* Main Layout */
         .studio-body {
             display: grid;
-            grid-template-columns: 320px 1fr 400px;
+            grid-template-columns: 320px 450px 1fr;
             height: calc(100vh - 49px);
         }
 
@@ -447,7 +447,10 @@
 </head>
 <body>
     <header class="studio-header">
-        <h1>Aiko Approval Studio</h1>
+        <div style="display: flex; align-items: center; gap: 14px;">
+            <a href="/" title="Return to Chat" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: var(--dimmer); border: 1px solid var(--dim); border-radius: 50%; color: var(--purple); text-decoration: none; transition: all 0.2s; font-weight: bold; font-size: 16px;">←</a>
+            <h1>Aiko Approval Studio</h1>
+        </div>
         <div class="header-actions">
             <span class="header-status" id="header-status">Loading drafts…</span>
             <button id="refresh-btn" class="btn">Refresh</button>
@@ -469,55 +472,76 @@
             <div id="drafts-list"></div>
         </aside>
 
-            <div class="content-area">
-                <div class="info-panel" id="info-panel">
-                    <div class="empty-state" id="info-empty">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                            <polyline points="14 2 14 8 20 8"></polyline>
-                            <line x1="16" y1="13" x2="8" y2="13"></line>
-                            <line x1="16" y1="17" x2="8" y2="17"></line>
-                            <polyline points="10 9 9 9 8 9"></polyline>
-                        </svg>
-                        <p>Select a draft from the sidebar to review</p>
-                    </div>
-                    <div id="info-content" style="display: none;">
-                        <h3>Draft Information</h3>
-                        <div class="info-grid" id="info-grid"></div>
-                        <div class="action-buttons" id="action-buttons"></div>
-                    </div>
+        <div class="content-area">
+            <div class="info-panel" id="info-panel">
+                <div class="empty-state" id="info-empty">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <p>Select a draft from the sidebar to review</p>
                 </div>
-                <div class="content-panel url-panel" id="content-panel">
-                    <div class="empty-state" id="content-empty">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></polyline>
-                            <polyline points="14 2 14 8 20 8"></polyline>
-                            <line x1="16" y1="13" x2="8" y2="13"></line>
-                            <line x1="16" y1="17" x2="8" y2="17"></line>
-                            <polyline points="10 9 9 9 8 9"></polyline>
-                        </svg>
-                        <p>Draft content will appear here</p>
-                    </div>
-                    <div id="content-text" class="content-text" style="display: none;"></div>
-                </div>
-                <div class="content-panel right-panel" id="url-panel">
-                    <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
-                        Source URL Content
-                    </h3>
-                    <div class="empty-state" id="url-empty" style="padding: 20px;">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
-                        </svg>
-                        <p>No source URL available for this draft</p>
-                    </div>
-                    <div id="url-content" style="display: none; background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 16px; max-height: 300px; overflow-y: auto;"></div>
+                <div id="info-content" style="display: none;">
+                    <h3>Draft Information</h3>
+                    <div class="info-grid" id="info-grid"></div>
+                    <div class="action-buttons" id="action-buttons" style="display: flex; gap: 8px; margin-top: 14px;"></div>
                 </div>
             </div>
+            <div class="content-panel url-panel" id="content-panel">
+                <div class="empty-state" id="content-empty">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <p>Draft content will appear here</p>
+                </div>
+                <div id="content-text" class="content-text" style="display: none; white-space: pre-wrap; font-family: ui-serif, Georgia, serif; line-height: 1.6; padding: 16px; color: var(--text);"></div>
+            </div>
+        </div>
+        
+        <!-- Moved URL Panel to right end of panel (3rd column of studio-body) -->
+        <div class="content-panel right-panel" id="url-panel" style="border-left: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg2);">
+            <h3 style="font-size: 11px; letter-spacing: 0.15em; color: var(--orange); text-transform: uppercase; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex: 0 0 auto;">
+                <span style="display: flex; align-items: center; gap: 8px;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                    Source Webpage
+                </span>
+                <a id="url-link" href="#" target="_blank" style="color: var(--purple); font-size: 10px; text-transform: none; text-decoration: underline;">Open in new tab ↗</a>
+            </h3>
+            <div class="empty-state" id="url-empty" style="padding: 20px; display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1;">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 32px; height: 32px; margin-bottom: 8px; opacity: 0.5;">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+                </svg>
+                <p>No source URL available for this draft</p>
+            </div>
+            
+            <!-- Web Browser View -->
+            <iframe id="url-content-frame" style="display: none; width: 100%; height: 50%; border: 1px solid var(--border); border-radius: 6px; background: #fff;" src="about:blank"></iframe>
+            
+            <!-- Dark Theme Scraped Content Fallback (below iframe) -->
+            <div id="url-scraped-fallback" style="display: none; flex: 1; flex-direction: column; overflow: hidden; margin-top: 12px;">
+                <h4 style="font-size: 10px; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; letter-spacing: 0.05em;">Scraped Text Content (Dark Theme Fallback)</h4>
+                <div id="url-scraped-text" style="flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 12px; background: var(--bg); overflow-y: auto; font-family: ui-serif, Georgia, serif; font-size: 13px; line-height: 1.6; color: var(--text); white-space: pre-wrap;"></div>
+            </div>
+        </div>
     </div>
 
     <script>
+        // Set up filter click events once DOM loads
+        document.querySelectorAll('.filter-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const filter = tab.dataset.filter;
+                renderDraftList(filter);
+            });
+        });
+
         // Detect base path for API calls (studio is mounted at /studio/approval/)
         const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
 
@@ -658,19 +682,21 @@
                 </div>
             `;
             
-            // Action buttons
+            // Action buttons in the exact order: Approve, Publish, Reject
             const actions = document.getElementById('action-buttons');
             if (draft.posted) {
                 actions.innerHTML = '<span style="color: var(--dim); font-size: 11px;">This draft has already been posted</span>';
             } else if (draft.human_approved) {
                 actions.innerHTML = `
-                    <button class="btn btn-danger" onclick="rejectDraft('${escapeHTML(draft.draft_dir)}')">Reject</button>
-                    <button class="btn btn-primary" onclick="postDraft('${escapeHTML(draft.draft_dir)}')">Post</button>
                     <button class="btn btn-warning" onclick="toggleApprove('${escapeHTML(draft.draft_dir)}', false)" style="background: var(--orange); border-color: var(--orange); color: var(--bg);">Unapprove</button>
+                    <button class="btn btn-primary" onclick="postDraft('${escapeHTML(draft.draft_dir)}')">Publish</button>
+                    <button class="btn btn-danger" onclick="rejectDraft('${escapeHTML(draft.draft_dir)}')">Reject</button>
                 `;
             } else {
                 actions.innerHTML = `
                     <button class="btn btn-success" onclick="toggleApprove('${escapeHTML(draft.draft_dir)}', true)">Approve</button>
+                    <button class="btn btn-primary" style="opacity: 0.5; cursor: not-allowed;" title="Approve before publishing" disabled>Publish</button>
+                    <button class="btn btn-danger" onclick="rejectDraft('${escapeHTML(draft.draft_dir)}')">Reject</button>
                 `;
             }
             
@@ -697,44 +723,49 @@
                     emptyEl.querySelector('p').textContent = 'No draft content available';
                 }
                 
-                // Fetch and display URL content if available
+                // Display URL content in iframe & scraped fallback
                 const posting = data.meta?.posting || data.posting;
+                const urlLink = document.getElementById('url-link');
+                const iframe = document.getElementById('url-content-frame');
+                const emptyElUrl = document.getElementById('url-empty');
+                const fallbackContainer = document.getElementById('url-scraped-fallback');
+                const fallbackText = document.getElementById('url-scraped-text');
+
                 if (posting && posting.url) {
-                    loadURLContent(posting.url);
+                    urlLink.href = posting.url;
+                    urlLink.style.display = 'inline';
+                    emptyElUrl.style.display = 'none';
+                    iframe.src = posting.url;
+                    iframe.style.display = 'block';
+                    
+                    // Fetch scraped content as dark theme fallback
+                    fallbackContainer.style.display = 'flex';
+                    fallbackText.textContent = 'Loading scraped content fallback...';
+                    try {
+                        const scrapeResp = await fetch(`${API_BASE}/fetch-url?url=${encodeURIComponent(posting.url)}`);
+                        if (scrapeResp.ok) {
+                            const scrapeData = await scrapeResp.json();
+                            fallbackText.textContent = scrapeData.content || 'No text content scraped.';
+                        } else {
+                            fallbackText.textContent = 'Failed to scrape webpage text.';
+                        }
+                    } catch (e) {
+                        fallbackText.textContent = 'Error loading scraped content fallback.';
+                    }
                 } else {
-                    document.getElementById('url-content').style.display = 'none';
-                    document.getElementById('url-empty').style.display = 'flex';
+                    urlLink.href = '#';
+                    urlLink.style.display = 'none';
+                    iframe.src = 'about:blank';
+                    iframe.style.display = 'none';
+                    emptyElUrl.style.display = 'flex';
+                    fallbackContainer.style.display = 'none';
+                    fallbackText.textContent = '';
                 }
             } catch (err) {
                 console.error('Failed to load draft content:', err);
                 document.getElementById('content-text').style.display = 'none';
                 document.getElementById('content-empty').style.display = 'flex';
                 document.getElementById('content-empty').querySelector('p').textContent = 'Failed to load content';
-            }
-        }
-
-        async function loadURLContent(url) {
-            const urlContentEl = document.getElementById('url-content');
-            const urlEmptyEl = document.getElementById('url-empty');
-            
-            // Show loading
-            urlEmptyEl.style.display = 'none';
-            urlContentEl.style.display = 'block';
-            urlContentEl.innerHTML = '<div style="color: var(--dim); padding: 20px; text-align: center;">Loading URL content...</div>';
-            
-            try {
-                const resp = await fetch(`${API_BASE}/fetch-url?url=${encodeURIComponent(url)}`);
-                if (!resp.ok) throw new Error('Failed to fetch URL');
-                const data = await resp.json();
-                
-                if (data.content) {
-                    urlContentEl.innerHTML = `<div style="font-family: ui-serif, Georgia, serif; font-size: 13px; line-height: 1.7; color: var(--text); white-space: pre-wrap;">${escapeHTML(data.content)}</div>`;
-                } else {
-                    urlContentEl.innerHTML = '<div style="color: var(--dim); padding: 20px; text-align: center;">No content extracted from URL</div>';
-                }
-            } catch (err) {
-                console.error('Failed to load URL content:', err);
-                urlContentEl.innerHTML = '<div style="color: var(--dim); padding: 20px; text-align: center;">Failed to load URL content</div>';
             }
         }
 
@@ -771,60 +802,6 @@
             } catch (err) {
                 console.error('Approve/unapprove failed:', err);
                 alert('Failed to update draft approval status');
-            }
-        }
-
-        async function approveDraft(draftDir) {
-            try {
-                const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}/approve`, {
-                    method: 'POST',
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    loadDrafts();
-                    if (currentDraft && currentDraft.draft_dir === draftDir) {
-                        selectDraft({ ...currentDraft, human_approved: true, meta: data.meta });
-                    }
-                } else {
-                    alert('Failed to approve: ' + (data.message || 'Unknown error'));
-                }
-            } catch (err) {
-                console.error('Approve failed:', err);
-                alert('Failed to approve draft');
-            }
-        }
-
-        async function rejectDraft(draftDir) {
-            if (!confirm('Reject this approved draft?')) return;
-            try {
-                const resp = await fetch(`${API_BASE}/drafts/${encodeURIComponent(draftDir)}/reject`, {
-                    method: 'POST',
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    loadDrafts();
-                    if (currentDraft && currentDraft.draft_dir === draftDir) {
-                        selectDraft({ ...currentDraft, human_approved: false, meta: data.meta });
-                    }
-                } else {
-                    alert('Failed to reject: ' + (data.message || 'Unknown error'));
-                }
-            } catch (err) {
-                console.error('Reject failed:', err);
-                alert('Failed to reject draft');
-            }
-        }
-
-        async function postDraft(draftDir) {
-            if (!confirm('Post this approved draft to Meta Threads?')) return;
-            try {
-                // Use the existing post_job_post_social tool via the agentic system
-                // For now, we'll call the approval studio's approve endpoint which marks it approved
-                // The actual posting would be done via the scheduler or CLI
-                alert('Posting is handled by the scheduler. Use the CLI or wait for the scheduled post.\n\nDraft directory: ' + draftDir);
-            } catch (err) {
-                console.error('Post failed:', err);
-                alert('Failed to post draft');
             }
         }
 

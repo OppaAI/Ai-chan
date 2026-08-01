@@ -133,9 +133,9 @@ async def get_draft_detail(draft_dir: str):
     }
 
 
-@app.post("/api/drafts/{draft_dir:path}/approve")
-async def approve_draft(draft_dir: str):
-    """Mark a draft as human-approved."""
+@app.post("/api/drafts/{draft_dir:path}/toggle-approval")
+async def toggle_approval(draft_dir: str, request: Request):
+    """Toggle draft approval status - approve if not approved, reject if approved."""
     root = _job_post_social_root()
     draft_path = (root / draft_dir).resolve()
     
@@ -151,37 +151,19 @@ async def approve_draft(draft_dir: str):
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     
     if meta.get("human_approved"):
-        return {"success": True, "message": "Already approved", "meta": meta}
+        # Currently approved, reject it
+        meta["human_approved"] = False
+        meta["rejected_at"] = datetime.now().isoformat()
+        message = "Draft unapproved"
+    else:
+        # Currently not approved, approve it
+        meta["human_approved"] = True
+        meta["approved_at"] = datetime.now().isoformat()
+        message = "Draft approved"
     
-    meta["human_approved"] = True
-    meta["approved_at"] = datetime.now().isoformat()
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     
-    return {"success": True, "message": "Draft approved", "meta": meta}
-
-
-@app.post("/api/drafts/{draft_dir:path}/reject")
-async def reject_draft(draft_dir: str, request: Request):
-    """Mark a draft as rejected (remove human_approved flag)."""
-    root = _job_post_social_root()
-    draft_path = (root / draft_dir).resolve()
-    
-    try:
-        draft_path.relative_to(root)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid draft path")
-    
-    meta_path = draft_path / "draft.json"
-    if not meta_path.exists():
-        raise HTTPException(status_code=404, detail="Draft not found")
-    
-    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    
-    meta["human_approved"] = False
-    meta["rejected_at"] = datetime.now().isoformat()
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    
-    return {"success": True, "message": "Draft rejected", "meta": meta}
+    return {"success": True, "message": message, "meta": meta}
 
 
 @app.get("/api/fetch-url")

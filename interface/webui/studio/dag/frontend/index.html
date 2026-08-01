@@ -681,6 +681,9 @@
             const positions = computeLayout(nodes, edges);
             nodes.forEach(n => { n._layout = positions[n.id] || { x: 200, y: 200 }; });
 
+            // Hide the canvas temporarily to prevent visual jump/flicker
+            svg.style('opacity', '0');
+
             const g = svg.append('g');
 
             // Zoom
@@ -691,6 +694,23 @@
                     g.attr('transform', event.transform);
                 });
             svg.call(currentZoom);
+
+            // Compute center transform synchronously
+            if (nodes.length > 0) {
+                const minX = Math.min(...nodes.map(n => n._layout.x));
+                const minY = Math.min(...nodes.map(n => n._layout.y));
+                const maxX = Math.max(...nodes.map(n => n._layout.x + NODE_W));
+                const maxY = Math.max(...nodes.map(n => n._layout.y + NODE_H));
+                
+                const graphW = maxX - minX;
+                const graphH = maxY - minY;
+                const scale = Math.min(width / (graphW + 120), height / (graphH + 120), 1.2);
+                const tx = (width - graphW * scale) / 2 - minX * scale;
+                const ty = (height - graphH * scale) / 2 - minY * scale;
+
+                // Apply zoom transform instantly (no transition)
+                svg.call(currentZoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+            }
 
             // Grid
             const defs = svg.append('defs');
@@ -929,6 +949,9 @@
             if (statusEl) {
                 statusEl.textContent = `${nodes.length}n · ${edges.length}e`;
             }
+
+            // Restore canvas opacity now that it is centered correctly
+            svg.style('opacity', '1');
         }
 
         function showNodeDetails(node) {
