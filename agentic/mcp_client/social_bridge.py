@@ -10,11 +10,16 @@ log = get_logger(__name__)
 
 
 def _call_mcp(tool: str, **kwargs: Any) -> dict[str, Any]:
+    """Call an MCP tool with the given keyword arguments.
+    
+    The MCP client's call_tool_sync expects individual keyword arguments,
+    not a wrapped dict — so we unpack kwargs directly into the call.
+    """
     client = get_mcp_client()
     if client is None:
         return {"ok": False, "error": "MCP client not connected"}
     try:
-        return client.call_tool_sync(tool, kwargs)
+        return client.call_tool_sync(tool, **kwargs)
     except Exception as e:
         return {"ok": False, "error": str(e), "tool": tool}
 
