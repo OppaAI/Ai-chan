@@ -135,15 +135,69 @@ def _latest_approved_job_post_draft() -> Path | None:
     return best[1] if best else None
 
 
+def _latest_approved_video_draft() -> Path | None:
+    """Return the most recently created human-approved video draft dir, or None.
+
+    Scans <video_social_root>/<timestamp>/draft.json for the dir whose
+    draft.json has human_approved=True and the newest created_at.
+    """
+    root = video_social_root()
+    best: tuple[float, Path] | None = None
+    for meta_path in root.glob("*/draft.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("human_approved") is not True:
+            continue
+        created = meta.get("created_at") or ""
+        key = 0.0
+        try:
+            dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            key = dt.timestamp()
+        except (ValueError, TypeError):
+            key = float(meta_path.stat().st_mtime)
+        if best is None or key > best[0]:
+            best = (key, meta_path.parent)
+    return best[1] if best else None
+
+
+def _latest_approved_photo_draft() -> Path | None:
+    """Return the most recently created human-approved photo draft dir, or None.
+
+    Scans <photo_social_root>/<timestamp>/draft.json for the dir whose
+    draft.json has human_approved=True and the newest created_at.
+    """
+    root = photo_social_root()
+    best: tuple[float, Path] | None = None
+    for meta_path in root.glob("*/draft.json"):
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if meta.get("human_approved") is not True:
+            continue
+        created = meta.get("created_at") or ""
+        key = 0.0
+        try:
+            dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            key = dt.timestamp()
+        except (ValueError, TypeError):
+            key = float(meta_path.stat().st_mtime)
+        if best is None or key > best[0]:
+            best = (key, meta_path.parent)
+    return best[1] if best else None
+
+
 def video_social_root() -> Path:
     """Resolve the active user video-social output root lazily.
 
-    Defaults to <USER_SPACE_ROOT>/<user_id>/workspace/social/video.
+    Defaults to <USER_SPACE_ROOT>/<user_id>/workspace/videos.
     """
     override = os.getenv("VIDEO_SOCIAL_ROOT")
     if override:
         return Path(override).expanduser().resolve()
-    return (user_workspace_root() / "social" / "video").resolve()
+    return (user_workspace_root() / "videos").resolve()
 
 
 # ── shared helpers ────────────────────────────────────────────────────────────
@@ -882,23 +936,39 @@ def _list_video_candidates(inbox: str, limit: int) -> list[Path]:
     return paths
 
 
-def _description_md_for(video_path: Path) -> Path:
-    """A video "my_trip.mp4" needs a sibling "MY_TRIP.md" (filename stem,
-    uppercased, .md extension) in the same folder — written by hand, not
+def _description_text_for(video_path: Path) -> Path | None:
+    """A video "my_trip.mp4" needs a sibling "my_trip.txt" (same stem,
+    .txt extension, case-insensitive) in the same folder — written by hand, not
     generated. Aiko only polishes it, never invents it."""
-    return video_path.with_name(video_path.stem.upper() + ".md")
+    stem = video_path.stem
+    for candidate in video_path.parent.glob(f"{stem}.*"):
+        if candidate.suffix.lower() == ".txt" and candidate.stem.lower() == stem.lower():
+            return candidate
+    return None
 
 
-def _llm_polish_video_description(video_path: Path, md_path: Path) -> dict[str, str]:
-    raw_note = md_path.read_text(encoding="utf-8").strip()
+def _llm_polish_video_description(video_path: Path, text_path: Path) -> dict[str, str]:
+    raw_text = text_path.read_text(encoding="utf-8").strip()
+    # Parse optional "Title: <title>\n\n<description>" format
+    explicit_title = ""
+    raw_note = raw_text
+    lines = raw_text.splitlines()
+    if lines and lines[0].lstrip().lower().startswith("title:"):
+        explicit_title = lines[0].split(":", 1)[1].strip()
+        # Find first blank line after title line, rest is description
+        desc_start = 1
+        while desc_start < len(lines) and not lines[desc_start].strip():
+            desc_start += 1
+        raw_note = "\n".join(lines[desc_start:]).strip()
+
     system = f"{_load_soul()}\n\n{_load_social_persona()}\n\n" + _VIDEO_POLISH_SYSTEM.format(
         max_title=MAX_YOUTUBE_TITLE_CHARS, max_description=MAX_YOUTUBE_DESCRIPTION_CHARS,
     )
     user = _VIDEO_POLISH_USER.format(
-        filename=video_path.name, md_filename=md_path.name, raw_note=raw_note or "(empty)",
+        filename=video_path.name, md_filename=text_path.name, raw_note=raw_note or "(empty)",
     )
 
-    fallback_title = video_path.stem.replace("_", " ").replace("-", " ").strip() or video_path.stem
+    fallback_title = explicit_title or video_path.stem.replace("_", " ").replace("-", " ").strip() or video_path.stem
     try:
         resp = _LLM_CLIENT.chat.completions.create(
             model=LLM_MODEL,
@@ -928,14 +998,14 @@ def _llm_polish_video_description(video_path: Path, md_path: Path) -> dict[str, 
 
 
 def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
-    """Queue the oldest not-yet-drafted video that has a matching NAME.md
-    description file sitting next to it in the videos inbox.
+    """Queue the oldest not-yet-drafted video that has a matching .txt
+    description file (case-insensitive stem) sitting next to it in the videos inbox.
 
     Deliberately does NOT run any vision/LLM selection over which video to
     post — dropping the file in the folder (with its description) IS the
     selection. This only decides ORDER (oldest first among videos that
     already have a description) and prevents re-drafting the same file
-    twice via a small local ledger. Videos without a matching NAME.md are
+    twice via a small local ledger. Videos without a matching .txt are
     left alone and picked up automatically once you add one.
     """
     inbox_path = inbox or VIDEO_SOCIAL_INBOX
@@ -945,21 +1015,23 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
 
     ledger = _load_video_ledger()
     unprocessed = [p for p in candidates if str(p) not in ledger]
-    ready = [p for p in unprocessed if _description_md_for(p).exists()]
+    ready = [p for p in unprocessed if _description_text_for(p) is not None]
     if not ready:
         return {
             "success": True,
             "skipped": True,
-            "reason": "no_new_videos" if not unprocessed else "waiting_on_description_md",
+            "reason": "no_new_videos" if not unprocessed else "waiting_on_description_txt",
             "inbox": inbox_path,
             "pending_without_description": [p.name for p in unprocessed if p not in ready],
         }
 
     ready.sort(key=lambda p: p.stat().st_mtime)
     video_path = ready[0]
-    md_path = _description_md_for(video_path)
+    text_path = _description_text_for(video_path)
+    if text_path is None:
+        return {"success": False, "reason": "description_txt_missing", "inbox": inbox_path}
 
-    polished = _llm_polish_video_description(video_path, md_path)
+    polished = _llm_polish_video_description(video_path, text_path)
 
     label = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     draft_dir = video_social_root() / label
@@ -974,7 +1046,7 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
     (draft_dir / "raw_note.md").write_text(polished["raw_note"] + "\n", encoding="utf-8")
     (draft_dir / "review.md").write_text(
         f"# Video Social Draft \u2014 {label}\n\n"
-        f"Source: {video_path.name} (description from {md_path.name})\n\n"
+        f"Source: {video_path.name} (description from {text_path.name})\n\n"
         f"## Title\n\n{polished['title']}\n\n"
         f"## Description\n\n{polished['description']}\n\n"
         f"Edit title.txt / description.txt before posting to override the "
@@ -999,7 +1071,7 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
         "draft_dir": str(draft_dir),
         "kind": "video",
         "source": str(video_path),
-        "source_md": str(md_path),
+        "source_md": str(text_path),
         "providers": list(VIDEO_SOCIAL_PROVIDERS),
         "selections": selections,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1016,7 +1088,7 @@ def generate_video_draft(*, inbox: str | None = None) -> dict[str, Any]:
 
 
 def generate_video_drafts(*, inbox: str | None = None, max_drafts: int | None = None) -> list[dict[str, Any]]:
-    """Drain the videos inbox (those with a matching NAME.md), one draft per video."""
+    """Drain the videos inbox (those with a matching .txt description), one draft per video."""
     results: list[dict[str, Any]] = []
     count = 0
     while max_drafts is None or count < max_drafts:
@@ -1404,11 +1476,17 @@ def draft_photo_social(*, inbox: str | None = None, force: bool = False) -> dict
 
 
 @tool(TOOLS["post_photo_social"])
-def post_photo_social(draft_dir: str, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
+def post_photo_social(draft_dir: str | None = None, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Agent-tool wrapper for Lane B posting. Refuses unless the draft at
-    draft_dir has already been human-approved outside this conversation."""
+    draft_dir has already been human-approved outside this conversation.
+    If draft_dir is omitted, posts the most recently approved photo draft."""
     try:
-        path = _resolve_contained_draft_dir(draft_dir, photo_social_root())
+        if draft_dir:
+            path = _resolve_contained_draft_dir(draft_dir, photo_social_root())
+        else:
+            path = _latest_approved_photo_draft()
+            if path is None:
+                return {"posted": False, "error": "no human-approved photo draft found to post"}
         _require_approved(path)
     except (ValueError, SocialApprovalError) as e:
         return {"posted": False, "error": str(e)}
@@ -1423,11 +1501,17 @@ def draft_video_social(*, inbox: str | None = None) -> dict[str, Any]:
 
 
 @tool(TOOLS["post_video_social"])
-def post_video_social(draft_dir: str, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
+def post_video_social(draft_dir: str | None = None, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
     """Agent-tool wrapper for Lane C posting. Refuses unless the draft at
-    draft_dir has already been human-approved outside this conversation."""
+    draft_dir has already been human-approved outside this conversation.
+    If draft_dir is omitted, posts the most recently approved video draft."""
     try:
-        path = _resolve_contained_draft_dir(draft_dir, video_social_root())
+        if draft_dir:
+            path = _resolve_contained_draft_dir(draft_dir, video_social_root())
+        else:
+            path = _latest_approved_video_draft()
+            if path is None:
+                return {"posted": False, "error": "no human-approved video draft found to post"}
         _require_approved(path)
     except (ValueError, SocialApprovalError) as e:
         return {"posted": False, "error": str(e)}
@@ -1453,7 +1537,7 @@ def _cmd() -> int:
     media_p.add_argument("--draft", action="store_true", help="scan photo inbox and create an LLM-curated photo draft bundle")
     media_p.add_argument("--force", action="store_true", help="create a new photo draft even if one exists this run")
     media_p.add_argument("--inbox", default="", help="override the photo inbox folder")
-    media_p.add_argument("--draft-video", action="store_true", help="queue the oldest new video that has a matching NAME.md description")
+    media_p.add_argument("--draft-video", action="store_true", help="queue the oldest new video that has a matching .txt description")
     media_p.add_argument("--draft-video-all", action="store_true", help="drain the video inbox, one draft per described video")
     media_p.add_argument("--video-inbox", default="", help="override the video inbox folder")
     media_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory (photo or video, auto-detected)")

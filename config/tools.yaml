@@ -204,7 +204,7 @@
     {
       "handler": "agentic.toolkit.social:draft_video_social",
       "name": "draft_video_social",
-      "description": "Queue the oldest not-yet-drafted video in the video inbox that already has a matching NAME.md description file, polishing it into a YouTube title/description for human review. Does NOT post, and does NOT choose which video — dropping the file with its description IS the selection.",
+      "description": "Queue the oldest not-yet-drafted video in the video inbox that already has a matching .txt description file (same stem, case-insensitive), polishing it into a YouTube title/description for human review. Does NOT post, and does NOT choose which video — dropping the file with its description IS the selection.",
       "props": {
         "inbox": {
           "type": "string",
@@ -441,11 +441,11 @@
     {
       "handler": "agentic.toolkit.social:post_photo_social",
       "name": "post_photo_social",
-      "description": "Post an ALREADY HUMAN-APPROVED photo draft to Pixelset. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
+      "description": "Post an ALREADY HUMAN-APPROVED photo draft to Pixelset. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now. If draft_dir is omitted, posts the most recently approved photo draft.",
       "props": {
         "draft_dir": {
           "type": "string",
-          "description": "The draft_dir path returned by draft_photo_social or given by the user."
+          "description": "Optional. The draft_dir path returned by draft_photo_social or given by the user. Omit to post the most recently approved photo draft."
         },
         "providers": {
           "type": "array",
@@ -457,9 +457,7 @@
           }
         }
       },
-      "required": [
-        "draft_dir"
-      ],
+      "required": [],
       "domain": "social",
       "react": true,
       "graph": true,
@@ -469,11 +467,11 @@
     {
       "handler": "agentic.toolkit.social:post_video_social",
       "name": "post_video_social",
-      "description": "Post an ALREADY HUMAN-APPROVED video draft to YouTube. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now.",
+      "description": "Post an ALREADY HUMAN-APPROVED video draft to YouTube. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now. If draft_dir is omitted, posts the most recently approved video draft.",
       "props": {
         "draft_dir": {
           "type": "string",
-          "description": "The draft_dir path returned by draft_video_social or given by the user."
+          "description": "Optional. The draft_dir path returned by draft_video_social or given by the user. Omit to post the most recently approved video draft."
         },
         "providers": {
           "type": "array",
@@ -485,9 +483,7 @@
           }
         }
       },
-      "required": [
-        "draft_dir"
-      ],
+      "required": [],
       "domain": "social",
       "react": true,
       "graph": true,

@@ -450,13 +450,14 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict
             if link_key in seen_ids or guid_key in seen_ids:
                 continue
             seen_ids.update({link_key, guid_key})
+            rss_location = _rss_text(entry, ("location", "city", "region", "jobLocation", "workLocation")).strip()
             kept.append({
                 "title": title or "Untitled role",
                 "organization": org,
                 "url": link,
                 "guid": guid,
                 "summary": summary,
-                "location": default_location,
+                "location": rss_location or "",
                 "employment_type": "",
                 "salary": "",
                 "experience": "",
