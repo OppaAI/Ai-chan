@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from typing import Optional
-
 from social.services import env, err
 from social.state import get_db
 
+# Global client cache (kept alive across tool calls)
+_client_cache = None
+_cache_username = None
+
 
 def _get_client():
+    """Get or create cached ProtonMail client."""
+    global _client_cache, _cache_username
+    
     try:
         from protonmail import ProtonMail
     except ImportError:
@@ -17,11 +23,24 @@ def _get_client():
     if not username or not password:
         return None, err("protonmail", "PROTONMAIL_USERNAME and PROTONMAIL_PASSWORD not set")
 
+    # Return cached client if credentials match and session is still valid
+    if _client_cache and _cache_username == username:
+        try:
+            # Quick validity check
+            _client_cache.get_messages(limit=1)
+            return _client_cache, None
+        except Exception:
+            # Session expired, clear cache
+            _client_cache = None
+
     try:
         client = ProtonMail()
         client.login(username, password)
+        _client_cache = client
+        _cache_username = username
         return client, None
     except Exception as e:
+        _client_cache = None
         return None, err("protonmail", f"login failed: {e}")
 
 
@@ -62,11 +81,6 @@ def load_tools(mcp):
             return {"ok": True, "provider": "protonmail", "folder": folder, "count": len(results), "messages": results}
         except Exception as e:
             return err("protonmail", f"read failed: {e}")
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
 
     @mcp.tool(
         name="search_protonmail",
@@ -102,11 +116,6 @@ def load_tools(mcp):
             return {"ok": True, "provider": "protonmail", "query": query, "count": len(results), "messages": results}
         except Exception as e:
             return err("protonmail", f"search failed: {e}")
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
 
     @mcp.tool(
         name="send_protonmail",
@@ -159,8 +168,3 @@ def load_tools(mcp):
             return {"ok": True, "provider": "protonmail", "message_id": getattr(result, "id", ""), "status": "sent"}
         except Exception as e:
             return err("protonmail", f"send failed: {e}")
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
