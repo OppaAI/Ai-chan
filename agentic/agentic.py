@@ -664,8 +664,14 @@ class VerificationResult:
 
 
 def tool_schemas() -> list[dict]:
-    """Return OpenAI-compatible tool schemas for autonomous task mode."""
-    return [schema for schema, _handler in _TOOLS.values()]
+    """Return OpenAI-compatible tool schemas for autonomous task mode.
+
+    Read live from the registry rather than the import-time ``_TOOLS``
+    snapshot so tools registered after import (e.g. MCP bridge tools
+    bootstrapped at wakeup, like the ProtonMail email tools) are visible
+    to the LLM too. Order is deterministic (registry insertion order).
+    """
+    return [spec.to_openai_schema() for spec in registry.all_specs() if spec.react]
 
 
 from agentic.registry import TOOLS, ValidationError, registry, register_tool_schema, tool
