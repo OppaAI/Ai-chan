@@ -1,6 +1,10 @@
 """Approval Studio backend — review and approve daily job post drafts."""
 from __future__ import annotations
 
+import json
+import mimetypes
+import os
+import requests
 from pathlib import Path
 from datetime import datetime
 
@@ -8,10 +12,12 @@ from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-import json
-import mimetypes
 
-import requests
+from system.config import load_config
+load_config()
+
+print(f"DEBUG: THREADS_ACCESS_TOKEN={os.environ.get('THREADS_ACCESS_TOKEN', 'NOT SET')}")
+print(f"DEBUG: THREADS_USER_ID={os.environ.get('THREADS_USER_ID', 'NOT SET')}")
 
 app = FastAPI(title="Aiko Approval Studio")
 

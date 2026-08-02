@@ -23,6 +23,7 @@ def load_tools(mcp):
         video_path: str | None = None,
         description: str = "",
         channel: str = "",
+        topic_tag: str | None = None,
     ) -> dict:
         results = []
         tools = mcp._tool_manager._tools
@@ -30,7 +31,7 @@ def load_tools(mcp):
             if service == "x":
                 result = tools["post_x"].fn(text=text, image_path=image_path)
             elif service == "threads":
-                result = tools["post_threads"].fn(text=text, image_path=image_path)
+                result = tools["post_threads"].fn(text=text, image_path=image_path, topic_tag=topic_tag)
             elif service == "bluesky":
                 result = tools["post_bluesky"].fn(text=text, image_path=image_path)
             elif service == "mastodon":

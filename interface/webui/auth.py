@@ -12,13 +12,13 @@ from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import httpx
-from dotenv import load_dotenv
+from system.config import load_config
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 from system import bioclock
 from system.userspace import normalize_user_id, user_state_path
 
-load_dotenv()
+load_config()
 
 log = logging.getLogger(__name__)
 
