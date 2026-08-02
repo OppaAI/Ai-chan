@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from typing import Optional, List, Dict
 from social.services import env, err
 from social.state import get_db
