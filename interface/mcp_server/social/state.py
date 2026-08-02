@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 import hashlib
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from dotenv import load_dotenv
 from system.log import get_logger
@@ -29,12 +31,15 @@ def _get_driver() -> str:
 
 
 _DB: "MCPDatabase | None" = None
+_db_lock = threading.Lock()
 
 
 def get_db() -> "MCPDatabase":
     global _DB
     if _DB is None:
-        raise RuntimeError("MCP database not initialized — call init_db() first")
+        with _db_lock:
+            if _DB is None:
+                init_db()
     return _DB
 
 
@@ -63,6 +68,7 @@ class MCPDatabase:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
         self._driver = _get_driver()
+        self._in_transaction = False
         self._connect()
 
     def _connect(self):
@@ -119,7 +125,28 @@ class MCPDatabase:
             CREATE INDEX IF NOT EXISTS idx_idempotency_expires ON idempotency(expires_at);
             CREATE INDEX IF NOT EXISTS idx_tool_log_created ON tool_log(created_at);
         """)
-        self._conn.commit()
+        self._commit()
+
+    def _commit(self) -> None:
+        """Commit unless inside a transaction() batch (caller commits once)."""
+        if not self._in_transaction:
+            self._conn.commit()
+
+    @contextmanager
+    def transaction(self) -> Iterator["MCPDatabase"]:
+        """Batch multiple writes into a single commit (one fsync per tool call)."""
+        self._in_transaction = True
+        ok = False
+        try:
+            yield self
+            ok = True
+        except BaseException:
+            self._conn.rollback()
+            raise
+        finally:
+            self._in_transaction = False
+            if ok:
+                self._conn.commit()
 
     # ── Access token cache ────────────────────────────────────────────────
 
@@ -138,7 +165,7 @@ class MCPDatabase:
             "INSERT OR REPLACE INTO access_tokens (service, access_token, expires_at, updated_at) VALUES (?, ?, ?, ?)",
             (service, access_token, now + expires_in, now),
         )
-        self._conn.commit()
+        self._commit()
 
     # ── Idempotency ───────────────────────────────────────────────────────
 
@@ -163,11 +190,11 @@ class MCPDatabase:
             "INSERT OR REPLACE INTO idempotency (request_hash, tool, result, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
             (h, tool, json.dumps(result), now, now + ttl_hours * 3600),
         )
-        self._conn.commit()
+        self._commit()
 
     def _clean_expired_idempotency(self):
         self._conn.execute("DELETE FROM idempotency WHERE expires_at <= ?", (time.time(),))
-        self._conn.commit()
+        self._commit()
 
     # ── Rate limiting ──────────────────────────────────────────────────────
 
@@ -207,7 +234,7 @@ class MCPDatabase:
                 "ON CONFLICT(service, period) DO UPDATE SET count = count + 1",
                 (service, period),
             )
-        self._conn.commit()
+        self._commit()
 
     # ── Tool log ───────────────────────────────────────────────────────────
 
@@ -216,7 +243,7 @@ class MCPDatabase:
             "INSERT INTO tool_log (tool, arguments, result, duration_ms, created_at) VALUES (?, ?, ?, ?, ?)",
             (tool, json.dumps(arguments), json.dumps(result), duration_ms, time.time()),
         )
-        self._conn.commit()
+        self._commit()
 
     # ── Periodic cleanup ──────────────────────────────────────────────────
 
@@ -225,7 +252,7 @@ class MCPDatabase:
         cutoff = time.time() - 86400 * 30  # 30 days
         self._conn.execute("DELETE FROM tool_log WHERE created_at < ?", (cutoff,))
         self._conn.execute("DELETE FROM access_tokens WHERE expires_at < ?", (time.time(),))
-        self._conn.commit()
+        self._commit()
 
     def close(self):
         if self._conn:

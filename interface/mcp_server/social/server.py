@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 
 # Load config FIRST, before anything else
 from system.config import load_config
@@ -28,21 +27,14 @@ _original_tool = mcp.tool
 def _wrapped_tool(*args, **kwargs):
     """
     Decorator factory that wraps tool functions with rate limiting.
-    
+
     Docstring: Intercept MCP tool registration, apply middleware
     to enforce quotas and log invocations before passing to MCP.
-    
-    Inline: Skip wrapping for internal tools (_inject_env).
     """
     def decorator(fn):
         name = kwargs.get("name") or fn.__name__
-        
-        # Skip internal tools
-        if name not in ("_inject_env",):
-            fn = wrap_tool(name, fn)
-        
-        return _original_tool(*args, **kwargs)(fn)
-    
+        return _original_tool(*args, **kwargs)(wrap_tool(name, fn))
+
     return decorator
 
 
@@ -60,22 +52,6 @@ def _load_tools() -> None:
     for mod in (x, threads, youtube, medium, reddit, bluesky, mastodon, pixelset, discord, email, multipost):
         if hasattr(mod, "load_tools"):
             mod.load_tools(mcp)
-
-
-# ── Internal tool: environment injection ───────────────────────────────────
-
-@mcp.tool(
-    name="_inject_env",
-    description="INTERNAL: inject environment variables from Aiko process (not user-facing)",
-)
-def _inject_env(vars: dict[str, str]) -> dict:
-    """Set environment variables at runtime if not already set."""
-    count = 0
-    for k, v in vars.items():
-        if k not in os.environ:
-            os.environ[k] = v
-            count += 1
-    return {"ok": True, "injected": count}
 
 
 # ── Entry point ────────────────────────────────────────────────────────────

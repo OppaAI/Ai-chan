@@ -57,7 +57,8 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
         cached = db.get_idempotent_result(tool_name, kwargs)
         if cached is not None:
             elapsed = (time.time() - t0) * 1000
-            db.log_tool_call(tool_name, kwargs, cached, elapsed)
+            with db.transaction():
+                db.log_tool_call(tool_name, kwargs, cached, elapsed)
             return cached
 
         # ── Rate limit check ──────────────────────────────────────────────
@@ -66,9 +67,10 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
         if not allowed:
             result = {"ok": False, "error": msg, "rate_limited": True}
             elapsed = (time.time() - t0) * 1000
-            db.log_tool_call(tool_name, kwargs, result, elapsed)
-            # Cache rate limit response for 1 hour (allow retry later)
-            db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=1)
+            with db.transaction():
+                db.log_tool_call(tool_name, kwargs, result, elapsed)
+                # Cache rate limit response for 1 hour (allow retry later)
+                db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=1)
             return result
 
         # ── Execute tool ──────────────────────────────────────────────────
@@ -80,15 +82,16 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
         elapsed = (time.time() - t0) * 1000
 
         # ── Log and cache ─────────────────────────────────────────────────
-        db.log_tool_call(tool_name, kwargs, result, elapsed)
+        with db.transaction():
+            db.log_tool_call(tool_name, kwargs, result, elapsed)
 
-        if result.get("ok"):
-            # Success: increment rate limit, cache result for 24 hours
-            db.increment_rate_limit(service)
-            db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=24)
-        else:
-            # Failure: cache for shorter time (1 hour) to allow retry
-            db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=1)
+            if result.get("ok"):
+                # Success: increment rate limit, cache result for 24 hours
+                db.increment_rate_limit(service)
+                db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=24)
+            else:
+                # Failure: cache for shorter time (1 hour) to allow retry
+                db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=1)
 
         return result
 
