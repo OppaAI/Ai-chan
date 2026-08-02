@@ -1,10 +1,8 @@
-from __future__ import annotations
-
 import os
-from typing import Optional
+from typing import Optional, Union
 
 
-def _split_services(services: str | list[str] | tuple[str, ...]) -> list[str]:
+def _split_services(services: Union[str, list[str], tuple[str, ...]]) -> list[str]:
     """
     Parse service list from comma/semicolon-separated string or iterable.
     
