@@ -3,7 +3,7 @@ import mimetypes
 from pathlib import Path
 
 from social.services import env, int_env, bool_env, get_session, err
-from social.db import get_db
+from social.state import get_db
 
 
 def _get_youtube_token() -> str | dict:

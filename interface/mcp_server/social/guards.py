@@ -4,7 +4,7 @@ import time
 from functools import wraps
 from typing import Any, Callable
 
-from social.db import get_db
+from social.state import get_db
 
 # ── Rate limit configuration (per-platform, with breathing room) ─────────────
 # YouTube is quota-limited (6 videos/day on default 10k quota)

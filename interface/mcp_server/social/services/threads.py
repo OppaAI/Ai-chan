@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from social.services import env, int_env, get_session, err
-from social.db import get_db
+from social.state import get_db
 
 
 def _upload_to_imgbb(image_path: str) -> dict:

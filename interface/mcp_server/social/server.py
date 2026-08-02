@@ -20,7 +20,7 @@ mcp = FastMCP("Aiko Social MCP Server")
 
 
 # ── Apply middleware (rate limiting, audit logging) ────────────────────────
-from social.middleware import wrap_tool
+from social.guards import wrap_tool
 
 _original_tool = mcp.tool
 

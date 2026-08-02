@@ -4,7 +4,7 @@ import os
 from email.message import EmailMessage
 
 from social.services import env, get_session, err
-from social.db import get_db
+from social.state import get_db
 
 
 # ── Gmail API (OAuth 2.0) ────────────────────────────────────────────────
