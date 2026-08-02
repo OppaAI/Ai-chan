@@ -102,6 +102,7 @@ function renderDraftList(filter) {
             </div>
             <div class="draft-status">${statusBadges.join('')}</div>
         `;
+        div.setAttribute('data-draft-dir', draft.draft_dir);
         div.onclick = () => selectDraft(draft);
         container.appendChild(div);
     });
@@ -114,7 +115,7 @@ function selectDraft(draft) {
     }
     currentDraft = draft;
     document.querySelectorAll('.draft-item').forEach(el => {
-        el.classList.toggle('active', el.textContent.includes(draft.relative_path));
+        el.classList.toggle('active', el.getAttribute('data-draft-dir') === draft.draft_dir);
     });
 
     // Show info panel
