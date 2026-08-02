@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, List, Dict
 from social.services import env, err
 from social.state import get_db
 
@@ -49,7 +49,7 @@ def load_tools(mcp):
         name="read_protonmail",
         description="Read messages from ProtonMail inbox (or specified folder). Returns list of messages with sender, subject, date, snippet.",
     )
-    def read_protonmail(folder: str = "inbox", query: str = "", max_results: int = 10) -> dict:
+    def read_protonmail(folder: str = "inbox", query: str = "", max_results: int = 10) -> Dict:
         client, err_resp = _get_client()
         if err_resp:
             return err_resp
@@ -86,7 +86,7 @@ def load_tools(mcp):
         name="search_protonmail",
         description="Search ProtonMail messages by keyword across all folders. Returns matching messages.",
     )
-    def search_protonmail(query: str, max_results: int = 20) -> dict:
+    def search_protonmail(query: str, max_results: int = 20) -> Dict:
         client, err_resp = _get_client()
         if err_resp:
             return err_resp
@@ -122,13 +122,13 @@ def load_tools(mcp):
         description="Send an email via ProtonMail. Supports HTML body, attachments, CC/BCC, reply-to.",
     )
     def send_protonmail(
-        recipients: list[str],
+        recipients: List[str],
         subject: str,
         body: str,
-        cc: Optional[list[str]] = None,
-        bcc: Optional[list[str]] = None,
-        attachments: Optional[list[dict]] = None,
-    ) -> dict:
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None,
+        attachments: Optional[List[Dict]] = None,
+    ) -> Dict:
         """
         Send email via ProtonMail.
 
