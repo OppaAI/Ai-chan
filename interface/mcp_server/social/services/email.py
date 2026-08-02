@@ -3,7 +3,7 @@ import base64
 import os
 from email.message import EmailMessage
 
-from social.services import env, get_session, err
+from social.services import env, get_session, err, refresh_oauth_token
 from social.state import get_db
 
 
@@ -18,24 +18,19 @@ def _gmail_access_token() -> tuple[str | None, dict | None]:
     client_id = env("GMAIL_CLIENT_ID")
     client_secret = env("GMAIL_CLIENT_SECRET")
     refresh_token = env("GMAIL_REFRESH_TOKEN")
-    if not all([client_id, client_secret, refresh_token]):
-        return None, err("gmail", "GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN not set")
-    session = get_session()
-    try:
-        resp = session.post(
-            "https://oauth2.googleapis.com/token",
-            data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"},
-            timeout=30,
-        )
-        payload = resp.json()
-        token = payload.get("access_token") if 200 <= resp.status_code < 300 else None
-        if not token:
-            return None, {"ok": False, "provider": "gmail", "stage": "token_refresh", "status_code": resp.status_code, "response": payload}
-        expires_in = int(payload.get("expires_in", 3600))
-        db.set_cached_token("gmail", token, expires_in)
-        return token, None
-    except Exception as e:
-        return None, {"ok": False, "provider": "gmail", "stage": "token_refresh", "error": str(e)}
+
+    token = refresh_oauth_token(
+        "gmail",
+        "https://oauth2.googleapis.com/token",
+        client_id,
+        client_secret,
+        refresh_token,
+    )
+    if isinstance(token, dict) and not token.get("ok", True):
+        return None, token
+
+    db.set_cached_token("gmail", token, 3600)
+    return token, None
 
 
 def _gmail_send(token: str, to: str, subject: str, body: str) -> dict:
@@ -110,30 +105,20 @@ def _outlook_access_token() -> tuple[str | None, dict | None]:
     client_secret = env("OUTLOOK_CLIENT_SECRET")
     refresh_token = env("OUTLOOK_REFRESH_TOKEN")
     tenant = env("OUTLOOK_TENANT", "common")
-    if not all([client_id, client_secret, refresh_token]):
-        return None, err("outlook", "OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET, OUTLOOK_REFRESH_TOKEN not set")
-    session = get_session()
-    try:
-        resp = session.post(
-            f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-                "scope": "https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.Read offline_access",
-            },
-            timeout=30,
-        )
-        payload = resp.json()
-        token = payload.get("access_token") if 200 <= resp.status_code < 300 else None
-        if not token:
-            return None, {"ok": False, "provider": "outlook", "stage": "token_refresh", "status_code": resp.status_code, "response": payload}
-        expires_in = int(payload.get("expires_in", 3600))
-        db.set_cached_token("outlook", token, expires_in)
-        return token, None
-    except Exception as e:
-        return None, {"ok": False, "provider": "outlook", "stage": "token_refresh", "error": str(e)}
+
+    token = refresh_oauth_token(
+        "outlook",
+        f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+        client_id,
+        client_secret,
+        refresh_token,
+        extra_data={"scope": "https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Mail.Read offline_access"},
+    )
+    if isinstance(token, dict) and not token.get("ok", True):
+        return None, token
+
+    db.set_cached_token("outlook", token, 3600)
+    return token, None
 
 
 def _outlook_send(token: str, to: str, subject: str, body: str) -> dict:

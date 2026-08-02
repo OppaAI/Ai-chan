@@ -58,3 +58,45 @@ def bool_env(name: str, default: bool = False) -> bool:
 
 def err(provider: str, message: str) -> dict:
     return {"ok": False, "provider": provider, "error": message}
+
+
+def refresh_oauth_token(
+    service: str,
+    token_url: str,
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    *,
+    grant_type: str = "refresh_token",
+    extra_data: dict | None = None,
+    timeout: int = 30,
+) -> str | dict:
+    """
+    Generic OAuth2 token refresh with retry (uses shared session).
+
+    Returns access_token (str) on success, or err dict on failure.
+    """
+    if not (client_id and client_secret and refresh_token):
+        return err(service, "missing client_id, client_secret, or refresh_token")
+
+    data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": grant_type,
+    }
+    if extra_data:
+        data.update(extra_data)
+
+    session = get_session()
+    try:
+        resp = session.post(token_url, data=data, timeout=timeout)
+        payload = resp.json()
+        if not (200 <= resp.status_code < 300):
+            return err(service, f"token refresh failed: {resp.status_code}, response: {payload}")
+        access_token = payload.get("access_token")
+        if not access_token:
+            return err(service, f"no access_token in refresh response: {payload}")
+        return access_token
+    except Exception as e:
+        return err(service, f"token refresh error: {e}")

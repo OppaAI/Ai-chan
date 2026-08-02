@@ -51,7 +51,13 @@ def _get_threads_token() -> str | dict:
     if cached:
         return cached
 
-    # Fallback to existing env-based refresh logic
+    token = env("THREADS_ACCESS_TOKEN")
+    base = env("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
+    if not token:
+        return err("threads", "THREADS_ACCESS_TOKEN not set")
+
+    # Meta's long-lived token lasts ~60 days; refresh proactively within
+    # THREADS_REFRESH_BEFORE_EXPIRY_DAYS (default 6) of expiry.
     raw = env("THREADS_ACCESS_TOKEN_EXPIRES_AT")
     if raw:
         try:
@@ -59,19 +65,15 @@ def _get_threads_token() -> str | dict:
             if expiry.tzinfo is None:
                 expiry = expiry.replace(tzinfo=timezone.utc)
             remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
-            if remaining > int_env("THREADS_REFRESH_WINDOW_DAYS", 55) * 86400:
-                token = env("THREADS_ACCESS_TOKEN")
-                if token:
-                    return token
+            refresh_before = int_env("THREADS_REFRESH_BEFORE_EXPIRY_DAYS", 6) * 86400
+            if remaining > refresh_before:
+                return token  # plenty of time left, use cached
         except ValueError:
             pass
 
-    token = env("THREADS_ACCESS_TOKEN")
-    base = env("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
-    if not token:
-        return err("threads", "THREADS_ACCESS_TOKEN not set")
+    # Refresh via Meta's th_refresh_token grant
+    session = get_session()
     try:
-        session = get_session()
         resp = session.get(
             f"{base}/refresh_access_token",
             params={"grant_type": "th_refresh_token", "access_token": token},

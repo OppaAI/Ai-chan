@@ -20,7 +20,7 @@ TWITTER_RELAY_TIMEOUT: "30"  # Seconds before X relay HTTP calls time out.
 
 # -- Threads metadata --
 THREADS_ACCESS_TOKEN_EXPIRES_AT: ""  # Expiration timestamp for Threads access token (auto-managed; manual override only).
-THREADS_REFRESH_WINDOW_DAYS: "55"  # Days before token expiration to trigger refresh.
+THREADS_REFRESH_BEFORE_EXPIRY_DAYS: "6"  # Days before token expiration to trigger refresh.
 THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Base URL for Threads Graph API.
 THREADS_TOPIC_TAG: "AI Threads"  # Default topic tag for Threads posts.
 THREADS_PUBLISH_DELAY_SECONDS: "5"  # Delay between publish requests to avoid rate limits.

@@ -18,18 +18,6 @@ load_dotenv()
 log = get_logger("social.db")
 
 
-def _get_driver() -> str:
-    encryption = os.getenv("SQLITE_ENCRYPTION", "0")
-    if encryption.lower() in ("1", "true", "yes"):
-        try:
-            import pysqlcipher3.dbapi2 as sqlcipher
-            log.info("Using SQLCipher for encrypted DB")
-            return "sqlcipher"
-        except ImportError:
-            log.warning("SQLITE_ENCRYPTION=1 but pysqlcipher3 not installed — falling back to plain SQLite")
-    return "sqlite"
-
-
 _DB: "MCPDatabase | None" = None
 _db_lock = threading.Lock()
 
@@ -67,23 +55,11 @@ class MCPDatabase:
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
-        self._driver = _get_driver()
         self._in_transaction = False
         self._connect()
 
     def _connect(self):
-        if self._driver == "sqlcipher":
-            import pysqlcipher3.dbapi2 as sqlcipher
-            self._conn = sqlcipher.connect(str(self._path))
-            key = os.getenv("DATA_KEY_SECRET", "")
-            if key:
-                key_bytes = key.encode("utf-8") if isinstance(key, str) else key
-                self._conn.execute(f"PRAGMA key = x'{key_bytes.hex()}'")
-            self._conn.execute("PRAGMA cipher_use_hmac = OFF")
-            self._conn.execute("PRAGMA cipher_page_size = 4096")
-        else:
-            self._conn = sqlite3.connect(str(self._path))
-
+        self._conn = sqlite3.connect(str(self._path))
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA synchronous = NORMAL")
         self._conn.row_factory = sqlite3.Row
