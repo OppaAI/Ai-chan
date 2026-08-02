@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 
 def _split_services(services: str | list[str] | tuple[str, ...]) -> list[str]:
@@ -58,14 +59,14 @@ def load_tools(mcp):
     def post_social(
         services: str,
         text: str = "",
-        image_path: str | None = None,
+        image_path: Optional[str] = None,
         title: str = "",
         subreddit: str = "OppaAI",
-        video_path: str | None = None,
+        video_path: Optional[str] = None,
         description: str = "",
         channel: str = "",
-        topic_tag: str | None = None,
-        medium_tags: list[str] | None = None,
+        topic_tag: Optional[str] = None,
+        medium_tags: Optional[list[str]] = None,
         medium_publish_status: str = "public",
         medium_canonical_url: str = "",
     ) -> dict:

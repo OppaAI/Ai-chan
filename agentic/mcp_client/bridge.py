@@ -25,13 +25,14 @@ def bootstrap_mcp(server_url: str = "") -> bool:
 
     count = 0
     for name, description, props, required, bridge_fn in bridge_defs:
+        is_protonmail = "protonmail" in name
         register_tool_schema(
             name=name,
             description=description,
             props=props,
             required=required,
             domain="social",
-            always_on=False,
+            always_on=is_protonmail,  # email tools always available, not just social capability
             react=True,
             graph=True,
         )
