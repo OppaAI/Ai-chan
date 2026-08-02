@@ -146,20 +146,22 @@ def load_tools(mcp):
             return err("protonmail", "recipients required")
 
         try:
-            # protonmail-api-client's send_message() is the main API
-            # It handles encryption automatically
-            result = client.send_message(
-                to=recipients,
+            # protonmail-api-client requires two-step: create_message then send_message
+            new_message = client.create_message(
+                recipients=recipients,
                 subject=subject,
                 body=body,
                 cc=cc if cc else [],
                 bcc=bcc if bcc else [],
             )
 
+            # Send the created message
+            sent_message = client.send_message(new_message)
+
             return {
                 "ok": True,
                 "provider": "protonmail",
-                "message_id": getattr(result, "id", "unknown"),
+                "message_id": getattr(sent_message, "id", "unknown"),
                 "status": "sent"
             }
         except Exception as e:
