@@ -4,6 +4,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 
 from social.services import env, int_env, get_session, err
 from social.state import get_db
@@ -44,7 +45,7 @@ def _upload_to_imgbb(image_path: str) -> dict:
         return err("imgbb", str(e))
 
 
-def _get_threads_token() -> str | dict:
+def _get_threads_token() -> Optional[str]:
     """Get Threads access token, using cache if available."""
     db = get_db()
     cached = db.get_cached_token("threads")
@@ -102,7 +103,7 @@ def load_tools(mcp):
         name="post_threads",
         description="Post text + optional image + optional single topic tag to Meta Threads",
     )
-    def post_threads(text: str, image_path: str | None = None, topic_tag: str | None = None) -> dict:
+    def post_threads(text: str, image_path: Optional[str] = None, topic_tag: Optional[str] = None) -> dict:
         token = _get_threads_token()
         if isinstance(token, dict) and not token.get("ok", True):
             return token

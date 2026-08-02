@@ -2,6 +2,7 @@
 import base64
 import mimetypes
 from pathlib import Path
+from typing import Optional
 
 from social.services import env, get_session, err
 
@@ -11,7 +12,7 @@ def load_tools(mcp):
         name="post_discord",
         description="Send a message + optional image to a Discord channel via webhook or bot token",
     )
-    def post_discord(text: str, image_path: str | None = None, channel_id: str = "") -> dict:
+    def post_discord(text: str, image_path: Optional[str] = None, channel_id: str = "") -> dict:
         webhook_url = env("DISCORD_POST_WEBHOOK_URL")
         bot_token = env("DISCORD_BOT_TOKEN")
         channel_id = channel_id or env("DISCORD_AIKO_DEV_CHANNEL_ID") or env("DISCORD_POST_CHANNEL_ID")

@@ -1,4 +1,6 @@
 
+from typing import Optional
+
 from social.services import env
 
 
@@ -7,7 +9,7 @@ def load_tools(mcp):
         name="post_reddit",
         description="Post a text, link, or image post to Reddit",
     )
-    def post_reddit(title: str, text: str = "", image_path: str | None = None, subreddit: str = "") -> dict:
+    def post_reddit(title: str, text: str = "", image_path: Optional[str] = None, subreddit: str = "") -> dict:
         client_id = env("REDDIT_CLIENT_ID")
         client_secret = env("REDDIT_CLIENT_SECRET")
         username = env("REDDIT_USERNAME")

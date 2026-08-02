@@ -1,5 +1,6 @@
 
 from pathlib import Path
+from typing import Optional
 
 from social.services import env
 
@@ -9,7 +10,7 @@ def load_tools(mcp):
         name="post_mastodon",
         description="Post text + optional image to Mastodon",
     )
-    def post_mastodon(text: str, image_path: str | None = None) -> dict:
+    def post_mastodon(text: str, image_path: Optional[str] = None) -> dict:
         instance = env("MASTODON_INSTANCE", "https://mastodon.social").rstrip("/")
         access_token = env("MASTODON_ACCESS_TOKEN")
 

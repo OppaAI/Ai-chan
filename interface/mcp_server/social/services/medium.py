@@ -1,3 +1,5 @@
+from typing import Optional
+
 from social.services import env, err, get_session
 
 
@@ -10,7 +12,7 @@ def load_tools(mcp):
         title: str,
         content: str,
         content_format: str = "markdown",
-        tags: list[str] | None = None,
+        tags: Optional[list[str]] = None,
         publish_status: str = "public",
         canonical_url: str = "",
     ) -> dict:

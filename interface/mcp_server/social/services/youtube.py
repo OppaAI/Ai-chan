@@ -1,12 +1,13 @@
 
 import mimetypes
 from pathlib import Path
+from typing import Optional
 
 from social.services import env, int_env, bool_env, get_session, err, refresh_oauth_token
 from social.state import get_db
 
 
-def _get_youtube_token() -> str | dict:
+def _get_youtube_token() -> Optional[str]:
     """Get YouTube access token, using cache if available."""
     db = get_db()
     cached = db.get_cached_token("youtube")

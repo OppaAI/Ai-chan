@@ -1,6 +1,7 @@
 
 import mimetypes
 from pathlib import Path
+from typing import Optional
 
 from social.services import env, int_env, get_session, err
 
@@ -10,7 +11,7 @@ def load_tools(mcp):
         name="post_x",
         description="Post text + optional image to X/Twitter via AIsa relay",
     )
-    def post_x(text: str, image_path: str | None = None) -> dict:
+    def post_x(text: str, image_path: Optional[str] = None) -> dict:
         api_key = env("AISA_API_KEY")
         base_url = env("TWITTER_RELAY_BASE_URL", "https://api.aisa.one/apis/v1/twitter").rstrip("/")
         timeout = int_env("TWITTER_RELAY_TIMEOUT", 30)

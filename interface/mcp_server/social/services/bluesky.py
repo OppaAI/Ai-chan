@@ -1,5 +1,6 @@
 
 from pathlib import Path
+from typing import Optional
 
 from social.services import env
 
@@ -9,7 +10,7 @@ def load_tools(mcp):
         name="post_bluesky",
         description="Post text + optional image to Bluesky",
     )
-    def post_bluesky(text: str, image_path: str | None = None) -> dict:
+    def post_bluesky(text: str, image_path: Optional[str] = None) -> dict:
         handle = env("BLUESKY_HANDLE")
         app_pass = env("BLUESKY_APP_PASS")
 
