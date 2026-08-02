@@ -67,7 +67,11 @@
       "publish to YouTube",
       "post to Threads",
       "draft a social media post for this photo",
-      "draft a social media post for this video"
+      "draft a social media post for this video",
+      "send an email to test@example.com",
+      "send a message via ProtonMail to a contact",
+      "check my ProtonMail inbox",
+      "search my email for Aiko"
     ]
   }
 }
