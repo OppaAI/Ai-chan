@@ -12,15 +12,15 @@ from social.state import get_db
 RATE_LIMITS: dict[str, dict[str, int]] = {
     "post_x": {"per_hour": 50, "per_day": 100},
     "post_threads": {"per_hour": 50, "per_day": 100},
-    "post_youtube": {"per_hour": 5, "per_day": 10},  # Quota-limited
+    "post_youtube": {"per_hour": 5, "per_day": 10},
     "post_reddit": {"per_hour": 30, "per_day": 50},
     "post_bluesky": {"per_hour": 100, "per_day": 500},
     "post_mastodon": {"per_hour": 30, "per_day": 100},
     "post_pixelset": {"per_hour": 30, "per_day": 100},
     "post_discord": {"per_hour": 30, "per_day": 200},
     "post_social": {"per_hour": 30, "per_day": 100},
-    "send_email": {"per_hour": 30, "per_day": 100},
-    "read_emails": {"per_hour": 30, "per_day": 50},
+    "read_protonmail": {"per_hour": 30, "per_day": 100},
+    "search_protonmail": {"per_hour": 20, "per_day": 50},
 }
 
 
