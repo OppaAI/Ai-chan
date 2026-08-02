@@ -925,12 +925,38 @@ def _is_post_existing_content(prompt: str) -> bool:
     return has_action and has_content and not has_draft
 
 
+_EMAIL_ACTION_TERMS = ("send", "email", "mail", "inbox", "reply to", "draft an email")
+_EMAIL_SIGNAL_TERMS = ("email", "mail", "protonmail", "inbox", "@gmail.com", "@protonmail", "subject", "attachment")
+
+
+def _is_email_request(prompt: str) -> bool:
+    """True when the prompt asks to send/read/search email. Email turns must
+    fall through to the ReAct loop, where the direct ProtonMail tools live,
+    instead of auto-running a research/plan playbook (which would burn the
+    research budget and never touch the mailbox)."""
+    t = prompt.casefold()
+    has_action = any(v in t for v in _EMAIL_ACTION_TERMS)
+    has_signal = any(v in t for v in _EMAIL_SIGNAL_TERMS)
+    return has_action and has_signal
+
+
 def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder=None) -> PlanGraph | None:
     if not GRAPH_AGENT_ENABLED:
         return None
     plans = load_playbooks()
-    if _is_post_existing_content(user_input):
+    if _is_post_existing_content(user_input) or _is_email_request(user_input):
         return None
+    # Capability gate: when a capability was matched, only run playbooks whose
+    # declared capabilities intersect it (or that declare none). This mirrors
+    # filtered_tool_schemas so a research playbook can never auto-run under a
+    # social/email turn just because its semantic triggers outscore everything
+    # else. No match -> keep every playbook eligible (safe default).
+    if cap_ids:
+        cap_set = set(cap_ids)
+        plans = [
+            p for p in plans
+            if not p.get("capabilities") or set(p.get("capabilities", [])) & cap_set
+        ]
     prompt_vec = None
     if embedder is not None:
         try:
