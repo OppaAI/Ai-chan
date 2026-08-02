@@ -21,6 +21,7 @@ RATE_LIMITS: dict[str, dict[str, int]] = {
     "post_social": {"per_hour": 30, "per_day": 100},
     "read_protonmail": {"per_hour": 30, "per_day": 100},
     "search_protonmail": {"per_hour": 20, "per_day": 50},
+    "send_protonmail": {"per_hour": 20, "per_day": 50},
 }
 
 
