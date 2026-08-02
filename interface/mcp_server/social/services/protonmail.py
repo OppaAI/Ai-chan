@@ -117,7 +117,7 @@ def load_tools(mcp):
 
     @mcp.tool(
         name="send_protonmail",
-        description="Send an email via ProtonMail. Supports HTML body, attachments, CC/BCC, reply-to.",
+        description="Send an email via ProtonMail. Supports HTML body, CC/BCC.",
     )
     def send_protonmail(
         recipients: List[str],
@@ -128,7 +128,7 @@ def load_tools(mcp):
         attachments: Optional[List[Dict]] = None,
     ) -> Dict:
         """
-        Send email via ProtonMail.
+        Send email via ProtonMail using protonmail-api-client.
 
         Args:
             recipients: List of email addresses (to)
@@ -136,33 +136,31 @@ def load_tools(mcp):
             body: HTML or plain text body
             cc: Optional CC recipients
             bcc: Optional BCC recipients
-            attachments: Optional list of dicts with keys: name, content (bytes), mime_type
+            attachments: Not yet implemented
         """
         client, err_resp = _get_client()
         if err_resp:
             return err_resp
 
-        try:
-            # Create attachments if provided
-            attach_objs = []
-            if attachments:
-                for att in attachments:
-                    attach_objs.append(client.create_attachment(
-                        content=att.get("content", b""),
-                        name=att.get("name", "attachment"),
-                    ))
+        if not recipients:
+            return err("protonmail", "recipients required")
 
-            msg = client.create_message(
-                recipients=recipients,
+        try:
+            # protonmail-api-client's send_message() is the main API
+            # It handles encryption automatically
+            result = client.send_message(
+                to=recipients,
                 subject=subject,
                 body=body,
-                cc=cc or [],
-                bcc=bcc or [],
-                attachments=attach_objs if attach_objs else None,
+                cc=cc if cc else [],
+                bcc=bcc if bcc else [],
             )
 
-            result = client.send_message(msg)
-
-            return {"ok": True, "provider": "protonmail", "message_id": getattr(result, "id", ""), "status": "sent"}
+            return {
+                "ok": True,
+                "provider": "protonmail",
+                "message_id": getattr(result, "id", "unknown"),
+                "status": "sent"
+            }
         except Exception as e:
             return err("protonmail", f"send failed: {e}")
