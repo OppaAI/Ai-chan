@@ -6,16 +6,21 @@ from typing import Any, Callable
 
 from social.db import get_db
 
-# ── Rate limit configuration ───────────────────────────────────────────────
-
-LOW_TRAFFIC_LIMIT = {"per_hour": 6, "per_day": 10}
+# ── Rate limit configuration (per-platform, with breathing room) ─────────────
+# YouTube is quota-limited (6 videos/day on default 10k quota)
+# Others have generous API limits; we cap well below to avoid bans
 RATE_LIMITS: dict[str, dict[str, int]] = {
-    name: LOW_TRAFFIC_LIMIT
-    for name in (
-        "post_x", "post_threads", "post_youtube", "post_reddit",
-        "post_bluesky", "post_mastodon", "post_pixelset", "post_discord",
-        "post_social", "send_email", "read_emails",
-    )
+    "post_x": {"per_hour": 50, "per_day": 100},
+    "post_threads": {"per_hour": 50, "per_day": 100},
+    "post_youtube": {"per_hour": 5, "per_day": 10},  # Quota-limited
+    "post_reddit": {"per_hour": 30, "per_day": 50},
+    "post_bluesky": {"per_hour": 100, "per_day": 500},
+    "post_mastodon": {"per_hour": 30, "per_day": 100},
+    "post_pixelset": {"per_hour": 30, "per_day": 100},
+    "post_discord": {"per_hour": 30, "per_day": 200},
+    "post_social": {"per_hour": 30, "per_day": 100},
+    "send_email": {"per_hour": 30, "per_day": 100},
+    "read_emails": {"per_hour": 30, "per_day": 50},
 }
 
 
