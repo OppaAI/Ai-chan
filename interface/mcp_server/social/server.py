@@ -22,9 +22,9 @@ mcp = FastMCP("Aiko Social MCP Server", host=HOST, port=PORT)
 # ── tool registration ─────────────────────────────────────────────────────
 
 def _load_tools() -> None:
-    from social.tools import x, threads, youtube
-    from social.tools import reddit, bluesky, mastodon, pixelset, multipost
-    from social.tools import discord, email
+    from social.services import x, threads, youtube
+    from social.services import reddit, bluesky, mastodon, pixelset, multipost
+    from social.services import discord, email
 
     for mod in (x, threads, youtube, reddit, bluesky, mastodon, pixelset, discord, email, multipost):
         if hasattr(mod, "load_tools"):

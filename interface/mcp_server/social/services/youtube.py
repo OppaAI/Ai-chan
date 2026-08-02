@@ -4,7 +4,7 @@ from pathlib import Path
 
 import requests
 
-from social.tools.base import env, int_env, bool_env
+from social.services import env, int_env, bool_env
 
 
 def load_tools(mcp):

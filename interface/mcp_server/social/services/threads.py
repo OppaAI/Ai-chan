@@ -7,7 +7,7 @@ from pathlib import Path
 
 import requests
 
-from social.tools.base import env, int_env
+from social.services import env, int_env
 
 
 def _upload_to_imgbb(image_path: str) -> dict:

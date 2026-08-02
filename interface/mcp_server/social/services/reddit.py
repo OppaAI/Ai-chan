@@ -1,5 +1,5 @@
 
-from social.tools.base import env
+from social.services import env
 
 
 def load_tools(mcp):

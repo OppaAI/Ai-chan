@@ -1,7 +1,7 @@
 
 from pathlib import Path
 
-from social.tools.base import env
+from social.services import env
 
 
 def _default_media_roots() -> list[Path]:
