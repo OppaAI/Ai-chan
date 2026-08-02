@@ -16,3 +16,7 @@ def int_env(name: str, default: int) -> int:
 
 def bool_env(name: str, default: bool = False) -> bool:
     return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def err(provider: str, message: str) -> dict:
+    return {"ok": False, "provider": provider, "error": message}

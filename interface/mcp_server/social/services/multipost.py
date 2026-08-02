@@ -12,7 +12,7 @@ def _split_services(services: str | list[str] | tuple[str, ...]) -> list[str]:
 def load_tools(mcp):
     @mcp.tool(
         name="post_social",
-        description="Post one payload to selected one-way social services: x, threads, bluesky, mastodon, youtube, reddit, pixelset, discord.",
+        description="Post one payload to selected one-way social services: x, threads, bluesky, mastodon, youtube, reddit, pixelset, discord, medium.",
     )
     def post_social(
         services: str,
@@ -24,6 +24,9 @@ def load_tools(mcp):
         description: str = "",
         channel: str = "",
         topic_tag: str | None = None,
+        medium_tags: list[str] | None = None,
+        medium_publish_status: str = "public",
+        medium_canonical_url: str = "",
     ) -> dict:
         results = []
         tools = mcp._tool_manager._tools
@@ -44,6 +47,8 @@ def load_tools(mcp):
                 result = tools["post_pixelset"].fn(image_path=image_path or "", caption=text)
             elif service == "discord":
                 result = tools["post_discord"].fn(text=text, image_path=image_path, channel_id=channel)
+            elif service == "medium":
+                result = tools["post_medium"].fn(title=title or text[:100], content=text, tags=medium_tags, publish_status=medium_publish_status, canonical_url=medium_canonical_url)
             else:
                 result = {"ok": False, "provider": service, "error": "unsupported service"}
             results.append(result)
