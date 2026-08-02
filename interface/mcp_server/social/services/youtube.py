@@ -3,6 +3,39 @@ import mimetypes
 from pathlib import Path
 
 from social.services import env, int_env, bool_env, get_session, err
+from social.db import get_db
+
+
+def _get_youtube_token() -> str | dict:
+    """Get YouTube access token, using cache if available."""
+    db = get_db()
+    cached = db.get_cached_token("youtube")
+    if cached:
+        return cached
+
+    client_id = env("YOUTUBE_CLIENT_ID")
+    client_secret = env("YOUTUBE_CLIENT_SECRET")
+    refresh_token = env("YOUTUBE_REFRESH_TOKEN")
+    if not client_id or not client_secret or not refresh_token:
+        return err("youtube", "YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REFRESH_TOKEN not set")
+
+    session = get_session()
+    try:
+        resp = session.post(
+            "https://oauth2.googleapis.com/token",
+            data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"},
+            timeout=30,
+        )
+        payload = resp.json()
+        access_token = payload.get("access_token") if 200 <= resp.status_code < 300 else None
+        if not access_token:
+            return {"ok": False, "provider": "youtube", "stage": "token_refresh", "status_code": resp.status_code, "response": payload}
+        # Cache token (expires_in is typically 3600s)
+        expires_in = int(payload.get("expires_in", 3600))
+        db.set_cached_token("youtube", access_token, expires_in)
+        return access_token
+    except Exception as e:
+        return {"ok": False, "provider": "youtube", "stage": "token_refresh", "error": str(e)}
 
 
 def load_tools(mcp):
@@ -11,27 +44,12 @@ def load_tools(mcp):
         description="Upload video with title + optional description to YouTube",
     )
     def post_youtube(video_path: str, title: str, description: str = "") -> dict:
-        client_id = env("YOUTUBE_CLIENT_ID")
-        client_secret = env("YOUTUBE_CLIENT_SECRET")
-        refresh_token = env("YOUTUBE_REFRESH_TOKEN")
+        token = _get_youtube_token()
+        if isinstance(token, dict) and not token.get("ok", True):
+            return token
+        access_token = token
+
         timeout = int_env("YOUTUBE_TIMEOUT", 120)
-
-        if not client_id or not client_secret or not refresh_token:
-            return err("youtube", "YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REFRESH_TOKEN not set")
-
-        session = get_session()
-        try:
-            resp = session.post(
-                "https://oauth2.googleapis.com/token",
-                data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"},
-                timeout=30,
-            )
-            payload = resp.json()
-            access_token = payload.get("access_token") if 200 <= resp.status_code < 300 else None
-            if not access_token:
-                return {"ok": False, "provider": "youtube", "stage": "token_refresh", "status_code": resp.status_code, "response": payload}
-        except Exception as e:
-            return {"ok": False, "provider": "youtube", "stage": "token_refresh", "error": str(e)}
 
         p = Path(video_path)
         if not p.exists():
@@ -54,6 +72,7 @@ def load_tools(mcp):
         }
         mime = mimetypes.guess_type(str(p))[0] or "video/mp4"
 
+        session = get_session()
         try:
             init = session.post(
                 "https://www.googleapis.com/upload/youtube/v3/videos",

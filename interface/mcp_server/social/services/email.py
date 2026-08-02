@@ -4,11 +4,17 @@ import os
 from email.message import EmailMessage
 
 from social.services import env, get_session, err
+from social.db import get_db
 
 
 # ── Gmail API (OAuth 2.0) ────────────────────────────────────────────────
 
 def _gmail_access_token() -> tuple[str | None, dict | None]:
+    db = get_db()
+    cached = db.get_cached_token("gmail")
+    if cached:
+        return cached, None
+
     client_id = env("GMAIL_CLIENT_ID")
     client_secret = env("GMAIL_CLIENT_SECRET")
     refresh_token = env("GMAIL_REFRESH_TOKEN")
@@ -25,6 +31,8 @@ def _gmail_access_token() -> tuple[str | None, dict | None]:
         token = payload.get("access_token") if 200 <= resp.status_code < 300 else None
         if not token:
             return None, {"ok": False, "provider": "gmail", "stage": "token_refresh", "status_code": resp.status_code, "response": payload}
+        expires_in = int(payload.get("expires_in", 3600))
+        db.set_cached_token("gmail", token, expires_in)
         return token, None
     except Exception as e:
         return None, {"ok": False, "provider": "gmail", "stage": "token_refresh", "error": str(e)}
@@ -93,6 +101,11 @@ def _gmail_read(token: str, query: str = "", max_results: int = 10) -> dict:
 # ── Microsoft Graph API (OAuth 2.0) ──────────────────────────────────────
 
 def _outlook_access_token() -> tuple[str | None, dict | None]:
+    db = get_db()
+    cached = db.get_cached_token("outlook")
+    if cached:
+        return cached, None
+
     client_id = env("OUTLOOK_CLIENT_ID")
     client_secret = env("OUTLOOK_CLIENT_SECRET")
     refresh_token = env("OUTLOOK_REFRESH_TOKEN")
@@ -116,6 +129,8 @@ def _outlook_access_token() -> tuple[str | None, dict | None]:
         token = payload.get("access_token") if 200 <= resp.status_code < 300 else None
         if not token:
             return None, {"ok": False, "provider": "outlook", "stage": "token_refresh", "status_code": resp.status_code, "response": payload}
+        expires_in = int(payload.get("expires_in", 3600))
+        db.set_cached_token("outlook", token, expires_in)
         return token, None
     except Exception as e:
         return None, {"ok": False, "provider": "outlook", "stage": "token_refresh", "error": str(e)}

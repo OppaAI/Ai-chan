@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from social.services import env, int_env, get_session, err
+from social.db import get_db
 
 
 def _upload_to_imgbb(image_path: str) -> dict:
@@ -43,24 +44,32 @@ def _upload_to_imgbb(image_path: str) -> dict:
         return err("imgbb", str(e))
 
 
-def _refresh_token_if_due() -> bool:
+def _get_threads_token() -> str | dict:
+    """Get Threads access token, using cache if available."""
+    db = get_db()
+    cached = db.get_cached_token("threads")
+    if cached:
+        return cached
+
+    # Fallback to existing env-based refresh logic
     raw = env("THREADS_ACCESS_TOKEN_EXPIRES_AT")
-    if not raw:
-        return True
-    try:
-        expiry = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return True
-    if expiry.tzinfo is None:
-        expiry = expiry.replace(tzinfo=timezone.utc)
-    remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
-    threshold = int_env("THREADS_REFRESH_WINDOW_DAYS", 55) * 86400
-    if remaining > threshold:
-        return True
+    if raw:
+        try:
+            expiry = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            remaining = (expiry - datetime.now(timezone.utc)).total_seconds()
+            if remaining > int_env("THREADS_REFRESH_WINDOW_DAYS", 55) * 86400:
+                token = env("THREADS_ACCESS_TOKEN")
+                if token:
+                    return token
+        except ValueError:
+            pass
+
     token = env("THREADS_ACCESS_TOKEN")
     base = env("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
     if not token:
-        return False
+        return err("threads", "THREADS_ACCESS_TOKEN not set")
     try:
         session = get_session()
         resp = session.get(
@@ -69,20 +78,21 @@ def _refresh_token_if_due() -> bool:
             timeout=120,
         )
         if not (200 <= resp.status_code < 300):
-            return False
+            return err("threads", f"Token refresh failed: {resp.status_code}")
         payload = resp.json()
         new_token = payload.get("access_token")
         if not new_token:
-            return False
+            return err("threads", "No access token in refresh response")
         os.environ["THREADS_ACCESS_TOKEN"] = new_token
         expires_in = int(payload.get("expires_in") or 0)
         if expires_in > 0:
             os.environ["THREADS_ACCESS_TOKEN_EXPIRES_AT"] = (
                 datetime.now(timezone.utc) + timedelta(seconds=expires_in)
             ).isoformat()
-        return True
-    except Exception:
-        return False
+        db.set_cached_token("threads", new_token, expires_in or 3600)
+        return new_token
+    except Exception as e:
+        return err("threads", f"Token refresh error: {e}")
 
 
 def load_tools(mcp):
@@ -91,8 +101,10 @@ def load_tools(mcp):
         description="Post text + optional image + optional single topic tag to Meta Threads",
     )
     def post_threads(text: str, image_path: str | None = None, topic_tag: str | None = None) -> dict:
-        _refresh_token_if_due()
-        token = env("THREADS_ACCESS_TOKEN")
+        token = _get_threads_token()
+        if isinstance(token, dict) and not token.get("ok", True):
+            return token
+
         user_id = env("THREADS_USER_ID")
         base = env("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
 
