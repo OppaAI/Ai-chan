@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import sys
 from pathlib import Path
@@ -7,39 +9,50 @@ from system.config import load_config
 load_config()
 
 from system.log import get_logger
-log = get_logger(__name__)
-
 from mcp.server.fastmcp import FastMCP
+
+log = get_logger(__name__)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# HOST/PORT kept for reference (unused with stdio transport)
-HOST = os.getenv("SOCIAL_MCP_HOST", "127.0.0.1")
-PORT = int(os.getenv("SOCIAL_MCP_PORT", "8100"))
-
-mcp = FastMCP("Aiko Social MCP Server", host=HOST, port=PORT)
+# Initialize MCP server for stdio transport (no HTTP binding)
+mcp = FastMCP("Aiko Social MCP Server")
 
 
-# ── apply middleware (rate limiting, idempotency, tool logging) ──────────────
+# ── Apply middleware (rate limiting, audit logging) ────────────────────────
 from social.middleware import wrap_tool
 
 _original_tool = mcp.tool
 
+
 def _wrapped_tool(*args, **kwargs):
+    """
+    Decorator factory that wraps tool functions with rate limiting.
+    
+    Docstring: Intercept MCP tool registration, apply middleware
+    to enforce quotas and log invocations before passing to MCP.
+    
+    Inline: Skip wrapping for internal tools (_inject_env).
+    """
     def decorator(fn):
         name = kwargs.get("name") or fn.__name__
+        
         # Skip internal tools
         if name not in ("_inject_env",):
             fn = wrap_tool(name, fn)
+        
         return _original_tool(*args, **kwargs)(fn)
+    
     return decorator
+
 
 mcp.tool = _wrapped_tool
 
 
-# ── tool registration ─────────────────────────────────────────────────────
+# ── Tool registration ──────────────────────────────────────────────────────
 
 def _load_tools() -> None:
+    """Load tool modules and register with MCP."""
     from social.services import x, threads, youtube, medium
     from social.services import reddit, bluesky, mastodon, pixelset, multipost
     from social.services import discord, email
@@ -49,12 +62,14 @@ def _load_tools() -> None:
             mod.load_tools(mcp)
 
 
-# Internal tool: inject env vars at runtime (called by Aiko on connect)
+# ── Internal tool: environment injection ───────────────────────────────────
+
 @mcp.tool(
     name="_inject_env",
     description="INTERNAL: inject environment variables from Aiko process (not user-facing)",
 )
 def _inject_env(vars: dict[str, str]) -> dict:
+    """Set environment variables at runtime if not already set."""
     count = 0
     for k, v in vars.items():
         if k not in os.environ:
@@ -63,9 +78,11 @@ def _inject_env(vars: dict[str, str]) -> dict:
     return {"ok": True, "injected": count}
 
 
-# ── entry point ───────────────────────────────────────────────────────────
+# ── Entry point ────────────────────────────────────────────────────────────
 
 def main() -> None:
+    """Boot MCP server on stdio transport."""
+    log.info("Starting Aiko Social MCP Server (stdio transport)")
     _load_tools()
     mcp.run(transport="stdio")
 
