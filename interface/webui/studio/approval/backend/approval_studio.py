@@ -16,9 +16,6 @@ from fastapi.staticfiles import StaticFiles
 from system.config import load_config
 load_config()
 
-print(f"DEBUG: THREADS_ACCESS_TOKEN={os.environ.get('THREADS_ACCESS_TOKEN', 'NOT SET')}")
-print(f"DEBUG: THREADS_USER_ID={os.environ.get('THREADS_USER_ID', 'NOT SET')}")
-
 app = FastAPI(title="Aiko Approval Studio")
 
 app.add_middleware(

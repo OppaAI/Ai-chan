@@ -21,24 +21,13 @@ def _get_client():
     if not username or not password:
         return None, err("protonmail", "PROTONMAIL_USERNAME and PROTONMAIL_PASSWORD not set")
 
-    # Return cached client if credentials match and session is still valid
-    if _client_cache and _cache_username == username:
-        try:
-            # Quick validity check
-            _client_cache.get_messages(limit=1)
-            return _client_cache, None
-        except Exception:
-            # Session expired, clear cache
-            _client_cache = None
-
+    # Always create a fresh client to avoid ServerProof errors
+    # protonmail-api-client caches sessions internally via save_session
     try:
         client = ProtonMail()
         client.login(username, password)
-        _client_cache = client
-        _cache_username = username
         return client, None
     except Exception as e:
-        _client_cache = None
         return None, err("protonmail", f"login failed: {e}")
 
 
@@ -53,10 +42,8 @@ def load_tools(mcp):
             return err_resp
 
         try:
-            if folder.lower() != "inbox":
-                messages = client.get_messages(folder=folder)
-            else:
-                messages = client.get_messages()
+            # Get all messages (protonmail-api-client doesn't support folder filtering directly)
+            messages = client.get_messages()
 
             if query:
                 q = query.lower()
@@ -166,3 +153,6 @@ def load_tools(mcp):
             }
         except Exception as e:
             return err("protonmail", f"send failed: {e}")
+        finally:
+            # protonmail-api-client doesn't have close() method
+            pass
