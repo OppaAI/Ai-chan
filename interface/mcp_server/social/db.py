@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import time
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,6 @@ log = get_logger("social.db")
 
 
 def _get_driver() -> str:
-    """Detect SQLCipher vs plain SQLite."""
     encryption = os.getenv("SQLITE_ENCRYPTION", "0")
     if encryption.lower() in ("1", "true", "yes"):
         try:
@@ -53,8 +53,6 @@ def close_db() -> None:
 
 
 class MCPDatabase:
-    """Minimal rate-limit and audit-log database for social MCP server."""
-
     def __init__(self, db_path: str = ""):
         path = db_path or os.path.expanduser(os.getenv("SOCIAL_MCP_DB_PATH", ""))
         if not path:
@@ -68,7 +66,6 @@ class MCPDatabase:
         self._connect()
 
     def _connect(self):
-        """Open connection with WAL mode for concurrent access."""
         if self._driver == "sqlcipher":
             import pysqlcipher3.dbapi2 as sqlcipher
             self._conn = sqlcipher.connect(str(self._path))
@@ -86,9 +83,23 @@ class MCPDatabase:
         self._conn.row_factory = sqlite3.Row
 
     def migrate(self):
-        """Create rate_limits and tool_log tables."""
         cur = self._conn.cursor()
         cur.executescript("""
+            CREATE TABLE IF NOT EXISTS access_tokens (
+                service TEXT PRIMARY KEY,
+                access_token TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS idempotency (
+                request_hash TEXT PRIMARY KEY,
+                tool TEXT NOT NULL,
+                result TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                expires_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS rate_limits (
                 service TEXT NOT NULL,
                 period TEXT NOT NULL,
@@ -105,21 +116,68 @@ class MCPDatabase:
                 created_at REAL NOT NULL
             );
 
+            CREATE INDEX IF NOT EXISTS idx_idempotency_expires ON idempotency(expires_at);
             CREATE INDEX IF NOT EXISTS idx_tool_log_created ON tool_log(created_at);
         """)
+        self._conn.commit()
+
+    # ── Access token cache ────────────────────────────────────────────────
+
+    def get_cached_token(self, service: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT access_token, expires_at FROM access_tokens WHERE service = ?",
+            (service,),
+        ).fetchone()
+        if row and row["expires_at"] > time.time():
+            return row["access_token"]
+        return None
+
+    def set_cached_token(self, service: str, access_token: str, expires_in: int):
+        now = time.time()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO access_tokens (service, access_token, expires_at, updated_at) VALUES (?, ?, ?, ?)",
+            (service, access_token, now + expires_in, now),
+        )
+        self._conn.commit()
+
+    # ── Idempotency ───────────────────────────────────────────────────────
+
+    def _request_hash(self, tool: str, arguments: dict) -> str:
+        raw = f"{tool}:{json.dumps(arguments, sort_keys=True, default=str)}"
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def get_idempotent_result(self, tool: str, arguments: dict) -> dict | None:
+        h = self._request_hash(tool, arguments)
+        row = self._conn.execute(
+            "SELECT result FROM idempotency WHERE request_hash = ? AND expires_at > ?",
+            (h, time.time()),
+        ).fetchone()
+        if row:
+            return json.loads(row["result"])
+        return None
+
+    def set_idempotent_result(self, tool: str, arguments: dict, result: dict, ttl_hours: int = 24):
+        h = self._request_hash(tool, arguments)
+        now = time.time()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO idempotency (request_hash, tool, result, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+            (h, tool, json.dumps(result), now, now + ttl_hours * 3600),
+        )
+        self._conn.commit()
+
+    def _clean_expired_idempotency(self):
+        self._conn.execute("DELETE FROM idempotency WHERE expires_at <= ?", (time.time(),))
         self._conn.commit()
 
     # ── Rate limiting ──────────────────────────────────────────────────────
 
     def _period_key(self, unit: str = "hour") -> str:
-        """Generate hourly or daily bucket key."""
         now = time.gmtime()
         if unit == "hour":
             return time.strftime("%Y-%m-%d-%H", now)
         return time.strftime("%Y-%m-%d", now)
 
     def check_rate_limit(self, service: str, max_per_hour: int = 10, max_per_day: int = 50) -> tuple[bool, str]:
-        """Check if service has exceeded hour/day limits."""
         hour_key = self._period_key("hour")
         day_key = self._period_key("day")
 
@@ -140,7 +198,6 @@ class MCPDatabase:
         return True, ""
 
     def increment_rate_limit(self, service: str):
-        """Increment hour and day counters for service."""
         hour_key = self._period_key("hour")
         day_key = self._period_key("day")
 
@@ -155,23 +212,22 @@ class MCPDatabase:
     # ── Tool log ───────────────────────────────────────────────────────────
 
     def log_tool_call(self, tool: str, arguments: dict, result: dict, duration_ms: float):
-        """Log a tool call for audit trail."""
         self._conn.execute(
             "INSERT INTO tool_log (tool, arguments, result, duration_ms, created_at) VALUES (?, ?, ?, ?, ?)",
             (tool, json.dumps(arguments), json.dumps(result), duration_ms, time.time()),
         )
         self._conn.commit()
 
-    # ── Cleanup ────────────────────────────────────────────────────────────
+    # ── Periodic cleanup ──────────────────────────────────────────────────
 
     def cleanup(self):
-        """Delete tool logs older than 30 days."""
-        cutoff = time.time() - 86400 * 30
+        self._clean_expired_idempotency()
+        cutoff = time.time() - 86400 * 30  # 30 days
         self._conn.execute("DELETE FROM tool_log WHERE created_at < ?", (cutoff,))
+        self._conn.execute("DELETE FROM access_tokens WHERE expires_at < ?", (time.time(),))
         self._conn.commit()
 
     def close(self):
-        """Close connection and cleanup."""
         if self._conn:
             self.cleanup()
             self._conn.close()
