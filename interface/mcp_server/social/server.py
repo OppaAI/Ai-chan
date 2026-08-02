@@ -1,6 +1,4 @@
-import logging
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -8,15 +6,35 @@ from pathlib import Path
 from system.config import load_config
 load_config()
 
-log = logging.getLogger(__name__)
+from system.log import get_logger
+log = get_logger(__name__)
+
 from mcp.server.fastmcp import FastMCP
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# HOST/PORT kept for reference (unused with stdio transport)
 HOST = os.getenv("SOCIAL_MCP_HOST", "127.0.0.1")
 PORT = int(os.getenv("SOCIAL_MCP_PORT", "8100"))
 
 mcp = FastMCP("Aiko Social MCP Server", host=HOST, port=PORT)
+
+
+# ── apply middleware (rate limiting, idempotency, tool logging) ──────────────
+from social.middleware import wrap_tool
+
+_original_tool = mcp.tool
+
+def _wrapped_tool(*args, **kwargs):
+    def decorator(fn):
+        name = kwargs.get("name") or fn.__name__
+        # Skip internal tools
+        if name not in ("_inject_env",):
+            fn = wrap_tool(name, fn)
+        return _original_tool(*args, **kwargs)(fn)
+    return decorator
+
+mcp.tool = _wrapped_tool
 
 
 # ── tool registration ─────────────────────────────────────────────────────
@@ -49,7 +67,7 @@ def _inject_env(vars: dict[str, str]) -> dict:
 
 def main() -> None:
     _load_tools()
-    mcp.run(transport="streamable-http")
+    mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

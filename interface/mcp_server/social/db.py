@@ -9,18 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
+from system.log import get_logger
 
 load_dotenv()
 
-log: Any = None
-
-
-def _get_log():
-    global log
-    if log is None:
-        import logging
-        log = logging.getLogger("social.db")
-    return log
+log = get_logger("social.db")
 
 
 def _get_driver() -> str:
@@ -28,10 +21,10 @@ def _get_driver() -> str:
     if encryption.lower() in ("1", "true", "yes"):
         try:
             import pysqlcipher3.dbapi2 as sqlcipher
-            _get_log().info("Using SQLCipher for encrypted DB")
+            log.info("Using SQLCipher for encrypted DB")
             return "sqlcipher"
         except ImportError:
-            _get_log().warning("SQLITE_ENCRYPTION=1 but pysqlcipher3 not installed — falling back to plain SQLite")
+            log.warning("SQLITE_ENCRYPTION=1 but pysqlcipher3 not installed — falling back to plain SQLite")
     return "sqlite"
 
 

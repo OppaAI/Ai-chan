@@ -2,9 +2,7 @@
 import mimetypes
 from pathlib import Path
 
-import requests
-
-from social.services import env, int_env
+from social.services import env, int_env, get_session, err
 
 
 def load_tools(mcp):
@@ -18,7 +16,7 @@ def load_tools(mcp):
         timeout = int_env("TWITTER_RELAY_TIMEOUT", 30)
 
         if not api_key:
-            return {"ok": False, "provider": "x", "error": "AISA_API_KEY not set"}
+            return err("x", "AISA_API_KEY not set")
 
         headers = {"Authorization": f"Bearer {api_key}"}
         payload = {"aisa_api_key": api_key, "content": text}
@@ -31,13 +29,14 @@ def load_tools(mcp):
                 with open(p, "rb") as f:
                     files = {"media_files": (p.name, f.read(), mime)}
 
+        session = get_session()
         try:
             if files:
-                resp = requests.post(
+                resp = session.post(
                     f"{base_url}/post_twitter", headers=headers, data=payload, files=files, timeout=timeout
                 )
             else:
-                resp = requests.post(
+                resp = session.post(
                     f"{base_url}/post_twitter",
                     headers={**headers, "Content-Type": "application/json"},
                     json=payload,
@@ -46,4 +45,4 @@ def load_tools(mcp):
             ok = 200 <= resp.status_code < 300
             return {"ok": ok, "provider": "x", "status_code": resp.status_code, "response": resp.text[:2000]}
         except Exception as e:
-            return {"ok": False, "provider": "x", "error": str(e)}
+            return err("x", str(e))

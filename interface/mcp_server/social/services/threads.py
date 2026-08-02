@@ -5,9 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import requests
-
-from social.services import env, int_env
+from social.services import env, int_env, get_session, err
 
 
 def _upload_to_imgbb(image_path: str) -> dict:
@@ -15,13 +13,14 @@ def _upload_to_imgbb(image_path: str) -> dict:
     timeout = int_env("IMGBB_UPLOAD_TIMEOUT", 30)
     p = Path(image_path)
     if not api_key:
-        return {"ok": False, "provider": "imgbb", "error": "IMGBB_API_KEY not set"}
+        return err("imgbb", "IMGBB_API_KEY not set")
     if not p.exists():
-        return {"ok": False, "provider": "imgbb", "error": f"image not found: {image_path}"}
+        return err("imgbb", f"image not found: {image_path}")
     mime, _ = mimetypes.guess_type(str(p))
     try:
+        session = get_session()
         with open(p, "rb") as f:
-            resp = requests.post(
+            resp = session.post(
                 "https://api.imgbb.com/1/upload",
                 data={"key": api_key, "name": p.stem},
                 files={"image": (p.name, f, mime or "image/jpeg")},
@@ -41,7 +40,7 @@ def _upload_to_imgbb(image_path: str) -> dict:
             result["response"] = payload
         return result
     except Exception as e:
-        return {"ok": False, "provider": "imgbb", "error": str(e)}
+        return err("imgbb", str(e))
 
 
 def _refresh_token_if_due() -> bool:
@@ -63,7 +62,8 @@ def _refresh_token_if_due() -> bool:
     if not token:
         return False
     try:
-        resp = requests.get(
+        session = get_session()
+        resp = session.get(
             f"{base}/refresh_access_token",
             params={"grant_type": "th_refresh_token", "access_token": token},
             timeout=120,
@@ -97,7 +97,7 @@ def load_tools(mcp):
         base = env("THREADS_API_BASE", "https://graph.threads.net/v1.0").rstrip("/")
 
         if not token or not user_id:
-            return {"ok": False, "provider": "threads", "error": "THREADS_ACCESS_TOKEN or THREADS_USER_ID not set"}
+            return err("threads", "THREADS_ACCESS_TOKEN or THREADS_USER_ID not set")
 
         image_url = None
         upload_result = None
@@ -115,21 +115,22 @@ def load_tools(mcp):
         else:
             params["media_type"] = "TEXT"
         if topic_tag:
-            params["topic_tag"] = topic_tag[:50]  # Meta hard limit: 1–50 chars, no "." or "&"
+            params["topic_tag"] = topic_tag[:50]
 
+        session = get_session()
         try:
-            create = requests.post(create_url, data=params, timeout=120)
+            create = session.post(create_url, data=params, timeout=120)
             if not (200 <= create.status_code < 300):
                 return {"ok": False, "provider": "threads", "stage": "create", "status_code": create.status_code, "response": create.text[:2000]}
             creation_id = create.json().get("id")
             if not creation_id:
                 return {"ok": False, "provider": "threads", "stage": "create", "error": "missing creation id"}
             time.sleep(int_env("THREADS_PUBLISH_DELAY_SECONDS", 5))
-            publish = requests.post(publish_url, data={"access_token": token, "creation_id": creation_id}, timeout=120)
+            publish = session.post(publish_url, data={"access_token": token, "creation_id": creation_id}, timeout=120)
             ok = 200 <= publish.status_code < 300
             result = {"ok": ok, "provider": "threads", "status_code": publish.status_code, "creation_id": creation_id, "response": publish.text[:2000]}
             if upload_result:
                 result["image_upload"] = upload_result
             return result
         except Exception as e:
-            return {"ok": False, "provider": "threads", "error": str(e)}
+            return err("threads", str(e))

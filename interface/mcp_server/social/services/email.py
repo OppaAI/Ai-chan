@@ -3,9 +3,7 @@ import base64
 import os
 from email.message import EmailMessage
 
-import requests
-
-from social.services import env, int_env
+from social.services import env, get_session, err
 
 
 # ── Gmail API (OAuth 2.0) ────────────────────────────────────────────────
@@ -15,9 +13,10 @@ def _gmail_access_token() -> tuple[str | None, dict | None]:
     client_secret = env("GMAIL_CLIENT_SECRET")
     refresh_token = env("GMAIL_REFRESH_TOKEN")
     if not all([client_id, client_secret, refresh_token]):
-        return None, {"ok": False, "provider": "gmail", "error": "GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN not set"}
+        return None, err("gmail", "GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN not set")
+    session = get_session()
     try:
-        resp = requests.post(
+        resp = session.post(
             "https://oauth2.googleapis.com/token",
             data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"},
             timeout=30,
@@ -39,7 +38,8 @@ def _gmail_send(token: str, to: str, subject: str, body: str) -> dict:
     encoded = base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
     try:
-        resp = requests.post(
+        session = get_session()
+        resp = session.post(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"raw": encoded},
@@ -48,15 +48,16 @@ def _gmail_send(token: str, to: str, subject: str, body: str) -> dict:
         ok = 200 <= resp.status_code < 300
         return {"ok": ok, "provider": "gmail", "action": "send", "status_code": resp.status_code, "response": resp.text[:500]}
     except Exception as e:
-        return {"ok": False, "provider": "gmail", "action": "send", "error": str(e)}
+        return err("gmail", str(e))
 
 
 def _gmail_read(token: str, query: str = "", max_results: int = 10) -> dict:
+    session = get_session()
     try:
         params = {"maxResults": min(max_results, 50)}
         if query:
             params["q"] = query
-        resp = requests.get(
+        resp = session.get(
             "https://gmail.googleapis.com/gmail/v1/users/me/messages",
             headers={"Authorization": f"Bearer {token}"},
             params=params,
@@ -68,7 +69,7 @@ def _gmail_read(token: str, query: str = "", max_results: int = 10) -> dict:
 
         results = []
         for msg_ref in messages[:max_results]:
-            detail = requests.get(
+            detail = session.get(
                 f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg_ref['id']}",
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30,
@@ -86,7 +87,7 @@ def _gmail_read(token: str, query: str = "", max_results: int = 10) -> dict:
                 })
         return {"ok": True, "provider": "gmail", "action": "read", "count": len(results), "messages": results}
     except Exception as e:
-        return {"ok": False, "provider": "gmail", "action": "read", "error": str(e)}
+        return err("gmail", str(e))
 
 
 # ── Microsoft Graph API (OAuth 2.0) ──────────────────────────────────────
@@ -97,9 +98,10 @@ def _outlook_access_token() -> tuple[str | None, dict | None]:
     refresh_token = env("OUTLOOK_REFRESH_TOKEN")
     tenant = env("OUTLOOK_TENANT", "common")
     if not all([client_id, client_secret, refresh_token]):
-        return None, {"ok": False, "provider": "outlook", "error": "OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET, OUTLOOK_REFRESH_TOKEN not set"}
+        return None, err("outlook", "OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET, OUTLOOK_REFRESH_TOKEN not set")
+    session = get_session()
     try:
-        resp = requests.post(
+        resp = session.post(
             f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
             data={
                 "client_id": client_id,
@@ -121,7 +123,8 @@ def _outlook_access_token() -> tuple[str | None, dict | None]:
 
 def _outlook_send(token: str, to: str, subject: str, body: str) -> dict:
     try:
-        resp = requests.post(
+        session = get_session()
+        resp = session.post(
             "https://graph.microsoft.com/v1.0/me/sendMail",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={
@@ -137,15 +140,16 @@ def _outlook_send(token: str, to: str, subject: str, body: str) -> dict:
         ok = 200 <= resp.status_code < 300
         return {"ok": ok, "provider": "outlook", "action": "send", "status_code": resp.status_code, "response": resp.text[:500]}
     except Exception as e:
-        return {"ok": False, "provider": "outlook", "action": "send", "error": str(e)}
+        return err("outlook", str(e))
 
 
 def _outlook_read(token: str, query: str = "", max_results: int = 10) -> dict:
+    session = get_session()
     try:
         params = {"$top": min(max_results, 50), "$select": "id,from,subject,receivedDateTime,bodyPreview"}
         if query:
             params["$search"] = f'"{query}"'
-        resp = requests.get(
+        resp = session.get(
             "https://graph.microsoft.com/v1.0/me/messages",
             headers={"Authorization": f"Bearer {token}"},
             params=params,
@@ -166,7 +170,7 @@ def _outlook_read(token: str, query: str = "", max_results: int = 10) -> dict:
             })
         return {"ok": True, "provider": "outlook", "action": "read", "count": len(messages), "messages": messages}
     except Exception as e:
-        return {"ok": False, "provider": "outlook", "action": "read", "error": str(e)}
+        return err("outlook", str(e))
 
 
 # ── unified tools ─────────────────────────────────────────────────────────

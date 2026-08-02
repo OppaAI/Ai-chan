@@ -3,9 +3,7 @@ import base64
 import mimetypes
 from pathlib import Path
 
-import requests
-
-from social.services import env
+from social.services import env, get_session, err
 
 
 def load_tools(mcp):
@@ -18,6 +16,8 @@ def load_tools(mcp):
         bot_token = env("DISCORD_BOT_TOKEN")
         channel_id = channel_id or env("DISCORD_AIKO_DEV_CHANNEL_ID") or env("DISCORD_POST_CHANNEL_ID")
 
+        session = get_session()
+
         if webhook_url:
             try:
                 files = None
@@ -27,11 +27,11 @@ def load_tools(mcp):
                     if p.exists():
                         with open(p, "rb") as f:
                             files = {"file": (p.name, f.read())}
-                resp = requests.post(webhook_url, data=data, files=files, timeout=30)
+                resp = session.post(webhook_url, data=data, files=files, timeout=30)
                 ok = 200 <= resp.status_code < 300
                 return {"ok": ok, "provider": "discord", "method": "webhook", "status_code": resp.status_code, "response": resp.text[:500]}
             except Exception as e:
-                return {"ok": False, "provider": "discord", "method": "webhook", "error": str(e)}
+                return err("discord", str(e))
 
         if bot_token and channel_id:
             try:
@@ -53,7 +53,7 @@ def load_tools(mcp):
                         headers.pop("Content-Type", None)
                         files = {"0": (p.name, raw_data, mime)}
                 if files:
-                    resp = requests.post(
+                    resp = session.post(
                         f"{api_base}/channels/{channel_id}/messages",
                         headers={"Authorization": f"Bot {bot_token}"},
                         data={"payload_json": str(payload)},
@@ -61,13 +61,13 @@ def load_tools(mcp):
                         timeout=30,
                     )
                 else:
-                    resp = requests.post(
+                    resp = session.post(
                         f"{api_base}/channels/{channel_id}/messages",
                         headers=headers, json=payload, timeout=30,
                     )
                 ok = 200 <= resp.status_code < 300
                 return {"ok": ok, "provider": "discord", "method": "bot", "status_code": resp.status_code, "response": resp.text[:500]}
             except Exception as e:
-                return {"ok": False, "provider": "discord", "method": "bot", "error": str(e)}
+                return err("discord", str(e))
 
-        return {"ok": False, "provider": "discord", "error": "No DISCORD_POST_WEBHOOK_URL or DISCORD_BOT_TOKEN+DISCORD_POST_CHANNEL_ID configured"}
+        return err("discord", "No DISCORD_POST_WEBHOOK_URL or DISCORD_BOT_TOKEN+DISCORD_POST_CHANNEL_ID configured")

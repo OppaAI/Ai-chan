@@ -1,6 +1,4 @@
-import requests
-
-from social.services import env, err
+from social.services import env, err, get_session
 
 
 def load_tools(mcp):
@@ -42,7 +40,8 @@ def load_tools(mcp):
             payload["canonicalUrl"] = canonical_url
 
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            session = get_session()
+            resp = session.post(url, headers=headers, json=payload, timeout=30)
             if 200 <= resp.status_code < 300:
                 data = resp.json().get("data", {})
                 return {

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 import threading
 from typing import Any
 
@@ -29,10 +30,16 @@ class MCPToolBridge:
 
 class MCPClient:
     def __init__(self, server_url: str = "") -> None:
-        base = server_url or os.getenv("SOCIAL_MCP_URL", "http://127.0.0.1:8100")
+        base = server_url or os.getenv("SOCIAL_MCP_URL", "")
         base = base.rstrip("/")
         self.server_url = base
-        self._mcp_url = f"{base}/mcp"
+        self._mcp_url = f"{base}/mcp" if base else ""
+        # stdio transport (spawn server as subprocess) is the default; set
+        # SOCIAL_MCP_TRANSPORT=http (and optionally SOCIAL_MCP_URL) to go back
+        # to a standalone streamable-http daemon.
+        self._transport_mode = os.getenv("SOCIAL_MCP_TRANSPORT", "stdio").lower()
+        if self._transport_mode != "stdio" and not self._mcp_url:
+            self._mcp_url = "http://127.0.0.1:8100/mcp"
         self._tools: dict[str, dict[str, Any]] = {}
         self._bridges: list[Any] = []
         self._session = None
@@ -93,13 +100,31 @@ class MCPClient:
         if self._session is not None:
             return self._session
 
-        from mcp.client.streamable_http import streamablehttp_client
         from mcp.client.session import ClientSession
 
-        transport = streamablehttp_client(self._mcp_url)
-        self._transport = transport
+        if self._transport_mode == "stdio":
+            from mcp import StdioServerParameters
+            from mcp.client.stdio import stdio_client
 
-        read, write, _get_id = await transport.__aenter__()
+            # Repo root: client.py lives at <repo>/agentic/mcp_client/client.py
+            repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            # Pass Aiko's full env explicitly: the SDK's stdio transport only
+            # inherits a safe subset otherwise, which would drop the social
+            # API tokens the server needs (MEDIUM_*, AISA_API_KEY, ...).
+            params = StdioServerParameters(
+                command=sys.executable,
+                args=["-m", "interface.mcp_server.social.server"],
+                cwd=repo_root,
+                env=dict(os.environ),
+            )
+            self._transport = stdio_client(params)
+            read, write = await self._transport.__aenter__()
+        else:
+            from mcp.client.streamable_http import streamablehttp_client
+
+            self._transport = streamablehttp_client(self._mcp_url)
+            read, write, _get_id = await self._transport.__aenter__()
+
         session = ClientSession(read, write)
         await session.__aenter__()
         await session.initialize()
@@ -156,8 +181,10 @@ class MCPClient:
                 tools.append(entry)
             self._tools = {t["name"]: t for t in tools}
 
-            # Inject env vars after listing tools (server is ready)
-            await self._inject_env()
+            # stdio subprocess already inherits Aiko's env at spawn, so no
+            # runtime injection is needed there (HTTP daemon still uses it).
+            if self._transport_mode != "stdio":
+                await self._inject_env()
 
             return tools
         except Exception as e:
@@ -213,7 +240,10 @@ def init_mcp_client(server_url: str = "") -> MCPClient | None:
         if not tools:
             log.warning("[mcp] Connected but no tools discovered")
         else:
-            log.info("[mcp] Discovered %d tools from %s", len(tools), client._mcp_url)
+            endpoint = client._mcp_url or (
+                f"stdio:{sys.executable} -m interface.mcp_server.social.server"
+            )
+            log.info("[mcp] Discovered %d tools from %s", len(tools), endpoint)
             for t in tools:
                 log.info("[mcp]   %s — %s", t["name"], t["description"][:60])
 

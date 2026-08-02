@@ -2,9 +2,7 @@
 import mimetypes
 from pathlib import Path
 
-import requests
-
-from social.services import env, int_env, bool_env
+from social.services import env, int_env, bool_env, get_session, err
 
 
 def load_tools(mcp):
@@ -19,10 +17,11 @@ def load_tools(mcp):
         timeout = int_env("YOUTUBE_TIMEOUT", 120)
 
         if not client_id or not client_secret or not refresh_token:
-            return {"ok": False, "provider": "youtube", "error": "YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REFRESH_TOKEN not set"}
+            return err("youtube", "YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REFRESH_TOKEN not set")
 
+        session = get_session()
         try:
-            resp = requests.post(
+            resp = session.post(
                 "https://oauth2.googleapis.com/token",
                 data={"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"},
                 timeout=30,
@@ -36,7 +35,7 @@ def load_tools(mcp):
 
         p = Path(video_path)
         if not p.exists():
-            return {"ok": False, "provider": "youtube", "error": f"video not found: {video_path}"}
+            return err("youtube", f"video not found: {video_path}")
 
         category_id = env("YOUTUBE_CATEGORY_ID", "22")
         privacy_status = env("YOUTUBE_PRIVACY_STATUS", "public").strip().lower()
@@ -56,7 +55,7 @@ def load_tools(mcp):
         mime = mimetypes.guess_type(str(p))[0] or "video/mp4"
 
         try:
-            init = requests.post(
+            init = session.post(
                 "https://www.googleapis.com/upload/youtube/v3/videos",
                 params={"uploadType": "resumable", "part": "snippet,status"},
                 headers={
@@ -71,10 +70,10 @@ def load_tools(mcp):
                 return {"ok": False, "provider": "youtube", "stage": "init", "status_code": init.status_code, "response": init.text[:2000]}
             upload_url = init.headers.get("Location")
             if not upload_url:
-                return {"ok": False, "provider": "youtube", "stage": "init", "error": "missing upload URL"}
+                return err("youtube", "missing upload URL")
 
             with open(p, "rb") as f:
-                upload = requests.put(upload_url, headers={"Content-Type": mime}, data=f, timeout=timeout)
+                upload = session.put(upload_url, headers={"Content-Type": mime}, data=f, timeout=timeout)
             ok = 200 <= upload.status_code < 300
             upload_payload = upload.json() if upload.text else {}
             return {
@@ -83,4 +82,4 @@ def load_tools(mcp):
                 "response": upload_payload,
             }
         except Exception as e:
-            return {"ok": False, "provider": "youtube", "error": str(e)}
+            return err("youtube", str(e))
