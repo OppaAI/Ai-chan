@@ -75,14 +75,18 @@ def reset_current_display_name(token: contextvars.Token[str | None]) -> None:
 
 def current_display_name() -> str:
     """Return the user's display name (e.g. GitHub login).
-    Order: request-local contextvar -> raw user_id as last resort.
+    Order: request-local context var -> process-global env override
+    -> raw user_id as last resort.
 
-    Display identity is intentionally not read from process-global environment
-    variables because web sessions and worker threads can overlap. Callers that
-    have authenticated session identity should set the contextvar for the
-    current request/thread with set_current_display_name().
+    The contextvar is preferred because web sessions and worker threads
+    can overlap, so authenticated callers should set it per request/thread
+    with set_current_display_name(). The env var is a single process-global
+    override for headless/local runs where no session identity exists.
     """
     name = _CURRENT_DISPLAY_NAME.get()
+    if name:
+        return name
+    name = os.getenv("CURRENT_DISPLAY_NAME")
     if name:
         return name
     return current_user_id()

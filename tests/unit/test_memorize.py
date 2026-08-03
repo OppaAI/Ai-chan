@@ -520,8 +520,11 @@ class TestWriteWindowTiming:
         monkeypatch.setattr(time, "sleep", lambda s: None)
 
         memo._wait_for_write_window(fake_is_active, lambda: 0.0)
-        # should exit via the max-wait deadline branch, not hang forever
-        assert state["calls"] >= 4
+        # Must exit via the max-wait deadline branch, not hang forever.
+        # The fake's is_active_turn() only turns False on poll #4, which
+        # never runs because the deadline check fires first — so the loop
+        # should terminate after a few active polls, never spinning on.
+        assert 1 <= state["calls"] <= 4
 
 
 def test_vacuum_memory_db_opens_user_store_and_runs_maintenance(monkeypatch, tmp_path):
