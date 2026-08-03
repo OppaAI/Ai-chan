@@ -315,6 +315,10 @@ MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01")
 # stronger KNN/FTS hit) without being mathematically inert. Set to 0 to
 # disable graph participation in scoring without touching any call sites.
 MEMORY_RANK_GRAPH_WEIGHT = float(os.getenv("MEMORY_RANK_GRAPH_WEIGHT", "0.6"))
+
+# Phase 3 entity importance (see memory.entity_importance)
+MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT = float(os.getenv("MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT", "0.008"))
+
 MEMORY_SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 MEMORY_SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -1807,6 +1811,7 @@ class _MemoryBackend:
         rank_knn: dict,
         rank_fts: dict,
         rank_graph: dict | None = None,
+        entity_importance_map: dict | None = None
     ) -> tuple[list[str], dict, dict]:
         """
         Dedup + score one candidate pool (from either the quick or wide pass).
@@ -1824,6 +1829,8 @@ class _MemoryBackend:
         score-ordered list (RRF + recency + access + pinned + graph weight).
         """
         rank_graph = rank_graph or {}
+        entity_importance_map = entity_importance_map or {}
+      
         all_ids = set(rank_knn) | set(rank_fts) | set(rank_graph)
         if not all_ids:
             return [], {}, {}
@@ -1881,7 +1888,18 @@ class _MemoryBackend:
                 score += MEMORY_RANK_ACCESS_WEIGHT * min(int(row["access_count"] or 0), ACCESS_COUNT_CAP) / max(ACCESS_COUNT_CAP, 1)
                 if int(row["pinned"] or 0):
                     score += MEMORY_RANK_PINNED_WEIGHT
-            return score
+                  
+                # Phase 3: entity importance boost
+                if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0 and entity_importance_map:
+                    try:
+                        from memory.entity_importance import memory_max_entity_importance
+                        score += MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT * memory_max_entity_importance(
+                            row, entity_importance_map
+                        )
+                    except Exception:
+                        pass
+
+          return score
 
         scored_ids = sorted(deduped_ids, key=final_score, reverse=True)
         scores = {mid: final_score(mid) for mid in scored_ids}
@@ -1961,6 +1979,14 @@ class _MemoryBackend:
         query_entities = extract_entities(query, max_entities=5)
         active_only = not include_history
 
+        entity_importance_map = {}
+        if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0:
+            try:
+                from memory.entity_importance import compute_entity_importance_map
+                entity_importance_map = compute_entity_importance_map(self, user_id) or {}
+            except Exception:
+                entity_importance_map = {}
+      
         with self._db_lock:
             quick_knn_rows = _sqlite_knn_search(
                 self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
@@ -1971,7 +1997,7 @@ class _MemoryBackend:
             quick_graph_rows = self._graph_pass(query_entities, user_id, QUICK_GRAPH_LIMIT, active_only=active_only)
             rank_graph_q = {row["id"]: i + 1 for i, row in enumerate(quick_graph_rows)}
 
-            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q)
+            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q, entity_importance_map=entity_importance_map)
 
             confident = (
                 len(scored_ids) >= limit
@@ -1988,7 +2014,7 @@ class _MemoryBackend:
                 rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
                 wide_graph_rows = self._graph_pass(query_entities, user_id, GRAPH_LIMIT, active_only=active_only)
                 rank_graph_w = {row["id"]: i + 1 for i, row in enumerate(wide_graph_rows)}
-                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w)
+                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w, entity_importance_map=entity_importance_map)
 
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
         top_ids = ordered_ids[:limit]
