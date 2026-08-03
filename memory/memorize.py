@@ -1365,6 +1365,8 @@ class _MemoryBackend:
         kind: str | None = None,
         entities: list[str] | None = None,
         scene_id: str | None = None,
+        valence_tag: str | None = None,
+        salience_hit: int | None = None,
     ) -> None:
         """Insert one memory row (Phase A + L2 columns when present) + its
         vector, and best-effort co-mention edges for the entity graph.
@@ -1378,6 +1380,10 @@ class _MemoryBackend:
         ents_list = entities if entities is not None else extract_entities(text)
         ents_json = entities_to_json(ents_list)
 
+        v_tag = valence_tag if valence_tag in ("pos", "neg", "neutral") else infer_valence_tag(text)
+        s_hit = int(salience_hit) if salience_hit is not None else infer_salience_hit(text)
+        s_hit = 1 if s_hit else 0
+      
         base_cols = ["id", "user_id", "memory", "created_at", "access_count", "last_accessed_at", "pinned"]
         base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
         ext_cols: list[str] = []
@@ -1388,6 +1394,12 @@ class _MemoryBackend:
         if "scene_id" in cols:
             ext_cols.append("scene_id")
             ext_vals.append(scene_id)
+        if "valence_tag" in cols:
+            ext_cols.append("valence_tag")
+            ext_vals.append(v_tag)
+        if "salience_hit" in cols:
+            ext_cols.append("salience_hit")
+            ext_vals.append(s_hit)
         all_cols = base_cols + ext_cols
         placeholders = ", ".join("?" * len(all_cols))
         self._conn.execute(
