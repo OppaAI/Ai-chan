@@ -1,6 +1,6 @@
 # A Computational Theory of Personal AI Memory: Decay, Consolidation, and Emotional Imprinting
 
-**Authors:** OppaAI
+**Authors:** OppaAI  
 **Affiliation:** Local AI Companion Research  
 **Date:** August 2026
 
