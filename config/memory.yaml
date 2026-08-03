@@ -94,6 +94,14 @@ MEMORY_WRITE_MAX_WAIT: "45.0"  # Max seconds memory writer waits before forcing 
 # Unified facade: from memory import search_memory
 MEMORY_ENTITY_BOOST: "0.003"  # Soft score boost when query text mentions a tagged entity on a personal memory.
 
+# -- Phase 3: entity importance + supersession chain --
+# I_e = (1-α)·centrality + α·recency; used in monthly R and mild recall boost.
+ENTITY_IMPORTANCE_ALPHA: "0.4"  # Blend weight for recency vs structural centrality (0=centrality only).
+ENTITY_IMPORTANCE_BETA: "0.05"  # Per-day recency decay for entity last-touch.
+MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT: "0.008"  # Flat recall score boost × max I_e on a memory; 0 disables.
+MEMORY_SUPERSESSION_CHAIN_EXPAND: "1"  # Expand supersedes_id lineage on reflective / identity-plan hits.
+MEMORY_SUPERSESSION_CHAIN_KINDS: "identity,preference,plan"  # Kinds that always expand chain when hit.
+
 # -- Decay and dream merge --
 FORGET_HALF_LIFE_DAYS: "21"  # Days until memory retention score halves.
 FORGET_ACCESS_COUNT_CAP: "255"  # Maximum access_count retained for decay scoring.

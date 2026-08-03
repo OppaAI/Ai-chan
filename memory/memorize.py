@@ -315,6 +315,10 @@ MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01")
 # stronger KNN/FTS hit) without being mathematically inert. Set to 0 to
 # disable graph participation in scoring without touching any call sites.
 MEMORY_RANK_GRAPH_WEIGHT = float(os.getenv("MEMORY_RANK_GRAPH_WEIGHT", "0.6"))
+
+# Phase 3 entity importance (see memory.entity_importance)
+MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT = float(os.getenv("MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT", "0.008"))
+
 MEMORY_SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 MEMORY_SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -1807,6 +1811,7 @@ class _MemoryBackend:
         rank_knn: dict,
         rank_fts: dict,
         rank_graph: dict | None = None,
+        entity_importance_map: dict | None = None,
     ) -> tuple[list[str], dict, dict]:
         """
         Dedup + score one candidate pool (from either the quick or wide pass).
@@ -1821,9 +1826,12 @@ class _MemoryBackend:
         Returns (ids sorted best-first by score, {id: score}, {id: row}).
         Recency-among-relevant reranking is applied afterward by the
         caller (search()), not here — this method only produces the base
-        score-ordered list (RRF + recency + access + pinned + graph weight).
+        score-ordered list (RRF + recency + access + pinned + graph weight +
+        entity importance).
         """
         rank_graph = rank_graph or {}
+        entity_importance_map = entity_importance_map or {}
+      
         all_ids = set(rank_knn) | set(rank_fts) | set(rank_graph)
         if not all_ids:
             return [], {}, {}
@@ -1881,6 +1889,17 @@ class _MemoryBackend:
                 score += MEMORY_RANK_ACCESS_WEIGHT * min(int(row["access_count"] or 0), ACCESS_COUNT_CAP) / max(ACCESS_COUNT_CAP, 1)
                 if int(row["pinned"] or 0):
                     score += MEMORY_RANK_PINNED_WEIGHT
+                  
+                # Phase 3: entity importance boost
+                if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0 and entity_importance_map:
+                    try:
+                        from memory.entity_importance import memory_max_entity_importance
+                        score += MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT * memory_max_entity_importance(
+                            row, entity_importance_map
+                        )
+                    except Exception as exc:
+                        log.debug("entity importance boost skipped: %s", exc)
+
             return score
 
         scored_ids = sorted(deduped_ids, key=final_score, reverse=True)
@@ -1961,6 +1980,15 @@ class _MemoryBackend:
         query_entities = extract_entities(query, max_entities=5)
         active_only = not include_history
 
+        entity_importance_map = {}
+        if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0:
+            try:
+                from memory.entity_importance import compute_entity_importance_map
+                entity_importance_map = compute_entity_importance_map(self, user_id) or {}
+            except Exception as exc:
+                log.debug("entity importance map skipped: %s", exc)
+                entity_importance_map = {}
+      
         with self._db_lock:
             quick_knn_rows = _sqlite_knn_search(
                 self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
@@ -1971,7 +1999,7 @@ class _MemoryBackend:
             quick_graph_rows = self._graph_pass(query_entities, user_id, QUICK_GRAPH_LIMIT, active_only=active_only)
             rank_graph_q = {row["id"]: i + 1 for i, row in enumerate(quick_graph_rows)}
 
-            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q)
+            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q, entity_importance_map=entity_importance_map)
 
             confident = (
                 len(scored_ids) >= limit
@@ -1988,7 +2016,7 @@ class _MemoryBackend:
                 rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
                 wide_graph_rows = self._graph_pass(query_entities, user_id, GRAPH_LIMIT, active_only=active_only)
                 rank_graph_w = {row["id"]: i + 1 for i, row in enumerate(wide_graph_rows)}
-                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w)
+                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w, entity_importance_map=entity_importance_map)
 
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
         top_ids = ordered_ids[:limit]
@@ -2001,7 +2029,44 @@ class _MemoryBackend:
             d["_recall_score"] = scores.get(mid, 0.0)
             results.append(d)
         return results
+      
+    def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
+        """
+        Insert supersession lineage (oldest → newest) when expand is warranted.
 
+        Result budget: up to max(limit, min(len, 2*limit)) so short chains
+        still fit under limit while multi-hit reflective expand is bounded.
+        """
+        from memory.entity_importance import should_expand_supersession_chain, walk_supersession_chain
+        if not results:
+            return results
+        expanded: list[dict] = []
+        seen: set[str] = set()
+        with self._db_lock:
+            for hit in results:
+                mid = str(hit.get("id") or "")
+                if not mid or mid in seen:
+                    continue
+                if not should_expand_supersession_chain(query, hit):
+                    expanded.append(hit)
+                    seen.add(mid)
+                    continue
+                chain = walk_supersession_chain(self._conn, mid, user_id)
+                if len(chain) <= 1:
+                    expanded.append(hit)
+                    seen.add(mid)
+                    continue
+                for node in chain:
+                    nid = str(node.get("id") or "")
+                    if not nid or nid in seen:
+                        continue
+                    node = dict(node)
+                    node["_recall_score"] = hit.get("_recall_score", 0.0)
+                    node["_supersession_chain"] = True
+                    expanded.append(node)
+                    seen.add(nid)
+        return expanded[: max(limit, min(len(expanded), limit * 2))]
+      
     def iter_all(self, user_id: str, batch_size: int = MEMORY_LIFECYCLE_BATCH_SIZE):
         """Yield memory records for a user in rowid order without one giant list.
 
@@ -2634,6 +2699,12 @@ class AikoMemorize:
         Side-effect: increments access_count and updates last_accessed_at
         for all returned memories in a single batched UPDATE.
 
+        When MEMORY_SUPERSESSION_CHAIN_EXPAND is on, reflective queries
+        (and hits with kind in MEMORY_SUPERSESSION_CHAIN_KINDS) may expand
+        supersedes_id lineages. In that case the returned list can grow up
+        to about 2×limit (oldest → newest along each expanded chain).
+        Callers that need a hard ceiling should truncate themselves.
+
         Entity-graph fusion happens inside self._mem.search() now (see
         _MemoryBackend._graph_pass / _rank_and_score) — this method no
         longer does a separate post-hoc entity rerank pass.
@@ -2659,7 +2730,14 @@ class AikoMemorize:
             if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
                 self._search_cache.move_to_end(cache_key)
                 results = [dict(r) for r in cached[1]]
-                log.debug("[memory] cache hit, scores=%s", [r.get("_recall_score") for r in results])
+                try:
+                    from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
+                    if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
+                        results = self._mem._expand_supersession_chains(
+                            query, user_id, results, limit=limit
+                        )
+                except Exception as exc:
+                    log.debug("supersession chain expand skipped: %s", exc)
                 self._touch_memories(results)
                 return results
             if cached:
@@ -2675,8 +2753,6 @@ class AikoMemorize:
         )
         # Fold L2 scene parents/members into the recall set (see _expand_scenes).
         results = self._expand_scenes(user_id, results)
-
-        self._touch_memories(results)
         log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
 
         # Search replay logging (optional, feature-gated)
@@ -2689,6 +2765,16 @@ class AikoMemorize:
             while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
                 self._search_cache.popitem(last=False)
 
+        try:
+            from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
+            if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
+                results = self._mem._expand_supersession_chains(
+                    query, user_id, results, limit=limit
+                )
+        except Exception as exc:
+            log.debug("supersession chain expand skipped: %s", exc)
+
+        self._touch_memories(results)  
         return results
 
     # ── L2 scene expansion ─────────────────────────────────────────────────────
@@ -3421,7 +3507,17 @@ class AikoMemorize:
 
         candidates = []
         kept       = 0
+        lineage_ids: set[str] = set()
 
+        try:
+            with self._mem._db_lock:
+                rows = self._conn.execute(
+                    "SELECT supersedes_id FROM memories WHERE supersedes_id IS NOT NULL AND supersedes_id != ''"
+                ).fetchall()
+            lineage_ids = {str(r["supersedes_id"]) for r in rows if r["supersedes_id"]}
+        except Exception:
+            lineage_ids = set()
+          
         for m in all_mems:
             mem_id     = str(m.get("id", ""))
             ac, la     = payload_map.get(mem_id, (0, "never"))
@@ -3430,7 +3526,11 @@ class AikoMemorize:
             if mem_id in pinned_ids:
                 kept += 1
                 continue
-
+              
+            if mem_id in lineage_ids:
+                kept += 1
+                continue
+              
             if should_cleanup(ac, la, created_at):
                 w = compute_weighted_score(ac, la)
                 candidates.append({
