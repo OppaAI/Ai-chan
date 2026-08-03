@@ -51,7 +51,7 @@ from system import bioclock
 from system.log import get_logger
 from system.userspace import current_display_name, current_user_id, user_state_path
 from memory.reflect import _extract_json_arrays, _salvage_truncated_facts
-from memory.memorize import classify_kind, entities_from_json
+from memory.memorize import classify_kind, entities_from_json, SALIENCE_POLICY_RE
 
 log = get_logger(__name__)
 
@@ -235,16 +235,6 @@ def _build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
     return np.mean(vectors, axis=0, keepdims=True)
 
 
-_SALIENCE_HIT_RE = re.compile(
-    r"\b(?:" + "|".join(re.escape(k.strip()) for k in (
-        "deadline", "birthday", "anniversary", "appointment", "hackathon",
-        "interview", "lost", "passport", "license", "wallet", "important",
-        "breakthrough", "problem", "always", "never", "favorite", "favourite",
-    )) + r")\b",
-    re.IGNORECASE,
-)
-
-
 def _score_daily_row(
     row: dict,
     *,
@@ -262,7 +252,7 @@ def _score_daily_row(
     if stored_hit is not None and str(stored_hit) != "":
         salience = 1.0 if int(stored_hit) else 0.3
     else:
-        salience = 1.0 if _SALIENCE_HIT_RE.search(text) else 0.3
+        salience = 1.0 if SALIENCE_POLICY_RE.search(text) else 0.3
 
     v_raw = (row.get("valence_tag") or "neutral")
     if isinstance(v_raw, str):
