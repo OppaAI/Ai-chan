@@ -666,13 +666,13 @@ _VALENCE_NEG_RE = re.compile(
     r"\b(?:sad|angry|frustrated|afraid|scared|hate|awful|terrible|worried|anxious|cry|pain)\b",
     re.IGNORECASE,
 )
-_TURN_SALIENCE_RE = re.compile(
+# Shared salience policy (write-time tags + monthly legacy fallback).
+SALIENCE_POLICY_RE = re.compile(
     r"\b(?:deadline|birthday|anniversary|appointment|hackathon|interview|lost|"
-    r"passport|license|wallet|important|breakthrough|always|never|favorite|favourite|"
-    r"remember this|never forget)\b|[!！]{2,}",
+    r"passport|license|wallet|important|breakthrough|problem|always|never|"
+    r"favorite|favourite|remember this|never forget)\b|!{2,}",
     re.IGNORECASE,
 )
-
 
 def infer_valence_tag(text: str) -> str:
     """Cheap pos/neg/neutral from emoji + lexicon. No LLM."""
@@ -689,7 +689,7 @@ def infer_valence_tag(text: str) -> str:
 
 
 def infer_salience_hit(text: str) -> int:
-    return 1 if _TURN_SALIENCE_RE.search(text or "") else 0
+    return 1 if SALIENCE_POLICY_RE.search(text or "") else 0
   
 def entity_overlap_score(query: str, entities: Iterable[str]) -> float:
     """Return 0..1 fraction of entities mentioned in the query (casefold)."""
