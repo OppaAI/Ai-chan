@@ -31,12 +31,40 @@ class SlackAdapter(AdapterBase):
         self._socket_client: SocketModeClient | None = None
         self._thread: threading.Thread | None = None
         self._bot_user_id: str | None = None
+        self._user_id_map: dict[str, str] = self._parse_user_map(
+            self._get_env("SLACK_USER_ID_MAP")
+        )
 
     def _read_config(self) -> dict[str, str]:
         return {
             "bot_token": self._get_env("SLACK_BOT_TOKEN"),
             "app_token": self._get_env("SLACK_APP_TOKEN"),
         }
+
+    @staticmethod
+    def _parse_user_map(raw: str) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        if not raw:
+            return mapping
+        for token in raw.replace(",", " ").split():
+            if "=" in token:
+                key, val = token.split("=", 1)
+            elif ":" in token:
+                key, val = token.split(":", 1)
+            else:
+                continue
+            key, val = key.strip(), val.strip()
+            if key and val:
+                mapping[key] = val
+        return mapping
+
+    def _canonical_user_id(self, raw: str) -> str:
+        if raw not in self._user_id_map:
+            log.debug("[slack] user %s -> %s (default)", raw, raw)
+            return raw
+        mapped = self._user_id_map[raw]
+        log.info("[slack] user %s -> %s (mapped)", raw, mapped)
+        return mapped
 
     def start(self) -> None:
         if WebClient is None:
@@ -78,11 +106,14 @@ class SlackAdapter(AdapterBase):
             channel = event.get("channel", "")
             thread_ts = event.get("thread_ts") or event.get("ts", "")
             cid = channel
-            uid = user
+            uid = self._canonical_user_id(user)
             display = f"<@{user}>"
             log.info("[slack] msg from %s in %s: %.60s", uid, channel, text)
-            session = self.handle_message(cid, uid, display, text)
-            session.wait()
+            # Do NOT block on session.wait(): this callback runs on Slack's
+            # internal event thread; blocking it starves the Socket Mode
+            # connection. The session runs inference on its own thread and
+            # delivers the reply via _on_platform_response -> send_message.
+            self.handle_message(cid, uid, display, text)
 
         self._thread = threading.Thread(
             target=self._socket_client.connect, daemon=True

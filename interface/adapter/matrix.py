@@ -41,6 +41,9 @@ class MatrixAdapter(AdapterBase):
         self._thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
         self._room_map: dict[str, str] = {}
+        self._user_id_map: dict[str, str] = self._parse_user_map(
+            self._get_env("MATRIX_USER_ID_MAP")
+        )
 
     def _read_config(self) -> dict[str, str]:
         return {
@@ -49,6 +52,31 @@ class MatrixAdapter(AdapterBase):
             "password": self._get_env("MATRIX_PASSWORD"),
             "device_id": self._get_env("MATRIX_DEVICE_ID", "aiko-adapter"),
         }
+
+    @staticmethod
+    def _parse_user_map(raw: str) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        if not raw:
+            return mapping
+        for token in raw.replace(",", " ").split():
+            if "=" in token:
+                key, val = token.split("=", 1)
+            elif ":" in token:
+                key, val = token.split(":", 1)
+            else:
+                continue
+            key, val = key.strip(), val.strip()
+            if key and val:
+                mapping[key] = val
+        return mapping
+
+    def _canonical_user_id(self, raw: str) -> str:
+        if raw not in self._user_id_map:
+            log.debug("[matrix] user %s -> %s (default)", raw, raw)
+            return raw
+        mapped = self._user_id_map[raw]
+        log.info("[matrix] user %s -> %s (mapped)", raw, mapped)
+        return mapped
 
     def start(self) -> None:
         if AsyncClient is None:
@@ -92,15 +120,19 @@ class MatrixAdapter(AdapterBase):
             if event.sender == self._client.user_id:
                 return
             cid = room.room_id
-            uid = event.sender
+            uid = self._canonical_user_id(event.sender)
             display = event.sender
             text = event.body.strip()
             if not text:
                 return
             self._room_map[uid] = cid
             log.info("[matrix] msg from %s in %s: %.60s", uid, cid, text)
-            session = self.handle_message(cid, uid, display, text)
-            session.wait()
+            # Do NOT block on session.wait(): this callback runs on matrix-nio's
+            # asyncio sync loop; blocking it during inference starves the sync
+            # loop. The session runs inference on its own thread and delivers
+            # the reply via _on_platform_response -> send_message, which
+            # schedules back onto this loop with run_coroutine_threadsafe.
+            self.handle_message(cid, uid, display, text)
 
         self._client.add_event_callback(message_cb, RoomMessageText)
 

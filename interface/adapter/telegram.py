@@ -22,11 +22,39 @@ class TelegramAdapter(AdapterBase):
         self._token: str = ""
         self._app: Application | None = None
         self._thread: threading.Thread | None = None
+        self._user_id_map: dict[str, str] = self._parse_user_map(
+            self._get_env("TELEGRAM_USER_ID_MAP")
+        )
 
     def _read_config(self) -> dict[str, str]:
         return {
             "token": self._get_env("TELEGRAM_BOT_TOKEN"),
         }
+
+    @staticmethod
+    def _parse_user_map(raw: str) -> dict[str, str]:
+        mapping: dict[str, str] = {}
+        if not raw:
+            return mapping
+        for token in raw.replace(",", " ").split():
+            if "=" in token:
+                key, val = token.split("=", 1)
+            elif ":" in token:
+                key, val = token.split(":", 1)
+            else:
+                continue
+            key, val = key.strip(), val.strip()
+            if key and val:
+                mapping[key] = val
+        return mapping
+
+    def _canonical_user_id(self, raw: str) -> str:
+        if raw not in self._user_id_map:
+            log.debug("[telegram] user %s -> %s (default)", raw, raw)
+            return raw
+        mapped = self._user_id_map[raw]
+        log.info("[telegram] user %s -> %s (mapped)", raw, mapped)
+        return mapped
 
     def start(self) -> None:
         if Application is None:
@@ -47,7 +75,7 @@ class TelegramAdapter(AdapterBase):
             if user is None:
                 return
             cid = str(update.effective_chat.id) if update.effective_chat else str(user.id)
-            uid = str(user.id)
+            uid = self._canonical_user_id(str(user.id))
             display = user.full_name or user.username or uid
             text = update.message.text.strip()
             if not text:
@@ -58,8 +86,12 @@ class TelegramAdapter(AdapterBase):
                 )
                 return
             log.info("[telegram] msg from %s: %.60s", display, text)
-            session = self.handle_message(cid, uid, display, text)
-            session.wait()
+            # Do NOT block on session.wait(): this handler runs on PTB's
+            # asyncio event loop; blocking it during inference starves the
+            # polling loop. The session runs inference on its own thread
+            # and delivers the reply via _on_platform_response -> send_message,
+            # which schedules back onto this loop with run_coroutine_threadsafe.
+            self.handle_message(cid, uid, display, text)
 
         if self._app:
             self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
