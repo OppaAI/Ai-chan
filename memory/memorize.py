@@ -1503,6 +1503,17 @@ class _MemoryBackend:
                             )
                             log.info("Superseded memory %s with new fact", supersedes_id)
                     mem_id = str(uuid.uuid4())
+                  
+                    # Phase 4: tag from fact text (and soft signal from last assistant msg).
+                    assist_blob = " ".join(
+                        (m.get("content") or "")
+                        for m in messages
+                        if m.get("role") == "assistant"
+                    )[-400:]
+                    tag_src = f"{fact}\n{assist_blob}"
+                    v_tag = infer_valence_tag(tag_src)
+                    s_hit = max(infer_salience_hit(fact), infer_salience_hit(assist_blob))
+                  
                     self._insert_row(
                         mem_id=mem_id,
                         user_id=user_id,
