@@ -1826,7 +1826,8 @@ class _MemoryBackend:
         Returns (ids sorted best-first by score, {id: score}, {id: row}).
         Recency-among-relevant reranking is applied afterward by the
         caller (search()), not here — this method only produces the base
-        score-ordered list (RRF + recency + access + pinned + graph weight).
+        score-ordered list (RRF + recency + access + pinned + graph weight +
+        entity importance).
         """
         rank_graph = rank_graph or {}
         entity_importance_map = entity_importance_map or {}
@@ -1896,8 +1897,8 @@ class _MemoryBackend:
                         score += MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT * memory_max_entity_importance(
                             row, entity_importance_map
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.debug("entity importance boost skipped: %s", exc)
 
             return score
 
@@ -2754,8 +2755,9 @@ class AikoMemorize:
                     query, user_id, results, limit=limit
                 )
         except Exception:
-            pass
+            log.debug("supersession chain expand skipped: %s", exc)
 
+        self._touch_memories(results)  
         return results
 
     # ── L2 scene expansion ─────────────────────────────────────────────────────
