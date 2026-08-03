@@ -1,6 +1,7 @@
 # Aiko Memory Architecture: Design & Implementation
 
 **Version:** 1.0  
+**Author:** OppaAI  
 **Status:** Active (Core formulas implemented; behavioral layer in progress)  
 **Last Updated:** 2026-08-03  
 
