@@ -2031,7 +2031,12 @@ class _MemoryBackend:
         return results
       
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
-        """Insert supersession lineage (oldest → newest) when expand is warranted."""
+        """
+        Insert supersession lineage (oldest → newest) when expand is warranted.
+
+        Result budget: up to max(limit, min(len, 2*limit)) so short chains
+        still fit under limit while multi-hit reflective expand is bounded.
+        """
         from memory.entity_importance import should_expand_supersession_chain, walk_supersession_chain
         if not results:
             return results
@@ -2693,6 +2698,12 @@ class AikoMemorize:
         Retrieve top-k memories relevant to the current query.
         Side-effect: increments access_count and updates last_accessed_at
         for all returned memories in a single batched UPDATE.
+
+        When MEMORY_SUPERSESSION_CHAIN_EXPAND is on, reflective queries
+        (and hits with kind in MEMORY_SUPERSESSION_CHAIN_KINDS) may expand
+        supersedes_id lineages. In that case the returned list can grow up
+        to about 2×limit (oldest → newest along each expanded chain).
+        Callers that need a hard ceiling should truncate themselves.
 
         Entity-graph fusion happens inside self._mem.search() now (see
         _MemoryBackend._graph_pass / _rank_and_score) — this method no
