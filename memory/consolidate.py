@@ -26,6 +26,9 @@ Retention gate (Phase 1):
   Phase 2 spacing: uses access_day_count (distinct local recall days), not
   raw access_count.
 
+  Phase 3 entity importance: connectivity term blends co-mention edge weight
+  with I_e = (1-α)·centrality + α·recency from entity_relations + last touch.
+  
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
 
