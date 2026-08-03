@@ -261,11 +261,16 @@ def _score_daily_row(
         day_count = 1 if int(row.get("access_count") or 0) > 0 else 0
     spacing = min(1.0, day_count / float(_RETENTION_SPACING_SATURATION))
 
+    # Phase 3: blend edge connectivity with entity importance I_e.
+    edge_conn = 0.0
     if entities and entity_weights:
         raw = [entity_weights.get(e.casefold(), 0.0) for e in entities]
-        connectivity = min(1.0, (sum(raw) / len(raw)) / max(entity_weight_cap, 1e-6))
-    else:
-        connectivity = 0.0
+        edge_conn = min(1.0, (sum(raw) / len(raw)) / max(entity_weight_cap, 1e-6))
+    ie = 0.0
+    if entities and entity_importance:
+        vals = [entity_importance.get(e.casefold(), 0.0) for e in entities]
+        ie = max(vals) if vals else 0.0
+    connectivity = 0.5 * edge_conn + 0.5 * ie if (entities and (entity_weights or entity_importance)) else 0.0
 
     if static_anchors is not None and len(static_anchors) and row_vector is not None:
         try:
@@ -311,6 +316,12 @@ def _apply_retention_gate(
     static_anchors = _build_static_anchors(memorize, user_id)
     entity_weights = _entity_connectivity_weights(memorize, user_id)
     entity_weight_cap = max(entity_weights.values(), default=1.0) or 1.0
+    entity_importance: dict[str, float] = {}
+    try:
+        from memory.entity_importance import compute_entity_importance_map
+        entity_importance = compute_entity_importance_map(memorize, user_id) or {}
+    except Exception as exc:
+        log.debug("Entity importance map skipped: %s", exc)
 
     candidate_texts = [row.get("_text", "") or "" for row in candidate_rows]
     candidate_vectors = None
@@ -332,6 +343,7 @@ def _apply_retention_gate(
             row_vector=vec,
             entity_weights=entity_weights,
             entity_weight_cap=entity_weight_cap,
+            entity_importance=entity_importance,
         )
         scored.append((score, row))
 
