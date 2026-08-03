@@ -777,21 +777,12 @@ def _read_media_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
 
 
 # ── Pixelset via MCP ─────────────────────────────────────────────────────────
+# Uploads are delegated to the MCP server (`post_social` with services="pixelset"),
+# which owns OAuth token refresh/state, rate limiting, idempotency, and audit
+# logging. The registry below starts empty and is populated at runtime by
+# `agentic.mcp_client.social_bridge.patch_social_registries()`.
 
-def _post_pixelset(selections: list[dict[str, Any]]) -> dict[str, Any]:
-    """Post the first approved Lane B photo through the social MCP server."""
-    if not selections:
-        return {"ok": False, "provider": "pixelset", "error": "no selections to post"}
-    sel = selections[0]
-    return _call_social_mcp(
-        "post_social",
-        services="pixelset",
-        text=sel.get("caption", ""),
-        image_path=sel.get("media_path", ""),
-    )
-
-
-_MEDIA_PROVIDERS_REGISTRY: dict[str, Callable[[list[dict[str, Any]]], dict[str, Any]]] = {"pixelset": _post_pixelset}
+_MEDIA_PROVIDERS_REGISTRY: dict[str, Callable[[list[dict[str, Any]]], dict[str, Any]]] = {}
 
 
 def post_photo_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:
@@ -1125,121 +1116,16 @@ def _read_video_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
 # a video insert costs 1600 units against a default 10,000/day quota
 # (~6 uploads/day) until the Cloud project is verified.
 #
-# No day-window refresh check like Threads/Pixelset: the refresh token
-# itself doesn't have a fixed expiry, so _youtube_access_token() just
-# exchanges it for a fresh short-lived access token on every post, unconditionally.
-
-def _youtube_config() -> tuple[str, str, str]:
-    client_id = os.getenv("YOUTUBE_CLIENT_ID", "").strip()
-    client_secret = os.getenv("YOUTUBE_CLIENT_SECRET", "").strip()
-    refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN", "").strip()
-    return client_id, client_secret, refresh_token
-
-
-def _youtube_access_token() -> tuple[str | None, dict[str, Any] | None]:
-    """Exchange the stored refresh token for a short-lived access token.
-    Returns (access_token, error_dict); exactly one will be non-None."""
-    client_id, client_secret, refresh_token = _youtube_config()
-    if not client_id or not client_secret or not refresh_token:
-        return None, {
-            "ok": False, "provider": "youtube",
-            "error": "YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REFRESH_TOKEN not set",
-        }
-    timeout = _int_env("YOUTUBE_TIMEOUT", 30)
-    try:
-        resp = requests.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "refresh_token": refresh_token,
-                "grant_type": "refresh_token",
-            },
-            timeout=timeout,
-        )
-        payload = resp.json()
-        token = payload.get("access_token") if 200 <= resp.status_code < 300 else None
-        if not token:
-            return None, {"ok": False, "provider": "youtube", "stage": "token_refresh", "status_code": resp.status_code, "response": payload}
-        return token, None
-    except Exception as e:
-        return None, {"ok": False, "provider": "youtube", "stage": "token_refresh", "error": str(e)}
-
-
-def _post_youtube(sel: dict[str, Any]) -> dict[str, Any]:
-    """Resumable upload: POST metadata to open a session, then PUT the file
-    bytes to the returned upload URL. Fine for the modest file sizes this
-    queue produces; very large files would want real chunked PUTs instead
-    of one big body."""
-    access_token, err = _youtube_access_token()
-    if err:
-        return err
-
-    media_path = Path(sel["media_path"])
-    if not media_path.exists():
-        return {"ok": False, "provider": "youtube", "error": f"media not found: {media_path}"}
-
-    timeout = _int_env("YOUTUBE_TIMEOUT", 120)
-    category_id = os.getenv("YOUTUBE_CATEGORY_ID", "22")  # 22 = People & Blogs
-    privacy_status = os.getenv("YOUTUBE_PRIVACY_STATUS", "public").strip().lower()
-    made_for_kids = _env_bool("YOUTUBE_MADE_FOR_KIDS", False)
-
-    metadata = {
-        "snippet": {
-            "title": sel.get("title", media_path.stem)[:MAX_YOUTUBE_TITLE_CHARS],
-            "description": sel.get("description", "")[:MAX_YOUTUBE_DESCRIPTION_CHARS],
-            "categoryId": category_id,
-        },
-        "status": {
-            "privacyStatus": privacy_status,
-            "selfDeclaredMadeForKids": made_for_kids,
-        },
-    }
-    mime = mimetypes.guess_type(str(media_path))[0] or "video/mp4"
-
-    try:
-        init = requests.post(
-            "https://www.googleapis.com/upload/youtube/v3/videos",
-            params={"uploadType": "resumable", "part": "snippet,status"},
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json; charset=UTF-8",
-                "X-Upload-Content-Type": mime,
-            },
-            json=metadata,
-            timeout=timeout,
-        )
-        if not (200 <= init.status_code < 300):
-            return {"ok": False, "provider": "youtube", "stage": "init", "status_code": init.status_code, "response": init.text[:2000]}
-        upload_url = init.headers.get("Location")
-        if not upload_url:
-            return {"ok": False, "provider": "youtube", "stage": "init", "error": "missing resumable upload Location header"}
-
-        with open(media_path, "rb") as f:
-            upload = requests.put(
-                upload_url,
-                headers={"Content-Type": mime},
-                data=f,  # requests streams from the file object
-                timeout=timeout,
-            )
-        ok = 200 <= upload.status_code < 300
-        try:
-            payload = upload.json()
-        except ValueError:
-            payload = {"raw": upload.text[:2000]}
-        return {
-            "ok": ok, "provider": "youtube", "status_code": upload.status_code,
-            "video_id": payload.get("id") if isinstance(payload, dict) else None,
-            "response": payload,
-        }
-    except Exception as e:
-        return {"ok": False, "provider": "youtube", "error": str(e)}
+# Actual uploads are delegated to the MCP server (`post_youtube`), which
+# owns OAuth token refresh/state, rate limiting, idempotency, and audit
+# logging. The registry below starts empty and is populated at runtime by
+# `agentic.mcp_client.social_bridge.patch_social_registries()`; posting
+# therefore only works when MCP is connected (one-way posting belongs in
+# the MCP server — see module docstring).
 
 
 # ── provider registry (video) ────────────────────────────────────────────────
-_VIDEO_PROVIDERS_REGISTRY: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
-    "youtube": _post_youtube,
-}
+_VIDEO_PROVIDERS_REGISTRY: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
 
 
 def post_video_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) -> dict[str, Any]:

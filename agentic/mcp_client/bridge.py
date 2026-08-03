@@ -8,6 +8,16 @@ from system.log import get_logger
 
 log = get_logger(__name__)
 
+# Raw MCP posting tools that duplicate the approved-workflow agent wrappers
+# (post_video_social / post_photo_social / post_to_social). Exposing these
+# directly lets the LLM call them with raw args (e.g. a draft *directory* as
+# video_path) and bypass the media_path/approval resolution those wrappers
+# handle. They remain reachable internally via the *_social registry adapters
+# (see social_bridge.patch_social_registries), just not as free LLM tools.
+_HIDDEN_MCP_POST_TOOLS = frozenset({
+    "post_youtube", "post_pixelset",
+})
+
 
 def bootstrap_mcp(server_url: str = "") -> bool:
     """Connect to the MCP server and register all discovered tools as Aiko bridges.
@@ -25,6 +35,9 @@ def bootstrap_mcp(server_url: str = "") -> bool:
 
     count = 0
     for name, description, props, required, bridge_fn in bridge_defs:
+        if name in _HIDDEN_MCP_POST_TOOLS:
+            log.info("[mcp] Hiding raw posting tool from LLM (use *_social wrapper): %s", name)
+            continue
         is_protonmail = "protonmail" in name
         register_tool_schema(
             name=name,
