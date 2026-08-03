@@ -7,37 +7,21 @@ Runs on/after the first day of a month and consolidates the month before the
 most recent full month. Example: on July 1, keep June intact and summarize May.
 
 Scope: this ONLY touches pinned daily-granularity memory (atomic facts tagged
-"[YYYY-MM-DD] ..." rows in memory.db plus "Daily journal of YYYY-MM-DD:" blobs in
-journal.db written nightly by memory.reflect). Unpinned memory is entirely out
-of scope here — its lifecycle is owned by memory.forget's decay scoring,
-applied nightly via memorize.dream(). Consolidation never reads, scores, or
-deletes unpinned rows.
-
-Why this exists: pinned memory has no decay mechanism by design (permanent =
-immune to forget.py). Without this step, daily atomic facts would accumulate
-forever with no ceiling. This step gives pinned memory the equivalent of what
-dream() already gives unpinned memory — compression instead of unbounded
-growth — but on a monthly cadence instead of nightly, and via merge/compress
-rather than delete-if-unused (since pinned facts were deliberately chosen as
-worth keeping; the compression only reduces resolution, it doesn't judge
-whether the content still matters).
+"[YYYY-MM-DD] ..." rows in memory.db). Journal day blobs in journal.db are
+loaded for counting/observability only in Phase 1 — they are not scored as
+retention candidates and are never deleted here (no journal archival path yet).
+Unpinned memory is entirely out of scope — its lifecycle is owned by
+memory.forget / memorize.dream().
 
 Retention gate (Phase 1):
-  Before facts are ever sent to the LLM for extraction/merge, *memory.db*
-  daily-granularity atomics for the target month are split into:
-    - must_keep: kind event/plan (classify_kind) or date-significant keywords
-    - candidates: scored 0..1 then floor/ceiling gated
-        0.30 * salience + 0.25 * novelty + 0.20 * spacing + 0.25 * connectivity
+  Before facts are sent to the LLM, *memory.db* day atomics for the target
+  month are split into must_keep vs scored candidates (floor/ceiling).
+  Static anchors come from prior "[YYYY-MM] ..." archive only.
+  LLM merge/compress only decides wording among survivors.
 
-  Journal day blobs are NOT scored as peer candidates (they are multi-fact
-  dumps and would skew must_keep/rank). They remain in scope for end-of-run
-  deletion when DELETE is enabled, same as day pins.
-
-  Static anchors: theme centroids from prior "[YYYY-MM] ..." archive only
-  (non-circular). sklearn KMeans optional; mean-vector fallback.
-
-  LLM merge/compress only decides wording among survivors — it must not drop
-  gated source material except as near-duplicate merges.
+  Full source-id provenance through the LLM (hard coverage proof before
+  delete) is deferred; MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES defaults
+  off so day pins are not removed until the gate is audited.
 
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
@@ -68,7 +52,6 @@ CONSOLIDATION_CHUNK_MEMS      = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_CHUN
 CONSOLIDATION_MAX_INPUT_CHARS = max(1000, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS", "6000")))
 CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MEMS", "5")))
 
-# ── retention gate knobs ──────────────────────────────────────────────────────
 CONSOLIDATION_MIN_MONTH        = max(0, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MONTH", "8")))
 CONSOLIDATION_MAX_MONTH        = max(CONSOLIDATION_MIN_MONTH, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_MONTH", "30")))
 CONSOLIDATION_SOFT_THRESHOLD   = float(os.getenv("MONTHLY_CONSOLIDATION_SOFT_THRESHOLD", "0.4"))
@@ -81,7 +64,6 @@ _RETENTION_W_CONNECTIVITY = float(os.getenv("MONTHLY_CONSOLIDATION_W_CONNECTIVIT
 _RETENTION_SPACING_SATURATION = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
 
 def consolidation_state_path(user_id: str | None = None) -> Path:
-    """Resolve monthly consolidation state path for the active user."""
     override = os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
     if override:
         return Path(override).expanduser()
@@ -104,7 +86,6 @@ _MUST_KEEP_KEYWORDS = (
 
 
 def _is_must_keep(text: str) -> bool:
-    """True if a daily atomic fact should bypass retention scoring entirely."""
     kind = classify_kind(text, default="fact")
     if kind in ("event", "plan"):
         return True
@@ -120,7 +101,6 @@ def _add_months(dt: datetime, months: int) -> datetime:
 
 
 def target_month_for(now: datetime) -> tuple[datetime, datetime, str]:
-    """Return (start, end, key) for the month ready to consolidate."""
     local_first  = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     target_end   = _add_months(local_first, -CONSOLIDATION_KEEP_MONTHS)
     target_start = _add_months(target_end, -1)
@@ -176,7 +156,6 @@ def _bounded_lines(items: list[str]) -> str:
 
 
 def _entity_connectivity_weights(memorize, user_id: str) -> dict[str, float]:
-    """Sum of co-mention edge weight per entity (casefolded). Read-only."""
     try:
         lock = getattr(getattr(memorize, "_mem", None), "_db_lock", None)
         if lock is not None:
@@ -207,7 +186,6 @@ def _entity_connectivity_weights(memorize, user_id: str) -> dict[str, float]:
 
 
 def _build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
-    """Theme centroids from prior archived [YYYY-MM] facts only."""
     try:
         all_mems = memorize.get_all(user_id=user_id)
     except Exception as exc:
@@ -266,7 +244,6 @@ def _score_daily_row(
     entity_weights: dict[str, float],
     entity_weight_cap: float,
 ) -> float:
-    """Retention score in 0..1 for one candidate daily atomic (not must_keep)."""
     text = row.get("_text", "") or ""
     entities = entities_from_json(row.get("entities"))
 
@@ -285,7 +262,7 @@ def _score_daily_row(
         try:
             norms = np.linalg.norm(static_anchors, axis=1) * np.linalg.norm(row_vector) + 1e-9
             sims = (static_anchors @ row_vector) / norms
-            novelty = float(max(0.0, min(1.0, 1.0 - float(np.max(sims)))))
+            novelty = float(max(0.0, min(1.0, 1.0 - float(np.max(sims))))
         except Exception:
             novelty = 0.5
     else:
@@ -304,7 +281,6 @@ def _apply_retention_gate(
     user_id: str,
     daily_rows: list[dict],
 ) -> tuple[list[dict], dict]:
-    """Gate *memory.db* day atomics only. Journal rows must not be in daily_rows."""
     must_keep_rows: list[dict] = []
     candidate_rows: list[dict] = []
 
@@ -374,7 +350,6 @@ def _apply_retention_gate(
     }
 
 
-# LLM is compressor only — gate already chose survivors.
 _MONTHLY_FACTS_SYSTEM = textwrap.dedent("""
     You are compressing a pre-selected list of daily memory facts about {USER_ID}
     into durable long-term monthly facts for archival.
@@ -476,7 +451,6 @@ def _merge_monthly_facts(month_key: str, chunk_facts: list[list[str]]) -> list[s
 
 
 def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str | None = None) -> dict:
-    """Run monthly consolidation if enabled and the target month is not already done."""
     if not CONSOLIDATION_ENABLED:
         return {"ran": False, "reason": "disabled"}
 
@@ -492,7 +466,6 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     end_utc   = end.astimezone(timezone.utc)
     all_memories = memorize.get_between(start_utc, end_utc, user_id=user_id)
 
-    # Day atomics only — these are what the retention gate ranks.
     memory_day_rows = [
         dict(m) | {"_store": "memory", "_text": (m.get("memory") or "").strip()}
         for m in all_memories
@@ -500,11 +473,12 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         and _DAILY_FACT_TAG_RE.match((m.get("memory") or "").strip())
     ]
 
-    # Journals: deletion lifecycle only (not scored as peer candidates).
+    # Journals: local calendar boundaries only (entry_date is YYYY-MM-DD local).
+    # Not scored; not deleted in Phase 1 (no journal archival path yet).
     journal_day_rows: list[dict] = []
     try:
         from memory import journal
-        journal_rows = journal.get_between(start_utc, end_utc, user_id=user_id)
+        journal_rows = journal.get_between(start, end, user_id=user_id)
         journal_day_rows = [
             dict(j) | {"_store": "journal", "_text": (j.get("body") or "").strip()}
             for j in journal_rows
@@ -557,21 +531,16 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     if facts_written == 0:
         return {"ran": False, "reason": "no_facts_written", "month": month_key, "count": source_count, **gate_stats}
 
-    # Delete ALL day-granularity originals for the month (gated survivors,
-    # dropped candidates, and journals) when DELETE is enabled.
-    delete_targets = memory_day_rows + journal_day_rows
+    # Phase 1: only memory.db day pins may be deleted (when DELETE is on).
+    # Journals are never deleted here — they were not LLM-archived sources.
     daily_deleted = 0
     if CONSOLIDATION_DELETE_DAILY_SUMMARIES:
-        for m in delete_targets:
+        for m in memory_day_rows:
             mem_id = m.get("id")
             if not mem_id:
                 continue
             try:
-                if m.get("_store") == "journal":
-                    from memory import journal
-                    journal.delete(mem_id, user_id=user_id)
-                else:
-                    memorize.delete(mem_id)
+                memorize.delete(mem_id)
                 daily_deleted += 1
             except Exception as e:
                 log.warning("Failed to delete consolidated daily row %s: %s", mem_id, e)
@@ -582,7 +551,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
 
     log.info(
         "monthly_consolidate complete: month=%s source_count=%s memory_days=%s "
-        "journals=%s must_keep=%s candidates=%s kept_candidates=%s "
+        "journals=%s journals_deleted=0 must_keep=%s candidates=%s kept_candidates=%s "
         "dropped_candidates=%s facts_written=%s daily_deleted=%s delete_enabled=%s",
         month_key, source_count, len(memory_day_rows), len(journal_day_rows),
         gate_stats["must_keep"], gate_stats["candidates"],
@@ -604,12 +573,12 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         "journal_count":  len(journal_day_rows),
         "facts_written":  facts_written,
         "daily_deleted":  daily_deleted,
+        "journals_deleted": 0,
         **gate_stats,
     }
 
 
 def _archive_reports(user_id: str | None = None, keep_days: int = 90) -> dict:
-    """Archive report files older than keep_days to reports/archive/."""
     import shutil
     from datetime import datetime, timedelta
     from system.userspace import user_workspace_root
@@ -646,7 +615,6 @@ def _archive_reports(user_id: str | None = None, keep_days: int = 90) -> dict:
     return {"moved": moved, "errors": errors}
 
 def _resolve_embedder(memorize=None):
-    """Best-effort embedder for maintenance (dedupe)."""
     if memorize is not None:
         try:
             emb = getattr(getattr(memorize, "_mem", None), "_embedder", None)
@@ -662,7 +630,6 @@ def _resolve_embedder(memorize=None):
         return None
 
 def _maintenance_run(user_id: str | None = None, memorize=None) -> dict:
-    """Run monthly maintenance: archive reports, prune KB, vacuum DBs."""
     uid = user_id or current_user_id()
     results = {}
 
