@@ -21,6 +21,47 @@ rather than delete-if-unused (since pinned facts were deliberately chosen as
 worth keeping; the compression only reduces resolution, it doesn't judge
 whether the content still matters).
 
+Retention gate (NEW):
+  Previously every fact the LLM merge step returned was pinned unconditionally
+  — a quiet month and a chaotic month got identical treatment, with no
+  ranking, no floor/ceiling, no novelty check. That's the "coin toss" failure
+  mode: boring months either wipe entirely or keep weak filler, busy months
+  can explode into unbounded monthly archive growth.
+
+  Before facts are ever sent to the LLM for extraction/merge, daily rows for
+  the target month are split into:
+    - must_keep: rows whose kind is 'event'/'plan' (memory.memorize.classify_kind)
+      or whose text contains a date-significant keyword (deadline, birthday,
+      anniversary, appointment, hackathon, interview, or an explicit loss
+      event) — these always survive into the LLM step regardless of score.
+    - candidates: everything else, scored 0..1 by a retention formula:
+        0.30 * salience     (keyword hit, else a lower baseline)
+        + 0.25 * novelty    (1 - cosine sim to nearest static theme anchor)
+        + 0.20 * spacing    (access_count proxy for repeated recall)
+        + 0.25 * connectivity (entity co-mention weight, from entity_relations,
+                                 already written at insert time — this is the
+                                 first time it's read as a numeric feature
+                                 rather than only for recall-time graph fusion)
+
+  Candidates are ranked by score; the number kept is
+  max(MIN_MONTH, min(MAX_MONTH, count(score >= SOFT_THRESHOLD))) — a floor so
+  a quiet month still leaves a thin trace, a ceiling so a busy month can't
+  make the monthly archive grow unbounded. Only must_keep + kept candidates
+  go into the existing chunk/extract/merge pipeline; the LLM still decides
+  wording and how to combine survivors, never which facts live or die.
+
+  Static anchors are theme centroids (k-means, or a single mean vector if
+  scikit-learn isn't available) built from the most recent already-archived
+  "[YYYY-MM] ..." monthly facts — "what themes defined recent months" — so
+  novelty is measured against real prior archive, not against the current
+  month's own candidates (which would be circular).
+
+  ALL daily-granularity originals for the month (must_keep + kept + dropped
+  candidates) are still deleted at the end, same as before — dropped
+  candidates are folded out of the monthly archive rather than merged into
+  it, must_keep + kept candidates get folded into monthly facts via the
+  existing LLM merge step.
+
 Date handling: like human memory, most facts lose day-level resolution once
 consolidated — a fact from mid-May becomes "sometime in May," not "May 18."
 But facts describing a genuinely date-significant occasion (birthdays,
@@ -51,12 +92,14 @@ import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 from openai import OpenAI
 
 from system import bioclock
 from system.log import get_logger
 from system.userspace import current_display_name, current_user_id, user_state_path
 from memory.reflect import _extract_json_arrays, _salvage_truncated_facts
+from memory.memorize import classify_kind, entities_from_json
 
 log = get_logger(__name__)
 
@@ -65,6 +108,26 @@ CONSOLIDATION_KEEP_MONTHS     = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_KEEP
 CONSOLIDATION_CHUNK_MEMS      = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_CHUNK_MEMS", "25")))
 CONSOLIDATION_MAX_INPUT_CHARS = max(1000, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS", "6000")))
 CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MEMS", "5")))
+
+# ── retention gate knobs (NEW) ────────────────────────────────────────────────
+# Floor/ceiling on how many *candidate* (non-must-keep) facts survive into
+# the monthly archive. must_keep facts are never subject to this cap.
+CONSOLIDATION_MIN_MONTH        = max(0, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MONTH", "8")))
+CONSOLIDATION_MAX_MONTH        = max(CONSOLIDATION_MIN_MONTH, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_MONTH", "30")))
+CONSOLIDATION_SOFT_THRESHOLD   = float(os.getenv("MONTHLY_CONSOLIDATION_SOFT_THRESHOLD", "0.4"))
+# How many prior "[YYYY-MM] ..." archive facts to pull for static anchor
+# clustering, and how many clusters (themes) to fit against them.
+CONSOLIDATION_ANCHOR_LOOKBACK  = max(2, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_LOOKBACK", "50")))
+CONSOLIDATION_ANCHOR_K         = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_K", "5")))
+# Retention score component weights — must sum to 1.0 to keep the score in
+# a stable 0..1 range against CONSOLIDATION_SOFT_THRESHOLD.
+_RETENTION_W_SALIENCE     = float(os.getenv("MONTHLY_CONSOLIDATION_W_SALIENCE", "0.30"))
+_RETENTION_W_NOVELTY      = float(os.getenv("MONTHLY_CONSOLIDATION_W_NOVELTY", "0.25"))
+_RETENTION_W_SPACING      = float(os.getenv("MONTHLY_CONSOLIDATION_W_SPACING", "0.20"))
+_RETENTION_W_CONNECTIVITY = float(os.getenv("MONTHLY_CONSOLIDATION_W_CONNECTIVITY", "0.25"))
+# access_count value treated as "fully spaced" (score saturates at 1.0 here).
+_RETENTION_SPACING_SATURATION = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
+
 def consolidation_state_path(user_id: str | None = None) -> Path:
     """Resolve monthly consolidation state path for the active user."""
     override = os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
@@ -85,6 +148,36 @@ CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_DELETE_D
 # pinned content (identity facts, standing preferences, etc.) that should
 # never be touched by consolidation.
 _DAILY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
+
+# Matches an already-archived monthly fact, e.g. "[2026-05] ...". Deliberately
+# does NOT match the daily tag above (the day-of-month digits after the
+# second "-" mean the char immediately after \d{4}-\d{2} is "-", not "]").
+# Used only to source static anchor embeddings from prior archive.
+_MONTHLY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
+
+# Facts matching these keywords (word-agnostic substring match, casefolded)
+# are treated as must-keep regardless of retention score — same rationale as
+# memory/memorize.py's _SALIENCE_KEYWORDS, narrowed to genuinely
+# date/occasion-significant terms rather than the broader recall-salience list.
+_MUST_KEEP_KEYWORDS = (
+    "deadline", "birthday", "anniversary", "appointment", "hackathon",
+    "interview", "lost ", "passport", "license", "wallet",
+)
+
+
+def _is_must_keep(text: str) -> bool:
+    """True if a daily fact should bypass retention scoring entirely.
+
+    Uses memory.memorize.classify_kind (the same rule-based classifier
+    already applied at write time) plus a narrower date/occasion keyword
+    list than recall-time salience, since must-keep is a stronger bar than
+    "worth boosting at dream time."
+    """
+    kind = classify_kind(text, default="fact")
+    if kind in ("event", "plan"):
+        return True
+    low = (text or "").casefold()
+    return any(k in low for k in _MUST_KEEP_KEYWORDS)
 
 
 # ── month math ─────────────────────────────────────────────────────────────
@@ -165,6 +258,263 @@ def _bounded_lines(items: list[str]) -> str:
         lines.append(line)
         total += len(line) + 1
     return "\n".join(lines) or "- none"
+
+
+# ── retention scoring (NEW) ───────────────────────────────────────────────────
+# Applied to `candidate` rows only (must_keep rows bypass scoring entirely —
+# see _is_must_keep). Scores every non-must-keep daily row 0..1 so a floor/
+# ceiling gate can decide how many survive into the LLM extraction/merge step,
+# instead of the LLM's own judgment being the only thing standing between a
+# quiet month (whole month wiped) and a busy month (unbounded archive growth).
+
+def _entity_connectivity_weights(memorize, user_id: str) -> dict[str, float]:
+    """Sum of co-mention edge weight per entity (casefolded), read from the
+    entity_relations table. This table is already populated at write time
+    by memory.memorize._insert_row -> upsert_co_mentions for every fact with
+    2+ entities — this is the first place it's read back as a numeric
+    connectivity feature rather than only for recall-time graph fusion
+    (_MemoryBackend._graph_pass). Read-only; never writes here.
+
+    Returns {} on any failure (e.g. table not yet migrated for this user) —
+    callers treat that as "no connectivity signal available" rather than
+    raising, since connectivity is one of four score components, not a
+    hard requirement.
+    """
+    try:
+        conn = memorize._conn
+        rows = conn.execute(
+            "SELECT entity_a, entity_b, weight FROM entity_relations WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    except Exception as exc:
+        log.debug("Connectivity weights: entity_relations read skipped: %s", exc)
+        return {}
+
+    weights: dict[str, float] = {}
+    for row in rows:
+        a = str(row["entity_a"] or "")
+        b = str(row["entity_b"] or "")
+        w = float(row["weight"] or 0.0)
+        if a:
+            weights[a] = weights.get(a, 0.0) + w
+        if b:
+            weights[b] = weights.get(b, 0.0) + w
+    return weights
+
+
+def _build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
+    """Theme centroids from the most recently archived "[YYYY-MM] ..."
+    monthly facts — "what themes defined recent months" — used as the
+    novelty reference for scoring this month's candidates. Deliberately
+    sourced from PRIOR archive, not this month's own candidates, to avoid
+    novelty being circular (everything looks novel relative to itself).
+
+    Returns None when there isn't enough prior archive yet (first few
+    months of the system's life) or on any failure; callers treat None as
+    "no novelty signal available" and fall back to a neutral 0.5, same
+    as the original Grace design's "empty month" case.
+    """
+    try:
+        all_mems = memorize.get_all(user_id=user_id)
+    except Exception as exc:
+        log.warning("Static anchor build: failed to fetch memories: %s", exc)
+        return None
+
+    monthly_texts = [
+        (m.get("memory") or "").strip()
+        for m in sorted(all_mems, key=lambda m: m.get("created_at", "") or "", reverse=True)
+        if _MONTHLY_FACT_TAG_RE.match((m.get("memory") or "").strip())
+    ][:CONSOLIDATION_ANCHOR_LOOKBACK]
+
+    if len(monthly_texts) < 2:
+        return None
+
+    try:
+        vectors = np.array(memorize.embed_texts(monthly_texts, query=False))
+    except Exception as exc:
+        log.warning("Static anchor build: embedding failed: %s", exc)
+        return None
+
+    if vectors.size == 0:
+        return None
+
+    k = max(1, min(CONSOLIDATION_ANCHOR_K, len(monthly_texts) // 3 or 1))
+    if k >= 2:
+        try:
+            from sklearn.cluster import KMeans
+            km = KMeans(n_clusters=k, random_state=42, n_init=5)
+            km.fit(vectors)
+            return km.cluster_centers_
+        except Exception as exc:
+            log.debug(
+                "Static anchor build: kmeans unavailable/failed (%s); "
+                "falling back to a single mean-vector anchor.", exc,
+            )
+
+    # Fallback (no sklearn, or k collapsed to 1): a single mean-vector
+    # anchor still gives a meaningful "distance from the general theme of
+    # recent months" novelty signal without requiring sklearn on Jetson.
+    return np.mean(vectors, axis=0, keepdims=True)
+
+
+def _score_daily_row(
+    row: dict,
+    *,
+    static_anchors: "np.ndarray | None",
+    row_vector: "np.ndarray | None",
+    entity_weights: dict[str, float],
+    entity_weight_cap: float,
+) -> float:
+    """Retention score in 0..1 for one candidate daily row (must_keep rows
+    never reach this function — see _is_must_keep).
+
+    Components:
+      salience     — cheap keyword hit (memory/memorize._SALIENCE_RE would
+                     also work here, but the day-fact already carries its
+                     own kind/text; a plain re-check keeps this function
+                     self-contained). 1.0 on hit, 0.3 baseline otherwise.
+      novelty      — 1 - cosine similarity to the nearest static theme
+                     anchor. Neutral (0.5) when no anchors are available yet
+                     (early system life) or embedding failed for this row.
+      spacing      — access_count proxy for repeated recall, saturating at
+                     _RETENTION_SPACING_SATURATION accesses. access_count is
+                     already decay-aware upstream (memory/forget.py), so
+                     this reuses a signal that already exists rather than
+                     introducing a new access-day-set column.
+      connectivity — mean normalized entity_relations co-mention weight
+                     across this row's own entities (already extracted and
+                     stored in the `entities` column at write time).
+    """
+    text = row.get("_text", "") or ""
+    entities = entities_from_json(row.get("entities"))
+
+    salience = 1.0 if _SALIENCE_HIT_RE.search(text) else 0.3
+
+    access_count = int(row.get("access_count") or 0)
+    spacing = min(1.0, access_count / float(_RETENTION_SPACING_SATURATION))
+
+    if entities and entity_weights:
+        raw = [entity_weights.get(e.casefold(), 0.0) for e in entities]
+        connectivity = min(1.0, (sum(raw) / len(raw)) / max(entity_weight_cap, 1e-6))
+    else:
+        connectivity = 0.0
+
+    if static_anchors is not None and len(static_anchors) and row_vector is not None:
+        try:
+            norms = np.linalg.norm(static_anchors, axis=1) * np.linalg.norm(row_vector) + 1e-9
+            sims = (static_anchors @ row_vector) / norms
+            novelty = float(max(0.0, min(1.0, 1.0 - float(np.max(sims)))))
+        except Exception:
+            novelty = 0.5
+    else:
+        novelty = 0.5
+
+    return (
+        _RETENTION_W_SALIENCE * salience
+        + _RETENTION_W_NOVELTY * novelty
+        + _RETENTION_W_SPACING * spacing
+        + _RETENTION_W_CONNECTIVITY * connectivity
+    )
+
+
+# Reuses the same date/occasion vocabulary as _is_must_keep's keyword check,
+# but as a soft salience signal for facts that didn't already qualify as
+# must_keep via kind or the narrower keyword list (e.g. "always"/"favorite"
+# style facts that matter but aren't calendar-significant).
+_SALIENCE_HIT_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(k.strip()) for k in (
+        "deadline", "birthday", "anniversary", "appointment", "hackathon",
+        "interview", "lost", "passport", "license", "wallet", "important",
+        "breakthrough", "problem", "always", "never", "favorite", "favourite",
+    )) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _apply_retention_gate(
+    memorize,
+    user_id: str,
+    daily_rows: list[dict],
+) -> tuple[list[dict], dict]:
+    """Split daily_rows into must_keep + scored/gated candidates.
+
+    Returns (kept_rows, stats) where kept_rows = must_keep + surviving
+    candidates (this is what gets chunked and sent to the LLM extraction/
+    merge step), and stats is a small audit dict for the result payload —
+    "why did this month keep N facts" should be answerable from the log
+    line alone, matching the Grace design's auditability goal.
+    """
+    must_keep_ids: set[str] = set()
+    must_keep_rows: list[dict] = []
+    candidate_rows: list[dict] = []
+
+    for row in daily_rows:
+        text = row.get("_text", "") or ""
+        if _is_must_keep(text):
+            rid = row.get("id")
+            if rid:
+                must_keep_ids.add(rid)
+            must_keep_rows.append(row)
+        else:
+            candidate_rows.append(row)
+
+    if not candidate_rows:
+        return must_keep_rows, {
+            "must_keep": len(must_keep_rows),
+            "candidates": 0,
+            "kept_candidates": 0,
+            "dropped_candidates": 0,
+        }
+
+    static_anchors = _build_static_anchors(memorize, user_id)
+    entity_weights = _entity_connectivity_weights(memorize, user_id)
+    entity_weight_cap = max(entity_weights.values(), default=1.0) or 1.0
+
+    candidate_texts = [row.get("_text", "") or "" for row in candidate_rows]
+    candidate_vectors = None
+    try:
+        candidate_vectors = np.array(memorize.embed_texts(candidate_texts, query=False))
+    except Exception as exc:
+        log.warning(
+            "Retention gate: failed to embed %d candidate row(s), "
+            "novelty will default to neutral for this run: %s",
+            len(candidate_texts), exc,
+        )
+
+    scored: list[tuple[float, dict]] = []
+    for i, row in enumerate(candidate_rows):
+        vec = candidate_vectors[i] if candidate_vectors is not None else None
+        score = _score_daily_row(
+            row,
+            static_anchors=static_anchors,
+            row_vector=vec,
+            entity_weights=entity_weights,
+            entity_weight_cap=entity_weight_cap,
+        )
+        scored.append((score, row))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+
+    above_threshold = sum(1 for score, _ in scored if score >= CONSOLIDATION_SOFT_THRESHOLD)
+    target_count = max(CONSOLIDATION_MIN_MONTH, min(CONSOLIDATION_MAX_MONTH, above_threshold))
+    target_count = min(target_count, len(scored))
+
+    kept_candidates = [row for _, row in scored[:target_count]]
+    dropped_candidates = [row for _, row in scored[target_count:]]
+
+    log.debug(
+        "Retention gate: %d must_keep, %d candidates scored (threshold=%.2f "
+        "above=%d), target_count=%d -> kept=%d dropped=%d",
+        len(must_keep_rows), len(scored), CONSOLIDATION_SOFT_THRESHOLD,
+        above_threshold, target_count, len(kept_candidates), len(dropped_candidates),
+    )
+
+    return must_keep_rows + kept_candidates, {
+        "must_keep": len(must_keep_rows),
+        "candidates": len(scored),
+        "kept_candidates": len(kept_candidates),
+        "dropped_candidates": len(dropped_candidates),
+    }
 
 
 # ── monthly fact extraction (mirrors memory/reflect.py's daily fact extraction,
@@ -305,8 +655,17 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     read, scored, or deleted here — that lifecycle belongs entirely to
     memory.forget / memorize.dream(), independent of this job.
 
+    Before extraction, daily rows are passed through _apply_retention_gate:
+    must-keep rows (dated/event/plan facts) always survive; the remaining
+    candidates are scored and floor/ceiling-gated (see module docstring)
+    so a quiet month doesn't get wiped and a busy month can't make the
+    monthly archive grow unbounded. The LLM extraction/merge step still
+    decides wording and how surviving facts get combined — it never decides
+    which facts live or die.
+
     Returns a result dict with keys: ran, reason (on skip), month, count,
-    facts_written, daily_deleted.
+    facts_written, daily_deleted, plus retention-gate stats (must_keep,
+    candidates, kept_candidates, dropped_candidates) when the gate ran.
     """
     if not CONSOLIDATION_ENABLED:
         return {"ran": False, "reason": "disabled"}
@@ -349,7 +708,10 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         _save_state(state, user_id)
         return {"ran": False, "reason": "too_few_memories", "month": month_key, "count": len(daily_rows)}
 
-    source_facts = [m.get("_text", "").strip() for m in daily_rows if m.get("_text", "").strip()]
+    # ── retention gate (NEW): decide which daily rows even reach the LLM ──
+    kept_rows, gate_stats = _apply_retention_gate(memorize, user_id, daily_rows)
+
+    source_facts = [m.get("_text", "").strip() for m in kept_rows if m.get("_text", "").strip()]
     chunks = [source_facts[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(source_facts), CONSOLIDATION_CHUNK_MEMS)]
 
     chunk_facts = [
@@ -359,11 +721,11 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     chunk_facts = [c for c in chunk_facts if c]  # drop empty chunks (parse failures)
 
     if not chunk_facts:
-        return {"ran": False, "reason": "empty_extraction", "month": month_key, "count": len(daily_rows)}
+        return {"ran": False, "reason": "empty_extraction", "month": month_key, "count": len(daily_rows), **gate_stats}
 
     final_facts = _merge_monthly_facts(month_key, chunk_facts)
     if not final_facts:
-        return {"ran": False, "reason": "empty_merge", "month": month_key, "count": len(daily_rows)}
+        return {"ran": False, "reason": "empty_merge", "month": month_key, "count": len(daily_rows), **gate_stats}
 
     facts_written = 0
     written_ids: list[str] = []
@@ -377,10 +739,13 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
             log.warning("Failed to pin monthly fact %r: %s", fact, e)
 
     if facts_written == 0:
-        return {"ran": False, "reason": "no_facts_written", "month": month_key, "count": len(daily_rows)}
+        return {"ran": False, "reason": "no_facts_written", "month": month_key, "count": len(daily_rows), **gate_stats}
 
-    # Only now delete the daily-granularity originals for this month —
-    # their content has been folded into the facts just pinned above.
+    # Only now delete the daily-granularity originals for this month — ALL
+    # of them, including retention-gate-dropped candidates, since dropped
+    # facts were deliberately excluded from the monthly archive rather than
+    # folded into it (that's the point of the gate); their content isn't
+    # preserved anywhere after this, same as any other forgotten memory.
     # Gated by MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES so consolidation
     # can run purely additively (archive-only) if you want a safety margin
     # before trusting deletion.
@@ -405,8 +770,12 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     _save_state(state, user_id)
 
     log.info(
-        "monthly_consolidate complete: month=%s source_count=%s facts_written=%s daily_deleted=%s",
-        month_key, len(daily_rows), facts_written, daily_deleted,
+        "monthly_consolidate complete: month=%s source_count=%s must_keep=%s "
+        "candidates=%s kept_candidates=%s dropped_candidates=%s "
+        "facts_written=%s daily_deleted=%s",
+        month_key, len(daily_rows), gate_stats["must_keep"], gate_stats["candidates"],
+        gate_stats["kept_candidates"], gate_stats["dropped_candidates"],
+        facts_written, daily_deleted,
     )
 
     # Run monthly maintenance (archive reports, prune KB, vacuum)
@@ -422,6 +791,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         "count":          len(daily_rows),
         "facts_written":  facts_written,
         "daily_deleted":  daily_deleted,
+        **gate_stats,
     }
 
 
