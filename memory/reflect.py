@@ -812,6 +812,7 @@ def generate_and_post(
     date_str = date.strftime("%Y-%m-%d")
     date_tag = f"[{date_str}]"
     pinned_count = 0
+    member_ids: list[str] = []
     if memorize is not None:
         try:
             facts = _generate_daily_facts(prose, snippets, date, display_name=display_name)
@@ -826,10 +827,29 @@ def generate_and_post(
         ]
         for fact in facts:
             try:
-                if memorize.add_raw(f"{date_tag} {fact}", user_id=uid, pinned=True):
+                mem_id = memorize.add_raw(f"{date_tag} {fact}", user_id=uid, pinned=True)
+                if mem_id:
                     pinned_count += 1
+                    member_ids.append(mem_id)
             except Exception as e:
                 log.warning(f"Failed to pin fact {fact!r}: {e}")
+
+    # Step 4c: build an L2 scene linking the day's pinned facts.
+    # The scene summary is a compact caption from the day's prose so it's
+    # searchable and surfaceable via "what happened during X".
+    scene_id = None
+    if memorize is not None and member_ids:
+        try:
+            # First sentence of prose as a compact scene caption; fallback to date tag.
+            first_sent = (prose or "").strip().split(". ")[0]
+            scene_summary = f"{date_str}: {first_sent}" if first_sent else f"Daily episode for {date_str}"
+            scene_id = memorize.build_scene(
+                summary=scene_summary, member_ids=member_ids, user_id=uid, pinned=True
+            )
+            if scene_id:
+                log.info(f"Built L2 scene {scene_id} with {len(member_ids)} members")
+        except Exception as e:
+            log.warning(f"Scene build failed: {e}")
 
     pinned = pinned_count > 0
 
@@ -869,4 +889,5 @@ def generate_and_post(
         "image_generated": image_generated,
         "pinned":          pinned,
         "journal_pinned":  journal_pinned,
+        "scene_id":        scene_id,
     }

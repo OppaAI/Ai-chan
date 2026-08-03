@@ -89,10 +89,27 @@ class DiscordAdapter(AdapterBase):
         channel_id = int(conversation_id)
         channel = self._client.get_channel(channel_id)
         if channel is None:
-            log.warning("[discord] Channel %s not found in cache", conversation_id)
+            log.warning("[discord] Channel %s not found in cache, trying fetch", conversation_id)
+            try:
+                import asyncio
+                asyncio.run_coroutine_threadsafe(
+                    self._fetch_and_send(channel_id, text), 
+                    self._client.loop
+                )
+            except Exception as exc:
+                log.error("[discord] Failed to fetch and send to %s: %s", conversation_id, exc)
             return
         try:
             import asyncio
             asyncio.run_coroutine_threadsafe(channel.send(text), self._client.loop)
         except Exception as exc:
             log.error("[discord] Failed to send to %s: %s", conversation_id, exc)
+
+    async def _fetch_and_send(self, channel_id: int, text: str) -> None:
+        """Fetch channel by ID and send message — used for DMs not in cache."""
+        try:
+            channel = await self._client.fetch_channel(channel_id)
+            await channel.send(text)
+            log.info("[discord] Sent to fetched channel %s", channel_id)
+        except Exception as exc:
+            log.error("[discord] Fetch and send failed for %s: %s", channel_id, exc)

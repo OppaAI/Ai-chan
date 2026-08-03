@@ -321,6 +321,28 @@ MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
 MEMORY_CONTEXT_TOTAL_CHARS = int(os.getenv("MEMORY_CONTEXT_TOTAL_CHARS", 1200))
 MEMORY_LIFECYCLE_BATCH_SIZE = int(os.getenv("MEMORY_LIFECYCLE_BATCH_SIZE", 500))
 
+# L3 persona cache — an always-hydrated, cheap blob of the most stable
+# identity facts (kind='identity'), prepended to context every turn WITHOUT
+# going through KNN/FTS/graph. Distinct from the RRF recall path so the common
+# "who am I talking to" turn never pays for a full search, and so stable
+# identity facts are never drowned out by turn-specific recall.
+PERSONA_RECALL_LIMIT   = int(os.getenv("PERSONA_RECALL_LIMIT", 6))
+PERSONA_CONTEXT_CHARS  = int(os.getenv("PERSONA_CONTEXT_CHARS", 600))
+PERSONA_CACHE_TTL      = float(os.getenv("PERSONA_CACHE_TTL", 60.0))
+# L2 scene blocks — a scene is itself a memory row with kind='scene'; the
+# atomic facts it summarizes carry scene_id back to it. These knobs bound how
+# many/hot scene summaries we surface as a cheap context bootstrap.
+SCENE_CONTEXT_LIMIT    = int(os.getenv("SCENE_CONTEXT_LIMIT", 3))
+SCENE_CONTEXT_CHARS    = int(os.getenv("SCENE_CONTEXT_CHARS", 600))
+SCENE_MEMBER_LIMIT     = int(os.getenv("SCENE_MEMBER_LIMIT", 6))
+# L0 conversation traceability — optional per-turn raw-log retention (off by
+# default; Aiko's lean-memory stance keeps the journal as its only L0).
+L0_CONVERSATION_LOG_ENABLED = _env_bool("L0_CONVERSATION_LOG_ENABLED", "0")
+
+# Recall hard-timeout — protects the turn from a slow local embed/stall on the
+# recall future. On timeout the recall is skipped (empty) instead of blocking.
+MEMORY_RECALL_TIMEOUT  = float(os.getenv("MEMORY_RECALL_TIMEOUT", 5.0))
+
 # Recency-among-relevant rerank — candidates clearing this score are
 # reordered by created_at descending among themselves (see module docstring
 # stage 3). Independent of MEMORY_RANK_RECENCY_WEIGHT's continuous blend.
@@ -511,6 +533,7 @@ STATUS_ACTIVE = "active"
 STATUS_SUPERSEDED = "superseded"
 
 KIND_FACT = "fact"
+KIND_SCENE = "scene"
 SOURCE_CHAT = "chat"
 SOURCE_PIN = "pin"
 SOURCE_LEGACY = "legacy"
@@ -524,6 +547,11 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("source", "TEXT NOT NULL DEFAULT 'legacy'"),
     ("entities", "TEXT NOT NULL DEFAULT '[]'"),
 )
+
+# L2 scene blocks — one additive runtime column on memories. A scene row
+# carries kind='scene' and is itself searchable; its atomic-fact members point
+# back to it via scene_id. See ensure_l2_scene_schema().
+_L2_SCENE_COLUMN: tuple[str, str] = ("scene_id", "TEXT")
 
 # ── Phase B: entity tagging (formerly memory/entities.py) ────────────────────
 # Pure regex / heuristics — no LLM, no NER model. Runs on already-extracted
@@ -719,6 +747,42 @@ def ensure_phase_a_schema(conn: sqlite3.Connection) -> list[str]:
         log.debug("memory Phase A index: %s", e)
     if added:
         log.info("memory Phase A schema: added columns %s", added)
+    return added
+
+
+def ensure_l2_scene_schema(conn: sqlite3.Connection) -> list[str]:
+    """Idempotent ALTER TABLE for the L2 scene_id column + kind index.
+
+    Scene rows are distinguished by kind='scene'; the index makes the persona
+    cache (kind='identity') and scene listing cheap without scanning the whole
+    table. Calls ensure_phase_a_schema() first because 'kind' must exist to
+    index it.
+    """
+    ensure_phase_a_schema(conn)
+    added: list[str] = []
+    cols = existing_columns(conn)
+    name, decl = _L2_SCENE_COLUMN
+    if name not in cols:
+        try:
+            conn.execute(f"ALTER TABLE memories ADD COLUMN {name} {decl}")
+            added.append(name)
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).casefold():
+                raise
+    try:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_user_kind "
+            "ON memories(user_id, kind)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_user_scene "
+            "ON memories(user_id, scene_id)"
+        )
+        conn.commit()
+    except sqlite3.Error as e:
+        log.debug("memory L2 scene index: %s", e)
+    if added:
+        log.info("memory L2 scene schema: added column %s", added)
     return added
 
 
@@ -1086,6 +1150,7 @@ class _MemoryBackend:
         # referencing `m.status` before that column exists.
         with self._db_lock:
             ensure_phase_a_schema(self._conn)
+            ensure_l2_scene_schema(self._conn)
             ensure_entity_relations_schema(self._conn)
 
     def _connect(self) -> sqlite3.Connection:
@@ -1256,35 +1321,36 @@ class _MemoryBackend:
         supersedes_id: str | None = None,
         kind: str | None = None,
         entities: list[str] | None = None,
+        scene_id: str | None = None,
     ) -> None:
-        """Insert one memory row (Phase A columns when present) + its vector,
-        and best-effort co-mention edges for the entity graph."""
+        """Insert one memory row (Phase A + L2 columns when present) + its
+        vector, and best-effort co-mention edges for the entity graph.
+
+        Extended columns are appended to the INSERT dynamically based on which
+        additive columns actually exist on the table, so the same call works
+        against a fresh DB, a Phase-A-only DB, and a fully-migrated L2 DB.
+        """
         cols = existing_columns(self._conn)
         kind_val = kind or classify_kind(text, default=KIND_FACT)
         ents_list = entities if entities is not None else extract_entities(text)
         ents_json = entities_to_json(ents_list)
+
+        base_cols = ["id", "user_id", "memory", "created_at", "access_count", "last_accessed_at", "pinned"]
+        base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
+        ext_cols: list[str] = []
+        ext_vals = []
         if "status" in cols:
-            self._conn.execute(
-                """
-                INSERT INTO memories
-                    (id, user_id, memory, created_at, access_count, last_accessed_at, pinned,
-                     status, supersedes_id, kind, source, entities)
-                VALUES (?, ?, ?, ?, 0, 'never', ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    mem_id, user_id, text, now, pinned,
-                    STATUS_ACTIVE, supersedes_id, kind_val, source, ents_json,
-                ),
-            )
-        else:
-            self._conn.execute(
-                """
-                INSERT INTO memories
-                    (id, user_id, memory, created_at, access_count, last_accessed_at, pinned)
-                VALUES (?, ?, ?, ?, 0, 'never', ?)
-                """,
-                (mem_id, user_id, text, now, pinned),
-            )
+            ext_cols += ["status", "supersedes_id", "kind", "source", "entities"]
+            ext_vals  += [STATUS_ACTIVE, supersedes_id, kind_val, source, ents_json]
+        if "scene_id" in cols:
+            ext_cols.append("scene_id")
+            ext_vals.append(scene_id)
+        all_cols = base_cols + ext_cols
+        placeholders = ", ".join("?" * len(all_cols))
+        self._conn.execute(
+            f"INSERT INTO memories ({', '.join(all_cols)}) VALUES ({placeholders})",
+            base_vals + ext_vals,
+        )
         self._conn.execute(
             "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
             (mem_id, sqlite_vec.serialize_float32(vector)),
@@ -1453,6 +1519,133 @@ class _MemoryBackend:
                 return None
 
     # ── read ──────────────────────────────────────────────────────────────────
+
+    # ── L2 scene blocks (backend) ─────────────────────────────────────────────
+    # A scene is a normal memories row with kind=KIND_SCENE whose text is a
+    # mid-grain episode summary. The atomic facts it was built from carry
+    # scene_id back to it, so recall can surface the scene (via its own
+    # vector match) and expand to its members, or re-link a recalled member to
+    # its episode.
+
+    def build_scene(
+        self,
+        user_id: str,
+        *,
+        summary: str,
+        member_ids: list[str],
+        pinned: bool = False,
+        created_at: str | None = None,
+    ) -> str | None:
+        """Persist one scene row (kind='scene') and tag each member fact with
+        scene_id pointing back to it. Returns the new scene id, or None if the
+        summary is empty / embedding fails. Caller must hold nothing; this
+        takes the lock around the creates + link update.
+
+        Re-runs write-time dedup/supersede on the summary itself so re-building
+        the same scene replaces (supersedes) rather than duplicates.
+        """
+        summary = (summary or "").strip()
+        if not summary:
+            return None
+        try:
+            vector = self._embed(summary)
+        except Exception as e:
+            log.warning("Failed to embed scene summary: %s", e)
+            return None
+        nows = created_at or datetime.now(timezone.utc).isoformat()
+        with self._db_lock:
+            try:
+                op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, summary)
+                if op == "supersede" and supersedes_id:
+                    if "status" in existing_columns(self._conn):
+                        self._conn.execute(
+                            "UPDATE memories SET status = ? WHERE id = ?",
+                            (STATUS_SUPERSEDED, supersedes_id),
+                        )
+                    # Re-use the superseded row's id so dangling member links
+                    # keep pointing at a live scene.
+                    mem_id = supersedes_id
+                    self._update_scene_row(mem_id, summary, vector, nows, pinned)
+                else:
+                    mem_id = str(uuid.uuid4())
+                    self._insert_row(
+                        mem_id=mem_id,
+                        user_id=user_id,
+                        text=summary,
+                        now=nows,
+                        vector=vector,
+                        pinned=1 if pinned else 0,
+                        source=SOURCE_CHAT,
+                        kind=KIND_SCENE,
+                    )
+                member_ids = [m for m in (member_ids or []) if m]
+                if member_ids:
+                    placeholders = ", ".join("?" * len(member_ids))
+                    self._conn.execute(
+                        f"UPDATE memories SET scene_id = ? "
+                        f"WHERE id IN ({placeholders}) AND user_id = ?",
+                        [mem_id, *member_ids, user_id],
+                    )
+                self._conn.commit()
+                return mem_id
+            except Exception as e:
+                log.warning("Failed to build scene: %s", e)
+                self._conn.rollback()
+                return None
+
+    def _update_scene_row(
+        self, scene_id: str, summary: str, vector: list[float], now: str, pinned: bool,
+    ) -> None:
+        """Replace a scene row's summary (superseded id reuse) in place."""
+        self._conn.execute(
+            "UPDATE memories SET memory = ?, created_at = ?, pinned = ?, status = ? WHERE id = ?",
+            (summary, now, 1 if pinned else 0, STATUS_ACTIVE, scene_id),
+        )
+        self._conn.execute(
+            "UPDATE memories_vec SET embedding = ? WHERE id = ?",
+            (sqlite_vec.serialize_float32(vector), scene_id),
+        )
+
+    def list_scenes(
+        self,
+        user_id: str,
+        limit: int = SCENE_CONTEXT_LIMIT,
+        active_only: bool = True,
+    ) -> list[dict]:
+        """Return the most recent scene rows for a user, newest first."""
+        if "kind" not in existing_columns(self._conn):
+            return []
+        status_sql = _active_sql(active_only)
+        with self._db_lock:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM memories m
+                WHERE m.user_id = ? AND m.kind = ?
+                  {status_sql}
+                ORDER BY m.created_at DESC
+                LIMIT ?
+                """.format(status_sql=status_sql),
+                (user_id, KIND_SCENE, int(limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def scene_members(self, scene_id: str, user_id: str, limit: int = SCENE_MEMBER_LIMIT) -> list[dict]:
+        """Return the atomic-fact rows linked to a scene, oldest first."""
+        if "scene_id" not in existing_columns(self._conn) or not scene_id:
+            return []
+        with self._db_lock:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM memories m
+                WHERE m.scene_id = ? AND m.user_id = ?
+                ORDER BY m.created_at ASC
+                LIMIT ?
+                """,
+                (scene_id, user_id, int(limit)),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def _fts_pass(self, fts_query: str | None, user_id: str, fts_limit: int, active_only: bool = True) -> list[sqlite3.Row]:
         """Run one FTS5 BM25 pass. Returns [] if fts_query is None (nothing usable to match).
@@ -2161,6 +2354,12 @@ class AikoMemorize:
         self._write_worker = threading.Thread(target=self._write_loop, daemon=True)
         self._write_worker.start()
         self._last_cache_clear_time: float = 0.0
+        # L3 persona cache — always-hydrated stable identity blob, TTL-cached so
+        # the cheap SQL only reruns occasionally even though it's injected every
+        # turn. Invalidated on any write (via _clear_search_cache).
+        self._persona_lock = threading.RLock()
+        self._persona_cache_at: float = 0.0
+        self._persona_cached: str | None = None
         if not silent:
             log.info("Ready.")
 
@@ -2446,8 +2645,9 @@ class AikoMemorize:
             results = self._recent_or_important_memories(
                 user_id=user_id, limit=limit, include_history=include_history
             )
+            results = self._expand_scenes(user_id, results[:int(limit)])
             self._touch_memories(results)
-            return results[:int(limit)]
+            return results
 
         cache_key = (user_id, " ".join((query or "").lower().split()), int(limit), bool(include_history))
         now_s = time.monotonic()
@@ -2471,6 +2671,8 @@ class AikoMemorize:
             vector=query_vector,
             include_history=include_history,
         )
+        # Fold L2 scene parents/members into the recall set (see _expand_scenes).
+        results = self._expand_scenes(user_id, results)
 
         self._touch_memories(results)
         log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
@@ -2486,6 +2688,155 @@ class AikoMemorize:
                 self._search_cache.popitem(last=False)
 
         return results
+
+    # ── L2 scene expansion ─────────────────────────────────────────────────────
+    # After RRF returns a set, re-link episode structure so yes the scene row
+    # itself is searchable, but also: a recalled-member pulls in its parent
+    # scene, and a recalled scene carries its members. Keeps "what happened
+    # during X" recoverable without rearchitecting search scoring.
+
+    def _scene_cols_available(self) -> bool:
+        try:
+            cols = existing_columns(self._conn)
+        except Exception:
+            return False
+        return "scene_id" in cols and "kind" in cols
+
+    def _expand_scenes(self, user_id: str, results: list[dict]) -> list[dict]:
+        if not results or not self._scene_cols_available():
+            return results
+        out: list[dict] = []
+        seen = {str(r.get("id")) for r in results if r.get("id")}
+        scene_cache: dict[str, dict | None] = {}
+        with self._mem._db_lock:
+            for r in results:
+                rid = str(r.get("id") or "")
+                # A scene row itself: attach a compact member list.
+                if r.get("kind") == KIND_SCENE:
+                    entry = dict(r)
+                    members = self._mem.scene_members(rid, user_id, limit=SCENE_MEMBER_LIMIT)
+                    if members:
+                        entry["_scene_members"] = [(m.get("memory") or "")[:160] for m in members]
+                    out.append(entry)
+                    continue
+                out.append(r)
+                sid = r.get("scene_id")
+                if not sid or str(sid) in seen:
+                    continue
+                if sid not in scene_cache:
+                    row = self._conn.execute(
+                        """
+                        SELECT * FROM memories m
+                        WHERE m.id = ? AND m.user_id = ? AND m.kind = ?
+                          AND (m.status = 'active' OR m.status IS NULL)
+                        """,
+                        (sid, user_id, KIND_SCENE),
+                    ).fetchone()
+                    scene_cache[sid] = dict(row) if row else None
+                srow = scene_cache[sid]
+                if srow:
+                    sd = dict(srow)
+                    sd["_recall_score"] = r.get("_recall_score", 0.0)
+                    sd["_scene"] = True
+                    out.append(sd)
+                    seen.add(str(sid))
+        return out
+
+    # ── L3 persona cache ───────────────────────────────────────────────────────
+    # An always-hydrated, cheap (no embeddings, no KNN/FTS/graph) blob of the
+    # most stable identity facts. Refreshed on write (cache invalidation) and
+    # TTL-cached within a session. Injected every turn via persona_context().
+
+    def persona_context(self) -> str | None:
+        """L3 stable-identity blob for context injection. TTL-cached."""
+        with self._persona_lock:
+            nows = time.monotonic()
+            if self._persona_cached is not None and nows - self._persona_cache_at < PERSONA_CACHE_TTL:
+                return self._persona_cached
+            block = self._build_persona_context()
+            self._persona_cached = block
+            self._persona_cache_at = nows
+            return block
+
+    def _build_persona_context(self) -> str | None:
+        user_id = self._resolve_user_id(self._user_id_override)
+        if not self._scene_cols_available():
+            return None
+        with self._mem._db_lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, memory
+                FROM memories m
+                WHERE m.user_id = ? AND m.kind = ?
+                  AND (m.status = 'active' OR m.status IS NULL)
+                ORDER BY m.pinned DESC, m.access_count DESC, m.created_at ASC
+                LIMIT ?
+                """,
+                (user_id, "identity", PERSONA_RECALL_LIMIT),
+            ).fetchall()
+        texts = [str(r["memory"]).strip() for r in rows if (r["memory"] or "").strip()]
+        if not texts:
+            return None
+        lines = [
+            "<persona>",
+            "Stable facts about the person — always available. Use silently.",
+            "",
+        ]
+        for t in texts:
+            clip = t if len(t) <= MEMORY_CONTEXT_FACT_CHARS else t[:MEMORY_CONTEXT_FACT_CHARS].rstrip() + "..."
+            lines.append(f"  - {clip}")
+        lines.append("</persona>")
+        block = "\n".join(lines)
+        if len(block) > PERSONA_CONTEXT_CHARS:
+            block = block[:PERSONA_CONTEXT_CHARS].rstrip() + "\n</persona>"
+        return block
+
+    # ── L2 scene public API ────────────────────────────────────────────────────
+
+    def build_scene(
+        self,
+        summary: str,
+        member_ids: list[str],
+        user_id: str | None = None,
+        *,
+        pinned: bool = False,
+    ) -> str | None:
+        """Build an L2 scene linking member fact ids, and clear caches."""
+        user_id = self._resolve_user_id(user_id)
+        scene_id = self._mem.build_scene(
+            user_id, summary=summary, member_ids=member_ids, pinned=pinned
+        )
+        if scene_id:
+            self._clear_search_cache()
+        return scene_id
+
+    def list_scenes(self, user_id: str | None = None, limit: int = SCENE_CONTEXT_LIMIT) -> list[dict]:
+        user_id = self._resolve_user_id(user_id)
+        return self._mem.list_scenes(user_id, limit=limit)
+
+    def scene_members(self, scene_id: str, user_id: str | None = None, limit: int = SCENE_MEMBER_LIMIT) -> list[dict]:
+        user_id = self._resolve_user_id(user_id)
+        return self._mem.scene_members(scene_id, user_id, limit=limit)
+
+    def scene_context(self, limit: int = SCENE_CONTEXT_LIMIT, user_id: str | None = None) -> str | None:
+        """Compact recent-scenes bootstrap block (L2), independent of RRF."""
+        user_id = self._resolve_user_id(user_id)
+        scenes = self._mem.list_scenes(user_id, limit=limit)
+        if not scenes:
+            return None
+        lines = ["<scenes>", "Recent long-running episodes — use only if relevant.", ""]
+        for s in scenes:
+            text = (s.get("memory") or "").strip()
+            if not text:
+                continue
+            if len(text) > MEMORY_CONTEXT_FACT_CHARS:
+                text = text[:MEMORY_CONTEXT_FACT_CHARS].rstrip() + "..."
+            lines.append(f"  - {text}")
+        lines.append("</scenes>")
+        block = "\n".join(lines)
+        if len(block) > SCENE_CONTEXT_CHARS:
+            block = block[:SCENE_CONTEXT_CHARS].rstrip() + "\n</scenes>"
+        return block
 
     def _write_search_replay(self, query: str, results: list[dict], user_id: str) -> None:
         """Append search to replay log (debug/tuning, env-gated)."""
@@ -2584,6 +2935,11 @@ class AikoMemorize:
     def _clear_search_cache(self) -> None:
         with self._search_cache_lock:
             self._search_cache.clear()
+        # Persona blob is identity-derived; a new/changed identity fact must
+        # be reflected on the next turn.
+        with self._persona_lock:
+            self._persona_cached = None
+            self._persona_cache_at = 0.0
 
     def _maybe_clear_search_cache(self) -> None:
         """Time-debounced cache clearing — invalidate on write, but only if

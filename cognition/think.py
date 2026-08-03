@@ -22,6 +22,7 @@ Memory + knowledge-base fetch:
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import os
 import json
@@ -89,6 +90,9 @@ CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 # (localchat/webchat/agentic) — see _fetch_memory_and_knowledge below.
 MEMORY_RECALL_LIMIT = int(os.getenv("MEMORY_RECALL_LIMIT", 3))
 KNOWLEDGE_RECALL_LIMIT = int(os.getenv("KNOWLEDGE_RECALL_LIMIT", 3))
+# Recall hard-timeout — a slow local embed (llama.cpp) must not block the turn.
+# On expiry the memory/KB recall is skipped (empty) rather than stalling.
+MEMORY_RECALL_TIMEOUT = float(os.getenv("MEMORY_RECALL_TIMEOUT", 5.0))
 # Minimum recall score (see _MemoryBackend._rank_and_score's final_score in
 # memory/memorize.py for the formula) a memory must clear to be included in
 # context. Same numeric scale as memorize.py's MEMORY_RECALL_SCORE_THRESHOLD
@@ -514,7 +518,11 @@ class AikoThink:
             knowledge_context_for, user_input, limit=know_limit, max_chars=2000, embedder=embedder
         )
         try:
-            memories = mem_future.result()
+            memories = mem_future.result(timeout=MEMORY_RECALL_TIMEOUT)
+        except concurrent.futures.TimeoutError:
+            log.warning("Memory recall timed out after %.1fs; skipping", MEMORY_RECALL_TIMEOUT)
+            know_future.cancel()
+            memories = []
         except Exception as e:
             log.error("Memory search failed: %s", e)
             know_future.cancel()
@@ -541,7 +549,10 @@ class AikoThink:
         handler was called standalone (no future supplied by route())."""
         if mem_kb_future is not None:
             try:
-                return mem_kb_future.result()
+                return mem_kb_future.result(timeout=MEMORY_RECALL_TIMEOUT)
+            except concurrent.futures.TimeoutError:
+                log.warning("Memory/KB recall timed out after %.1fs; skipping", MEMORY_RECALL_TIMEOUT)
+                return [], "<knowledge_context>\nLookup timed out.\n</knowledge_context>"
             except Exception as e:
                 log.error("Memory/KB fetch failed: %s", e)
                 return [], "<knowledge_context>\nLookup failed.\n</knowledge_context>"
@@ -868,10 +879,13 @@ class AikoThink:
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
         memory_block = self._get_memorize().format_for_context(memories)
+        persona_block = self._get_memorize().persona_context()
 
         # Build base system (persona + memory + knowledge)
         system = self._current_system_prompt()
         system += "\n\n" + bioclock.current_datetime_block()
+        if persona_block:
+            system = f"{system}\n\n{persona_block}"
         if memory_block:
             system = f"{system}\n\n{memory_block}"
         system = f"{system}\n\n{knowledge_block}"
@@ -996,15 +1010,19 @@ class AikoThink:
             memories = []
             knowledge_block = ""
             memory_block = ""
+            persona_block = ""
         else:
             # Memory + KB — either resolved from route()'s post-intent future,
             # or fetched directly if this was called standalone.
             memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
             memory_block = self._get_memorize().format_for_context(memories)
+            persona_block = self._get_memorize().persona_context()
         
         system = self._current_system_prompt(user_input)
         system += "\n\n" + bioclock.current_datetime_block()
         if not skip_memory:
+            if persona_block:
+                system = f"{system}\n\n{persona_block}"
             if memory_block:
                 system = f"{system}\n\n{memory_block}"
             else:

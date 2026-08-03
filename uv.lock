@@ -23,6 +23,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "coloredlogs" },
     { name = "defusedxml" },
+    { name = "discord-py" },
     { name = "fastapi", extra = ["standard"] },
     { name = "flatbuffers" },
     { name = "httpx" },
@@ -97,6 +98,7 @@ requires-dist = [
     { name = "atproto", marker = "extra == 'bluesky'", specifier = ">=0.0.34" },
     { name = "coloredlogs", specifier = ">=15.0.1" },
     { name = "defusedxml", specifier = ">=0.7.1" },
+    { name = "discord-py", specifier = ">=2.7.1" },
     { name = "discord-py", marker = "extra == 'adapters'", specifier = ">=2.4.0" },
     { name = "discord-py", marker = "extra == 'discord'", specifier = ">=2.4.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.139.0" },

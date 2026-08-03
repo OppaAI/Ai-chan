@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import struct
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -529,3 +530,246 @@ def test_vacuum_memory_db_opens_user_store_and_runs_maintenance(monkeypatch, tmp
     assert ("execute", "VACUUM") in calls
     assert ("execute", "ANALYZE") in calls
     assert calls[-1] == ("close", None)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L3 Persona cache — always-hydrated top-N stable identity facts
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPersonaCache:
+    def test_persona_cache_prefers_identity_kind(self, backend):
+        """Only facts with kind='identity' end up in the persona blob."""
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        # Insert: 2 identity, 1 preference, 1 fact
+        for mid, txt, kind in [
+            ("id1", "Oppa's birthday is June 3", "identity"),
+            ("id2", "Oppa lives in Tokyo", "identity"),
+            ("id3", "Oppa loves ramen", "preference"),
+            ("id4", "Oppa met a friend", "fact"),
+        ]:
+            _insert_row(conn, mid, "u1", txt, now, access_count=5)
+            _insert_vector(conn, mid, backend._embedder._vec(txt))
+            conn.execute(
+                "UPDATE memories SET kind = ? WHERE id = ?", (kind, mid)
+            )
+        conn.commit()
+
+        memo = AikoMemorize.__new__(AikoMemorize)
+        memo._mem = backend
+        memo._conn = backend._conn
+        memo._user_id_override = "u1"
+        # Directly call private builder to inspect raw output
+        block = memo._build_persona_context()
+        assert block is not None
+        assert "birthday" in block
+        assert "Tokyo" in block
+        assert "ramen" not in block  # preference excluded
+        assert "friend" not in block  # fact excluded
+        assert block.count("birthday") == 1
+        assert block.count("Tokyo") == 1
+
+    def test_persona_cache_order_by_access_then_age(self, backend):
+        """Higher access_count first, then older created_at for ties."""
+        conn = backend._conn
+        base = datetime.now(timezone.utc)
+        for i, (mid, txt, access, days_old) in enumerate([
+            ("id1", "Oppa A", 10, 5),   # high access, older
+            ("id2", "Oppa B", 5, 1),    # lower access
+            ("id3", "Oppa C", 10, 2),   # same high access, newer -> should come AFTER id1
+        ]):
+            created = (base - timedelta(days=days_old)).isoformat()
+            _insert_row(conn, mid, "u1", txt, created, access_count=access)
+            _insert_vector(conn, mid, backend._embedder._vec(txt))
+            conn.execute("UPDATE memories SET kind = 'identity' WHERE id = ?", (mid,))
+        conn.commit()
+
+        memo = AikoMemorize.__new__(AikoMemorize)
+        memo._mem = backend
+        memo._conn = backend._conn
+        memo._user_id_override = "u1"
+        block = memo._build_persona_context()
+        assert block is not None
+        lines = [l for l in block.split("\n") if l.strip().startswith("-")]
+        # id1 (access 10, 5 days old) should appear before id3 (access 10, 2 days old)
+        assert lines[0] == "  - Oppa A"
+        assert lines[1] == "  - Oppa C"
+        assert lines[2] == "  - Oppa B"
+
+    def test_persona_cache_ttl_invalidation(self, backend, monkeypatch):
+        """Cache respects TTL and rebuilds after PERSONA_CACHE_TTL."""
+        from memory.memorize import PERSONA_CACHE_TTL
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        _insert_row(conn, "id1", "u1", "Oppa X", now)
+        _insert_vector(conn, "id1", backend._embedder._vec("Oppa X"))
+        conn.execute("UPDATE memories SET kind = 'identity' WHERE id = 'id1'")
+        conn.commit()
+
+        memo = AikoMemorize.__new__(AikoMemorize)
+        memo._mem = backend
+        memo._conn = backend._conn
+        memo._user_id_override = "u1"
+        memo._persona_lock = __import__("threading").RLock()
+        memo._persona_cached = None
+        memo._persona_cache_at = 0.0
+        # First call populates cache
+        block1 = memo.persona_context()
+        assert "Oppa X" in block1
+        # Immediately call again -> cached
+        block2 = memo.persona_context()
+        assert block1 == block2
+
+        # Advance time past TTL
+        monkeypatch.setattr(time, "monotonic", lambda: time.monotonic() + PERSONA_CACHE_TTL + 1)
+        # Now add a new identity fact
+        _insert_row(conn, "id2", "u1", "Oppa Y", now)
+        _insert_vector(conn, "id2", backend._embedder._vec("Oppa Y"))
+        conn.execute("UPDATE memories SET kind = 'identity' WHERE id = 'id2'")
+        conn.commit()
+
+        block3 = memo.persona_context()
+        assert "Oppa Y" in block3  # rebuilt, includes new fact
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L2 Scene blocks — mid-grain episode summaries with member linking
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSceneBlocks:
+    def test_build_scene_links_members(self, backend):
+        """build_scene creates a kind='scene' row and tags members with scene_id."""
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        # Seed 3 atomic facts
+        member_ids = []
+        for i, txt in enumerate(["Oppa coded late", "Oppa fixed a bug", "Oppa shipped"]):
+            mid = str(uuid.uuid4())
+            _insert_row(conn, mid, "u1", txt, now)
+            _insert_vector(conn, mid, backend._embedder._vec(txt))
+            member_ids.append(mid)
+        conn.commit()
+
+        scene_id = backend.build_scene("u1", summary="Coding sprint", member_ids=member_ids, pinned=True)
+        assert scene_id is not None
+
+        # Scene row exists with kind='scene'
+        scene_row = conn.execute("SELECT * FROM memories WHERE id = ?", (scene_id,)).fetchone()
+        assert scene_row["kind"] == "scene"
+        assert scene_row["pinned"] == 1
+
+        # Members tagged with scene_id
+        for mid in member_ids:
+            m = conn.execute("SELECT scene_id FROM memories WHERE id = ?", (mid,)).fetchone()
+            assert m["scene_id"] == scene_id
+
+    def test_list_scenes_returns_recent_first(self, backend):
+        conn = backend._conn
+        base = datetime.now(timezone.utc)
+        # Create 3 scenes at different times
+        for i, (summary, days_ago) in enumerate([
+            ("Scene A", 5),
+            ("Scene B", 1),
+            ("Scene C", 3),
+        ]):
+            sid = str(uuid.uuid4())
+            created = (base - timedelta(days=days_ago)).isoformat()
+            _insert_row(conn, sid, "u1", summary, created, pinned=0)
+            _insert_vector(conn, sid, backend._embedder._vec(summary))
+            conn.execute("UPDATE memories SET kind = 'scene' WHERE id = ?", (sid,))
+        conn.commit()
+
+        scenes = backend.list_scenes("u1", limit=10)
+        assert len(scenes) == 3
+        # Newest first (Scene B is 1 day ago)
+        assert scenes[0]["memory"] == "Scene B"
+        assert scenes[1]["memory"] == "Scene C"
+        assert scenes[2]["memory"] == "Scene A"
+
+    def test_scene_members_returns_linked_facts(self, backend):
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        mid1 = str(uuid.uuid4())
+        mid2 = str(uuid.uuid4())
+        for mid, txt in [(mid1, "Fact one"), (mid2, "Fact two")]:
+            _insert_row(conn, mid, "u1", txt, now)
+            _insert_vector(conn, mid, backend._embedder._vec(txt))
+        scene_id = str(uuid.uuid4())
+        _insert_row(conn, scene_id, "u1", "Scene summary", now)
+        _insert_vector(conn, scene_id, backend._embedder._vec("Scene summary"))
+        conn.execute("UPDATE memories SET kind = 'scene' WHERE id = ?", (scene_id,))
+        conn.execute("UPDATE memories SET scene_id = ? WHERE id IN (?, ?)", (scene_id, mid1, mid2))
+        conn.commit()
+
+        members = backend.scene_members(scene_id, "u1")
+        assert len(members) == 2
+        assert {m["memory"] for m in members} == {"Fact one", "Fact two"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Scene expansion in search — recalled members pull in parent scene, and vice versa
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSceneExpansion:
+    def test_recalled_member_pulls_parent_scene(self, backend, monkeypatch):
+        """A recalled atomic fact with scene_id causes its scene row to be added to results."""
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        # Seed: one scene + one member
+        scene_id = str(uuid.uuid4())
+        member_id = str(uuid.uuid4())
+        for mid, txt, kind in [
+            (scene_id, "Coding sprint", "scene"),
+            (member_id, "Oppa fixed a bug", "fact"),
+        ]:
+            _insert_row(conn, mid, "u1", txt, now)
+            _insert_vector(conn, mid, backend._embedder._vec(txt))
+            conn.execute("UPDATE memories SET kind = ? WHERE id = ?", (kind, mid))
+        conn.execute("UPDATE memories SET scene_id = ? WHERE id = ?", (scene_id, member_id))
+        conn.commit()
+
+        # Search for the member text; it should return the member + the scene
+        memo = AikoMemorize.__new__(AikoMemorize)
+        memo._mem = backend
+        memo._conn = backend._conn
+        # Monkey the embedder to return the member's vector for the query
+        member_vec = backend._embedder._vec("Oppa fixed a bug")
+        monkeypatch.setattr(backend._embedder, "embed_query", lambda q, **kw: member_vec)
+
+        results = memo.search("bug fixed", user_id="u1", limit=5)
+        ids = {r["id"] for r in results}
+        assert member_id in ids
+        assert scene_id in ids
+        # The recalled member pulled its parent scene in as an expanded row.
+        scene_entry = next(r for r in results if r["id"] == scene_id)
+        assert scene_entry.get("_scene") is True
+
+    def test_recalled_scene_carries_members(self, backend, monkeypatch):
+        """A recalled scene row should have _scene_members populated."""
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        scene_id = str(uuid.uuid4())
+        member_id = str(uuid.uuid4())
+        for mid, txt, kind in [
+            (scene_id, "Coding sprint", "scene"),
+            (member_id, "Oppa fixed a bug", "fact"),
+        ]:
+            _insert_row(conn, mid, "u1", txt, now)
+            _insert_vector(conn, mid, backend._embedder._vec(txt))
+            conn.execute("UPDATE memories SET kind = ? WHERE id = ?", (kind, mid))
+        conn.execute("UPDATE memories SET scene_id = ? WHERE id = ?", (scene_id, member_id))
+        conn.commit()
+
+        memo = AikoMemorize.__new__(AikoMemorize)
+        memo._mem = backend
+        memo._conn = backend._conn
+        # Query vector matches scene text
+        scene_vec = backend._embedder._vec("Coding sprint")
+        monkeypatch.setattr(backend._embedder, "embed_query", lambda q, **kw: scene_vec)
+
+        results = memo.search("coding sprint", user_id="u1", limit=5)
+        ids = {r["id"] for r in results}
+        assert scene_id in ids
+        scene_entry = next(r for r in results if r["id"] == scene_id)
+        assert scene_entry.get("_scene_members") is not None
+        assert "Oppa fixed a bug" in scene_entry["_scene_members"][0]

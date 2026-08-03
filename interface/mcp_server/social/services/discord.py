@@ -7,68 +7,73 @@ from typing import Optional
 from social.services import env, get_session, err
 
 
+def post_discord(text: str, image_path: Optional[str] = None, channel_id: str = "") -> dict:
+    """Send a message + optional image to a Discord channel via webhook or bot token"""
+    webhook_url = env("DISCORD_POST_WEBHOOK_URL")
+    bot_token = env("DISCORD_BOT_TOKEN")
+    channel_id = channel_id or env("DISCORD_AIKO_DEV_CHANNEL_ID") or env("DISCORD_POST_CHANNEL_ID")
+
+    session = get_session()
+
+    if webhook_url:
+        try:
+            files = None
+            data = {"content": text}
+            if image_path:
+                p = Path(image_path)
+                if p.exists():
+                    with open(p, "rb") as f:
+                        files = {"file": (p.name, f.read())}
+            resp = session.post(webhook_url, data=data, files=files, timeout=30)
+            ok = 200 <= resp.status_code < 300
+            return {"ok": ok, "provider": "discord", "method": "webhook", "status_code": resp.status_code, "response": resp.text[:500]}
+        except Exception as e:
+            return err("discord", str(e))
+
+    if bot_token and channel_id:
+        try:
+            api_base = env("DISCORD_API_BASE", "https://discord.com/api/v10").rstrip("/")
+            headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
+
+            payload = {"content": text}
+            files = None
+            raw_data = None
+            if image_path:
+                p = Path(image_path)
+                if p.exists():
+                    mime = mimetypes.guess_type(str(p))[0] or "image/png"
+                    with open(p, "rb") as f:
+                        raw_data = f.read()
+                    b64_data = base64.b64encode(raw_data).decode()
+                    payload["attachments"] = [{"id": "0", "filename": p.name}]
+                    payload["file"] = b64_data
+                    headers.pop("Content-Type", None)
+                    files = {"0": (p.name, raw_data, mime)}
+            if files:
+                resp = session.post(
+                    f"{api_base}/channels/{channel_id}/messages",
+                    headers={"Authorization": f"Bot {bot_token}"},
+                    data={"payload_json": str(payload)},
+                    files=files,
+                    timeout=30,
+                )
+            else:
+                resp = session.post(
+                    f"{api_base}/channels/{channel_id}/messages",
+                    headers=headers, json=payload, timeout=30,
+                )
+            ok = 200 <= resp.status_code < 300
+            return {"ok": ok, "provider": "discord", "method": "bot", "status_code": resp.status_code, "response": resp.text[:500]}
+        except Exception as e:
+            return err("discord", str(e))
+
+    return err("discord", "No DISCORD_POST_WEBHOOK_URL or DISCORD_BOT_TOKEN+DISCORD_POST_CHANNEL_ID configured")
+
+
 def load_tools(mcp):
     @mcp.tool(
         name="post_discord",
         description="Send a message + optional image to a Discord channel via webhook or bot token",
     )
-    def post_discord(text: str, image_path: Optional[str] = None, channel_id: str = "") -> dict:
-        webhook_url = env("DISCORD_POST_WEBHOOK_URL")
-        bot_token = env("DISCORD_BOT_TOKEN")
-        channel_id = channel_id or env("DISCORD_AIKO_DEV_CHANNEL_ID") or env("DISCORD_POST_CHANNEL_ID")
-
-        session = get_session()
-
-        if webhook_url:
-            try:
-                files = None
-                data = {"content": text}
-                if image_path:
-                    p = Path(image_path)
-                    if p.exists():
-                        with open(p, "rb") as f:
-                            files = {"file": (p.name, f.read())}
-                resp = session.post(webhook_url, data=data, files=files, timeout=30)
-                ok = 200 <= resp.status_code < 300
-                return {"ok": ok, "provider": "discord", "method": "webhook", "status_code": resp.status_code, "response": resp.text[:500]}
-            except Exception as e:
-                return err("discord", str(e))
-
-        if bot_token and channel_id:
-            try:
-                api_base = env("DISCORD_API_BASE", "https://discord.com/api/v10").rstrip("/")
-                headers = {"Authorization": f"Bot {bot_token}", "Content-Type": "application/json"}
-
-                payload = {"content": text}
-                files = None
-                raw_data = None
-                if image_path:
-                    p = Path(image_path)
-                    if p.exists():
-                        mime = mimetypes.guess_type(str(p))[0] or "image/png"
-                        with open(p, "rb") as f:
-                            raw_data = f.read()
-                        b64_data = base64.b64encode(raw_data).decode()
-                        payload["attachments"] = [{"id": "0", "filename": p.name}]
-                        payload["file"] = b64_data
-                        headers.pop("Content-Type", None)
-                        files = {"0": (p.name, raw_data, mime)}
-                if files:
-                    resp = session.post(
-                        f"{api_base}/channels/{channel_id}/messages",
-                        headers={"Authorization": f"Bot {bot_token}"},
-                        data={"payload_json": str(payload)},
-                        files=files,
-                        timeout=30,
-                    )
-                else:
-                    resp = session.post(
-                        f"{api_base}/channels/{channel_id}/messages",
-                        headers=headers, json=payload, timeout=30,
-                    )
-                ok = 200 <= resp.status_code < 300
-                return {"ok": ok, "provider": "discord", "method": "bot", "status_code": resp.status_code, "response": resp.text[:500]}
-            except Exception as e:
-                return err("discord", str(e))
-
-        return err("discord", "No DISCORD_POST_WEBHOOK_URL or DISCORD_BOT_TOKEN+DISCORD_POST_CHANNEL_ID configured")
+    def _post_discord_tool(text: str, image_path: Optional[str] = None, channel_id: str = "") -> dict:
+        return post_discord(text, image_path, channel_id)
