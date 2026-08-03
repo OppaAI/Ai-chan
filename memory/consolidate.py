@@ -248,6 +248,7 @@ def _score_daily_row(
     row_vector: "np.ndarray | None",
     entity_weights: dict[str, float],
     entity_weight_cap: float,
+    entity_importance: dict[str, float] | None = None,
 ) -> float:
     text = row.get("_text", "") or ""
     entities = entities_from_json(row.get("entities"))
