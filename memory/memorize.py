@@ -1899,7 +1899,7 @@ class _MemoryBackend:
                     except Exception:
                         pass
 
-          return score
+            return score
 
         scored_ids = sorted(deduped_ids, key=final_score, reverse=True)
         scores = {mid: final_score(mid) for mid in scored_ids}
