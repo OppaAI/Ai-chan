@@ -23,6 +23,9 @@ Retention gate (Phase 1):
   delete) is deferred; MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES defaults
   off so day pins are not removed until the gate is audited.
 
+  Phase 2 spacing: uses access_day_count (distinct local recall days), not
+  raw access_count.
+
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
 
@@ -248,8 +251,11 @@ def _score_daily_row(
 
     salience = 1.0 if _SALIENCE_HIT_RE.search(text) else 0.3
 
-    access_count = int(row.get("access_count") or 0)
-    spacing = min(1.0, access_count / float(_RETENTION_SPACING_SATURATION))
+    # Phase 2: distinct recall days (access_day_count). Fallback for pre-Phase-2 rows.
+    day_count = int(row.get("access_day_count") or 0)
+    if day_count <= 0:
+        day_count = 1 if int(row.get("access_count") or 0) > 0 else 0
+    spacing = min(1.0, day_count / float(_RETENTION_SPACING_SATURATION))
 
     if entities and entity_weights:
         raw = [entity_weights.get(e.casefold(), 0.0) for e in entities]

@@ -546,6 +546,8 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("kind", "TEXT NOT NULL DEFAULT 'fact'"),
     ("source", "TEXT NOT NULL DEFAULT 'legacy'"),
     ("entities", "TEXT NOT NULL DEFAULT '[]'"),
+  # Phase 2 spacing: distinct local calendar days this memory was recalled.
+    ("access_day_count", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 # L2 scene blocks — one additive runtime column on memories. A scene row
@@ -2913,24 +2915,78 @@ class AikoMemorize:
         return out
 
     def _touch_memories(self, results: list[dict]) -> None:
+        """Bump access_count on every recall; bump access_day_count only on a
+        new local calendar day (Phase 2 spacing effect).
+
+        access_count stays the total touch counter for decay/ranking.
+        access_day_count counts distinct local days a memory was recalled —
+        monthly consolidation uses this for the spacing term of R.
+        """
         if not results:
             return
-        now = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            today_local = bioclock.local_now().strftime("%Y-%m-%d")
+        except Exception:
+            today_local = datetime.now().astimezone().strftime("%Y-%m-%d")
         mem_ids = [str(r.get("id", "")) for r in results if r.get("id")]
         if not mem_ids:
             return
         with self._mem._db_lock:
             try:
+                cols = existing_columns(self._conn)
+                has_day_count = "access_day_count" in cols
                 placeholders = ",".join("?" * len(mem_ids))
-                self._conn.execute(
-                    f"""
-                    UPDATE memories
-                    SET access_count = MIN(access_count + 1, 255),
-                        last_accessed_at = ?
-                    WHERE id IN ({placeholders})
-                    """,
-                    [now] + mem_ids,
-                )
+                if has_day_count:
+                    rows = self._conn.execute(
+                        f"SELECT id, last_accessed_at FROM memories WHERE id IN ({placeholders})",
+                        mem_ids,
+                    ).fetchall()
+                    day_bump_ids: list[str] = []
+                    for row in rows:
+                        la = row["last_accessed_at"] or "never"
+                        if la == "never" or not la:
+                            day_bump_ids.append(str(row["id"]))
+                            continue
+                        try:
+                            ts = datetime.fromisoformat(str(la).replace("Z", "+00:00"))
+                            if ts.tzinfo is None:
+                                ts = ts.replace(tzinfo=timezone.utc)
+                            last_local = ts.astimezone().strftime("%Y-%m-%d")
+                        except Exception:
+                            last_local = ""
+                        if last_local != today_local:
+                            day_bump_ids.append(str(row["id"]))
+
+                    self._conn.execute(
+                        f"""
+                        UPDATE memories
+                        SET access_count = MIN(access_count + 1, 255),
+                            last_accessed_at = ?
+                        WHERE id IN ({placeholders})
+                        """,
+                        [now_iso] + mem_ids,
+                    )
+                    if day_bump_ids:
+                        ph2 = ",".join("?" * len(day_bump_ids))
+                        self._conn.execute(
+                            f"""
+                            UPDATE memories
+                            SET access_day_count = MIN(access_day_count + 1, 255)
+                            WHERE id IN ({ph2})
+                            """,
+                            day_bump_ids,
+                        )
+                else:
+                    self._conn.execute(
+                        f"""
+                        UPDATE memories
+                        SET access_count = MIN(access_count + 1, 255),
+                            last_accessed_at = ?
+                        WHERE id IN ({placeholders})
+                        """,
+                        [now_iso] + mem_ids,
+                    )
                 self._conn.commit()
             except Exception as e:
                 log.warning(f"Access tracking failed for {mem_ids}: {e}")
