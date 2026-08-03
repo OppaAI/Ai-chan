@@ -28,6 +28,9 @@ Retention gate (Phase 1):
 
   Phase 3 entity importance: connectivity term blends co-mention edge weight
   with I_e = (1-α)·centrality + α·recency from entity_relations + last touch.
+
+  Phase 4 turn tags: valence_tag (pos/neg/neutral) and salience_hit preferred
+  over text re-scan when present; small valence intensity term in R.
   
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
@@ -63,10 +66,11 @@ CONSOLIDATION_MAX_MONTH        = max(CONSOLIDATION_MIN_MONTH, int(os.getenv("MON
 CONSOLIDATION_SOFT_THRESHOLD   = float(os.getenv("MONTHLY_CONSOLIDATION_SOFT_THRESHOLD", "0.4"))
 CONSOLIDATION_ANCHOR_LOOKBACK  = max(2, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_LOOKBACK", "50")))
 CONSOLIDATION_ANCHOR_K         = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_K", "5")))
-_RETENTION_W_SALIENCE     = float(os.getenv("MONTHLY_CONSOLIDATION_W_SALIENCE", "0.30"))
-_RETENTION_W_NOVELTY      = float(os.getenv("MONTHLY_CONSOLIDATION_W_NOVELTY", "0.25"))
-_RETENTION_W_SPACING      = float(os.getenv("MONTHLY_CONSOLIDATION_W_SPACING", "0.20"))
+_RETENTION_W_SALIENCE     = float(os.getenv("MONTHLY_CONSOLIDATION_W_SALIENCE", "0.25"))
+_RETENTION_W_NOVELTY      = float(os.getenv("MONTHLY_CONSOLIDATION_W_NOVELTY", "0.22"))
+_RETENTION_W_SPACING      = float(os.getenv("MONTHLY_CONSOLIDATION_W_SPACING", "0.18"))
 _RETENTION_W_CONNECTIVITY = float(os.getenv("MONTHLY_CONSOLIDATION_W_CONNECTIVITY", "0.25"))
+_RETENTION_W_VALENCE      = float(os.getenv("MONTHLY_CONSOLIDATION_W_VALENCE", "0.10"))
 _RETENTION_SPACING_SATURATION = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
 
 def consolidation_state_path(user_id: str | None = None) -> Path:
@@ -253,8 +257,25 @@ def _score_daily_row(
     text = row.get("_text", "") or ""
     entities = entities_from_json(row.get("entities"))
 
-    salience = 1.0 if _SALIENCE_HIT_RE.search(text) else 0.3
+    # Phase 4: prefer stored turn tags; fall back to text scan for legacy rows.
+    stored_hit = row.get("salience_hit")
+    if stored_hit is not None and str(stored_hit) != "":
+        salience = 1.0 if int(stored_hit) else 0.3
+    else:
+        salience = 1.0 if _SALIENCE_HIT_RE.search(text) else 0.3
 
+    v_raw = (row.get("valence_tag") or "neutral")
+    if isinstance(v_raw, str):
+        v_raw = v_raw.strip().lower()
+    else:
+        v_raw = "neutral"
+    # Intensity for retention (neg slightly stronger — Phase 5 will use for decay).
+    if v_raw == "neg":
+        valence = 0.85
+    elif v_raw == "pos":
+        valence = 0.65
+    else:
+        valence = 0.25
     # Phase 2: distinct recall days (access_day_count). Fallback for pre-Phase-2 rows.
     day_count = int(row.get("access_day_count") or 0)
     if day_count <= 0:
@@ -287,6 +308,7 @@ def _score_daily_row(
         + _RETENTION_W_NOVELTY * novelty
         + _RETENTION_W_SPACING * spacing
         + _RETENTION_W_CONNECTIVITY * connectivity
+        + _RETENTION_W_VALENCE * valence
     )
 
 
