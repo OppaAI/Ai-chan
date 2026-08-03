@@ -552,6 +552,9 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("entities", "TEXT NOT NULL DEFAULT '[]'"),
   # Phase 2 spacing: distinct local calendar days this memory was recalled.
     ("access_day_count", "INTEGER NOT NULL DEFAULT 0"),
+  # Phase 4: turn-level emotion / salience tags (cheap, no LLM).
+    ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
+    ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 # L2 scene blocks — one additive runtime column on memories. A scene row
@@ -653,6 +656,40 @@ def classify_kind(text: str, default: str = "fact") -> str:
     return default
 
 
+_VALENCE_POS_RE = re.compile(
+    r"[\U0001F600-\U0001F64F\U0001F970-\U0001F973\U0001F929\U0001F60A\U0001F60D\U0001F389]|"
+    r"\b(?:happy|glad|love|great|awesome|excited|relief|yay|wonderful|proud)\b",
+    re.IGNORECASE,
+)
+_VALENCE_NEG_RE = re.compile(
+    r"[\U0001F622\U0001F62D\U0001F614\U0001F61E\U0001F620\U0001F621\U0001F624]|"
+    r"\b(?:sad|angry|frustrated|afraid|scared|hate|awful|terrible|worried|anxious|cry|pain)\b",
+    re.IGNORECASE,
+)
+_TURN_SALIENCE_RE = re.compile(
+    r"\b(?:deadline|birthday|anniversary|appointment|hackathon|interview|lost|"
+    r"passport|license|wallet|important|breakthrough|always|never|favorite|favourite|"
+    r"remember this|never forget)\b|[!！]{2,}",
+    re.IGNORECASE,
+)
+
+
+def infer_valence_tag(text: str) -> str:
+    """Cheap pos/neg/neutral from emoji + lexicon. No LLM."""
+    t = text or ""
+    neg = bool(_VALENCE_NEG_RE.search(t))
+    pos = bool(_VALENCE_POS_RE.search(t))
+    if neg and not pos:
+        return "neg"
+    if pos and not neg:
+        return "pos"
+    if neg and pos:
+        return "neg"  # conflict → treat as emotionally loaded neg for retention
+    return "neutral"
+
+
+def infer_salience_hit(text: str) -> int:
+    return 1 if _TURN_SALIENCE_RE.search(text or "") else 0
 def entity_overlap_score(query: str, entities: Iterable[str]) -> float:
     """Return 0..1 fraction of entities mentioned in the query (casefold)."""
     ents = [e for e in entities if e]
