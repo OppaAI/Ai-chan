@@ -1985,7 +1985,8 @@ class _MemoryBackend:
             try:
                 from memory.entity_importance import compute_entity_importance_map
                 entity_importance_map = compute_entity_importance_map(self, user_id) or {}
-            except Exception:
+            except Exception as exc:
+                log.debug("entity importance map skipped: %s", exc)
                 entity_importance_map = {}
       
         with self._db_lock:
@@ -2718,7 +2719,14 @@ class AikoMemorize:
             if cached and now_s - cached[0] <= MEMORY_SEARCH_CACHE_TTL:
                 self._search_cache.move_to_end(cache_key)
                 results = [dict(r) for r in cached[1]]
-                log.debug("[memory] cache hit, scores=%s", [r.get("_recall_score") for r in results])
+                try:
+                    from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
+                    if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
+                        results = self._mem._expand_supersession_chains(
+                            query, user_id, results, limit=limit
+                        )
+                except Exception as exc:
+                    log.debug("supersession chain expand skipped: %s", exc)
                 self._touch_memories(results)
                 return results
             if cached:
@@ -2734,8 +2742,6 @@ class AikoMemorize:
         )
         # Fold L2 scene parents/members into the recall set (see _expand_scenes).
         results = self._expand_scenes(user_id, results)
-
-        self._touch_memories(results)
         log.debug("[memory] search miss, scores=%s", [r.get("_recall_score") for r in results])
 
         # Search replay logging (optional, feature-gated)
