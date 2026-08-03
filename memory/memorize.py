@@ -2027,7 +2027,39 @@ class _MemoryBackend:
             d["_recall_score"] = scores.get(mid, 0.0)
             results.append(d)
         return results
-
+      
+    def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
+        """Insert supersession lineage (oldest → newest) when expand is warranted."""
+        from memory.entity_importance import should_expand_supersession_chain, walk_supersession_chain
+        if not results:
+            return results
+        expanded: list[dict] = []
+        seen: set[str] = set()
+        with self._db_lock:
+            for hit in results:
+                mid = str(hit.get("id") or "")
+                if not mid or mid in seen:
+                    continue
+                if not should_expand_supersession_chain(query, hit):
+                    expanded.append(hit)
+                    seen.add(mid)
+                    continue
+                chain = walk_supersession_chain(self._conn, mid, user_id)
+                if len(chain) <= 1:
+                    expanded.append(hit)
+                    seen.add(mid)
+                    continue
+                for node in chain:
+                    nid = str(node.get("id") or "")
+                    if not nid or nid in seen:
+                        continue
+                    node = dict(node)
+                    node["_recall_score"] = hit.get("_recall_score", 0.0)
+                    node["_supersession_chain"] = True
+                    expanded.append(node)
+                    seen.add(nid)
+        return expanded[: max(limit, min(len(expanded), limit * 2))]
+      
     def iter_all(self, user_id: str, batch_size: int = MEMORY_LIFECYCLE_BATCH_SIZE):
         """Yield memory records for a user in rowid order without one giant list.
 
@@ -2715,6 +2747,13 @@ class AikoMemorize:
             while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
                 self._search_cache.popitem(last=False)
 
+          try:
+              from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
+              if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
+                  results = self._expand_supersession_chains(query, user_id, results, limit=limit)
+          except Exception:
+              pass
+          
         return results
 
     # ── L2 scene expansion ─────────────────────────────────────────────────────
@@ -3447,7 +3486,17 @@ class AikoMemorize:
 
         candidates = []
         kept       = 0
+        lineage_ids: set[str] = set()
 
+        try:
+            with self._mem._db_lock:
+                rows = self._conn.execute(
+                    "SELECT supersedes_id FROM memories WHERE supersedes_id IS NOT NULL AND supersedes_id != ''"
+                ).fetchall()
+            lineage_ids = {str(r["supersedes_id"]) for r in rows if r["supersedes_id"]}
+        except Exception:
+            lineage_ids = set()
+          
         for m in all_mems:
             mem_id     = str(m.get("id", ""))
             ac, la     = payload_map.get(mem_id, (0, "never"))
@@ -3456,7 +3505,11 @@ class AikoMemorize:
             if mem_id in pinned_ids:
                 kept += 1
                 continue
-
+              
+            if mem_id in lineage_ids:
+                kept += 1
+                continue
+              
             if should_cleanup(ac, la, created_at):
                 w = compute_weighted_score(ac, la)
                 candidates.append({
