@@ -252,10 +252,10 @@ def _score_daily_row(
     salience = 1.0 if _SALIENCE_HIT_RE.search(text) else 0.3
 
     # Phase 2: distinct recall days (access_day_count). Fallback for pre-Phase-2 rows.
-        day_count = int(row.get("access_day_count") or 0)
-        if day_count <= 0:
-            day_count = 1 if int(row.get("access_count") or 0) > 0 else 0
-        spacing = min(1.0, day_count / float(_RETENTION_SPACING_SATURATION))
+    day_count = int(row.get("access_day_count") or 0)
+    if day_count <= 0:
+        day_count = 1 if int(row.get("access_count") or 0) > 0 else 0
+    spacing = min(1.0, day_count / float(_RETENTION_SPACING_SATURATION))
 
     if entities and entity_weights:
         raw = [entity_weights.get(e.casefold(), 0.0) for e in entities]
