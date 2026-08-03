@@ -690,6 +690,7 @@ def infer_valence_tag(text: str) -> str:
 
 def infer_salience_hit(text: str) -> int:
     return 1 if _TURN_SALIENCE_RE.search(text or "") else 0
+  
 def entity_overlap_score(query: str, entities: Iterable[str]) -> float:
     """Return 0..1 fraction of entities mentioned in the query (casefold)."""
     ents = [e for e in entities if e]
@@ -1523,6 +1524,8 @@ class _MemoryBackend:
                         pinned=0,
                         source=SOURCE_CHAT,
                         supersedes_id=supersedes_id,
+                        valence_tag=v_tag,
+                        salience_hit=s_hit,
                     )
                     ids.append(mem_id)
                 self._conn.commit()
