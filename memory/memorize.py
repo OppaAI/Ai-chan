@@ -2714,6 +2714,7 @@ class AikoMemorize:
                 # A scene row itself: attach a compact member list.
                 if r.get("kind") == KIND_SCENE:
                     entry = dict(r)
+                    entry["_scene"] = True
                     members = self._mem.scene_members(rid, user_id, limit=SCENE_MEMBER_LIMIT)
                     if members:
                         entry["_scene_members"] = [(m.get("memory") or "")[:160] for m in members]
@@ -2737,7 +2738,7 @@ class AikoMemorize:
                 if srow:
                     sd = dict(srow)
                     sd["_recall_score"] = r.get("_recall_score", 0.0)
-                    sd["_scene"] = True
+                    sd["_scene"] = True  # ADD THIS LINE
                     out.append(sd)
                     seen.add(str(sid))
         return out

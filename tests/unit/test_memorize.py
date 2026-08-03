@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import hashlib
 import struct
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -185,6 +187,22 @@ def _insert_vector(conn, mem_id, vector):
         "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
         (mem_id, sqlite_vec.serialize_float32(vector.tolist())),
     )
+
+
+def _bare_memo(backend, user_id: str = "u1"):
+    """Build an AikoMemorize instance without __init__ (no worker thread or
+    config load), wiring only the state the recall/persona paths touch."""
+    from memory.memorize import AikoMemorize
+    memo = AikoMemorize.__new__(AikoMemorize)
+    memo._mem = backend
+    memo._user_id_override = user_id
+    memo._search_cache = OrderedDict()
+    memo._search_cache_lock = threading.RLock()
+    memo._last_cache_clear_time = 0.0
+    memo._persona_lock = threading.RLock()
+    memo._persona_cached = None
+    memo._persona_cache_at = 0.0
+    return memo
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -510,6 +528,8 @@ def test_vacuum_memory_db_opens_user_store_and_runs_maintenance(monkeypatch, tmp
     calls = []
 
     class FakeConn:
+        def __init__(self):
+            self.isolation_level = None  # ADD THIS
         def execute(self, sql):
             calls.append(("execute", sql))
         def commit(self):
@@ -555,10 +575,7 @@ class TestPersonaCache:
             )
         conn.commit()
 
-        memo = AikoMemorize.__new__(AikoMemorize)
-        memo._mem = backend
-        memo._conn = backend._conn
-        memo._user_id_override = "u1"
+        memo = _bare_memo(backend)
         # Directly call private builder to inspect raw output
         block = memo._build_persona_context()
         assert block is not None
@@ -584,10 +601,7 @@ class TestPersonaCache:
             conn.execute("UPDATE memories SET kind = 'identity' WHERE id = ?", (mid,))
         conn.commit()
 
-        memo = AikoMemorize.__new__(AikoMemorize)
-        memo._mem = backend
-        memo._conn = backend._conn
-        memo._user_id_override = "u1"
+        memo = _bare_memo(backend)
         block = memo._build_persona_context()
         assert block is not None
         lines = [l for l in block.split("\n") if l.strip().startswith("-")]
@@ -606,13 +620,7 @@ class TestPersonaCache:
         conn.execute("UPDATE memories SET kind = 'identity' WHERE id = 'id1'")
         conn.commit()
 
-        memo = AikoMemorize.__new__(AikoMemorize)
-        memo._mem = backend
-        memo._conn = backend._conn
-        memo._user_id_override = "u1"
-        memo._persona_lock = __import__("threading").RLock()
-        memo._persona_cached = None
-        memo._persona_cache_at = 0.0
+        memo = _bare_memo(backend)
         # First call populates cache
         block1 = memo.persona_context()
         assert "Oppa X" in block1
@@ -621,8 +629,8 @@ class TestPersonaCache:
         assert block1 == block2
 
         # Advance time past TTL
-        monkeypatch.setattr(time, "monotonic", lambda: time.monotonic() + PERSONA_CACHE_TTL + 1)
-        # Now add a new identity fact
+        original_monotonic = time.monotonic  # capture BEFORE patching
+        monkeypatch.setattr(time, "monotonic", lambda: original_monotonic() + PERSONA_CACHE_TTL + 1)        # Now add a new identity fact
         _insert_row(conn, "id2", "u1", "Oppa Y", now)
         _insert_vector(conn, "id2", backend._embedder._vec("Oppa Y"))
         conn.execute("UPDATE memories SET kind = 'identity' WHERE id = 'id2'")
@@ -729,9 +737,7 @@ class TestSceneExpansion:
         conn.commit()
 
         # Search for the member text; it should return the member + the scene
-        memo = AikoMemorize.__new__(AikoMemorize)
-        memo._mem = backend
-        memo._conn = backend._conn
+        memo = _bare_memo(backend)
         # Monkey the embedder to return the member's vector for the query
         member_vec = backend._embedder._vec("Oppa fixed a bug")
         monkeypatch.setattr(backend._embedder, "embed_query", lambda q, **kw: member_vec)
@@ -760,9 +766,7 @@ class TestSceneExpansion:
         conn.execute("UPDATE memories SET scene_id = ? WHERE id = ?", (scene_id, member_id))
         conn.commit()
 
-        memo = AikoMemorize.__new__(AikoMemorize)
-        memo._mem = backend
-        memo._conn = backend._conn
+        memo = _bare_memo(backend)
         # Query vector matches scene text
         scene_vec = backend._embedder._vec("Coding sprint")
         monkeypatch.setattr(backend._embedder, "embed_query", lambda q, **kw: scene_vec)
