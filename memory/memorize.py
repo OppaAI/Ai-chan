@@ -1506,10 +1506,13 @@ class _MemoryBackend:
                     mem_id = str(uuid.uuid4())
                   
                     # Phase 4: tag from fact text (and soft signal from last assistant msg).
-                    assist_blob = " ".join(
-                        (m.get("content") or "")
-                        for m in messages
-                        if m.get("role") == "assistant"
+                    assist_blob = next(
+                        (
+                            (m.get("content") or "")
+                            for m in reversed(messages)
+                            if m.get("role") == "assistant"
+                        ),
+                        "",
                     )[-400:]
                     tag_src = f"{fact}\n{assist_blob}"
                     v_tag = infer_valence_tag(tag_src)
