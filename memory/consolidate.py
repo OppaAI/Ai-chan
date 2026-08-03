@@ -73,7 +73,6 @@ def consolidation_state_path(user_id: str | None = None) -> Path:
 LLM_BASE_URL          = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
 CONSOLIDATION_LLM_TIMEOUT = float(os.getenv("MONTHLY_CONSOLIDATION_LLM_TIMEOUT", os.getenv("LLM_TIMEOUT", "120")))
-# Default OFF until the retention gate has been audited on at least one real month.
 CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES", "0").lower() in {"1", "true", "yes", "on"}
 
 _DAILY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
@@ -262,7 +261,7 @@ def _score_daily_row(
         try:
             norms = np.linalg.norm(static_anchors, axis=1) * np.linalg.norm(row_vector) + 1e-9
             sims = (static_anchors @ row_vector) / norms
-            novelty = float(max(0.0, min(1.0, 1.0 - float(np.max(sims))))
+            novelty = float(max(0.0, min(1.0, 1.0 - float(np.max(sims)))))
         except Exception:
             novelty = 0.5
     else:
@@ -333,20 +332,19 @@ def _apply_retention_gate(
     target_count = min(target_count, len(scored))
 
     kept_candidates = [row for _, row in scored[:target_count]]
-    dropped_candidates = [row for _, row in scored[target_count:]]
 
     log.info(
         "Retention gate: %d must_keep, %d candidates scored (threshold=%.2f "
         "above=%d), target_count=%d -> kept=%d dropped=%d",
         len(must_keep_rows), len(scored), CONSOLIDATION_SOFT_THRESHOLD,
-        above_threshold, target_count, len(kept_candidates), len(dropped_candidates),
+        above_threshold, target_count, len(kept_candidates), len(scored) - target_count,
     )
 
     return must_keep_rows + kept_candidates, {
         "must_keep": len(must_keep_rows),
         "candidates": len(scored),
         "kept_candidates": len(kept_candidates),
-        "dropped_candidates": len(dropped_candidates),
+        "dropped_candidates": len(scored) - target_count,
     }
 
 
