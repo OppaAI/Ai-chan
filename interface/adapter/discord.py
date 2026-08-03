@@ -23,12 +23,45 @@ class DiscordAdapter(AdapterBase):
         self._client: discord.Client | None = None
         self._thread: threading.Thread | None = None
         self._channel_map: dict[int, str] = {}
+        self._user_id_map: dict[str, str] = self._parse_user_map(
+            self._get_env("DISCORD_USER_ID_MAP")
+        )
 
     def _read_config(self) -> dict[str, str]:
         return {
             "token": self._get_env("DISCORD_BOT_TOKEN"),
             "prefix": self._get_env("DISCORD_COMMAND_PREFIX", "!"),
         }
+
+    @staticmethod
+    def _parse_user_map(raw: str) -> dict[str, str]:
+        """Parse DISCORD_USER_ID_MAP: a comma/space separated list of `id=user`
+        pairs (also accepts `id:user`). Collapses the Discord snowflake(s) onto
+        a single canonical Aiko user id so memory is shared across accounts /
+        channels, instead of a fresh folder per Discord id.
+        """
+        mapping: dict[str, str] = {}
+        if not raw:
+            return mapping
+        for token in raw.replace(",", " ").split():
+            if "=" in token:
+                key, val = token.split("=", 1)
+            elif ":" in token:
+                key, val = token.split(":", 1)
+            else:
+                continue
+            key, val = key.strip(), val.strip()
+            if key and val:
+                mapping[key] = val
+        return mapping
+
+    def _canonical_user_id(self, raw: str) -> str:
+        if raw not in self._user_id_map:
+            log.debug("[discord] user %s -> %s (default)", raw, raw)
+            return raw
+        mapped = self._user_id_map[raw]
+        log.info("[discord] user %s -> %s (mapped)", raw, mapped)
+        return mapped
 
     def start(self) -> None:
         if discord is None:
@@ -55,14 +88,19 @@ class DiscordAdapter(AdapterBase):
             if self._client and self._client.user and message.author.id == self._client.user.id:
                 return
             cid = str(message.channel.id)
-            uid = str(message.author.id)
+            uid = self._canonical_user_id(str(message.author.id))
             display = message.author.display_name
             text = message.content.strip()
             if not text:
                 return
             log.info("[discord] msg from %s in %s: %.60s", display, cid, text)
-            session = self.handle_message(cid, uid, display, text)
-            session.wait()
+            # Do NOT block on session.wait() here: this coroutine runs on
+            # Discord's event loop, and blocking it during inference starves
+            # the gateway heartbeat (>20s) -> aiohttp resets the connection
+            # and Discord reconnects. The session runs the reply on its own
+            # thread and delivers it via _on_platform_response -> send_message,
+            # which schedules back onto this loop with run_coroutine_threadsafe.
+            self.handle_message(cid, uid, display, text)
 
         self._thread = threading.Thread(
             target=self._client.run, args=(self._token,), daemon=True
