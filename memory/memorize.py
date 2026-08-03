@@ -1811,7 +1811,7 @@ class _MemoryBackend:
         rank_knn: dict,
         rank_fts: dict,
         rank_graph: dict | None = None,
-        entity_importance_map: dict | None = None
+        entity_importance_map: dict | None = None,
     ) -> tuple[list[str], dict, dict]:
         """
         Dedup + score one candidate pool (from either the quick or wide pass).
@@ -2747,13 +2747,15 @@ class AikoMemorize:
             while len(self._search_cache) > MEMORY_SEARCH_CACHE_SIZE:
                 self._search_cache.popitem(last=False)
 
-          try:
-              from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
-              if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
-                  results = self._expand_supersession_chains(query, user_id, results, limit=limit)
-          except Exception:
-              pass
-          
+        try:
+            from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
+            if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
+                results = self._mem._expand_supersession_chains(
+                    query, user_id, results, limit=limit
+                )
+        except Exception:
+            pass
+
         return results
 
     # ── L2 scene expansion ─────────────────────────────────────────────────────
