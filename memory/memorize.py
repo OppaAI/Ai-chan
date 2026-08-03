@@ -2760,7 +2760,11 @@ class AikoMemorize:
 
     def _build_persona_context(self) -> str | None:
         user_id = self._resolve_user_id(self._user_id_override)
-        if not self._scene_cols_available():
+        # Persona only needs Phase A 'kind' (not the L2 scene_id column).
+        try:
+            if "kind" not in existing_columns(self._conn):
+                return None
+        except Exception:
             return None
         with self._mem._db_lock:
             rows = self._conn.execute(

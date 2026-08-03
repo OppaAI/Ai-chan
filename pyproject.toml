@@ -41,6 +41,9 @@ dependencies = [
     "mcp>=1.10.1",
     "protonmail-api-client>=2.4.3",
     "discord-py>=2.7.1",
+    "python-telegram-bot>=22.8",
+    "davey>=0.1.6",
+    "pynacl>=1.6.2",
 ]
 
 [project.optional-dependencies]
