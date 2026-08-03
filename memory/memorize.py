@@ -2754,7 +2754,7 @@ class AikoMemorize:
                 results = self._mem._expand_supersession_chains(
                     query, user_id, results, limit=limit
                 )
-        except Exception:
+        except Exception as exc:
             log.debug("supersession chain expand skipped: %s", exc)
 
         self._touch_memories(results)  
