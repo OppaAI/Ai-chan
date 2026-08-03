@@ -102,6 +102,14 @@ MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT: "0.008"  # Flat recall score boost × max 
 MEMORY_SUPERSESSION_CHAIN_EXPAND: "1"  # Expand supersedes_id lineage on reflective / identity-plan hits.
 MEMORY_SUPERSESSION_CHAIN_KINDS: "identity,preference,plan"  # Kinds that always expand chain when hit.
 
+# -- Phase 4: turn-level valence + salience tags --
+MONTHLY_CONSOLIDATION_W_VALENCE: "0.10"  # Weight for |emotional intensity|. Neuroscience: high-valence ↔ fast consolidation.
+# Rebalance of Phase 1 weights when valence is present (should sum ~1.0 with W_VALENCE):
+MONTHLY_CONSOLIDATION_W_SALIENCE: "0.25"  # User-tagged importance or story-weight (e.g. "first piano recital").
+MONTHLY_CONSOLIDATION_W_NOVELTY: "0.22"  # Semantic distance from existing memories. Surprise/contradiction factor.
+MONTHLY_CONSOLIDATION_W_SPACING: "0.18"  # Time gaps between repeated retrievals. Spaced-rep principle.
+MONTHLY_CONSOLIDATION_W_CONNECTIVITY: "0.25"  # In-graph degree. Well-connected memories survive consolidation.
+
 # -- Decay and dream merge --
 FORGET_HALF_LIFE_DAYS: "21"  # Days until memory retention score halves.
 FORGET_ACCESS_COUNT_CAP: "255"  # Maximum access_count retained for decay scoring.

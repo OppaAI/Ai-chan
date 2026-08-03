@@ -552,6 +552,9 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("entities", "TEXT NOT NULL DEFAULT '[]'"),
   # Phase 2 spacing: distinct local calendar days this memory was recalled.
     ("access_day_count", "INTEGER NOT NULL DEFAULT 0"),
+  # Phase 4: turn-level emotion / salience tags (cheap, no LLM).
+    ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
+    ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 # L2 scene blocks — one additive runtime column on memories. A scene row
@@ -653,6 +656,41 @@ def classify_kind(text: str, default: str = "fact") -> str:
     return default
 
 
+_VALENCE_POS_RE = re.compile(
+    r"[\U0001F600-\U0001F64F\U0001F970-\U0001F973\U0001F929\U0001F60A\U0001F60D\U0001F389]|"
+    r"\b(?:happy|glad|love|great|awesome|excited|relief|yay|wonderful|proud)\b",
+    re.IGNORECASE,
+)
+_VALENCE_NEG_RE = re.compile(
+    r"[\U0001F622\U0001F62D\U0001F614\U0001F61E\U0001F620\U0001F621\U0001F624]|"
+    r"\b(?:sad|angry|frustrated|afraid|scared|hate|awful|terrible|worried|anxious|cry|pain)\b",
+    re.IGNORECASE,
+)
+# Shared salience policy (write-time tags + monthly legacy fallback).
+SALIENCE_POLICY_RE = re.compile(
+    r"\b(?:deadline|birthday|anniversary|appointment|hackathon|interview|lost|"
+    r"passport|license|wallet|important|breakthrough|problem|always|never|"
+    r"favorite|favourite|remember this|never forget)\b|!{2,}",
+    re.IGNORECASE,
+)
+
+def infer_valence_tag(text: str) -> str:
+    """Cheap pos/neg/neutral from emoji + lexicon. No LLM."""
+    t = text or ""
+    neg = bool(_VALENCE_NEG_RE.search(t))
+    pos = bool(_VALENCE_POS_RE.search(t))
+    if neg and not pos:
+        return "neg"
+    if pos and not neg:
+        return "pos"
+    if neg and pos:
+        return "neg"  # conflict → treat as emotionally loaded neg for retention
+    return "neutral"
+
+
+def infer_salience_hit(text: str) -> int:
+    return 1 if SALIENCE_POLICY_RE.search(text or "") else 0
+  
 def entity_overlap_score(query: str, entities: Iterable[str]) -> float:
     """Return 0..1 fraction of entities mentioned in the query (casefold)."""
     ents = [e for e in entities if e]
@@ -1328,6 +1366,8 @@ class _MemoryBackend:
         kind: str | None = None,
         entities: list[str] | None = None,
         scene_id: str | None = None,
+        valence_tag: str | None = None,
+        salience_hit: int | None = None,
     ) -> None:
         """Insert one memory row (Phase A + L2 columns when present) + its
         vector, and best-effort co-mention edges for the entity graph.
@@ -1341,6 +1381,10 @@ class _MemoryBackend:
         ents_list = entities if entities is not None else extract_entities(text)
         ents_json = entities_to_json(ents_list)
 
+        v_tag = valence_tag if valence_tag in ("pos", "neg", "neutral") else infer_valence_tag(text)
+        s_hit = int(salience_hit) if salience_hit is not None else infer_salience_hit(text)
+        s_hit = 1 if s_hit else 0
+      
         base_cols = ["id", "user_id", "memory", "created_at", "access_count", "last_accessed_at", "pinned"]
         base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
         ext_cols: list[str] = []
@@ -1351,6 +1395,12 @@ class _MemoryBackend:
         if "scene_id" in cols:
             ext_cols.append("scene_id")
             ext_vals.append(scene_id)
+        if "valence_tag" in cols:
+            ext_cols.append("valence_tag")
+            ext_vals.append(v_tag)
+        if "salience_hit" in cols:
+            ext_cols.append("salience_hit")
+            ext_vals.append(s_hit)
         all_cols = base_cols + ext_cols
         placeholders = ", ".join("?" * len(all_cols))
         self._conn.execute(
@@ -1454,6 +1504,20 @@ class _MemoryBackend:
                             )
                             log.info("Superseded memory %s with new fact", supersedes_id)
                     mem_id = str(uuid.uuid4())
+                  
+                    # Phase 4: tag from fact text (and soft signal from last assistant msg).
+                    assist_blob = next(
+                        (
+                            (m.get("content") or "")
+                            for m in reversed(messages)
+                            if m.get("role") == "assistant"
+                        ),
+                        "",
+                    )[-400:]
+                    tag_src = f"{fact}\n{assist_blob}"
+                    v_tag = infer_valence_tag(tag_src)
+                    s_hit = max(infer_salience_hit(fact), infer_salience_hit(assist_blob))
+                  
                     self._insert_row(
                         mem_id=mem_id,
                         user_id=user_id,
@@ -1463,6 +1527,8 @@ class _MemoryBackend:
                         pinned=0,
                         source=SOURCE_CHAT,
                         supersedes_id=supersedes_id,
+                        valence_tag=v_tag,
+                        salience_hit=s_hit,
                     )
                     ids.append(mem_id)
                 self._conn.commit()
