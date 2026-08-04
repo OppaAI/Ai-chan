@@ -81,9 +81,7 @@ def spread_activation(
                 continue
             for nb, w in adj.get(node, []):
                 # normalize soft weight: treat weight as relative, clamp
-                hop = s0 * decay * min(1.0, w / max(w, 1.0) if w else 0.0)
-                # simpler: hop = s0 * decay * min(1.0, w) if weights are small
-                hop = s0 * decay * (1.0 if w <= 0 else min(1.0, w if w <= 1.0 else 1.0))
+                hop = s0 * decay * min(1.0, max(0.0, w))
                 if hop < min_strength:
                     continue
                 if hop > strength.get(nb, 0.0):
