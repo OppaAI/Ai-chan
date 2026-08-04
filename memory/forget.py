@@ -39,7 +39,13 @@ _INTENSITY = {
 
 def _valence_intensity(valence_tag: str | None) -> float:
     key = (valence_tag or "neutral").strip().lower()
-    return float(_INTENSITY.get(key, 0.0))
+    try:
+        v = float(_INTENSITY.get(key, 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+    if v != v or v in (float("inf"), float("-inf")):  # NaN or ±inf
+        return 0.0
+    return max(0.0, v)
 
 
 # ── scoring ───────────────────────────────────────────────────────────────────
