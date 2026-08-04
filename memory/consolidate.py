@@ -32,6 +32,10 @@ Retention gate (Phase 1):
   Phase 4 turn tags: valence_tag (pos/neg/neutral) and salience_hit preferred
   over text re-scan when present; small valence intensity term in R.
   
+  Phase 6 novelty: blend distance to static [YYYY-MM] anchors with distance to a
+  dynamic anchor (mean of recent active memory vectors). Distinctiveness: rare
+  entities within the month's day pins score higher.
+  
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
 
@@ -66,12 +70,17 @@ CONSOLIDATION_MAX_MONTH        = max(CONSOLIDATION_MIN_MONTH, int(os.getenv("MON
 CONSOLIDATION_SOFT_THRESHOLD   = float(os.getenv("MONTHLY_CONSOLIDATION_SOFT_THRESHOLD", "0.4"))
 CONSOLIDATION_ANCHOR_LOOKBACK  = max(2, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_LOOKBACK", "50")))
 CONSOLIDATION_ANCHOR_K         = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_K", "5")))
-_RETENTION_W_SALIENCE     = float(os.getenv("MONTHLY_CONSOLIDATION_W_SALIENCE", "0.25"))
-_RETENTION_W_NOVELTY      = float(os.getenv("MONTHLY_CONSOLIDATION_W_NOVELTY", "0.22"))
-_RETENTION_W_SPACING      = float(os.getenv("MONTHLY_CONSOLIDATION_W_SPACING", "0.18"))
-_RETENTION_W_CONNECTIVITY = float(os.getenv("MONTHLY_CONSOLIDATION_W_CONNECTIVITY", "0.25"))
+_RETENTION_W_SALIENCE     = float(os.getenv("MONTHLY_CONSOLIDATION_W_SALIENCE", "0.22"))
+_RETENTION_W_NOVELTY      = float(os.getenv("MONTHLY_CONSOLIDATION_W_NOVELTY", "0.20"))
+_RETENTION_W_SPACING      = float(os.getenv("MONTHLY_CONSOLIDATION_W_SPACING", "0.16"))
+_RETENTION_W_CONNECTIVITY = float(os.getenv("MONTHLY_CONSOLIDATION_W_CONNECTIVITY", "0.22"))
 _RETENTION_W_VALENCE      = float(os.getenv("MONTHLY_CONSOLIDATION_W_VALENCE", "0.10"))
-_RETENTION_SPACING_SATURATION = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
+_RETENTION_W_DISTINCT     = float(os.getenv("MONTHLY_CONSOLIDATION_W_DISTINCTIVENESS", "0.10"))
+# Phase 6: split novelty between static archive anchors and dynamic recent mean.
+_NOVELTY_W_STATIC  = float(os.getenv("MONTHLY_CONSOLIDATION_NOVELTY_W_STATIC", "0.6"))
+_NOVELTY_W_DYNAMIC = float(os.getenv("MONTHLY_CONSOLIDATION_NOVELTY_W_DYNAMIC", "0.4"))
+_DYNAMIC_ANCHOR_LIMIT = max(5, int(os.getenv("MONTHLY_CONSOLIDATION_DYNAMIC_ANCHOR_LIMIT", "40")))
+_DYNAMIC_ANCHOR_DAYS  = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_DYNAMIC_ANCHOR_DAYS", "14")))
 
 def consolidation_state_path(user_id: str | None = None) -> Path:
     override = os.getenv("MONTHLY_CONSOLIDATION_STATE_PATH")
@@ -235,14 +244,100 @@ def _build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
     return np.mean(vectors, axis=0, keepdims=True)
 
 
+
+def _build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
+    """Mean vector of recently active memories — 'what has been active lately'.
+
+    Used at monthly gate time (not turn-level WMC). Prefers rows with recent
+    last_accessed_at / created_at within DYNAMIC_ANCHOR_DAYS, capped at LIMIT.
+    Returns shape (1, dim) or None when insufficient data.
+    """
+    try:
+        all_mems = memorize.get_all(user_id=user_id)
+    except Exception as exc:
+        log.warning("Dynamic anchor build: failed to fetch memories: %s", exc)
+        return None
+    if not all_mems:
+        return None
+
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=_DYNAMIC_ANCHOR_DAYS)
+
+    def _ts(m):
+        raw = m.get("last_accessed_at") or m.get("created_at") or ""
+        if not raw or raw == "never":
+            return None
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            return None
+
+    scored = []
+    for m in all_mems:
+        text = (m.get("memory") or "").strip()
+        if not text:
+            continue
+        if _MONTHLY_FACT_TAG_RE.match(text):
+            continue
+        dt = _ts(m)
+        if dt is not None and dt < cutoff:
+            continue
+        ac = int(m.get("access_count") or 0)
+        scored.append((dt or now, ac, text))
+
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    texts = [t for _, _, t in scored[:_DYNAMIC_ANCHOR_LIMIT]]
+    if len(texts) < 2:
+        return None
+    try:
+        vectors = np.array(memorize.embed_texts(texts, query=False))
+    except Exception as exc:
+        log.warning("Dynamic anchor build: embedding failed: %s", exc)
+        return None
+    if vectors.size == 0:
+        return None
+    return np.mean(vectors, axis=0, keepdims=True)
+
+
+def _entity_month_freq(daily_rows: list[dict]) -> dict[str, int]:
+    """Count how often each entity appears across this month's day pins."""
+    freq: dict[str, int] = {}
+    for row in daily_rows:
+        for e in entities_from_json(row.get("entities")):
+            k = e.casefold()
+            if k:
+                freq[k] = freq.get(k, 0) + 1
+    return freq
+
+
+def _distinctiveness_score(row: dict, entity_freq: dict[str, int]) -> float:
+    """Higher when the fact's entities are rare in this month (0..1)."""
+    ents = entities_from_json(row.get("entities"))
+    if not ents or not entity_freq:
+        return 0.5
+    import math
+    scores = []
+    for e in ents:
+        c = entity_freq.get(e.casefold(), 1)
+        scores.append(1.0 / math.log1p(c + 1.0))
+    raw = max(scores) if scores else 0.5
+    return float(max(0.0, min(1.0, raw / math.log1p(2.0))))
+
+
 def _score_daily_row(
     row: dict,
     *,
     static_anchors: "np.ndarray | None",
+    dynamic_anchors: "np.ndarray | None",
     row_vector: "np.ndarray | None",
     entity_weights: dict[str, float],
     entity_weight_cap: float,
     entity_importance: dict[str, float] | None = None,
+    entity_freq: dict[str, int] | None = None,
 ) -> float:
     text = row.get("_text", "") or ""
     entities = entities_from_json(row.get("entities"))
@@ -283,15 +378,35 @@ def _score_daily_row(
         ie = max(vals) if vals else 0.0
     connectivity = 0.5 * edge_conn + 0.5 * ie if (entities and (entity_weights or entity_importance)) else 0.0
 
-    if static_anchors is not None and len(static_anchors) and row_vector is not None:
+    # Phase 6: novelty = blend of distance-to-static and distance-to-dynamic anchors.
+    def _one_minus_max_sim(anchors, vec):
+        if anchors is None or not len(anchors) or vec is None:
+            return None
         try:
-            norms = np.linalg.norm(static_anchors, axis=1) * np.linalg.norm(row_vector) + 1e-9
-            sims = (static_anchors @ row_vector) / norms
-            novelty = float(max(0.0, min(1.0, 1.0 - float(np.max(sims)))))
+            norms = np.linalg.norm(anchors, axis=1) * np.linalg.norm(vec) + 1e-9
+            sims = (anchors @ vec) / norms
+            return float(max(0.0, min(1.0, 1.0 - float(np.max(sims)))))
         except Exception:
-            novelty = 0.5
-    else:
+            return None
+
+    n_static = _one_minus_max_sim(static_anchors, row_vector)
+    n_dynamic = _one_minus_max_sim(dynamic_anchors, row_vector)
+    w_s = max(0.0, _NOVELTY_W_STATIC)
+    w_d = max(0.0, _NOVELTY_W_DYNAMIC)
+    w_sum = w_s + w_d
+    if w_sum <= 0:
+        w_s, w_d, w_sum = 1.0, 0.0, 1.0
+    w_s, w_d = w_s / w_sum, w_d / w_sum
+    if n_static is None and n_dynamic is None:
         novelty = 0.5
+    elif n_static is None:
+        novelty = n_dynamic if n_dynamic is not None else 0.5
+    elif n_dynamic is None:
+        novelty = n_static
+    else:
+        novelty = w_s * n_static + w_d * n_dynamic
+
+    distinctiveness = _distinctiveness_score(row, entity_freq or {})
 
     return (
         _RETENTION_W_SALIENCE * salience
@@ -299,6 +414,7 @@ def _score_daily_row(
         + _RETENTION_W_SPACING * spacing
         + _RETENTION_W_CONNECTIVITY * connectivity
         + _RETENTION_W_VALENCE * valence
+        + _RETENTION_W_DISTINCT * distinctiveness
     )
 
 
@@ -326,8 +442,10 @@ def _apply_retention_gate(
         }
 
     static_anchors = _build_static_anchors(memorize, user_id)
+    dynamic_anchors = _build_dynamic_anchors(memorize, user_id)
     entity_weights = _entity_connectivity_weights(memorize, user_id)
     entity_weight_cap = max(entity_weights.values(), default=1.0) or 1.0
+    entity_freq = _entity_month_freq(daily_rows)
     entity_importance: dict[str, float] = {}
     try:
         from memory.entity_importance import compute_entity_importance_map
@@ -352,10 +470,12 @@ def _apply_retention_gate(
         score = _score_daily_row(
             row,
             static_anchors=static_anchors,
+            dynamic_anchors=dynamic_anchors,
             row_vector=vec,
             entity_weights=entity_weights,
             entity_weight_cap=entity_weight_cap,
             entity_importance=entity_importance,
+            entity_freq=entity_freq,
         )
         scored.append((score, row))
 
