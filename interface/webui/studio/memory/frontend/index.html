@@ -32,6 +32,7 @@
     .sidebar { border-right: 1px solid var(--border); background: var(--bg2); padding: 14px; overflow-y: auto; font-size: 12px; }
     .sidebar h2 { font-size: 10px; letter-spacing: .18em; color: var(--pink); text-transform: uppercase; margin: 12px 0 8px; }
     .sidebar label { display: flex; gap: 8px; align-items: center; margin: 6px 0; color: var(--dim); }
+    .sidebar select,
     .sidebar input[type=number], .sidebar input[type=text] {
       width: 100%; background: #120a1c; border: 1px solid var(--dim); color: var(--text);
       padding: 6px 8px; border-radius: 3px; font-size: 12px;
@@ -279,6 +280,7 @@
 
       const nodes = (graph.nodes || []).map(n => ({ ...n }));
       const links = (graph.edges || []).map(e => ({ ...e }));
+      const links = (graph.edges || []).map(e => ({ ...e }));
       if (!nodes.length) {
         svg.append('text').attr('x', w/2).attr('y', h/2).attr('text-anchor','middle')
           .attr('fill','var(--dim)').text('No memories yet');
@@ -384,6 +386,7 @@
 
     document.getElementById('refresh').onclick = loadGraph;
     document.getElementById('apply').onclick = loadGraph;
+    document.getElementById('apply-filters').onclick = () => render();
     document.getElementById('search-btn').onclick = runSearch;
     document.getElementById('search-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
     document.getElementById('export').onclick = () => {
