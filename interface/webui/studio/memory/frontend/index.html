@@ -83,7 +83,25 @@
       <label>Limit <input type="number" id="limit" value="200" min="1" max="2000" /></label>
       <label><input type="checkbox" id="include-history" checked /> Include superseded</label>
       <label><input type="checkbox" id="include-entities" checked /> Entity hubs</label>
+            <label>Status
+        <select id="filter-status">
+          <option value="all">all</option>
+          <option value="active">active</option>
+          <option value="superseded">superseded</option>
+        </select>
+      </label>
+      <label>Valence
+        <select id="filter-valence">
+          <option value="all">all</option>
+          <option value="pos">pos</option>
+          <option value="neg">neg</option>
+          <option value="neutral">neutral</option>
+        </select>
+      </label>
+      <label>Min retain <input type="number" id="filter-min-retain" value="0" min="0" max="1" step="0.05" /></label>
+      <label>Entity contains <input type="text" id="filter-entity" placeholder="e.g. ros2" /></label>
       <button class="btn btn-primary" id="apply" style="width:100%;margin-top:10px">Apply</button>
+      <button class="btn" id="apply-filters" style="width:100%;margin-top:6px">Re-filter (no reload)</button>
       <h2>Stats</h2>
       <div class="stat" id="stats">—</div>
       <h2>Legend</h2>
