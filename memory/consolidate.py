@@ -640,6 +640,9 @@ def _merge_monthly_facts(month_key: str, chunk_items: list[list[dict]]) -> list[
         return chunk_items[0]
     # Flatten with provenance preserved; LLM merge drops source_ids — re-attach by fact text best-effort later if needed.
     flat = [it for chunk in chunk_items for it in chunk]
+    if HARD_SOURCE_PROVENANCE:
+        # Keep chunk-level source_ids until merge protocol carries them.
+        return flat
     chunks_text = "\n\n".join(
         f"List {i+1}:\n" + "\n".join(f"- {it.get('fact','')}" for it in facts)
         for i, facts in enumerate(chunk_items)
