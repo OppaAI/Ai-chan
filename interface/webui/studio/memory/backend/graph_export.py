@@ -255,11 +255,13 @@ def export_memory_graph(
         if req_limit < 1:
             req_limit = 200
         effective_limit = min(req_limit, _MAX_MEMORIES)
+        # Over-fetch so retain ranking can prefer strong older rows in a wider window
+        fetch_n = min(max(effective_limit * 3, effective_limit), max(_MAX_MEMORIES * 3, effective_limit))
 
         sql += " ORDER BY created_at DESC"
-        if effective_limit > 0:
+        if fetch_n > 0:
             sql += " LIMIT ?"
-            params.append(int(effective_limit))
+            params.append(int(fetch_n))
 
         rows = conn.execute(sql, params).fetchall()
 
@@ -394,7 +396,7 @@ def export_memory_graph(
 
                 ensure_entity_relations_schema(conn)
                 for e in relations_as_graph_edges(
-                    conn, user_id=uid, limit=max(int(effective_limit) * 2, 500)
+                    conn, user_id=uid, limit=max(int(fetch_n) * 2, 500)
                 ):
                     for endpoint in (e["source"], e["target"]):
                         if endpoint not in entity_ids and endpoint not in mem_ids:
@@ -436,8 +438,9 @@ def export_memory_graph(
             key=lambda n: float((n.get("scores") or {}).get("retain") or n.get("size") or 0),
             reverse=True,
         )
+        # Prefer high retain among the over-fetched window
+        mem_nodes = mem_nodes[:effective_limit]
         ent_nodes.sort(key=lambda n: float(n.get("size") or 0), reverse=True)
-        mem_nodes = mem_nodes[:_MAX_MEMORIES]
         ent_nodes = ent_nodes[:_MAX_ENTITIES]
         keep_ids = {n["id"] for n in mem_nodes} | {n["id"] for n in ent_nodes}
         nodes = mem_nodes + ent_nodes
