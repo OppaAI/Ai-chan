@@ -42,7 +42,7 @@ Query params for `/api/graph`:
 - `MEMORY_STUDIO_MAX_ENTITIES` (default 120)
 - `MEMORY_STUDIO_MAX_EDGES` (default 200)
 
-Note: over-fetches ~3× `limit` (newest-first), then keeps the top `limit` by retain among
+Note: over-fetches ~3× `limit` (newest-first), then keeps the top `limit` by retain among that window (not a full-DB retain rank).
 
 **Client filters** (sidebar; re-filter without reload):
 
