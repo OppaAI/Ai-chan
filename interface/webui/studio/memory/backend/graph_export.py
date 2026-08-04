@@ -1,14 +1,20 @@
 """
-memory/graph_export.py
+interface/webui/studio/memory/backend/graph_export.py
 
-Phase C: export personal memory as a node/edge graph for visualization.
-Phase D polish: merge entity co-mention edges from entity_relations.
+Export personal memory as a node/edge graph for Memory Graph Studio.
+
+Phase C: memory + entity nodes, supersedes / mentions edges.
+Phase D: entity co-mention edges from entity_relations.
+Phase 10: retain tendency, rim scores, valence, I_e → size + scores on nodes.
 
 Read-only. Tolerates pre-Phase-A DBs (missing status/entities columns).
 """
 from __future__ import annotations
 
 import json
+import math
+import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -17,6 +23,10 @@ from system.log import get_logger
 from system.userspace import current_user_id
 
 log = get_logger(__name__)
+
+_SPACING_SAT = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
+_DAILY_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
+_MONTHLY_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
 
 
 def _entities_from_raw(raw: Any) -> list[str]:
@@ -50,6 +60,100 @@ def _resolve_db_path(user_id: str) -> Path:
     return resolve_user_db_path("memory/memory.db", user_id=user_id)
 
 
+def _valence_score(tag: Any) -> float:
+    t = (str(tag or "neutral")).strip().lower()
+    if t == "neg":
+        return 0.85
+    if t == "pos":
+        return 0.65
+    return 0.25
+
+
+def _salience_score(text: str, stored_hit: Any) -> float:
+    if stored_hit is not None and str(stored_hit) != "":
+        try:
+            return 1.0 if int(stored_hit) else 0.3
+        except (TypeError, ValueError):
+            pass
+    try:
+        from memory.memorize import SALIENCE_POLICY_RE
+        return 1.0 if SALIENCE_POLICY_RE.search(text or "") else 0.3
+    except Exception:
+        return 0.3
+
+
+def _spacing_score(access_day_count: int, access_count: int) -> float:
+    day_count = int(access_day_count or 0)
+    if day_count <= 0:
+        day_count = 1 if int(access_count or 0) > 0 else 0
+    return min(1.0, day_count / float(_SPACING_SAT))
+
+
+def _access_score(access_count: int) -> float:
+    ac = int(access_count or 0)
+    return min(1.0, math.log1p(ac) / math.log1p(50))
+
+
+def _memory_scores(
+    *,
+    text: str,
+    status: str,
+    pinned: bool,
+    access_count: int,
+    access_day_count: int,
+    valence_tag: Any,
+    salience_hit: Any,
+    entities: list[str],
+    entity_importance: dict[str, float],
+) -> dict[str, float]:
+    """Rim arcs + retain tendency (node size). Not full monthly R (no anchors)."""
+    if str(status).strip().lower() == "superseded":
+        retain = 0.15
+    else:
+        sal = _salience_score(text, salience_hit)
+        sp = _spacing_score(access_day_count, access_count)
+        val = _valence_score(valence_tag)
+        acc = _access_score(access_count)
+        ie = 0.0
+        if entities and entity_importance:
+            ie = max(
+                (entity_importance.get(e.casefold(), 0.0) for e in entities),
+                default=0.0,
+            )
+        pin = 1.0 if pinned else 0.0
+        if _MONTHLY_RE.match(text or ""):
+            pin = max(pin, 0.95)
+        retain = (
+            0.28 * sal
+            + 0.18 * sp
+            + 0.12 * val
+            + 0.12 * acc
+            + 0.20 * ie
+            + 0.25 * pin
+        )
+        retain = float(max(0.05, min(1.0, retain)))
+
+    sal = _salience_score(text, salience_hit)
+    sp = _spacing_score(access_day_count, access_count)
+    val = _valence_score(valence_tag)
+    acc = _access_score(access_count)
+    ie = 0.0
+    if entities and entity_importance:
+        ie = max(
+            (entity_importance.get(e.casefold(), 0.0) for e in entities),
+            default=0.0,
+        )
+
+    return {
+        "retain": round(retain, 4),
+        "salience": round(sal, 4),
+        "spacing": round(sp, 4),
+        "connectivity": round(ie, 4),
+        "valence": round(val, 4),
+        "access": round(acc, 4),
+    }
+
+
 def export_memory_graph(
     *,
     user_id: str | None = None,
@@ -58,16 +162,16 @@ def export_memory_graph(
     include_entities: bool = True,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
-    """Build a graph dict: {nodes, edges, meta}.
+    """Build a graph dict: {nodes, edges, meta, legend}.
 
     Node types:
-      - memory: one per fact row
-      - entity: hub nodes shared across facts (when include_entities)
+      - memory: one per fact row (scores + size = retain tendency)
+      - entity: hub nodes (size = I_e when available)
 
     Edge types:
       - supersedes: newer memory → older memory it replaced
       - mentions: memory → entity
-      - co_mentions: entity → entity (Phase D entity_relations)
+      - co_mentions / related_to: entity → entity (entity_relations)
     """
     uid = user_id or current_user_id()
     owns_conn = conn is None
@@ -80,24 +184,32 @@ def export_memory_graph(
                 "nodes": [],
                 "edges": [],
                 "meta": {"user_id": uid, "count": 0, "note": "db missing"},
+                "legend": _legend(),
             }
-        # Minimal DDL — do not recreate schema; just open
         try:
             conn = initialize_store_db(str(db_path), "PRAGMA journal_mode = WAL;", user_id=uid, vector=True)
         except Exception as e:
             log.warning("graph_export: open failed: %s", e)
-            return {"nodes": [], "edges": [], "meta": {"user_id": uid, "error": str(e)}}
+            return {"nodes": [], "edges": [], "meta": {"user_id": uid, "error": str(e)}, "legend": _legend()}
 
     try:
         cols = _table_columns(conn)
         if "id" not in cols:
-            return {"nodes": [], "edges": [], "meta": {"user_id": uid, "count": 0, "note": "no memories table"}}
+            return {
+                "nodes": [],
+                "edges": [],
+                "meta": {"user_id": uid, "count": 0, "note": "no memories table"},
+                "legend": _legend(),
+            }
 
         has_status = "status" in cols
         has_entities = "entities" in cols
         has_kind = "kind" in cols
         has_source = "source" in cols
         has_supersedes = "supersedes_id" in cols
+        has_valence = "valence_tag" in cols
+        has_salience = "salience_hit" in cols
+        has_day_count = "access_day_count" in cols
 
         select_cols = ["id", "memory", "created_at", "pinned", "access_count"]
         if has_status:
@@ -110,6 +222,12 @@ def export_memory_graph(
             select_cols.append("source")
         if has_supersedes:
             select_cols.append("supersedes_id")
+        if has_valence:
+            select_cols.append("valence_tag")
+        if has_salience:
+            select_cols.append("salience_hit")
+        if has_day_count:
+            select_cols.append("access_day_count")
 
         sql = f"SELECT {', '.join(select_cols)} FROM memories WHERE user_id = ?"
         params: list[Any] = [uid]
@@ -121,6 +239,20 @@ def export_memory_graph(
             params.append(int(limit))
 
         rows = conn.execute(sql, params).fetchall()
+
+        entity_importance: dict[str, float] = {}
+        try:
+            from memory.entity_importance import compute_entity_importance_map
+            # Prefer map from memorize if available; else empty
+            entity_importance = {}
+            try:
+                from memory.memorize import AikoMemorize
+                mem = AikoMemorize(silent=True)
+                entity_importance = compute_entity_importance_map(mem, uid) or {}
+            except Exception:
+                entity_importance = {}
+        except Exception as ex:
+            log.debug("graph_export: I_e map skipped: %s", ex)
 
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
@@ -134,11 +266,35 @@ def export_memory_graph(
             label = text if len(text) <= 80 else text[:77] + "…"
             status = str(row["status"]) if has_status and row["status"] is not None else "active"
             kind = str(row["kind"]) if has_kind and row["kind"] else "fact"
+            if _MONTHLY_RE.match(text):
+                kind = "monthly"
+            elif _DAILY_RE.match(text) and kind == "fact":
+                kind = "daily"
             source = str(row["source"]) if has_source and row["source"] else ""
             ents = _entities_from_raw(row["entities"]) if has_entities else []
             supersedes_id = (
                 str(row["supersedes_id"]) if has_supersedes and row["supersedes_id"] else None
             )
+            valence_tag = (
+                str(row["valence_tag"]) if has_valence and row["valence_tag"] is not None else "neutral"
+            )
+            salience_hit = row["salience_hit"] if has_salience else None
+            access_day_count = int(row["access_day_count"] or 0) if has_day_count else 0
+            access_count = int(row["access_count"] or 0)
+            pinned = bool(row["pinned"])
+
+            scores = _memory_scores(
+                text=text,
+                status=status,
+                pinned=pinned,
+                access_count=access_count,
+                access_day_count=access_day_count,
+                valence_tag=valence_tag,
+                salience_hit=salience_hit,
+                entities=ents,
+                entity_importance=entity_importance,
+            )
+            size = round(0.35 + 0.9 * scores["retain"], 4)
 
             nodes.append({
                 "id": mid,
@@ -148,11 +304,15 @@ def export_memory_graph(
                 "status": status,
                 "kind": kind,
                 "source": source,
-                "pinned": bool(row["pinned"]),
-                "access_count": int(row["access_count"] or 0),
+                "pinned": pinned,
+                "access_count": access_count,
+                "access_day_count": access_day_count,
                 "created_at": row["created_at"],
                 "entities": ents,
                 "supersedes_id": supersedes_id,
+                "valence_tag": valence_tag,
+                "scores": scores,
+                "size": size,
             })
 
             if supersedes_id:
@@ -168,6 +328,7 @@ def export_memory_graph(
                     eid = f"ent:{ent.casefold()}"
                     if eid not in entity_ids:
                         entity_ids.add(eid)
+                        ie = float(entity_importance.get(ent.casefold(), 0.0))
                         nodes.append({
                             "id": eid,
                             "type": "entity",
@@ -181,6 +342,17 @@ def export_memory_graph(
                             "created_at": None,
                             "entities": [],
                             "supersedes_id": None,
+                            "valence_tag": "neutral",
+                            "scores": {
+                                "retain": round(ie, 4),
+                                "importance": round(ie, 4),
+                                "salience": 0.0,
+                                "spacing": 0.0,
+                                "connectivity": round(ie, 4),
+                                "valence": 0.25,
+                                "access": 0.0,
+                            },
+                            "size": round(0.25 + 0.85 * ie, 4),
                         })
                     edges.append({
                         "id": f"men:{mid}->{eid}",
@@ -189,13 +361,11 @@ def export_memory_graph(
                         "type": "mentions",
                     })
 
-        # Drop supersedes edges whose target fell outside the limit window
         edges = [
             e for e in edges
             if e["type"] != "supersedes" or e["target"] in mem_ids
         ]
 
-        # Phase D: entity ↔ entity co-mentions
         if include_entities:
             try:
                 from memory.memorize import ensure_entity_relations_schema
@@ -208,6 +378,7 @@ def export_memory_graph(
                         if endpoint not in entity_ids and endpoint not in mem_ids:
                             label = endpoint.removeprefix("ent:")
                             entity_ids.add(endpoint)
+                            ie = float(entity_importance.get(label.casefold(), 0.0))
                             nodes.append({
                                 "id": endpoint,
                                 "type": "entity",
@@ -221,6 +392,17 @@ def export_memory_graph(
                                 "created_at": None,
                                 "entities": [],
                                 "supersedes_id": None,
+                                "valence_tag": "neutral",
+                                "scores": {
+                                    "retain": round(ie, 4),
+                                    "importance": round(ie, 4),
+                                    "salience": 0.0,
+                                    "spacing": 0.0,
+                                    "connectivity": round(ie, 4),
+                                    "valence": 0.25,
+                                    "access": 0.0,
+                                },
+                                "size": round(0.25 + 0.85 * ie, 4),
                             })
                     edges.append(e)
             except Exception as ex:
@@ -237,7 +419,9 @@ def export_memory_graph(
                 "include_history": include_history,
                 "include_entities": include_entities,
                 "limit": limit,
+                "theme": "galaxy",
             },
+            "legend": _legend(),
         }
     finally:
         if owns_conn and conn is not None:
@@ -247,9 +431,21 @@ def export_memory_graph(
                 pass
 
 
-# ── entity relation reads (Studio-facing) ────────────────────────────────────
-# The write side (upsert_co_mentions, schema) lives in memory/memorize.py;
-# these read-only helpers serve the Studio's edge export.
+def _legend() -> dict[str, Any]:
+    return {
+        "size": "retain tendency (memories) / I_e (entities)",
+        "rim_arcs": ["salience", "spacing", "connectivity", "valence", "access"],
+        "colors": {
+            "neg": "#ff6b6b",
+            "neutral": "#c0c8d8",
+            "pos": "#7ad7f0",
+            "entity": "#c9a0ff",
+            "monthly": "#ffd27a",
+            "pinned": "#51d4c8",
+            "superseded": "#4a3a6a",
+        },
+    }
+
 
 def list_entity_relations(
     conn: sqlite3.Connection,
