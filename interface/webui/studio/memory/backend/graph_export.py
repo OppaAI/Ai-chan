@@ -27,9 +27,20 @@ log = get_logger(__name__)
 _SPACING_SAT = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
 _DAILY_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
 _MONTHLY_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
-_MAX_MEMORIES = max(1, int(os.getenv("MEMORY_STUDIO_MAX_MEMORIES", "400")))
-_MAX_ENTITIES = max(0, int(os.getenv("MEMORY_STUDIO_MAX_ENTITIES", "120")))
-_MAX_EDGES = max(0, int(os.getenv("MEMORY_STUDIO_MAX_EDGES", "200")))
+
+def _env_int(name: str, default: int, *, floor: int = 0) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return max(floor, default)
+    try:
+        return max(floor, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        log.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return max(floor, default)
+
+_MAX_MEMORIES = _env_int("MEMORY_STUDIO_MAX_MEMORIES", 400, floor=1)
+_MAX_ENTITIES = _env_int("MEMORY_STUDIO_MAX_ENTITIES", 120, floor=0)
+_MAX_EDGES = _env_int("MEMORY_STUDIO_MAX_EDGES", 200, floor=0)
 
 
 def _entities_from_raw(raw: Any) -> list[str]:
