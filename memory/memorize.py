@@ -319,6 +319,10 @@ MEMORY_RANK_GRAPH_WEIGHT = float(os.getenv("MEMORY_RANK_GRAPH_WEIGHT", "0.6"))
 # Phase 3 entity importance (see memory.entity_importance)
 MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT = float(os.getenv("MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT", "0.008"))
 
+MEMORY_SPREADING_ENABLED = os.getenv("MEMORY_SPREADING_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+MEMORY_SPREADING_MAX_EXTRA = max(0, int(os.getenv("MEMORY_SPREADING_MAX_EXTRA", "5")))
+MEMORY_SPREADING_SCORE_WEIGHT = float(os.getenv("MEMORY_SPREADING_SCORE_WEIGHT", "0.01"))
+
 MEMORY_SEARCH_CACHE_SIZE = int(os.getenv("MEMORY_SEARCH_CACHE_SIZE", 128))
 MEMORY_SEARCH_CACHE_TTL  = float(os.getenv("MEMORY_SEARCH_CACHE_TTL", 20.0))
 MEMORY_CONTEXT_FACT_CHARS  = int(os.getenv("MEMORY_CONTEXT_FACT_CHARS", 220))
@@ -1872,7 +1876,97 @@ class _MemoryBackend:
             [user_id] + filtered + [limit],
         ).fetchall()
       
-      
+    def _spreading_extra_ids(
+        self,
+        user_id: str,
+        seed_rows: list,
+        *,
+        exclude_ids: set[str],
+        query: str = "",
+    ) -> tuple[dict[str, float], list[str]]:
+        """Return (entity_activation, extra_memory_ids) via entity_relations walk."""
+        if not MEMORY_SPREADING_ENABLED or MEMORY_SPREADING_MAX_EXTRA <= 0:
+            return {}, []
+        try:
+            from memory.entity_importance import (
+                entities_from_json_safe,
+                spread_activation,
+            )
+        except Exception:
+            return {}, []
+
+        seeds: list[str] = []
+        for row in seed_rows:
+            try:
+                raw = row["entities"] if hasattr(row, "keys") else row.get("entities")
+                seeds.extend(entities_from_json_safe(raw))
+            except Exception:
+                pass
+
+        if query:
+            try:
+                seeds.extend(extract_entities(query))
+            except Exception:
+                pass
+
+        if not seeds:
+            return {}, []
+
+        try:
+            edge_rows = self._conn.execute(
+                "SELECT entity_a, entity_b, weight FROM entity_relations WHERE user_id = ?",
+                (user_id,),
+            ).fetchall()
+            edges = [
+                (str(r["entity_a"] or ""), str(r["entity_b"] or ""), float(r["weight"] or 0.0))
+                for r in edge_rows
+            ]
+        except Exception:
+            return {}, []
+
+        activation = spread_activation(seeds, edges)
+        if not activation:
+            return {}, []
+
+        # Strongest entities first (skip pure seeds at 1.0 if you want only neighbors —
+        # usually keep all activated)
+        ranked_ents = sorted(activation.keys(), key=lambda e: -activation[e])
+        extra: list[str] = []
+        seen = set(exclude_ids)
+        for ent in ranked_ents:
+            if len(extra) >= MEMORY_SPREADING_MAX_EXTRA:
+                break
+            try:
+                rows = self._conn.execute(
+                    """
+                    SELECT id FROM memories
+                    WHERE user_id = ?
+                      AND (status = 'active' OR status IS NULL)
+                      AND entities LIKE ?
+                    ORDER BY last_accessed_at DESC
+                    LIMIT 5
+                    """,
+                    (user_id, f"%{ent}%"),
+                ).fetchall()
+            except Exception:
+                continue
+            for r in rows:
+                mid = str(r["id"])
+                if mid in seen:
+                    continue
+                # tighter check: entity really in JSON list
+                full = self._conn.execute(
+                    "SELECT entities FROM memories WHERE id = ?", (mid,)
+                ).fetchone()
+                ents = entities_from_json_safe(full["entities"] if full else "[]")
+                if ent not in {e.casefold() for e in ents}:
+                    continue
+                seen.add(mid)
+                extra.append(mid)
+                if len(extra) >= MEMORY_SPREADING_MAX_EXTRA:
+                    break
+        return activation, extra
+          
     def _rank_and_score(
         self,
         rank_knn: dict,
@@ -2095,7 +2189,40 @@ class _MemoryBackend:
             d = dict(row_by_id[mid])
             d["_recall_score"] = scores.get(mid, 0.0)
             results.append(d)
-        return results
+          
+        activation: dict[str, float] = {}
+        if MEMORY_SPREADING_ENABLED and results:
+            try:
+                with self._db_lock:
+                    exclude = {str(r.get("id")) for r in results}
+                    activation, extra_ids = self._spreading_extra_ids(
+                        user_id, results, exclude_ids=exclude, query=query,
+                    )
+                    for mid in extra_ids:
+                        row = self._conn.execute(
+                            "SELECT * FROM memories WHERE id = ? AND user_id = ?",
+                            (mid, user_id),
+                        ).fetchone()
+                        if row is None:
+                            continue
+                        d = dict(row)
+                        d["_recall_score"] = 0.0
+                        d["_from_spreading"] = True
+                        results.append(d)
+            except Exception as exc:
+                log.debug("spreading activation skipped: %s", exc)
+
+        if MEMORY_SPREADING_SCORE_WEIGHT > 0 and activation and results:
+            try:
+                from memory.entity_importance import memory_max_activation
+                for r in results:
+                    boost = MEMORY_SPREADING_SCORE_WEIGHT * memory_max_activation(r, activation)
+                    r["_recall_score"] = float(r.get("_recall_score") or 0.0) + boost
+                results.sort(key=lambda x: float(x.get("_recall_score") or 0.0), reverse=True)
+            except Exception as exc:
+                log.debug("spreading activation score boost skipped: %s", exc)
+
+        return results[:limit]
       
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
         """
