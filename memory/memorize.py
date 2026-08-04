@@ -2094,7 +2094,39 @@ class _MemoryBackend:
             d = dict(row_by_id[mid])
             d["_recall_score"] = scores.get(mid, 0.0)
             results.append(d)
-        return results
+          
+        activation: dict[str, float] = {}
+        if MEMORY_SPREADING_ENABLED and results:
+            try:
+                exclude = {str(r.get("id")) for r in results}
+                activation, extra_ids = self._spreading_extra_ids(
+                    user_id, results, exclude_ids=exclude
+                )
+                for mid in extra_ids:
+                    row = self._conn.execute(
+                        "SELECT * FROM memories WHERE id = ? AND user_id = ?",
+                        (mid, user_id),
+                    ).fetchone()
+                    if row is None:
+                        continue
+                    d = dict(row)
+                    d["_recall_score"] = 0.0
+                    d["_from_spreading"] = True
+                    results.append(d)
+            except Exception as exc:
+                log.debug("spreading activation skipped: %s", exc)
+
+        if MEMORY_SPREADING_SCORE_WEIGHT > 0 and activation and results:
+            try:
+                from memory.entity_importance import memory_max_activation
+                for r in results:
+                    boost = MEMORY_SPREADING_SCORE_WEIGHT * memory_max_activation(r, activation)
+                    r["_recall_score"] = float(r.get("_recall_score") or 0.0) + boost
+                results.sort(key=lambda x: float(x.get("_recall_score") or 0.0), reverse=True)
+            except Exception:
+                pass
+
+        return results[:limit]
       
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
         """
