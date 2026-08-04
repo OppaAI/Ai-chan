@@ -2193,21 +2193,22 @@ class _MemoryBackend:
         activation: dict[str, float] = {}
         if MEMORY_SPREADING_ENABLED and results:
             try:
-                exclude = {str(r.get("id")) for r in results}
-                activation, extra_ids = self._spreading_extra_ids(
-                    user_id, results, exclude_ids=exclude, query=query,
-                )
-                for mid in extra_ids:
-                    row = self._conn.execute(
-                        "SELECT * FROM memories WHERE id = ? AND user_id = ?",
-                        (mid, user_id),
-                    ).fetchone()
-                    if row is None:
-                        continue
-                    d = dict(row)
-                    d["_recall_score"] = 0.0
-                    d["_from_spreading"] = True
-                    results.append(d)
+                with self._db_lock:
+                    exclude = {str(r.get("id")) for r in results}
+                    activation, extra_ids = self._spreading_extra_ids(
+                        user_id, results, exclude_ids=exclude, query=query,
+                    )
+                    for mid in extra_ids:
+                        row = self._conn.execute(
+                            "SELECT * FROM memories WHERE id = ? AND user_id = ?",
+                            (mid, user_id),
+                        ).fetchone()
+                        if row is None:
+                            continue
+                        d = dict(row)
+                        d["_recall_score"] = 0.0
+                        d["_from_spreading"] = True
+                        results.append(d)
             except Exception as exc:
                 log.debug("spreading activation skipped: %s", exc)
 
