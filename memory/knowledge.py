@@ -414,18 +414,44 @@ def ingest_text(
         if embedder is not None:
             batch = reason.embed_batch_or_none(embedder, chunks)
             vectors = list(batch) if batch is not None and len(batch) == len(chunks) else []
-        for index, chunk in enumerate(chunks):
-            chunk_id = str(uuid.uuid4())
-            conn.execute(
-                "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at,entities,status) VALUES(?,?,?,?,?,?,?,?)",
-                (
-                    chunk_id, doc_id, uid, index, chunk, created_at,
-                    entities_to_json(extract_entities(chunk)),
-                    "active",
-                ),
-            )
-            if vectors:
-                insert_vector(conn, "learned_chunks_vec", chunk_id, vectors[index])
+            for index, chunk in enumerate(chunks):
+                ents_json = entities_to_json(extract_entities(chunk))
+                vec = vectors[index] if vectors else None
+
+                # Optional: near-dup skip
+                if (
+                    KNOWLEDGE_WRITE_DEDUP_THRESHOLD > 0
+                    and vec is not None
+                ):
+                    try:
+                        # top-1 neighbor for this user
+                        neighbors = user_scoped_vec_knn(
+                            conn,
+                            "learned_chunks_vec",
+                            owner_table="learned_chunks",
+                            owner_alias="c",
+                            query_vec=vec,  # adapt to your vecstore API
+                            user_id=uid,
+                            limit=1,
+                        )
+                        # If API only takes text query, embed via existing _knn path instead
+                        if neighbors:
+                            # row has distance or similarity depending on vec0
+                            sim = float(neighbors[0].get("similarity") or neighbors[0].get("score") or 0.0)
+                            # if you only get distance: sim = 1 - distance
+                            if sim >= KNOWLEDGE_WRITE_DEDUP_THRESHOLD:
+                                log.debug("knowledge dedup skip chunk sim=%.3f", sim)
+                                continue
+                    except Exception as dedup_exc:
+                        log.debug("knowledge dedup skipped: %s", dedup_exc)
+
+                chunk_id = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO learned_chunks(...) VALUES (...)",
+                    (...),
+                )
+                if vec is not None:
+                    insert_vector(conn, "learned_chunks_vec", chunk_id, vec)
         conn.commit()
         _maybe_clear_knowledge_cache()
         return doc_id

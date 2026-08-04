@@ -213,7 +213,35 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
                 insert_vector(conn, "experiences_vec", row_id, vec)
                 conn.commit()
             except Exception as embed_exc:
-                log.warning("experience embedding failed (record kept, FTS-only): %s", embed_exc)
+                log.warning("experience embedding failed ...: %s", embed_exc)
+                vec = None
+        else:
+            vec = None
+
+        # Optional Phase 8: auto engram link to similar past runs
+        if EXPERIENCE_AUTO_RELATE_THRESHOLD > 0 and vec is not None:
+            try:
+                prior = search_experience(goal, limit=5, embedder=embedder)
+                for hit in prior:
+                    hid = hit.get("id")
+                    if not hid or hid == row_id:
+                        continue
+                    # Prefer embedding cosine if you can load hit vector;
+                    # fallback: high recall_score is only a weak signal
+                    sim = float(hit.get("recall_score") or 0.0)
+                    # RRF scores are small (~0.01–0.05). Better: cosine.
+                    # If you only have RRF, use a separate threshold or skip.
+                    if sim < 0.02:  # weak RRF proxy — prefer real cosine
+                        continue
+                    old_outcome = (hit.get("outcome") or "").lower()
+                    if old_outcome and old_outcome != outcome and {"ok", "failed"} & {old_outcome, outcome}:
+                        rel = "contradiction"
+                    else:
+                        rel = "refines"
+                    record_engram_relation(row_id, hid, rel, confidence=min(1.0, sim * 20))
+            except Exception as rel_exc:
+                log.debug("auto engram relate skipped: %s", rel_exc)
+
         _prune(conn, uid)
         return row_id
     except Exception as exc:
