@@ -41,6 +41,7 @@ Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedul
 
 from __future__ import annotations
 
+import math
 import json
 import os
 import re
@@ -204,6 +205,7 @@ def _entity_connectivity_weights(memorize, user_id: str) -> dict[str, float]:
 
 
 def _build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
+    # Phase 6: get_all + filter is OK monthly; SQL limit if this ever shows up in profiles.
     try:
         all_mems = memorize.get_all(user_id=user_id)
     except Exception as exc:
@@ -281,9 +283,9 @@ def _build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
 
     scored = []
     for m in all_mems:
-        # Match active-recall filter used elsewhere.
-        status = (m.get("status") or "active")
-        if str(status).lower() not in ("active",):
+        # Active-only; NULL/missing status = legacy active (same as search filters).
+        status = m.get("status")
+        if status is not None and str(status).strip().lower() not in ("active", ""):
             continue
 
         text = (m.get("memory") or "").strip()
@@ -329,7 +331,6 @@ def _distinctiveness_score(row: dict, entity_freq: dict[str, int]) -> float:
     ents = entities_from_json(row.get("entities"))
     if not ents or not entity_freq:
         return 0.5
-    import math
     scores = []
     for e in ents:
         c = entity_freq.get(e.casefold(), 1)
