@@ -137,7 +137,12 @@ END;
 
 
 def _connect(user_id: str | None = None) -> sqlite3.Connection:
-    return initialize_store_db(EXPERIENCE_DB_PATH, _DDL, user_id=user_id, vector=True)
+    conn = initialize_store_db(EXPERIENCE_DB_PATH, _DDL, user_id=user_id, vector=True)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(experiences)").fetchall()]
+    if "entities" not in cols:
+        conn.execute("ALTER TABLE experiences ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
+        conn.commit()
+    return conn
 
 
 def _sanitize(text: str, max_chars: int = 500) -> str:
