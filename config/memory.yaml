@@ -104,14 +104,17 @@ MEMORY_SUPERSESSION_CHAIN_KINDS: "identity,preference,plan"  # Kinds that always
 
 # -- Phase 4: turn-level valence + salience tags --
 MONTHLY_CONSOLIDATION_W_VALENCE: "0.10"  # Weight for |emotional intensity|. Neuroscience: high-valence ↔ fast consolidation.
-# Rebalance of Phase 1 weights when valence is present (should sum ~1.0 with W_VALENCE):
-MONTHLY_CONSOLIDATION_W_SALIENCE: "0.22"  # User-tagged importance or story-weight (e.g. "first piano recital").
-MONTHLY_CONSOLIDATION_W_NOVELTY: "0.20"  # Semantic distance from existing memories. Surprise/contradiction factor.
-MONTHLY_CONSOLIDATION_W_SPACING: "0.16"  # Time gaps between repeated retrievals. Spaced-rep principle.
-MONTHLY_CONSOLIDATION_W_CONNECTIVITY: "0.22"  # In-graph degree. Well-connected memories survive consolidation.
+# Paper I §5.2 weights (salience/novelty/spacing/connectivity), with W_VALENCE blended in.
+MONTHLY_CONSOLIDATION_W_SALIENCE: "0.30"  # User-tagged importance or story-weight (e.g. "first piano recital").
+MONTHLY_CONSOLIDATION_W_NOVELTY: "0.25"  # Semantic distance from existing memories. Surprise/contradiction factor.
+MONTHLY_CONSOLIDATION_W_SPACING: "0.20"  # Time gaps between repeated retrievals. Spaced-rep principle.
+MONTHLY_CONSOLIDATION_W_CONNECTIVITY: "0.25"  # In-graph degree. Well-connected memories survive consolidation.
 
-# -- Phase 6: dynamic anchors + distinctiveness --
-MONTHLY_CONSOLIDATION_W_DISTINCTIVENESS: "0.10"  # Rare entities in the month score higher (1/log frequency).
+# -- Phase 6: dynamic anchors --
+# Novelty = W_STATIC·(distance to prior [YYYY-MM] archive anchors) +
+#           W_DYNAMIC·(distance to mean of recently-active memory vectors).
+# The dynamic anchor captures whether a fact is already represented by what's
+# currently hot — a coherent extension of the paper's static-anchor novelty.
 MONTHLY_CONSOLIDATION_NOVELTY_W_STATIC: "0.6"  # Share of novelty from prior [YYYY-MM] static anchors.
 MONTHLY_CONSOLIDATION_NOVELTY_W_DYNAMIC: "0.4"  # Share of novelty vs recent active-memory mean (dynamic anchor).
 MONTHLY_CONSOLIDATION_DYNAMIC_ANCHOR_LIMIT: "40"  # Max recent active facts to build the dynamic anchor mean.
@@ -155,6 +158,7 @@ MEMORY_RECENCY_RERANK_THRESHOLD: "0.012"  # Min final score for a candidate to b
 # -- Experience and consolidation --
 MONTHLY_CONSOLIDATION_ENABLED: "1"  # Monthly consolidation toggle; options: 1/0, true/false, yes/no, on/off.
 MONTHLY_CONSOLIDATION_KEEP_MONTHS: "1"  # Number of recent full months to keep as detailed memories.
+MONTHLY_CONSOLIDATION_SOFT_THRESHOLD: "0.44"  # Min retention-gate score to survive consolidation; weights max out at ~1.1 (paper weights + valence).
 MONTHLY_CONSOLIDATION_CHUNK_MEMS: "25"  # Memory facts per fallback monthly summary chunk.
 MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS: "6000"  # Max source chars per monthly consolidation LLM request.
 MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "1"  # After folding a month's pinned daily facts/day-records into "[YYYY-MM] ..." consolidated facts, delete the daily-granularity originals. Set to 0 to keep consolidation purely additive (compress + archive, no deletion) until you've verified retrieval/growth behavior.

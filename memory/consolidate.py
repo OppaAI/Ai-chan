@@ -33,15 +33,13 @@ Retention gate (Phase 1):
   over text re-scan when present; small valence intensity term in R.
   
   Phase 6 novelty: blend distance to static [YYYY-MM] anchors with distance to a
-  dynamic anchor (mean of recent active memory vectors). Distinctiveness: rare
-  entities within the month's day pins score higher.
+  dynamic anchor (mean of recent active memory vectors).
   
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
 
 from __future__ import annotations
 
-import math
 import json
 import os
 import re
@@ -68,15 +66,14 @@ CONSOLIDATION_MIN_MEMS        = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_
 
 CONSOLIDATION_MIN_MONTH        = max(0, int(os.getenv("MONTHLY_CONSOLIDATION_MIN_MONTH", "8")))
 CONSOLIDATION_MAX_MONTH        = max(CONSOLIDATION_MIN_MONTH, int(os.getenv("MONTHLY_CONSOLIDATION_MAX_MONTH", "30")))
-CONSOLIDATION_SOFT_THRESHOLD   = float(os.getenv("MONTHLY_CONSOLIDATION_SOFT_THRESHOLD", "0.4"))
+CONSOLIDATION_SOFT_THRESHOLD   = float(os.getenv("MONTHLY_CONSOLIDATION_SOFT_THRESHOLD", "0.44"))
 CONSOLIDATION_ANCHOR_LOOKBACK  = max(2, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_LOOKBACK", "50")))
 CONSOLIDATION_ANCHOR_K         = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_ANCHOR_K", "5")))
-_RETENTION_W_SALIENCE     = float(os.getenv("MONTHLY_CONSOLIDATION_W_SALIENCE", "0.22"))
-_RETENTION_W_NOVELTY      = float(os.getenv("MONTHLY_CONSOLIDATION_W_NOVELTY", "0.20"))
-_RETENTION_W_SPACING      = float(os.getenv("MONTHLY_CONSOLIDATION_W_SPACING", "0.16"))
-_RETENTION_W_CONNECTIVITY = float(os.getenv("MONTHLY_CONSOLIDATION_W_CONNECTIVITY", "0.22"))
+_RETENTION_W_SALIENCE     = float(os.getenv("MONTHLY_CONSOLIDATION_W_SALIENCE", "0.30"))
+_RETENTION_W_NOVELTY      = float(os.getenv("MONTHLY_CONSOLIDATION_W_NOVELTY", "0.25"))
+_RETENTION_W_SPACING      = float(os.getenv("MONTHLY_CONSOLIDATION_W_SPACING", "0.20"))
+_RETENTION_W_CONNECTIVITY = float(os.getenv("MONTHLY_CONSOLIDATION_W_CONNECTIVITY", "0.25"))
 _RETENTION_W_VALENCE      = float(os.getenv("MONTHLY_CONSOLIDATION_W_VALENCE", "0.10"))
-_RETENTION_W_DISTINCT     = float(os.getenv("MONTHLY_CONSOLIDATION_W_DISTINCTIVENESS", "0.10"))
 _RETENTION_SPACING_SATURATION = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
 # Phase 6: split novelty between static archive anchors and dynamic recent mean.
 _NOVELTY_W_STATIC  = float(os.getenv("MONTHLY_CONSOLIDATION_NOVELTY_W_STATIC", "0.6"))
@@ -316,30 +313,6 @@ def _build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
     return np.mean(vectors, axis=0, keepdims=True)
 
 
-def _entity_month_freq(daily_rows: list[dict]) -> dict[str, int]:
-    """Count how often each entity appears across this month's day pins."""
-    freq: dict[str, int] = {}
-    for row in daily_rows:
-        for e in entities_from_json(row.get("entities")):
-            k = e.casefold()
-            if k:
-                freq[k] = freq.get(k, 0) + 1
-    return freq
-
-
-def _distinctiveness_score(row: dict, entity_freq: dict[str, int]) -> float:
-    """Higher when the fact's entities are rare in this month (0..1)."""
-    ents = entities_from_json(row.get("entities"))
-    if not ents or not entity_freq:
-        return 0.5
-    scores = []
-    for e in ents:
-        c = entity_freq.get(e.casefold(), 1)
-        scores.append(1.0 / math.log1p(c + 1.0))
-    raw = max(scores) if scores else 0.5
-    return float(max(0.0, min(1.0, raw / math.log1p(2.0))))
-
-
 def _score_daily_row(
     row: dict,
     *,
@@ -349,7 +322,6 @@ def _score_daily_row(
     entity_weights: dict[str, float],
     entity_weight_cap: float,
     entity_importance: dict[str, float] | None = None,
-    entity_freq: dict[str, int] | None = None,
 ) -> float:
     text = row.get("_text", "") or ""
     entities = entities_from_json(row.get("entities"))
@@ -418,15 +390,12 @@ def _score_daily_row(
     else:
         novelty = w_s * n_static + w_d * n_dynamic
 
-    distinctiveness = _distinctiveness_score(row, entity_freq or {})
-
     return (
         _RETENTION_W_SALIENCE * salience
         + _RETENTION_W_NOVELTY * novelty
         + _RETENTION_W_SPACING * spacing
         + _RETENTION_W_CONNECTIVITY * connectivity
         + _RETENTION_W_VALENCE * valence
-        + _RETENTION_W_DISTINCT * distinctiveness
     )
 
 
@@ -457,7 +426,6 @@ def _apply_retention_gate(
     dynamic_anchors = _build_dynamic_anchors(memorize, user_id)
     entity_weights = _entity_connectivity_weights(memorize, user_id)
     entity_weight_cap = max(entity_weights.values(), default=1.0) or 1.0
-    entity_freq = _entity_month_freq(daily_rows)
     entity_importance: dict[str, float] = {}
     try:
         from memory.entity_importance import compute_entity_importance_map
@@ -487,7 +455,6 @@ def _apply_retention_gate(
             entity_weights=entity_weights,
             entity_weight_cap=entity_weight_cap,
             entity_importance=entity_importance,
-            entity_freq=entity_freq,
         )
         scored.append((score, row))
 
