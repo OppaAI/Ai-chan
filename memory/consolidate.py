@@ -821,11 +821,13 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     log.info(
         "monthly_consolidate complete: month=%s source_count=%s memory_days=%s "
         "journals=%s journals_deleted=0 must_keep=%s candidates=%s kept_candidates=%s "
-        "dropped_candidates=%s facts_written=%s daily_deleted=%s delete_enabled=%s",
+        "dropped_candidates=%s facts_written=%s daily_deleted=%s delete_enabled=%s "
+        "journal_promoted=%s delete_skipped=%s",
         month_key, source_count, len(memory_day_rows), len(journal_day_rows),
         gate_stats["must_keep"], gate_stats["candidates"],
         gate_stats["kept_candidates"], gate_stats["dropped_candidates"],
         facts_written, daily_deleted, CONSOLIDATION_DELETE_DAILY_SUMMARIES,
+        journal_promoted, delete_skipped_reason or "none",
     )
 
     try:
@@ -843,6 +845,8 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         "facts_written":  facts_written,
         "daily_deleted":  daily_deleted,
         "journals_deleted": 0,
+        "journal_promoted": journal_promoted,
+        "delete_skipped_reason": delete_skipped_reason,
         **gate_stats,
     }
 
