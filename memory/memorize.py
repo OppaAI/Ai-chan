@@ -1876,12 +1876,13 @@ class _MemoryBackend:
             [user_id] + filtered + [limit],
         ).fetchall()
 
-    def _spreading_extra_ids(
+  def _spreading_extra_ids(
         self,
         user_id: str,
         seed_rows: list,
         *,
         exclude_ids: set[str],
+        query: str = "",
     ) -> tuple[dict[str, float], list[str]]:
         """Return (entity_activation, extra_memory_ids) via entity_relations walk."""
         if not MEMORY_SPREADING_ENABLED or MEMORY_SPREADING_MAX_EXTRA <= 0:
@@ -2187,7 +2188,7 @@ class _MemoryBackend:
             try:
                 exclude = {str(r.get("id")) for r in results}
                 activation, extra_ids = self._spreading_extra_ids(
-                    user_id, results, exclude_ids=exclude
+                    user_id, results, exclude_ids=exclude, query=query,
                 )
                 for mid in extra_ids:
                     row = self._conn.execute(
