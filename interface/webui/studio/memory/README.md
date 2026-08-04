@@ -1,21 +1,22 @@
 # Aiko Memory Graph Studio
 
-Visualize personal memory as a **galaxy graph** — facts, supersession chains, entity hubs, and Phase 10 retain scores.
+Visualize personal memory as a **galaxy graph** — facts, supersession chains, entity hubs, and retain scores.
 
 ## Run
 
 ```bash
 # from repo root (deps: fastapi uvicorn)
 uv run python -m interface.webui.studio.memory.backend.api
-# → http://localhost:8001
+# → http://127.0.0.1:8001
 ```
 
 Or:
 
 ```bash
-uv run uvicorn interface.webui.studio.memory.backend.api:app --host 0.0.0.0 --port 8001
-Local only (`127.0.0.1`). For remote access, put an authenticated TLS-terminating reverse proxy in front; do not expose plain HTTP on `0.0.0.0`.
+uv run uvicorn interface.webui.studio.memory.backend.api:app --host 127.0.0.1 --port 8001
 ```
+
+Local only (`127.0.0.1`). For remote access, put an authenticated TLS-terminating reverse proxy in front; do not expose plain HTTP on `0.0.0.0`.
 
 ## API
 
@@ -29,42 +30,39 @@ Local only (`127.0.0.1`). For remote access, put an authenticated TLS-terminatin
 Query params for `/api/graph`:
 
 - `user_id` — optional
-- `limit` — max memory rows (default 200)
+- `limit` — max memory rows fetched (default 200; also capped by `MEMORY_STUDIO_MAX_MEMORIES`)
 - `include_history` — include `status=superseded` (default true)
 - `include_entities` — entity hub nodes + `mentions` edges (default true)
+
+## Phase 12
+
+**Server caps** (`config/memory.yaml`):
+
+- `MEMORY_STUDIO_MAX_MEMORIES` (default 400) — prefer high retain
+- `MEMORY_STUDIO_MAX_ENTITIES` (default 120)
+- `MEMORY_STUDIO_MAX_EDGES` (default 200)
+
+**Client filters** (sidebar; re-filter without reload):
+
+- Status: all / active / superseded
+- Valence: all / pos / neg / neutral
+- Min retain (0–1)
+- Entity contains (substring)
 
 ## Graph model
 
 **Nodes**
 
 - `type=memory` — fact rows; **`size`** = retain tendency; **`scores`** rim arcs
-- `type=entity` — shared entity hubs; **`size`** ≈ \(I_e\) when available
-
-**Node fields (Phase 10)**
-
-- `scores.retain` — keep-likelihood proxy (not full monthly R)
-- `scores.salience | spacing | connectivity | valence | access` — rim arcs
-- `valence_tag` — pos / neg / neutral
-- `size` — derived from retain / \(I_e\)
+- `type=entity` — shared entity hubs; **`size`** ≈ $I_e$ when available
 
 **Edges**
 
 - `supersedes` — newer fact → older fact it replaced
 - `mentions` — memory → entity
-- `related_to` / co-mention — entity → entity (`entity_relations`)
-
-## Visual encoding
-
-| Channel | Meaning |
-|---------|---------|
-| **Size** | Retain tendency (memories) / entity importance |
-| **Rim arcs** | Factor breakdown |
-| **Fill** | Valence / monthly / entity / pinned |
-| **Dim** | Superseded |
+- `related_to` / co-mention — entity → entity
 
 ## Notes
 
 - Read-only — does not write memories
-- No re-embed
-- Backend: `graph_export.export_memory_graph` (scores computed at export time)
-- Scoring helpers live **inside** `graph_export.py` (no separate `studio_scores.py`)
+- Scoring helpers live inside `graph_export.py`
