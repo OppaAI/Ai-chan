@@ -14,6 +14,7 @@ Or:
 
 ```bash
 uv run uvicorn interface.webui.studio.memory.backend.api:app --host 0.0.0.0 --port 8001
+Local only (`127.0.0.1`). For remote access, put an authenticated TLS-terminating reverse proxy in front; do not expose plain HTTP on `0.0.0.0`.
 ```
 
 ## API
