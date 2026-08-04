@@ -36,11 +36,13 @@ Query params for `/api/graph`:
 
 ## Phase 12
 
-**Server caps** (`config/memory.yaml`):
+**Server caps** (env vars read by `graph_export.py`; set via deploy / `.env` — `config/memory.yaml` is the documented source when your config loader exports them to the environment):
 
-- `MEMORY_STUDIO_MAX_MEMORIES` (default 400) — prefer high retain
+- `MEMORY_STUDIO_MAX_MEMORIES` (default 400)
 - `MEMORY_STUDIO_MAX_ENTITIES` (default 120)
 - `MEMORY_STUDIO_MAX_EDGES` (default 200)
+
+Note: among the newest `limit` rows, export prefers higher retain when applying the memory cap (not a full-DB retain rank).
 
 **Client filters** (sidebar; re-filter without reload):
 
