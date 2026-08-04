@@ -534,9 +534,12 @@ def search_knowledge(
         scored: list[tuple[float, str]] = []
         for cid in ids:
             score = rrf_score(cid, rank_knn, rank_fts, k=KNOWLEDGE_RRF_K)
+            row = by_id.get(cid)
+            if row is None:
+                continue
             ents = entities_from_json(row["entities"] if "entities" in row.keys() else "[]")
             score += KNOWLEDGE_ENTITY_BOOST * entity_overlap_score(query, ents)
-            if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD and cid in by_id:
+            if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD:
                 scored.append((score, cid))
         scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
         return [dict(by_id[cid]) | {"score": score} for score, cid in scored[:limit]]

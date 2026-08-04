@@ -193,8 +193,18 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
     try:
         conn.execute(
             "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (..., _sanitize(final_answer, 500), ents_json, _now()),
-            (row_id, uid, _sanitize(goal, 700), record_text, json.dumps([s.__dict__ for s in exp_steps], ensure_ascii=False), outcome, float(score), _sanitize(final_answer, 500), _now()),
+            (
+                row_id,
+                uid,
+                _sanitize(goal, 700),
+                record_text,
+                json.dumps([s.__dict__ for s in exp_steps], ensure_ascii=False),
+                outcome,
+                float(score),
+                _sanitize(final_answer, 500),
+                ents_json,
+                _now(),
+            ),
         )
         conn.commit()
         if embedder is not None:
@@ -269,17 +279,16 @@ def search_experience(query: str, limit: int = 3, embedder=None) -> list[dict]:
         by_id = {row["id"]: row for row in rows}
         scored = []
         for cid in ids:
-            score = rrf_score(cid, rank_knn, rank_fts, k=KNOWLEDGE_RRF_K)
+            score = rrf_score(cid, rank_knn, rank_fts, k=EXPERIENCE_RRF_K)
             row = by_id.get(cid)
             if row is None:
                 continue
-            # Phase 8: entity overlap soft boost
             try:
                 ents = entities_from_json(row["entities"] if "entities" in row.keys() else "[]")
             except Exception:
                 ents = []
-            score += KNOWLEDGE_ENTITY_BOOST * entity_overlap_score(query, ents)
-            if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD:
+            score += EXPERIENCE_ENTITY_BOOST * entity_overlap_score(query, ents)
+            if score >= EXPERIENCE_RECALL_SCORE_THRESHOLD:
                 scored.append((score, cid))
         scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
         return [dict(by_id[eid]) | {"recall_score": score} for score, eid in scored[:limit]]
