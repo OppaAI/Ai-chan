@@ -674,6 +674,12 @@ def _promote_journal_fragments(
                 "id": mem_id,
                 "memory": tagged,
                 "pinned": 1,
+                "access_count": 0,
+                "access_day_count": 0,
+                "entities": "[]",
+                "salience_hit": 1 if SALIENCE_POLICY_RE.search(line) else 0,
+                "valence_tag": "neutral",
+                "status": "active",
                 "_store": "memory",
                 "_text": tagged,
                 "_promoted_from_journal": True,
@@ -805,9 +811,9 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
             )
         else:
             for m in memory_day_rows:
-                mem_id = m.get("id")
-                if not mem_id:
+                if m.get("_promoted_from_journal"):
                     continue
+                mem_id = m.get("id")
                 try:
                     memorize.delete(mem_id)
                     daily_deleted += 1
