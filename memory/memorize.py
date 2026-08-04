@@ -1897,14 +1897,20 @@ class _MemoryBackend:
 
         seeds: list[str] = []
         for row in seed_rows:
-          if query:
-              try:
-                  seeds.extend(extract_entities(query))
-              except Exception:
-                  pass
-  
-          if not seeds:
-              return {}, []
+            try:
+                raw = row["entities"] if hasattr(row, "keys") else row.get("entities")
+                seeds.extend(entities_from_json_safe(raw))
+            except Exception:
+                pass
+
+        if query:
+            try:
+                seeds.extend(extract_entities(query))
+            except Exception:
+                pass
+
+        if not seeds:
+            return {}, []
 
         try:
             edge_rows = self._conn.execute(
