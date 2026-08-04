@@ -301,9 +301,19 @@
         .attr('filter', 'url(#glow)');
 
       // soft glow
-      defs.append('filter').attr('id','glow')
-        .append('feGaussianBlur').attr('stdDeviation','1.2').attr('result','coloredBlur');
-
+      const glow = defs.append('filter')
+        .attr('id', 'glow')
+        .attr('x', '-50%').attr('y', '-50%')
+        .attr('width', '200%').attr('height', '200%');
+      glow.append('feGaussianBlur')
+        .attr('in', 'SourceGraphic')
+        .attr('stdDeviation', '1.5')
+        .attr('result', 'blur');
+      glow.append('feMerge').selectAll('feMergeNode')
+        .data(['blur', 'SourceGraphic'])
+        .join('feMergeNode')
+        .attr('in', d => d);
+      
       // rim arcs
       node.each(function(d) {
         const sc = d.scores || {};
