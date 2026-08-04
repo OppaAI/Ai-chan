@@ -105,10 +105,17 @@ MEMORY_SUPERSESSION_CHAIN_KINDS: "identity,preference,plan"  # Kinds that always
 # -- Phase 4: turn-level valence + salience tags --
 MONTHLY_CONSOLIDATION_W_VALENCE: "0.10"  # Weight for |emotional intensity|. Neuroscience: high-valence ↔ fast consolidation.
 # Rebalance of Phase 1 weights when valence is present (should sum ~1.0 with W_VALENCE):
-MONTHLY_CONSOLIDATION_W_SALIENCE: "0.25"  # User-tagged importance or story-weight (e.g. "first piano recital").
-MONTHLY_CONSOLIDATION_W_NOVELTY: "0.22"  # Semantic distance from existing memories. Surprise/contradiction factor.
-MONTHLY_CONSOLIDATION_W_SPACING: "0.18"  # Time gaps between repeated retrievals. Spaced-rep principle.
-MONTHLY_CONSOLIDATION_W_CONNECTIVITY: "0.25"  # In-graph degree. Well-connected memories survive consolidation.
+MONTHLY_CONSOLIDATION_W_SALIENCE: "0.22"  # User-tagged importance or story-weight (e.g. "first piano recital").
+MONTHLY_CONSOLIDATION_W_NOVELTY: "0.20"  # Semantic distance from existing memories. Surprise/contradiction factor.
+MONTHLY_CONSOLIDATION_W_SPACING: "0.16"  # Time gaps between repeated retrievals. Spaced-rep principle.
+MONTHLY_CONSOLIDATION_W_CONNECTIVITY: "0.22"  # In-graph degree. Well-connected memories survive consolidation.
+
+# -- Phase 6: dynamic anchors + distinctiveness --
+MONTHLY_CONSOLIDATION_W_DISTINCTIVENESS: "0.10"  # Rare entities in the month score higher (1/log frequency).
+MONTHLY_CONSOLIDATION_NOVELTY_W_STATIC: "0.6"  # Share of novelty from prior [YYYY-MM] static anchors.
+MONTHLY_CONSOLIDATION_NOVELTY_W_DYNAMIC: "0.4"  # Share of novelty vs recent active-memory mean (dynamic anchor).
+MONTHLY_CONSOLIDATION_DYNAMIC_ANCHOR_LIMIT: "40"  # Max recent active facts to build the dynamic anchor mean.
+MONTHLY_CONSOLIDATION_DYNAMIC_ANCHOR_DAYS: "14"  # Prefer facts touched/created within this many days.
 
 # -- Phase 5: emotion imprint on decay + dream --
 FORGET_EMOTION_GAMMA: "0.5"  # H_eff = H * (1 + gamma * intensity); 0 disables emotion-modified decay.
