@@ -129,7 +129,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=7.2.2" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pynacl", specifier = ">=1.6.2" },
-    { name = "pysqlcipher3", specifier = ">=1.2.0" },
+    { name = "pysqlcipher3", specifier = "==1.2.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-telegram-bot", specifier = ">=22.8" },
