@@ -1,95 +1,377 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<title>Aiko Memory Galaxy</title>
-<style>
-  html,body{margin:0;height:100%;background:#050510;color:#d8e0f0;font-family:system-ui,sans-serif}
-  #c{display:block;width:100%;height:100%}
-  #hud{position:fixed;left:12px;top:12px;max-width:320px;background:rgba(10,12,28,.82);padding:12px 14px;border-radius:10px;border:1px solid #2a3355;font-size:12px;line-height:1.45}
-  #hud h1{font-size:14px;margin:0 0 8px;color:#c9a0ff}
-  .legend span{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiko Memory Galaxy</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --bg: #050510; --bg2: #0a0a14; --border: #1e1428;
+      --pink: #c651a8; --purple: #a888e8; --cyan: #51d4c8;
+      --dim: #4a3a6a; --text: #cdbfe6; --orange: #e8843a;
+      --glass: rgba(10,12,28,0.82);
+      --neg: #ff6b6b; --pos: #7ad7f0; --monthly: #ffd27a; --entity: #c9a0ff;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; height: 100vh; overflow: hidden; }
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--bg2);
+    }
+    header h1 { font-size: 15px; letter-spacing: .12em; text-transform: uppercase; color: var(--purple); }
+    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .btn {
+      background: #1a1028; border: 1px solid var(--dim); color: var(--dim);
+      font-size: 11px; letter-spacing: .08em; padding: 5px 12px; border-radius: 3px;
+      cursor: pointer; text-transform: uppercase;
+    }
+    .btn:hover { color: var(--purple); border-color: var(--purple); }
+    .btn-primary { background: var(--purple); color: var(--bg); border-color: var(--purple); }
+    .body { display: grid; grid-template-columns: 260px 1fr; height: calc(100vh - 48px); }
+    .sidebar { border-right: 1px solid var(--border); background: var(--bg2); padding: 14px; overflow-y: auto; font-size: 12px; }
+    .sidebar h2 { font-size: 10px; letter-spacing: .18em; color: var(--pink); text-transform: uppercase; margin: 12px 0 8px; }
+    .sidebar label { display: flex; gap: 8px; align-items: center; margin: 6px 0; color: var(--dim); }
+    .sidebar input[type=number], .sidebar input[type=text] {
+      width: 100%; background: #120a1c; border: 1px solid var(--dim); color: var(--text);
+      padding: 6px 8px; border-radius: 3px; font-size: 12px;
+    }
+    .stat { color: var(--dim); font-size: 11px; margin-top: 4px; line-height: 1.45; }
+    .canvas-area {
+      position: relative;
+      background: radial-gradient(ellipse at 50% 45%, #12122a 0%, #080812 45%, #050510 100%);
+    }
+    .canvas-area svg { width: 100%; height: 100%; display: block; }
+    .details {
+      position: absolute; top: 14px; right: 14px; width: 320px; max-height: calc(100% - 28px);
+      overflow-y: auto; background: var(--glass); backdrop-filter: blur(14px);
+      border: 1px solid rgba(200,168,240,.16); border-radius: 8px; padding: 14px; font-size: 12px;
+      display: none;
+    }
+    .details h3 { font-size: 11px; letter-spacing: .12em; color: var(--pink); text-transform: uppercase; margin-bottom: 10px; }
+    .detail-label { color: var(--dim); font-size: 10px; text-transform: uppercase; margin-top: 8px; }
+    .detail-value { margin-top: 2px; word-break: break-word; }
+    .score-bar { height: 4px; background: #1a1028; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+    .score-bar > i { display: block; height: 100%; background: var(--purple); }
+    .legend { position: absolute; bottom: 12px; left: 14px; display: flex; flex-wrap: wrap; gap: 10px; font-size: 10px; color: var(--dim); max-width: 70%; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+    .zoom { position: absolute; bottom: 12px; right: 14px; display: flex; flex-direction: column; gap: 4px; }
+    .zoom button { width: 28px; height: 28px; background: var(--glass); border: 1px solid rgba(200,168,240,.16); color: var(--dim); border-radius: 4px; cursor: pointer; }
+    .node-label { fill: var(--text); font-size: 9px; pointer-events: none; opacity: 0.75; }
+  </style>
 </head>
 <body>
-<canvas id="c"></canvas>
-<div id="hud">
-  <h1>Memory Galaxy</h1>
-  <div>Size = retain tendency / entity I<sub>e</sub></div>
-  <div>Rim arcs = salience · spacing · connectivity · valence · access</div>
-  <div class="legend" style="margin-top:8px">
-    <div><span style="background:#ff6b6b"></span>neg</div>
-    <div><span style="background:#c0c8d8"></span>neutral</div>
-    <div><span style="background:#7ad7f0"></span>pos</div>
-    <div><span style="background:#c9a0ff"></span>entity</div>
-    <div><span style="background:#ffd27a"></span>monthly</div>
+  <header>
+    <div style="display: flex; align-items: center; gap: 14px;">
+      <a href="javascript:history.back();" title="Back" style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:#1a1028;border:1px solid var(--dim);border-radius:50%;color:var(--purple);text-decoration:none;font-weight:bold;">←</a>
+      <h1>Memory Galaxy</h1>
+    </div>
+    <div class="actions">
+      <span id="status" style="font-size:11px;color:var(--dim)"></span>
+      <button class="btn" id="refresh">Refresh</button>
+      <button class="btn btn-primary" id="export">Export JSON</button>
+    </div>
+  </header>
+  <div class="body">
+    <aside class="sidebar">
+      <h2>Search</h2>
+      <label>Query <input type="text" id="search-q" placeholder="e.g. ROS2, OppaAI…" /></label>
+      <button class="btn btn-primary" id="search-btn" style="width:100%;margin-top:4px">Search mem + KB</button>
+      <div class="stat" id="search-stats">—</div>
+      <h2>Filters</h2>
+      <label>User id <input type="text" id="user-id" placeholder="(current)" /></label>
+      <label>Limit <input type="number" id="limit" value="200" min="1" max="2000" /></label>
+      <label><input type="checkbox" id="include-history" checked /> Include superseded</label>
+      <label><input type="checkbox" id="include-entities" checked /> Entity hubs</label>
+      <button class="btn btn-primary" id="apply" style="width:100%;margin-top:10px">Apply</button>
+      <h2>Stats</h2>
+      <div class="stat" id="stats">—</div>
+      <h2>Legend</h2>
+      <div class="stat"><b>Size</b> = retain tendency / entity I<sub>e</sub></div>
+      <div class="stat"><b>Rim</b> = sal · space · conn · val · access</div>
+      <div class="stat" style="margin-top:8px"><i style="background:var(--neg);width:10px;height:10px;border-radius:50%;display:inline-block"></i> neg</div>
+      <div class="stat"><i style="background:var(--pos);width:10px;height:10px;border-radius:50%;display:inline-block"></i> pos</div>
+      <div class="stat"><i style="background:var(--monthly);width:10px;height:10px;border-radius:50%;display:inline-block"></i> monthly</div>
+      <div class="stat"><i style="background:var(--entity);width:10px;height:10px;border-radius:50%;display:inline-block"></i> entity</div>
+      <div class="stat"><i style="background:var(--orange);width:14px;height:3px;display:inline-block"></i> supersedes</div>
+    </aside>
+    <div class="canvas-area" id="canvas-area">
+      <svg id="canvas"></svg>
+      <div class="details" id="details"></div>
+      <div class="legend">
+        <span><i style="background:var(--orange);border-radius:0;height:3px;width:14px"></i>supersedes</span>
+        <span><i style="background:var(--dim)"></i>mentions</span>
+        <span>rim arcs = factor scores</span>
+      </div>
+      <div class="zoom">
+        <button id="zoom-in">+</button>
+        <button id="zoom-out">−</button>
+        <button id="zoom-fit">⊡</button>
+      </div>
+    </div>
   </div>
-  <div id="stats" style="margin-top:8px;opacity:.8"></div>
-  <div id="tip" style="margin-top:8px;color:#a8b4d0"></div>
-</div>
-<script>
-// Paste JSON from: uv run python -c "from memory.studio import build_galaxy_graph; import json; print(json.dumps(build_galaxy_graph()))"
-const SAMPLE = null;
-async function loadGraph() {
-  if (SAMPLE) return SAMPLE;
-  try {
-    const r = await fetch('/api/memory/studio/galaxy');
-    if (r.ok) return await r.json();
-  } catch (e) {}
-  document.getElementById('tip').textContent = 'Load graph JSON via build_galaxy_graph() or serve /api/memory/studio/galaxy';
-  return {nodes:[], edges:[], stats:{}};
-}
-const ARC_KEYS = ['salience','spacing','connectivity','valence','access'];
-const ARC_COLORS = ['#ffd27a','#6bcf7f','#c9a0ff','#ff6b6b','#ffffff'];
-function draw() {
-  loadGraph().then(g => {
-    const canvas = document.getElementById('c');
-    const ctx = canvas.getContext('2d');
-    const dpr = devicePixelRatio || 1;
-    function resize(){canvas.width=innerWidth*dpr;canvas.height=innerHeight*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
-    resize(); addEventListener('resize', () => { resize(); paint(); });
-    function paint() {
-      const w=innerWidth,h=innerHeight,cx=w/2,cy=h/2,scale=Math.min(w,h)*0.42;
-      ctx.fillStyle='#050510'; ctx.fillRect(0,0,w,h);
-      // stars
-      for(let i=0;i<180;i++){ctx.fillStyle=`rgba(200,210,255,${0.15+((i*17)%50)/200})`;ctx.fillRect((i*97)%w,(i*53)%h,1,1)}
-      const nodes=g.nodes||[], edges=g.edges||[];
-      const byId=Object.fromEntries(nodes.map(n=>[n.id,n]));
-      ctx.lineWidth=1;
-      for(const e of edges){
-        const a=byId[e.source], b=byId[e.target]; if(!a||!b) continue;
-        const ax=cx+a.x*scale, ay=cy+a.y*scale, bx=cx+b.x*scale, by=cy+b.y*scale;
-        ctx.strokeStyle=e.kind==='co_mention'?'rgba(180,160,255,0.25)':'rgba(120,140,180,0.12)';
-        ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
-      }
-      for(const n of nodes){
-        const x=cx+n.x*scale, y=cy+n.y*scale;
-        const r=6+(n.size||0.5)*14;
-        let fill='#c0c8d8';
-        if(n.type==='entity') fill='#c9a0ff';
-        else if(n.kind==='monthly') fill='#ffd27a';
-        else if((n.valence_tag||'')==='neg') fill='#ff6b6b';
-        else if((n.valence_tag||'')==='pos') fill='#7ad7f0';
-        ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
-        ctx.fillStyle=fill; ctx.globalAlpha=0.85; ctx.fill();
-        ctx.globalAlpha=1;
-        // rim arcs
-        const sc=n.scores||{};
-        let a0=-Math.PI/2;
-        ARC_KEYS.forEach((k,i)=>{
-          const v=Math.max(0,Math.min(1,sc[k]||0));
-          const a1=a0+v*(Math.PI*2/ARC_KEYS.length);
-          ctx.beginPath(); ctx.arc(x,y,r+3,a0,a1);
-          ctx.strokeStyle=ARC_COLORS[i]; ctx.lineWidth=2; ctx.stroke();
-          a0+=Math.PI*2/ARC_KEYS.length;
-        });
-      }
-      document.getElementById('stats').textContent = JSON.stringify(g.stats||{});
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script>
+    const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+    const ARC_KEYS = ['salience', 'spacing', 'connectivity', 'valence', 'access'];
+    const ARC_COLORS = ['#ffd27a', '#6bcf7f', '#c9a0ff', '#ff6b6b', '#e8eef8'];
+
+    let graph = { nodes: [], edges: [], meta: {} };
+    let simulation = null;
+    let zoomBehavior = null;
+    let userEntityId = null;
+    let currentUsername = 'OppaAI';
+
+    async function getCurrentUser() {
+      try {
+        const resp = await fetch('/api/auth/me', { credentials: 'include' });
+        if (resp.ok) {
+          const data = await resp.json();
+          currentUsername = data.username || currentUsername;
+        }
+      } catch (e) {}
+      return currentUsername;
     }
-    paint();
-  });
-}
-draw();
-</script>
+
+    function qs() {
+      const p = new URLSearchParams();
+      const uid = document.getElementById('user-id').value.trim();
+      if (uid) p.set('user_id', uid);
+      p.set('limit', document.getElementById('limit').value || '200');
+      p.set('include_history', document.getElementById('include-history').checked);
+      p.set('include_entities', document.getElementById('include-entities').checked);
+      return p.toString();
+    }
+
+    async function loadGraph() {
+      document.getElementById('status').textContent = 'Loading…';
+      try {
+        const resp = await fetch(`${API_BASE}/graph?` + qs());
+        graph = await resp.json();
+        const m = graph.meta || {};
+        document.getElementById('stats').innerHTML =
+          `memories: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>edges: ${m.edge_count ?? 0}`;
+        document.getElementById('status').textContent =
+          `${(graph.nodes||[]).length} nodes · ${(graph.edges||[]).length} edges`;
+        await getCurrentUser();
+        userEntityId = `ent:${currentUsername.toLowerCase()}`;
+        render();
+      } catch (e) {
+        document.getElementById('status').textContent = 'Load failed';
+        console.error(e);
+      }
+    }
+
+    function nodeFill(d) {
+      if (d.type === 'entity') return 'var(--entity)';
+      if (d.kind === 'monthly') return 'var(--monthly)';
+      if ((d.valence_tag || '') === 'neg') return 'var(--neg)';
+      if ((d.valence_tag || '') === 'pos') return 'var(--pos)';
+      if (d.pinned) return 'var(--cyan)';
+      return '#a888e8';
+    }
+
+    function nodeRadius(d) {
+      const s = (d.size != null) ? Number(d.size) : (d.type === 'entity' ? 0.4 : 0.5);
+      return d.type === 'entity' ? (6 + s * 12) : (8 + s * 16);
+    }
+
+    function showDetails(d) {
+      const el = document.getElementById('details');
+      el.style.display = 'block';
+      const sc = d.scores || {};
+      const scoreRows = ARC_KEYS.map(k => {
+        const v = Math.max(0, Math.min(1, Number(sc[k] || 0)));
+        return `<div class="detail-label">${k}</div>
+          <div class="score-bar"><i style="width:${(v*100).toFixed(0)}%"></i></div>
+          <div class="detail-value">${v.toFixed(3)}</div>`;
+      }).join('');
+      const rows = [
+        ['type', d.type],
+        ['id', d.id],
+        ['kind', d.kind],
+        ['status', d.status],
+        ['pinned', d.pinned ? 'yes' : 'no'],
+        ['valence', d.valence_tag || '—'],
+        ['retain', sc.retain != null ? Number(sc.retain).toFixed(3) : '—'],
+        ['size', d.size != null ? Number(d.size).toFixed(3) : '—'],
+        ['created', d.created_at || '—'],
+        ['entities', (d.entities || []).join(', ') || '—'],
+        ['supersedes', d.supersedes_id || '—'],
+        ['text', d.text || d.label || ''],
+      ];
+      el.innerHTML = '<h3>Node</h3>' + rows.map(([k,v]) =>
+        `<div class="detail-label">${k}</div><div class="detail-value">${escapeHtml(String(v))}</div>`
+      ).join('') + '<h3 style="margin-top:14px">Rim scores</h3>' + scoreRows;
+    }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    async function runSearch() {
+      const q = document.getElementById('search-q').value.trim();
+      const box = document.getElementById('search-stats');
+      if (!q) { box.textContent = 'type a query'; return; }
+      box.textContent = 'Searching…';
+      try {
+        const p = new URLSearchParams();
+        p.set('q', q);
+        const uid = document.getElementById('user-id').value.trim();
+        if (uid) p.set('user_id', uid);
+        p.set('limit', '10');
+        const resp = await fetch(`${API_BASE}/search?` + p.toString());
+        const data = await resp.json();
+        const hits = data.hits || [];
+        if (!hits.length) { box.textContent = 'No hits'; return; }
+        box.innerHTML = hits.map(h =>
+          `<div style="margin-bottom:10px;padding:8px;border:1px solid var(--dim);border-radius:4px;background:#120a1c">
+             <div style="color:var(--pink);text-transform:uppercase;font-size:9px;letter-spacing:.1em">
+               ${escapeHtml(h.store)} · ${escapeHtml(h.kind)} · ${Number(h.score||0).toFixed(3)}
+             </div>
+             <div style="margin-top:4px;color:var(--text)">${escapeHtml(h.text)}</div>
+           </div>`
+        ).join('');
+      } catch (e) {
+        box.textContent = 'Search failed';
+        console.error(e);
+      }
+    }
+
+    function render() {
+      const svg = d3.select('#canvas');
+      svg.selectAll('*').remove();
+      const area = document.getElementById('canvas-area');
+      const w = area.clientWidth || 1000;
+      const h = area.clientHeight || 700;
+      svg.attr('viewBox', `0 0 ${w} ${h}`);
+
+      // starfield
+      const stars = svg.append('g').attr('class', 'stars');
+      for (let i = 0; i < 160; i++) {
+        stars.append('circle')
+          .attr('cx', Math.random() * w)
+          .attr('cy', Math.random() * h)
+          .attr('r', Math.random() * 1.2)
+          .attr('fill', '#c8d0ff')
+          .attr('opacity', 0.12 + Math.random() * 0.35);
+      }
+
+      const nodes = (graph.nodes || []).map(n => ({ ...n }));
+      const links = (graph.edges || []).map(e => ({ ...e }));
+      if (!nodes.length) {
+        svg.append('text').attr('x', w/2).attr('y', h/2).attr('text-anchor','middle')
+          .attr('fill','var(--dim)').text('No memories yet');
+        return;
+      }
+
+      const g = svg.append('g');
+      zoomBehavior = d3.zoom().scaleExtent([0.2, 4]).on('zoom', (ev) => g.attr('transform', ev.transform));
+      svg.call(zoomBehavior);
+
+      const defs = svg.append('defs');
+      defs.append('marker').attr('id','arrow-sup').attr('viewBox','0 0 10 10')
+        .attr('refX',22).attr('refY',5).attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto')
+        .append('path').attr('d','M 0 1 L 10 5 L 0 9 Z').attr('fill','var(--orange)');
+
+      const link = g.append('g').selectAll('line').data(links).join('line')
+        .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : 'rgba(120,100,160,0.35)')
+        .attr('stroke-width', d => d.type === 'supersedes' ? 1.6 : 1)
+        .attr('stroke-dasharray', d => d.type === 'mentions' || d.type === 'related_to' ? '3 3' : null)
+        .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null)
+        .attr('opacity', d => d.type === 'supersedes' ? 0.9 : 0.45);
+
+      const node = g.append('g').selectAll('g').data(nodes).join('g')
+        .style('cursor', 'pointer')
+        .attr('opacity', d => d.status === 'superseded' ? 0.5 : 0.95)
+        .call(d3.drag()
+          .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+          .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
+          .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+        )
+        .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
+
+      node.append('circle')
+        .attr('r', nodeRadius)
+        .attr('fill', nodeFill)
+        .attr('stroke', d => d.pinned ? 'var(--cyan)' : 'rgba(255,255,255,0.15)')
+        .attr('stroke-width', d => d.pinned ? 2 : 1)
+        .attr('filter', 'url(#glow)');
+
+      // soft glow
+      defs.append('filter').attr('id','glow')
+        .append('feGaussianBlur').attr('stdDeviation','1.2').attr('result','coloredBlur');
+
+      // rim arcs
+      node.each(function(d) {
+        const sc = d.scores || {};
+        const r = nodeRadius(d) + 3;
+        const gArc = d3.select(this);
+        let a0 = -Math.PI / 2;
+        const slice = (Math.PI * 2) / ARC_KEYS.length;
+        ARC_KEYS.forEach((k, i) => {
+          const v = Math.max(0, Math.min(1, Number(sc[k] || 0)));
+          const a1 = a0 + v * slice;
+          if (v > 0.02) {
+            const arc = d3.arc().innerRadius(r).outerRadius(r + 2.5).startAngle(a0 + Math.PI/2).endAngle(a1 + Math.PI/2);
+            gArc.append('path').attr('d', arc()).attr('fill', ARC_COLORS[i]).attr('opacity', 0.9);
+          }
+          a0 += slice;
+        });
+      });
+
+      node.append('text').attr('class','node-label').attr('dy', d => nodeRadius(d) + 12).attr('text-anchor','middle')
+        .text(d => {
+          const t = d.label || d.id;
+          return t.length > 22 ? t.slice(0, 20) + '…' : t;
+        });
+
+      const centerX = w * 0.55, centerY = h * 0.5;
+      nodes.forEach((n) => {
+        if (n.id === userEntityId) {
+          n.x = centerX; n.y = centerY; n.fx = centerX; n.fy = centerY;
+        } else if (n.x == null) {
+          n.x = centerX + (Math.random() - 0.5) * w * 0.7;
+          n.y = centerY + (Math.random() - 0.5) * h * 0.7;
+        }
+      });
+
+      simulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(d => d.id)
+          .distance(d => d.type === 'mentions' ? 55 : (d.type === 'supersedes' ? 100 : 80))
+          .strength(0.35))
+        .force('charge', d3.forceManyBody().strength(-160))
+        .force('center', d3.forceCenter(w/2, h/2))
+        .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 8))
+        .on('tick', () => {
+          link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+              .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+          node.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+
+      svg.on('click', () => { document.getElementById('details').style.display = 'none'; });
+    }
+
+    document.getElementById('refresh').onclick = loadGraph;
+    document.getElementById('apply').onclick = loadGraph;
+    document.getElementById('search-btn').onclick = runSearch;
+    document.getElementById('search-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+    document.getElementById('export').onclick = () => {
+      const blob = new Blob([JSON.stringify(graph, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'memory-galaxy.json';
+      a.click();
+    };
+    document.getElementById('zoom-in').onclick = () => d3.select('#canvas').transition().call(zoomBehavior.scaleBy, 1.3);
+    document.getElementById('zoom-out').onclick = () => d3.select('#canvas').transition().call(zoomBehavior.scaleBy, 0.7);
+    document.getElementById('zoom-fit').onclick = () => {
+      d3.select('#canvas').transition().duration(400).call(zoomBehavior.transform, d3.zoomIdentity);
+    };
+
+    loadGraph();
+  </script>
 </body>
 </html>
