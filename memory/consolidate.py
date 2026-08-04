@@ -814,6 +814,8 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
                 if m.get("_promoted_from_journal"):
                     continue
                 mem_id = m.get("id")
+                if not mem_id:
+                    continue
                 try:
                     memorize.delete(mem_id)
                     daily_deleted += 1
