@@ -642,6 +642,26 @@ def _merge_monthly_facts(month_key: str, chunk_items: list[list[dict]]) -> list[
     user_prompt = _MONTHLY_MERGE_USER.format(month_key=month_key, chunks=chunks_text)
     raw = _chat(_MONTHLY_MERGE_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=1200, temperature=0.1)
     merged = _parse_fact_items(raw)
+    # Best-effort: reattach source_ids lost by LLM merge (match on fact text).
+    by_text: dict[str, list[str]] = {}
+    for it in flat:
+        key = (it.get("fact") or "").strip().casefold()
+        if not key:
+            continue
+        by_text.setdefault(key, [])
+        for sid in it.get("source_ids") or []:
+            s = str(sid).strip()
+            if s and s not in by_text[key]:
+                by_text[key].append(s)
+    
+    for it in merged:
+        if it.get("source_ids"):
+            continue
+        key = (it.get("fact") or "").strip().casefold()
+        if key in by_text:
+            it["source_ids"] = list(by_text[key])
+    return merged
+  
     if not merged:
         return flat
     # If merge returned strings without ids, keep facts only (soft coverage still applies).
