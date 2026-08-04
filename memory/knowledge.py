@@ -142,17 +142,6 @@ CREATE TABLE IF NOT EXISTS learned_chunks (
     supersedes_id   TEXT
 );
 
-CREATE TABLE IF NOT EXISTS learned_chunks (
-    id              TEXT PRIMARY KEY,
-    doc_id          TEXT NOT NULL REFERENCES learned_docs(id) ON DELETE CASCADE,
-    user_id         TEXT NOT NULL,
-    chunk_index     INTEGER NOT NULL,
-    text            TEXT NOT NULL,
-    created_at      TEXT NOT NULL,
-    access_count    INTEGER NOT NULL DEFAULT 0,
-    last_accessed   TEXT
-);
-
 CREATE INDEX IF NOT EXISTS idx_learned_docs_user ON learned_docs(user_id);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_doc ON learned_chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_user ON learned_chunks(user_id);
