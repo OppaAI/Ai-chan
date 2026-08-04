@@ -98,4 +98,5 @@ async def serve_studio():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Local only — use a TLS reverse proxy for remote access.
+    uvicorn.run(app, host="127.0.0.1", port=8001)
