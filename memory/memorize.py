@@ -1876,7 +1876,7 @@ class _MemoryBackend:
             [user_id] + filtered + [limit],
         ).fetchall()
 
-  def _spreading_extra_ids(
+    def _spreading_extra_ids(
         self,
         user_id: str,
         seed_rows: list,
