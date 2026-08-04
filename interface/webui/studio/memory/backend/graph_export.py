@@ -27,6 +27,9 @@ log = get_logger(__name__)
 _SPACING_SAT = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", "5")))
 _DAILY_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
 _MONTHLY_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
+_MAX_MEMORIES = max(1, int(os.getenv("MEMORY_STUDIO_MAX_MEMORIES", "400")))
+_MAX_ENTITIES = max(0, int(os.getenv("MEMORY_STUDIO_MAX_ENTITIES", "120")))
+_MAX_EDGES = max(0, int(os.getenv("MEMORY_STUDIO_MAX_EDGES", "200")))
 
 
 def _entities_from_raw(raw: Any) -> list[str]:
@@ -234,9 +237,10 @@ def export_memory_graph(
         if has_status and not include_history:
             sql += " AND (status = 'active' OR status IS NULL)"
         sql += " ORDER BY created_at DESC"
-        if limit and limit > 0:
+        effective_limit = min(int(limit or 200), _MAX_MEMORIES) if limit else _MAX_MEMORIES
+        if effective_limit > 0:
             sql += " LIMIT ?"
-            params.append(int(limit))
+            params.append(int(effective_limit))
 
         rows = conn.execute(sql, params).fetchall()
 
@@ -407,18 +411,38 @@ def export_memory_graph(
             except Exception as ex:
                 log.debug("graph_export: entity_relations skipped: %s", ex)
 
+        mem_nodes = [n for n in nodes if n.get("type") == "memory"]
+        ent_nodes = [n for n in nodes if n.get("type") == "entity"]
+        mem_nodes.sort(
+            key=lambda n: float((n.get("scores") or {}).get("retain") or n.get("size") or 0),
+            reverse=True,
+        )
+        ent_nodes.sort(key=lambda n: float(n.get("size") or 0), reverse=True)
+        mem_nodes = mem_nodes[:_MAX_MEMORIES]
+        ent_nodes = ent_nodes[:_MAX_ENTITIES]
+        keep_ids = {n["id"] for n in mem_nodes} | {n["id"] for n in ent_nodes}
+        nodes = mem_nodes + ent_nodes
+        edges = [e for e in edges if e.get("source") in keep_ids and e.get("target") in keep_ids]
+        edges.sort(
+            key=lambda e: (0 if e.get("type") == "supersedes" else 1, -float(e.get("weight") or 0)),
+        )
+        edges = edges[:_MAX_EDGES]
+        
         return {
             "nodes": nodes,
             "edges": edges,
             "meta": {
                 "user_id": uid,
-                "memory_count": len(mem_ids),
-                "entity_count": len(entity_ids),
+                "memory_count": len(mem_nodes),
+                "entity_count": len(ent_nodes),
                 "edge_count": len(edges),
                 "include_history": include_history,
                 "include_entities": include_entities,
                 "limit": limit,
                 "theme": "galaxy",
+                "max_memories": _MAX_MEMORIES,
+                "max_entities": _MAX_ENTITIES,
+                "max_edges": _MAX_EDGES,
             },
             "legend": _legend(),
         }
