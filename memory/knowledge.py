@@ -205,8 +205,11 @@ END;
 
 
 def _connect(user_id: str | None = None) -> sqlite3.Connection:
-    conn = initialize_store_db(KNOWLEDGE_DB_PATH, _DDL, user_id=user_id, vector=True)
-    _ensure_knowledge_schema_migrated(conn, user_id)
+    conn = initialize_store_db(EXPERIENCE_DB_PATH, _DDL, user_id=user_id, vector=True)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(experiences)").fetchall()]
+    if "entities" not in cols:
+        conn.execute("ALTER TABLE experiences ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
+        conn.commit()
     return conn
 
 
