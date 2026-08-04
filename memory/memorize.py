@@ -3325,6 +3325,8 @@ class AikoMemorize:
         Increment access_count on memories matching salience heuristics.
         Pinned memories pass through unchanged.
         Returns count of memories boosted.
+        
+        Phase 5: prefers stored salience_hit / non-neutral valence_tag when set.
         """
         now     = datetime.now(timezone.utc)
         boost_ids: list[str] = []
@@ -3349,8 +3351,24 @@ class AikoMemorize:
                 except Exception:
                     log.warning("memorize: failed to parse created_at")
 
+            # Phase 5: prefer stored turn tags when present.
+            stored_salient = False
+            emotional = False
+            if os.getenv("DREAM_BOOST_USE_STORED_TAGS", "1").lower() in {"1", "true", "yes", "on"}:
+                try:
+                    sh = m.get("salience_hit")
+                    if sh is not None and str(sh) != "":
+                        stored_salient = bool(int(sh))
+                    vt = m.get("valence_tag") or "neutral"
+                    if isinstance(vt, str) and vt.strip().lower() in ("neg", "pos"):
+                        emotional = True
+                except Exception:
+                    pass
+
             is_salient = (
-                bool(_SALIENCE_RE.search(text))
+                stored_salient
+                or emotional
+                or bool(_SALIENCE_RE.search(text))
                 or ac >= 3
                 or is_recent
             )
@@ -3597,8 +3615,9 @@ class AikoMemorize:
                 kept += 1
                 continue
               
-            if should_cleanup(ac, la, created_at):
-                w = compute_weighted_score(ac, la)
+            v_tag = m.get("valence_tag")
+            if should_cleanup(ac, la, created_at, valence_tag=v_tag):
+                w = compute_weighted_score(ac, la, valence_tag=v_tag)
                 candidates.append({
                     "id":               mem_id,
                     "memory":           m.get("memory", "")[:120],
