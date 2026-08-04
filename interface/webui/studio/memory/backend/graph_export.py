@@ -243,14 +243,13 @@ def export_memory_graph(
         entity_importance: dict[str, float] = {}
         try:
             from memory.entity_importance import compute_entity_importance_map
-            # Prefer map from memorize if available; else empty
-            entity_importance = {}
-            try:
-                from memory.memorize import AikoMemorize
-                mem = AikoMemorize(silent=True)
-                entity_importance = compute_entity_importance_map(mem, uid) or {}
-            except Exception:
-                entity_importance = {}
+            from types import SimpleNamespace
+
+            # Reuse export conn + uid (no new AikoMemorize / write worker).
+            entity_importance = compute_entity_importance_map(
+                SimpleNamespace(_conn=conn, _db_lock=None),
+                uid,
+            ) or {}
         except Exception as ex:
             log.debug("graph_export: I_e map skipped: %s", ex)
 
