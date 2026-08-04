@@ -29,7 +29,81 @@ _REFLECTIVE_RE = re.compile(
     re.IGNORECASE,
 )
 
+MEMORY_SPREADING_ENABLED = os.getenv("MEMORY_SPREADING_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+MEMORY_SPREADING_MAX_DEPTH = max(1, int(os.getenv("MEMORY_SPREADING_MAX_DEPTH", "2")))
+MEMORY_SPREADING_DECAY = float(os.getenv("MEMORY_SPREADING_DECAY", "0.6"))
+MEMORY_SPREADING_MIN_STRENGTH = float(os.getenv("MEMORY_SPREADING_MIN_STRENGTH", "0.15"))
 
+
+def spread_activation(
+    seed_entities: list[str],
+    edges: list[tuple[str, str, float]],
+    *,
+    max_depth: int | None = None,
+    decay: float | None = None,
+    min_strength: float | None = None,
+) -> dict[str, float]:
+    """BFS-style activation over undirected co-mention edges.
+
+    seed_entities: casefolded entity strings from entry-hit memories / query
+    edges: list of (entity_a, entity_b, weight) already casefolded
+    returns: entity -> activation strength in [0, 1+]
+    """
+    if not MEMORY_SPREADING_ENABLED or not seed_entities:
+        return {}
+    max_depth = max_depth if max_depth is not None else MEMORY_SPREADING_MAX_DEPTH
+    decay = decay if decay is not None else MEMORY_SPREADING_DECAY
+    min_strength = min_strength if min_strength is not None else MEMORY_SPREADING_MIN_STRENGTH
+    decay = max(0.0, min(1.0, float(decay)))
+
+    # adjacency
+    adj: dict[str, list[tuple[str, float]]] = {}
+    for a, b, w in edges:
+        a, b = a.casefold(), b.casefold()
+        if not a or not b or a == b:
+            continue
+        ww = max(0.0, float(w or 0.0))
+        adj.setdefault(a, []).append((b, ww))
+        adj.setdefault(b, []).append((a, ww))
+
+    strength: dict[str, float] = {}
+    for e in seed_entities:
+        k = e.casefold()
+        if k:
+            strength[k] = max(strength.get(k, 0.0), 1.0)
+
+    frontier = set(strength)
+    for _ in range(max_depth):
+        nxt: set[str] = set()
+        for node in frontier:
+            s0 = strength.get(node, 0.0)
+            if s0 < min_strength:
+                continue
+            for nb, w in adj.get(node, []):
+                # normalize soft weight: treat weight as relative, clamp
+                hop = s0 * decay * min(1.0, w / max(w, 1.0) if w else 0.0)
+                # simpler: hop = s0 * decay * min(1.0, w) if weights are small
+                hop = s0 * decay * (1.0 if w <= 0 else min(1.0, w if w <= 1.0 else 1.0))
+                if hop < min_strength:
+                    continue
+                if hop > strength.get(nb, 0.0):
+                    strength[nb] = hop
+                    nxt.add(nb)
+        frontier = nxt
+        if not frontier:
+            break
+    return {e: s for e, s in strength.items() if s >= min_strength}
+
+
+def memory_max_activation(row, activation: dict[str, float]) -> float:
+    if not activation:
+        return 0.0
+    ents = entities_from_json_safe(
+        row["entities"] if hasattr(row, "keys") and "entities" in row.keys() else row.get("entities")
+    )
+    if not ents:
+        return 0.0
+    return max((activation.get(e.casefold(), 0.0) for e in ents), default=0.0)
 def entities_from_json_safe(raw) -> list[str]:
     try:
         from memory.memorize import entities_from_json
