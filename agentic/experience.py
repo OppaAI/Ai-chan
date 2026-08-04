@@ -218,27 +218,48 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
         else:
             vec = None
 
-        # Optional Phase 8: auto engram link to similar past runs
+        # Optional Phase 8: auto engram link via embedding cosine (not RRF).
         if EXPERIENCE_AUTO_RELATE_THRESHOLD > 0 and vec is not None:
             try:
-                prior = search_experience(goal, limit=5, embedder=embedder)
-                for hit in prior:
-                    hid = hit.get("id")
-                    if not hid or hid == row_id:
+                neighbors = user_scoped_vec_knn(
+                    conn,
+                    vec_table="experiences_vec",
+                    owner_table="experiences",
+                    owner_alias="e",
+                    vector=vec,
+                    user_id=uid,
+                    limit=5,
+                    threshold=EXPERIENCE_AUTO_RELATE_THRESHOLD,
+                )
+                for nb in neighbors:
+                    hid = str(nb["id"])
+                    if hid == row_id:
                         continue
-                    # Prefer embedding cosine if you can load hit vector;
-                    # fallback: high recall_score is only a weak signal
-                    sim = float(hit.get("recall_score") or 0.0)
-                    # RRF scores are small (~0.01–0.05). Better: cosine.
-                    # If you only have RRF, use a separate threshold or skip.
-                    if sim < 0.02:  # weak RRF proxy — prefer real cosine
+                    dist = float(nb["dist"])
+                    sim = 1.0 - dist  # cosine similarity
+                    if sim < EXPERIENCE_AUTO_RELATE_THRESHOLD:
                         continue
-                    old_outcome = (hit.get("outcome") or "").lower()
-                    if old_outcome and old_outcome != outcome and {"ok", "failed"} & {old_outcome, outcome}:
+                    old = conn.execute(
+                        "SELECT outcome FROM experiences WHERE id=? AND user_id=?",
+                        (hid, uid),
+                    ).fetchone()
+                    old_outcome = (old["outcome"] if old else "") or ""
+                    old_outcome = old_outcome.lower()
+                    new_o = outcome.lower()
+                    if (
+                        old_outcome
+                        and new_o
+                        and old_outcome != new_o
+                        and {old_outcome, new_o} & {"ok", "failed"}
+                    ):
                         rel = "contradiction"
+                    elif old_outcome == new_o:
+                        rel = "continuation"
                     else:
                         rel = "refines"
-                    record_engram_relation(row_id, hid, rel, confidence=min(1.0, sim * 20))
+                    record_engram_relation(
+                        row_id, hid, rel, confidence=min(1.0, sim), user_id=uid
+                    )
             except Exception as rel_exc:
                 log.debug("auto engram relate skipped: %s", rel_exc)
 
