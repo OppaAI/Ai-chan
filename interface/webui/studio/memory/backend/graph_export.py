@@ -28,20 +28,6 @@ _SPACING_SAT = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", 
 _DAILY_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
 _MONTHLY_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
 
-def _env_int(name: str, default: int, *, floor: int = 0) -> int:
-    raw = os.getenv(name)
-    if raw is None or str(raw).strip() == "":
-        return max(floor, default)
-    try:
-        return max(floor, int(str(raw).strip()))
-    except (TypeError, ValueError):
-        log.warning("Invalid %s=%r; using default %s", name, raw, default)
-        return max(floor, default)
-
-_MAX_MEMORIES = _env_int("MEMORY_STUDIO_MAX_MEMORIES", 400, floor=1)
-_MAX_ENTITIES = _env_int("MEMORY_STUDIO_MAX_ENTITIES", 120, floor=0)
-_MAX_EDGES = _env_int("MEMORY_STUDIO_MAX_EDGES", 200, floor=0)
-
 
 def _entities_from_raw(raw: Any) -> list[str]:
     if raw is None or raw == "":
@@ -247,34 +233,24 @@ def export_memory_graph(
         params: list[Any] = [uid]
         if has_status and not include_history:
             sql += " AND (status = 'active' OR status IS NULL)"
-            
-        try:
-            req_limit = int(limit) if limit is not None else 200
-        except (TypeError, ValueError):
-            req_limit = 200
-        if req_limit < 1:
-            req_limit = 200
-        effective_limit = min(req_limit, _MAX_MEMORIES)
-        # Over-fetch so retain ranking can prefer strong older rows in a wider window
-        fetch_n = min(max(effective_limit * 3, effective_limit), max(_MAX_MEMORIES * 3, effective_limit))
-
         sql += " ORDER BY created_at DESC"
-        if fetch_n > 0:
+        if limit and limit > 0:
             sql += " LIMIT ?"
-            params.append(int(fetch_n))
+            params.append(int(limit))
 
         rows = conn.execute(sql, params).fetchall()
 
         entity_importance: dict[str, float] = {}
         try:
             from memory.entity_importance import compute_entity_importance_map
-            from types import SimpleNamespace
-
-            # Reuse export conn + uid (no new AikoMemorize / write worker).
-            entity_importance = compute_entity_importance_map(
-                SimpleNamespace(_conn=conn, _db_lock=None),
-                uid,
-            ) or {}
+            # Prefer map from memorize if available; else empty
+            entity_importance = {}
+            try:
+                from memory.memorize import AikoMemorize
+                mem = AikoMemorize(silent=True)
+                entity_importance = compute_entity_importance_map(mem, uid) or {}
+            except Exception:
+                entity_importance = {}
         except Exception as ex:
             log.debug("graph_export: I_e map skipped: %s", ex)
 
@@ -396,7 +372,7 @@ def export_memory_graph(
 
                 ensure_entity_relations_schema(conn)
                 for e in relations_as_graph_edges(
-                    conn, user_id=uid, limit=max(int(fetch_n) * 2, 500)
+                    conn, user_id=uid, limit=max(int(limit) * 2, 500)
                 ):
                     for endpoint in (e["source"], e["target"]):
                         if endpoint not in entity_ids and endpoint not in mem_ids:
@@ -432,39 +408,18 @@ def export_memory_graph(
             except Exception as ex:
                 log.debug("graph_export: entity_relations skipped: %s", ex)
 
-        mem_nodes = [n for n in nodes if n.get("type") == "memory"]
-        ent_nodes = [n for n in nodes if n.get("type") == "entity"]
-        mem_nodes.sort(
-            key=lambda n: float((n.get("scores") or {}).get("retain") or n.get("size") or 0),
-            reverse=True,
-        )
-        # Prefer high retain among the over-fetched window
-        mem_nodes = mem_nodes[:effective_limit]
-        ent_nodes.sort(key=lambda n: float(n.get("size") or 0), reverse=True)
-        ent_nodes = ent_nodes[:_MAX_ENTITIES]
-        keep_ids = {n["id"] for n in mem_nodes} | {n["id"] for n in ent_nodes}
-        nodes = mem_nodes + ent_nodes
-        edges = [e for e in edges if e.get("source") in keep_ids and e.get("target") in keep_ids]
-        edges.sort(
-            key=lambda e: (0 if e.get("type") == "supersedes" else 1, -float(e.get("weight") or 0)),
-        )
-        edges = edges[:_MAX_EDGES]
-        
         return {
             "nodes": nodes,
             "edges": edges,
             "meta": {
                 "user_id": uid,
-                "memory_count": len(mem_nodes),
-                "entity_count": len(ent_nodes),
+                "memory_count": len(mem_ids),
+                "entity_count": len(entity_ids),
                 "edge_count": len(edges),
                 "include_history": include_history,
                 "include_entities": include_entities,
                 "limit": limit,
                 "theme": "galaxy",
-                "max_memories": _MAX_MEMORIES,
-                "max_entities": _MAX_ENTITIES,
-                "max_edges": _MAX_EDGES,
             },
             "legend": _legend(),
         }
