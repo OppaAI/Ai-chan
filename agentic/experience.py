@@ -25,6 +25,7 @@ load_config()
 
 try:
     from memory.vecstore import delete_by_id, initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
+    from memory.memorize import extract_entities, entities_to_json, entities_from_json, entity_overlap_score
 except ImportError:  # lightweight practice.py/test environments may not have numpy/sqlite-vec
     from datetime import datetime, timezone
     def utc_now_iso(): return datetime.now(timezone.utc).isoformat()
@@ -40,6 +41,10 @@ except ImportError:  # lightweight practice.py/test environments may not have nu
         safe = re.sub(r"CREATE VIRTUAL TABLE IF NOT EXISTS experiences_vec USING vec0\([^;]+;", "", ddl, flags=re.S)
         safe = re.sub(r"DELETE FROM experiences_vec WHERE id = old.id;", "", safe)
         conn.executescript(safe)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(experiences)").fetchall()]
+        if "entities" not in cols:
+            conn.execute("ALTER TABLE experiences ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
+            conn.commit()
         return conn
     def insert_vector(*args, **kwargs): return None
     def delete_by_id(conn, table, row_id): conn.execute(f"DELETE FROM {table} WHERE id=?", (row_id,))
@@ -62,6 +67,8 @@ EXPERIENCE_FTS_LIMIT = int(os.getenv("EXPERIENCE_FTS_LIMIT", "20"))
 EXPERIENCE_RECALL_SCORE_THRESHOLD = float(os.getenv("EXPERIENCE_RECALL_SCORE_THRESHOLD", "0.012"))
 EXPERIENCE_MAX_ROWS = int(os.getenv("EXPERIENCE_MAX_ROWS", "5000"))
 EXPERIENCE_CONTEXT_CHARS = int(os.getenv("EXPERIENCE_CONTEXT_CHARS", "2500"))
+EXPERIENCE_ENTITY_BOOST = float(os.getenv("EXPERIENCE_ENTITY_BOOST", "0.003"))
+EXPERIENCE_AUTO_RELATE_THRESHOLD = float(os.getenv("EXPERIENCE_AUTO_RELATE_THRESHOLD", "0.90"))
 
 _SECRET_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)")
 
@@ -78,6 +85,7 @@ CREATE TABLE IF NOT EXISTS experiences (
     outcome        TEXT NOT NULL,
     score          REAL NOT NULL,
     answer_excerpt TEXT NOT NULL,
+    entities       TEXT NOT NULL DEFAULT '[]',
     created_at     TEXT NOT NULL
 );
 
@@ -180,10 +188,12 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
         f"Result: {_sanitize(final_answer, 300)}"
     )
     row_id = str(uuid.uuid4())
+    ents_json = entities_to_json(extract_entities(f"{goal} {final_answer}"))
     conn = _connect(uid)
     try:
         conn.execute(
-            "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (..., _sanitize(final_answer, 500), ents_json, _now()),
             (row_id, uid, _sanitize(goal, 700), record_text, json.dumps([s.__dict__ for s in exp_steps], ensure_ascii=False), outcome, float(score), _sanitize(final_answer, 500), _now()),
         )
         conn.commit()
@@ -260,6 +270,10 @@ def search_experience(query: str, limit: int = 3, embedder=None) -> list[dict]:
         scored = []
         for eid in ids:
             score = rrf_score(eid, rank_knn, rank_fts, k=EXPERIENCE_RRF_K)
+            row = by_id.get(eid)
+            if row is not None:
+                ents = entities_from_json(row["entities"] if "entities" in row.keys() else "[]")
+                score += EXPERIENCE_ENTITY_BOOST * entity_overlap_score(query, ents)
             if score >= EXPERIENCE_RECALL_SCORE_THRESHOLD and eid in by_id:
                 scored.append((score, eid))
         scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))

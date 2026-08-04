@@ -15,6 +15,10 @@ KNOWLEDGE_RRF_K: "60"  # Reciprocal Rank Fusion constant; higher dampens rank di
 KNOWLEDGE_RECALL_SCORE_THRESHOLD: "0.012"  # Minimum fused score for a learned chunk to be injected.
 KNOWLEDGE_QUERY_INSTRUCT: "Retrieve durable learned knowledge relevant to the request"
 
+# Phase 8: entity tags + relate
+KNOWLEDGE_ENTITY_BOOST: "0.003"  # Soft search boost when query overlaps chunk entities.
+KNOWLEDGE_WRITE_DEDUP_THRESHOLD: "0.95"  # Cosine ≥ this → skip near-dup chunk (same ingest). 0 disables.
+
 # Learn config
 #
 # Settings for memory/learn.py — Aiko's two research depths (quick_studying,
@@ -187,3 +191,5 @@ EXPERIENCE_RRF_K: "60"  # Reciprocal Rank Fusion constant; higher dampens rank d
 EXPERIENCE_RECALL_SCORE_THRESHOLD: "0.012"  # Minimum fused score for a past task to be injected.
 EXPERIENCE_MAX_ROWS: "10000"  # Hard cap per user; lowest-scored/oldest rows are pruned only to limit noise/storage.
 EXPERIENCE_QUERY_INSTRUCT: "Retrieve similar past agentic task runs"
+EXPERIENCE_ENTITY_BOOST: "0.003"
+EXPERIENCE_AUTO_RELATE_THRESHOLD: "0.90"  # Auto engram link if similar past run ≥ this; 0 disables.

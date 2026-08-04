@@ -38,6 +38,8 @@ load_config()
 
 from cognition import reason
 from memory.vecstore import initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
+from memory.memorize import extract_entities, entities_to_json, entities_from_json, entity_overlap_score
+
 from system.log import get_logger
 from system.userspace import current_user_id, user_workspace_root
 
@@ -57,6 +59,8 @@ KNOWLEDGE_QUERY_INSTRUCT = os.getenv(
     "Retrieve durable learned knowledge relevant to the request",
 ).strip()
 KNOWLEDGE_WORKSPACE_DIR = os.getenv("KNOWLEDGE_WORKSPACE_DIR", "library").strip().strip("/") or "library"
+KNOWLEDGE_ENTITY_BOOST = float(os.getenv("KNOWLEDGE_ENTITY_BOOST", "0.003"))
+KNOWLEDGE_WRITE_DEDUP_THRESHOLD = float(os.getenv("KNOWLEDGE_WRITE_DEDUP_THRESHOLD", "0.95"))
 
 # ── search cache (mirrors memory/memorize.py's pattern) ─────────────────────
 
@@ -124,13 +128,18 @@ _DDL = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS learned_docs (
-    id          TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    title       TEXT NOT NULL,
-    source      TEXT NOT NULL DEFAULT '',
-    kind        TEXT NOT NULL DEFAULT 'ingested',
-    created_at  TEXT NOT NULL
+CREATE TABLE IF NOT EXISTS learned_chunks (
+    id              TEXT PRIMARY KEY,
+    doc_id          TEXT NOT NULL REFERENCES learned_docs(id) ON DELETE CASCADE,
+    user_id         TEXT NOT NULL,
+    chunk_index     INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    access_count    INTEGER NOT NULL DEFAULT 0,
+    last_accessed   TEXT,
+    entities        TEXT NOT NULL DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'active',
+    supersedes_id   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS learned_chunks (
@@ -213,6 +222,12 @@ def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | N
     if "archived_at" not in cols:
         conn.execute("ALTER TABLE learned_chunks ADD COLUMN archived_at TEXT")
         log.info("[knowledge] Added missing archived_at column to learned_chunks")
+    if "entities" not in cols:
+        conn.execute("ALTER TABLE learned_chunks ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
+    if "status" not in cols:
+        conn.execute("ALTER TABLE learned_chunks ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+    if "supersedes_id" not in cols:
+        conn.execute("ALTER TABLE learned_chunks ADD COLUMN supersedes_id TEXT")
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_learned_chunks_access ON learned_chunks(access_count, last_accessed)")
 
@@ -402,8 +417,12 @@ def ingest_text(
         for index, chunk in enumerate(chunks):
             chunk_id = str(uuid.uuid4())
             conn.execute(
-                "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at) VALUES(?,?,?,?,?,?)",
-                (chunk_id, doc_id, uid, index, chunk, created_at),
+                "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at,entities,status) VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    chunk_id, doc_id, uid, index, chunk, created_at,
+                    entities_to_json(extract_entities(chunk)),
+                    "active",
+                ),
             )
             if vectors:
                 insert_vector(conn, "learned_chunks_vec", chunk_id, vectors[index])
@@ -502,11 +521,12 @@ def search_knowledge(
         placeholders = ",".join("?" * len(ids))
         rows = conn.execute(
             f"""
-            SELECT c.id, c.text, c.chunk_index, c.created_at,
-                   d.title, d.source, d.kind, d.id AS doc_id
+            SELECT c.id, c.text, c.chunk_index, c.created_at, c.entities, c.status,
+                d.title, d.source, d.kind, d.id AS doc_id
             FROM learned_chunks c
             JOIN learned_docs d ON d.id = c.doc_id
             WHERE c.id IN ({placeholders})
+                AND (c.status = 'active' OR c.status IS NULL)
             """,
             list(ids),
         ).fetchall()
@@ -514,6 +534,8 @@ def search_knowledge(
         scored: list[tuple[float, str]] = []
         for cid in ids:
             score = rrf_score(cid, rank_knn, rank_fts, k=KNOWLEDGE_RRF_K)
+            ents = entities_from_json(row["entities"] if "entities" in row.keys() else "[]")
+            score += KNOWLEDGE_ENTITY_BOOST * entity_overlap_score(query, ents)
             if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD and cid in by_id:
                 scored.append((score, cid))
         scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
