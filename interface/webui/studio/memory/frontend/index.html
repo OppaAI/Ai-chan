@@ -284,27 +284,6 @@
       const entQ = (document.getElementById('filter-entity')?.value || '').trim().toLowerCase();
 
       let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
-        if (d.type === 'entity') {
-          if (entQ && !(String(d.label || d.text || '').toLowerCase().includes(entQ))) return false;
-          return true;
-        }
-        if (st !== 'all' && (d.status || 'active') !== st) return false;
-        if (val !== 'all' && (d.valence_tag || 'neutral') !== val) return false;
-        const r = Number((d.scores || {}).retain ?? d.size ?? 0);
-        if (r < minR) return false;
-        if (entQ) {
-          const ents = (d.entities || []).map(e => String(e).toLowerCase());
-          if (!ents.some(e => e.includes(entQ))) return false;
-        }
-        return true;
-      });
-      const keep = new Set(nodes.map(n => n.id));
-      // Keep entity hubs linked to visible memories
-      for (const e of (graph.edges || [])) {
-        if (e.type === 'mentions' && keep.has(e.source)) keep.add(e.target);
-        if (e.type === 'mentions' && keep.has(e.target)) keep.add(e.source);
-      }
-      let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
         if (d.type === 'entity') return false;
         if (st !== 'all' && (d.status || 'active') !== st) return false;
         if (val !== 'all' && (d.valence_tag || 'neutral') !== val) return false;
