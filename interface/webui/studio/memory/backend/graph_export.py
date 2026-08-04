@@ -247,8 +247,16 @@ def export_memory_graph(
         params: list[Any] = [uid]
         if has_status and not include_history:
             sql += " AND (status = 'active' OR status IS NULL)"
+            
+        try:
+            req_limit = int(limit) if limit is not None else 200
+        except (TypeError, ValueError):
+            req_limit = 200
+        if req_limit < 1:
+            req_limit = 200
+        effective_limit = min(req_limit, _MAX_MEMORIES)
+
         sql += " ORDER BY created_at DESC"
-        effective_limit = min(int(limit or 200), _MAX_MEMORIES) if limit else _MAX_MEMORIES
         if effective_limit > 0:
             sql += " LIMIT ?"
             params.append(int(effective_limit))
@@ -386,7 +394,7 @@ def export_memory_graph(
 
                 ensure_entity_relations_schema(conn)
                 for e in relations_as_graph_edges(
-                    conn, user_id=uid, limit=max(int(limit) * 2, 500)
+                    conn, user_id=uid, limit=max(int(effective_limit) * 2, 500)
                 ):
                     for endpoint in (e["source"], e["target"]):
                         if endpoint not in entity_ids and endpoint not in mem_ids:
