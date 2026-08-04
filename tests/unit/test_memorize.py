@@ -44,8 +44,21 @@ from memory.memorize import (
     _sanitize_fts_query,
     _normalize_memory_text,
     _first_json_array,
+    ensure_phase_a_schema,
+    ensure_entity_relations_schema,
+    infer_salience_hit,
+    infer_valence_tag,
+    entities_to_json,
     vacuum_memory_db,
 )
+from memory.forget import _valence_intensity, compute_weighted_score, is_grace_protected, should_cleanup
+from memory.entity_importance import (
+    compute_entity_importance_map,
+    memory_max_entity_importance,
+    should_expand_supersession_chain,
+    walk_supersession_chain,
+)
+from memory import consolidate as consolidate_mod
 from system import userspace
 
 
@@ -780,3 +793,221 @@ class TestSceneExpansion:
         scene_entry = next(r for r in results if r["id"] == scene_id)
         assert scene_entry.get("_scene_members") is not None
         assert "Oppa fixed a bug" in scene_entry["_scene_members"][0]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 5 — emotion-imprinted decay (memory/forget.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestForgetValenceDecay:
+    """Phase 5 emotion imprint. NOTE: forget.py reads env at import time, so
+    every test that tunes knobs must monkeypatch.setenv + importlib.reload."""
+
+    @pytest.fixture(autouse=True)
+    def _reload_forget(self, monkeypatch):
+        import importlib
+        import memory.forget as forget_mod
+        monkeypatch.setenv("FORGET_HALF_LIFE_DAYS", "21.0")
+        monkeypatch.setenv("FORGET_EMOTION_GAMMA", "0.5")
+        monkeypatch.setenv("FORGET_INTENSITY_NEG", "1.0")
+        monkeypatch.setenv("FORGET_INTENSITY_POS", "0.4")
+        monkeypatch.setenv("FORGET_INTENSITY_NEUTRAL", "0.0")
+        monkeypatch.setenv("FORGET_CLEANUP_THRESHOLD", "0.02")
+        importlib.reload(forget_mod)
+        yield forget_mod
+
+    def test_valence_intensity_lookup(self, _reload_forget):
+        for key, val in (("neg", 1.0), ("pos", 0.4), ("neutral", 0.0)):
+            assert _valence_intensity(key) == val
+        assert _valence_intensity(None) == 0.0
+        assert _valence_intensity("") == 0.0
+        assert _valence_intensity("Neg") == 1.0
+
+    def test_valence_intensity_invalid_inputs(self):
+        assert _valence_intensity("garbage") == 0.0
+        assert _valence_intensity("nan") == 0.0  # string that doesn't map
+
+    def test_negative_valence_decays_slower_than_neutral(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        neutral = compute_weighted_score(10, old, "neutral")
+        neg = compute_weighted_score(10, old, "neg")
+        assert neg > neutral  # neg keeps more (slower decay)
+
+    def test_positive_valence_decays_between_neutral_and_neg(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        neutral = compute_weighted_score(10, old, "neutral")
+        pos = compute_weighted_score(10, old, "pos")
+        neg = compute_weighted_score(10, old, "neg")
+        assert neutral < pos < neg
+
+    def test_gamma_zero_disables_emotion(self, monkeypatch, _reload_forget):
+        import importlib
+        import memory.forget as forget_mod
+        monkeypatch.setenv("FORGET_EMOTION_GAMMA", "0")
+        importlib.reload(forget_mod)
+        old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        assert compute_weighted_score(10, old, "neg") == pytest.approx(
+            compute_weighted_score(10, old, "neutral"), abs=1e-9
+        )
+
+    def test_negative_valence_resists_cleanup(self):
+        """A neg-valence memory past grace survives cleanup while an identical
+        neutral one is pruned — the emotion imprint must lengthen H_eff.
+
+        At 140 days with HALF_LIFE_DAYS=21:
+          neutral: 0.5^(140/21) ≈ 0.0098 < 0.02  -> pruned
+          neg:     0.5^(140/31.5) ≈ 0.046  > 0.02  -> kept
+        """
+        created = (datetime.now(timezone.utc) - timedelta(days=140)).isoformat()  # past grace
+        old = (datetime.now(timezone.utc) - timedelta(days=140)).isoformat()
+        assert is_grace_protected(created) is False
+        assert should_cleanup(1, old, created, "neutral") is True
+        assert should_cleanup(1, old, created, "neg") is False
+
+    def test_grace_protected_new_memory_never_cleaned(self):
+        created = datetime.now(timezone.utc).isoformat()
+        assert is_grace_protected(created) is True
+        assert should_cleanup(0, "never", created, "neutral") is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3 — entity importance I_e + supersession chain (memory/entity_importance.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestEntityImportance:
+    def test_importance_map_centrality_and_recency(self, backend):
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        old = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        # Entities: "grace" heavily connected; "rust" connected but stale.
+        for a, b, w in [("grace", "robot", 3.0), ("grace", "oppa", 2.0), ("rust", "robot", 1.0)]:
+            conn.execute(
+                "INSERT INTO entity_relations (user_id, entity_a, entity_b, weight, updated_at) VALUES (?,?,?,?,?)",
+                ("u1", a, b, w, now),
+            )
+        # memories referencing those entities; grace touched recently, rust long ago.
+        for mid, text, ts, ents in [
+            ("m1", "grace fact", recent, ["Grace"]),
+            ("m2", "rust fact", old, ["Rust"]),
+        ]:
+            conn.execute(
+                "INSERT INTO memories (id, user_id, memory, created_at, access_count, last_accessed_at, entities) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (mid, "u1", text, now, 1, ts, entities_to_json(ents)),
+            )
+        conn.commit()
+
+        imap = compute_entity_importance_map(backend, "u1")
+        assert "grace" in imap
+        assert "rust" in imap
+        # grace has higher centrality AND recency → strictly more important
+        assert imap["grace"] > imap["rust"]
+
+    def test_importance_map_empty_db_returns_empty(self, backend):
+        assert compute_entity_importance_map(backend, "u1") == {}
+
+    def test_memory_max_entity_importance(self):
+        imap = {"grace": 0.9, "rust": 0.2}
+        row = {"entities": entities_to_json(["Grace", "Rust"])}
+        assert memory_max_entity_importance(row, imap) == 0.9
+        assert memory_max_entity_importance({"entities": "[]"}, imap) == 0.0
+        assert memory_max_entity_importance({"entities": None}, imap) == 0.0
+
+    def test_expand_trigger_reflective_query(self):
+        row = {"kind": "fact"}
+        assert should_expand_supersession_chain("what changed about oppa", row) is True
+        assert should_expand_supersession_chain("whats the weather", row) is False
+
+    def test_expand_trigger_identity_kind(self):
+        row = {"kind": "identity"}
+        assert should_expand_supersession_chain("anything about oppa", row) is True
+
+    def test_walk_supersession_chain_forward_and_back(self, backend):
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        # lineage: v1 <- v2 <- v3 (v3 supersedes v2, v2 supersedes v1)
+        for mid, text, supersedes in [
+            ("v1", "Oppa likes tea", None),
+            ("v2", "Oppa prefers coffee", "v1"),
+            ("v3", "Oppa prefers matcha", "v2"),
+        ]:
+            conn.execute(
+                "INSERT INTO memories (id, user_id, memory, created_at, access_count, last_accessed_at, supersedes_id) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (mid, "u1", text, now, 1, now, supersedes),
+            )
+        conn.commit()
+        chain = walk_supersession_chain(conn, "v3", "u1")
+        ids = [r["id"] for r in chain]
+        assert ids == ["v1", "v2", "v3"]
+
+    def test_walk_supersession_chain_no_history(self, backend):
+        conn = backend._conn
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO memories (id, user_id, memory, created_at, access_count, last_accessed_at) "
+            "VALUES (?,?,?,?,?,?)",
+            ("solo", "u1", "a lone fact", now, 1, now),
+        )
+        conn.commit()
+        # The starting memory is always included; no lineage means a 1-item chain.
+        chain = walk_supersession_chain(conn, "solo", "u1")
+        assert [r["id"] for r in chain] == ["solo"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1/2/4 — retention gate scoring (memory/consolidate.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestConsolidateRetentionScoring:
+    def _score(self, **row):
+        return consolidate_mod._score_daily_row(
+            row,
+            static_anchors=None,
+            row_vector=None,
+            entity_weights={},
+            entity_weight_cap=1.0,
+        )
+
+    def test_stored_salience_hit_outranks_plain_text(self):
+        high = self._score(_text="ordinary fact", salience_hit=1, valence_tag="neutral",
+                           access_day_count=1, access_count=1, entities="[]")
+        low = self._score(_text="ordinary fact", salience_hit=0, valence_tag="neutral",
+                          access_day_count=1, access_count=1, entities="[]")
+        assert high > low
+
+    def test_negative_valence_scores_higher_than_neutral(self):
+        neg = self._score(_text="a fact", salience_hit=0, valence_tag="neg",
+                          access_day_count=1, access_count=1, entities="[]")
+        neu = self._score(_text="a fact", salience_hit=0, valence_tag="neutral",
+                          access_day_count=1, access_count=1, entities="[]")
+        assert neg > neu
+
+    def test_spacing_saturates_at_cap(self):
+        day1 = self._score(_text="a fact", salience_hit=0, valence_tag="neutral",
+                           access_day_count=1, access_count=1, entities="[]")
+        day9 = self._score(_text="a fact", salience_hit=0, valence_tag="neutral",
+                           access_day_count=9, access_count=9, entities="[]")
+        assert day9 > day1
+
+    def test_fallback_to_access_count_when_no_day_count(self):
+        no_days = self._score(_text="a fact", salience_hit=0, valence_tag="neutral",
+                              access_day_count=0, access_count=0, entities="[]")
+        some_access = self._score(_text="a fact", salience_hit=0, valence_tag="neutral",
+                                  access_day_count=0, access_count=3, entities="[]")
+        assert some_access > no_days
+
+    def test_entity_importance_blends_into_connectivity(self):
+        base = self._score(_text="a fact", salience_hit=0, valence_tag="neutral",
+                           access_day_count=1, access_count=1, entities='["Grace"]')
+        boosted = consolidate_mod._score_daily_row(
+            {"_text": "a fact", "salience_hit": 0, "valence_tag": "neutral",
+             "access_day_count": 1, "access_count": 1, "entities": '["Grace"]'},
+            static_anchors=None,
+            row_vector=None,
+            entity_weights={},
+            entity_weight_cap=1.0,
+            entity_importance={"grace": 0.95},
+        )
+        assert boosted > base
