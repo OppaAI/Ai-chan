@@ -591,6 +591,11 @@ def _parse_fact_items(raw: str) -> list[dict]:
             if out:
                 return out
 
+    # Object-array salvage treats quoted source_ids as facts — refuse.
+    if re.search(r"\[\s*\{", raw):
+        log.warning("Monthly-facts object array incomplete/invalid; discarding.")
+        return []
+
     salvaged = _salvage_truncated_facts(raw)
     if salvaged:
         log.warning("Monthly-facts array truncated — salvaged %d fact(s) from partial output.", len(salvaged))
