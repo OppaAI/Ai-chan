@@ -1498,7 +1498,9 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
     else:
         memories, knowledge_block = owner._fetch_memory_and_knowledge(user_input, query_vector=_query_vec)
 
-    memory_block = owner._memorize.format_for_context(memories)
+        memory_block = self._get_memorize().format_for_context(
+            memories, query=user_input
+        )
     memory_context = memory_block or "<memory_context>\nNo relevant memories found.\n</memory_context>"
     memory_context = _blank_empty_context(memory_context)
 
