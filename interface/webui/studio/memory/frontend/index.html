@@ -304,13 +304,28 @@
         if (e.type === 'mentions' && keep.has(e.source)) keep.add(e.target);
         if (e.type === 'mentions' && keep.has(e.target)) keep.add(e.source);
       }
+      let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
+        if (d.type === 'entity') return false;
+        if (st !== 'all' && (d.status || 'active') !== st) return false;
+        if (val !== 'all' && (d.valence_tag || 'neutral') !== val) return false;
+        const r = Number((d.scores || {}).retain ?? d.size ?? 0);
+        if (r < minR) return false;
+        if (entQ) {
+          const ents = (d.entities || []).map(e => String(e).toLowerCase());
+          if (!ents.some(e => e.includes(entQ))) return false;
+        }
+        return true;
+      });
+      const keep = new Set(nodes.map(n => n.id));
+      for (const e of (graph.edges || [])) {
+        if (e.type === 'mentions' && keep.has(e.source)) keep.add(e.target);
+      }
       nodes = (graph.nodes || []).map(n => ({ ...n })).filter(n => {
         if (!keep.has(n.id)) return false;
-        if (n.type === 'entity') return true;
-        if (st !== 'all' && (n.status || 'active') !== st) return false;
-        if (val !== 'all' && (n.valence_tag || 'neutral') !== val) return false;
-        const r = Number((n.scores || {}).retain ?? n.size ?? 0);
-        if (r < minR) return false;
+        if (n.type === 'entity') {
+          if (entQ && !(String(n.label || n.text || '').toLowerCase().includes(entQ))) return false;
+          return true;
+        }
         return true;
       });
       const keep2 = new Set(nodes.map(n => n.id));
