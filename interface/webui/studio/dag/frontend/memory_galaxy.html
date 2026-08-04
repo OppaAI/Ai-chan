@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Aiko Memory Galaxy</title>
+<style>
+  html,body{margin:0;height:100%;background:#050510;color:#d8e0f0;font-family:system-ui,sans-serif}
+  #c{display:block;width:100%;height:100%}
+  #hud{position:fixed;left:12px;top:12px;max-width:320px;background:rgba(10,12,28,.82);padding:12px 14px;border-radius:10px;border:1px solid #2a3355;font-size:12px;line-height:1.45}
+  #hud h1{font-size:14px;margin:0 0 8px;color:#c9a0ff}
+  .legend span{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <h1>Memory Galaxy</h1>
+  <div>Size = retain tendency / entity I<sub>e</sub></div>
+  <div>Rim arcs = salience · spacing · connectivity · valence · access</div>
+  <div class="legend" style="margin-top:8px">
+    <div><span style="background:#ff6b6b"></span>neg</div>
+    <div><span style="background:#c0c8d8"></span>neutral</div>
+    <div><span style="background:#7ad7f0"></span>pos</div>
+    <div><span style="background:#c9a0ff"></span>entity</div>
+    <div><span style="background:#ffd27a"></span>monthly</div>
+  </div>
+  <div id="stats" style="margin-top:8px;opacity:.8"></div>
+  <div id="tip" style="margin-top:8px;color:#a8b4d0"></div>
+</div>
+<script>
+// Paste JSON from: uv run python -c "from memory.studio import build_galaxy_graph; import json; print(json.dumps(build_galaxy_graph()))"
+const SAMPLE = null;
+async function loadGraph() {
+  if (SAMPLE) return SAMPLE;
+  try {
+    const r = await fetch('/api/memory/studio/galaxy');
+    if (r.ok) return await r.json();
+  } catch (e) {}
+  document.getElementById('tip').textContent = 'Load graph JSON via build_galaxy_graph() or serve /api/memory/studio/galaxy';
+  return {nodes:[], edges:[], stats:{}};
+}
+const ARC_KEYS = ['salience','spacing','connectivity','valence','access'];
+const ARC_COLORS = ['#ffd27a','#6bcf7f','#c9a0ff','#ff6b6b','#ffffff'];
+function draw() {
+  loadGraph().then(g => {
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const dpr = devicePixelRatio || 1;
+    function resize(){canvas.width=innerWidth*dpr;canvas.height=innerHeight*dpr;ctx.setTransform(dpr,0,0,dpr,0,0)}
+    resize(); addEventListener('resize', () => { resize(); paint(); });
+    function paint() {
+      const w=innerWidth,h=innerHeight,cx=w/2,cy=h/2,scale=Math.min(w,h)*0.42;
+      ctx.fillStyle='#050510'; ctx.fillRect(0,0,w,h);
+      // stars
+      for(let i=0;i<180;i++){ctx.fillStyle=`rgba(200,210,255,${0.15+((i*17)%50)/200})`;ctx.fillRect((i*97)%w,(i*53)%h,1,1)}
+      const nodes=g.nodes||[], edges=g.edges||[];
+      const byId=Object.fromEntries(nodes.map(n=>[n.id,n]));
+      ctx.lineWidth=1;
+      for(const e of edges){
+        const a=byId[e.source], b=byId[e.target]; if(!a||!b) continue;
+        const ax=cx+a.x*scale, ay=cy+a.y*scale, bx=cx+b.x*scale, by=cy+b.y*scale;
+        ctx.strokeStyle=e.kind==='co_mention'?'rgba(180,160,255,0.25)':'rgba(120,140,180,0.12)';
+        ctx.beginPath(); ctx.moveTo(ax,ay); ctx.lineTo(bx,by); ctx.stroke();
+      }
+      for(const n of nodes){
+        const x=cx+n.x*scale, y=cy+n.y*scale;
+        const r=6+(n.size||0.5)*14;
+        let fill='#c0c8d8';
+        if(n.type==='entity') fill='#c9a0ff';
+        else if(n.kind==='monthly') fill='#ffd27a';
+        else if((n.valence_tag||'')==='neg') fill='#ff6b6b';
+        else if((n.valence_tag||'')==='pos') fill='#7ad7f0';
+        ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+        ctx.fillStyle=fill; ctx.globalAlpha=0.85; ctx.fill();
+        ctx.globalAlpha=1;
+        // rim arcs
+        const sc=n.scores||{};
+        let a0=-Math.PI/2;
+        ARC_KEYS.forEach((k,i)=>{
+          const v=Math.max(0,Math.min(1,sc[k]||0));
+          const a1=a0+v*(Math.PI*2/ARC_KEYS.length);
+          ctx.beginPath(); ctx.arc(x,y,r+3,a0,a1);
+          ctx.strokeStyle=ARC_COLORS[i]; ctx.lineWidth=2; ctx.stroke();
+          a0+=Math.PI*2/ARC_KEYS.length;
+        });
+      }
+      document.getElementById('stats').textContent = JSON.stringify(g.stats||{});
+    }
+    paint();
+  });
+}
+draw();
+</script>
+</body>
+</html>
