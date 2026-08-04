@@ -965,6 +965,7 @@ class TestConsolidateRetentionScoring:
         return consolidate_mod._score_daily_row(
             row,
             static_anchors=None,
+            dynamic_anchors=None,
             row_vector=None,
             entity_weights={},
             entity_weight_cap=1.0,
@@ -1005,6 +1006,7 @@ class TestConsolidateRetentionScoring:
             {"_text": "a fact", "salience_hit": 0, "valence_tag": "neutral",
              "access_day_count": 1, "access_count": 1, "entities": '["Grace"]'},
             static_anchors=None,
+            dynamic_anchors=None,
             row_vector=None,
             entity_weights={},
             entity_weight_cap=1.0,
