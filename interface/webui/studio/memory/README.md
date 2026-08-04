@@ -42,7 +42,7 @@ Query params for `/api/graph`:
 - `MEMORY_STUDIO_MAX_ENTITIES` (default 120)
 - `MEMORY_STUDIO_MAX_EDGES` (default 200)
 
-Note: among the newest `limit` rows, export prefers higher retain when applying the memory cap (not a full-DB retain rank).
+Note: over-fetches ~3× `limit` (newest-first), then keeps the top `limit` by retain among
 
 **Client filters** (sidebar; re-filter without reload):
 
