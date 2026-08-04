@@ -106,6 +106,14 @@ MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT: "0.008"  # Flat recall score boost × max 
 MEMORY_SUPERSESSION_CHAIN_EXPAND: "1"  # Expand supersedes_id lineage on reflective / identity-plan hits.
 MEMORY_SUPERSESSION_CHAIN_KINDS: "identity,preference,plan"  # Kinds that always expand chain when hit.
 
+# -- Phase 9: spreading activation --
+MEMORY_SPREADING_ENABLED: "1"  # Walk entity_relations from entry hits; 0 disables.
+MEMORY_SPREADING_MAX_DEPTH: "2"  # Hops from seed entities.
+MEMORY_SPREADING_DECAY: "0.6"  # Multiplier per hop on edge weight.
+MEMORY_SPREADING_MIN_STRENGTH: "0.15"  # Drop entities below this activation.
+MEMORY_SPREADING_MAX_EXTRA: "5"  # Max neighbor memories added beyond RRF hits.
+MEMORY_SPREADING_SCORE_WEIGHT: "0.01"  # Flat boost × max entity activation on a row.
+
 # -- Phase 4: turn-level valence + salience tags --
 MONTHLY_CONSOLIDATION_W_VALENCE: "0.10"  # Weight for |emotional intensity|. Neuroscience: high-valence ↔ fast consolidation.
 # Paper I §5.2 weights (salience/novelty/spacing/connectivity), with W_VALENCE blended in.
