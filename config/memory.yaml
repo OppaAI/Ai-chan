@@ -110,6 +110,13 @@ MONTHLY_CONSOLIDATION_W_NOVELTY: "0.22"  # Semantic distance from existing memor
 MONTHLY_CONSOLIDATION_W_SPACING: "0.18"  # Time gaps between repeated retrievals. Spaced-rep principle.
 MONTHLY_CONSOLIDATION_W_CONNECTIVITY: "0.25"  # In-graph degree. Well-connected memories survive consolidation.
 
+# -- Phase 5: emotion imprint on decay + dream --
+FORGET_EMOTION_GAMMA: "0.5"  # H_eff = H * (1 + gamma * intensity); 0 disables emotion-modified decay.
+FORGET_INTENSITY_NEG: "1.0"  # intensity for valence_tag=neg (sticky imprint).
+FORGET_INTENSITY_POS: "0.4"  # intensity for valence_tag=pos.
+FORGET_INTENSITY_NEUTRAL: "0.0" # treat neutal is emotion or not; 0 means neutral is not emotional.
+DREAM_BOOST_USE_STORED_TAGS: "1"  # Prefer salience_hit / valence_tag over text-only heuristics in dream boost.
+
 # -- Decay and dream merge --
 FORGET_HALF_LIFE_DAYS: "21"  # Days until memory retention score halves.
 FORGET_ACCESS_COUNT_CAP: "255"  # Maximum access_count retained for decay scoring.
