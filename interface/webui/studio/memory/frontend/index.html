@@ -278,9 +278,44 @@
           .attr('opacity', 0.12 + Math.random() * 0.35);
       }
 
-      const nodes = (graph.nodes || []).map(n => ({ ...n }));
-      const links = (graph.edges || []).map(e => ({ ...e }));
-      const links = (graph.edges || []).map(e => ({ ...e }));
+      const st = document.getElementById('filter-status')?.value || 'all';
+      const val = document.getElementById('filter-valence')?.value || 'all';
+      const minR = parseFloat(document.getElementById('filter-min-retain')?.value || '0') || 0;
+      const entQ = (document.getElementById('filter-entity')?.value || '').trim().toLowerCase();
+
+      let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
+        if (d.type === 'entity') {
+          if (entQ && !(String(d.label || d.text || '').toLowerCase().includes(entQ))) return false;
+          return true;
+        }
+        if (st !== 'all' && (d.status || 'active') !== st) return false;
+        if (val !== 'all' && (d.valence_tag || 'neutral') !== val) return false;
+        const r = Number((d.scores || {}).retain ?? d.size ?? 0);
+        if (r < minR) return false;
+        if (entQ) {
+          const ents = (d.entities || []).map(e => String(e).toLowerCase());
+          if (!ents.some(e => e.includes(entQ))) return false;
+        }
+        return true;
+      });
+      const keep = new Set(nodes.map(n => n.id));
+      // Keep entity hubs linked to visible memories
+      for (const e of (graph.edges || [])) {
+        if (e.type === 'mentions' && keep.has(e.source)) keep.add(e.target);
+        if (e.type === 'mentions' && keep.has(e.target)) keep.add(e.source);
+      }
+      nodes = (graph.nodes || []).map(n => ({ ...n })).filter(n => {
+        if (!keep.has(n.id)) return false;
+        if (n.type === 'entity') return true;
+        if (st !== 'all' && (n.status || 'active') !== st) return false;
+        if (val !== 'all' && (n.valence_tag || 'neutral') !== val) return false;
+        const r = Number((n.scores || {}).retain ?? n.size ?? 0);
+        if (r < minR) return false;
+        return true;
+      });
+      const keep2 = new Set(nodes.map(n => n.id));
+      const links = (graph.edges || []).map(e => ({ ...e }))
+        .filter(e => keep2.has(e.source) && keep2.has(e.target));
       if (!nodes.length) {
         svg.append('text').attr('x', w/2).attr('y', h/2).attr('text-anchor','middle')
           .attr('fill','var(--dim)').text('No memories yet');
