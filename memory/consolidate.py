@@ -39,6 +39,10 @@ Retention gate (Phase 1):
   pins before the retention gate. Day-pin delete only when soft archival
   coverage passes (min written + min ratio vs kept_rows). Journals still
   never deleted here.
+
+  Phase 11: optional hard source-id provenance — LLM returns
+  {fact, source_ids[]} per monthly fact; delete only if every kept day-pin
+  id appears in some source_ids (when HARD_SOURCE_PROVENANCE=1).
   
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
@@ -103,6 +107,8 @@ JOURNAL_PROMOTE_K = max(0, int(os.getenv("MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE_
 DELETE_REQUIRE_COVERAGE = os.getenv("MONTHLY_CONSOLIDATION_DELETE_REQUIRE_COVERAGE", "1").lower() in {"1", "true", "yes", "on"}
 DELETE_MIN_WRITTEN = max(0, int(os.getenv("MONTHLY_CONSOLIDATION_DELETE_MIN_WRITTEN", "1")))
 DELETE_MIN_RATIO = float(os.getenv("MONTHLY_CONSOLIDATION_DELETE_MIN_RATIO", "0.15"))
+# Phase 11: hard source-id provenance before day-pin delete (0 = soft coverage only).
+HARD_SOURCE_PROVENANCE = os.getenv("MONTHLY_CONSOLIDATION_HARD_SOURCE_PROVENANCE", "1").lower() in {"1", "true", "yes", "on"}
 
 _DAILY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
 _MONTHLY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
@@ -512,17 +518,21 @@ _MONTHLY_FACTS_SYSTEM = textwrap.dedent("""
     - For routine/recurring themes with no specific date significance, summarize
       at month-level without inventing a day.
     - Do not invent details, outcomes, dates, or facts not in the sources.
-    - One fact per line, third person, about {USER_ID}.
-    - Each fact must be self-contained and short.
+    - Each fact must be self-contained and short, third person, about {USER_ID}.
 
-    Return ONLY a JSON array of short strings. No markdown, no explanation.
+    Return ONLY a JSON array. Prefer objects with provenance:
+      [{"fact": "...", "source_ids": ["id1", "id2"]}, ...]
+    source_ids must be ids from the input lines (id=...). Many sources may map
+    to one fact. Plain string arrays are accepted only as a degraded fallback.
+    No markdown, no explanation.
 """).strip()
 
 _MONTHLY_FACTS_USER = textwrap.dedent("""
     Month: {month_key}
     Chunk: {idx}/{total}
 
-    Pre-selected daily facts (do not drop except exact/near duplicates):
+    Pre-selected daily facts (id=... | text). Do not drop except exact/near duplicates.
+    Map every id you use into some output source_ids:
     {facts}
 """).strip()
 
@@ -551,45 +561,136 @@ _MONTHLY_MERGE_USER = textwrap.dedent("""
 
 
 def _parse_fact_array(raw: str) -> list[str]:
+    """Legacy: plain string facts only."""
+    items = _parse_fact_items(raw)
+    return [it["fact"] for it in items if it.get("fact")]
+
+
+def _parse_fact_items(raw: str) -> list[dict]:
+    """Parse monthly facts as {fact, source_ids[]} or plain strings."""
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
 
     arrays = _extract_json_arrays(raw)
+    out: list[dict] = []
     for candidate in reversed(arrays):
-        if candidate and all(isinstance(f, str) for f in candidate):
-            return [f.strip() for f in candidate if isinstance(f, str) and f.strip()]
+        if not candidate:
+            continue
+        if all(isinstance(f, str) for f in candidate):
+            return [{"fact": f.strip(), "source_ids": []} for f in candidate if isinstance(f, str) and f.strip()]
+        if all(isinstance(f, dict) for f in candidate):
+            for f in candidate:
+                fact = (f.get("fact") or f.get("text") or f.get("memory") or "").strip()
+                if not fact:
+                    continue
+                sids = f.get("source_ids") or f.get("sources") or f.get("ids") or []
+                if isinstance(sids, str):
+                    sids = [sids]
+                sids = [str(s).strip() for s in sids if str(s).strip()]
+                out.append({"fact": fact, "source_ids": sids})
+            if out:
+                return out
+
+    # Object-array salvage treats quoted source_ids as facts — refuse.
+    if re.search(r"\[\s*\{", raw):
+        log.warning("Monthly-facts object array incomplete/invalid; discarding.")
+        return []
 
     salvaged = _salvage_truncated_facts(raw)
     if salvaged:
         log.warning("Monthly-facts array truncated — salvaged %d fact(s) from partial output.", len(salvaged))
-        return salvaged
+        return [{"fact": f, "source_ids": []} for f in salvaged]
 
     log.warning("Failed to parse monthly-facts JSON: %r", raw[:600])
     return []
 
 
-def _extract_monthly_facts_chunk(month_key: str, facts: list[str], idx: int, total: int) -> list[str]:
+def _extract_monthly_facts_chunk(
+    month_key: str,
+    rows: list[dict],
+    idx: int,
+    total: int,
+) -> list[dict]:
+    """rows: kept day-pin dicts with id + _text (or plain text strings for legacy)."""
+    lines: list[str] = []
+    for r in rows:
+        if isinstance(r, str):
+            lines.append(f"- {r}")
+            continue
+        mid = str(r.get("id") or "").strip()
+        txt = (r.get("_text") or r.get("memory") or "").strip()
+        if not txt:
+            continue
+        if mid:
+            lines.append(f"- id={mid} | {txt}")
+        else:
+            lines.append(f"- {txt}")
     user_prompt = _MONTHLY_FACTS_USER.format(
         month_key=month_key,
         idx=idx,
         total=total,
-        facts=_bounded_lines([f"- {f}" for f in facts]),
+        facts=_bounded_lines(lines),
     )
-    raw = _chat(_MONTHLY_FACTS_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=900, temperature=0.1)
-    return _parse_fact_array(raw)
+    raw = _chat(_MONTHLY_FACTS_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=1100, temperature=0.1)
+    return _parse_fact_items(raw)
 
 
-def _merge_monthly_facts(month_key: str, chunk_facts: list[list[str]]) -> list[str]:
-    if len(chunk_facts) == 1:
-        return chunk_facts[0]
+def _merge_monthly_facts(month_key: str, chunk_items: list[list[dict]]) -> list[dict]:
+    if len(chunk_items) == 1:
+        return chunk_items[0]
+    # Flatten with provenance preserved; LLM merge drops source_ids — re-attach by fact text best-effort later if needed.
+    flat = [it for chunk in chunk_items for it in chunk]
+    if HARD_SOURCE_PROVENANCE:
+        # Keep chunk-level source_ids until merge protocol carries them.
+        return flat
     chunks_text = "\n\n".join(
-        f"List {i+1}:\n" + "\n".join(f"- {f}" for f in facts)
-        for i, facts in enumerate(chunk_facts)
+        f"List {i+1}:\n" + "\n".join(f"- {it.get('fact','')}" for it in facts)
+        for i, facts in enumerate(chunk_items)
     )
     user_prompt = _MONTHLY_MERGE_USER.format(month_key=month_key, chunks=chunks_text)
     raw = _chat(_MONTHLY_MERGE_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=1200, temperature=0.1)
-    merged = _parse_fact_array(raw)
-    return merged or [f for facts in chunk_facts for f in facts]
+    merged = _parse_fact_items(raw)
+    if not merged:
+        return flat
+
+    # Best-effort: reattach source_ids lost by LLM merge (match on fact text).
+    by_text: dict[str, list[str]] = {}
+    for it in flat:
+        key = (it.get("fact") or "").strip().casefold()
+        if not key:
+            continue
+        by_text.setdefault(key, [])
+        for sid in it.get("source_ids") or []:
+            s = str(sid).strip()
+            if s and s not in by_text[key]:
+                by_text[key].append(s)
+
+    for it in merged:
+        if it.get("source_ids"):
+            continue
+        key = (it.get("fact") or "").strip().casefold()
+        if key in by_text:
+            it["source_ids"] = list(by_text[key])
+    return merged
+
+
+def _hard_provenance_ok(kept_rows: list[dict], fact_items: list[dict]) -> tuple[bool, set[str]]:
+    """Every kept day-pin id must appear in some output source_ids."""
+    kept_ids = {str(r.get("id")).strip() for r in kept_rows if r.get("id")}
+    covered: set[str] = set()
+    for it in fact_items:
+        for sid in it.get("source_ids") or []:
+            covered.add(str(sid).strip())
+    if not kept_ids:
+        return True, covered
+    missing = kept_ids - covered
+    if missing:
+        log.warning(
+            "Phase 11 hard provenance: %d/%d kept ids missing from source_ids (sample=%s)",
+            len(missing), len(kept_ids), list(missing)[:5],
+        )
+        return False, covered
+    return True, covered
 
 _DATE_FROM_JOURNAL_RE = re.compile(
     r"(?:Daily journal of |\[)(\d{4}-\d{2}-\d{2})",
@@ -753,7 +854,8 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         memory_day_rows = memory_day_rows + promoted_rows
 
     source_count = len(memory_day_rows) + len(journal_day_rows)
-    if len(memory_day_rows) < CONSOLIDATION_MIN_MEMS:        state["last_consolidated_month"] = month_key
+    if len(memory_day_rows) < CONSOLIDATION_MIN_MEMS:
+        state["last_consolidated_month"] = month_key
         _save_state(state, user_id)
         return {
             "ran": False,
@@ -765,25 +867,29 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
 
     kept_rows, gate_stats = _apply_retention_gate(memorize, user_id, memory_day_rows)
 
-    source_facts = [m.get("_text", "").strip() for m in kept_rows if m.get("_text", "").strip()]
-    chunks = [source_facts[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(source_facts), CONSOLIDATION_CHUNK_MEMS)]
+    kept_for_llm = [m for m in kept_rows if (m.get("_text") or "").strip()]
+    chunks = [kept_for_llm[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(kept_for_llm), CONSOLIDATION_CHUNK_MEMS)]
 
-    chunk_facts = [
+    chunk_items = [
         _extract_monthly_facts_chunk(month_key, chunk, i + 1, len(chunks))
         for i, chunk in enumerate(chunks)
     ]
-    chunk_facts = [c for c in chunk_facts if c]
+    chunk_items = [c for c in chunk_items if c]
 
-    if not chunk_facts:
+    if not chunk_items:
         return {"ran": False, "reason": "empty_extraction", "month": month_key, "count": source_count, **gate_stats}
 
-    final_facts = _merge_monthly_facts(month_key, chunk_facts)
-    if not final_facts:
+    final_items = _merge_monthly_facts(month_key, chunk_items)
+    if not final_items:
         return {"ran": False, "reason": "empty_merge", "month": month_key, "count": source_count, **gate_stats}
 
     facts_written = 0
     written_ids: list[str] = []
-    for fact in final_facts:
+    for item in final_items:
+        fact = (item.get("fact") if isinstance(item, dict) else item) or ""
+        fact = str(fact).strip()
+        if not fact:
+            continue
         try:
             mem_id = memorize.add_raw(f"[{month_key}] {fact}", user_id=user_id, pinned=True)
             if mem_id:
@@ -795,11 +901,14 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     if facts_written == 0:
         return {"ran": False, "reason": "no_facts_written", "month": month_key, "count": source_count, **gate_stats}
 
-    # Phase 7: delete day pins only when enabled AND soft coverage passes.
-    # Journals are never deleted here.
+    # Phase 7 soft coverage + Phase 11 hard source-id provenance before delete.
     daily_deleted = 0
     delete_skipped_reason = ""
     kept_count = len(kept_rows)
+    hard_ok, covered_ids = True, set()
+    if HARD_SOURCE_PROVENANCE:
+        hard_ok, covered_ids = _hard_provenance_ok(kept_rows, final_items)
+
     if CONSOLIDATION_DELETE_DAILY_SUMMARIES:
         if not _delete_coverage_ok(facts_written, kept_count):
             delete_skipped_reason = "coverage_failed"
@@ -809,12 +918,21 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
                 month_key, facts_written, kept_count,
                 DELETE_MIN_WRITTEN, DELETE_MIN_RATIO,
             )
+        elif HARD_SOURCE_PROVENANCE and not hard_ok:
+            delete_skipped_reason = "hard_provenance_failed"
+            log.warning(
+                "Phase 11: skip day-pin delete month=%s — incomplete source_ids coverage",
+                month_key,
+            )
         else:
             for m in memory_day_rows:
                 if m.get("_promoted_from_journal"):
                     continue
                 mem_id = m.get("id")
                 if not mem_id:
+                    continue
+                # When hard provenance is on, only delete ids that were covered.
+                if HARD_SOURCE_PROVENANCE and str(mem_id) not in covered_ids:
                     continue
                 try:
                     memorize.delete(mem_id)
@@ -837,6 +955,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         facts_written, daily_deleted, CONSOLIDATION_DELETE_DAILY_SUMMARIES,
         journal_promoted, delete_skipped_reason or "none",
     )
+    # hard_ok available in locals when Phase 11 enabled
 
     try:
         maintenance_results = _maintenance_run(user_id, memorize=memorize)

@@ -1,28 +1,29 @@
-# Aiko Memory Graph Studio (Phase C)
+# Aiko Memory Graph Studio
 
-Visualize personal memory as a graph — same spirit as `agentic/studio`,
-but for facts, supersession chains, and entity hubs.
+Visualize personal memory as a **galaxy graph** — facts, supersession chains, entity hubs, and Phase 10 retain scores.
 
 ## Run
 
 ```bash
 # from repo root (deps: fastapi uvicorn)
-uv run python -m memory.studio.backend.api
+uv run python -m interface.webui.studio.memory.backend.api
 # → http://localhost:8001
 ```
 
 Or:
 
 ```bash
-uv run uvicorn memory.studio.backend.api:app --host 0.0.0.0 --port 8001
+uv run uvicorn interface.webui.studio.memory.backend.api:app --host 0.0.0.0 --port 8001
+Local only (`127.0.0.1`). For remote access, put an authenticated TLS-terminating reverse proxy in front; do not expose plain HTTP on `0.0.0.0`.
 ```
 
 ## API
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | SPA frontend |
-| `GET /api/graph` | `{nodes, edges, meta}` |
+| `GET /` | SPA frontend (galaxy view) |
+| `GET /api/graph` | `{nodes, edges, meta, legend}` |
+| `GET /api/search` | Memory + knowledge search |
 | `GET /api/health` | Liveness |
 
 Query params for `/api/graph`:
@@ -36,18 +37,34 @@ Query params for `/api/graph`:
 
 **Nodes**
 
-- `type=memory` — fact rows (`label` truncated text, full `text` in details)
-- `type=entity` — shared entity hubs from Phase B tags
+- `type=memory` — fact rows; **`size`** = retain tendency; **`scores`** rim arcs
+- `type=entity` — shared entity hubs; **`size`** ≈ \(I_e\) when available
+
+**Node fields (Phase 10)**
+
+- `scores.retain` — keep-likelihood proxy (not full monthly R)
+- `scores.salience | spacing | connectivity | valence | access` — rim arcs
+- `valence_tag` — pos / neg / neutral
+- `size` — derived from retain / \(I_e\)
 
 **Edges**
 
-- `supersedes` — newer fact → older fact it replaced (Phase A)
-- `mentions` — memory → entity (Phase B)
+- `supersedes` — newer fact → older fact it replaced
+- `mentions` — memory → entity
+- `related_to` / co-mention — entity → entity (`entity_relations`)
 
-Without Phase B tags, entity hubs stay empty; supersedes still show if Phase A ran.
+## Visual encoding
+
+| Channel | Meaning |
+|---------|---------|
+| **Size** | Retain tendency (memories) / entity importance |
+| **Rim arcs** | Factor breakdown |
+| **Fill** | Valence / monthly / entity / pinned |
+| **Dim** | Superseded |
 
 ## Notes
 
 - Read-only — does not write memories
 - No re-embed
-- Draft / smoke-test after Phase A+B on a real DB before relying on it day-to-day
+- Backend: `graph_export.export_memory_graph` (scores computed at export time)
+- Scoring helpers live **inside** `graph_export.py` (no separate `studio_scores.py`)
