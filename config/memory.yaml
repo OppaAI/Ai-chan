@@ -161,10 +161,17 @@ MONTHLY_CONSOLIDATION_KEEP_MONTHS: "1"  # Number of recent full months to keep a
 MONTHLY_CONSOLIDATION_SOFT_THRESHOLD: "0.44"  # Min retention-gate score to survive consolidation; weights max out at ~1.1 (paper weights + valence).
 MONTHLY_CONSOLIDATION_CHUNK_MEMS: "25"  # Memory facts per fallback monthly summary chunk.
 MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS: "6000"  # Max source chars per monthly consolidation LLM request.
-MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "1"  # After folding a month's pinned daily facts/day-records into "[YYYY-MM] ..." consolidated facts, delete the daily-granularity originals. Set to 0 to keep consolidation purely additive (compress + archive, no deletion) until you've verified retrieval/growth behavior.
+MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "0"  # After folding a month's pinned daily facts/day-records into "[YYYY-MM] ..." consolidated facts, delete the daily-granularity originals. Set to 0 to keep consolidation purely additive (compress + archive, no deletion) until you've verified retrieval/growth behavior.
 MONTHLY_CONSOLIDATION_MIN_MEMS: "5"  # Skip fallback months with fewer memories than this.
 MONTHLY_CONSOLIDATION_LLM_TIMEOUT: "120"  # Seconds before monthly summary LLM calls time out.
 MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/monthly_consolidation_state.jsonl.
+
+# -- Phase 7: journal promote + safer day-pin delete --
+MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE: "1"  # Promote top journal fragments into day pins before the retention gate.
+MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE_K: "4"  # Max journal lines promoted per month (selective, not random).
+MONTHLY_CONSOLIDATION_DELETE_REQUIRE_COVERAGE: "1"  # Require soft archival coverage before deleting day pins.
+MONTHLY_CONSOLIDATION_DELETE_MIN_WRITTEN: "1"  # Min [YYYY-MM] facts written before delete is allowed.
+MONTHLY_CONSOLIDATION_DELETE_MIN_RATIO: "0.15"  # Min facts_written / len(kept_rows); else skip delete.
 
 # Experience vector-store config
 #

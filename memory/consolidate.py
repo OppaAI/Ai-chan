@@ -34,6 +34,11 @@ Retention gate (Phase 1):
   
   Phase 6 novelty: blend distance to static [YYYY-MM] anchors with distance to a
   dynamic anchor (mean of recent active memory vectors).
+
+  Phase 7: selective journal fragment promote (top-K by salience) into day
+  pins before the retention gate. Day-pin delete only when soft archival
+  coverage passes (min written + min ratio vs kept_rows). Journals still
+  never deleted here.
   
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
@@ -92,6 +97,12 @@ LLM_BASE_URL          = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
 LLM_MODEL             = os.getenv("REFLECT_MODEL", os.getenv("LLM_MODEL", "ministral"))
 CONSOLIDATION_LLM_TIMEOUT = float(os.getenv("MONTHLY_CONSOLIDATION_LLM_TIMEOUT", os.getenv("LLM_TIMEOUT", "120")))
 CONSOLIDATION_DELETE_DAILY_SUMMARIES = os.getenv("MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES", "0").lower() in {"1", "true", "yes", "on"}
+
+JOURNAL_PROMOTE = os.getenv("MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE", "1").lower() in {"1", "true", "yes", "on"}
+JOURNAL_PROMOTE_K = max(0, int(os.getenv("MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE_K", "4")))
+DELETE_REQUIRE_COVERAGE = os.getenv("MONTHLY_CONSOLIDATION_DELETE_REQUIRE_COVERAGE", "1").lower() in {"1", "true", "yes", "on"}
+DELETE_MIN_WRITTEN = max(0, int(os.getenv("MONTHLY_CONSOLIDATION_DELETE_MIN_WRITTEN", "1")))
+DELETE_MIN_RATIO = float(os.getenv("MONTHLY_CONSOLIDATION_DELETE_MIN_RATIO", "0.15"))
 
 _DAILY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
 _MONTHLY_FACT_TAG_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
@@ -580,6 +591,122 @@ def _merge_monthly_facts(month_key: str, chunk_facts: list[list[str]]) -> list[s
     merged = _parse_fact_array(raw)
     return merged or [f for facts in chunk_facts for f in facts]
 
+_DATE_FROM_JOURNAL_RE = re.compile(
+    r"(?:Daily journal of |\[)(\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+
+
+def _journal_fragment_lines(body: str) -> list[str]:
+    """Split a journal blob into candidate fact-like lines."""
+    lines: list[str] = []
+    for raw in (body or "").splitlines():
+        s = raw.strip().lstrip("-•*").strip()
+        if len(s) < 20:
+            continue
+        if s.lower().startswith("daily journal"):
+            continue
+        lines.append(s)
+    return lines
+
+
+def _score_journal_fragment(text: str) -> float:
+    """Cheap promote score: must_keep / salience / length (no LLM)."""
+    score = 0.2
+    if _is_must_keep(text):
+        score += 0.5
+    if SALIENCE_POLICY_RE.search(text or ""):
+        score += 0.3
+    score += min(0.2, len(text) / 500.0)
+    return score
+
+
+def _promote_journal_fragments(
+    memorize,
+    user_id: str,
+    month_key: str,
+    journal_day_rows: list[dict],
+    memory_day_rows: list[dict],
+) -> tuple[list[dict], int]:
+    """Select top-K journal lines not already covered by day pins; write as pinned day facts.
+
+    Returns (new_day_rows_to_append, promoted_count).
+    """
+    if not JOURNAL_PROMOTE or JOURNAL_PROMOTE_K <= 0 or not journal_day_rows:
+        return [], 0
+
+    existing_norms = {
+        re.sub(r"\s+", " ", (r.get("_text") or "").casefold().strip())
+        for r in memory_day_rows
+    }
+
+    candidates: list[tuple[float, str, str]] = []  # score, date_tag, text
+    for j in journal_day_rows:
+        body = j.get("_text") or ""
+        m = _DATE_FROM_JOURNAL_RE.search(body)
+        day = m.group(1) if m else None
+        if not day or not day.startswith(month_key):
+            # fallback: try entry metadata
+            day = str(j.get("entry_date") or j.get("date") or "")[:10]
+            if not re.match(r"\d{4}-\d{2}-\d{2}", day):
+                continue
+        for line in _journal_fragment_lines(body):
+            tagged = f"[{day}] {line}"
+            norm = re.sub(r"\s+", " ", tagged.casefold().strip())
+            if norm in existing_norms:
+                continue
+            # skip near-dup of line alone inside existing texts
+            line_norm = re.sub(r"\s+", " ", line.casefold().strip())
+            if any(line_norm in e for e in existing_norms if len(line_norm) > 30):
+                continue
+            candidates.append((_score_journal_fragment(line), day, line))
+
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    picked = candidates[:JOURNAL_PROMOTE_K]
+    new_rows: list[dict] = []
+    for _sc, day, line in picked:
+        tagged = f"[{day}] {line}"
+        try:
+            mem_id = memorize.add_raw(tagged, user_id=user_id, pinned=True)
+            if not mem_id:
+                continue
+            new_rows.append({
+                "id": mem_id,
+                "memory": tagged,
+                "pinned": 1,
+                "access_count": 0,
+                "access_day_count": 0,
+                "entities": "[]",
+                "salience_hit": 1 if SALIENCE_POLICY_RE.search(line) else 0,
+                "valence_tag": "neutral",
+                "status": "active",
+                "_store": "memory",
+                "_text": tagged,
+                "_promoted_from_journal": True,
+            })
+            existing_norms.add(re.sub(r"\s+", " ", tagged.casefold().strip()))
+        except Exception as exc:
+            log.warning("Journal promote failed for %r: %s", tagged[:80], exc)
+
+    if new_rows:
+        log.info(
+            "Phase 7 journal promote: %d fragment(s) -> day pins for %s",
+            len(new_rows), month_key,
+        )
+    return new_rows, len(new_rows)
+
+
+def _delete_coverage_ok(facts_written: int, kept_count: int) -> bool:
+    """Soft archival coverage: enough monthly facts vs gated survivors."""
+    if not DELETE_REQUIRE_COVERAGE:
+        return True
+    if facts_written < DELETE_MIN_WRITTEN:
+        return False
+    if kept_count <= 0:
+        return facts_written >= DELETE_MIN_WRITTEN
+    ratio = facts_written / float(kept_count)
+    return ratio >= DELETE_MIN_RATIO
+
 
 def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str | None = None) -> dict:
     if not CONSOLIDATION_ENABLED:
@@ -618,9 +745,15 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     except Exception as exc:
         log.warning("Failed to load daily journals for monthly consolidation: %s", exc)
 
+    # Phase 7: selective journal promote into day pins (before gate + min-count).
+    promoted_rows, journal_promoted = _promote_journal_fragments(
+        memorize, user_id, month_key, journal_day_rows, memory_day_rows,
+    )
+    if promoted_rows:
+        memory_day_rows = memory_day_rows + promoted_rows
+
     source_count = len(memory_day_rows) + len(journal_day_rows)
-    if len(memory_day_rows) < CONSOLIDATION_MIN_MEMS:
-        state["last_consolidated_month"] = month_key
+    if len(memory_day_rows) < CONSOLIDATION_MIN_MEMS:        state["last_consolidated_month"] = month_key
         _save_state(state, user_id)
         return {
             "ran": False,
@@ -662,19 +795,32 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     if facts_written == 0:
         return {"ran": False, "reason": "no_facts_written", "month": month_key, "count": source_count, **gate_stats}
 
-    # Phase 1: only memory.db day pins may be deleted (when DELETE is on).
-    # Journals are never deleted here — they were not LLM-archived sources.
+    # Phase 7: delete day pins only when enabled AND soft coverage passes.
+    # Journals are never deleted here.
     daily_deleted = 0
+    delete_skipped_reason = ""
+    kept_count = len(kept_rows)
     if CONSOLIDATION_DELETE_DAILY_SUMMARIES:
-        for m in memory_day_rows:
-            mem_id = m.get("id")
-            if not mem_id:
-                continue
-            try:
-                memorize.delete(mem_id)
-                daily_deleted += 1
-            except Exception as e:
-                log.warning("Failed to delete consolidated daily row %s: %s", mem_id, e)
+        if not _delete_coverage_ok(facts_written, kept_count):
+            delete_skipped_reason = "coverage_failed"
+            log.warning(
+                "Phase 7: skip day-pin delete month=%s facts_written=%s kept_rows=%s "
+                "(need written>=%s and ratio>=%.2f)",
+                month_key, facts_written, kept_count,
+                DELETE_MIN_WRITTEN, DELETE_MIN_RATIO,
+            )
+        else:
+            for m in memory_day_rows:
+                if m.get("_promoted_from_journal"):
+                    continue
+                mem_id = m.get("id")
+                if not mem_id:
+                    continue
+                try:
+                    memorize.delete(mem_id)
+                    daily_deleted += 1
+                except Exception as e:
+                    log.warning("Failed to delete consolidated daily row %s: %s", mem_id, e)
 
     state["last_consolidated_month"] = month_key
     state["last_summary_ids"]        = written_ids
@@ -683,11 +829,13 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     log.info(
         "monthly_consolidate complete: month=%s source_count=%s memory_days=%s "
         "journals=%s journals_deleted=0 must_keep=%s candidates=%s kept_candidates=%s "
-        "dropped_candidates=%s facts_written=%s daily_deleted=%s delete_enabled=%s",
+        "dropped_candidates=%s facts_written=%s daily_deleted=%s delete_enabled=%s "
+        "journal_promoted=%s delete_skipped=%s",
         month_key, source_count, len(memory_day_rows), len(journal_day_rows),
         gate_stats["must_keep"], gate_stats["candidates"],
         gate_stats["kept_candidates"], gate_stats["dropped_candidates"],
         facts_written, daily_deleted, CONSOLIDATION_DELETE_DAILY_SUMMARIES,
+        journal_promoted, delete_skipped_reason or "none",
     )
 
     try:
@@ -705,6 +853,8 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         "facts_written":  facts_written,
         "daily_deleted":  daily_deleted,
         "journals_deleted": 0,
+        "journal_promoted": journal_promoted,
+        "delete_skipped_reason": delete_skipped_reason,
         **gate_stats,
     }
 
