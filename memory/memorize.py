@@ -2220,7 +2220,7 @@ class _MemoryBackend:
                     r["_recall_score"] = float(r.get("_recall_score") or 0.0) + boost
                 results.sort(key=lambda x: float(x.get("_recall_score") or 0.0), reverse=True)
             except Exception:
-                pass
+                log.debug("spreading activation score boost skipped: %s", exc)
 
         return results[:limit]
       
