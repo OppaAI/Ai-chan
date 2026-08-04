@@ -265,8 +265,11 @@ def _build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
     cutoff = now - timedelta(days=_DYNAMIC_ANCHOR_DAYS)
 
     def _ts(m):
-        raw = m.get("last_accessed_at") or m.get("created_at") or ""
-        if not raw or raw == "never":
+        # Prefer last_accessed; treat "never" as missing so created_at can win.
+        raw = m.get("last_accessed_at") or ""
+        if not raw or str(raw).strip().lower() == "never":
+            raw = m.get("created_at") or ""
+        if not raw or str(raw).strip().lower() == "never":
             return None
         try:
             dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
@@ -278,16 +281,23 @@ def _build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
 
     scored = []
     for m in all_mems:
+        # Match active-recall filter used elsewhere.
+        status = (m.get("status") or "active")
+        if str(status).lower() not in ("active",):
+            continue
+
         text = (m.get("memory") or "").strip()
         if not text:
             continue
         if _MONTHLY_FACT_TAG_RE.match(text):
             continue
+
         dt = _ts(m)
-        if dt is not None and dt < cutoff:
+        if dt is None or dt < cutoff:
             continue
+
         ac = int(m.get("access_count") or 0)
-        scored.append((dt or now, ac, text))
+        scored.append((dt, ac, text))
 
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
     texts = [t for _, _, t in scored[:_DYNAMIC_ANCHOR_LIMIT]]
