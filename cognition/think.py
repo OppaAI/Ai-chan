@@ -1017,7 +1017,9 @@ class AikoThink:
             # Memory + KB — either resolved from route()'s post-intent future,
             # or fetched directly if this was called standalone.
             memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-            memory_block = self._get_memorize().format_for_context(memories)
+            memory_block = self._get_memorize().format_for_context(
+              memories, query=user_input
+            )
             persona_block = self._get_memorize().persona_context()
         
         system = self._current_system_prompt(user_input)
