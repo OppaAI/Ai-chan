@@ -557,10 +557,6 @@
         .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : '#3de0ff')
         .attr('stroke-width', d => d.type === 'supersedes' ? 1.4 : (0.6 + (d.weight ? Math.min(2, Number(d.weight)) * 0.3 : 0.8)))
         .attr('stroke-opacity', d => edgeOpacity(d, nodeById))
-        // on node circle, not on link:
-        .attr('stroke-dasharray', d =>
-          (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
-        )
         .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null);
 
       const node = g.append('g').selectAll('g').data(nodes).join('g')
@@ -587,7 +583,10 @@
         .attr('stroke', d => d.pinned ? '#ffffff' : d._hueCol)
         .attr('stroke-width', d => d.pinned ? 1.8 : 0.9)
         .attr('stroke-opacity', d => d.pinned ? 0.7 : 0.35 + retainOf(d) * 0.4);
-
+        .attr('stroke-dasharray', d =>
+                  (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
+                )
+      
       // quiet rim arcs (factor scores) — outside body, low opacity
       node.each(function(d) {
         const sc = d.scores || {};
