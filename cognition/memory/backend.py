@@ -540,7 +540,14 @@ Rules:
 - If nothing is worth remembering, return: []
 
 Return ONLY a JSON array of objects. No markdown. No explanation.
-Each object: {{"fact": "<one short self-contained sentence>", "valence_score": <int>}}
+Each object:
+{"fact": "<third-person sentence>", "subject": "user"|"assistant", "valence_score": <int>}
+
+subject MUST match the speaker line:
+- "{user_name}: ..." → "user" → fact starts with "{user_name}"
+- "Aiko: ..." → "assistant" → fact starts with "Aiko"
+- User giving the assistant rules ("follow my rules") → subject "assistant",
+  e.g. "Aiko should follow {user_name}'s rules"
 valence_score is -2..+2 (user feeling: -2 strong neg … 0 neutral/technical … +2 strong pos).
 Use 0 when there is no clear emotion.
 
@@ -559,6 +566,25 @@ Bad examples (do not produce these):
 Conversation:
 {conversation}"""
 
+def _force_subject_name(text: str, subject: str, user_name: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return t
+    name = "Aiko" if subject == "assistant" else user_name
+    low = t.casefold()
+    # strip a leading wrong/right name token once
+    for prefix in (user_name, "Aiko", "User", "Assistant"):
+        if prefix and low.startswith(prefix.casefold()):
+            parts = t.split(None, 1)
+            t = parts[1] if len(parts) > 1 else ""
+            low = t.casefold()
+            break
+    if not t:
+        return name
+    if not t.casefold().startswith(name.casefold()):
+        body = t[0].lower() + t[1:] if t else t
+        t = f"{name} {body}"
+    return t.strip()
 
 def _sanitize_fts_query(query: str) -> str | None:
     """
@@ -1380,9 +1406,10 @@ class _MemoryBackend:
                             "type": "object",
                             "properties": {
                                 "fact": {"type": "string"},
+                                "subject": {"type": "string", "enum": ["user", "assistant"]},
                                 "valence_score": {"type": "integer"},
                             },
-                            "required": ["fact"],
+                            "required": ["fact", "subject"],
                         },
                     },
                 },
