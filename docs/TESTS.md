@@ -90,7 +90,7 @@ Run before any phase suite.
 - [ ] `PRAGMA cipher_page_size = 4096` is applied consistently — reopening a DB created by this code with a different page size setting does not silently corrupt reads.
 - [ ] Switching `SQLITE_ENCRYPTION` from `0` to `1` (or vice versa) against an *existing* unencrypted/encrypted DB is documented behavior — confirm it fails loudly (wrong file format) rather than appearing to "work" while actually creating a second shadow DB or silently reading garbage.
 - [ ] `DATA_KEY_SECRET`/`SECRET_KEY` value is never printed in logs, error messages, or debug output (only the *derived per-user key* should ever appear, and only in contexts that already treat it as sensitive).
-- [ ] Concurrent access: two connections opened for the same `user_id` (e.g. `AikoMemorize` main thread + write-queue worker thread — see `memory/memorize.py`'s `_write_loop`) both derive the same key and don't race on `PRAGMA key`.
+- [ ] Concurrent access: two connections opened for the same `user_id` (e.g. `AikoMemorize` main thread + write-queue worker thread — see `cognition/memory/memorize.py`'s `_write_loop`) both derive the same key and don't race on `PRAGMA key`.
 
 ---
 
@@ -604,7 +604,7 @@ Run before any phase suite.
 - [ ] Ambiguous queries like "I need to organize my photos" fall back to LLM router when enabled.
 - [ ] Routing latency: semantic path < 50ms, LLM fallback < 500ms on Jetson.
 
-### 2.5.13 Async memory write queue idle-grace window (`memory/memorize.py`)
+### 2.5.13 Async memory write queue idle-grace window (`cognition/memory/memorize.py`)
 
 *`queue_write()` / `_wait_for_write_window()` can silently delay a write up to `MEMORY_WRITE_MAX_WAIT` (default 45s) waiting for an idle window before running fact-extraction on the shared LLM. If this stalls or races, a memory write looks "lost" when it's actually just queued — worth distinguishing from a genuine extraction failure.*
 
