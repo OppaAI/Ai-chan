@@ -2372,26 +2372,26 @@ class _MemoryBackend:
             except Exception as exc:
                 log.debug("spreading activation score boost skipped: %s", exc)
 
-    if MEMORY_NEG_RECALL_AVOID and results:
-        relax = MEMORY_NEG_RECALL_AVOID_EXCEPT and query_wants_emotion(query or "")
-        if not relax:
-            w = MEMORY_NEG_RECALL_AVOID_WEIGHT
-            for r in results:
-                if r.get("pinned"):
-                    continue
-                tag = (str(r.get("valence_tag") or "")).strip().lower()
-                vs = r.get("valence_score")
-                is_neg = tag == "neg"
-                if not is_neg and vs is not None and str(vs).strip() != "":
-                    try:
-                        is_neg = int(vs) <= -1
-                    except (TypeError, ValueError):
-                        pass
-                if is_neg:
-                    # use the same score key you sort on
-                    key = "_recall_score"  # or "score" — match your pipeline
-                    r[key] = float(r.get(key) or 0.0) - w
-            results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
+        if MEMORY_NEG_RECALL_AVOID and results:
+            relax = MEMORY_NEG_RECALL_AVOID_EXCEPT and query_wants_emotion(query or "")
+            if not relax:
+                w = MEMORY_NEG_RECALL_AVOID_WEIGHT
+                for r in results:
+                    if r.get("pinned"):
+                        continue
+                    tag = (str(r.get("valence_tag") or "")).strip().lower()
+                    vs = r.get("valence_score")
+                    is_neg = tag == "neg"
+                    if not is_neg and vs is not None and str(vs).strip() != "":
+                        try:
+                            is_neg = int(vs) <= -1
+                        except (TypeError, ValueError):
+                            pass
+                    if is_neg:
+                        # use the same score key you sort on
+                        key = "_recall_score"  # or "score" — match your pipeline
+                        r[key] = float(r.get(key) or 0.0) - w
+                results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
           
         return results[:limit]
       
