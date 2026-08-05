@@ -511,7 +511,10 @@ Rules:
 - No uncertain language: never use might, probably, seems, maybe, perhaps, appears.
 - If nothing is worth remembering, return: []
 
-Return ONLY a JSON array of short strings. No markdown. No explanation.
+Return ONLY a JSON array of objects. No markdown. No explanation.
+Each object: {"fact": "<one short self-contained sentence>", "valence_score": <int>}
+valence_score is -2..+2 (user feeling: -2 strong neg … 0 neutral/technical … +2 strong pos).
+Use 0 when there is no clear emotion.
 
 Good examples:
 ["{user_name}'s birthday is June 3", "{user_name} is building a robot called GRACE", "{user_name} joined the Hugging Face Hackathon", "{user_name} lost his wallet", "{user_name} has a deadline on Friday", "{user_name} dislikes mushrooms"]
