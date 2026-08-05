@@ -315,22 +315,6 @@
       return o;
     }
 
-    function lineageText(d, graph) {
-      if (!d || d.type !== 'memory') return '';
-      const edges = (graph.edges || []).filter(e => e.type === 'supersedes');
-      // edge: newer -> older (confirm your export direction; adjust if reversed)
-      const olderId = edges.find(e => e.source === d.id || e.source?.id === d.id)?.target;
-      const newerId = edges.find(e => e.target === d.id || e.target?.id === d.id)?.source;
-      const nodes = Object.fromEntries((graph.nodes || []).map(n => [n.id, n]));
-      const bits = [];
-      const oid = typeof olderId === 'object' ? olderId.id : olderId;
-      const nid = typeof newerId === 'object' ? newerId.id : newerId;
-      if (oid && nodes[oid]) bits.push('Was: ' + (nodes[oid].text || nodes[oid].label || '').slice(0, 100));
-      if (nid && nodes[nid]) bits.push('Now: ' + (nodes[nid].text || nodes[nid].label || '').slice(0, 100));
-      if (d.status === 'superseded') bits.unshift('(superseded)');
-      return bits.join('\n');
-    }
-
     function glowStrength(d) {
       let r = retainOf(d);
       if (d.pinned) r = Math.max(r, 0.95);
@@ -356,7 +340,23 @@
       return 0.08 + mid * 0.45;
     }
 
-    function showDetails(d) {
+    function lineageText(d, graph) {
+      if (!d || d.type !== 'memory') return '';
+      const edges = (graph.edges || []).filter(e => e.type === 'supersedes');
+      // edge: newer -> older (confirm your export direction; adjust if reversed)
+      const olderId = edges.find(e => e.source === d.id || e.source?.id === d.id)?.target;
+      const newerId = edges.find(e => e.target === d.id || e.target?.id === d.id)?.source;
+      const nodes = Object.fromEntries((graph.nodes || []).map(n => [n.id, n]));
+      const bits = [];
+      const oid = typeof olderId === 'object' ? olderId.id : olderId;
+      const nid = typeof newerId === 'object' ? newerId.id : newerId;
+      if (oid && nodes[oid]) bits.push('Was: ' + (nodes[oid].text || nodes[oid].label || '').slice(0, 100));
+      if (nid && nodes[nid]) bits.push('Now: ' + (nodes[nid].text || nodes[nid].label || '').slice(0, 100));
+      if (d.status === 'superseded') bits.unshift('(superseded)');
+      return bits.join('\n');
+    }
+    
+  function showDetails(d) {
       const el = document.getElementById('details');
       el.style.display = 'block';
       const sc = d.scores || {};
@@ -373,15 +373,23 @@
         ['status', d.status],
         ['pinned', d.pinned ? 'yes' : 'no'],
         ['valence', d.valence_tag || '—'],
-        ['retain', (sc.retain != null ? Number(sc.retain) : retainOf(d)).toFixed(3)],
+        ['retain', retainOf(d).toFixed(3)],
         ['created', d.created_at || '—'],
         ['entities', (d.entities || []).join(', ') || '—'],
         ['supersedes', d.supersedes_id || '—'],
         ['text', d.text || d.label || ''],
       ];
-      el.innerHTML = '<h3>Neuron</h3>' + rows.map(([k,v]) =>
+      let html = '<h3>Neuron</h3>' + rows.map(([k,v]) =>
         `<div class="detail-label">${k}</div><div class="detail-value">${escapeHtml(String(v))}</div>`
       ).join('') + '<h3 style="margin-top:14px">Factor scores</h3>' + scoreRows;
+
+      // Phase 16 — lineage (uses global `graph` from loadGraph)
+      const lin = lineageText(d, graph);
+      if (lin) {
+        html += '<h3 style="margin-top:14px">Lineage</h3>'
+          + `<div class="detail-value" style="white-space:pre-wrap">${escapeHtml(lin)}</div>`;
+      }
+      el.innerHTML = html;
     }
 
     function escapeHtml(s) {
