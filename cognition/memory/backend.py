@@ -527,8 +527,8 @@ def _valence_from_llm() -> bool:
 
 # Extraction prompt — temperature 0.0, explicit only-stated-facts rule.
 _EXTRACT_PROMPT = """\
-Extract memorable facts about {user_name} from this conversation.
-{user_name} is the user (he/him). You are Aiko, the assistant.
+Extract memorable facts from this conversation.
+{user_name} is the user (he/him). Aiko is the assistant. Attribute each fact to the correct person.
 
 Rules:
 - Only include facts the speaker stated explicitly. Never infer or assume.
@@ -544,13 +544,17 @@ Each object: {{"fact": "<one short self-contained sentence>", "valence_score": <
 valence_score is -2..+2 (user feeling: -2 strong neg … 0 neutral/technical … +2 strong pos).
 Use 0 when there is no clear emotion.
 
-Speaker attribution: 'Aiko: I am off limits to others' → {{"fact": "Aiko is off limits to others"}}. NOT '{{user_name}} says he is off limits to others'.
+Speaker attribution (critical):
+- 'Aiko: I am off limits to others' → {{"fact": "Aiko is off limits to others"}}. NEVER "{user_name} is off limits..." or "{user_name} says he is off limits...".
+- 'Aiko: I dislike being treated as human-like' → {{"fact": "Aiko dislikes being treated as human-like"}}. NEVER "{user_name} dislikes being human-like".
+- '{user_name}: follow my rules' / rules for the assistant → {{"fact": "Aiko should follow {user_name}'s rules"}}. NEVER "{user_name} needs to follow {user_name}'s rules".
+- '{user_name}: I prefer dark mode' → {{"fact": "{user_name} prefers dark mode"}}.
 
 Good examples:
-[{{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "valence_score": 0}}]
+[{{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "valence_score": 0}}, {{"fact": "Aiko dislikes being treated as human-like", "valence_score": -1}}, {{"fact": "Aiko should follow {user_name}'s rules", "valence_score": 0}}]
 
 Bad examples (do not produce these):
-[{{"fact": "{user_name} might like cats", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "valence_score": 0}}, {{"fact": "Aiko should remember this", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "valence_score": 0}}]
+[{{"fact": "{user_name} might like cats", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "valence_score": 0}}, {{"fact": "Aiko should remember this", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "valence_score": 0}}, {{"fact": "{user_name} dislikes being human-like", "valence_score": -1}}, {{"fact": "{user_name} needs to follow {user_name}'s rules", "valence_score": 0}}]
 
 Conversation:
 {conversation}"""
@@ -1461,7 +1465,13 @@ class _MemoryBackend:
                 continue
             clean_pairs.append((fact, sc))
 
-        return clean_pairs
+        # Repair common user/assistant subject swaps (Oppa vs Aiko).
+        from cognition.memory.fact_identity import sanitize_fact_score_pairs
+        return sanitize_fact_score_pairs(
+            clean_pairs,
+            user_name=user_name,
+            assistant_name="Aiko",
+        )
 
     # ── write ─────────────────────────────────────────────────────────────────
 
