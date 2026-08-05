@@ -1534,7 +1534,7 @@ class _MemoryBackend:
             try:
                 from datetime import datetime
                 import json
-                hour = datetime.now().hour  # or bioclock if you use it
+                hour = bioclock.local_now().hour
                 state_json = json.dumps({"local_hour": int(hour)}, ensure_ascii=False)
                 ext_cols.append("state_json")
                 ext_vals.append(state_json)
