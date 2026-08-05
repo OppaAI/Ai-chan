@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiko Neural Memory</title>
+  <link rel="stylesheet" href="memory_graph.css" />
+</head>
+<body>
+  <header>
+    <div style="display: flex; align-items: center; gap: 14px;">
+      <a href="javascript:history.back();" title="Back"
+         style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:#1a1028;border:1px solid var(--dim);border-radius:50%;color:var(--purple);text-decoration:none;font-weight:bold;">←</a>
+      <h1>Neural Memory</h1>
+    </div>
+    <div class="actions">
+      <span id="status" style="font-size:11px;color:var(--dim)"></span>
+      <button class="btn" id="refresh">Refresh</button>
+      <button class="btn btn-primary" id="export">Export JSON</button>
+    </div>
+  </header>
+  <div class="body">
+    <aside class="sidebar">
+      <h2>Search</h2>
+      <label>Query <input type="text" id="search-q" placeholder="e.g. ROS2, OppaAI…" /></label>
+      <button class="btn btn-primary" id="search-btn" style="width:100%;margin-top:4px">Search mem + KB</button>
+      <div class="stat" id="search-stats">—</div>
+      <h2>Filters</h2>
+      <label>User id <input type="text" id="user-id" placeholder="(current)" /></label>
+      <label>Limit <input type="number" id="limit" value="200" min="1" max="2000" /></label>
+      <label>From <input type="date" id="date-from" /></label>
+      <label>To <input type="date" id="date-to" /></label>
+      <label><input type="checkbox" id="include-history" checked /> Include superseded</label>
+      <label><input type="checkbox" id="include-entities" checked /> Entity hubs</label>
+      <label><input type="checkbox" id="include-knowledge" checked /> Knowledge</label>
+      <label><input type="checkbox" id="include-experience" checked /> Experience</label>
+      <label><input type="checkbox" id="layer-memory" checked /> Show memory</label>
+      <label><input type="checkbox" id="layer-entity" checked /> Show entities</label>
+      <label><input type="checkbox" id="layer-knowledge" checked /> Show knowledge</label>
+      <label><input type="checkbox" id="layer-experience" checked /> Show experience</label>
+      <label>Status
+        <select id="filter-status">
+          <option value="all">all</option>
+          <option value="active">active</option>
+          <option value="superseded">superseded</option>
+        </select>
+      </label>
+      <label>Valence
+        <select id="filter-valence">
+          <option value="all">all</option>
+          <option value="pos">pos</option>
+          <option value="neg">neg</option>
+          <option value="neutral">neutral</option>
+        </select>
+      </label>
+      <label>Min retain <input type="number" id="filter-min-retain" value="0" min="0" max="1" step="0.05" /></label>
+      <label>Entity contains <input type="text" id="filter-entity" placeholder="e.g. ros2" /></label>
+      <button class="btn btn-primary" id="apply" style="width:100%;margin-top:10px">Apply</button>
+      <button class="btn" id="apply-filters" style="width:100%;margin-top:6px">Re-filter (no reload)</button>
+      <h2>Stats</h2>
+      <div class="stat" id="stats">—</div>
+      <h2>Legend</h2>
+      <div class="stat"><b>Size + glow</b> = retain (stay ↔ forget)</div>
+      <div class="stat"><b>Rim</b> = sal · space · conn · val · access (quiet)</div>
+      <div class="stat" style="margin-top:8px"><i style="background:var(--neg);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--neg)"></i> neg (cyan)</div>
+      <div class="stat"><i style="background:var(--pos);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pos)"></i> pos (gold)</div>
+      <div class="stat"><i style="background:var(--neutral);width:10px;height:10px;border-radius:50%;display:inline-block"></i> neutral</div>
+      <div class="stat"><i style="background:var(--entity);width:10px;height:10px;border-radius:50%;display:inline-block"></i> entity</div>
+      <div class="stat"><i style="background:var(--pink);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pink)"></i> imprint (survived consolidation)</div>
+      <div class="stat">Pinned = brightest of valence hue</div>
+      <div class="stat"><i style="background:var(--orange);width:14px;height:3px;display:inline-block"></i> supersedes</div>
+    </aside>
+    <div class="canvas-area" id="canvas-area">
+      <svg id="canvas"></svg>
+      <div class="details" id="details"></div>
+      <div class="legend">
+        <span><i style="background:var(--orange);border-radius:0;height:3px;width:14px"></i>supersedes</span>
+        <span><i style="background:#3de0ff55"></i>synapse</span>
+        <span><i style="background:#4ade80"></i>knowledge</span>
+        <span><i style="background:#fb923c"></i>experience</span>
+        <span><i style="background:#c651a8"></i>imprint</span>
+        <span><i style="background:#f0c14a"></i>pos</span>
+        <span><i style="background:#3de0ff"></i>neg</span>
+        <span>brighter / larger → tends to stay</span>
+      </div>
+      <div class="legend-row muted" style="font-size:10px;margin-top:8px">
+        Dashed / dim = superseded · solid = active tip
+      </div>
+      <div class="zoom">
+        <button id="zoom-in">+</button>
+        <button id="zoom-out">−</button>
+        <button id="zoom-fit">⊡</button>
+      </div>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="memory_graph.js"></script>
+</body>
+</html>
