@@ -239,3 +239,11 @@ MONTHLY_CONSOLIDATION_HARD_SOURCE_PROVENANCE: "1"  # Require every kept day-pin 
 # Phase 15
 MEMORY_VALENCE_FROM_LLM: "1"   # use extract valence_score when present
 # Studio curves live in graph_export / index.html for now
+
+# -- Phase 16: human-feel recall --
+MEMORY_STATE_TAGS_ENABLED: "1"
+MEMORY_NEG_RECALL_AVOID: "1"
+MEMORY_NEG_RECALL_AVOID_WEIGHT: "0.015"   # subtract from rank when avoid applies
+MEMORY_NEG_RECALL_AVOID_EXCEPT: "1"      # skip avoid if query looks emotional/reflective
+MEMORY_SUPERSESSION_NARRATIVE: "1"
+MEMORY_SUPERSESSION_NARRATIVE_MAX: "2"   # max chains to narrate per turn
