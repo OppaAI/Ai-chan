@@ -572,6 +572,7 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("access_day_count", "INTEGER NOT NULL DEFAULT 0"),
   # Phase 4: turn-level emotion / salience tags (cheap, no LLM).
     ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
+    ("valence_score", "INTEGER"),  # -2..+2; NULL = legacy/unknown
     ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
 )
 
@@ -692,18 +693,41 @@ SALIENCE_POLICY_RE = re.compile(
     re.IGNORECASE,
 )
 
-def infer_valence_tag(text: str) -> str:
-    """Cheap pos/neg/neutral from emoji + lexicon. No LLM."""
+_VALENCE_STRONG_RE = re.compile(
+    r"\b(?:very|so|extremely|furious|devastat|ecstatic|hate this|love this|terrified|overjoyed)\b|!{2,}",
+    re.IGNORECASE,
+)
+
+def infer_valence_score(text: str) -> int:
+    """Return −2…+2 from emoji + lexicon + intensifiers. No LLM / no Harrier."""
     t = text or ""
     neg = bool(_VALENCE_NEG_RE.search(t))
     pos = bool(_VALENCE_POS_RE.search(t))
+    strong = bool(_VALENCE_STRONG_RE.search(t))
     if neg and not pos:
-        return "neg"
+        return -2 if strong else -1
     if pos and not neg:
-        return "pos"
+        return 2 if strong else 1
     if neg and pos:
-        return "neg"  # conflict → treat as emotionally loaded neg for retention
+        return -1
+    return 0
+
+
+def tag_from_score(score: int) -> str:
+    try:
+        s = int(score)
+    except (TypeError, ValueError):
+        return "neutral"
+    if s <= -1:
+        return "neg"
+    if s >= 1:
+        return "pos"
     return "neutral"
+
+
+def infer_valence_tag(text: str) -> str:
+    """Backward-compatible 3-way tag derived from 5-pt score."""
+    return tag_from_score(infer_valence_score(text))
 
 
 def infer_salience_hit(text: str) -> int:
@@ -1385,6 +1409,7 @@ class _MemoryBackend:
         entities: list[str] | None = None,
         scene_id: str | None = None,
         valence_tag: str | None = None,
+        valence_score: int | None = None,
         salience_hit: int | None = None,
     ) -> None:
         """Insert one memory row (Phase A + L2 columns when present) + its
@@ -1550,11 +1575,8 @@ class _MemoryBackend:
                     )[-400:]
                     tag_src = f"{fact}\n{assist_blob}"
                     v_score = infer_valence_score(tag_src)
-                    v_tag = infer_valence_tag(tag_src)
-                    valence_tag=tag_from_score(v_score),
-                    valence_score=v_score,
                     s_hit = max(infer_salience_hit(fact), infer_salience_hit(assist_blob))
-                  
+
                     self._insert_row(
                         mem_id=mem_id,
                         user_id=user_id,
@@ -1564,7 +1586,8 @@ class _MemoryBackend:
                         pinned=0,
                         source=SOURCE_CHAT,
                         supersedes_id=supersedes_id,
-                        valence_tag=v_tag,
+                        valence_tag=tag_from_score(v_score),
+                        valence_score=v_score,
                         salience_hit=s_hit,
                     )
                     ids.append(mem_id)
@@ -3807,7 +3830,7 @@ class AikoMemorize:
                 kept += 1
                 continue
               
-            v_tag = m.get("valence_tag")v_tag = m.get("valence_tag")
+            v_tag = m.get("valence_tag")
             v_score = m.get("valence_score")
             if should_cleanup(ac, la, created_at, valence_tag=v_tag, valence_score=v_score):
                 w = compute_weighted_score(ac, la, valence_tag=v_tag, valence_score=v_score)
