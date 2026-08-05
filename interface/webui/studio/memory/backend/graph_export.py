@@ -28,6 +28,24 @@ _SPACING_SAT = max(1, int(os.getenv("MONTHLY_CONSOLIDATION_SPACING_SATURATION", 
 _DAILY_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s")
 _MONTHLY_RE = re.compile(r"^\[\d{4}-\d{2}\]\s")
 
+def _env_int(name: str, default: int, *, floor: int = 0) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return max(floor, default)
+    try:
+        return max(floor, int(str(raw).strip()))
+    except (TypeError, ValueError):
+        log.warning("Invalid %s=%r; using default %s", name, raw, default)
+        return max(floor, default)
+
+_MAX_MEMORIES = _env_int("MEMORY_STUDIO_MAX_MEMORIES", 400, floor=1)
+_MAX_ENTITIES = _env_int("MEMORY_STUDIO_MAX_ENTITIES", 120, floor=0)
+_MAX_EDGES = _env_int("MEMORY_STUDIO_MAX_EDGES", 200, floor=0)
+_MAX_KNOWLEDGE = _env_int("MEMORY_STUDIO_MAX_KNOWLEDGE", 80, floor=0)
+_MAX_EXPERIENCE = _env_int("MEMORY_STUDIO_MAX_EXPERIENCE", 40, floor=0)
+_INCLUDE_KNOWLEDGE = os.getenv("MEMORY_STUDIO_INCLUDE_KNOWLEDGE", "1").lower() in {"1", "true", "yes", "on"}
+_INCLUDE_EXPERIENCE = os.getenv("MEMORY_STUDIO_INCLUDE_EXPERIENCE", "1").lower() in {"1", "true", "yes", "on"}
+
 
 def _entities_from_raw(raw: Any) -> list[str]:
     if raw is None or raw == "":
@@ -160,6 +178,8 @@ def export_memory_graph(
     limit: int = 200,
     include_history: bool = True,
     include_entities: bool = True,
+    include_knowledge: bool | None = None,
+    include_experience: bool | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     """Build a graph dict: {nodes, edges, meta, legend}.
@@ -174,6 +194,10 @@ def export_memory_graph(
       - co_mentions / related_to: entity → entity (entity_relations)
     """
     uid = user_id or current_user_id()
+    if include_knowledge is None:
+        include_knowledge = _INCLUDE_KNOWLEDGE
+    if include_experience is None:
+        include_experience = _INCLUDE_EXPERIENCE
     owns_conn = conn is None
     if conn is None:
         from memory.vecstore import initialize_store_db
@@ -233,24 +257,34 @@ def export_memory_graph(
         params: list[Any] = [uid]
         if has_status and not include_history:
             sql += " AND (status = 'active' OR status IS NULL)"
+            
+        try:
+            req_limit = int(limit) if limit is not None else 200
+        except (TypeError, ValueError):
+            req_limit = 200
+        if req_limit < 1:
+            req_limit = 200
+        effective_limit = min(req_limit, _MAX_MEMORIES)
+        # Over-fetch so retain ranking can prefer strong older rows in a wider window
+        fetch_n = min(max(effective_limit * 3, effective_limit), max(_MAX_MEMORIES * 3, effective_limit))
+
         sql += " ORDER BY created_at DESC"
-        if limit and limit > 0:
+        if fetch_n > 0:
             sql += " LIMIT ?"
-            params.append(int(limit))
+            params.append(int(fetch_n))
 
         rows = conn.execute(sql, params).fetchall()
 
         entity_importance: dict[str, float] = {}
         try:
             from memory.entity_importance import compute_entity_importance_map
-            # Prefer map from memorize if available; else empty
-            entity_importance = {}
-            try:
-                from memory.memorize import AikoMemorize
-                mem = AikoMemorize(silent=True)
-                entity_importance = compute_entity_importance_map(mem, uid) or {}
-            except Exception:
-                entity_importance = {}
+            from types import SimpleNamespace
+
+            # Reuse export conn + uid (no new AikoMemorize / write worker).
+            entity_importance = compute_entity_importance_map(
+                SimpleNamespace(_conn=conn, _db_lock=None),
+                uid,
+            ) or {}
         except Exception as ex:
             log.debug("graph_export: I_e map skipped: %s", ex)
 
@@ -372,7 +406,7 @@ def export_memory_graph(
 
                 ensure_entity_relations_schema(conn)
                 for e in relations_as_graph_edges(
-                    conn, user_id=uid, limit=max(int(limit) * 2, 500)
+                    conn, user_id=uid, limit=max(int(fetch_n) * 2, 500)
                 ):
                     for endpoint in (e["source"], e["target"]):
                         if endpoint not in entity_ids and endpoint not in mem_ids:
@@ -408,18 +442,65 @@ def export_memory_graph(
             except Exception as ex:
                 log.debug("graph_export: entity_relations skipped: %s", ex)
 
+
+        # Phase 13b: knowledge + experience layers (entity overlap)
+        if include_knowledge and _MAX_KNOWLEDGE > 0:
+            try:
+                _add_knowledge_layer(conn, uid, nodes, edges, entity_ids, mem_ids)
+            except Exception as ex:
+                log.debug("graph_export: knowledge layer skipped: %s", ex)
+        if include_experience and _MAX_EXPERIENCE > 0:
+            try:
+                _add_experience_layer(conn, uid, nodes, edges, entity_ids, mem_ids)
+            except Exception as ex:
+                log.debug("graph_export: experience layer skipped: %s", ex)
+
+        mem_nodes = [n for n in nodes if n.get("type") == "memory"]
+        ent_nodes = [n for n in nodes if n.get("type") == "entity"]
+        kb_nodes = [n for n in nodes if n.get("type") == "knowledge"]
+        exp_nodes = [n for n in nodes if n.get("type") == "experience"]
+        mem_nodes.sort(
+            key=lambda n: float((n.get("scores") or {}).get("retain") or n.get("size") or 0),
+            reverse=True,
+        )
+        # Prefer high retain among the over-fetched window
+        mem_nodes = mem_nodes[:effective_limit]
+        ent_nodes.sort(key=lambda n: float(n.get("size") or 0), reverse=True)
+        ent_nodes = ent_nodes[:_MAX_ENTITIES]
+        kb_nodes = kb_nodes[:_MAX_KNOWLEDGE]
+        exp_nodes = exp_nodes[:_MAX_EXPERIENCE]
+        keep_ids = (
+            {n["id"] for n in mem_nodes}
+            | {n["id"] for n in ent_nodes}
+            | {n["id"] for n in kb_nodes}
+            | {n["id"] for n in exp_nodes}
+        )
+        nodes = mem_nodes + ent_nodes + kb_nodes + exp_nodes
+        edges = [e for e in edges if e.get("source") in keep_ids and e.get("target") in keep_ids]
+        edges.sort(
+            key=lambda e: (0 if e.get("type") == "supersedes" else 1, -float(e.get("weight") or 0)),
+        )
+        edges = edges[:_MAX_EDGES]
+        
         return {
             "nodes": nodes,
             "edges": edges,
             "meta": {
                 "user_id": uid,
-                "memory_count": len(mem_ids),
-                "entity_count": len(entity_ids),
+                "memory_count": len(mem_nodes),
+                "entity_count": len(ent_nodes),
                 "edge_count": len(edges),
                 "include_history": include_history,
                 "include_entities": include_entities,
                 "limit": limit,
                 "theme": "galaxy",
+                "max_memories": _MAX_MEMORIES,
+                "max_entities": _MAX_ENTITIES,
+                "max_edges": _MAX_EDGES,
+                "max_knowledge": _MAX_KNOWLEDGE,
+                "max_experience": _MAX_EXPERIENCE,
+                "include_knowledge": include_knowledge,
+                "include_experience": include_experience,
             },
             "legend": _legend(),
         }
@@ -488,3 +569,265 @@ def relations_as_graph_edges(
             "weight": float(rel.get("weight") or 1.0),
         })
     return edges
+
+
+def _add_knowledge_layer(
+    conn: sqlite3.Connection,
+    uid: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    entity_ids: set[str],
+    mem_ids: set[str],
+) -> None:
+    """Add learned_chunks as knowledge nodes + about / grounded_in edges."""
+    kb_conn = conn
+    owns = False
+    try:
+        cols = {r[1] for r in kb_conn.execute("PRAGMA table_info(learned_chunks)").fetchall()}
+    except Exception:
+        cols = set()
+    if not cols or "id" not in cols:
+        try:
+            from memory.knowledge import _connect as kb_connect
+            kb_conn = kb_connect(uid)
+            owns = True
+            cols = {r[1] for r in kb_conn.execute("PRAGMA table_info(learned_chunks)").fetchall()}
+        except Exception as ex:
+            log.debug("knowledge layer open failed: %s", ex)
+            return
+    if not cols or "id" not in cols:
+        if owns:
+            try:
+                kb_conn.close()
+            except Exception:
+                pass
+        return
+    has_ent = "entities" in cols
+    has_status = "status" in cols
+    sql = "SELECT id, text, created_at"
+    if has_ent:
+        sql += ", entities"
+    if has_status:
+        sql += ", status"
+    sql += " FROM learned_chunks WHERE user_id = ?"
+    if has_status:
+        sql += " AND (status = 'active' OR status IS NULL)"
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    try:
+        rows = kb_conn.execute(sql, (uid, _MAX_KNOWLEDGE)).fetchall()
+    except Exception as ex:
+        log.debug("knowledge layer query failed: %s", ex)
+        if owns:
+            try:
+                kb_conn.close()
+            except Exception:
+                pass
+        return
+
+    mem_ents: dict[str, set[str]] = {}
+    for e in edges:
+        if e.get("type") == "mentions":
+            mid, eid = e.get("source"), e.get("target")
+            if mid in mem_ids and isinstance(eid, str) and eid.startswith("ent:"):
+                mem_ents.setdefault(str(mid), set()).add(eid.removeprefix("ent:").casefold())
+
+    try:
+        for row in rows:
+            kid = f"kb:{row['id']}"
+            text = (row["text"] or "").strip()
+            label = text if len(text) <= 72 else text[:69] + "…"
+            ents = _entities_from_raw(row["entities"]) if has_ent else []
+            nodes.append({
+                "id": kid,
+                "type": "knowledge",
+                "label": label,
+                "text": text,
+                "status": "active",
+                "kind": "knowledge",
+                "source": "learned_chunks",
+                "pinned": False,
+                "access_count": 0,
+                "created_at": row["created_at"] if "created_at" in row.keys() else None,
+                "entities": ents,
+                "supersedes_id": None,
+                "valence_tag": "neutral",
+                "scores": {
+                    "retain": 0.55, "salience": 0.4, "spacing": 0.0,
+                    "connectivity": 0.0, "valence": 0.25, "access": 0.0,
+                },
+                "size": 0.45,
+            })
+            for ent in ents:
+                eid = f"ent:{ent}"
+                if eid not in entity_ids:
+                    entity_ids.add(eid)
+                    nodes.append({
+                        "id": eid,
+                        "type": "entity",
+                        "label": ent,
+                        "text": ent,
+                        "status": "active",
+                        "kind": "entity",
+                        "source": "",
+                        "pinned": False,
+                        "access_count": 0,
+                        "created_at": None,
+                        "entities": [],
+                        "supersedes_id": None,
+                        "valence_tag": "neutral",
+                        "scores": {
+                            "retain": 0.3, "importance": 0.3, "salience": 0.0,
+                            "spacing": 0.0, "connectivity": 0.3, "valence": 0.25, "access": 0.0,
+                        },
+                        "size": 0.35,
+                    })
+                edges.append({
+                    "id": f"about:{kid}->{eid}",
+                    "source": kid,
+                    "target": eid,
+                    "type": "about",
+                    "weight": 1.0,
+                })
+                ent_cf = ent.casefold()
+                for mid, mes in mem_ents.items():
+                    if ent_cf in mes:
+                        edges.append({
+                            "id": f"grounded:{mid}->{kid}",
+                            "source": mid,
+                            "target": kid,
+                            "type": "grounded_in",
+                            "weight": 1.0,
+                        })
+    finally:
+        if owns:
+            try:
+                kb_conn.close()
+            except Exception:
+                pass
+
+
+def _add_experience_layer(
+    conn: sqlite3.Connection,
+    uid: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    entity_ids: set[str],
+    mem_ids: set[str],
+) -> None:
+    """Add experiences as nodes + about / practiced_in edges (separate DB)."""
+    exp_conn = None
+    owns = False
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(experiences)").fetchall()}
+        exp_conn = conn
+    except Exception:
+        cols = set()
+    if not cols or "id" not in cols:
+        try:
+            from agentic.experience import _connect as exp_connect
+            exp_conn = exp_connect(uid)
+            owns = True
+            cols = {r[1] for r in exp_conn.execute("PRAGMA table_info(experiences)").fetchall()}
+        except Exception as ex:
+            log.debug("experience layer open failed: %s", ex)
+            return
+    if not cols or "id" not in cols or exp_conn is None:
+        return
+    has_ent = "entities" in cols
+    sql = "SELECT id, goal, record_text, outcome, answer_excerpt, created_at"
+    if has_ent:
+        sql += ", entities"
+    sql += " FROM experiences WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
+    try:
+        rows = exp_conn.execute(sql, (uid, _MAX_EXPERIENCE)).fetchall()
+    except Exception as ex:
+        log.debug("experience layer query failed: %s", ex)
+        if owns:
+            try:
+                exp_conn.close()
+            except Exception:
+                pass
+        return
+
+    mem_ents: dict[str, set[str]] = {}
+    for e in edges:
+        if e.get("type") == "mentions":
+            mid, eid = e.get("source"), e.get("target")
+            if mid in mem_ids and isinstance(eid, str) and eid.startswith("ent:"):
+                mem_ents.setdefault(str(mid), set()).add(eid.removeprefix("ent:").casefold())
+
+    try:
+        for row in rows:
+            xid = f"exp:{row['id']}"
+            text = (row["record_text"] or row["goal"] or row["answer_excerpt"] or "").strip()
+            goal = (row["goal"] or text)[:72]
+            label = goal + ("…" if len(goal) >= 72 else "")
+            ents = _entities_from_raw(row["entities"]) if has_ent else []
+            nodes.append({
+                "id": xid,
+                "type": "experience",
+                "label": label,
+                "text": text,
+                "status": "active",
+                "kind": "experience",
+                "source": "experiences",
+                "pinned": False,
+                "access_count": 0,
+                "created_at": row["created_at"] if "created_at" in row.keys() else None,
+                "entities": ents,
+                "supersedes_id": None,
+                "valence_tag": "neutral",
+                "outcome": row["outcome"] if "outcome" in row.keys() else "",
+                "scores": {
+                    "retain": 0.5, "salience": 0.35, "spacing": 0.0,
+                    "connectivity": 0.0, "valence": 0.25, "access": 0.0,
+                },
+                "size": 0.42,
+            })
+            for ent in ents:
+                eid = f"ent:{ent}"
+                if eid not in entity_ids:
+                    entity_ids.add(eid)
+                    nodes.append({
+                        "id": eid,
+                        "type": "entity",
+                        "label": ent,
+                        "text": ent,
+                        "status": "active",
+                        "kind": "entity",
+                        "source": "",
+                        "pinned": False,
+                        "access_count": 0,
+                        "created_at": None,
+                        "entities": [],
+                        "supersedes_id": None,
+                        "valence_tag": "neutral",
+                        "scores": {
+                            "retain": 0.3, "importance": 0.3, "salience": 0.0,
+                            "spacing": 0.0, "connectivity": 0.3, "valence": 0.25, "access": 0.0,
+                        },
+                        "size": 0.35,
+                    })
+                edges.append({
+                    "id": f"about:{xid}->{eid}",
+                    "source": xid,
+                    "target": eid,
+                    "type": "about",
+                    "weight": 1.0,
+                })
+                ent_cf = ent.casefold()
+                for mid, mes in mem_ents.items():
+                    if ent_cf in mes:
+                        edges.append({
+                            "id": f"practiced:{mid}->{xid}",
+                            "source": mid,
+                            "target": xid,
+                            "type": "practiced_in",
+                            "weight": 1.0,
+                        })
+    finally:
+        if owns and exp_conn is not None:
+            try:
+                exp_conn.close()
+            except Exception:
+                pass
