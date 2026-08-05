@@ -350,18 +350,26 @@ def _score_daily_row(
     else:
         salience = 1.0 if SALIENCE_POLICY_RE.search(text) else 0.3
 
-    v_raw = (row.get("valence_tag") or "neutral")
-    if isinstance(v_raw, str):
-        v_raw = v_raw.strip().lower()
+    vs = row.get("valence_score")
+    if vs is not None and str(vs).strip() != "":
+        try:
+            s = max(-2, min(2, int(vs)))
+            valence = 0.25 + 0.30 * abs(s)  # 0.25, 0.55, 0.85
+        except (TypeError, ValueError):
+            valence = 0.25
     else:
-        v_raw = "neutral"
-    # Intensity for retention (neg slightly stronger — Phase 5 will use for decay).
-    if v_raw == "neg":
-        valence = 0.85
-    elif v_raw == "pos":
-        valence = 0.65
-    else:
-        valence = 0.25
+        v_raw = (row.get("valence_tag") or "neutral")
+        if isinstance(v_raw, str):
+            v_raw = v_raw.strip().lower()
+        else:
+            v_raw = "neutral"
+        if v_raw == "neg":
+            valence = 0.85
+        elif v_raw == "pos":
+            valence = 0.65
+        else:
+            valence = 0.25
+
     # Phase 2: distinct recall days (access_day_count). Fallback for pre-Phase-2 rows.
     day_count = int(row.get("access_day_count") or 0)
     if day_count <= 0:
