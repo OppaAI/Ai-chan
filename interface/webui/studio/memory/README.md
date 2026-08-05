@@ -66,7 +66,7 @@ Related knowledge and experience appear as extra node types, linked by shared en
 | `practiced_in` | memory → experience (shared entity) |
 
 ### API
-```
+```http
 GET /api/graph?include_knowledge=true&include_experience=true
 ```
 
