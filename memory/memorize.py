@@ -2421,13 +2421,19 @@ class _MemoryBackend:
                     expanded.append(hit)
                     seen.add(mid)
                     continue
-                for node in chain:
+
+                # Normalize: list[dict], oldest → newest
+                chain_rows = [dict(n) for n in chain]
+                tip_id = str(chain_rows[-1].get("id") or mid)
+
+                for node in chain_rows:
                     nid = str(node.get("id") or "")
                     if not nid or nid in seen:
                         continue
                     node = dict(node)
                     node["_recall_score"] = hit.get("_recall_score", 0.0)
-                    node["_supersession_chain"] = True
+                    # Full chain for narrative (same list on each member is fine)
+                    node["_supersession_chain"] = chain_rows
                     expanded.append(node)
                     seen.add(nid)
         return expanded[: max(limit, min(len(expanded), limit * 2))]
