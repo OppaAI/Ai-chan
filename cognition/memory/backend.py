@@ -1381,6 +1381,8 @@ class _MemoryBackend:
             return []
 
         user_name = (display_name or current_display_name()).strip()
+        if user_name.casefold() == "aiko":
+            user_name = "User"  # belt only — prefer reject at set time      
         convo = "\n".join(
             f"{user_name}: {m['content'].strip()}" if m["role"] == "user"
             else f"Aiko: {m['content'].strip()}"
