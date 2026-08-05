@@ -78,7 +78,14 @@ def _resolve_db_path(user_id: str) -> Path:
     return resolve_user_db_path("memory/memory.db", user_id=user_id)
 
 
-def _valence_score(tag: Any) -> float:
+def _valence_score(tag: Any, score: Any = None) -> float:
+    """0..1 rim. Prefer 5-pt score when present."""
+    if score is not None and str(score).strip() != "":
+        try:
+            s = max(-2, min(2, int(score)))
+            return round(0.25 + 0.30 * abs(s), 4)
+        except (TypeError, ValueError):
+            pass
     t = (str(tag or "neutral")).strip().lower()
     if t == "neg":
         return 0.85
