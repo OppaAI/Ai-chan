@@ -1054,7 +1054,8 @@ class TestCrossStoreUserScoping:
                 h = hashlib.sha256(t.encode()).digest()
                 raw = (h * (640 // len(h) + 1))[:2560]
                 arr = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)[:640]/255.0*2-1
-                n = np.linalg.norm(arr); return arr/n if n else arr
+                n = np.linalg.norm(arr)
+                return arr / n if n else arr
 
         fe = FE()
         exp_id = str(uuid.uuid4())

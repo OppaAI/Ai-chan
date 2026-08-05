@@ -1420,7 +1420,10 @@ class _MemoryBackend:
                 if t:
                     pairs.append((t, None))
             elif isinstance(x, dict):
-                t = (x.get("fact") or x.get("text") or "").strip()
+                raw_fact = x.get("fact") or x.get("text") or ""
+                if not isinstance(raw_fact, str):
+                    continue
+                t = raw_fact.strip()
                 sc = x.get("valence_score", x.get("valence"))
                 try:
                     sc_i = max(-2, min(2, int(sc))) if sc is not None else None
@@ -1593,6 +1596,12 @@ class _MemoryBackend:
             vectors = self._embed_batch(facts)
         except Exception as e:
             log.warning("Batch embedding failed, aborting write: %s", e)
+            return []
+        if len(vectors) != len(pairs):
+            log.warning(
+                "Batch embedding count mismatch: %d facts, %d vectors; aborting write",
+                len(pairs), len(vectors),
+            )
             return []
 
         with self._db_lock:

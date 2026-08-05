@@ -365,8 +365,7 @@ def export_memory_graph(
                 "entities": ents,
                 "supersedes_id": supersedes_id,
                 "valence_tag": valence_tag,
-                    "valence_score": row.get("valence_score") if isinstance(row, dict)
-                                    else getattr(row, "valence_score", None),
+                    "valence_score": valence_score,
                     "size": size,
                     "scores": scores,
                 })
