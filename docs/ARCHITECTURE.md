@@ -81,7 +81,7 @@ sequenceDiagram
     participant UI as WebUI or CLI
     participant W as system.wakeup.AikoWakeup
     participant T as cognition.think.AikoThink
-    participant Mem as memory.memorize.AikoMemorize
+    participant Mem as cognition.memory.memorize.AikoMemorize
     participant S as sensory.speak.AikoSpeak
     participant L as sensory.listen.AikoListen
 
@@ -115,7 +115,7 @@ sequenceDiagram
     participant UI as WebUI or CLI
     participant M as main.py session loop
     participant T as cognition.think.AikoThink
-    participant Mem as memory.memorize.AikoMemorize
+    participant Mem as cognition.memory.memorize.AikoMemorize
     participant A as agentic.agentic
     participant G as agentic.schema
     participant Tools as toolkit tools

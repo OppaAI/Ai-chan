@@ -1,5 +1,5 @@
 """
-memory/journal.py
+cognition/consolidate/journal.py
 
 Encrypted daily journal store for faithful reflection records.
 
@@ -13,7 +13,7 @@ import os
 import uuid
 from datetime import datetime
 
-from memory.vecstore import delete_user_row, initialize_store_db, utc_now_iso
+from cognition.memory.vecstore import delete_user_row, initialize_store_db, utc_now_iso
 from system.userspace import current_user_id
 
 JOURNAL_DB_PATH = os.getenv("JOURNAL_DB_PATH", "memory/journal.db")

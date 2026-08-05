@@ -1,5 +1,5 @@
 """
-memory/reflect.py
+cognition/memory/reflect.py
 Aiko's nightly experience-summary writer.
 
 Called at 00:00 and then dream() starts afterwards. Pulls the day's chat turns and
@@ -317,11 +317,11 @@ _IMAGE_PROMPT_SYSTEM = textwrap.dedent("""
     You are Aiko. Given the day's summary of what happened, imagine
     a single vivid anime scene that captures it. Choose the setting,
     lighting, and who appears based on what feels true to the day.
-    
+
     Write a scene prompt (under 60 words) for an anime illustration model.
     Focus on mood, atmosphere, and activity — let the memories guide what
     the image should show.
-    
+
     Return ONLY the prompt text. No explanation, no quotes, no preamble.
 """).strip()
 
@@ -329,7 +329,7 @@ _IMAGE_PROMPT_USER = "Daily summary:\n\n{prose}\n\nImagine the scene."
 
 _FEELINGS_SYSTEM = textwrap.dedent("""
     You are Aiko writing a private journal entry about {USER_ID} in shoujo monologue style.
-    
+
     Shoujo monologue style means:
     - Introspective and emotional — quiet feelings, not loud ones.
     - Rooted in small, concrete moments — a pause, a glance, a late-night message, the way light falls across the desk.
@@ -521,7 +521,7 @@ def _build_hugo_post(
     body = prose
     if feelings:
         body += f"\n\n---\n\n{feelings}"
-    
+
     body += f"\n\n*Generated from {mem_count} memories on {date_str}.*"
     content = f"{front_matter}\n\n{body}\n"
     return slug, content
@@ -728,7 +728,7 @@ def generate_and_post(
         display_name = memorize.get_display_name()
     elif display_name is None:
         display_name = current_display_name()
-    
+
     if memorize is not None:
         # Set user context before image generation so _load_reference_images()
         # uses the correct user_id from memorize (not "guest" from scheduler thread)
@@ -858,7 +858,7 @@ def generate_and_post(
     # paraphrased, never invented.
     journal_pinned = False
     try:
-        from memory.journal import pin_daily_journal
+        from cognition.consolidate.journal import pin_daily_journal
         daily_journal = build_daily_journal(snippets, date)
         journal_pinned = bool(pin_daily_journal(daily_journal, date, user_id=uid))
     except Exception as e:

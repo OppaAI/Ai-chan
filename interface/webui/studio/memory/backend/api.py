@@ -69,7 +69,7 @@ async def search(
         return {"query": "", "hits": [], "meta": {"user_id": uid}}
 
     try:
-        from memory.memorize import AikoMemorize
+        from cognition.memory.memorize import AikoMemorize
 
         memorize = AikoMemorize(silent=True)
     except Exception as e:

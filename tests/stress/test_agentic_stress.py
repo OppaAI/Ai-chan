@@ -227,7 +227,7 @@ class TestMemoryKnowledgeStress:
 
     def test_concurrent_memory_searches(self):
         """Concurrent memory searches don't corrupt cache."""
-        from memory.memorize import AikoMemorize, _MemoryBackend
+        from cognition.memory.memorize import AikoMemorize, _MemoryBackend
 
         # Create backend with some data
         import tempfile

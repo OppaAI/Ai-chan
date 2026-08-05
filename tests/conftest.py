@@ -182,5 +182,5 @@ def mock_external_services():
 
 def _connect(db_path: str):
     """Import connect function at runtime to avoid circular imports."""
-    from memory.knowledge import _connect as _connect_fn
+    from cognition.knowledge import _connect as _connect_fn
     return _connect_fn(db_path)

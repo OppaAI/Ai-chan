@@ -4,7 +4,7 @@ cognition/think.py
 Aiko's chat facade.
   - Routes between single-shot chat and the agentic task loop in agentic.agentic.
   - Streams llama.cpp response to console + TTS simultaneously.
-  - Queues long-term memory writes (delegated to memory.memorize's async write queue).
+  - Queues long-term memory writes (delegated to cognition.memory.memorize's async write queue).
   - Owns scheduled-job callbacks and idle learner handoff (delegated to memory.learn).
   - Owns the proactive idle check-in state machine (config/proactive.yaml),
     which is also the "is Aiko resting" signal memory.learn's idle_learner_loop
@@ -45,12 +45,12 @@ import threading
 import time
 import unicodedata
 
-from memory.memorize import AikoMemorize
+from cognition.memory.memorize import AikoMemorize
 from sensory.speak    import AikoSpeak
 from agentic.tools    import web_search_context
 from agentic.agentic  import run_agentic_chat
 from agentic.wiki import wiki_knowledge_context_for
-from memory.knowledge import knowledge_context_for
+from cognition.knowledge import knowledge_context_for
 from cognition import CONTEXT_POOL
 from system.log      import get_logger
 from system.schedule import DueJob, register_system_handler
@@ -58,7 +58,7 @@ from system.userspace import current_user_id, current_display_name, user_profile
 from system import bioclock
 from agentic.toolkit.social import run_scheduled_weekly_social
 from cognition import reason
-from memory import learn
+from cognition.memory import learn
 
 log = get_logger(__name__)
 register_system_handler("weekly_social", run_scheduled_weekly_social)
@@ -1148,7 +1148,7 @@ class AikoThink:
   
     def wait_for_memory(self, timeout: float | None = None) -> bool:
         """Block until AikoMemorize's async write queue drains, or timeout
-        elapses. The queue itself now lives in memory.memorize; this is a
+        elapses. The queue itself now lives in cognition.memory.memorize; this is a
         thin passthrough kept for call sites that only know about the
         AikoThink instance. No longer called from agentic.agentic's turn
         start (see run_agentic_chat) — draining there was removed since
@@ -1334,7 +1334,7 @@ class AikoThink:
 
     def _store_async(self, user_input: str, response_text: str) -> None:
         """Queue a fire-and-forget memory write. The actual queue/worker
-        thread now lives on AikoMemorize (memory.memorize); this just wires
+        thread now lives on AikoMemorize (cognition.memory.memorize); this just wires
         up this instance's idle-tracking callables (is_active_turn /
         idle_since) so the write waits for a genuinely idle window before
         using the shared LLM for fact extraction. Kept as a method (rather

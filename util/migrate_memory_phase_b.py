@@ -27,8 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Count candidates only")
     args = parser.parse_args(argv)
 
-    from memory.memorize import backfill_entities, ensure_phase_a_schema, existing_columns
-    from memory.vecstore import initialize_store_db, resolve_user_db_path
+    from cognition.memory.memorize import backfill_entities, ensure_phase_a_schema, existing_columns
+    from cognition.memory.vecstore import initialize_store_db, resolve_user_db_path
     from system.userspace import current_user_id
 
     uid = (args.user_id or "").strip() or current_user_id()

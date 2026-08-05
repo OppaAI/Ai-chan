@@ -29,7 +29,7 @@ import uuid
 import numpy as np
 import pytest
 
-from memory.memorize import (
+from cognition.memory.memorize import (
     AikoMemorize,
     MEMORY_WRITE_IDLE_GRACE,
     MEMORY_WRITE_MAX_WAIT,
@@ -46,7 +46,7 @@ class FakeEmbedder:
 
     def _vec(self, text: str) -> np.ndarray:
         import hashlib
-        from memory.memorize import EMBED_DIMS
+        from cognition.memory.memorize import EMBED_DIMS
         h = hashlib.sha256(text.encode("utf-8")).digest()
         raw = (h * (EMBED_DIMS // len(h) + 1))[: EMBED_DIMS * 4]
         arr = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)

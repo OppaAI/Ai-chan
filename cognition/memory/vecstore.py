@@ -334,7 +334,7 @@ def initialize_store_db(
     #  no runtime monkey-patching needed.)
     if "memories_vec" in (ddl or "") or "CREATE TABLE IF NOT EXISTS memories" in (ddl or ""):
         try:
-            from memory.memorize import ensure_phase_a_schema
+            from cognition.memory.memorize import ensure_phase_a_schema
             ensure_phase_a_schema(conn)
         except Exception:
             # Never block boot on optional Phase A wiring.

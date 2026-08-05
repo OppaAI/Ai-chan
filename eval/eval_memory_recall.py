@@ -122,7 +122,7 @@ def _rank_of(results: list[dict], target_id: str) -> int | None:
 
 
 def run_eval(verbose: bool = False) -> dict:
-    from memory.memorize import _MemoryBackend
+    from cognition.memory.memorize import _MemoryBackend
 
     backend = _MemoryBackend(
         db_path="/tmp/eval_memory_recall.db",

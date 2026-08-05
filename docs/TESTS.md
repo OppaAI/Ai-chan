@@ -133,7 +133,7 @@ Run before any phase suite.
 - [ ] `/clear` wipes memories; `/memory` is empty afterward and no stale recall appears in the next turn.
 - [ ] `--clear-mem` wipes memories and exits cleanly without launching the UI.
 - [ ] DB file exists after first write: `ls -lh "$SQLITE_MEMORY_PATH"`.
-- [ ] `uv run python -c "from memory.memorize import AikoMemorize; m=AikoMemorize(); print(m.dream(dry_run=True))"` completes without error.
+- [ ] `uv run python -c "from cognition.memory.memorize import AikoMemorize; m=AikoMemorize(); print(m.dream(dry_run=True))"` completes without error.
 - [ ] Corrupt/locked DB simulation is handled safely: Aiko reports the memory problem and continues chat if possible, without overwriting unrelated files.
 - [ ] Duplicate memory pressure test: repeat the same fact 20 times; recall does not become dominated by redundant near-identical entries.
 - [ ] Unicode memory test: store Japanese, Korean, emoji, and mixed punctuation; recall and display remain readable.

@@ -34,7 +34,7 @@ from unittest.mock import MagicMock
 sys.modules.setdefault("pygame", MagicMock())
 sys.modules.setdefault("openai", MagicMock())
 
-from memory.memorize import AikoMemorize
+from cognition.memory.memorize import AikoMemorize
 from cognition.think import (
     AikoThink,
     LLM_BASE_URL,

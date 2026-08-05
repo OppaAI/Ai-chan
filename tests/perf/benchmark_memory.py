@@ -45,14 +45,14 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 try:
-    from memory.memorize import (
+    from cognition.memory.memorize import (
         AikoMemorize,
         MEMORY_LIFECYCLE_BATCH_SIZE,
         MEMORY_SEARCH_CACHE_TTL,
         _MemoryBackend,
     )
 except ImportError as e:  # pragma: no cover
-    pytest.skip(f"memory.memorize not importable in this environment: {e}", allow_module_level=True)
+    pytest.skip(f"cognition.memory.memorize not importable in this environment: {e}", allow_module_level=True)
 
 
 pytestmark = pytest.mark.perf
@@ -160,7 +160,7 @@ class TestSearchLatency:
         impossibly high, so every search widens. This is the worst-case
         per-turn search latency -- worth knowing explicitly since it's a
         real (if less common) path in production, not just a hypothetical."""
-        import memory.memorize as memorize_module
+        import cognition.memory.memorize as memorize_module
         monkeypatch.setattr(memorize_module, "MEMORY_RECALL_SCORE_THRESHOLD", 999.0)
         benchmark(seeded_backend.search, "tell me about Oppa", "perf_user", 5)
 

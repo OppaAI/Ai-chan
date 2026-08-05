@@ -25,7 +25,7 @@ import time
 import numpy as np
 import pytest
 
-from memory.memorize import AikoMemorize, EMBED_DIMS
+from cognition.memory.memorize import AikoMemorize, EMBED_DIMS
 from system import userspace
 
 

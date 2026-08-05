@@ -189,7 +189,7 @@ def _patch_common(monkeypatch, *, think_cls=FakeThink, memorize_cls=FakeMemorize
     # register_deep_study_handlers lives on memory.learn -- patch the
     # attribute wakeup.py actually calls through (module-level import
     # inside boot(), so patch the source module directly).
-    import memory.learn as learn_module
+    import cognition.memory.learn as learn_module
     monkeypatch.setattr(learn_module, "register_deep_study_handlers", _noop)
 
     # _prewarm_semantic_cache pulls constants from cognition.think --
@@ -215,7 +215,7 @@ class TestBootLabels:
         define the same key, one silently overwrites the other in the merge
         -- this test catches that before it becomes a UI display bug."""
         from cognition.think import BOOT_LABELS as think_labels
-        from memory.memorize import BOOT_LABELS as mem_labels
+        from cognition.memory.memorize import BOOT_LABELS as mem_labels
         from sensory.speak import BOOT_LABELS as speak_labels
         from sensory.listen import BOOT_LABELS as listen_labels
 

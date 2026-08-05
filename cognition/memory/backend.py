@@ -1,5 +1,5 @@
 """
-memory/memorize.py
+cognition/memory/backend.py
 Aiko's persistent memory — custom backend via sqlite-vec + HarrierEmbedder (GGUF/llama.cpp).
 Abstracts all memory calls so think.py stays clean.
 
@@ -17,7 +17,7 @@ Memory lifecycle:
     memories aren't immediately swept.
   - cleanup() deletes memories below decay threshold, with grace period
     protection for newly created entries.
-  - Decay logic lives in memory/forget.py (pure math, no I/O).
+  - Decay logic lives in cognition/memory/forget.py (pure math, no I/O).
   - Pinned memories (created via pin()) are permanently immune to decay
     cleanup and dream pruning. The pinned flag lives in the memories table.
 
@@ -216,7 +216,7 @@ Async write queue:
 
 Dependencies:
   pip install sqlite-vec llama-cpp-python tokenizers openai
-  (HarrierEmbedder, imported from memory.vecstore, pulls in its own model/
+  (HarrierEmbedder, imported from cognition.memory.vecstore, pulls in its own model/
   tokenizer deps separately — see that module for its requirements.)
 """
 from __future__ import annotations
@@ -238,15 +238,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from system import bioclock
-from memory.vecstore import initialize_store_db, resolve_user_db_path
+from cognition.memory.vecstore import initialize_store_db, resolve_user_db_path
 from system.userspace import current_display_name, current_user_id, user_state_path
 import sqlite_vec
 from openai import OpenAI
 
-from memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
-from memory.narrative import query_wants_emotion, format_supersession_narrative
+from cognition.memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
+from cognition.memory.narrative import query_wants_emotion, format_supersession_narrative
 from system.log import get_logger
-from memory.vecstore import HarrierEmbedder
+from cognition.memory.vecstore import HarrierEmbedder
 
 log = get_logger(__name__)
 
@@ -317,7 +317,7 @@ MEMORY_RANK_PINNED_WEIGHT = float(os.getenv("MEMORY_RANK_PINNED_WEIGHT", "0.01")
 # disable graph participation in scoring without touching any call sites.
 MEMORY_RANK_GRAPH_WEIGHT = float(os.getenv("MEMORY_RANK_GRAPH_WEIGHT", "0.6"))
 
-# Phase 3 entity importance (see memory.entity_importance)
+# Phase 3 entity importance (see cognition.memory.entity)
 MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT = float(os.getenv("MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT", "0.008"))
 
 MEMORY_SPREADING_ENABLED = os.getenv("MEMORY_SPREADING_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
@@ -766,7 +766,7 @@ def infer_valence_tag(text: str) -> str:
 
 def infer_salience_hit(text: str) -> int:
     return 1 if SALIENCE_POLICY_RE.search(text or "") else 0
-  
+
 def entity_overlap_score(query: str, entities: Iterable[str]) -> float:
     """Return 0..1 fraction of entities mentioned in the query (casefold)."""
     ents = [e for e in entities if e]
@@ -1510,7 +1510,7 @@ class _MemoryBackend:
             v_tag = tag_from_score(v_score)
         s_hit = int(salience_hit) if salience_hit is not None else infer_salience_hit(text)
         s_hit = 1 if s_hit else 0
-      
+
         base_cols = ["id", "user_id", "memory", "created_at", "access_count", "last_accessed_at", "pinned"]
         base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
         ext_cols: list[str] = []
@@ -1650,7 +1650,7 @@ class _MemoryBackend:
                             )
                             log.info("Superseded memory %s with new fact", supersedes_id)
                     mem_id = str(uuid.uuid4())
-                  
+
                     # Phase 4: tag from fact text (and soft signal from last assistant msg).
                     assist_blob = next(
                         (
@@ -2018,7 +2018,7 @@ class _MemoryBackend:
             """,
             [user_id] + filtered + [limit],
         ).fetchall()
-      
+
     def _spreading_extra_ids(
         self,
         user_id: str,
@@ -2031,7 +2031,7 @@ class _MemoryBackend:
         if not MEMORY_SPREADING_ENABLED or MEMORY_SPREADING_MAX_EXTRA <= 0:
             return {}, []
         try:
-            from memory.entity_importance import (
+            from cognition.memory.entity import (
                 entities_from_json_safe,
                 spread_activation,
             )
@@ -2109,7 +2109,7 @@ class _MemoryBackend:
                 if len(extra) >= MEMORY_SPREADING_MAX_EXTRA:
                     break
         return activation, extra
-          
+
     def _rank_and_score(
         self,
         rank_knn: dict,
@@ -2135,7 +2135,7 @@ class _MemoryBackend:
         """
         rank_graph = rank_graph or {}
         entity_importance_map = entity_importance_map or {}
-      
+
         all_ids = set(rank_knn) | set(rank_fts) | set(rank_graph)
         if not all_ids:
             return [], {}, {}
@@ -2193,11 +2193,11 @@ class _MemoryBackend:
                 score += MEMORY_RANK_ACCESS_WEIGHT * min(int(row["access_count"] or 0), ACCESS_COUNT_CAP) / max(ACCESS_COUNT_CAP, 1)
                 if int(row["pinned"] or 0):
                     score += MEMORY_RANK_PINNED_WEIGHT
-                  
+
                 # Phase 3: entity importance boost
                 if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0 and entity_importance_map:
                     try:
-                        from memory.entity_importance import memory_max_entity_importance
+                        from cognition.memory.entity import memory_max_entity_importance
                         score += MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT * memory_max_entity_importance(
                             row, entity_importance_map
                         )
@@ -2287,12 +2287,12 @@ class _MemoryBackend:
         entity_importance_map = {}
         if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0:
             try:
-                from memory.entity_importance import compute_entity_importance_map
+                from cognition.memory.entity import compute_entity_importance_map
                 entity_importance_map = compute_entity_importance_map(self, user_id) or {}
             except Exception as exc:
                 log.debug("entity importance map skipped: %s", exc)
                 entity_importance_map = {}
-      
+
         with self._db_lock:
             quick_knn_rows = _sqlite_knn_search(
                 self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
@@ -2332,7 +2332,7 @@ class _MemoryBackend:
             d = dict(row_by_id[mid])
             d["_recall_score"] = scores.get(mid, 0.0)
             results.append(d)
-          
+
         activation: dict[str, float] = {}
         if MEMORY_SPREADING_ENABLED and results:
             try:
@@ -2357,7 +2357,7 @@ class _MemoryBackend:
 
         if MEMORY_SPREADING_SCORE_WEIGHT > 0 and activation and results:
             try:
-                from memory.entity_importance import memory_max_activation
+                from cognition.memory.entity import memory_max_activation
                 for r in results:
                     boost = MEMORY_SPREADING_SCORE_WEIGHT * memory_max_activation(r, activation)
                     r["_recall_score"] = float(r.get("_recall_score") or 0.0) + boost
@@ -2385,9 +2385,9 @@ class _MemoryBackend:
                         key = "_recall_score"  # or "score" — match your pipeline
                         r[key] = float(r.get(key) or 0.0) - w
                 results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
-          
+
         return results[:limit]
-      
+
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
         """
         Insert supersession lineage (oldest → newest) when expand is warranted.
@@ -2395,7 +2395,7 @@ class _MemoryBackend:
         Result budget: up to max(limit, min(len, 2*limit)) so short chains
         still fit under limit while multi-hit reflective expand is bounded.
         """
-        from memory.entity_importance import should_expand_supersession_chain, walk_supersession_chain
+        from cognition.memory.entity import should_expand_supersession_chain, walk_supersession_chain
         if not results:
             return results
         expanded: list[dict] = []
@@ -2430,7 +2430,7 @@ class _MemoryBackend:
                     expanded.append(node)
                     seen.add(nid)
         return expanded[: max(limit, min(len(expanded), limit * 2))]
-      
+
     def iter_all(self, user_id: str, batch_size: int = MEMORY_LIFECYCLE_BATCH_SIZE):
         """Yield memory records for a user in rowid order without one giant list.
 
@@ -2587,7 +2587,7 @@ def upsert_co_mentions(
     updated_at: str | None = None,
 ) -> int:
     """Record co-mention pairs for entities on one memory. Returns pairs touched."""
-    from memory.vecstore import utc_now_iso
+    from cognition.memory.vecstore import utc_now_iso
 
     # Store casefolded identity, not display casing: entity_relations is a
     # traversal index, never shown to the user directly, and the unique
@@ -3099,7 +3099,7 @@ class AikoMemorize:
                 self._search_cache.move_to_end(cache_key)
                 results = [dict(r) for r in cached[1]]
                 try:
-                    from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
+                    from cognition.memory.entity import MEMORY_SUPERSESSION_CHAIN_EXPAND
                     if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
                         results = self._mem._expand_supersession_chains(
                             query, user_id, results, limit=limit
@@ -3134,7 +3134,7 @@ class AikoMemorize:
                 self._search_cache.popitem(last=False)
 
         try:
-            from memory.entity_importance import MEMORY_SUPERSESSION_CHAIN_EXPAND
+            from cognition.memory.entity import MEMORY_SUPERSESSION_CHAIN_EXPAND
             if MEMORY_SUPERSESSION_CHAIN_EXPAND and results:
                 results = self._mem._expand_supersession_chains(
                     query, user_id, results, limit=limit
@@ -3142,7 +3142,7 @@ class AikoMemorize:
         except Exception as exc:
             log.debug("supersession chain expand skipped: %s", exc)
 
-        self._touch_memories(results)  
+        self._touch_memories(results)
         return results
 
     # ── L2 scene expansion ─────────────────────────────────────────────────────
@@ -3542,7 +3542,7 @@ class AikoMemorize:
         block = "\n".join(lines)
         if len(block) > MEMORY_CONTEXT_TOTAL_CHARS:
             block = block[:MEMORY_CONTEXT_TOTAL_CHARS].rstrip() + "\n</memory_context>"
-          
+
         if MEMORY_SUPERSESSION_NARRATIVE and MEMORY_SUPERSESSION_NARRATIVE_MAX > 0:
             narr_lines = []
             seen_keys: set[str] = set()
@@ -3565,11 +3565,11 @@ class AikoMemorize:
                     + "\n".join(narr_lines)
                     + "\n</memory_update>"
                 )
-              
+
         # Phase 13a: secondary related knowledge / experience
         if MEMORY_CROSS_STORE_ENABLED and MEMORY_CROSS_STORE_CONTEXT_CHARS > 0:
             try:
-                from memory.cross_store import fetch_related_for_memories, format_related_blocks
+                from cognition.memory.cross_store import fetch_related_for_memories, format_related_blocks
 
                 rel = related
                 if rel is None:
@@ -3681,7 +3681,7 @@ class AikoMemorize:
         Increment access_count on memories matching salience heuristics.
         Pinned memories pass through unchanged.
         Returns count of memories boosted.
-        
+
         Phase 5: prefers stored salience_hit / non-neutral valence_tag when set.
         """
         now     = datetime.now(timezone.utc)
@@ -3957,7 +3957,7 @@ class AikoMemorize:
             lineage_ids = {str(r["supersedes_id"]) for r in rows if r["supersedes_id"]}
         except Exception:
             lineage_ids = set()
-          
+
         for m in all_mems:
             mem_id     = str(m.get("id", ""))
             ac, la     = payload_map.get(mem_id, (0, "never"))
@@ -3966,11 +3966,11 @@ class AikoMemorize:
             if mem_id in pinned_ids:
                 kept += 1
                 continue
-              
+
             if mem_id in lineage_ids:
                 kept += 1
                 continue
-              
+
             v_tag = m.get("valence_tag")
             v_score = m.get("valence_score")
             if should_cleanup(ac, la, created_at, valence_tag=v_tag, valence_score=v_score):
