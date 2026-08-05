@@ -83,6 +83,62 @@ def _norm_date(value: Any, *, end: bool) -> str | None:
     return v
 
 
+_FULL_DATE_RE = re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)")
+_MONTH_ONLY_RE = re.compile(r"(?<!\d)(\d{4})-(\d{2})(?!\d)")
+
+
+def _memory_date_span(text: Any, created_at: Any = None) -> tuple[str, str] | None:
+    """Return the (start_iso, end_iso) span of a memory's original date.
+
+    Precedence:
+      - a full date in the text ([YYYY-MM-DD] or bare YYYY-MM-DD, including
+        the "Daily journal of YYYY-MM-DD:" blobs) → that exact day;
+      - a month tag ([YYYY-MM] / bare YYYY-MM) → the full month;
+      - otherwise the created_at timestamp.
+
+    Consolidation rewrites created_at (scene re-summary, monthly/journal
+    add_raw) but never rewrites the text tag, so the tag is the stable
+    original date. Month-tagged memories match any filter day inside the
+    month.
+    """
+    import calendar
+
+    t = str(text or "")
+    m = _FULL_DATE_RE.search(t)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return (
+                f"{y:04d}-{mo:02d}-{d:02d}T00:00:00",
+                f"{y:04d}-{mo:02d}-{d:02d}T23:59:59.999999",
+            )
+    m = _MONTH_ONLY_RE.search(t)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+        if 1 <= mo <= 12:
+            last = calendar.monthrange(y, mo)[1]
+            return (
+                f"{y:04d}-{mo:02d}-01T00:00:00",
+                f"{y:04d}-{mo:02d}-{last:02d}T23:59:59.999999",
+            )
+    s = str(created_at or "").strip()[:19]
+    if s:
+        return (s, s)
+    return None
+
+
+def _date_spans_overlap(span: tuple[str, str] | None, from_dt: str | None, to_dt: str | None) -> bool:
+    """True when a memory's [start, end] overlaps the filter window [from, to]."""
+    if span is None:
+        return from_dt is None and to_dt is None
+    start, end = span
+    if from_dt and end < from_dt:
+        return False
+    if to_dt and start > to_dt:
+        return False
+    return True
+
+
 def _resolve_db_path(user_id: str) -> Path:
     import os
     from memory.vecstore import resolve_user_db_path
@@ -287,13 +343,7 @@ def export_memory_graph(
             sql += " AND (status = 'active' OR status IS NULL)"
         from_dt = _norm_date(date_from, end=False)
         to_dt = _norm_date(date_to, end=True)
-        if from_dt:
-            sql += " AND created_at >= ?"
-            params.append(from_dt)
-        if to_dt:
-            sql += " AND created_at <= ?"
-            params.append(to_dt)
-            
+
         try:
             req_limit = int(limit) if limit is not None else 200
         except (TypeError, ValueError):
@@ -305,11 +355,22 @@ def export_memory_graph(
         fetch_n = min(max(effective_limit * 3, effective_limit), max(_MAX_MEMORIES * 3, effective_limit))
 
         sql += " ORDER BY created_at DESC"
-        if fetch_n > 0:
+        # Date filter runs in Python against the stable text date tag
+        # (created_at is rewritten by consolidation). When filtering, fetch
+        # all rows so in-range tagged memories aren't cut off by the LIMIT.
+        if not (from_dt or to_dt) and fetch_n > 0:
             sql += " LIMIT ?"
             params.append(int(fetch_n))
 
         rows = conn.execute(sql, params).fetchall()
+
+        # Apply the date filter on the memory's original date (text tag) with
+        # created_at fallback, month tags matching any day within the month.
+        if from_dt or to_dt:
+            rows = [
+                r for r in rows
+                if _date_spans_overlap(_memory_date_span(r["memory"], r["created_at"]), from_dt, to_dt)
+            ]
 
         entity_importance: dict[str, float] = {}
         try:
