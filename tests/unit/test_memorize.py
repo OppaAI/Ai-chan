@@ -1042,10 +1042,11 @@ class TestValenceColumnsInIterAll:
 class TestCrossStoreUserScoping:
     """Cross-store experience leg should respect explicit user_id."""
 
-    def test_related_experience_threads_user_id(self, tmp_path):
+    def test_search_experience_threads_user_id(self, tmp_path):
         db = tmp_path / "exp.db"
         from agentic.experience import _connect as exp_connect, search_experience, record_experience
         import numpy as np
+        import hashlib
 
         conn = exp_connect("user1")
         # Seed one experience for user1
@@ -1063,7 +1064,7 @@ class TestCrossStoreUserScoping:
         assert len(hits) >= 1
         assert hits[0]["user_id"] == "user1"
 
-        # With different user_id should return empty
+        # With different user_id should return empty (separate DB)
         hits2 = search_experience("user1", limit=5, embedder=FE(), user_id="user2")
         assert hits2 == []
 
