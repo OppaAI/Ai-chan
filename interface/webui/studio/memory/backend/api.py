@@ -27,6 +27,8 @@ async def get_graph(
     limit: int = Query(200, ge=1, le=2000),
     include_history: bool = Query(True, description="Include superseded memories"),
     include_entities: bool = Query(True, description="Add entity hub nodes"),
+    include_knowledge: bool = Query(True, description="Phase 13: learned knowledge nodes"),
+    include_experience: bool = Query(True, description="Phase 13: experience nodes"),
 ):
     from interface.webui.studio.memory.backend.graph_export import export_memory_graph
     from system.userspace import current_user_id
@@ -37,6 +39,8 @@ async def get_graph(
         limit=limit,
         include_history=include_history,
         include_entities=include_entities,
+        include_knowledge=include_knowledge,
+        include_experience=include_experience,
     )
 
 
