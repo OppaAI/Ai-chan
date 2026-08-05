@@ -50,6 +50,13 @@ Note: over-fetches ~3× `limit` (newest-first), then keeps the top `limit` by re
 
 Related knowledge and experience appear as extra node types, linked by shared entities.
 
+## Phase 16 — Human-feel recall
+
+- **State tags** — optional `state_json` on write (e.g. `local_hour`)
+- **Neg recall-avoid** — mild rank penalty for neg unpinned facts unless query is emotional/reflective
+- **Supersession narrative** — context block `Previously held` / `Current` from chains
+- **Studio** — superseded nodes dimmed; details show lineage via `supersedes` edges
+
 ### New node types
 
 | type | Color | Source |
@@ -83,6 +90,9 @@ Sidebar:
 - `MEMORY_STUDIO_INCLUDE_EXPERIENCE` (default `1`)
 - `MEMORY_STUDIO_MAX_KNOWLEDGE` (default `80`)
 - `MEMORY_STUDIO_MAX_EXPERIENCE` (default `40`)
+- `MEMORY_STATE_TAGS_ENABLED`
+- `MEMORY_NEG_RECALL_AVOID` / `_WEIGHT` / `_EXCEPT`
+- `MEMORY_SUPERSESSION_NARRATIVE` / `_MAX`
 
 **Client filters** (sidebar; re-filter without reload):
 
