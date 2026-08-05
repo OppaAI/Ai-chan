@@ -562,7 +562,7 @@ Rules:
 
 Return ONLY a JSON array of objects. No markdown. No explanation.
 Each object:
-{"fact": "<third-person sentence>", "subject": "user"|"assistant", "valence_score": <int>}
+{{"fact": "<third-person sentence>", "subject": "user"|"assistant", "valence_score": <int>}}
 
 subject MUST match the speaker line:
 - "{user_name}: ..." → "user" → fact starts with "{user_name}"
@@ -1477,12 +1477,12 @@ class _MemoryBackend:
                 if not isinstance(raw_fact, str):
                     continue
                 t = raw_fact.strip()
-                sc = x.get("valence_score", x.get("valence"))
-                try:
-                    sc_i = max(-2, min(2, int(sc))) if sc is not None else None
-                except (TypeError, ValueError):
-                    sc_i = None
+                sc = ...
+                subj = str(x.get("subject") or "").strip().lower()
+                if subj not in ("user", "assistant"):
+                    subj = "assistant" if t.casefold().startswith("aiko") else "user"
                 if t:
+                    t = _force_subject_name(t, subj, user_name)
                     pairs.append((t, sc_i))
 
         # drop facts containing hedging/uncertain language (word-boundary
@@ -1493,11 +1493,6 @@ class _MemoryBackend:
                 log.debug(f"Dropped hedging fact: {fact!r}")
                 continue
             clean_pairs.append((fact, sc))
-          
-        subj = str(x.get("subject") or "").strip().lower()
-        if subj not in ("user", "assistant"):
-            subj = "assistant" if t.casefold().startswith("aiko") else "user"
-        t = _force_subject_name(t, subj, user_name)
               
         # Repair common user/assistant subject swaps (Oppa vs Aiko).
         from cognition.memory.fact_identity import sanitize_fact_score_pairs
