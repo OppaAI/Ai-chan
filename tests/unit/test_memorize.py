@@ -1042,30 +1042,51 @@ class TestValenceColumnsInIterAll:
 class TestCrossStoreUserScoping:
     """Cross-store experience leg should respect explicit user_id."""
 
-    def test_search_experience_threads_user_id(self, tmp_path):
-        db = tmp_path / "exp.db"
-        from agentic.experience import _connect as exp_connect, search_experience, record_experience
+    def test_search_experience_threads_user_id(self, tmp_path, monkeypatch):
+        from agentic.experience import _connect as exp_connect, search_experience
+        import agentic.experience as exp_mod
         import numpy as np
         import hashlib
+        import uuid
 
-        conn = exp_connect("user1")
-        # Seed one experience for user1
-        record_experience(None, "user1 task", [{"tool": "test", "ok": True}], "done", True, 1.0, conn=conn)
+        monkeypatch.setattr(exp_mod, "EXPERIENCE_DB_PATH", str(tmp_path / "experience_test.db"))
 
-        # search_experience with explicit user_id should find it
+        # Create a matching embedder for the seeded data
         class FE:
             def embed_query(self, t, instruct=""):
                 h = hashlib.sha256(t.encode()).digest()
                 raw = (h * (640 // len(h) + 1))[:2560]
                 arr = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)[:640]/255.0*2-1
-                n = np.linalg.norm(arr); return arr/n if n else arr
+                n = np.linalg.norm(arr)
+                return arr / n if n else arr
 
-        hits = search_experience("user1", limit=5, embedder=FE(), user_id="user1")
-        assert len(hits) >= 1
-        assert hits[0]["user_id"] == "user1"
+        fe = FE()
+        exp_id = str(uuid.uuid4())
+        vec = fe.embed_query("user1 task")
+        import sqlite_vec
+
+        # Seed one experience for user1
+        conn1 = exp_connect("user1")
+        conn1.execute(
+            "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (exp_id, "user1", "user1 task", "user1 task", '[]', "done", 1.0, "excerpt", '[]', "2024-01-01T00:00:00")
+        )
+        conn1.execute(
+            "INSERT INTO experiences_vec(id,embedding) VALUES(?,?)",
+            (exp_id, sqlite_vec.serialize_float32(vec.tolist()))
+        )
+        conn1.execute(
+            "INSERT INTO experiences_fts(rowid, record_text, id) VALUES(?,?,?)",
+            (1, "user1 task", exp_id)
+        )
+        conn1.commit()
+        conn1.close()
+
+        # search_experience with explicit user_id should find it
+        hits = search_experience("user1 task", limit=5, embedder=fe, user_id="user1")
+        assert any(hit["id"] == exp_id for hit in hits)
 
         # With different user_id should return empty (separate DB)
-        hits2 = search_experience("user1", limit=5, embedder=FE(), user_id="user2")
+        hits2 = search_experience("user1 task", limit=5, embedder=fe, user_id="user2")
         assert hits2 == []
-
-        conn.close()

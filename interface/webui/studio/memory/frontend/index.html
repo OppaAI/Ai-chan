@@ -237,15 +237,23 @@
       const sc = d.scores || {};
       if (sc.retain != null) return Math.max(0, Math.min(1, Number(sc.retain)));
       if (d.size != null) {
-        // backend size ~ 0.35 + 0.9*retain → invert roughly
-        return Math.max(0, Math.min(1, (Number(d.size) - 0.25) / 0.95));
+        // backend size ≈ 0.20 + 1.10 * retain^1.25 → approximate invert
+        const s = Math.max(0.20, Number(d.size));
+        const t = Math.max(0, Math.min(1, (s - 0.20) / 1.10));
+        return Math.pow(t, 1 / 1.25);
       }
       return d.type === 'entity' ? 0.4 : 0.35;
     }
 
     function valenceHue(d) {
       if (d.type === 'entity') return 'entity';
-      const v = (d.valence_tag || 'neutral').toLowerCase();
+      let v = (d.valence_tag || 'neutral').toLowerCase();
+      const vs = d.valence_score;
+      if ((v === 'neutral' || !v) && vs != null && vs !== '') {
+        const s = Number(vs);
+        if (s <= -1) v = 'neg';
+        else if (s >= 1) v = 'pos';
+      }
       if (v === 'neg') return 'neg';
       if (v === 'pos') return 'pos';
       return 'neutral';
@@ -264,21 +272,21 @@
       if (d.pinned) r = Math.max(r, 0.92);
       if (d.status === 'superseded') r *= 0.45;
       // map retain → visible opacity range (dim forget ↔ bright stay)
-      return 0.22 + r * 0.78;
+      return 0.18 + r * 0.82;
     }
 
     function glowStrength(d) {
       let r = retainOf(d);
       if (d.pinned) r = Math.max(r, 0.95);
       if (d.status === 'superseded') return 0.5;
-      return 0.6 + r * 2.4; // stdDeviation-ish via filter scale
+      return 0.4 + r * 2.8; // stdDeviation-ish via filter scale
     }
 
     function nodeRadius(d) {
       let r = retainOf(d);
       if (d.pinned) r = Math.max(r, 0.85);
-      if (d.type === 'entity') return 7 + r * 10;
-      return 9 + r * 14;
+      if (d.type === 'entity') return 5 + 16 * Math.pow(r, 1.25);
+      return 5 + 24 * Math.pow(r, 1.35);
     }
 
     function edgeOpacity(e, nodeById) {
