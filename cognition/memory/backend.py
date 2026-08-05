@@ -528,7 +528,7 @@ def _valence_from_llm() -> bool:
 # Extraction prompt — temperature 0.0, explicit only-stated-facts rule.
 _EXTRACT_PROMPT = """\
 Extract memorable facts from this conversation.
-{user_name} is the user (he/him). Aiko is the assistant. Attribute each fact to the correct person.
+{user_name} is the user. Aiko is the assistant. Attribute each fact to the correct person.
 
 Rules:
 - Only include facts the speaker stated explicitly. Never infer or assume.

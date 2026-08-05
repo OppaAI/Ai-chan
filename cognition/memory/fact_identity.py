@@ -47,7 +47,7 @@ def fix_fact_identity(
     t2 = re.sub(
         rf"^({ue})\s+(dislikes|doesn't like|does not like|hates|dislike)\s+"
         rf"(to be |being )?(portrayed as )?human[- ]?like\b",
-        rf"{a} \2 being human-like",
+        lambda m: f"{a} {m.group(2)} being human-like",
         t,
         count=1,
         flags=re.IGNORECASE,
@@ -58,7 +58,7 @@ def fix_fact_identity(
     # 2) "{User} needs/must/should follow {User}'s rules" → Aiko follows user's rules
     t2 = re.sub(
         rf"^{ue}\s+(needs to|must|should|has to)\s+follow\s+{ue}'s\s+rules\b",
-        rf"{a} should follow {u}'s rules",
+        lambda m: f"{a} should follow {u}'s rules",
         t,
         count=1,
         flags=re.IGNORECASE,
@@ -70,7 +70,7 @@ def fix_fact_identity(
     t2 = re.sub(
         rf"^{ue}\s+(needs to|must|should|has to)\s+(obey|follow)\s+{ue}'s\s+"
         rf"(instructions|commands|orders)\b",
-        rf"{a} should follow {u}'s \3",
+        lambda m: f"{a} should follow {u}'s {m.group(3)}",
         t,
         count=1,
         flags=re.IGNORECASE,
@@ -81,18 +81,7 @@ def fix_fact_identity(
     # 4) "{User} is an AI / assistant / language model" → Aiko
     t2 = re.sub(
         rf"^{ue}\s+(is|as)\s+(an?\s+)?(AI|assistant|language model|LLM)\b",
-        rf"{a} is \2\3",
-        t,
-        count=1,
-        flags=re.IGNORECASE,
-    )
-    if t2 != t:
-        t = t2
-
-    # 5) "{User}'s persona / personality (assistant sense)" mild fix when clearly bot
-    t2 = re.sub(
-        rf"^{ue}\s+(has|uses)\s+(a\s+)?(persona|character settings)\b",
-        rf"{a} has \2\3",
+        lambda m: f"{a} is {m.group(2) or ''}{m.group(3)}",
         t,
         count=1,
         flags=re.IGNORECASE,
