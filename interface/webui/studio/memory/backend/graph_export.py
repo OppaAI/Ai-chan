@@ -365,10 +365,11 @@ def export_memory_graph(
                 "entities": ents,
                 "supersedes_id": supersedes_id,
                 "valence_tag": valence_tag,
-                "valence_score": 0 if valence_score is None else valence_score,
-                "scores": scores,
-                "size": size,
-            })
+                    "valence_score": row.get("valence_score") if isinstance(row, dict)
+                                    else getattr(row, "valence_score", None),
+                    "size": size,
+                    "scores": scores,
+                })
 
             if supersedes_id:
                 edges.append({

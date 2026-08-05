@@ -1432,9 +1432,10 @@ class _MemoryBackend:
         else:
             v_score = infer_valence_score(text)
 
-        v_tag = tag_from_score(v_score)
-
-        if valence_tag is None:
+        # Prefer explicit tag only if caller passed one; else derive from score
+        if valence_tag is not None:
+            v_tag = valence_tag
+        else:
             v_tag = tag_from_score(v_score)
         s_hit = int(salience_hit) if salience_hit is not None else infer_salience_hit(text)
         s_hit = 1 if s_hit else 0
