@@ -134,10 +134,22 @@
             transition: all 0.15s;
             border: 1px solid transparent;
             margin-bottom: 6px;
+            background: transparent;
+            color: inherit;
+            font-family: inherit;
+            font-size: inherit;
+            text-align: left;
+            width: 100%;
         }
         .playbook-item:hover {
             background: rgba(168, 136, 232, 0.06);
             border-color: var(--dim);
+        }
+        .playbook-item:focus {
+            outline: none;
+            background: rgba(168, 136, 232, 0.08);
+            border-color: var(--purple);
+            box-shadow: 0 0 0 2px rgba(168, 136, 232, 0.2);
         }
         .playbook-item.active {
             background: rgba(168, 136, 232, 0.1);
@@ -206,9 +218,9 @@
             padding: 16px;
             font-size: 12px;
             box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-            animation: fadeSlideIn 0.2s ease-out;
+            animation: fade-slide-in 0.2s ease-out;
         }
-        @keyframes fadeSlideIn {
+        @keyframes fade-slide-in {
             from { opacity: 0; transform: translateY(-8px); }
             to { opacity: 1; transform: translateY(0); }
         }

@@ -137,10 +137,22 @@
             transition: all 0.15s;
             border: 1px solid transparent;
             margin-bottom: 8px;
+            background: transparent;
+            color: inherit;
+            font-family: inherit;
+            font-size: inherit;
+            text-align: left;
+            width: 100%;
         }
         .server-item:hover {
             background: rgba(168, 136, 232, 0.06);
             border-color: var(--dim);
+        }
+        .server-item:focus {
+            outline: none;
+            background: rgba(168, 136, 232, 0.08);
+            border-color: var(--purple);
+            box-shadow: 0 0 0 2px rgba(168, 136, 232, 0.2);
         }
         .server-item.active {
             background: rgba(168, 136, 232, 0.1);

@@ -138,9 +138,9 @@ Run before any phase suite.
 - [ ] Duplicate memory pressure test: repeat the same fact 20 times; recall does not become dominated by redundant near-identical entries.
 - [ ] Unicode memory test: store Japanese, Korean, emoji, and mixed punctuation; recall and display remain readable.
 - [ ] Privacy check: `/memory` does not expose secrets from environment variables or unrelated workspace files.
-- [ ] If `SQLITE_ENCRYPTION=1` for this run, confirm `memory/memorize.py`'s DB open path goes through `system.secure.connect_sqlite` (not a bare `sqlite3.connect`) — see Pre-flight's At-rest encryption block for the full key-derivation test set.
+- [ ] If `SQLITE_ENCRYPTION=1` for this run, confirm `cognition/memory/memorize.py`'s DB open path goes through `system.secure.connect_sqlite` (not a bare `sqlite3.connect`) — see Pre-flight's At-rest encryption block for the full key-derivation test set.
 
-### 1.4a Trivial-input skip and broad-recall routing (`memory/memorize.py`)
+### 1.4a Trivial-input skip and broad-recall routing (`cognition/memory/memorize.py`)
 
 *`_is_trivial_input()` and `_BROAD_RECALL_RE` are choke-point logic — every `search()` call from every input path goes through them before the cache lookup or embedding call, so a bug here silently affects CLI, WebUI, and voice alike.*
 

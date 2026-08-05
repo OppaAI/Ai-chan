@@ -19,6 +19,21 @@
                 const resp = await fetch(`${API_BASE}/servers`);
                 const data = await resp.json();
                 allServers = data.servers || [];
+
+                // Reconcile currentServer with refreshed data
+                if (currentServer) {
+                    const refreshed = allServers.find(s => s.name === currentServer.name);
+                    if (refreshed) {
+                        currentServer = refreshed;
+                        selectServer(currentServer);
+                    } else {
+                        // Server no longer exists, clear selection
+                        currentServer = null;
+                        document.getElementById('detail-empty').style.display = 'block';
+                        document.getElementById('detail-content').style.display = 'none';
+                    }
+                }
+
                 renderServerList();
                 document.getElementById('header-status').textContent = `${allServers.length} servers`;
             } catch (err) {
@@ -37,14 +52,15 @@
 
             container.innerHTML = '';
             allServers.forEach(server => {
-                const div = document.createElement('div');
-                div.className = 'server-item' + (currentServer && currentServer.name === server.name ? ' active' : '');
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'server-item' + (currentServer && currentServer.name === server.name ? ' active' : '');
 
                 let statusClass = 'unknown';
                 if (server.status === 'running') statusClass = 'running';
                 else if (server.status === 'stopped') statusClass = 'stopped';
 
-                div.innerHTML = `
+                button.innerHTML = `
                     <div class="server-name">
                         ${escapeHTML(server.name)}
                         <span class="status-badge ${statusClass}">${server.status || 'unknown'}</span>
@@ -54,8 +70,8 @@
                         <span>${server.tools.length} tools</span>
                     </div>
                 `;
-                div.onclick = () => selectServer(server);
-                container.appendChild(div);
+                button.onclick = () => selectServer(server);
+                container.appendChild(button);
             });
         }
 

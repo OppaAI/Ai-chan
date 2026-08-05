@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from .backend import (
     AikoMemorize,
+    EMBED_DIMS,
     _MemoryBackend,
     backfill_entities,
     classify_kind,
@@ -36,6 +37,7 @@ format_for_context = AikoMemorize.format_for_context
 
 __all__ = [
     "AikoMemorize",
+    "EMBED_DIMS",
     "_MemoryBackend",
     "backfill_entities",
     "classify_kind",

@@ -317,7 +317,6 @@ __all__ = [
     "extract_entities",
     "memory_max_activation",
     "memory_max_entity_importance",
-    "query_wants_chain_expansion",
     "should_expand_supersession_chain",
     "spread_activation",
     "walk_supersession_chain",

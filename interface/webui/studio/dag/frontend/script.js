@@ -20,6 +20,24 @@ const SIDE = 60;
             try {
                 const resp = await fetch(`${API_BASE}/playbooks`);
                 currentPlaybooks = await resp.json();
+
+                // Reconcile selectedPlaybook with refreshed data
+                if (selectedPlaybook) {
+                    const refreshed = currentPlaybooks.find(pb => pb.id === selectedPlaybook.id);
+                    if (refreshed) {
+                        selectedPlaybook = refreshed;
+                        renderGraph(selectedPlaybook);
+                    } else {
+                        // Playbook no longer exists, clear selection
+                        selectedPlaybook = null;
+                        selectedNodeId = null;
+                        selectedEdgeId = null;
+                        const svg = d3.select('#canvas');
+                        svg.selectAll('*').remove();
+                        hideDetails();
+                    }
+                }
+
                 renderPlaybooksList();
             } catch (err) {
                 console.error('Failed to fetch playbooks:', err);
@@ -37,15 +55,15 @@ const SIDE = 60;
             }
             currentPlaybooks.forEach(pb => {
                 const nodeCount = Array.isArray(pb.nodes) ? pb.nodes.length : 0;
-                const div = document.createElement('div');
-                div.className = 'playbook-item' + (selectedPlaybook && selectedPlaybook.id === pb.id ? ' active' : '');
-                div.innerHTML = `
+                const button = document.createElement('button');
+                button.className = 'playbook-item' + (selectedPlaybook && selectedPlaybook.id === pb.id ? ' active' : '');
+                button.innerHTML = `
                     <div class="pb-name">${escapeHTML(pb.name || pb.id)}</div>
                     <div class="pb-id">${escapeHTML(pb.id)}</div>
                     <div class="pb-meta"><span>${nodeCount} nodes</span></div>
                 `;
-                div.onclick = () => selectPlaybook(pb);
-                container.appendChild(div);
+                button.onclick = () => selectPlaybook(pb);
+                container.appendChild(button);
             });
         }
 
