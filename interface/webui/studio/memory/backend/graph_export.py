@@ -258,7 +258,7 @@ def export_memory_graph(
         if has_valence:
             select_cols.append("valence_tag")
         if has_valence_score:
-            select_cols.append("valence_score"
+            select_cols.append("valence_score")
         if has_salience:
             select_cols.append("salience_hit")
         if has_day_count:
