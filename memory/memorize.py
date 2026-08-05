@@ -3558,8 +3558,10 @@ class AikoMemorize:
                     narr_lines.append(f"  {line}")
                     seen += 1
             if narr_lines:
-                parts.append(
-                    "<memory_update>\n" + "\n".join(narr_lines) + "\n</memory_update>"
+                block += (
+                    "\n\n<memory_update>\n"
+                    + "\n".join(narr_lines)
+                    + "\n</memory_update>"
                 )
               
         # Phase 13a: secondary related knowledge / experience
