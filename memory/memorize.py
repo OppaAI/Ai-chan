@@ -244,6 +244,7 @@ import sqlite_vec
 from openai import OpenAI
 
 from memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
+from memory.narrative import query_wants_emotion, format_supersession_narrative
 from system.log import get_logger
 from memory.vecstore import HarrierEmbedder
 
@@ -613,6 +614,7 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
     ("valence_score", "INTEGER"),  # -2..+2; NULL = legacy/unknown
     ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
+    ("state_json", "TEXT"),  # Phase 16: optional {"local_hour": 0-23}
 )
 
 # L2 scene blocks — one additive runtime column on memories. A scene row
@@ -1535,6 +1537,16 @@ class _MemoryBackend:
         if "salience_hit" in cols:
             ext_cols.append("salience_hit")
             ext_vals.append(s_hit)
+        if MEMORY_STATE_TAGS_ENABLED and "state_json" in cols:
+            try:
+                from datetime import datetime
+                import json
+                hour = datetime.now().hour  # or bioclock if you use it
+                state_json = json.dumps({"local_hour": int(hour)}, ensure_ascii=False)
+                ext_cols.append("state_json")
+                ext_vals.append(state_json)
+            except Exception:
+                pass
         all_cols = base_cols + ext_cols
         placeholders = ", ".join("?" * len(all_cols))
         self._conn.execute(
@@ -2360,6 +2372,27 @@ class _MemoryBackend:
             except Exception as exc:
                 log.debug("spreading activation score boost skipped: %s", exc)
 
+    if MEMORY_NEG_RECALL_AVOID and results:
+        relax = MEMORY_NEG_RECALL_AVOID_EXCEPT and query_wants_emotion(query or "")
+        if not relax:
+            w = MEMORY_NEG_RECALL_AVOID_WEIGHT
+            for r in results:
+                if r.get("pinned"):
+                    continue
+                tag = (str(r.get("valence_tag") or "")).strip().lower()
+                vs = r.get("valence_score")
+                is_neg = tag == "neg"
+                if not is_neg and vs is not None and str(vs).strip() != "":
+                    try:
+                        is_neg = int(vs) <= -1
+                    except (TypeError, ValueError):
+                        pass
+                if is_neg:
+                    # use the same score key you sort on
+                    key = "_recall_score"  # or "score" — match your pipeline
+                    r[key] = float(r.get(key) or 0.0) - w
+            results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
+          
         return results[:limit]
       
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
@@ -3510,7 +3543,26 @@ class AikoMemorize:
         block = "\n".join(lines)
         if len(block) > MEMORY_CONTEXT_TOTAL_CHARS:
             block = block[:MEMORY_CONTEXT_TOTAL_CHARS].rstrip() + "\n</memory_context>"
-
+          
+        if MEMORY_SUPERSESSION_NARRATIVE and MEMORY_SUPERSESSION_NARRATIVE_MAX > 0:
+            narr_lines = []
+            seen = 0
+            for r in memories or []:  # same list you just formatted
+                if seen >= MEMORY_SUPERSESSION_NARRATIVE_MAX:
+                    break
+                chain = r.get("_supersession_chain")
+                if not chain or len(chain) < 2:
+                    # minimal fallback: tip + parent id only if you already loaded parent
+                    continue
+                line = format_supersession_narrative(chain)
+                if line:
+                    narr_lines.append(f"  {line}")
+                    seen += 1
+            if narr_lines:
+                parts.append(
+                    "<memory_update>\n" + "\n".join(narr_lines) + "\n</memory_update>"
+                )
+              
         # Phase 13a: secondary related knowledge / experience
         if MEMORY_CROSS_STORE_ENABLED and MEMORY_CROSS_STORE_CONTEXT_CHARS > 0:
             try:
