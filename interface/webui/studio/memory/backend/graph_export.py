@@ -141,7 +141,7 @@ def _date_spans_overlap(span: tuple[str, str] | None, from_dt: str | None, to_dt
 
 def _resolve_db_path(user_id: str) -> Path:
     import os
-    from memory.vecstore import resolve_user_db_path
+    from cognition.memory.vecstore import resolve_user_db_path
 
     env = os.getenv("SQLITE_MEMORY_PATH", "").strip()
     if env:
@@ -172,7 +172,7 @@ def _salience_score(text: str, stored_hit: Any) -> float:
         except (TypeError, ValueError):
             pass
     try:
-        from memory.memorize import SALIENCE_POLICY_RE
+        from cognition.memory.memorize import SALIENCE_POLICY_RE
         return 1.0 if SALIENCE_POLICY_RE.search(text or "") else 0.3
     except Exception:
         return 0.3
@@ -281,7 +281,7 @@ def export_memory_graph(
         include_experience = _INCLUDE_EXPERIENCE
     owns_conn = conn is None
     if conn is None:
-        from memory.vecstore import initialize_store_db
+        from cognition.memory.vecstore import initialize_store_db
 
         db_path = _resolve_db_path(uid)
         if not db_path.exists() and str(db_path) != ":memory:":
@@ -374,7 +374,7 @@ def export_memory_graph(
 
         entity_importance: dict[str, float] = {}
         try:
-            from memory.entity_importance import compute_entity_importance_map
+            from cognition.memory.entity import compute_entity_importance_map
             from types import SimpleNamespace
 
             # Reuse export conn + uid (no new AikoMemorize / write worker).
@@ -512,7 +512,7 @@ def export_memory_graph(
 
         if include_entities:
             try:
-                from memory.memorize import ensure_entity_relations_schema
+                from cognition.memory.memorize import ensure_entity_relations_schema
 
                 ensure_entity_relations_schema(conn)
                 for e in relations_as_graph_edges(
@@ -647,7 +647,7 @@ def list_entity_relations(
     user_id: str,
     limit: int = 500,
 ) -> list[dict[str, Any]]:
-    from memory.memorize import ensure_entity_relations_schema
+    from cognition.memory.memorize import ensure_entity_relations_schema
 
     ensure_entity_relations_schema(conn)
     rows = conn.execute(
@@ -703,7 +703,7 @@ def _add_knowledge_layer(
         cols = set()
     if not cols or "id" not in cols:
         try:
-            from memory.knowledge import _connect as kb_connect
+            from cognition.knowledge import _connect as kb_connect
             kb_conn = kb_connect(uid)
             owns = True
             cols = {r[1] for r in kb_conn.execute("PRAGMA table_info(learned_chunks)").fetchall()}

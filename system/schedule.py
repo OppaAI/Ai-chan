@@ -975,7 +975,7 @@ def bootstrap_non_system_jobs(
     
     if think is not None:
         try:
-            from memory import learn
+            from cognition.memory import learn
 
             learn.register_deep_study_handlers(
                 client=getattr(think, "_client", None),
@@ -988,7 +988,7 @@ def bootstrap_non_system_jobs(
 
     if memorize is not None:
         try:
-            from memory.knowledge import ingest_workspace_knowledge_folder
+            from cognition.knowledge import ingest_workspace_knowledge_folder
 
             register_system_handler(
                 "workspace_knowledge_scan",
@@ -1363,7 +1363,7 @@ class ScheduleRunner:
             query_start = target_local.astimezone(timezone.utc)
             query_end   = target_end_local.astimezone(timezone.utc)
 
-            from memory.reflect import REFLECT_MAX_MEMS
+            from cognition.memory.reflect import REFLECT_MAX_MEMS
             memories = self._memorize.get_between(
                 query_start, query_end, user_id=self._memorize.get_user_id()
             )            
@@ -1600,8 +1600,8 @@ def start_scheduler(
     subsystems and then delegates the rest here.
     """
     from agentic.graph_engine import ensure_playbooks
-    from memory.reflect import generate_and_post
-    from memory.consolidate import maybe_run_consolidation
+    from cognition.memory.reflect import generate_and_post
+    from cognition.consolidate import maybe_run_consolidation
 
     ensure_playbooks(user_id=user_id)
 

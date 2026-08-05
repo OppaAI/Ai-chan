@@ -46,7 +46,7 @@ from agentic.skills import list_skillsets, load_skillset, load_skills, search_sk
 from agentic.wiki import wiki_agentic_contexts_for
 from agentic.capability import match_capabilities, filtered_tool_schemas, resolve_handoff
 from agentic.guardrails import DEFAULT_POST_ANSWER_GUARDRAILS, default_pre_tool_guardrails
-from memory.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
+from cognition.knowledge import knowledge_context_for, ingest_text as ingest_knowledge_text, ingest_file as ingest_knowledge_file
 from agentic import experience, skill_learning
 from agentic import graph_engine as schema
 from agentic.tools import (

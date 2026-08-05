@@ -1,5 +1,5 @@
 """
-memory/consolidate.py
+cognition/consolidate/backend.py
 
 Monthly memory consolidation.
 
@@ -11,7 +11,7 @@ Scope: this ONLY touches pinned daily-granularity memory (atomic facts tagged
 loaded for counting/observability only in Phase 1 — they are not scored as
 retention candidates and are never deleted here (no journal archival path yet).
 Unpinned memory is entirely out of scope — its lifecycle is owned by
-memory.forget / memorize.dream().
+cognition.memory.forget / memorize.dream().
 
 Retention gate (Phase 1):
   Before facts are sent to the LLM, *memory.db* day atomics for the target
@@ -31,7 +31,7 @@ Retention gate (Phase 1):
 
   Phase 4 turn tags: valence_tag (pos/neg/neutral) and salience_hit preferred
   over text re-scan when present; small valence intensity term in R.
-  
+
   Phase 6 novelty: blend distance to static [YYYY-MM] anchors with distance to a
   dynamic anchor (mean of recent active memory vectors).
 
@@ -43,7 +43,7 @@ Retention gate (Phase 1):
   Phase 11: optional hard source-id provenance — LLM returns
   {fact, source_ids[]} per monthly fact; delete only if every kept day-pin
   id appears in some source_ids (when HARD_SOURCE_PROVENANCE=1).
-  
+
 Called by ScheduleRunner.monthly_consolidate — not user-modifiable via schedule.json.
 """
 
@@ -62,8 +62,8 @@ from openai import OpenAI
 from system import bioclock
 from system.log import get_logger
 from system.userspace import current_display_name, current_user_id, user_state_path
-from memory.reflect import _extract_json_arrays, _salvage_truncated_facts
-from memory.memorize import classify_kind, entities_from_json, SALIENCE_POLICY_RE
+from cognition.memory.reflect import _extract_json_arrays, _salvage_truncated_facts
+from cognition.memory.memorize import classify_kind, entities_from_json, SALIENCE_POLICY_RE
 
 log = get_logger(__name__)
 
@@ -453,7 +453,7 @@ def _apply_retention_gate(
     entity_weight_cap = max(entity_weights.values(), default=1.0) or 1.0
     entity_importance: dict[str, float] = {}
     try:
-        from memory.entity_importance import compute_entity_importance_map
+        from cognition.memory.entity import compute_entity_importance_map
         entity_importance = compute_entity_importance_map(memorize, user_id) or {}
     except Exception as exc:
         log.debug("Entity importance map skipped: %s", exc)
@@ -844,7 +844,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     # Not scored; not deleted in Phase 1 (no journal archival path yet).
     journal_day_rows: list[dict] = []
     try:
-        from memory import journal
+        from cognition.consolidate import journal
         journal_rows = journal.get_between(start, end, user_id=user_id)
         journal_day_rows = [
             dict(j) | {"_store": "journal", "_text": (j.get("body") or "").strip()}
@@ -1048,7 +1048,7 @@ def _maintenance_run(user_id: str | None = None, memorize=None) -> dict:
         results["archive_reports"] = {"error": str(exc)}
 
     try:
-        from memory.knowledge import prune_knowledge
+        from cognition.knowledge import prune_knowledge
         emb = _resolve_embedder(memorize)
         results["prune_knowledge"] = prune_knowledge(
             keep_days=30,
@@ -1066,7 +1066,7 @@ def _maintenance_run(user_id: str | None = None, memorize=None) -> dict:
         results["prune_knowledge"] = {"error": str(exc)}
 
     try:
-        from memory.knowledge import vacuum_knowledge_db
+        from cognition.knowledge import vacuum_knowledge_db
         vacuum_knowledge_db(uid)
         results["vacuum_knowledge"] = "ok"
     except Exception as exc:
@@ -1074,7 +1074,7 @@ def _maintenance_run(user_id: str | None = None, memorize=None) -> dict:
         results["vacuum_knowledge"] = {"error": str(exc)}
 
     try:
-        from memory.memorize import vacuum_memory_db
+        from cognition.memory.memorize import vacuum_memory_db
         vacuum_memory_db(uid)
         results["vacuum_memory"] = "ok"
     except Exception as exc:

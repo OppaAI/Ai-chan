@@ -102,11 +102,11 @@ from system.log import get_logger                           # pass the logging t
 log = get_logger(__name__)
 
 from cognition.think import BOOT_LABELS as _THINK_LABELS    # for the booting status of cognition core
-from memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting status of memory system
+from cognition.memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting status of memory system
 from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting status of speaking module
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
-from memory.memorize import AikoMemorize                    # for initiating memory system
+from cognition.memory.memorize import AikoMemorize                    # for initiating memory system
 from cognition.think import AikoThink                        # for initiating cognitive core
 from sensory.speak import AikoSpeak                          # for initiating speaking module
 from sensory.listen import AikoListen                        # for initiating listening module

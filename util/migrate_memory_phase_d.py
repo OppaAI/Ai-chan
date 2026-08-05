@@ -24,8 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    from memory.memorize import ensure_entity_relations_schema, ensure_phase_a_schema, rebuild_entity_relations
-    from memory.vecstore import initialize_store_db, resolve_user_db_path
+    from cognition.memory.memorize import ensure_entity_relations_schema, ensure_phase_a_schema, rebuild_entity_relations
+    from cognition.memory.vecstore import initialize_store_db, resolve_user_db_path
     from system.userspace import current_user_id
 
     uid = (args.user_id or "").strip() or current_user_id()

@@ -67,7 +67,7 @@ warnings.filterwarnings("ignore")
 from system.log import get_logger                     # assign logging to universal logger
 log = get_logger(__name__)
 
-from memory.memorize import AikoMemorize             # load memory system for --clear-mem
+from cognition.memory.memorize import AikoMemorize             # load memory system for --clear-mem
 
 
 def parse_args():

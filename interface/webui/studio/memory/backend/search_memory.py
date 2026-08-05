@@ -28,7 +28,7 @@ def _escape_like(value: str) -> str:
 
 
 def _normalize_personal_hit(row: dict, query: str = "") -> dict[str, Any]:
-    from memory.memorize import entities_from_json, entity_overlap_score
+    from cognition.memory.memorize import entities_from_json, entity_overlap_score
 
     entities = entities_from_json(row.get("entities"))
     base = float(row.get("_recall_score") or row.get("score") or 0.0)
@@ -104,7 +104,7 @@ def search_knowledge_store(
     user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     try:
-        from memory.knowledge import search_knowledge
+        from cognition.knowledge import search_knowledge
     except Exception as e:
         log.debug("knowledge store unavailable: %s", e)
         return []

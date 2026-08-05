@@ -1,5 +1,5 @@
 """
-memory/knowledge.py
+cognition/knowledge/backend.py
 
 Persistent learned knowledge store for Aiko.
 
@@ -37,8 +37,8 @@ from system.config import load_config
 load_config()
 
 from cognition import reason
-from memory.vecstore import initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
-from memory.memorize import extract_entities, entities_to_json, entities_from_json, entity_overlap_score
+from cognition.memory.vecstore import initialize_store_db, insert_vector, rank_by_id, rrf_score, user_scoped_fts_search, user_scoped_vec_knn, utc_now_iso
+from cognition.memory.memorize import extract_entities, entities_to_json, entities_from_json, entity_overlap_score
 
 from system.log import get_logger
 from system.userspace import current_user_id, user_workspace_root

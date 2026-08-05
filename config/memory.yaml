@@ -1,6 +1,6 @@
 # Learned knowledge vector-store config
 #
-# Settings for memory/knowledge.py, Aiko's machine-writable RAG store for
+# Settings for cognition/knowledge/backend.py, Aiko's machine-writable RAG store for
 # durable learned facts, user-ingested document/PDF text, and self-learning
 # research notes. This is separate from agentic/wiki.py, which indexes
 # human-authored wiki/skill/persona/config files.
@@ -21,7 +21,7 @@ KNOWLEDGE_WRITE_DEDUP_THRESHOLD: "0.95"  # Cosine ≥ this → skip near-dup chu
 
 # Learn config
 #
-# Settings for memory/learn.py — Aiko's two research depths (quick_studying,
+# Settings for cognition/memory/learn.py — Aiko's two research depths (quick_studying,
 # deep_studying) and the idle learner loop that decides when to run them.
 # Both depths sit on top of agentic/toolkit/research.py's primitives
 # (see web.yaml for the shared search/fetch/condense tunables they inherit).
@@ -62,12 +62,12 @@ DEEP_STUDY_SYNTHESIS_MAX_TOKENS: "900"  # Token budget for the final distillatio
 
 # Memorize config
 #
-# Settings for memory/memorize.py, memory/vecstore.py, memory/forget.py, and memory/consolidate.py.
+# Settings for cognition/memory/memorize.py, cognition/memory/vecstore.py, cognition/memory/forget.py, and cognition/consolidate/backend.py.
 # Tune local sqlite memory, embedding model behavior, memory decay, and monthly consolidation here.
 
 # -- Storage and embedding endpoint --
 SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory/memory.db.
-EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by memory/vecstore.py.
+EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by cognition/memory/vecstore.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.
 EMBED_QUERY_INSTRUCT: "Retrieve relevant memories that answer the query"  # Instruction prefix used for query embeddings; memories/documents stay unprefixed.
@@ -95,7 +95,7 @@ MEMORY_WRITE_MAX_WAIT: "45.0"  # Max seconds memory writer waits before forcing 
 # Rule-based entity extract + kind on write. Optional backfill:
 #   uv run python -m util.migrate_memory_phase_b --dry-run
 #   uv run python -m util.migrate_memory_phase_b
-# Unified facade: from memory import search_memory
+# Unified facade: from cognition.memory import search_memory
 MEMORY_ENTITY_BOOST: "0.003"  # Soft score boost when query text mentions a tagged entity on a personal memory.
 
 # -- Phase 3: entity importance + supersession chain --

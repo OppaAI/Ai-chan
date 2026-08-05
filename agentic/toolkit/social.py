@@ -46,9 +46,9 @@ from openai import OpenAI
 
 from system.bioclock import get_timezone
 from system.log import get_logger
-from memory.memorize import AikoMemorize
+from cognition.memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
-from memory.reflect import _load_soul
+from cognition.memory.reflect import _load_soul
 
 from agentic.toolkit.common import workspace_root
 from agentic.toolkit.photography import scan_photo_workspace, scan_video_workspace

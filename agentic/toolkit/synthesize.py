@@ -212,7 +212,7 @@ def kb_search(
         return "[no matching learned knowledge]"
 
     try:
-        from memory.knowledge import knowledge_context_for
+        from cognition.knowledge import knowledge_context_for
         ctx = knowledge_context_for(text, limit=5, max_chars=max_chars,
                                      embedder=embedder, user_id=user_id)
     except Exception as e:
@@ -244,7 +244,7 @@ def learn_report(
     if not text:
         return "[learn skipped: empty report]"
     try:
-        from memory.knowledge import ingest_text
+        from cognition.knowledge import ingest_text
         doc_id = ingest_text(
             title=title, text=text, source="agentic.research", kind=kind,
             embedder=embedder, user_id=user_id,

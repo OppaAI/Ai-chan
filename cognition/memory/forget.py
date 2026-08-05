@@ -37,7 +37,7 @@ def _valence_intensity(
     """0..1 intensity for half-life stretch. Prefer 5-pt score when present."""
     if valence_score is not None and str(valence_score).strip() != "":
         try:
-            s = int(valence_score)
+            s = float(valence_score)
             s = max(-2, min(2, s))
             return min(1.0, abs(s) / 2.0)
         except (TypeError, ValueError):

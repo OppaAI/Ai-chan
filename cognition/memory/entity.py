@@ -104,7 +104,7 @@ def memory_max_activation(row, activation: dict[str, float]) -> float:
     return max((activation.get(e.casefold(), 0.0) for e in ents), default=0.0)
 def entities_from_json_safe(raw) -> list[str]:
     try:
-        from memory.memorize import entities_from_json
+        from cognition.memory.memorize import entities_from_json
         return entities_from_json(raw)
     except Exception:
         return []
@@ -269,3 +269,55 @@ def walk_supersession_chain(conn, mem_id: str, user_id: str, max_depth: int = 12
     except Exception as exc:
         log.debug("supersession chain walk failed for %s: %s", mem_id, exc)
         return []
+
+
+# Entity extraction/classification helpers still live with the write backend while
+# the backend is being decomposed; expose lazy wrappers here so entity-related
+# imports have a single home without forcing backend/numpy imports at module load.
+def extract_entities(text: str):
+    from .backend import extract_entities as _impl
+    return _impl(text)
+
+
+def entities_to_json(entities):
+    from .backend import entities_to_json as _impl
+    return _impl(entities)
+
+
+def entities_from_json(raw):
+    from .backend import entities_from_json as _impl
+    return _impl(raw)
+
+
+def entity_overlap_score(a, b) -> float:
+    from .backend import entity_overlap_score as _impl
+    return _impl(a, b)
+
+
+def backfill_entities(conn) -> int:
+    from .backend import backfill_entities as _impl
+    return _impl(conn)
+
+
+__all__ = [
+    "ENTITY_IMPORTANCE_ALPHA",
+    "ENTITY_IMPORTANCE_BETA",
+    "MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT",
+    "MEMORY_SUPERSESSION_CHAIN_EXPAND",
+    "MEMORY_SUPERSESSION_CHAIN_KINDS",
+    "MEMORY_SPREADING_ENABLED",
+    "MEMORY_SPREADING_MAX_DEPTH",
+    "MEMORY_SPREADING_DECAY",
+    "MEMORY_SPREADING_MIN_STRENGTH",
+    "backfill_entities",
+    "compute_entity_importance_map",
+    "entities_from_json",
+    "entities_to_json",
+    "entity_overlap_score",
+    "extract_entities",
+    "memory_max_activation",
+    "memory_max_entity_importance",
+    "should_expand_supersession_chain",
+    "spread_activation",
+    "walk_supersession_chain",
+]

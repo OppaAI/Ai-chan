@@ -155,7 +155,7 @@ def fresh_think_instance(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("ROUTE_VECTOR_CACHE_DIR", str(tmp_path / "route_vectors"))
     from cognition.think import AikoThink
-    from memory.memorize import AikoMemorize
+    from cognition.memory.memorize import AikoMemorize
     try:
         think = AikoThink(None, speak=None)
         think.join_warmup()

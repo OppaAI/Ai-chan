@@ -245,7 +245,7 @@ uv run python -c "from agentic.skills import list_skillsets; print(list_skillset
 uv run python -c "from agentic.agentic import tool_schemas; print([s['function']['name'] for s in tool_schemas()])"
 
 # Memory backend
-uv run python -c "from memory.memorize import AikoMemorize; m=AikoMemorize(silent=True); print(m.get_all()[:1])"
+uv run python -c "from cognition.memory.memorize import AikoMemorize; m=AikoMemorize(silent=True); print(m.get_all()[:1])"
 ```
 
 ---

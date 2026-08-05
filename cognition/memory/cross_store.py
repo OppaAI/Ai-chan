@@ -35,7 +35,7 @@ MIN_ENTITY_OVERLAP = max(0, _env_int("MEMORY_CROSS_STORE_MIN_ENTITY_OVERLAP", 1)
 
 def _entities_from_row(row: dict | Any) -> list[str]:
     try:
-        from memory.memorize import entities_from_json
+        from cognition.memory.memorize import entities_from_json
 
         raw = None
         if hasattr(row, "keys") and "entities" in row.keys():
@@ -58,7 +58,7 @@ def seed_entities_from_memories(memories: list[dict], query: str = "") -> list[s
                 seeds.append(e)
     if query:
         try:
-            from memory.memorize import extract_entities
+            from cognition.memory.memorize import extract_entities
 
             for e in extract_entities(query):
                 k = e.casefold()
@@ -92,7 +92,7 @@ def related_knowledge(
         return []
     seed = {e.casefold() for e in (seed_entities or []) if e}
     try:
-        from memory.knowledge import search_knowledge
+        from cognition.knowledge import search_knowledge
 
         hits = search_knowledge(
             query or " ",

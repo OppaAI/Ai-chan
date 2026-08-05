@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 import sqlite_vec
 
-from memory.memorize import (
+from cognition.memory.memorize import (
     _MemoryBackend,
     AikoMemorize,
     EMBED_DIMS,
@@ -51,14 +51,14 @@ from memory.memorize import (
     entities_to_json,
     vacuum_memory_db,
 )
-from memory.forget import _valence_intensity, compute_weighted_score, is_grace_protected, should_cleanup
-from memory.entity_importance import (
+from cognition.memory.forget import _valence_intensity, compute_weighted_score, is_grace_protected, should_cleanup
+from cognition.memory.entity import (
     compute_entity_importance_map,
     memory_max_entity_importance,
     should_expand_supersession_chain,
     walk_supersession_chain,
 )
-from memory import consolidate as consolidate_mod
+from cognition import consolidate as consolidate_mod
 from system import userspace
 
 
@@ -205,7 +205,7 @@ def _insert_vector(conn, mem_id, vector):
 def _bare_memo(backend, user_id: str = "u1"):
     """Build an AikoMemorize instance without __init__ (no worker thread or
     config load), wiring only the state the recall/persona paths touch."""
-    from memory.memorize import AikoMemorize
+    from cognition.memory.memorize import AikoMemorize
     memo = AikoMemorize.__new__(AikoMemorize)
     memo._mem = backend
     memo._user_id_override = user_id
@@ -557,8 +557,8 @@ def test_vacuum_memory_db_opens_user_store_and_runs_maintenance(monkeypatch, tmp
         calls.append(("initialize", str(path), user_id, vector))
         return FakeConn()
 
-    monkeypatch.setattr("memory.memorize.resolve_user_db_path", lambda path, user_id=None: tmp_path / user_id / "memory.db")
-    monkeypatch.setattr("memory.memorize.initialize_store_db", fake_initialize)
+    monkeypatch.setattr("cognition.memory.memorize.resolve_user_db_path", lambda path, user_id=None: tmp_path / user_id / "memory.db")
+    monkeypatch.setattr("cognition.memory.memorize.initialize_store_db", fake_initialize)
 
     vacuum_memory_db("alice")
 
@@ -628,7 +628,7 @@ class TestPersonaCache:
 
     def test_persona_cache_ttl_invalidation(self, backend, monkeypatch):
         """Cache respects TTL and rebuilds after PERSONA_CACHE_TTL."""
-        from memory.memorize import PERSONA_CACHE_TTL
+        from cognition.memory.memorize import PERSONA_CACHE_TTL
         conn = backend._conn
         now = datetime.now(timezone.utc).isoformat()
         _insert_row(conn, "id1", "u1", "Oppa X", now)
@@ -806,7 +806,7 @@ class TestForgetValenceDecay:
     @pytest.fixture(autouse=True)
     def _reload_forget(self, monkeypatch):
         import importlib
-        import memory.forget as forget_mod
+        import cognition.memory.forget as forget_mod
         monkeypatch.setenv("FORGET_HALF_LIFE_DAYS", "21.0")
         monkeypatch.setenv("FORGET_EMOTION_GAMMA", "0.5")
         monkeypatch.setenv("FORGET_INTENSITY_NEG", "1.0")
@@ -842,7 +842,7 @@ class TestForgetValenceDecay:
 
     def test_gamma_zero_disables_emotion(self, monkeypatch, _reload_forget):
         import importlib
-        import memory.forget as forget_mod
+        import cognition.memory.forget as forget_mod
         monkeypatch.setenv("FORGET_EMOTION_GAMMA", "0")
         importlib.reload(forget_mod)
         old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
@@ -871,7 +871,7 @@ class TestForgetValenceDecay:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 3 — entity importance I_e + supersession chain (memory/entity_importance.py)
+# Phase 3 — entity importance I_e + supersession chain (cognition/memory/entity.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestEntityImportance:
@@ -957,7 +957,7 @@ class TestEntityImportance:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Phase 1/2/4 — retention gate scoring (memory/consolidate.py)
+# Phase 1/2/4 — retention gate scoring (cognition/consolidate/backend.py)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestConsolidateRetentionScoring:

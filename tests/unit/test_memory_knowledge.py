@@ -24,7 +24,7 @@ sys.path.insert(0, "/home/oppa-ai/jetson")
 from system.config import load_config
 load_config()
 
-from memory.knowledge import (
+from cognition.knowledge import (
     search_knowledge,
     knowledge_context_for,
     ingest_text,
@@ -95,7 +95,7 @@ class TestIngestText:
 
     def test_ingest_creates_doc_and_chunks(self, tmp_path):
         db_path = tmp_path / "test.db"
-        with patch("memory.knowledge._connect", return_value=_connect(str(db_path))):
+        with patch("cognition.knowledge._connect", return_value=_connect(str(db_path))):
             doc_id = ingest_text(
                 title="Test Doc",
                 text="This is a test document. " * 10,
@@ -107,13 +107,13 @@ class TestIngestText:
 
     def test_ingest_empty_text_returns_none(self, tmp_path):
         db_path = tmp_path / "test.db"
-        with patch("memory.knowledge._connect", return_value=_connect(str(db_path))):
+        with patch("cognition.knowledge._connect", return_value=_connect(str(db_path))):
             doc_id = ingest_text("Title", "", embedder=FakeEmbedder())
             assert doc_id is None
 
     def test_ingest_sanitizes_text(self, tmp_path):
         db_path = tmp_path / "test.db"
-        with patch("memory.knowledge._connect", return_value=_connect(str(db_path))):
+        with patch("cognition.knowledge._connect", return_value=_connect(str(db_path))):
             doc_id = ingest_text(
                 "Title", "  \n\n  Content with  excessive   whitespace  \n\n  ",
                 embedder=FakeEmbedder()
@@ -129,12 +129,12 @@ class TestIngestFile:
         workspace.mkdir(parents=True, exist_ok=True)
         (workspace / "test.txt").write_text("File content for ingestion. " * 5)
 
-        with patch("memory.knowledge._connect", return_value=_connect(str(tmp_path / "test.db"))):
+        with patch("cognition.knowledge._connect", return_value=_connect(str(tmp_path / "test.db"))):
             doc_id = ingest_file("test.txt", title="Test File", embedder=FakeEmbedder())
             assert doc_id is not None
 
     def test_ingest_nonexistent_file(self, tmp_path):
-        with patch("memory.knowledge._connect", return_value=_connect(str(tmp_path / "test.db"))):
+        with patch("cognition.knowledge._connect", return_value=_connect(str(tmp_path / "test.db"))):
             doc_id = ingest_file("nonexistent/path.txt", embedder=FakeEmbedder())
             assert doc_id is None
 
@@ -207,19 +207,19 @@ class TestSearchKnowledge:
         self.conn.commit()
     
     def test_search_returns_relevant_results(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             results = search_knowledge("quantum qubits", limit=5, embedder=FakeEmbedder(), user_id="test_user")
             assert len(results) > 0
             # Should find quantum doc
             assert any("quantum" in r["text"].lower() for r in results)
 
     def test_search_filters_by_user(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             results = search_knowledge("quantum", limit=5, embedder=FakeEmbedder(), user_id="other_user")
             assert len(results) == 0
 
     def test_search_returns_scores(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             results = search_knowledge("quantum", limit=5, embedder=FakeEmbedder(), user_id="test_user")
             for r in results:
                 assert "score" in r
@@ -227,12 +227,12 @@ class TestSearchKnowledge:
                 assert 0 <= r["score"] <= 1
 
     def test_search_limit_respected(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             results = search_knowledge("computing", limit=1, embedder=FakeEmbedder(), user_id="test_user")
             assert len(results) <= 1
 
     def test_empty_query_returns_empty(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             results = search_knowledge("", embedder=FakeEmbedder(), user_id="test_user")
             assert results == []
 
@@ -275,7 +275,7 @@ class TestKnowledgeContextFor:
         self.conn.commit()
 
     def test_returns_xml_format(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             ctx = knowledge_context_for("test", limit=5, embedder=FakeEmbedder(), user_id="test_user")
             assert "<knowledge_context>" in ctx
             assert "</knowledge_context>" in ctx
@@ -287,19 +287,19 @@ class TestKnowledgeContextFor:
             assert "score" in ctx
 
     def test_no_results_returns_empty_message(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             ctx = knowledge_context_for("nonexistent query xyz", limit=5, embedder=FakeEmbedder(), user_id="test_user")
             assert "No matching learned knowledge found" in ctx
 
     def test_max_chars_limit(self):
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             ctx = knowledge_context_for("test", limit=5, max_chars=50, embedder=FakeEmbedder(), user_id="test_user")
             # Content should be truncated
             assert len(ctx) < 500  # Well under default
 
     def test_cache_hit_returns_cached(self):
         """Second call with same query should use cache."""
-        with patch("memory.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge._connect", return_value=self.conn):
             ctx1 = knowledge_context_for("test query", limit=5, embedder=FakeEmbedder(), user_id="test_user")
             ctx2 = knowledge_context_for("test query", limit=5, embedder=FakeEmbedder(), user_id="test_user")
             assert ctx1 == ctx2
@@ -378,7 +378,7 @@ class TestCache:
         assert cached is None
 
     def test_cache_ttl_expiry(self, monkeypatch):
-        import memory.knowledge as knowledge_module
+        import cognition.knowledge as knowledge_module
         monkeypatch.setattr(knowledge_module, "_KNOWLEDGE_SEARCH_CACHE_TTL", 0.01)
         _search_cache_set("query", "user1", 5, [{"id": "1"}])
         time.sleep(0.02)

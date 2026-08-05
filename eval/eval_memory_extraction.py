@@ -193,7 +193,7 @@ def _load_real_backend():
     the environment (LLM_BASE_URL, GGUF model, etc.) isn't set up --
     this eval is meant to run on the actual device with real components.
     """
-    from memory.memorize import _MemoryBackend
+    from cognition.memory.memorize import _MemoryBackend
 
     backend = _MemoryBackend(
         db_path="/tmp/eval_memory_extraction.db",
