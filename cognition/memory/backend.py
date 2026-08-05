@@ -515,6 +515,27 @@ _HEDGE_RE = re.compile(
 )
 
 
+def _force_subject_name(text: str, subject: str, user_name: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return t
+    name = "Aiko" if subject == "assistant" else user_name
+    low = t.casefold()
+    # strip a leading wrong/right name token once
+    for prefix in (user_name, "Aiko", "User", "Assistant"):
+        if prefix and low.startswith(prefix.casefold()):
+            parts = t.split(None, 1)
+            t = parts[1] if len(parts) > 1 else ""
+            low = t.casefold()
+            break
+    if not t:
+        return name
+    if not t.casefold().startswith(name.casefold()):
+        body = t[0].lower() + t[1:] if t else t
+        t = f"{name} {body}"
+    return t.strip()
+  
+
 def _valence_from_llm() -> bool:
     """Whether extract-provided valence_score overrides lexical inference.
 
@@ -566,25 +587,6 @@ Bad examples (do not produce these):
 Conversation:
 {conversation}"""
 
-def _force_subject_name(text: str, subject: str, user_name: str) -> str:
-    t = (text or "").strip()
-    if not t:
-        return t
-    name = "Aiko" if subject == "assistant" else user_name
-    low = t.casefold()
-    # strip a leading wrong/right name token once
-    for prefix in (user_name, "Aiko", "User", "Assistant"):
-        if prefix and low.startswith(prefix.casefold()):
-            parts = t.split(None, 1)
-            t = parts[1] if len(parts) > 1 else ""
-            low = t.casefold()
-            break
-    if not t:
-        return name
-    if not t.casefold().startswith(name.casefold()):
-        body = t[0].lower() + t[1:] if t else t
-        t = f"{name} {body}"
-    return t.strip()
 
 def _sanitize_fts_query(query: str) -> str | None:
     """
@@ -1491,7 +1493,12 @@ class _MemoryBackend:
                 log.debug(f"Dropped hedging fact: {fact!r}")
                 continue
             clean_pairs.append((fact, sc))
-
+          
+        subj = str(x.get("subject") or "").strip().lower()
+        if subj not in ("user", "assistant"):
+            subj = "assistant" if t.casefold().startswith("aiko") else "user"
+        t = _force_subject_name(t, subj, user_name)
+              
         # Repair common user/assistant subject swaps (Oppa vs Aiko).
         from cognition.memory.fact_identity import sanitize_fact_score_pairs
         return sanitize_fact_score_pairs(
