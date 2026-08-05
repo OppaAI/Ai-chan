@@ -1424,18 +1424,16 @@ class _MemoryBackend:
         ents_list = entities if entities is not None else extract_entities(text)
         ents_json = entities_to_json(ents_list)
 
-        if valence_score is not None:
+        if llm_score is not None:
             try:
-                v_score = max(-2, min(2, int(valence_score)))
+                v_score = max(-2, min(2, int(llm_score)))
             except (TypeError, ValueError):
                 v_score = infer_valence_score(text)
         else:
             v_score = infer_valence_score(text)
-        v_tag = (
-            valence_tag
-            if valence_tag in ("pos", "neg", "neutral")
-            else tag_from_score(v_score)
-        )
+
+        v_tag = tag_from_score(v_score)
+
         if valence_tag is None:
             v_tag = tag_from_score(v_score)
         s_hit = int(salience_hit) if salience_hit is not None else infer_salience_hit(text)
@@ -1586,7 +1584,7 @@ class _MemoryBackend:
                         pinned=0,
                         source=SOURCE_CHAT,
                         supersedes_id=supersedes_id,
-                        valence_tag=tag_from_score(v_score),
+                        valence_tag=v_tag,
                         valence_score=v_score,
                         salience_hit=s_hit,
                     )

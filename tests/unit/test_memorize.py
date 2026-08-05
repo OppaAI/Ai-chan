@@ -1043,16 +1043,14 @@ class TestCrossStoreUserScoping:
     """Cross-store experience leg should respect explicit user_id."""
 
     def test_search_experience_threads_user_id(self, tmp_path):
-        db = tmp_path / "exp.db"
-        from agentic.experience import _connect as exp_connect, search_experience, record_experience
+        from agentic.experience import _connect as exp_connect, search_experience
         import numpy as np
         import hashlib
 
+        # Seed one experience for user1 directly
         conn = exp_connect("user1")
-        # Seed one experience for user1
-        record_experience(None, "user1 task", [{"tool": "test", "ok": True}], "done", True, 1.0, conn=conn)
 
-        # search_experience with explicit user_id should find it
+        # Create a matching embedder for the seeded data
         class FE:
             def embed_query(self, t, instruct=""):
                 h = hashlib.sha256(t.encode()).digest()
@@ -1060,12 +1058,31 @@ class TestCrossStoreUserScoping:
                 arr = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)[:640]/255.0*2-1
                 n = np.linalg.norm(arr); return arr/n if n else arr
 
-        hits = search_experience("user1", limit=5, embedder=FE(), user_id="user1")
+        fe = FE()
+        vec = fe.embed_query("user1 task")
+        import sqlite_vec
+        conn.execute(
+            "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            ("exp-1", "user1", "user1 task", "test record", '[]', "done", 1.0, "excerpt", '[]', "2024-01-01T00:00:00")
+        )
+        conn.execute(
+            "INSERT INTO experiences_vec(id,embedding) VALUES(?,?)",
+            ("exp-1", sqlite_vec.serialize_float32(vec.tolist()))
+        )
+        conn.execute(
+            "INSERT INTO experiences_fts(id,goal,record_text) VALUES(?,?,?)",
+            ("exp-1", "user1 task", "test record")
+        )
+        conn.commit()
+
+        # search_experience with explicit user_id should find it
+        hits = search_experience("user1 task", limit=5, embedder=fe, user_id="user1")
         assert len(hits) >= 1
         assert hits[0]["user_id"] == "user1"
 
         # With different user_id should return empty (separate DB)
-        hits2 = search_experience("user1", limit=5, embedder=FE(), user_id="user2")
+        hits2 = search_experience("user1 task", limit=5, embedder=fe, user_id="user2")
         assert hits2 == []
 
         conn.close()

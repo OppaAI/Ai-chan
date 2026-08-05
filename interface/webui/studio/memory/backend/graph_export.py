@@ -346,7 +346,9 @@ def export_memory_graph(
                 entities=ents,
                 entity_importance=entity_importance,
             )
-            size = round(0.35 + 0.9 * scores["retain"], 4)
+            # Wider spread: weak ≈ 0.2, strong ≈ 1.3
+            r = float(scores["retain"])
+            size = round(0.20 + 1.10 * (r ** 1.25), 4)
 
             nodes.append({
                 "id": mid,
