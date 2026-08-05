@@ -585,7 +585,7 @@
         .attr('stroke-opacity', d => d.pinned ? 0.7 : 0.35 + retainOf(d) * 0.4);
         .attr('stroke-dasharray', d =>
                   (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
-                )
+                );
       
       // quiet rim arcs (factor scores) — outside body, low opacity
       node.each(function(d) {
