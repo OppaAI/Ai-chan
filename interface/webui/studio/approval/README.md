@@ -27,7 +27,7 @@ This directory contains the frontend and backend for the job post approval inter
 # Files
 
 - `backend/api.py` - FastAPI backend serving the API and static files
-- `frontend/approval-studio.html` - Single-page interface with sidebar for draft selection
+- `frontend/index.html` - Single-page interface with sidebar for draft selection
 - `entrypoint.sh` - Startup script
 
 # Design
