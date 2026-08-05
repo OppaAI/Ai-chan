@@ -8,6 +8,7 @@ as secondary context.
 """
 from __future__ import annotations
 
+import html
 import os
 from typing import Any
 
@@ -18,9 +19,6 @@ log = get_logger(__name__)
 CROSS_STORE_ENABLED = os.getenv("MEMORY_CROSS_STORE_ENABLED", "1").lower() in {
     "1", "true", "yes", "on",
 }
-MAX_KNOWLEDGE = max(0, int(os.getenv("MEMORY_CROSS_STORE_MAX_KNOWLEDGE", "2")))
-MAX_EXPERIENCE = max(0, int(os.getenv("MEMORY_CROSS_STORE_MAX_EXPERIENCE", "2")))
-MIN_ENTITY_OVERLAP = max(0, int(os.getenv("MEMORY_CROSS_STORE_MIN_ENTITY_OVERLAP", "1")))
 
 
 def _env_int(name: str, default: int) -> int:
@@ -30,7 +28,6 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# re-read after possible load_config
 MAX_KNOWLEDGE = max(0, _env_int("MEMORY_CROSS_STORE_MAX_KNOWLEDGE", 2))
 MAX_EXPERIENCE = max(0, _env_int("MEMORY_CROSS_STORE_MAX_EXPERIENCE", 2))
 MIN_ENTITY_OVERLAP = max(0, _env_int("MEMORY_CROSS_STORE_MIN_ENTITY_OVERLAP", 1))
@@ -239,9 +236,21 @@ def format_related_blocks(
         for h in exp:
             if budget <= 0:
                 break
-            body = (h.get("text") or h.get("goal") or "")[: min(220, budget)]
-            outcome = h.get("outcome") or ""
-            line = f'  <past_task outcome="{outcome}">{body}</past_task>'
+            # Escape and truncate outcome for attribute
+            outcome_raw = h.get("outcome") or ""
+            outcome_escaped = html.escape(outcome_raw, quote=True)
+            # Reserve space for tag structure: '  <past_task outcome="">\n</past_task>'
+            # Approx 36 chars + outcome length
+            tag_overhead = 36 + len(outcome_escaped)
+            if budget <= tag_overhead:
+                break
+            # Truncate and escape body within remaining budget
+            body_raw = h.get("text") or h.get("goal") or ""
+            max_body_len = min(220, budget - tag_overhead)
+            body_truncated = body_raw[:max_body_len]
+            body_escaped = html.escape(body_truncated, quote=False)
+            # Build final line and measure actual length
+            line = f'  <past_task outcome="{outcome_escaped}">{body_escaped}</past_task>'
             lines.append(line)
             budget -= len(line)
         lines.append("</related_experience>")

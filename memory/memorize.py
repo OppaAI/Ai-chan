@@ -367,9 +367,17 @@ MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 MEMORY_CROSS_STORE_ENABLED = os.getenv("MEMORY_CROSS_STORE_ENABLED", "1").lower() in {
     "1", "true", "yes", "on",
 }
-MEMORY_CROSS_STORE_CONTEXT_CHARS = max(
-    0, int(os.getenv("MEMORY_CROSS_STORE_CONTEXT_CHARS", "800"))
-)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+MEMORY_CROSS_STORE_CONTEXT_CHARS = max(0, _env_int("MEMORY_CROSS_STORE_CONTEXT_CHARS", 800))
+
 
 def _default_user_id(user_id: str | None = None) -> str:
     return user_id or current_user_id()
