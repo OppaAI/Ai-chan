@@ -244,6 +244,7 @@ import sqlite_vec
 from openai import OpenAI
 
 from memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
+from memory.narrative import query_wants_emotion, format_supersession_narrative
 from system.log import get_logger
 from memory.vecstore import HarrierEmbedder
 
@@ -368,6 +369,14 @@ MEMORY_CROSS_STORE_ENABLED = os.getenv("MEMORY_CROSS_STORE_ENABLED", "1").lower(
     "1", "true", "yes", "on",
 }
 
+def _env_flag(name: str, default: str = "1") -> bool:
+    return str(os.getenv(name, default)).strip().lower() not in ("0", "false", "no", "")
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
 
 def _env_int(name: str, default: int) -> int:
     try:
@@ -375,6 +384,12 @@ def _env_int(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
 
+MEMORY_STATE_TAGS_ENABLED = _env_flag("MEMORY_STATE_TAGS_ENABLED", "1")
+MEMORY_NEG_RECALL_AVOID = _env_flag("MEMORY_NEG_RECALL_AVOID", "1")
+MEMORY_NEG_RECALL_AVOID_WEIGHT = _env_float("MEMORY_NEG_RECALL_AVOID_WEIGHT", 0.015)
+MEMORY_NEG_RECALL_AVOID_EXCEPT = _env_flag("MEMORY_NEG_RECALL_AVOID_EXCEPT", "1")
+MEMORY_SUPERSESSION_NARRATIVE = _env_flag("MEMORY_SUPERSESSION_NARRATIVE", "1")
+MEMORY_SUPERSESSION_NARRATIVE_MAX = max(0, _env_int("MEMORY_SUPERSESSION_NARRATIVE_MAX", 2))
 
 MEMORY_CROSS_STORE_CONTEXT_CHARS = max(0, _env_int("MEMORY_CROSS_STORE_CONTEXT_CHARS", 800))
 
@@ -592,6 +607,7 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
     ("valence_score", "INTEGER"),  # -2..+2; NULL = legacy/unknown
     ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
+    ("state_json", "TEXT"),  # Phase 16: optional {"local_hour": 0-23}
 )
 
 # L2 scene blocks — one additive runtime column on memories. A scene row
@@ -1514,6 +1530,16 @@ class _MemoryBackend:
         if "salience_hit" in cols:
             ext_cols.append("salience_hit")
             ext_vals.append(s_hit)
+        if MEMORY_STATE_TAGS_ENABLED and "state_json" in cols:
+            try:
+                from datetime import datetime
+                import json
+                hour = bioclock.local_now().hour
+                state_json = json.dumps({"local_hour": int(hour)}, ensure_ascii=False)
+                ext_cols.append("state_json")
+                ext_vals.append(state_json)
+            except Exception:
+                pass
         all_cols = base_cols + ext_cols
         placeholders = ", ".join("?" * len(all_cols))
         self._conn.execute(
@@ -2339,6 +2365,27 @@ class _MemoryBackend:
             except Exception as exc:
                 log.debug("spreading activation score boost skipped: %s", exc)
 
+        if MEMORY_NEG_RECALL_AVOID and results:
+            relax = MEMORY_NEG_RECALL_AVOID_EXCEPT and query_wants_emotion(query or "")
+            if not relax:
+                w = MEMORY_NEG_RECALL_AVOID_WEIGHT
+                for r in results:
+                    if r.get("pinned"):
+                        continue
+                    tag = (str(r.get("valence_tag") or "")).strip().lower()
+                    vs = r.get("valence_score")
+                    is_neg = tag == "neg"
+                    if not is_neg and vs is not None and str(vs).strip() != "":
+                        try:
+                            is_neg = int(vs) <= -1
+                        except (TypeError, ValueError):
+                            pass
+                    if is_neg:
+                        # use the same score key you sort on
+                        key = "_recall_score"  # or "score" — match your pipeline
+                        r[key] = float(r.get(key) or 0.0) - w
+                results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
+          
         return results[:limit]
       
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
@@ -2367,13 +2414,19 @@ class _MemoryBackend:
                     expanded.append(hit)
                     seen.add(mid)
                     continue
-                for node in chain:
+
+                # Normalize: list[dict], oldest → newest
+                chain_rows = [dict(n) for n in chain]
+                tip_id = str(chain_rows[-1].get("id") or mid)
+
+                for node in chain_rows:
                     nid = str(node.get("id") or "")
                     if not nid or nid in seen:
                         continue
                     node = dict(node)
                     node["_recall_score"] = hit.get("_recall_score", 0.0)
-                    node["_supersession_chain"] = True
+                    # Full chain for narrative (same list on each member is fine)
+                    node["_supersession_chain"] = chain_rows
                     expanded.append(node)
                     seen.add(nid)
         return expanded[: max(limit, min(len(expanded), limit * 2))]
@@ -3489,7 +3542,30 @@ class AikoMemorize:
         block = "\n".join(lines)
         if len(block) > MEMORY_CONTEXT_TOTAL_CHARS:
             block = block[:MEMORY_CONTEXT_TOTAL_CHARS].rstrip() + "\n</memory_context>"
-
+          
+        if MEMORY_SUPERSESSION_NARRATIVE and MEMORY_SUPERSESSION_NARRATIVE_MAX > 0:
+            narr_lines = []
+            seen_keys: set[str] = set()
+            for r in memories or []:
+                if len(seen_keys) >= MEMORY_SUPERSESSION_NARRATIVE_MAX:
+                    break
+                chain = r.get("_supersession_chain")
+                if not chain or len(chain) < 2:
+                    continue
+                key = str(chain[-1].get("id") or "")  # tip id
+                if not key or key in seen_keys:
+                    continue
+                line = format_supersession_narrative(chain)
+                if line:
+                    narr_lines.append(f"  {line}")
+                    seen_keys.add(key)
+            if narr_lines:
+                block += (
+                    "\n\n<memory_update>\n"
+                    + "\n".join(narr_lines)
+                    + "\n</memory_update>"
+                )
+              
         # Phase 13a: secondary related knowledge / experience
         if MEMORY_CROSS_STORE_ENABLED and MEMORY_CROSS_STORE_CONTEXT_CHARS > 0:
             try:
