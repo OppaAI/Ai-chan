@@ -369,7 +369,7 @@ async def health():
 
 @app.get("/")
 async def serve_studio():
-    return FileResponse(FRONTEND_DIR / "approval-studio.html")
+    return FileResponse(FRONTEND_DIR / "index.html")
 
 
 if __name__ == "__main__":
