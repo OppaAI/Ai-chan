@@ -368,6 +368,27 @@ MEMORY_CROSS_STORE_ENABLED = os.getenv("MEMORY_CROSS_STORE_ENABLED", "1").lower(
     "1", "true", "yes", "on",
 }
 
+def _env_flag(name: str, default: str = "1") -> bool:
+    return str(os.getenv(name, default)).strip().lower() not in ("0", "false", "no", "")
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+MEMORY_STATE_TAGS_ENABLED = _env_flag("MEMORY_STATE_TAGS_ENABLED", "1")
+MEMORY_NEG_RECALL_AVOID = _env_flag("MEMORY_NEG_RECALL_AVOID", "1")
+MEMORY_NEG_RECALL_AVOID_WEIGHT = _env_float("MEMORY_NEG_RECALL_AVOID_WEIGHT", 0.015)
+MEMORY_NEG_RECALL_AVOID_EXCEPT = _env_flag("MEMORY_NEG_RECALL_AVOID_EXCEPT", "1")
+MEMORY_SUPERSESSION_NARRATIVE = _env_flag("MEMORY_SUPERSESSION_NARRATIVE", "1")
+MEMORY_SUPERSESSION_NARRATIVE_MAX = max(0, _env_int("MEMORY_SUPERSESSION_NARRATIVE_MAX", 2))
 
 def _env_int(name: str, default: int) -> int:
     try:
