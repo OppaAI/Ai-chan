@@ -613,7 +613,7 @@ def export_memory_graph(
                 "include_experience": include_experience,
                 "date_from": from_dt,
                 "date_to": to_dt,
-                ""phase16_lineage": bool(has_supersedes),
+                "phase16_lineage": bool(has_supersedes),
             },
             "legend": _legend(),
         }
