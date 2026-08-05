@@ -113,6 +113,10 @@ MEMORY_SPREADING_DECAY: "0.6"  # Multiplier per hop on edge weight.
 MEMORY_SPREADING_MIN_STRENGTH: "0.15"  # Drop entities below this activation.
 MEMORY_SPREADING_MAX_EXTRA: "5"  # Max neighbor memories added beyond RRF hits.
 MEMORY_SPREADING_SCORE_WEIGHT: "0.01"  # Flat boost × max entity activation on a row.
+MEMORY_RANK_GRAPH_WEIGHT: "0.6"  # Entity-graph recall tiebreaker; adds weight/(RRF_K+rank) per row with a graph hit. 0 disables.
+QUICK_GRAPH_LIMIT: "6"  # Narrow graph-pass candidate count tried before falling back to full search.
+MEMORY_GRAPH_SUPER_NODE_FRACTION: "0.3"  # Share of top-freq entities treated as a fused super-node during graph fusion.
+MEMORY_GRAPH_SUPER_NODE_TTL: "3600"  # Seconds the high-frequency entity super-node cache is considered fresh.
 
 # -- Phase 4: turn-level valence + salience tags --
 MONTHLY_CONSOLIDATION_W_VALENCE: "0.10"  # Weight for |emotional intensity|. Neuroscience: high-valence ↔ fast consolidation.
@@ -131,6 +135,9 @@ MONTHLY_CONSOLIDATION_NOVELTY_W_STATIC: "0.6"  # Share of novelty from prior [YY
 MONTHLY_CONSOLIDATION_NOVELTY_W_DYNAMIC: "0.4"  # Share of novelty vs recent active-memory mean (dynamic anchor).
 MONTHLY_CONSOLIDATION_DYNAMIC_ANCHOR_LIMIT: "40"  # Max recent active facts to build the dynamic anchor mean.
 MONTHLY_CONSOLIDATION_DYNAMIC_ANCHOR_DAYS: "14"  # Prefer facts touched/created within this many days.
+MONTHLY_CONSOLIDATION_ANCHOR_LOOKBACK: "50"  # Max prior [YYYY-MM] archive anchors to compare against for static novelty.
+MONTHLY_CONSOLIDATION_ANCHOR_K: "5"  # Nearest archive anchors kept when scoring static novelty.
+MONTHLY_CONSOLIDATION_SPACING_SATURATION: "5"  # Spacing score saturates once access_day_count reaches this many distinct days.
 
 # -- Phase 5: emotion imprint on decay + dream --
 FORGET_EMOTION_GAMMA: "0.5"  # H_eff = H * (1 + gamma * intensity); 0 disables emotion-modified decay.
@@ -193,6 +200,8 @@ MONTHLY_CONSOLIDATION_CHUNK_MEMS: "25"  # Memory facts per fallback monthly summ
 MONTHLY_CONSOLIDATION_MAX_INPUT_CHARS: "6000"  # Max source chars per monthly consolidation LLM request.
 MONTHLY_CONSOLIDATION_DELETE_DAILY_SUMMARIES: "0"  # After folding a month's pinned daily facts/day-records into "[YYYY-MM] ..." consolidated facts, delete the daily-granularity originals. Set to 0 to keep consolidation purely additive (compress + archive, no deletion) until you've verified retrieval/growth behavior.
 MONTHLY_CONSOLIDATION_MIN_MEMS: "5"  # Skip fallback months with fewer memories than this.
+MONTHLY_CONSOLIDATION_MIN_MONTH: "8"  # Floor on how many month candidates the retention gate considers before consolidation.
+MONTHLY_CONSOLIDATION_MAX_MONTH: "30"  # Cap on month candidates scanned per consolidation pass.
 MONTHLY_CONSOLIDATION_LLM_TIMEOUT: "120"  # Seconds before monthly summary LLM calls time out.
 MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/monthly_consolidation_state.jsonl.
 

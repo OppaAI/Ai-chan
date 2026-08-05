@@ -1013,3 +1013,58 @@ class TestConsolidateRetentionScoring:
             entity_importance={"grace": 0.95},
         )
         assert boosted > base
+
+
+class TestValenceColumnsInIterAll:
+    """Ensure iter_all() yields Phase 5 / 12R columns so dream/cleanup can use them."""
+
+    def test_iter_all_includes_valence_salience(self, backend):
+        # Insert with valence_score, valence_tag, salience_hit
+        backend._conn.execute(
+            "INSERT INTO memories(id,user_id,memory,created_at,status,valence_tag,valence_score,salience_hit) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            ("mem-1", "test_user", "I love this!", "2024-01-01T00:00:00", "active", "pos", 2, 1)
+        )
+        backend._conn.commit()
+
+        rows = list(backend.iter_all("test_user"))
+        assert len(rows) == 1
+        m = rows[0]
+        # New columns present
+        assert "valence_tag" in m
+        assert "valence_score" in m
+        assert "salience_hit" in m
+        assert m["valence_tag"] == "pos"
+        assert m["valence_score"] == 2
+        assert m["salience_hit"] == 1
+
+
+class TestCrossStoreUserScoping:
+    """Cross-store experience leg should respect explicit user_id."""
+
+    def test_related_experience_threads_user_id(self, tmp_path):
+        db = tmp_path / "exp.db"
+        from agentic.experience import _connect as exp_connect, search_experience, record_experience
+        import numpy as np
+
+        conn = exp_connect("user1")
+        # Seed one experience for user1
+        record_experience(None, "user1 task", [{"tool": "test", "ok": True}], "done", True, 1.0, conn=conn)
+
+        # search_experience with explicit user_id should find it
+        class FE:
+            def embed_query(self, t, instruct=""):
+                h = hashlib.sha256(t.encode()).digest()
+                raw = (h * (640 // len(h) + 1))[:2560]
+                arr = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)[:640]/255.0*2-1
+                n = np.linalg.norm(arr); return arr/n if n else arr
+
+        hits = search_experience("user1", limit=5, embedder=FE(), user_id="user1")
+        assert len(hits) >= 1
+        assert hits[0]["user_id"] == "user1"
+
+        # With different user_id should return empty
+        hits2 = search_experience("user1", limit=5, embedder=FE(), user_id="user2")
+        assert hits2 == []
+
+        conn.close()

@@ -319,8 +319,8 @@ def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sql
     )
 
 
-def search_experience(query: str, limit: int = 3, embedder=None) -> list[dict]:
-    uid = current_user_id()
+def search_experience(query: str, limit: int = 3, embedder=None, user_id: str | None = None) -> list[dict]:
+    uid = user_id or current_user_id()
     conn = _connect(uid)
     try:
         rank_knn = rank_by_id(_knn(conn, query, embedder, uid, EXPERIENCE_KNN_LIMIT))

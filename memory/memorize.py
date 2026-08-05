@@ -2330,7 +2330,8 @@ class _MemoryBackend:
             with self._db_lock:
                 rows = self._conn.execute(
                     """
-                    SELECT rowid, id, memory, created_at, status
+                    SELECT rowid, id, memory, created_at, status,
+                           valence_tag, valence_score, salience_hit
                     FROM memories
                     WHERE user_id = ? AND rowid > ?
                     ORDER BY rowid ASC
@@ -2347,6 +2348,9 @@ class _MemoryBackend:
                     "memory": row["memory"],
                     "created_at": row["created_at"],
                     "status": row["status"],
+                    "valence_tag": row["valence_tag"],
+                    "valence_score": row["valence_score"],
+                    "salience_hit": row["salience_hit"],
                 }
 
     def get_all(self, user_id: str) -> list[dict]:

@@ -207,7 +207,7 @@ def memories_for_entity(
         return []
     # status_sql is one of two hardcoded literals (not user input).
     status_clause = "" if include_history else "AND (status = 'active' OR status IS NULL)"
-    like = f'%"{_escape_like(needle)}"%'
+    like = f'%"{_escape_like(needle)}"[,\]]%'
     sql = (
         "SELECT * FROM memories "
         "WHERE user_id = ? "

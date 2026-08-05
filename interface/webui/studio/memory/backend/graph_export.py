@@ -412,6 +412,7 @@ def export_memory_graph(
                         "source": mid,
                         "target": eid,
                         "type": "mentions",
+                        "weight": 0.9,
                     })
 
         edges = [
@@ -651,6 +652,7 @@ def _add_knowledge_layer(
                 mem_ents.setdefault(str(mid), set()).add(eid.removeprefix("ent:").casefold())
 
     try:
+        grounded_seen: set[str] = set()
         for row in rows:
             kid = f"kb:{row['id']}"
             text = (row["text"] or "").strip()
@@ -677,7 +679,7 @@ def _add_knowledge_layer(
                 "size": 0.45,
             })
             for ent in ents:
-                eid = f"ent:{ent}"
+                eid = f"ent:{ent.casefold()}"
                 if eid not in entity_ids:
                     entity_ids.add(eid)
                     nodes.append({
@@ -710,13 +712,16 @@ def _add_knowledge_layer(
                 ent_cf = ent.casefold()
                 for mid, mes in mem_ents.items():
                     if ent_cf in mes:
-                        edges.append({
-                            "id": f"grounded:{mid}->{kid}",
-                            "source": mid,
-                            "target": kid,
-                            "type": "grounded_in",
-                            "weight": 1.0,
-                        })
+                        gid = f"grounded:{mid}->{kid}"
+                        if gid not in grounded_seen:
+                            grounded_seen.add(gid)
+                            edges.append({
+                                "id": gid,
+                                "source": mid,
+                                "target": kid,
+                                "type": "grounded_in",
+                                "weight": 1.0,
+                            })
     finally:
         if owns:
             try:
@@ -776,6 +781,7 @@ def _add_experience_layer(
                 mem_ents.setdefault(str(mid), set()).add(eid.removeprefix("ent:").casefold())
 
     try:
+        practiced_seen: set[str] = set()
         for row in rows:
             xid = f"exp:{row['id']}"
             text = (row["record_text"] or row["goal"] or row["answer_excerpt"] or "").strip()
@@ -804,7 +810,7 @@ def _add_experience_layer(
                 "size": 0.42,
             })
             for ent in ents:
-                eid = f"ent:{ent}"
+                eid = f"ent:{ent.casefold()}"
                 if eid not in entity_ids:
                     entity_ids.add(eid)
                     nodes.append({
@@ -837,13 +843,16 @@ def _add_experience_layer(
                 ent_cf = ent.casefold()
                 for mid, mes in mem_ents.items():
                     if ent_cf in mes:
-                        edges.append({
-                            "id": f"practiced:{mid}->{xid}",
-                            "source": mid,
-                            "target": xid,
-                            "type": "practiced_in",
-                            "weight": 1.0,
-                        })
+                        pid = f"practiced:{mid}->{xid}"
+                        if pid not in practiced_seen:
+                            practiced_seen.add(pid)
+                            edges.append({
+                                "id": pid,
+                                "source": mid,
+                                "target": xid,
+                                "type": "practiced_in",
+                                "weight": 1.0,
+                            })
     finally:
         if owns and exp_conn is not None:
             try:

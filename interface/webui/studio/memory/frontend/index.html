@@ -395,13 +395,23 @@
         return true;
       });
       const keep = new Set(nodes.map(n => n.id));
-      for (const e of (graph.edges || [])) {
-        if (e.type === 'mentions' && keep.has(e.source)) keep.add(e.target);
-      }
+      const nodeTypeOf = new Map((graph.nodes || []).map(n => [n.id, n.type]));
       // Add knowledge / experience nodes when their layers are on
       for (const n of (graph.nodes || [])) {
         if (n.type === 'knowledge' && showKb) keep.add(n.id);
         if (n.type === 'experience' && showExp) keep.add(n.id);
+      }
+      // Pull in entity hubs connected to any kept node via any edge type
+      // (mentions, about, related_to, grounded_in, practiced_in, co_mentions).
+      // Bounded to entity nodes so filtered-out memories can't leak back in.
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const e of (graph.edges || [])) {
+          const s = keep.has(e.source), t = keep.has(e.target);
+          if (s && !t) { if (nodeTypeOf.get(e.target) === 'entity') { keep.add(e.target); grew = true; } }
+          else if (t && !s) { if (nodeTypeOf.get(e.source) === 'entity') { keep.add(e.source); grew = true; } }
+        }
       }
       nodes = (graph.nodes || []).map(n => ({ ...n })).filter(n => {
         if (!keep.has(n.id)) return false;

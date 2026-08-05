@@ -147,7 +147,7 @@ def related_experience(
     try:
         from agentic.experience import search_experience
 
-        hits = search_experience(query or " ", limit=max(limit * 4, 8), embedder=embedder)
+        hits = search_experience(query or " ", limit=max(limit * 4, 8), embedder=embedder, user_id=user_id)
     except Exception as exc:
         log.debug("cross_store: search_experience failed: %s", exc)
         return []

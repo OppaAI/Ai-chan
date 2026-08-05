@@ -128,6 +128,15 @@ _DDL = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 
+CREATE TABLE IF NOT EXISTS learned_docs (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL DEFAULT 'ingested',
+    created_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS learned_chunks (
     id              TEXT PRIMARY KEY,
     doc_id          TEXT NOT NULL REFERENCES learned_docs(id) ON DELETE CASCADE,
