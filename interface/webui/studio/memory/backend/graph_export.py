@@ -68,6 +68,21 @@ def _table_columns(conn: sqlite3.Connection, table: str = "memories") -> set[str
         return set()
 
 
+def _norm_date(value: Any, *, end: bool) -> str | None:
+    """Normalize a YYYY-MM-DD or full ISO timestamp for created_at comparisons.
+
+    Bare dates are padded to start-of-day (end=False) or end-of-day (end=True)
+    so string comparison against ISO-8601 created_at stays correct.
+    """
+    v = str(value or "").strip()
+    if not v:
+        return None
+    v = v[:19]
+    if len(v) == 10:
+        return v + ("T23:59:59.999999" if end else "T00:00:00")
+    return v
+
+
 def _resolve_db_path(user_id: str) -> Path:
     import os
     from memory.vecstore import resolve_user_db_path
@@ -188,6 +203,8 @@ def export_memory_graph(
     include_entities: bool = True,
     include_knowledge: bool | None = None,
     include_experience: bool | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     """Build a graph dict: {nodes, edges, meta, legend}.
@@ -268,6 +285,14 @@ def export_memory_graph(
         params: list[Any] = [uid]
         if has_status and not include_history:
             sql += " AND (status = 'active' OR status IS NULL)"
+        from_dt = _norm_date(date_from, end=False)
+        to_dt = _norm_date(date_to, end=True)
+        if from_dt:
+            sql += " AND created_at >= ?"
+            params.append(from_dt)
+        if to_dt:
+            sql += " AND created_at <= ?"
+            params.append(to_dt)
             
         try:
             req_limit = int(limit) if limit is not None else 200
@@ -468,12 +493,12 @@ def export_memory_graph(
         # Phase 13b: knowledge + experience layers (entity overlap)
         if include_knowledge and _MAX_KNOWLEDGE > 0:
             try:
-                _add_knowledge_layer(conn, uid, nodes, edges, entity_ids, mem_ids)
+                _add_knowledge_layer(conn, uid, nodes, edges, entity_ids, mem_ids, date_from=from_dt, date_to=to_dt)
             except Exception as ex:
                 log.debug("graph_export: knowledge layer skipped: %s", ex)
         if include_experience and _MAX_EXPERIENCE > 0:
             try:
-                _add_experience_layer(conn, uid, nodes, edges, entity_ids, mem_ids)
+                _add_experience_layer(conn, uid, nodes, edges, entity_ids, mem_ids, date_from=from_dt, date_to=to_dt)
             except Exception as ex:
                 log.debug("graph_export: experience layer skipped: %s", ex)
 
@@ -523,6 +548,8 @@ def export_memory_graph(
                 "max_experience": _MAX_EXPERIENCE,
                 "include_knowledge": include_knowledge,
                 "include_experience": include_experience,
+                "date_from": from_dt,
+                "date_to": to_dt,
             },
             "legend": _legend(),
         }
@@ -600,6 +627,8 @@ def _add_knowledge_layer(
     edges: list[dict[str, Any]],
     entity_ids: set[str],
     mem_ids: set[str],
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> None:
     """Add learned_chunks as knowledge nodes + about / grounded_in edges."""
     kb_conn = conn
@@ -632,11 +661,19 @@ def _add_knowledge_layer(
     if has_status:
         sql += ", status"
     sql += " FROM learned_chunks WHERE user_id = ?"
+    kb_params: list[Any] = [uid]
     if has_status:
         sql += " AND (status = 'active' OR status IS NULL)"
+    if date_from:
+        sql += " AND created_at >= ?"
+        kb_params.append(date_from)
+    if date_to:
+        sql += " AND created_at <= ?"
+        kb_params.append(date_to)
     sql += " ORDER BY created_at DESC LIMIT ?"
+    kb_params.append(_MAX_KNOWLEDGE)
     try:
-        rows = kb_conn.execute(sql, (uid, _MAX_KNOWLEDGE)).fetchall()
+        rows = kb_conn.execute(sql, kb_params).fetchall()
     except Exception as ex:
         log.debug("knowledge layer query failed: %s", ex)
         if owns:
@@ -739,6 +776,8 @@ def _add_experience_layer(
     edges: list[dict[str, Any]],
     entity_ids: set[str],
     mem_ids: set[str],
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> None:
     """Add experiences as nodes + about / practiced_in edges (separate DB)."""
     exp_conn = None
@@ -763,9 +802,18 @@ def _add_experience_layer(
     sql = "SELECT id, goal, record_text, outcome, answer_excerpt, created_at"
     if has_ent:
         sql += ", entities"
-    sql += " FROM experiences WHERE user_id = ? ORDER BY created_at DESC LIMIT ?"
+    sql += " FROM experiences WHERE user_id = ?"
+    exp_params: list[Any] = [uid]
+    if date_from:
+        sql += " AND created_at >= ?"
+        exp_params.append(date_from)
+    if date_to:
+        sql += " AND created_at <= ?"
+        exp_params.append(date_to)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    exp_params.append(_MAX_EXPERIENCE)
     try:
-        rows = exp_conn.execute(sql, (uid, _MAX_EXPERIENCE)).fetchall()
+        rows = exp_conn.execute(sql, exp_params).fetchall()
     except Exception as ex:
         log.debug("experience layer query failed: %s", ex)
         if owns:

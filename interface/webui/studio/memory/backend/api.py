@@ -29,6 +29,8 @@ async def get_graph(
     include_entities: bool = Query(True, description="Add entity hub nodes"),
     include_knowledge: bool = Query(True, description="Phase 13: learned knowledge nodes"),
     include_experience: bool = Query(True, description="Phase 13: experience nodes"),
+    date_from: str | None = Query(None, description="Only include items created at/after this date (YYYY-MM-DD)"),
+    date_to: str | None = Query(None, description="Only include items created at/before this date (YYYY-MM-DD)"),
 ):
     from interface.webui.studio.memory.backend.graph_export import export_memory_graph
     from system.userspace import current_user_id
@@ -41,6 +43,8 @@ async def get_graph(
         include_entities=include_entities,
         include_knowledge=include_knowledge,
         include_experience=include_experience,
+        date_from=date_from,
+        date_to=date_to,
     )
 
 
