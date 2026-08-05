@@ -120,6 +120,7 @@ def _memory_scores(
     access_count: int,
     access_day_count: int,
     valence_tag: Any,
+    valence_score: Any = None,
     salience_hit: Any,
     entities: list[str],
     entity_importance: dict[str, float],
@@ -130,7 +131,7 @@ def _memory_scores(
     else:
         sal = _salience_score(text, salience_hit)
         sp = _spacing_score(access_day_count, access_count)
-        val = _valence_score(valence_tag)
+        val = _valence_score(valence_tag, valence_score)
         acc = _access_score(access_count)
         ie = 0.0
         if entities and entity_importance:
@@ -153,7 +154,7 @@ def _memory_scores(
 
     sal = _salience_score(text, salience_hit)
     sp = _spacing_score(access_day_count, access_count)
-    val = _valence_score(valence_tag)
+    val = _valence_score(valence_tag, valence_score)
     acc = _access_score(access_count)
     ie = 0.0
     if entities and entity_importance:
@@ -232,6 +233,7 @@ def export_memory_graph(
         has_source = "source" in cols
         has_supersedes = "supersedes_id" in cols
         has_valence = "valence_tag" in cols
+        has_valence_score = "valence_score" in cols
         has_salience = "salience_hit" in cols
         has_day_count = "access_day_count" in cols
 
@@ -248,6 +250,8 @@ def export_memory_graph(
             select_cols.append("supersedes_id")
         if has_valence:
             select_cols.append("valence_tag")
+        if has_valence_score:
+            select_cols.append("valence_score"
         if has_salience:
             select_cols.append("salience_hit")
         if has_day_count:
@@ -312,6 +316,12 @@ def export_memory_graph(
             valence_tag = (
                 str(row["valence_tag"]) if has_valence and row["valence_tag"] is not None else "neutral"
             )
+            valence_score = None
+            if has_valence_score and row["valence_score"] is not None:
+                try:
+                    valence_score = int(row["valence_score"])
+                except (TypeError, ValueError):
+                    valence_score = None
             salience_hit = row["salience_hit"] if has_salience else None
             access_day_count = int(row["access_day_count"] or 0) if has_day_count else 0
             access_count = int(row["access_count"] or 0)
@@ -324,6 +334,7 @@ def export_memory_graph(
                 access_count=access_count,
                 access_day_count=access_day_count,
                 valence_tag=valence_tag,
+                valence_score=valence_score,
                 salience_hit=salience_hit,
                 entities=ents,
                 entity_importance=entity_importance,
@@ -345,6 +356,7 @@ def export_memory_graph(
                 "entities": ents,
                 "supersedes_id": supersedes_id,
                 "valence_tag": valence_tag,
+                "valence_score": 0 if valence_score is None else valence_score,
                 "scores": scores,
                 "size": size,
             })
