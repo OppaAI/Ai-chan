@@ -13,8 +13,8 @@ Aiko is organized by runtime responsibility rather than by one monolithic `core/
 - `agentic/schema.py` owns the graph-first playbook DAG executor.
 - `agentic/tools.py` is the compatibility facade for executable tools; focused implementations live under `agentic/toolkit/`.
 - `agentic/skills.py` owns skillset CRUD/search helpers and the `agentic/skillsets/` workflow registry used by task mode.
-- `memory/memorize.py` owns persistent memory CRUD, recall, pinning, decay, cleanup, and consolidation hooks.
-- `memory/reflect.py` owns factual daily summary publishing and pinning of generated daily summaries.
+- `cognition/memory/memorize.py` owns persistent memory CRUD, recall, pinning, decay, cleanup, and consolidation hooks.
+- `cognition/memory/reflect.py` owns factual daily summary publishing and pinning of generated daily summaries.
 
 ## Module Boundaries
 
@@ -24,7 +24,7 @@ interface/webui/      browser adapter, HTTP static server, WebSocket bridge, UI 
 interface/cli/        CLI auth and local testing helpers
 system/wakeup.py      boot orchestration and BootResult assembly
 cognition/think.py    chat facade, routing, scheduled callbacks, TTS/history glue
-memory/               memory, journal, consolidation, reflection, sqlite-vec helpers
+cognition/memory/     memory, journal, consolidation, reflection, sqlite-vec helpers
 sensory/              speech and listening adapters
 agentic/tools.py      stable facade for pure callable tools
 agentic/toolkit/              focused tool implementations; no LLM loop or conversation state
