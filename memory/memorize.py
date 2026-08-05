@@ -572,6 +572,7 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("access_day_count", "INTEGER NOT NULL DEFAULT 0"),
   # Phase 4: turn-level emotion / salience tags (cheap, no LLM).
     ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
+    ("valence_score", "INTEGER NOT NULL DEFAULT 0"),  # Phase 12R: −2…+2
     ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
 )
 
@@ -692,18 +693,41 @@ SALIENCE_POLICY_RE = re.compile(
     re.IGNORECASE,
 )
 
-def infer_valence_tag(text: str) -> str:
-    """Cheap pos/neg/neutral from emoji + lexicon. No LLM."""
+_VALENCE_STRONG_RE = re.compile(
+    r"\b(?:very|so|extremely|furious|devastat|ecstatic|hate this|love this|terrified|overjoyed)\b|!{2,}",
+    re.IGNORECASE,
+)
+
+def infer_valence_score(text: str) -> int:
+    """Return −2…+2 from emoji + lexicon + intensifiers. No LLM / no Harrier."""
     t = text or ""
     neg = bool(_VALENCE_NEG_RE.search(t))
     pos = bool(_VALENCE_POS_RE.search(t))
+    strong = bool(_VALENCE_STRONG_RE.search(t))
     if neg and not pos:
-        return "neg"
+        return -2 if strong else -1
     if pos and not neg:
-        return "pos"
+        return 2 if strong else 1
     if neg and pos:
-        return "neg"  # conflict → treat as emotionally loaded neg for retention
+        return -1
+    return 0
+
+
+def tag_from_score(score: int) -> str:
+    try:
+        s = int(score)
+    except (TypeError, ValueError):
+        return "neutral"
+    if s <= -1:
+        return "neg"
+    if s >= 1:
+        return "pos"
     return "neutral"
+
+
+def infer_valence_tag(text: str) -> str:
+    """Backward-compatible 3-way tag derived from 5-pt score."""
+    return tag_from_score(infer_valence_score(text))
 
 
 def infer_salience_hit(text: str) -> int:
