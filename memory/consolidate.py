@@ -354,10 +354,10 @@ def _score_daily_row(
     if vs is not None and str(vs).strip() != "":
         try:
             s = max(-2, min(2, int(vs)))
-            valence = 0.25 + 0.30 * abs(s)  # 0.25, 0.55, 0.85
+            valence = 0.25 + 0.30 * abs(s)
         except (TypeError, ValueError):
-            valence = 0.25
-    else:
+            vs = None
+    if vs is None or str(vs).strip() == "":
         v_raw = (row.get("valence_tag") or "neutral")
         if isinstance(v_raw, str):
             v_raw = v_raw.strip().lower()
