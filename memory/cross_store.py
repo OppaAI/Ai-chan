@@ -217,11 +217,15 @@ def format_related_blocks(
             "Learned notes related to the same topics (secondary; not personal facts).",
         ]
         for h in kb:
-            if budget <= 0:
+            if budget <= 40:
                 break
-            body = (h.get("text") or "")[: min(220, budget)]
-            title = (h.get("title") or "")[:80]
+            title = html.escape((h.get("title") or "")[:80], quote=True)
+            overhead = len(f'  <chunk title="{title}"></chunk>')
+            room = max(0, min(220, budget - overhead))
+            body = html.escape((h.get("text") or "")[:room], quote=False)
             line = f'  <chunk title="{title}">{body}</chunk>'
+            if len(line) > budget:
+                break
             lines.append(line)
             budget -= len(line)
         lines.append("</related_knowledge>")
