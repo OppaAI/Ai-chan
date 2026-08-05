@@ -396,6 +396,7 @@ def export_memory_graph(
             text = (row["memory"] or "").strip()
             label = text if len(text) <= 80 else text[:77] + "…"
             status = str(row["status"]) if has_status and row["status"] is not None else "active"
+            is_tip = status.strip().lower() != "superseded"
             kind = str(row["kind"]) if has_kind and row["kind"] else "fact"
             imprint = bool(_MONTHLY_RE.match(text))
             if imprint:
@@ -443,6 +444,7 @@ def export_memory_graph(
                 "label": label,
                 "text": text,
                 "status": status,
+                "is_tip": is_tip,
                 "kind": kind,
                 "source": source,
                 "pinned": pinned,
@@ -452,11 +454,9 @@ def export_memory_graph(
                 "entities": ents,
                 "supersedes_id": supersedes_id,
                 "valence_tag": valence_tag,
-                    "valence_score": valence_score,
-                    "imprint": imprint,
-                    "size": size,
-                    "scores": scores,
-                })
+                "scores": scores,
+                "size": size,
+            })
 
             if supersedes_id:
                 edges.append({
@@ -478,6 +478,7 @@ def export_memory_graph(
                             "label": ent,
                             "text": ent,
                             "status": "active",
+                            "is_tip": is_tip,
                             "kind": "entity",
                             "source": "",
                             "pinned": False,
@@ -529,6 +530,7 @@ def export_memory_graph(
                                 "label": label,
                                 "text": label,
                                 "status": "active",
+                                "is_tip": False,
                                 "kind": "entity",
                                 "source": "",
                                 "pinned": False,
