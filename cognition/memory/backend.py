@@ -579,10 +579,10 @@ Speaker attribution (critical):
 - '{user_name}: I prefer dark mode' → {{"fact": "{user_name} prefers dark mode"}}.
 
 Good examples:
-[{{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "valence_score": 0}}, {{"fact": "Aiko dislikes being treated as human-like", "valence_score": -1}}, {{"fact": "Aiko should follow {user_name}'s rules", "valence_score": 0}}]
+[{{"fact": "{user_name}'s birthday is June 3", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "subject": "user", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "subject": "user", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "subject": "user", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "subject": "user", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "subject": "user", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "subject": "assistant", "valence_score": 0}}, {{"fact": "Aiko dislikes being treated as human-like", "subject": "assistant", "valence_score": -1}}, {{"fact": "Aiko should follow {user_name}'s rules", "subject": "assistant", "valence_score": 0}}]
 
 Bad examples (do not produce these):
-[{{"fact": "{user_name} might like cats", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "valence_score": 0}}, {{"fact": "Aiko should remember this", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "valence_score": 0}}, {{"fact": "{user_name} dislikes being human-like", "valence_score": -1}}, {{"fact": "{user_name} needs to follow {user_name}'s rules", "valence_score": 0}}]
+[{{"fact": "{user_name} might like cats", "subject": "user", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "subject": "user", "valence_score": 0}}, {{"fact": "Aiko should remember this", "subject": "assistant", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} dislikes being human-like", "subject": "user", "valence_score": -1}}, {{"fact": "{user_name} needs to follow {user_name}'s rules", "subject": "user", "valence_score": 0}}]
 
 Conversation:
 {conversation}"""
@@ -2919,7 +2919,10 @@ class AikoMemorize:
 
     def set_display_name(self, name: str) -> None:
         """Set the display name for this user (e.g. GitHub login)."""
-        self._display_name = name.strip() if name else None
+        stripped = name.strip() if name else None
+        if stripped and stripped.casefold() == "aiko":
+            raise ValueError("Display name cannot be 'Aiko' (reserved for assistant)")
+        self._display_name = stripped
 
     def get_display_name(self) -> str:
         """Return the display name for this user, or fall back to user_id."""
