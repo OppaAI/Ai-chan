@@ -65,6 +65,9 @@ def current_user_id() -> str:
 
 def set_current_display_name(name: str | None) -> contextvars.Token[str | None]:
     """Set the request-local display name (e.g. GitHub login) and return a token."""
+    n = (name or "").strip()
+    if n.casefold() in _RESERVED_DISPLAY:
+        raise ValueError("Display name 'Aiko' is reserved for the assistant")
     return _CURRENT_DISPLAY_NAME.set(name)
 
 
