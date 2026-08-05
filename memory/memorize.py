@@ -1409,6 +1409,7 @@ class _MemoryBackend:
         entities: list[str] | None = None,
         scene_id: str | None = None,
         valence_tag: str | None = None,
+        valence_score: int | None = None,
         salience_hit: int | None = None,
     ) -> None:
         """Insert one memory row (Phase A + L2 columns when present) + its
