@@ -3545,18 +3545,20 @@ class AikoMemorize:
           
         if MEMORY_SUPERSESSION_NARRATIVE and MEMORY_SUPERSESSION_NARRATIVE_MAX > 0:
             narr_lines = []
-            seen = 0
-            for r in memories or []:  # same list you just formatted
-                if seen >= MEMORY_SUPERSESSION_NARRATIVE_MAX:
+            seen_keys: set[str] = set()
+            for r in memories or []:
+                if len(seen_keys) >= MEMORY_SUPERSESSION_NARRATIVE_MAX:
                     break
                 chain = r.get("_supersession_chain")
                 if not chain or len(chain) < 2:
-                    # minimal fallback: tip + parent id only if you already loaded parent
+                    continue
+                key = str(chain[-1].get("id") or "")  # tip id
+                if not key or key in seen_keys:
                     continue
                 line = format_supersession_narrative(chain)
                 if line:
                     narr_lines.append(f"  {line}")
-                    seen += 1
+                    seen_keys.add(key)
             if narr_lines:
                 block += (
                     "\n\n<memory_update>\n"
