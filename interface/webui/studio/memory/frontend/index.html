@@ -346,16 +346,22 @@
     function lineageText(d, graph) {
       if (!d || d.type !== 'memory') return '';
       const edges = (graph.edges || []).filter(e => e.type === 'supersedes');
-      // edge: newer -> older (confirm your export direction; adjust if reversed)
-      const olderId = edges.find(e => e.source === d.id || e.source?.id === d.id)?.target;
-      const newerId = edges.find(e => e.target === d.id || e.target?.id === d.id)?.source;
       const nodes = Object.fromEntries((graph.nodes || []).map(n => [n.id, n]));
+      const idOf = (x) => (x && typeof x === 'object' ? x.id : x);
+      const textOf = (n) => String((n && (n.text || n.label)) || '').slice(0, 100);
+      // export: source=newer → target=older
+      const olderId = idOf(edges.find(e => idOf(e.source) === d.id)?.target);
+      const newerId = idOf(edges.find(e => idOf(e.target) === d.id)?.source);
       const bits = [];
-      const oid = typeof olderId === 'object' ? olderId.id : olderId;
-      const nid = typeof newerId === 'object' ? newerId.id : newerId;
-      if (oid && nodes[oid]) bits.push('Was: ' + (nodes[oid].text || nodes[oid].label || '').slice(0, 100));
-      if (nid && nodes[nid]) bits.push('Now: ' + (nodes[nid].text || nodes[nid].label || '').slice(0, 100));
-      if (d.status === 'superseded') bits.unshift('(superseded)');
+      const selfText = textOf(d);
+      if (d.status === 'superseded' || d.is_tip === false) {
+        bits.push('(superseded)');
+        bits.push('Was: ' + selfText);
+        if (newerId && nodes[newerId]) bits.push('Now: ' + textOf(nodes[newerId]));
+      } else {
+        if (olderId && nodes[olderId]) bits.push('Was: ' + textOf(nodes[olderId]));
+        bits.push('Now: ' + selfText);
+      }
       return bits.join('\n');
     }
     
