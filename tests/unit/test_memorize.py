@@ -1073,8 +1073,8 @@ class TestCrossStoreUserScoping:
             (exp_id, sqlite_vec.serialize_float32(vec.tolist()))
         )
         conn1.execute(
-            "INSERT INTO experiences_fts(id,goal,record_text) VALUES(?,?,?)",
-            (exp_id, "user1 task", "test record")
+            "INSERT INTO experiences_fts(rowid, record_text, id) VALUES(?,?,?)",
+            (1, "test record", exp_id)
         )
         conn1.commit()
         conn1.close()
