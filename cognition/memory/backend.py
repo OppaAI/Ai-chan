@@ -515,6 +515,27 @@ _HEDGE_RE = re.compile(
 )
 
 
+def _force_subject_name(text: str, subject: str, user_name: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return t
+    name = "Aiko" if subject == "assistant" else user_name
+    low = t.casefold()
+    # strip a leading wrong/right name token once
+    for prefix in (user_name, "Aiko", "User", "Assistant"):
+        if prefix and low.startswith(prefix.casefold()):
+            parts = t.split(None, 1)
+            t = parts[1] if len(parts) > 1 else ""
+            low = t.casefold()
+            break
+    if not t:
+        return name
+    if not t.casefold().startswith(name.casefold()):
+        body = t[0].lower() + t[1:] if t else t
+        t = f"{name} {body}"
+    return t.strip()
+  
+
 def _valence_from_llm() -> bool:
     """Whether extract-provided valence_score overrides lexical inference.
 
@@ -540,7 +561,14 @@ Rules:
 - If nothing is worth remembering, return: []
 
 Return ONLY a JSON array of objects. No markdown. No explanation.
-Each object: {{"fact": "<one short self-contained sentence>", "valence_score": <int>}}
+Each object:
+{{"fact": "<third-person sentence>", "subject": "user"|"assistant", "valence_score": <int>}}
+
+subject MUST match the speaker line:
+- "{user_name}: ..." → "user" → fact starts with "{user_name}"
+- "Aiko: ..." → "assistant" → fact starts with "Aiko"
+- User giving the assistant rules ("follow my rules") → subject "assistant",
+  e.g. "Aiko should follow {user_name}'s rules"
 valence_score is -2..+2 (user feeling: -2 strong neg … 0 neutral/technical … +2 strong pos).
 Use 0 when there is no clear emotion.
 
@@ -551,10 +579,10 @@ Speaker attribution (critical):
 - '{user_name}: I prefer dark mode' → {{"fact": "{user_name} prefers dark mode"}}.
 
 Good examples:
-[{{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "valence_score": 0}}, {{"fact": "Aiko dislikes being treated as human-like", "valence_score": -1}}, {{"fact": "Aiko should follow {user_name}'s rules", "valence_score": 0}}]
+[{{"fact": "{user_name}'s birthday is June 3", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "subject": "user", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "subject": "user", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "subject": "user", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "subject": "user", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "subject": "user", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "subject": "assistant", "valence_score": 0}}, {{"fact": "Aiko dislikes being treated as human-like", "subject": "assistant", "valence_score": -1}}, {{"fact": "Aiko should follow {user_name}'s rules", "subject": "assistant", "valence_score": 0}}]
 
 Bad examples (do not produce these):
-[{{"fact": "{user_name} might like cats", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "valence_score": 0}}, {{"fact": "Aiko should remember this", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "valence_score": 0}}, {{"fact": "{user_name} dislikes being human-like", "valence_score": -1}}, {{"fact": "{user_name} needs to follow {user_name}'s rules", "valence_score": 0}}]
+[{{"fact": "{user_name} might like cats", "subject": "user", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "subject": "user", "valence_score": 0}}, {{"fact": "Aiko should remember this", "subject": "assistant", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} dislikes being human-like", "subject": "user", "valence_score": -1}}, {{"fact": "{user_name} needs to follow {user_name}'s rules", "subject": "user", "valence_score": 0}}]
 
 Conversation:
 {conversation}"""
@@ -1353,6 +1381,8 @@ class _MemoryBackend:
             return []
 
         user_name = (display_name or current_display_name()).strip()
+        if user_name.casefold() == "aiko":
+            user_name = "User"  # belt only — prefer reject at set time      
         convo = "\n".join(
             f"{user_name}: {m['content'].strip()}" if m["role"] == "user"
             else f"Aiko: {m['content'].strip()}"
@@ -1380,9 +1410,10 @@ class _MemoryBackend:
                             "type": "object",
                             "properties": {
                                 "fact": {"type": "string"},
+                                "subject": {"type": "string", "enum": ["user", "assistant"]},
                                 "valence_score": {"type": "integer"},
                             },
-                            "required": ["fact"],
+                            "required": ["fact", "subject"],
                         },
                     },
                 },
@@ -1453,7 +1484,11 @@ class _MemoryBackend:
                     sc_i = max(-2, min(2, int(sc))) if sc is not None else None
                 except (TypeError, ValueError):
                     sc_i = None
+                subj = str(x.get("subject") or "").strip().lower()
+                if subj not in ("user", "assistant"):
+                    subj = "assistant" if t.casefold().startswith("aiko") else "user"
                 if t:
+                    t = _force_subject_name(t, subj, user_name)
                     pairs.append((t, sc_i))
 
         # drop facts containing hedging/uncertain language (word-boundary
@@ -1464,7 +1499,7 @@ class _MemoryBackend:
                 log.debug(f"Dropped hedging fact: {fact!r}")
                 continue
             clean_pairs.append((fact, sc))
-
+              
         # Repair common user/assistant subject swaps (Oppa vs Aiko).
         from cognition.memory.fact_identity import sanitize_fact_score_pairs
         return sanitize_fact_score_pairs(
@@ -2890,7 +2925,10 @@ class AikoMemorize:
 
     def set_display_name(self, name: str) -> None:
         """Set the display name for this user (e.g. GitHub login)."""
-        self._display_name = name.strip() if name else None
+        stripped = name.strip() if name else None
+        if stripped and stripped.casefold() == "aiko":
+            raise ValueError("Display name cannot be 'Aiko' (reserved for assistant)")
+        self._display_name = stripped
 
     def get_display_name(self) -> str:
         """Return the display name for this user, or fall back to user_id."""
