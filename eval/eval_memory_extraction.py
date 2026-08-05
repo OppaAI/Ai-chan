@@ -214,7 +214,8 @@ def run_eval(verbose: bool = False) -> dict:
     hedge_leaks = 0
 
     for case in GOLDEN_SET:
-        extracted = backend._extract_facts(case["conversation"], display_name="Oppa")
+        pairs = backend._extract_facts(case["conversation"], display_name="Oppa")
+        extracted = [f for f, _ in pairs]
         match = _match_facts(extracted, case["expected_facts"], embed_fn)
         leaked = _contains_forbidden(extracted, case["forbidden_facts"], embed_fn)
 

@@ -499,6 +499,17 @@ _HEDGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+def _valence_from_llm() -> bool:
+    """Whether extract-provided valence_score overrides lexical inference.
+
+    Read from the same env/yaml source as the other MEMORY_* keys. Defaults
+    to ON (matches MEMORY_VALENCE_FROM_LLM: "1" in config/memory.yaml).
+    """
+    import os
+    return os.getenv("MEMORY_VALENCE_FROM_LLM", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
 # Extraction prompt — temperature 0.0, explicit only-stated-facts rule.
 _EXTRACT_PROMPT = """\
 Extract memorable facts about {user_name} from this conversation.
@@ -517,10 +528,10 @@ valence_score is -2..+2 (user feeling: -2 strong neg … 0 neutral/technical …
 Use 0 when there is no clear emotion.
 
 Good examples:
-["{user_name}'s birthday is June 3", "{user_name} is building a robot called GRACE", "{user_name} joined the Hugging Face Hackathon", "{user_name} lost his wallet", "{user_name} has a deadline on Friday", "{user_name} dislikes mushrooms"]
+[{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}, {"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}, {"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}, {"fact": "{user_name} lost his wallet", "valence_score": -2}, {"fact": "{user_name} has a deadline on Friday", "valence_score": -1}, {"fact": "{user_name} dislikes mushrooms", "valence_score": -1}]
 
 Bad examples (do not produce these):
-["{user_name} might like cats", "It seems {user_name} is tired", "Aiko should remember this"]
+[{"fact": "{user_name} might like cats", "valence_score": 0}, {"fact": "It seems {user_name} is tired", "valence_score": 0}, {"fact": "Aiko should remember this", "valence_score": 0}]
 
 Conversation:
 {conversation}"""
@@ -1269,9 +1280,14 @@ class _MemoryBackend:
         )
         return total >= _EXTRACT_MIN_CHARS
 
-    def _extract_facts(self, messages: list[dict], display_name: str | None = None) -> list[str]:
+    def _extract_facts(self, messages: list[dict], display_name: str | None = None) -> list[tuple[str, int | None]]:
         """
         Send conversation to the OpenAI-compatible local LLM and parse the returned JSON fact array.
+
+        Returns a list of (fact, valence_score) pairs in which each fact is a
+        cleaned short string and valence_score is the model-provided −2..+2
+        value (None when the source was a legacy string item or carried no
+        usable score).
 
         Changes from original:
           - temperature=0.0 for deterministic output — reduces confabulation.
@@ -1284,6 +1300,9 @@ class _MemoryBackend:
             remember the server doesn't support it for the rest of this
             instance's life, so we stop paying for a failing attempt every
             turn.
+          - Parser accepts both legacy string items and the newer
+            {"fact": ..., "valence_score": ...} object items, so an old model
+            output or a mixed array never crashes the write path.
         """
         if not self._should_extract(messages):
             return []
@@ -1331,7 +1350,17 @@ class _MemoryBackend:
                 "type": "json_schema",
                 "json_schema": {
                     "name": "facts",
-                    "schema": {"type": "array", "items": {"type": "string"}},
+                    "schema": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "fact": {"type": "string"},
+                                "valence_score": {"type": "integer"},
+                            },
+                            "required": ["fact"],
+                        },
+                    },
                 },
             }
         }
@@ -1376,24 +1405,40 @@ class _MemoryBackend:
         # fences or add a preamble, so salvage the first top-level JSON
         # array before parsing.
         try:
-            facts = json.loads(raw if used_schema else (_first_json_array(raw) or raw))
-            if isinstance(facts, list):
-                facts = [f.strip() for f in facts if isinstance(f, str) and f.strip()]
-            else:
+            parsed = json.loads(raw if used_schema else (_first_json_array(raw) or raw))
+            if not isinstance(parsed, list):
                 return []
         except json.JSONDecodeError:
             log.warning(f"Failed to parse extraction JSON: {raw[:200]!r}")
             return []
 
-        # drop facts containing hedging/uncertain language (word-boundary match)
-        clean_facts = []
-        for fact in facts:
+        # Normalise legacy string items and newer object items into pairs.
+        pairs: list[tuple[str, int | None]] = []
+        for x in parsed:
+            if isinstance(x, str):
+                t = x.strip()
+                if t:
+                    pairs.append((t, None))
+            elif isinstance(x, dict):
+                t = (x.get("fact") or x.get("text") or "").strip()
+                sc = x.get("valence_score", x.get("valence"))
+                try:
+                    sc_i = max(-2, min(2, int(sc))) if sc is not None else None
+                except (TypeError, ValueError):
+                    sc_i = None
+                if t:
+                    pairs.append((t, sc_i))
+
+        # drop facts containing hedging/uncertain language (word-boundary
+        # match); drop the paired score alongside the dropped fact
+        clean_pairs = []
+        for fact, sc in pairs:
             if _HEDGE_RE.search(fact):
                 log.debug(f"Dropped hedging fact: {fact!r}")
                 continue
-            clean_facts.append(fact)
+            clean_pairs.append((fact, sc))
 
-        return clean_facts
+        return clean_pairs
 
     # ── write ─────────────────────────────────────────────────────────────────
 
@@ -1530,9 +1575,10 @@ class _MemoryBackend:
 
         Returns list of new memory IDs. Empty list if nothing extracted.
         """
-        facts = self._extract_facts(messages, display_name=display_name)
-        if not facts:
+        pairs = self._extract_facts(messages, display_name=display_name)
+        if not pairs:
             return []
+        facts = [f for f, _ in pairs]
 
         # created_at is UTC everywhere (matches add_raw()/_touch_memories()/
         # pin()) — see the class docstring's "Fixes applied" note. Mixing
@@ -1551,7 +1597,7 @@ class _MemoryBackend:
 
         with self._db_lock:
             try:
-                for fact, vector in zip(facts, vectors):
+                for (fact, llm_sc), vector in zip(pairs, vectors):
                     op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, fact)
                     if op == "noop":
                         log.debug("Skipping near-duplicate fact: %r", fact)
@@ -1588,7 +1634,7 @@ class _MemoryBackend:
                         pinned=0,
                         source=SOURCE_CHAT,
                         supersedes_id=supersedes_id,
-                        llm_score=v_score,
+                        llm_score=llm_sc if (_valence_from_llm() and llm_sc is not None) else v_score,
                         valence_tag=None,
                         salience_hit=s_hit,
                     )
