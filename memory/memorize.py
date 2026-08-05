@@ -391,13 +391,6 @@ MEMORY_NEG_RECALL_AVOID_EXCEPT = _env_flag("MEMORY_NEG_RECALL_AVOID_EXCEPT", "1"
 MEMORY_SUPERSESSION_NARRATIVE = _env_flag("MEMORY_SUPERSESSION_NARRATIVE", "1")
 MEMORY_SUPERSESSION_NARRATIVE_MAX = max(0, _env_int("MEMORY_SUPERSESSION_NARRATIVE_MAX", 2))
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
 MEMORY_CROSS_STORE_CONTEXT_CHARS = max(0, _env_int("MEMORY_CROSS_STORE_CONTEXT_CHARS", 800))
 
 
