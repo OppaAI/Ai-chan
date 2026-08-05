@@ -1070,7 +1070,7 @@ class TestCrossStoreUserScoping:
         conn1.execute(
             "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            (exp_id, "user1", "user1 task", "test record", '[]', "done", 1.0, "excerpt", '[]', "2024-01-01T00:00:00")
+            (exp_id, "user1", "user1 task", "user1 task", '[]', "done", 1.0, "excerpt", '[]', "2024-01-01T00:00:00")
         )
         conn1.execute(
             "INSERT INTO experiences_vec(id,embedding) VALUES(?,?)",
@@ -1078,7 +1078,7 @@ class TestCrossStoreUserScoping:
         )
         conn1.execute(
             "INSERT INTO experiences_fts(rowid, record_text, id) VALUES(?,?,?)",
-            (1, "test record", exp_id)
+            (1, "user1 task", exp_id)
         )
         conn1.commit()
         conn1.close()
