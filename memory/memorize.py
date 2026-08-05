@@ -1585,8 +1585,8 @@ class _MemoryBackend:
                         pinned=0,
                         source=SOURCE_CHAT,
                         supersedes_id=supersedes_id,
-                        valence_tag=v_tag,
-                        valence_score=v_score,
+                        llm_score=v_score,
+                        valence_tag=None,
                         salience_hit=s_hit,
                     )
                     ids.append(mem_id)
