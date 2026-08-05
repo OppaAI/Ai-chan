@@ -1046,10 +1046,7 @@ class TestCrossStoreUserScoping:
         from agentic.experience import _connect as exp_connect, search_experience
         import numpy as np
         import hashlib
-
-        # Use unique DB paths per user
-        db1 = tmp_path / "exp_user1.db"
-        db2 = tmp_path / "exp_user2.db"
+        import uuid
 
         # Create a matching embedder for the seeded data
         class FE:
@@ -1060,6 +1057,7 @@ class TestCrossStoreUserScoping:
                 n = np.linalg.norm(arr); return arr/n if n else arr
 
         fe = FE()
+        exp_id = str(uuid.uuid4())
         vec = fe.embed_query("user1 task")
         import sqlite_vec
 
@@ -1068,15 +1066,15 @@ class TestCrossStoreUserScoping:
         conn1.execute(
             "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
-            ("exp-1", "user1", "user1 task", "test record", '[]', "done", 1.0, "excerpt", '[]', "2024-01-01T00:00:00")
+            (exp_id, "user1", "user1 task", "test record", '[]', "done", 1.0, "excerpt", '[]', "2024-01-01T00:00:00")
         )
         conn1.execute(
             "INSERT INTO experiences_vec(id,embedding) VALUES(?,?)",
-            ("exp-1", sqlite_vec.serialize_float32(vec.tolist()))
+            (exp_id, sqlite_vec.serialize_float32(vec.tolist()))
         )
         conn1.execute(
             "INSERT INTO experiences_fts(id,goal,record_text) VALUES(?,?,?)",
-            ("exp-1", "user1 task", "test record")
+            (exp_id, "user1 task", "test record")
         )
         conn1.commit()
         conn1.close()

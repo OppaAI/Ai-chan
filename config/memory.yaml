@@ -236,3 +236,6 @@ MEMORY_STUDIO_MAX_EDGES: "200"  # Max co-mention + mention edges.
 
 # -- Phase 11: hard source-id provenance before day-pin delete --
 MONTHLY_CONSOLIDATION_HARD_SOURCE_PROVENANCE: "1"  # Require every kept day-pin id in some LLM source_ids before delete. Soft coverage still applies. 0 = soft only.
+# Phase 15
+MEMORY_VALENCE_FROM_LLM: "1"   # use extract valence_score when present
+# Studio curves live in graph_export / index.html for now
