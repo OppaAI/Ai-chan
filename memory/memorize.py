@@ -364,6 +364,20 @@ MEMORY_RECENCY_RERANK_THRESHOLD = float(os.getenv("MEMORY_RECENCY_RERANK_THRESHO
 MEMORY_WRITE_IDLE_GRACE = float(os.getenv("MEMORY_WRITE_IDLE_GRACE", 3.0))
 MEMORY_WRITE_MAX_WAIT = float(os.getenv("MEMORY_WRITE_MAX_WAIT", 45.0))
 
+MEMORY_CROSS_STORE_ENABLED = os.getenv("MEMORY_CROSS_STORE_ENABLED", "1").lower() in {
+    "1", "true", "yes", "on",
+}
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+MEMORY_CROSS_STORE_CONTEXT_CHARS = max(0, _env_int("MEMORY_CROSS_STORE_CONTEXT_CHARS", 800))
+
 
 def _default_user_id(user_id: str | None = None) -> str:
     return user_id or current_user_id()
@@ -3296,7 +3310,15 @@ class AikoMemorize:
             self._clear_search_cache()
             self._last_cache_clear_time = now
 
-    def format_for_context(self, memories: list[dict]) -> str | None:
+    def format_for_context(
+        self,
+        memories: list[dict],
+        *,
+        query: str = "",
+        related: dict | None = None,
+        user_id: str | None = None,
+        embedder=None,
+    ) -> str | None:
         """
         Format retrieved memories into a compact string for injection
         into the conversation context. Returns None if nothing to inject.
@@ -3360,6 +3382,29 @@ class AikoMemorize:
         block = "\n".join(lines)
         if len(block) > MEMORY_CONTEXT_TOTAL_CHARS:
             block = block[:MEMORY_CONTEXT_TOTAL_CHARS].rstrip() + "\n</memory_context>"
+
+        # Phase 13a: secondary related knowledge / experience
+        if MEMORY_CROSS_STORE_ENABLED and MEMORY_CROSS_STORE_CONTEXT_CHARS > 0:
+            try:
+                from memory.cross_store import fetch_related_for_memories, format_related_blocks
+
+                rel = related
+                if rel is None:
+                    rel = fetch_related_for_memories(
+                        query or "",
+                        memories,
+                        user_id=user_id or self._resolve_user_id(None),
+                        embedder=embedder,
+                    )
+                extra = format_related_blocks(
+                    rel or {},
+                    max_chars=MEMORY_CROSS_STORE_CONTEXT_CHARS,
+                )
+                if extra:
+                    block = block + "\n\n" + extra
+            except Exception as exc:
+                log.debug("cross_store context skipped: %s", exc)
+
         return block
 
     # ── dream pass ────────────────────────────────────────────────────────────

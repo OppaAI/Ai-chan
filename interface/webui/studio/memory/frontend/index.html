@@ -123,6 +123,12 @@
       <label>Limit <input type="number" id="limit" value="200" min="1" max="2000" /></label>
       <label><input type="checkbox" id="include-history" checked /> Include superseded</label>
       <label><input type="checkbox" id="include-entities" checked /> Entity hubs</label>
+      <label><input type="checkbox" id="include-knowledge" checked /> Knowledge</label>
+      <label><input type="checkbox" id="include-experience" checked /> Experience</label>
+      <label><input type="checkbox" id="layer-memory" checked /> Show memory</label>
+      <label><input type="checkbox" id="layer-entity" checked /> Show entities</label>
+      <label><input type="checkbox" id="layer-knowledge" checked /> Show knowledge</label>
+      <label><input type="checkbox" id="layer-experience" checked /> Show experience</label>
       <label>Status
         <select id="filter-status">
           <option value="all">all</option>
@@ -160,6 +166,8 @@
       <div class="legend">
         <span><i style="background:var(--orange);border-radius:0;height:3px;width:14px"></i>supersedes</span>
         <span><i style="background:#3de0ff55"></i>synapse</span>
+        <span><i style="background:#4ade80"></i>knowledge</span>
+        <span><i style="background:#fb923c"></i>experience</span>
         <span>brighter / larger → tends to stay</span>
       </div>
       <div class="zoom">
@@ -200,6 +208,8 @@
       p.set('limit', document.getElementById('limit').value || '200');
       p.set('include_history', document.getElementById('include-history').checked);
       p.set('include_entities', document.getElementById('include-entities').checked);
+      p.set('include_knowledge', document.getElementById('include-knowledge').checked);
+      p.set('include_experience', document.getElementById('include-experience').checked);
       return p.toString();
     }
 
@@ -210,7 +220,7 @@
         graph = await resp.json();
         const m = graph.meta || {};
         document.getElementById('stats').innerHTML =
-          `neurons: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>synapses: ${m.edge_count ?? 0}`;
+          `neurons: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>knowledge: ${(graph.nodes||[]).filter(n=>n.type==='knowledge').length}<br/>experience: ${(graph.nodes||[]).filter(n=>n.type==='experience').length}<br/>synapses: ${m.edge_count ?? 0}`;
         document.getElementById('status').textContent =
           `${(graph.nodes||[]).length} nodes · ${(graph.edges||[]).length} edges`;
         await getCurrentUser();
@@ -368,6 +378,10 @@
       const val = document.getElementById('filter-valence')?.value || 'all';
       const minR = parseFloat(document.getElementById('filter-min-retain')?.value || '0') || 0;
       const entQ = (document.getElementById('filter-entity')?.value || '').trim().toLowerCase();
+      const showMem = document.getElementById('layer-memory')?.checked !== false;
+      const showEnt = document.getElementById('layer-entity')?.checked !== false;
+      const showKb = document.getElementById('layer-knowledge')?.checked !== false;
+      const showExp = document.getElementById('layer-experience')?.checked !== false;
 
       let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
         if (d.type === 'entity') return false;
@@ -384,12 +398,21 @@
       for (const e of (graph.edges || [])) {
         if (e.type === 'mentions' && keep.has(e.source)) keep.add(e.target);
       }
+      // Add knowledge / experience nodes when their layers are on
+      for (const n of (graph.nodes || [])) {
+        if (n.type === 'knowledge' && showKb) keep.add(n.id);
+        if (n.type === 'experience' && showExp) keep.add(n.id);
+      }
       nodes = (graph.nodes || []).map(n => ({ ...n })).filter(n => {
         if (!keep.has(n.id)) return false;
+        if (n.type === 'memory' && !showMem) return false;
         if (n.type === 'entity') {
+          if (!showEnt) return false;
           if (entQ && !(String(n.label || n.text || '').toLowerCase().includes(entQ))) return false;
           return true;
         }
+        if (n.type === 'knowledge') return showKb;
+        if (n.type === 'experience') return showExp;
         return true;
       });
       const keep2 = new Set(nodes.map(n => n.id));

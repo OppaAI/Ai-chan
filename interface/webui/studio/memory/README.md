@@ -1,6 +1,6 @@
 # Aiko Memory Graph Studio
 
-Visualize personal memory as a **galaxy graph** — facts, supersession chains, entity hubs, and retain scores.
+Visualize personal memory as a **neural graph** — facts, supersession chains, entity hubs, knowledge, experience, and retain scores.
 
 ## Run
 
@@ -33,6 +33,8 @@ Query params for `/api/graph`:
 - `limit` — max memory rows fetched (default 200; also capped by `MEMORY_STUDIO_MAX_MEMORIES`)
 - `include_history` — include `status=superseded` (default true)
 - `include_entities` — entity hub nodes + `mentions` edges (default true)
+- `include_knowledge` — learned knowledge nodes (default true; Phase 13)
+- `include_experience` — experience nodes (default true; Phase 13)
 
 ## Phase 12
 
@@ -43,6 +45,44 @@ Query params for `/api/graph`:
 - `MEMORY_STUDIO_MAX_EDGES` (default 200)
 
 Note: over-fetches ~3× `limit` (newest-first), then keeps the top `limit` by retain among that window (not a full-DB retain rank).
+
+## Phase 13 — Cross-store layers
+
+Related knowledge and experience appear as extra node types, linked by shared entities.
+
+### New node types
+
+| type | Color | Source |
+|------|--------|--------|
+| `knowledge` | green `#4ade80` | `learned_chunks` |
+| `experience` | orange `#fb923c` | `experiences` |
+
+### New edge types
+
+| type | Meaning |
+|------|---------|
+| `about` | knowledge/experience → entity |
+| `grounded_in` | memory → knowledge (shared entity) |
+| `practiced_in` | memory → experience (shared entity) |
+
+### API
+```http
+GET /api/graph?include_knowledge=true&include_experience=true
+```
+
+### UI layers
+
+Sidebar:
+
+- **Include knowledge / experience** — control what the export loads (reload)
+- **Show memory / entities / knowledge / experience** — client filter without reload
+
+### Env (optional)
+
+- `MEMORY_STUDIO_INCLUDE_KNOWLEDGE` (default `1`)
+- `MEMORY_STUDIO_INCLUDE_EXPERIENCE` (default `1`)
+- `MEMORY_STUDIO_MAX_KNOWLEDGE` (default `80`)
+- `MEMORY_STUDIO_MAX_EXPERIENCE` (default `40`)
 
 **Client filters** (sidebar; re-filter without reload):
 
@@ -57,12 +97,18 @@ Note: over-fetches ~3× `limit` (newest-first), then keeps the top `limit` by re
 
 - `type=memory` — fact rows; **`size`** = retain tendency; **`scores`** rim arcs
 - `type=entity` — shared entity hubs; **`size`** ≈ $I_e$ when available
+- `type=knowledge` — learned chunks (green)
+- `type=experience` — past agent runs (orange)
 
 **Edges**
 
 - `supersedes` — newer fact → older fact it replaced
 - `mentions` — memory → entity
 - `related_to` / co-mention — entity → entity
+
+- `about` — knowledge/experience → entity
+- `grounded_in` — memory → knowledge
+- `practiced_in` — memory → experience
 
 ## Notes
 
