@@ -1047,8 +1047,9 @@ class TestCrossStoreUserScoping:
         import numpy as np
         import hashlib
 
-        # Seed one experience for user1 directly
-        conn = exp_connect("user1")
+        # Use unique DB paths per user
+        db1 = tmp_path / "exp_user1.db"
+        db2 = tmp_path / "exp_user2.db"
 
         # Create a matching embedder for the seeded data
         class FE:
@@ -1061,20 +1062,24 @@ class TestCrossStoreUserScoping:
         fe = FE()
         vec = fe.embed_query("user1 task")
         import sqlite_vec
-        conn.execute(
+
+        # Seed one experience for user1
+        conn1 = exp_connect("user1")
+        conn1.execute(
             "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?)",
             ("exp-1", "user1", "user1 task", "test record", '[]', "done", 1.0, "excerpt", '[]', "2024-01-01T00:00:00")
         )
-        conn.execute(
+        conn1.execute(
             "INSERT INTO experiences_vec(id,embedding) VALUES(?,?)",
             ("exp-1", sqlite_vec.serialize_float32(vec.tolist()))
         )
-        conn.execute(
+        conn1.execute(
             "INSERT INTO experiences_fts(id,goal,record_text) VALUES(?,?,?)",
             ("exp-1", "user1 task", "test record")
         )
-        conn.commit()
+        conn1.commit()
+        conn1.close()
 
         # search_experience with explicit user_id should find it
         hits = search_experience("user1 task", limit=5, embedder=fe, user_id="user1")
@@ -1084,5 +1089,3 @@ class TestCrossStoreUserScoping:
         # With different user_id should return empty (separate DB)
         hits2 = search_experience("user1 task", limit=5, embedder=fe, user_id="user2")
         assert hits2 == []
-
-        conn.close()
