@@ -90,7 +90,7 @@ Run before any phase suite.
 - [ ] `PRAGMA cipher_page_size = 4096` is applied consistently — reopening a DB created by this code with a different page size setting does not silently corrupt reads.
 - [ ] Switching `SQLITE_ENCRYPTION` from `0` to `1` (or vice versa) against an *existing* unencrypted/encrypted DB is documented behavior — confirm it fails loudly (wrong file format) rather than appearing to "work" while actually creating a second shadow DB or silently reading garbage.
 - [ ] `DATA_KEY_SECRET`/`SECRET_KEY` value is never printed in logs, error messages, or debug output (only the *derived per-user key* should ever appear, and only in contexts that already treat it as sensitive).
-- [ ] Concurrent access: two connections opened for the same `user_id` (e.g. `AikoMemorize` main thread + write-queue worker thread — see `memory/memorize.py`'s `_write_loop`) both derive the same key and don't race on `PRAGMA key`.
+- [ ] Concurrent access: two connections opened for the same `user_id` (e.g. `AikoMemorize` main thread + write-queue worker thread — see `cognition/memory/memorize.py`'s `_write_loop`) both derive the same key and don't race on `PRAGMA key`.
 
 ---
 
@@ -133,14 +133,14 @@ Run before any phase suite.
 - [ ] `/clear` wipes memories; `/memory` is empty afterward and no stale recall appears in the next turn.
 - [ ] `--clear-mem` wipes memories and exits cleanly without launching the UI.
 - [ ] DB file exists after first write: `ls -lh "$SQLITE_MEMORY_PATH"`.
-- [ ] `uv run python -c "from cognition.memory.memorize import AikoMemorize; m=AikoMemorize(); print(m.dream(dry_run=True))"` completes without error.
+- [ ] `uv run python -c "from memory.memorize import AikoMemorize; m=AikoMemorize(); print(m.dream(dry_run=True))"` completes without error.
 - [ ] Corrupt/locked DB simulation is handled safely: Aiko reports the memory problem and continues chat if possible, without overwriting unrelated files.
 - [ ] Duplicate memory pressure test: repeat the same fact 20 times; recall does not become dominated by redundant near-identical entries.
 - [ ] Unicode memory test: store Japanese, Korean, emoji, and mixed punctuation; recall and display remain readable.
 - [ ] Privacy check: `/memory` does not expose secrets from environment variables or unrelated workspace files.
-- [ ] If `SQLITE_ENCRYPTION=1` for this run, confirm `cognition/memory/memorize.py`'s DB open path goes through `system.secure.connect_sqlite` (not a bare `sqlite3.connect`) — see Pre-flight's At-rest encryption block for the full key-derivation test set.
+- [ ] If `SQLITE_ENCRYPTION=1` for this run, confirm `memory/memorize.py`'s DB open path goes through `system.secure.connect_sqlite` (not a bare `sqlite3.connect`) — see Pre-flight's At-rest encryption block for the full key-derivation test set.
 
-### 1.4a Trivial-input skip and broad-recall routing (`cognition/memory/memorize.py`)
+### 1.4a Trivial-input skip and broad-recall routing (`memory/memorize.py`)
 
 *`_is_trivial_input()` and `_BROAD_RECALL_RE` are choke-point logic — every `search()` call from every input path goes through them before the cache lookup or embedding call, so a bug here silently affects CLI, WebUI, and voice alike.*
 
@@ -604,7 +604,7 @@ Run before any phase suite.
 - [ ] Ambiguous queries like "I need to organize my photos" fall back to LLM router when enabled.
 - [ ] Routing latency: semantic path < 50ms, LLM fallback < 500ms on Jetson.
 
-### 2.5.13 Async memory write queue idle-grace window (`memory/memorize.py`)
+### 2.5.13 Async memory write queue idle-grace window (`cognition/memory/memorize.py`)
 
 *`queue_write()` / `_wait_for_write_window()` can silently delay a write up to `MEMORY_WRITE_MAX_WAIT` (default 45s) waiting for an idle window before running fact-extraction on the shared LLM. If this stalls or races, a memory write looks "lost" when it's actually just queued — worth distinguishing from a genuine extraction failure.*
 
