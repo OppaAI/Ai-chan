@@ -1477,7 +1477,11 @@ class _MemoryBackend:
                 if not isinstance(raw_fact, str):
                     continue
                 t = raw_fact.strip()
-                sc = ...
+                sc = x.get("valence_score", x.get("valence"))
+                try:
+                    sc_i = max(-2, min(2, int(sc))) if sc is not None else None
+                except (TypeError, ValueError):
+                    sc_i = None
                 subj = str(x.get("subject") or "").strip().lower()
                 if subj not in ("user", "assistant"):
                     subj = "assistant" if t.casefold().startswith("aiko") else "user"
