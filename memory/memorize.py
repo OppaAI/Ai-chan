@@ -1424,9 +1424,23 @@ class _MemoryBackend:
         ents_list = entities if entities is not None else extract_entities(text)
         ents_json = entities_to_json(ents_list)
 
-        v_tag = valence_tag if valence_tag in ("pos", "neg", "neutral") else infer_valence_tag(text)
-        s_hit = int(salience_hit) if salience_hit is not None else infer_salience_hit(text)
-        s_hit = 1 if s_hit else 0
+        if valence_score is not None:
+            try:
+                v_score = max(-2, min(2, int(valence_score)))
+            except (TypeError, ValueError):
+                v_score = infer_valence_score(text)
+        else:
+            v_score = infer_valence_score(text)
+          
+        v_tag = (
+            valence_tag
+            if valence_tag in ("pos", "neg", "neutral")
+            else tag_from_score(v_score)
+        )
+        if valence_tag is None:
+            v_tag = tag_from_score(v_score)
+          
+        s_hit = 1 if (int(salience_hit) if salience_hit is not None else infer_salience_hit(text)) else 0
       
         base_cols = ["id", "user_id", "memory", "created_at", "access_count", "last_accessed_at", "pinned"]
         base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
@@ -1441,6 +1455,9 @@ class _MemoryBackend:
         if "valence_tag" in cols:
             ext_cols.append("valence_tag")
             ext_vals.append(v_tag)
+        if "valence_score" in cols:
+            ext_cols.append("valence_score")
+            ext_vals.append(int(v_score))
         if "salience_hit" in cols:
             ext_cols.append("salience_hit")
             ext_vals.append(s_hit)
