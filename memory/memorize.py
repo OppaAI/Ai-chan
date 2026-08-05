@@ -1575,11 +1575,8 @@ class _MemoryBackend:
                     )[-400:]
                     tag_src = f"{fact}\n{assist_blob}"
                     v_score = infer_valence_score(tag_src)
-                    v_tag = infer_valence_tag(tag_src)
-                    valence_tag=tag_from_score(v_score),
-                    valence_score=v_score,
                     s_hit = max(infer_salience_hit(fact), infer_salience_hit(assist_blob))
-                  
+
                     self._insert_row(
                         mem_id=mem_id,
                         user_id=user_id,
@@ -1589,7 +1586,8 @@ class _MemoryBackend:
                         pinned=0,
                         source=SOURCE_CHAT,
                         supersedes_id=supersedes_id,
-                        valence_tag=v_tag,
+                        valence_tag=tag_from_score(v_score),
+                        valence_score=v_score,
                         salience_hit=s_hit,
                     )
                     ids.append(mem_id)
@@ -3832,7 +3830,7 @@ class AikoMemorize:
                 kept += 1
                 continue
               
-            v_tag = m.get("valence_tag")v_tag = m.get("valence_tag")
+            v_tag = m.get("valence_tag")
             v_score = m.get("valence_score")
             if should_cleanup(ac, la, created_at, valence_tag=v_tag, valence_score=v_score):
                 w = compute_weighted_score(ac, la, valence_tag=v_tag, valence_score=v_score)
