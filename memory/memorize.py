@@ -1431,7 +1431,6 @@ class _MemoryBackend:
                 v_score = infer_valence_score(text)
         else:
             v_score = infer_valence_score(text)
-          
         v_tag = (
             valence_tag
             if valence_tag in ("pos", "neg", "neutral")
@@ -1439,8 +1438,8 @@ class _MemoryBackend:
         )
         if valence_tag is None:
             v_tag = tag_from_score(v_score)
-          
-        s_hit = 1 if (int(salience_hit) if salience_hit is not None else infer_salience_hit(text)) else 0
+        s_hit = int(salience_hit) if salience_hit is not None else infer_salience_hit(text)
+        s_hit = 1 if s_hit else 0
       
         base_cols = ["id", "user_id", "memory", "created_at", "access_count", "last_accessed_at", "pinned"]
         base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
@@ -1575,7 +1574,10 @@ class _MemoryBackend:
                         "",
                     )[-400:]
                     tag_src = f"{fact}\n{assist_blob}"
+                    v_score = infer_valence_score(tag_src)
                     v_tag = infer_valence_tag(tag_src)
+                    valence_tag=tag_from_score(v_score),
+                    valence_score=v_score,
                     s_hit = max(infer_salience_hit(fact), infer_salience_hit(assist_blob))
                   
                     self._insert_row(
@@ -3830,9 +3832,10 @@ class AikoMemorize:
                 kept += 1
                 continue
               
-            v_tag = m.get("valence_tag")
-            if should_cleanup(ac, la, created_at, valence_tag=v_tag):
-                w = compute_weighted_score(ac, la, valence_tag=v_tag)
+            v_tag = m.get("valence_tag")v_tag = m.get("valence_tag")
+            v_score = m.get("valence_score")
+            if should_cleanup(ac, la, created_at, valence_tag=v_tag, valence_score=v_score):
+                w = compute_weighted_score(ac, la, valence_tag=v_tag, valence_score=v_score)
                 candidates.append({
                     "id":               mem_id,
                     "memory":           m.get("memory", "")[:120],
