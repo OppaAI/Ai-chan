@@ -572,7 +572,7 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
     ("access_day_count", "INTEGER NOT NULL DEFAULT 0"),
   # Phase 4: turn-level emotion / salience tags (cheap, no LLM).
     ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
-    ("valence_score", "INTEGER NOT NULL DEFAULT 0"),  # Phase 12R: −2…+2
+    ("valence_score", "INTEGER"),  # -2..+2; NULL = legacy/unknown
     ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
 )
 
