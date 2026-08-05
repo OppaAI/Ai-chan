@@ -1615,8 +1615,8 @@ def start_scheduler(
         llm_model=getattr(think, "_llm_model", None),
     )
     register_scheduler(scheduler)
-    scheduler.start()
     bootstrap_non_system_jobs(think=think, memorize=memorize, timezone=timezone)
+    scheduler.start()
     scheduler.notify_new_job()
     return scheduler
 

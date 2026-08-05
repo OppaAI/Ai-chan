@@ -523,15 +523,15 @@ Rules:
 - If nothing is worth remembering, return: []
 
 Return ONLY a JSON array of objects. No markdown. No explanation.
-Each object: {"fact": "<one short self-contained sentence>", "valence_score": <int>}
+Each object: {{"fact": "<one short self-contained sentence>", "valence_score": <int>}}
 valence_score is -2..+2 (user feeling: -2 strong neg … 0 neutral/technical … +2 strong pos).
 Use 0 when there is no clear emotion.
 
 Good examples:
-[{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}, {"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}, {"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}, {"fact": "{user_name} lost his wallet", "valence_score": -2}, {"fact": "{user_name} has a deadline on Friday", "valence_score": -1}, {"fact": "{user_name} dislikes mushrooms", "valence_score": -1}]
+[{{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "valence_score": -1}}]
 
 Bad examples (do not produce these):
-[{"fact": "{user_name} might like cats", "valence_score": 0}, {"fact": "It seems {user_name} is tired", "valence_score": 0}, {"fact": "Aiko should remember this", "valence_score": 0}]
+[{{"fact": "{user_name} might like cats", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "valence_score": 0}}, {{"fact": "Aiko should remember this", "valence_score": 0}}]
 
 Conversation:
 {conversation}"""
