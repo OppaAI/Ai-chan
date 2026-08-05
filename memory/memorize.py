@@ -516,9 +516,11 @@ Extract memorable facts about {user_name} from this conversation.
 {user_name} is the user (he/him). You are Aiko, the assistant.
 
 Rules:
-- Only include facts {user_name} stated explicitly. Never infer or assume.
-- Write facts as short, direct statements in third person about {user_name}.
-- No facts about Aiko's behavior, feelings, or responses.
+- Only include facts the speaker stated explicitly. Never infer or assume.
+- Each line is prefixed with the speaker: "{user_name}:" or "Aiko:".
+- NEVER misattribute: what Aiko says is a fact about Aiko ("Aiko ..."). What {user_name} says is a fact about {user_name} ("{user_name} ..."). Never turn one speaker's statement into a fact about the other.
+- Prefer memorable facts about {user_name}. Also keep Aiko's own explicit statements about herself (identity, limits, preferences, plans) — written as "Aiko ...", third person.
+- Write facts as short, direct, self-contained statements in third person.
 - No uncertain language: never use might, probably, seems, maybe, perhaps, appears.
 - If nothing is worth remembering, return: []
 
@@ -527,11 +529,13 @@ Each object: {{"fact": "<one short self-contained sentence>", "valence_score": <
 valence_score is -2..+2 (user feeling: -2 strong neg … 0 neutral/technical … +2 strong pos).
 Use 0 when there is no clear emotion.
 
+Speaker attribution: 'Aiko: I am off limits to others' → {{"fact": "Aiko is off limits to others"}}. NOT '{{user_name}} says he is off limits to others'.
+
 Good examples:
-[{{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "valence_score": -1}}]
+[{{"fact": "{user_name}'s birthday is June 3", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "valence_score": 0}}]
 
 Bad examples (do not produce these):
-[{{"fact": "{user_name} might like cats", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "valence_score": 0}}, {{"fact": "Aiko should remember this", "valence_score": 0}}]
+[{{"fact": "{user_name} might like cats", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "valence_score": 0}}, {{"fact": "Aiko should remember this", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "valence_score": 0}}]
 
 Conversation:
 {conversation}"""

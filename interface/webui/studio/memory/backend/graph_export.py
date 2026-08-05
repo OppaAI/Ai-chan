@@ -397,8 +397,9 @@ def export_memory_graph(
             label = text if len(text) <= 80 else text[:77] + "…"
             status = str(row["status"]) if has_status and row["status"] is not None else "active"
             kind = str(row["kind"]) if has_kind and row["kind"] else "fact"
-            if _MONTHLY_RE.match(text):
-                kind = "monthly"
+            imprint = bool(_MONTHLY_RE.match(text))
+            if imprint:
+                kind = "imprint"
             elif _DAILY_RE.match(text) and kind == "fact":
                 kind = "daily"
             source = str(row["source"]) if has_source and row["source"] else ""
@@ -452,6 +453,7 @@ def export_memory_graph(
                 "supersedes_id": supersedes_id,
                 "valence_tag": valence_tag,
                     "valence_score": valence_score,
+                    "imprint": imprint,
                     "size": size,
                     "scores": scores,
                 })
@@ -627,11 +629,11 @@ def _legend() -> dict[str, Any]:
         "size": "retain tendency (memories) / I_e (entities)",
         "rim_arcs": ["salience", "spacing", "connectivity", "valence", "access"],
         "colors": {
-            "neg": "#ff6b6b",
-            "neutral": "#c0c8d8",
-            "pos": "#7ad7f0",
-            "entity": "#c9a0ff",
-            "monthly": "#ffd27a",
+            "neg": "#3de0ff",
+            "neutral": "#8a9bb8",
+            "pos": "#f0c14a",
+            "entity": "#b794f6",
+            "imprint": "#c651a8",
             "pinned": "#51d4c8",
             "superseded": "#4a3a6a",
         },

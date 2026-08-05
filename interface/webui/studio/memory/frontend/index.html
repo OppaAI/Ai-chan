@@ -160,6 +160,7 @@
       <div class="stat"><i style="background:var(--pos);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pos)"></i> pos (gold)</div>
       <div class="stat"><i style="background:var(--neutral);width:10px;height:10px;border-radius:50%;display:inline-block"></i> neutral</div>
       <div class="stat"><i style="background:var(--entity);width:10px;height:10px;border-radius:50%;display:inline-block"></i> entity</div>
+      <div class="stat"><i style="background:var(--pink);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pink)"></i> imprint (survived consolidation)</div>
       <div class="stat">Pinned = brightest of valence hue</div>
       <div class="stat"><i style="background:var(--orange);width:14px;height:3px;display:inline-block"></i> supersedes</div>
     </aside>
@@ -171,6 +172,9 @@
         <span><i style="background:#3de0ff55"></i>synapse</span>
         <span><i style="background:#4ade80"></i>knowledge</span>
         <span><i style="background:#fb923c"></i>experience</span>
+        <span><i style="background:#c651a8"></i>imprint</span>
+        <span><i style="background:#f0c14a"></i>pos</span>
+        <span><i style="background:#3de0ff"></i>neg</span>
         <span>brighter / larger → tends to stay</span>
       </div>
       <div class="zoom">
@@ -225,6 +229,7 @@
       try {
         const resp = await fetch(`${API_BASE}/graph?` + qs());
         graph = await resp.json();
+        stretchRetain(graph.nodes);
         const m = graph.meta || {};
         document.getElementById('stats').innerHTML =
           `neurons: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>knowledge: ${(graph.nodes||[]).filter(n=>n.type==='knowledge').length}<br/>experience: ${(graph.nodes||[]).filter(n=>n.type==='experience').length}<br/>synapses: ${m.edge_count ?? 0}`;
@@ -241,6 +246,7 @@
 
     /** Retain in [0,1] — drives BOTH size and brightness */
     function retainOf(d) {
+      if (d._dispRetain != null) return d._dispRetain;
       const sc = d.scores || {};
       if (sc.retain != null) return Math.max(0, Math.min(1, Number(sc.retain)));
       if (d.size != null) {
@@ -252,10 +258,31 @@
       return d.type === 'entity' ? 0.4 : 0.35;
     }
 
+    /**
+     * Contrast-stretch memory retain values across the visible node set, so
+     * size/brightness differences are actually visible when scores cluster
+     * (raw retain is often ~flat, e.g. 0.48 for half the nodes).
+     */
+    function stretchRetain(nodes) {
+      for (const n of nodes) if (n._dispRetain != null) delete n._dispRetain;
+      const mem = (nodes || []).filter(n => n.type === 'memory');
+      const r = mem.map(retainOf).filter(v => isFinite(v));
+      if (r.length < 3) return;
+      let lo = Math.min.apply(null, r);
+      let hi = Math.max.apply(null, r);
+      if (hi - lo < 0.05) { lo = Math.max(0, lo - 0.12); hi = Math.min(1, hi + 0.12); }
+      const span = (hi - lo) || 1;
+      for (const n of mem) {
+        const v = retainOf(n);
+        n._dispRetain = Math.max(0.1, Math.min(1, 0.12 + 0.88 * ((v - lo) / span)));
+      }
+    }
+
     function valenceHue(d) {
       if (d.type === 'entity') return 'entity';
       if (d.type === 'knowledge') return 'knowledge';
       if (d.type === 'experience') return 'experience';
+      if (d.imprint) return 'imprint';
       let v = (d.valence_tag || 'neutral').toLowerCase();
       const vs = d.valence_score;
       if ((v === 'neutral' || !v) && vs != null && vs !== '') {
@@ -272,6 +299,7 @@
       if (hue === 'entity') return '#b794f6';
       if (hue === 'knowledge') return '#4ade80';
       if (hue === 'experience') return '#fb923c';
+      if (hue === 'imprint') return '#c651a8';
       if (hue === 'neg') return '#3de0ff';
       if (hue === 'pos') return '#f0c14a';
       return '#8a9bb8';
@@ -328,7 +356,7 @@
         ['status', d.status],
         ['pinned', d.pinned ? 'yes' : 'no'],
         ['valence', d.valence_tag || '—'],
-        ['retain', retainOf(d).toFixed(3)],
+        ['retain', (sc.retain != null ? Number(sc.retain) : retainOf(d)).toFixed(3)],
         ['created', d.created_at || '—'],
         ['entities', (d.entities || []).join(', ') || '—'],
         ['supersedes', d.supersedes_id || '—'],
