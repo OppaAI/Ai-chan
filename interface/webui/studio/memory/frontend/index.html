@@ -551,7 +551,10 @@
         .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : '#3de0ff')
         .attr('stroke-width', d => d.type === 'supersedes' ? 1.4 : (0.6 + (d.weight ? Math.min(2, Number(d.weight)) * 0.3 : 0.8)))
         .attr('stroke-opacity', d => edgeOpacity(d, nodeById))
-        .attr('stroke-dasharray', d => d.status === 'superseded' || d.is_tip === false) ? '3,2' : null)
+        // on node circle, not on link:
+        .attr('stroke-dasharray', d =>
+          (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
+        )
         .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null);
 
       const node = g.append('g').selectAll('g').data(nodes).join('g')
