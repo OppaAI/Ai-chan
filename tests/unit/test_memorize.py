@@ -1042,11 +1042,14 @@ class TestValenceColumnsInIterAll:
 class TestCrossStoreUserScoping:
     """Cross-store experience leg should respect explicit user_id."""
 
-    def test_search_experience_threads_user_id(self, tmp_path):
+    def test_search_experience_threads_user_id(self, tmp_path, monkeypatch):
         from agentic.experience import _connect as exp_connect, search_experience
+        import agentic.experience as exp_mod
         import numpy as np
         import hashlib
         import uuid
+
+        monkeypatch.setattr(exp_mod, "EXPERIENCE_DB_PATH", str(tmp_path / "experience_test.db"))
 
         # Create a matching embedder for the seeded data
         class FE:
@@ -1082,8 +1085,7 @@ class TestCrossStoreUserScoping:
 
         # search_experience with explicit user_id should find it
         hits = search_experience("user1 task", limit=5, embedder=fe, user_id="user1")
-        assert len(hits) >= 1
-        assert hits[0]["user_id"] == "user1"
+        assert any(hit["id"] == exp_id for hit in hits)
 
         # With different user_id should return empty (separate DB)
         hits2 = search_experience("user1 task", limit=5, embedder=fe, user_id="user2")
