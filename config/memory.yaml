@@ -269,3 +269,10 @@ EXPERIENCE_SUPERSEDE_THRESHOLD: "0.95"  # cosine sim to mark older run supersede
 EXPERIENCE_SPREADING_ENABLED: "0"
 EXPERIENCE_SPREADING_MAX_EXTRA: "2"
 EXPERIENCE_SPREADING_SCORE_WEIGHT: "0.003"
+
+# -- Phase 19: arousal + neg hard filter + lineage --
+MEMORY_AROUSAL_ENABLED: "1"           # Write/rank arousal_score (−2..+2).
+MEMORY_AROUSAL_RANK_WEIGHT: "0.08"    # Small additive rank term: weight * |arousal|/2.
+MEMORY_NEG_HARD_FILTER: "1"           # Exclude strong-neg from unsolicited context inject.
+MEMORY_NEG_HARD_THRESHOLD: "-1"       # valence_score <= this counts as sticky-neg.
+MEMORY_LINEAGE_MAX_DEPTH: "32"        # Max supersession chain nodes returned by lineage API.
