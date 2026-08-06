@@ -66,7 +66,7 @@ def _search_cache_set(query: str, user_id: str, limit: int, embedder_id: str, re
             _KNOWLEDGE_SEARCH_CACHE.popitem(last=False)
 
 
-def _maybe_clear_knowledge_cache() -> None:
+def maybe_clear_knowledge_cache() -> None:
     """Clear the cache after every successful write to ensure fresh data."""
     with _KNOWLEDGE_SEARCH_CACHE_LOCK:
         _KNOWLEDGE_SEARCH_CACHE.clear()
