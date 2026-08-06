@@ -213,6 +213,8 @@ def export_knowledge_graph(
 
     # Build chunk nodes + entity degree
     entity_degree: dict[str, int] = {}
+    entity_label: dict[str, str] = {}  # casefold key → display string
+
     chunk_nodes: list[dict] = []
     doc_chunks: dict[str, list[str]] = {}
 
@@ -226,6 +228,9 @@ def export_knowledge_graph(
         for e in ents:
             k = e.casefold()
             entity_degree[k] = entity_degree.get(k, 0) + 1
+            # prefer first non-empty original form
+            if k not in entity_label and e.strip():
+                entity_label[k] = e.strip()
         status = str(rid.get("status") or "active") if has_status else "active"
         ac = int(rid.get("access_count") or 0) if has_access else 0
         scores = _chunk_importance(
@@ -280,11 +285,12 @@ def export_knowledge_graph(
         imp = min(1.0, deg / max_deg)
         size = round(0.25 + 0.9 * (imp ** 1.1), 4)
         eid = f"ent:{name}"
+        label = entity_label.get(name, name)
         nodes.append({
             "id": eid,
             "type": "entity",
-            "label": name,
-            "text": name,
+            "label": label,
+            "text": label,
             "degree": deg,
             "size": size,
             "scores": {
