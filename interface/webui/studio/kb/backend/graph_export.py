@@ -28,7 +28,7 @@ except Exception:
     knowledge_connect = None  # type: ignore
 
 try:
-    from memory.memorize import entities_from_json
+    from cognition.memory.memorize import entities_from_json
 except Exception:  # pragma: no cover
     import json
 
