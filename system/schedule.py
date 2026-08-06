@@ -1380,16 +1380,11 @@ class ScheduleRunner:
             query_start = target_local.astimezone(timezone.utc)
             query_end   = target_end_local.astimezone(timezone.utc)
 
-            from cognition.memory.reflect import REFLECT_MAX_MEMS
+            from cognition.memory.reflect import REFLECT_MAX_MEMS, filter_reflect_snippets
             memories = self._memorize.get_between(
                 query_start, query_end, user_id=self._memorize.get_user_id()
-            )            
-            log.info(
-                "daily_reflect_and_dream: %d memories fetched for %s.",
-                len(memories), target_local.date(),
             )
-
-            log.info("daily_reflect_and_dream: running reflect for %s...", target_local.date())
+            memories = filter_reflect_snippets(memories, target_local)
             reflect_result = self._generate_and_post_fn(
                 memories[:REFLECT_MAX_MEMS],
                 date=target_local,
