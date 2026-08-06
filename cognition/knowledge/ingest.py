@@ -43,56 +43,55 @@ class KnowledgeIngest:
     ) -> tuple[str, str]:
         return extract_text_from_file(relative_path, user_id=user_id, max_chars=max_chars)
 
-    def ingest_file(
-        self,
-        relative_path: str,
-        *,
-        title: str | None = None,
-        kind: str = "ingested",
-        embedder: Embedder | None = None,
-        user_id: str | None = None,
-    ) -> str | None:
-        return ingest_file(
-            relative_path,
-            title=title,
-            kind=kind,
-            embedder=embedder if embedder is not None else self.embedder,
-            user_id=user_id,
-        )
+def ingest_file(
+    self,
+    relative_path: str,
+    *,
+    title: str | None = None,
+    kind: str = "ingested",
+    embedder: Embedder | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    return ingest_file(
+        relative_path,
+        title=title,
+        kind=kind,
+        embedder=embedder if embedder is not None else self.embedder,
+        user_id=user_id,
+        schema=self.schema,  # ← add
+    )
 
-    def ingest_text(
-        self,
-        title: str,
-        text: str,
-        *,
-        source: str = "",
-        kind: str = "ingested",
-        embedder: Embedder | None = None,
-        user_id: str | None = None,
-    ) -> str | None:
-        return ingest_text(
-            title,
-            text,
-            source=source,
-            kind=kind,
-            embedder=embedder if embedder is not None else self.embedder,
-            user_id=user_id,
-        )
+def ingest_text(
+    self,
+    title: str,
+    text: str,
+    *,
+    source: str = "",
+    kind: str = "ingested",
+    embedder: Embedder | None = None,
+    user_id: str | None = None,
+) -> str | None:
+    return ingest_text(
+        title,
+        text,
+        source=source,
+        kind=kind,
+        embedder=embedder if embedder is not None else self.embedder,
+        user_id=user_id,
+        schema=self.schema,  # ← add
+    )
 
-    def ingest_workspace_knowledge_folder(
-        self, *, embedder: Embedder | None = None, user_id: str | None = None
-    ) -> list[str]:
-        return ingest_workspace_knowledge_folder(
-            embedder=embedder if embedder is not None else self.embedder,
-            user_id=user_id,
-        )
-
+def ingest_workspace_knowledge_folder(
+    self, *, embedder: Embedder | None = None, user_id: str | None = None
+) -> list[str]:
+    return ingest_workspace_knowledge_folder(
+        embedder=embedder if embedder is not None else self.embedder,
+        user_id=user_id,
+        schema=self.schema,  # ← add
+    )
 
 def _sanitize_text(text: str, max_chars: int = 200_000) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())[:max_chars]
-
-
-
 
 
 def _safe_workspace_path(relative_path: str, user_id: str | None = None) -> Path:
