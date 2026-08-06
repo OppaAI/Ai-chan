@@ -731,6 +731,14 @@ def generate_and_post(
     write_time = datetime.now(local_tz)
     date       = date or write_time - timedelta(days=1)
 
+    before = len(memories or [])
+    memories = filter_reflect_snippets(memories or [], date)
+    if before != len(memories):
+        log.info(
+            "reflect: filtered daily artifacts %d -> %d for %s",
+            before, len(memories), date.strftime("%Y-%m-%d"),
+        )
+
     # Extract and deduplicate memory snippets
     snippets: list[str] = []
     seen:     set[str]  = set()
