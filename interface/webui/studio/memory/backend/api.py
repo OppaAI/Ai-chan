@@ -98,6 +98,20 @@ async def search(
     }
 
 
+@app.get("/api/memory/{mem_id}/lineage")
+async def memory_lineage(
+    mem_id: str,
+    user_id: str | None = Query(None, description="User id (default: current_user_id)"),
+):
+    from cognition.memory.memorize import AikoMemorize
+    from system.userspace import current_user_id
+    # walk_supersession_lineage from backend or cognition/memory/lineage.py
+
+    uid = (user_id or "").strip() or current_user_id()
+    memorize = AikoMemorize(silent=True)
+    return memorize.get_lineage(mem_id, user_id=uid)  # or walk_...(store, mem_id, user_id=uid)
+
+
 @app.get("/")
 async def serve_studio():
     return FileResponse(FRONTEND_DIR / "index.html")
