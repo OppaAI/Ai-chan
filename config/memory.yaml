@@ -247,3 +247,12 @@ MEMORY_NEG_RECALL_AVOID_WEIGHT: "0.015"   # subtract from rank when avoid applie
 MEMORY_NEG_RECALL_AVOID_EXCEPT: "1"      # skip avoid if query looks emotional/reflective
 MEMORY_SUPERSESSION_NARRATIVE: "1"
 MEMORY_SUPERSESSION_NARRATIVE_MAX: "2"   # max chains to narrate per turn
+
+# -- Phase 17: session novelty (turn-level dynamic anchor) --
+# Ring buffer of last-K query embeddings per user (in-process). Rank mildly
+# boosts memories similar to that mean ("hot in this chat"). Monthly dynamic
+# novelty is unchanged. Existing MEMORY_RANK_RECENCY_* still provides light
+# continuous recency in rank.
+MEMORY_SESSION_ANCHOR_ENABLED: "1"
+MEMORY_SESSION_ANCHOR_K: "8"           # Last K query vectors in this process/session
+MEMORY_SESSION_ANCHOR_WEIGHT: "0.006"  # Cosine-to-session-mean boost (same order as rank recency)

@@ -2220,6 +2220,32 @@ class _MemoryBackend:
             except Exception:
                 return 0.0
 
+        # Phase 17: session dynamic anchor (mean of last-K query vectors)
+        _session_mean = None
+        _session_vecs: dict = {}
+        try:
+            from cognition.memory.session_anchor import (
+                MEMORY_SESSION_ANCHOR_ENABLED,
+                MEMORY_SESSION_ANCHOR_WEIGHT,
+                load_memory_vectors,
+                session_boost_for,
+                session_mean,
+            )
+            if MEMORY_SESSION_ANCHOR_ENABLED and MEMORY_SESSION_ANCHOR_WEIGHT > 0:
+                # user_id is on rows; pick any
+                _uid = None
+                for _mid in deduped_ids:
+                    _r = row_by_id.get(_mid)
+                    if _r is not None and _r["user_id"]:
+                        _uid = str(_r["user_id"])
+                        break
+                if _uid:
+                    _session_mean = session_mean(_uid)
+                    if _session_mean is not None:
+                        _session_vecs = load_memory_vectors(self._conn, list(deduped_ids))
+        except Exception as _sess_exc:
+            log.debug("session anchor prep skipped: %s", _sess_exc)
+
         def final_score(mem_id: str) -> float:
             knn = rank_knn.get(mem_id, 0)
             fts = rank_fts.get(mem_id, 0)
@@ -2248,6 +2274,13 @@ class _MemoryBackend:
                         )
                     except Exception as exc:
                         log.debug("entity importance boost skipped: %s", exc)
+
+                # Phase 17: align with this chat's query topic mean
+                if _session_mean is not None:
+                    try:
+                        score += session_boost_for(mem_id, _session_mean, _session_vecs)
+                    except Exception:
+                        pass
 
             return score
 
@@ -2325,6 +2358,12 @@ class _MemoryBackend:
         """
         if vector is None:
             vector = self._embed(query, query=True)
+        # Phase 17: record query embedding for session dynamic anchor
+        try:
+            from cognition.memory.session_anchor import push_query_vector
+            push_query_vector(user_id, vector)
+        except Exception:
+            pass
         fts_query = _sanitize_fts_query(query)
         query_entities = extract_entities(query, max_entities=5)
         active_only = not include_history
