@@ -833,7 +833,8 @@ def infer_arousal_score(text: str) -> int:
 
     Convention (parallel to valence magnitude, signed only for calm):
       +2 strong high arousal, +1 moderate high, 0 neutral/unknown,
-      −1 low activation (calm/flat).
+      -1 low activation (calm/flat). -2 is reserved and not yet produced
+      by this heuristic.
     Ranking uses abs(score); sign is for analytics/Studio.
     """
     t = text or ""
