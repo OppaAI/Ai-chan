@@ -301,8 +301,6 @@ def export_knowledge_graph(
             },
             "valence_tag": "neutral",
         })
-        keep_chunk_ids.add(eid)
-
     entity_ids = {n["id"] for n in nodes if n["type"] == "entity"}
 
     # about edges: chunk → entity
