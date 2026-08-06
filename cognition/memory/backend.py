@@ -1702,6 +1702,7 @@ class _MemoryBackend:
         base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
         ext_cols: list[str] = []
         ext_vals = []
+        a_score = infer_arousal_score(text) if _arousal_enabled() else None
         if "status" in cols:
             ext_cols += ["status", "supersedes_id", "kind", "source", "entities"]
             ext_vals  += [STATUS_ACTIVE, supersedes_id, kind_val, source, ents_json]
@@ -1727,6 +1728,9 @@ class _MemoryBackend:
                 ext_vals.append(state_json)
             except Exception:
                 pass
+        if "arousal_score" in cols and a_score is not None:
+            ext_cols.append("arousal_score")
+            ext_vals.append(int(a_score))
         all_cols = base_cols + ext_cols
         placeholders = ", ".join("?" * len(all_cols))
         self._conn.execute(
