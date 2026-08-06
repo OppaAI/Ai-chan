@@ -141,7 +141,7 @@ def connect(user_id: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | None = None) -> None:
+def ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | None = None) -> None:
     """Add missing columns and indexes to knowledge tables."""
     cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks)").fetchall()]
     if "access_count" not in cols:
