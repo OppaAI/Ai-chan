@@ -109,7 +109,7 @@ async def memory_lineage(
 
     uid = (user_id or "").strip() or current_user_id()
     memorize = AikoMemorize(silent=True)
-    return memorize.get_lineage(mem_id, user_id=uid)  # or walk_...(store, mem_id, user_id=uid)
+    return memorize.get_lineage(mem_id, user_id=uid)
 
 
 @app.get("/")
