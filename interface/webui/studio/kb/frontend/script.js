@@ -46,9 +46,10 @@ function escapeHtml(s) {
 async function loadGraph() {
   const limit = document.getElementById('limit').value || 200;
   const res = await fetch(`${API_BASE}/api/graph?limit=${encodeURIComponent(limit)}`);
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  graph = await res.json();
-  if (graph.meta && graph.meta.error) throw new Error(graph.meta.error);
+  if (!res.ok) throw new Error(`graph request failed: ${res.status}`);
+   graph = await res.json();
+  if (graph && graph.meta && graph.meta.error) {
+    throw new Error(`graph export failed: ${graph.meta.error}`);
   render();
 }
 
