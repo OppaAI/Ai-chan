@@ -440,12 +440,26 @@ def ingest_text(
                         if sim >= KNOWLEDGE_WRITE_DEDUP_THRESHOLD:
                             old_id = str(neighbors[0]["id"])
                             if KNOWLEDGE_SUPERSEDE_ON_DEDUP and old_id:
-                                # Phase 18: replace near-dup with lineage instead of silent skip
+                                row = conn.execute(
+                                    "SELECT status FROM learned_chunks WHERE id = ? AND user_id = ?",
+                                    (old_id, uid),
+                                ).fetchone()
+                                st = "active"
+                                if row is not None:
+                                    try:
+                                        st = (row["status"] or "active")
+                                    except Exception:
+                                        st = "active"
+                                if str(st).strip().lower() == "superseded":
+                                    # Already replaced — skip insert (true dedup) or treat as no parent
+                                    log.debug("knowledge dedup skip already-superseded sim=%.3f", sim)
+                                    continue
                                 supersedes_id = old_id
                                 try:
                                     conn.execute(
                                         "UPDATE learned_chunks SET status = 'superseded' "
-                                        "WHERE id = ? AND user_id = ? AND (status = 'active' OR status IS NULL)",
+                                        "WHERE id = ? AND user_id = ? "
+                                        "AND (status = 'active' OR status IS NULL)",
                                         (old_id, uid),
                                     )
                                 except Exception as sup_exc:
