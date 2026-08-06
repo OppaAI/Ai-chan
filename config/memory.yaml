@@ -206,7 +206,7 @@ MONTHLY_CONSOLIDATION_LLM_TIMEOUT: "120"  # Seconds before monthly summary LLM c
 MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/monthly_consolidation_state.jsonl.
 
 # -- Phase 7: journal promote + safer day-pin delete --
-MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE: "1"  # Promote top journal fragments into day pins before the retention gate.
+MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE: "0"  # Promote top journal fragments into day pins before the retention gate.
 MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE_K: "4"  # Max journal lines promoted per month (selective, not random).
 MONTHLY_CONSOLIDATION_DELETE_REQUIRE_COVERAGE: "1"  # Require soft archival coverage before deleting day pins.
 MONTHLY_CONSOLIDATION_DELETE_MIN_WRITTEN: "1"  # Min [YYYY-MM] facts written before delete is allowed.
