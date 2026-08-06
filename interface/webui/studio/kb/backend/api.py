@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -46,7 +46,6 @@ def index():
         return FileResponse(p)
     log.warning("frontend missing at %s", _FRONTEND)
     raise HTTPException(status_code=404, detail="frontend missing")
-
 
 if _FRONTEND.is_dir():
     app.mount("/static", StaticFiles(directory=str(_FRONTEND)), name="static")
