@@ -893,9 +893,8 @@ def _query_engages_memory(query: str, mem: dict[str, Any]) -> bool:
     ents = mem.get("entities") or []
     if isinstance(ents, str):
         try:
-            import json
             ents = json.loads(ents)
-        except Exception:
+        except (ValueError, TypeError):
             ents = []
     for e in ents:
         if e and str(e).casefold() in q:
