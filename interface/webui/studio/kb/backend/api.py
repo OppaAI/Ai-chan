@@ -30,7 +30,7 @@ def api_graph(limit: int = Query(200, ge=1, le=1000)):
 @app.get("/api/search")
 def api_search(q: str = Query(""), limit: int = Query(20, ge=1, le=100)):
     try:
-        from cognition.knowledge import search_knowledge  # not memory.knowledge
+        from cognition.knowledge import search_knowledge
         from system.userspace import current_user_id
         hits = search_knowledge(q, limit=limit, user_id=current_user_id()) or []
         return {"query": q, "results": hits}
