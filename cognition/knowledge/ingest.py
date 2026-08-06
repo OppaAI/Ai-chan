@@ -43,52 +43,52 @@ class KnowledgeIngest:
     ) -> tuple[str, str]:
         return extract_text_from_file(relative_path, user_id=user_id, max_chars=max_chars)
 
-def ingest_file(
-    self,
-    relative_path: str,
-    *,
-    title: str | None = None,
-    kind: str = "ingested",
-    embedder: Embedder | None = None,
-    user_id: str | None = None,
-) -> str | None:
-    return ingest_file(
-        relative_path,
-        title=title,
-        kind=kind,
-        embedder=embedder if embedder is not None else self.embedder,
-        user_id=user_id,
-        schema=self.schema,
-    )
-
-def ingest_text(
-    self,
-    title: str,
-    text: str,
-    *,
-    source: str = "",
-    kind: str = "ingested",
-    embedder: Embedder | None = None,
-    user_id: str | None = None,
-) -> str | None:
-    return ingest_text(
-        title,
-        text,
-        source=source,
-        kind=kind,
-        embedder=embedder if embedder is not None else self.embedder,
-        user_id=user_id,
-        schema=self.schema,
-    )
-
-def ingest_workspace_knowledge_folder(
-    self, *, embedder: Embedder | None = None, user_id: str | None = None
-) -> list[str]:
-    return ingest_workspace_knowledge_folder(
-        embedder=embedder if embedder is not None else self.embedder,
-        user_id=user_id,
-        schema=self.schema,
-    )
+    def ingest_file(
+        self,
+        relative_path: str,
+        *,
+        title: str | None = None,
+        kind: str = "ingested",
+        embedder: Embedder | None = None,
+        user_id: str | None = None,
+    ) -> str | None:
+        return ingest_file(
+            relative_path,
+            title=title,
+            kind=kind,
+            embedder=embedder if embedder is not None else self.embedder,
+            user_id=user_id,
+            schema=self.schema,
+        )
+    
+    def ingest_text(
+        self,
+        title: str,
+        text: str,
+        *,
+        source: str = "",
+        kind: str = "ingested",
+        embedder: Embedder | None = None,
+        user_id: str | None = None,
+    ) -> str | None:
+        return ingest_text(
+            title,
+            text,
+            source=source,
+            kind=kind,
+            embedder=embedder if embedder is not None else self.embedder,
+            user_id=user_id,
+            schema=self.schema,
+        )
+    
+    def ingest_workspace_knowledge_folder(
+        self, *, embedder: Embedder | None = None, user_id: str | None = None
+    ) -> list[str]:
+        return ingest_workspace_knowledge_folder(
+            embedder=embedder if embedder is not None else self.embedder,
+            user_id=user_id,
+            schema=self.schema,
+        )
 
 def _sanitize_text(text: str, max_chars: int = 200_000) -> str:
     return re.sub(r"\s+", " ", (text or "").strip())[:max_chars]
@@ -269,6 +269,7 @@ def ingest_file(
     kind: str = "ingested",
     embedder: Embedder | None = None,
     user_id: str | None = None,
+    schema: KnowledgeSchema | None = None,
 ) -> str | None:
     """Extract a workspace file and store it in learned knowledge RAG."""
     try:
@@ -276,7 +277,7 @@ def ingest_file(
     except ValueError as exc:
         log.warning("Failed to extract knowledge file %s: %s", relative_path, exc)
         return None
-    return ingest_text(title or Path(relative_path).stem.replace("_", " ").title(), text, source=source, kind=kind, embedder=embedder, user_id=user_id)
+    return ingest_text(title or Path(relative_path).stem.replace("_", " ").title(), text, source=source, kind=kind, embedder=embedder, user_id=user_id, schema=schema,)
 
 def ingest_text(
     title: str,
@@ -286,6 +287,7 @@ def ingest_text(
     kind: str = "ingested",
     embedder: Embedder | None = None,
     user_id: str | None = None,
+    schema: KnowledgeSchema | None = None,
 ) -> str | None:
     """Chunk, embed, and persist durable learned knowledge."""
     clean = _sanitize_text(text)
@@ -295,7 +297,7 @@ def ingest_text(
     doc_id = str(uuid.uuid4())
     created_at = _now()
     chunks = reason.chunk_text(clean, KNOWLEDGE_CHUNK_CHARS) or [clean]
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         conn.execute(
             "INSERT INTO learned_docs(id,user_id,title,source,kind,created_at) VALUES(?,?,?,?,?,?)",
