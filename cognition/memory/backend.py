@@ -638,6 +638,7 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
   # Phase 4: turn-level emotion / salience tags (cheap, no LLM).
     ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
     ("valence_score", "INTEGER"),  # -2..+2; NULL = legacy/unknown
+    ("arousal_score", "INTEGER"),  # Phase 19: −2..+2 intensity; NULL = legacy
     ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
     ("state_json", "TEXT"),  # Phase 16: optional {"local_hour": 0-23}
 )
@@ -778,6 +779,147 @@ def infer_valence_score(text: str) -> int:
         return -1
     return 0
 
+# ── config ────────────────────────────────────────────────────────────────────
+
+def _env_bool(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _arousal_enabled() -> bool:
+    return _env_bool("MEMORY_AROUSAL_ENABLED", "1")
+
+
+def _arousal_rank_weight() -> float:
+    try:
+        return float(os.getenv("MEMORY_AROUSAL_RANK_WEIGHT", "0.08"))
+    except ValueError:
+        return 0.08
+
+
+def _neg_hard_filter_enabled() -> bool:
+    return _env_bool("MEMORY_NEG_HARD_FILTER", "1")
+
+
+def _neg_hard_threshold() -> int:
+    try:
+        return int(os.getenv("MEMORY_NEG_HARD_THRESHOLD", "-1"))
+    except ValueError:
+        return -1
+
+
+# ── arousal inference (heuristic, no LLM) ─────────────────────────────────────
+
+_AROUSAL_HIGH_RE = re.compile(
+    r"\b(?:panic|panick(?:ed|ing)?|terrified|furious|ecstatic|urgent|emergency|"
+    r"scream(?:ed|ing)?|shock(?:ed|ing)?|adrenaline|frantic|hyper|"
+    r"can't sleep|cant sleep|all-nighter|meltdown|breakdown)\b|!{2,}",
+    re.IGNORECASE,
+)
+_AROUSAL_MID_RE = re.compile(
+    r"\b(?:excited|anxious|nervous|stressed|worried|angry|upset|thrilled|"
+    r"glitch|bug|crash(?:ed|ing)?|deadline|interview|hackathon|fight|"
+    r"argument|crying|tears)\b",
+    re.IGNORECASE,
+)
+_AROUSAL_LOW_RE = re.compile(
+    r"\b(?:calm|peaceful|quiet|tired|sleepy|bored|meh|whatever|"
+    r"routine|ordinary|mundane)\b",
+    re.IGNORECASE,
+)
+
+
+def infer_arousal_score(text: str) -> int:
+    """Return −2…+2 activation intensity from lexicon (no LLM).
+
+    Convention (parallel to valence magnitude, signed only for extreme calm):
+      +2 strong high arousal, +1 moderate high, 0 neutral/unknown,
+      −1 low activation (calm/flat), −2 very flat/withdrawn if clearly marked.
+    Ranking uses abs(score); sign is for analytics/Studio.
+    """
+    t = text or ""
+    if _AROUSAL_HIGH_RE.search(t):
+        return 2
+    if _AROUSAL_MID_RE.search(t):
+        return 1
+    if _AROUSAL_LOW_RE.search(t):
+        return -1
+    return 0
+
+
+def arousal_rank_bonus(arousal_score: int | None) -> float:
+    """Additive score term; 0 when disabled or missing."""
+    if not _arousal_enabled() or arousal_score is None:
+        return 0.0
+    try:
+        a = int(arousal_score)
+    except (TypeError, ValueError):
+        return 0.0
+    return _arousal_rank_weight() * (abs(a) / 2.0)
+
+
+# ── neg hard filter ───────────────────────────────────────────────────────────
+
+_EMOTION_QUERY_RE = re.compile(
+    r"\b(?:feel(?:ing)?|emotion|upset|sad|angry|anxious|stress(?:ed)?|"
+    r"embarrass(?:ed|ing)?|ashamed|guilt|hate|conflict|fight|problem with|"
+    r"what's wrong|what is wrong|are you ok|worried about)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_sticky_neg(mem: dict[str, Any]) -> bool:
+    thr = _neg_hard_threshold()
+    vs = mem.get("valence_score")
+    if vs is not None:
+        try:
+            if int(vs) <= thr:
+                return True
+        except (TypeError, ValueError):
+            pass
+    tag = (mem.get("valence_tag") or "").strip().lower()
+    return tag in ("neg", "negative") and thr >= -1
+
+
+def _query_engages_memory(query: str, mem: dict[str, Any]) -> bool:
+    q = (query or "").casefold()
+    if not q:
+        return False
+    if _EMOTION_QUERY_RE.search(query or ""):
+        return True
+    text = (mem.get("memory") or mem.get("text") or "").casefold()
+    if text and any(tok in text for tok in q.split() if len(tok) >= 4):
+        # light token overlap; prefer entity overlap when present
+        return True
+    ents = mem.get("entities") or []
+    if isinstance(ents, str):
+        try:
+            import json
+            ents = json.loads(ents)
+        except Exception:
+            ents = []
+    for e in ents:
+        if e and str(e).casefold() in q:
+            return True
+    return False
+
+
+def apply_neg_hard_filter(
+    memories: list[dict[str, Any]],
+    query: str,
+) -> list[dict[str, Any]]:
+    """Drop sticky-neg rows unless the user query engages them.
+
+    Unsolicited = no engagement signal. Explicit reference or emotion-seeking
+    query keeps the memory.
+    """
+    if not _neg_hard_filter_enabled():
+        return memories
+    out: list[dict[str, Any]] = []
+    for m in memories:
+        if _is_sticky_neg(m) and not _query_engages_memory(query, m):
+            continue
+        out.append(m)
+    return out
 
 def tag_from_score(score: int) -> str:
     try:
