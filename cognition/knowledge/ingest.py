@@ -58,7 +58,7 @@ def ingest_file(
         kind=kind,
         embedder=embedder if embedder is not None else self.embedder,
         user_id=user_id,
-        schema=self.schema,  # ← add
+        schema=self.schema,
     )
 
 def ingest_text(
@@ -78,7 +78,7 @@ def ingest_text(
         kind=kind,
         embedder=embedder if embedder is not None else self.embedder,
         user_id=user_id,
-        schema=self.schema,  # ← add
+        schema=self.schema,
     )
 
 def ingest_workspace_knowledge_folder(
@@ -87,7 +87,7 @@ def ingest_workspace_knowledge_folder(
     return ingest_workspace_knowledge_folder(
         embedder=embedder if embedder is not None else self.embedder,
         user_id=user_id,
-        schema=self.schema,  # ← add
+        schema=self.schema,
     )
 
 def _sanitize_text(text: str, max_chars: int = 200_000) -> str:
