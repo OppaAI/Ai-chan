@@ -173,7 +173,7 @@ def _ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | N
     conn.commit()
 
 
-def _now() -> str:
+def now() -> str:
     return utc_now_iso()
 
 
