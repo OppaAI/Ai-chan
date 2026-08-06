@@ -260,12 +260,13 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
                     limit=5,
                     threshold=EXPERIENCE_AUTO_RELATE_THRESHOLD,
                 )
+                best_sup = None  # (hid, sim)
                 for nb in neighbors:
                     hid = str(nb["id"])
                     if hid == row_id:
                         continue
                     dist = float(nb["dist"])
-                    sim = 1.0 - dist  # cosine similarity
+                    sim = 1.0 - dist
                     if sim < EXPERIENCE_AUTO_RELATE_THRESHOLD:
                         continue
                     old = conn.execute(
@@ -290,14 +291,20 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
                         row_id, hid, rel, confidence=min(1.0, sim), user_id=uid
                     )
                     # Phase 18: very high similarity → mark older run superseded
-                    if (
+                    if (if (
                         EXPERIENCE_SUPERSEDE_ON_NEAR_DUP
                         and sim >= EXPERIENCE_SUPERSEDE_THRESHOLD
+                        and (best_sup is None or sim > best_sup[1])
                     ):
+                        best_sup = (hid, sim)
+
+                    if best_sup is not None:
+                        hid, sim = best_sup
                         try:
                             conn.execute(
                                 "UPDATE experiences SET status = 'superseded' "
-                                "WHERE id = ? AND user_id = ? AND (status = 'active' OR status IS NULL OR status = '')",
+                                "WHERE id = ? AND user_id = ? "
+                                "AND (status = 'active' OR status IS NULL OR status = '')",
                                 (hid, uid),
                             )
                             conn.execute(
