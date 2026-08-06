@@ -17,14 +17,14 @@ from system.log import get_logger
 from system.userspace import current_user_id, user_workspace_root
 
 from .schema import (
+    connect,
     Embedder,
     KNOWLEDGE_CHUNK_CHARS,
     KNOWLEDGE_SUPERSEDE_ON_DEDUP,
     KNOWLEDGE_WORKSPACE_DIR,
     KNOWLEDGE_WRITE_DEDUP_THRESHOLD,
     KnowledgeSchema,
-    _connect,
-    _now,
+    now,
 )
 from .search import _maybe_clear_knowledge_cache
 
@@ -295,7 +295,7 @@ def ingest_text(
         return None
     uid = user_id or current_user_id()
     doc_id = str(uuid.uuid4())
-    created_at = _now()
+    created_at = now()
     chunks = reason.chunk_text(clean, KNOWLEDGE_CHUNK_CHARS) or [clean]
     conn = connect(uid)
     try:
@@ -403,7 +403,7 @@ def ingest_workspace_knowledge_folder(*, embedder: Embedder | None = None, user_
     root = user_workspace_root(uid)
     folder = (root / KNOWLEDGE_WORKSPACE_DIR).resolve()
     folder.mkdir(parents=True, exist_ok=True)
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         known = _knowledge_sources(conn, uid)
     finally:
