@@ -32,9 +32,9 @@ from .schema import (
     KNOWLEDGE_WRITE_DEDUP_THRESHOLD,
     Embedder,
     KnowledgeSchema,
-    _connect,
-    _ensure_knowledge_schema_migrated,
-    _now,
+    connect,
+    ensure_knowledge_schema_migrated,
+    now,
     vacuum_knowledge_db,
 )
 from .ingest import (
@@ -48,7 +48,7 @@ from .search import (
     KnowledgeSearch,
     knowledge_context_for,
     search_knowledge,
-    _maybe_clear_knowledge_cache,
+    maybe_clear_knowledge_cache,
 )
 from .lifecycle import (
     KnowledgeLifecycle,
