@@ -12,14 +12,17 @@ Open `http://127.0.0.1:8002/` (or open `frontend/index.html` with `API_BASE` set
 
 ## Visual encoding
 
-| Node | Color | Size / brightness |
-|------|--------|-------------------|
-| Knowledge chunk | green `#4ade80` | **importance** = access + recency + entity count |
-| Entity hub | purple `#a78bfa` | degree among visible chunks |
+| Node | Color | Importance |
+|------|-------|------------|
+| Knowledge chunk | green `#4ade80` | weighted access, recency, and entity connectivity |
+| Entity hub | purple `#a78bfa` | degree relative to the highest-degree visible entity |
 
 ```text
 importance ∈ [0,1]
-size ≈ 0.20 + 1.10 × importance^1.25
+knowledge importance = 0.45 × access + 0.30 × recency + 0.25 × connectivity
+connectivity = min(1.0, entity_count / 6.0)
+
+entity importance = entity_degree / maximum_visible_entity_degree
 ```
 
 ## Edges
