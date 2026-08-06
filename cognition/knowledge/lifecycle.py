@@ -120,7 +120,9 @@ def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, thresh
     rows = conn.execute(
         """
         SELECT id, text, chunk_index, access_count, created_at FROM learned_chunks
-        WHERE user_id = ? AND id NOT IN (SELECT id FROM learned_chunks_archive WHERE user_id = ?)
+        WHERE user_id = ?
+          AND (status = 'active' OR status IS NULL)
+          AND id NOT IN (SELECT id FROM learned_chunks_archive WHERE user_id = ?)
         ORDER BY chunk_index
         LIMIT ?
         """,
