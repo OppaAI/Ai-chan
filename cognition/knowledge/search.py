@@ -41,7 +41,7 @@ _KNOWLEDGE_SEARCH_CACHE_TTL: float = 20.0
 _KNOWLEDGE_SEARCH_CACHE_MAX: int = 128
 
 def _cache_key(query: str, user_id: str, limit: int, embedder_id: str) -> tuple[str, str, int, str]:
-    return (user_id, " ".join((query or "").lower().split()), limit, embedder_id)
+    return (user_id, query or "", limit, embedder_id)
 
 
 def _search_cache_get(query: str, user_id: str, limit: int, embedder_id: str) -> list[dict] | None:
