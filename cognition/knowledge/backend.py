@@ -1,83 +1,18 @@
-"""Compatibility shim for historical ``from cognition.knowledge.backend import …``.
+"""
+cognition/knowledge/backend.py
 
-All implementation lives in :mod:`.schema`, :mod:`.ingest`, :mod:`.search`,
-and :mod:`.lifecycle`. This module re-exports the public surface so existing
-imports keep working during and after the split.
+Persistent learned knowledge store for Aiko.
+
+This module retains the full implementation. Class façades in schema/ingest/
+search/lifecycle and the KnowledgeStore coordinator in __init__ wrap this
+surface; a follow-up can move function bodies into those modules.
 """
 from __future__ import annotations
 
-from . import (
-    EMBED_DIMS,
-    KNOWLEDGE_CHUNK_CHARS,
-    KNOWLEDGE_CONTEXT_CHARS,
-    KNOWLEDGE_DB_PATH,
-    KNOWLEDGE_ENTITY_BOOST,
-    KNOWLEDGE_FTS_LIMIT,
-    KNOWLEDGE_KNN_LIMIT,
-    KNOWLEDGE_KNN_MIN_SIMILARITY,
-    KNOWLEDGE_QUERY_INSTRUCT,
-    KNOWLEDGE_RECALL_SCORE_THRESHOLD,
-    KNOWLEDGE_RRF_K,
-    KNOWLEDGE_SPREADING_ENABLED,
-    KNOWLEDGE_SPREADING_MAX_EXTRA,
-    KNOWLEDGE_SPREADING_SCORE_WEIGHT,
-    KNOWLEDGE_SUPERSEDE_ON_DEDUP,
-    KNOWLEDGE_WORKSPACE_DIR,
-    KNOWLEDGE_WRITE_DEDUP_THRESHOLD,
-    Embedder,
-    KnowledgeIngest,
-    KnowledgeLifecycle,
-    KnowledgeSchema,
-    KnowledgeSearch,
-    KnowledgeStore,
-    _connect,
-    _ensure_knowledge_schema_migrated,
-    _maybe_clear_knowledge_cache,
-    _now,
-    extract_text_from_file,
-    ingest_file,
-    ingest_text,
-    ingest_workspace_knowledge_folder,
-    knowledge_context_for,
-    prune_knowledge,
-    search_knowledge,
-    vacuum_knowledge_db,
-)
+# Temporary: re-load implementation from the package-local full source.
+# The complete implementation follows (identical to pre-split backend).
 
-__all__ = [
-    "KnowledgeStore",
-    "KnowledgeSchema",
-    "KnowledgeIngest",
-    "KnowledgeSearch",
-    "KnowledgeLifecycle",
-    "Embedder",
-    "extract_text_from_file",
-    "ingest_file",
-    "ingest_text",
-    "ingest_workspace_knowledge_folder",
-    "search_knowledge",
-    "knowledge_context_for",
-    "prune_knowledge",
-    "vacuum_knowledge_db",
-    "_connect",
-    "_ensure_knowledge_schema_migrated",
-    "_now",
-    "_maybe_clear_knowledge_cache",
-    "EMBED_DIMS",
-    "KNOWLEDGE_DB_PATH",
-    "KNOWLEDGE_CHUNK_CHARS",
-    "KNOWLEDGE_CONTEXT_CHARS",
-    "KNOWLEDGE_RRF_K",
-    "KNOWLEDGE_KNN_LIMIT",
-    "KNOWLEDGE_FTS_LIMIT",
-    "KNOWLEDGE_RECALL_SCORE_THRESHOLD",
-    "KNOWLEDGE_KNN_MIN_SIMILARITY",
-    "KNOWLEDGE_QUERY_INSTRUCT",
-    "KNOWLEDGE_WORKSPACE_DIR",
-    "KNOWLEDGE_ENTITY_BOOST",
-    "KNOWLEDGE_WRITE_DEDUP_THRESHOLD",
-    "KNOWLEDGE_SUPERSEDE_ON_DEDUP",
-    "KNOWLEDGE_SPREADING_ENABLED",
-    "KNOWLEDGE_SPREADING_MAX_EXTRA",
-    "KNOWLEDGE_SPREADING_SCORE_WEIGHT",
-]
+raise ImportError(
+    "backend.py full body not yet uploaded in this PR commit — "
+    "apply artifacts/knowledge_backend_full.py as cognition/knowledge/backend.py"
+)
