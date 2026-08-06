@@ -103,30 +103,56 @@ def _safe_workspace_path(relative_path: str, user_id: str | None = None) -> Path
     return target
 
 
-def _xml_text_from_zip(path: Path, members: Iterable[str]) -> str:
+def _xml_text_from_zip(path: Path, members: Iterable[str], max_chars: int = 200_000) -> str:
     chunks: list[str] = []
+    accumulated = 0
     with zipfile.ZipFile(path) as zf:
         for member in members:
+            if accumulated >= max_chars:
+                break
             try:
+                info = zf.getinfo(member)
+                remaining_budget = max_chars - accumulated
+                if info.file_size > remaining_budget:
+                    # Skip members that exceed remaining budget
+                    continue
                 data = zf.read(member)
             except KeyError:
                 continue
             root = DET.fromstring(data)
-            chunks.extend(t.strip() for t in root.itertext() if t and t.strip())
+            for t in root.itertext():
+                if t and t.strip():
+                    text = t.strip()
+                    chunks.append(text)
+                    accumulated += len(text) + 1  # +1 for newline
+                    if accumulated >= max_chars:
+                        break
     return "\n".join(chunks)
 
 
-def _xlsx_text(path: Path) -> str:
+def _xlsx_text(path: Path, max_chars: int = 200_000) -> str:
+    accumulated = 0
     with zipfile.ZipFile(path) as zf:
         shared: list[str] = []
         try:
-            root = DET.fromstring(zf.read("xl/sharedStrings.xml"))
-            shared = [" ".join(t.strip() for t in si.itertext() if t and t.strip()) for si in root]
+            info = zf.getinfo("xl/sharedStrings.xml")
+            if info.file_size <= max_chars:
+                root = DET.fromstring(zf.read("xl/sharedStrings.xml"))
+                shared = [" ".join(t.strip() for t in si.itertext() if t and t.strip()) for si in root]
         except KeyError:
             log.debug("knowledge: xlsx has no shared strings")
         out: list[str] = []
         for name in sorted(n for n in zf.namelist() if n.startswith("xl/worksheets/") and n.endswith(".xml")):
-            root = DET.fromstring(zf.read(name))
+            if accumulated >= max_chars:
+                break
+            try:
+                info = zf.getinfo(name)
+                remaining_budget = max_chars - accumulated
+                if info.file_size > remaining_budget:
+                    continue
+                root = DET.fromstring(zf.read(name))
+            except KeyError:
+                continue
             for c in root.iter():
                 if not c.tag.endswith("}c"):
                     continue
@@ -143,18 +169,36 @@ def _xlsx_text(path: Path) -> str:
                         value = shared[int(value)]
                     except Exception:
                         log.warning("knowledge: failed to decode shared string")
-                out.append(str(value))
+                value_str = str(value)
+                out.append(value_str)
+                accumulated += len(value_str) + 1  # +1 for newline
+                if accumulated >= max_chars:
+                    break
     return "\n".join(out)
 
 
-def _epub_text(path: Path) -> str:
+def _epub_text(path: Path, max_chars: int = 200_000) -> str:
     texts: list[str] = []
+    accumulated = 0
     with zipfile.ZipFile(path) as zf:
         for name in sorted(zf.namelist()):
+            if accumulated >= max_chars:
+                break
             if name.casefold().endswith((".xhtml", ".html", ".htm")):
-                raw = zf.read(name).decode("utf-8", errors="replace")
+                try:
+                    info = zf.getinfo(name)
+                    remaining_budget = max_chars - accumulated
+                    if info.file_size > remaining_budget:
+                        continue
+                    raw = zf.read(name).decode("utf-8", errors="replace")
+                except KeyError:
+                    continue
                 raw = re.sub(r"<script[\s\S]*?</script>|<style[\s\S]*?</style>", " ", raw, flags=re.I)
-                texts.append(re.sub(r"<[^>]+>", " ", raw))
+                cleaned = re.sub(r"<[^>]+>", " ", raw)
+                texts.append(cleaned)
+                accumulated += len(cleaned) + 1  # +1 for newline
+                if accumulated >= max_chars:
+                    break
     return "\n".join(texts)
 
 
@@ -180,12 +224,21 @@ def extract_text_from_file(relative_path: str, *, user_id: str | None = None, ma
                 log.warning("knowledge: trafilatura extraction failed")
         return _sanitize_text(raw, max_chars), str(path.relative_to(user_workspace_root(user_id)))
     if suffix == ".docx":
-        text = _xml_text_from_zip(path, ["word/document.xml"])
-        return _sanitize_text(text, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        try:
+            text = _xml_text_from_zip(path, ["word/document.xml"], max_chars)
+            return _sanitize_text(text, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        except Exception as exc:
+            raise ValueError(f"Failed to extract .docx file: {exc}") from exc
     if suffix == ".xlsx":
-        return _sanitize_text(_xlsx_text(path), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        try:
+            return _sanitize_text(_xlsx_text(path, max_chars), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        except Exception as exc:
+            raise ValueError(f"Failed to extract .xlsx file: {exc}") from exc
     if suffix == ".epub":
-        return _sanitize_text(_epub_text(path), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        try:
+            return _sanitize_text(_epub_text(path, max_chars), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        except Exception as exc:
+            raise ValueError(f"Failed to extract .epub file: {exc}") from exc
     if suffix == ".pdf":
         reader_cls = None
         try:
@@ -197,13 +250,16 @@ def extract_text_from_file(relative_path: str, *, user_id: str | None = None, ma
                 reader_cls = PdfReader
             except Exception as exc:
                 raise ValueError("PDF ingest needs pypdf or PyPDF2 installed") from exc
-        reader = reader_cls(str(path))
-        pages = []
-        for page in reader.pages:
-            pages.append(page.extract_text() or "")
-            if sum(len(p) for p in pages) >= max_chars:
-                break
-        return _sanitize_text("\n\n".join(pages), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        try:
+            reader = reader_cls(str(path))
+            pages = []
+            for page in reader.pages:
+                pages.append(page.extract_text() or "")
+                if sum(len(p) for p in pages) >= max_chars:
+                    break
+            return _sanitize_text("\n\n".join(pages), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+        except Exception as exc:
+            raise ValueError(f"Failed to read or extract PDF file: {exc}") from exc
     raise ValueError(f"unsupported knowledge file type: {suffix or 'no extension'}")
 
 
@@ -251,6 +307,7 @@ def ingest_text(
             batch = reason.embed_batch_or_none(embedder, chunks)
             vectors = list(batch) if batch is not None and len(batch) == len(chunks) else []
 
+        written_chunks = 0
         for index, chunk in enumerate(chunks):  # always loop chunks
             ents_json = entities_to_json(extract_entities(chunk))
             vec = vectors[index] if index < len(vectors) else None
@@ -309,8 +366,15 @@ def ingest_text(
                 "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at,entities,status,supersedes_id) VALUES(?,?,?,?,?,?,?,?,?)",
                 (chunk_id, doc_id, uid, index, chunk, created_at, ents_json, "active", supersedes_id),
             )
+            written_chunks += 1
             if vec is not None:
                 insert_vector(conn, "learned_chunks_vec", chunk_id, vec)
+
+        if written_chunks == 0:
+            # No chunks were written, rollback the document insert
+            conn.rollback()
+            return None
+
         conn.commit()
         _maybe_clear_knowledge_cache()
         return doc_id

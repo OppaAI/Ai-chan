@@ -34,22 +34,18 @@ log = get_logger(__name__)
 # ── search cache (mirrors memory/memorize.py's pattern) ─────────────────────
 
 _KNOWLEDGE_SEARCH_CACHE: OrderedDict[
-    tuple[str, str, int], tuple[float, list[dict]]
+    tuple[str, str, int, str], tuple[float, list[dict]]
 ] = OrderedDict()
 _KNOWLEDGE_SEARCH_CACHE_LOCK = threading.RLock()
 _KNOWLEDGE_SEARCH_CACHE_TTL: float = 20.0
 _KNOWLEDGE_SEARCH_CACHE_MAX: int = 128
 
-_LAST_KNOWLEDGE_CLEAR_TIME: float = 0.0
-_KNOWLEDGE_MIN_CLEAR_INTERVAL: float = 0.5  # seconds — debounce window
+def _cache_key(query: str, user_id: str, limit: int, embedder_id: str) -> tuple[str, str, int, str]:
+    return (user_id, " ".join((query or "").lower().split()), limit, embedder_id)
 
 
-def _cache_key(query: str, user_id: str, limit: int) -> tuple[str, str, int]:
-    return (user_id, " ".join((query or "").lower().split()), limit)
-
-
-def _search_cache_get(query: str, user_id: str, limit: int) -> list[dict] | None:
-    key = _cache_key(query, user_id, limit)
+def _search_cache_get(query: str, user_id: str, limit: int, embedder_id: str) -> list[dict] | None:
+    key = _cache_key(query, user_id, limit, embedder_id)
     now = time.monotonic()
     with _KNOWLEDGE_SEARCH_CACHE_LOCK:
         cached = _KNOWLEDGE_SEARCH_CACHE.get(key)
@@ -61,8 +57,8 @@ def _search_cache_get(query: str, user_id: str, limit: int) -> list[dict] | None
     return None
 
 
-def _search_cache_set(query: str, user_id: str, limit: int, results: list[dict]) -> None:
-    key = _cache_key(query, user_id, limit)
+def _search_cache_set(query: str, user_id: str, limit: int, embedder_id: str, results: list[dict]) -> None:
+    key = _cache_key(query, user_id, limit, embedder_id)
     now = time.monotonic()
     with _KNOWLEDGE_SEARCH_CACHE_LOCK:
         _KNOWLEDGE_SEARCH_CACHE[key] = (now, [dict(r) for r in results])
@@ -71,21 +67,9 @@ def _search_cache_set(query: str, user_id: str, limit: int, results: list[dict])
 
 
 def _maybe_clear_knowledge_cache() -> None:
-    """Time-debounced invalidation: clear the cache on write, but only if
-    at least _KNOWLEDGE_MIN_CLEAR_INTERVAL has elapsed since the last clear.
-
-    Knowledge writes are rare (learn/research pipeline). After a write, the
-    user is likely to ask about what was just taught — the debounce ensures
-    the next read always sees fresh data at human-paced gaps, while batch
-    writes within the same window (multiple chunks from one source) keep the
-    cache warm.
-    """
-    global _LAST_KNOWLEDGE_CLEAR_TIME
-    now = time.monotonic()
-    if now - _LAST_KNOWLEDGE_CLEAR_TIME >= _KNOWLEDGE_MIN_CLEAR_INTERVAL:
-        with _KNOWLEDGE_SEARCH_CACHE_LOCK:
-            _KNOWLEDGE_SEARCH_CACHE.clear()
-        _LAST_KNOWLEDGE_CLEAR_TIME = now
+    """Clear the cache after every successful write to ensure fresh data."""
+    with _KNOWLEDGE_SEARCH_CACHE_LOCK:
+        _KNOWLEDGE_SEARCH_CACHE.clear()
 
 
 
@@ -271,9 +255,12 @@ def knowledge_context_for(
         user_id: Optional user ID (defaults to current_user_id)
     """
     uid = user_id or current_user_id()
-    remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
+    remaining = KNOWLEDGE_CONTEXT_CHARS if max_chars is None else max_chars
 
-    cached = _search_cache_get(query, uid, limit)
+    # Generate embedder ID for cache key
+    embedder_id = str(id(embedder)) if embedder is not None else "default"
+
+    cached = _search_cache_get(query, uid, limit, embedder_id)
     if cached is not None:
         # Track access for cached results too
         chunk_ids = [r["id"] for r in cached]
@@ -282,7 +269,7 @@ def knowledge_context_for(
 
     hits = search_knowledge(query, limit=limit, embedder=embedder, user_id=uid)
     if hits:
-        _search_cache_set(query, uid, limit, hits)
+        _search_cache_set(query, uid, limit, embedder_id, hits)
 
     if not hits:
         return "<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"
@@ -315,8 +302,8 @@ def _increment_access_count(chunk_ids: list[str], user_id: str | None = None) ->
         conn.close()
 
 
-def _format_knowledge_context(results: list[dict], max_chars: int | None = None) -> str:
-    remaining = max_chars or KNOWLEDGE_CONTEXT_CHARS
+def _format_knowledge_context(results: list[dict], max_chars: int) -> str:
+    remaining = max_chars
     blocks = []
     for row in results:
         if remaining <= 0:

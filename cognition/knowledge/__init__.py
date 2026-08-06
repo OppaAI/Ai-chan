@@ -68,28 +68,35 @@ class KnowledgeStore:
         self.lifecycle = KnowledgeLifecycle(self.schema, embedder)
 
     def extract_text_from_file(self, relative_path: str, **kwargs):
+        kwargs.setdefault("user_id", self.user_id)
         return self.ingest.extract_text_from_file(relative_path, **kwargs)
 
     def ingest_file(self, relative_path: str, **kwargs):
+        kwargs.setdefault("user_id", self.user_id)
         return self.ingest.ingest_file(relative_path, **kwargs)
 
     def ingest_text(self, title: str, text: str, **kwargs):
+        kwargs.setdefault("user_id", self.user_id)
         return self.ingest.ingest_text(title, text, **kwargs)
 
     def ingest_workspace_knowledge_folder(self, **kwargs):
+        kwargs.setdefault("user_id", self.user_id)
         return self.ingest.ingest_workspace_knowledge_folder(**kwargs)
 
     def search_knowledge(self, query: str, limit: int = 5, **kwargs):
+        kwargs.setdefault("user_id", self.user_id)
         return self.search.search(query, limit=limit, **kwargs)
 
     def knowledge_context_for(self, query: str, limit: int = 5, **kwargs):
+        kwargs.setdefault("user_id", self.user_id)
         return self.search.context_for(query, limit=limit, **kwargs)
 
     def prune_knowledge(self, **kwargs):
+        kwargs.setdefault("user_id", self.user_id)
         return self.lifecycle.prune(**kwargs)
 
     def vacuum_knowledge_db(self, user_id: str | None = None):
-        return self.lifecycle.vacuum(user_id)
+        return self.lifecycle.vacuum(user_id or self.user_id)
 
 
 __all__ = [

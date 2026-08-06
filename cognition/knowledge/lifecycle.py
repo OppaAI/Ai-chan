@@ -25,7 +25,6 @@ class KnowledgeLifecycle:
     def prune(
         self,
         *,
-        keep_days: int = 30,
         min_access: int = 2,
         archive_days: int = 90,
         delete_days: int = 180,
@@ -34,7 +33,6 @@ class KnowledgeLifecycle:
         embedder=None,
     ) -> dict:
         return prune_knowledge(
-            keep_days=keep_days,
             min_access=min_access,
             archive_days=archive_days,
             delete_days=delete_days,
@@ -49,7 +47,6 @@ class KnowledgeLifecycle:
 
 def prune_knowledge(
     *,
-    keep_days: int = 30,
     min_access: int = 2,
     archive_days: int = 90,
     delete_days: int = 180,
@@ -68,7 +65,7 @@ def prune_knowledge(
     try:
         # 1. Archive: move cold chunks (old + low access) to archive table
         archive_cutoff = (datetime.fromisoformat(now.replace('Z', '+00:00')) - timedelta(days=archive_days)).isoformat()
-        conn.execute(
+        archive_cursor = conn.execute(
             """
             INSERT INTO learned_chunks_archive
             (id, doc_id, user_id, chunk_index, text, created_at, access_count, last_accessed, archived_at)
@@ -81,7 +78,7 @@ def prune_knowledge(
             """,
             (now, uid, archive_cutoff, min_access, uid),
         )
-        stats["archived"] = conn.total_changes
+        stats["archived"] = archive_cursor.rowcount
 
         # Delete archived from main table
         conn.execute(
@@ -91,7 +88,7 @@ def prune_knowledge(
 
         # 2. Delete: remove never-accessed chunks older than delete_days
         delete_cutoff = (datetime.fromisoformat(now.replace('Z', '+00:00')) - timedelta(days=delete_days)).isoformat()
-        conn.execute(
+        delete_cursor = conn.execute(
             """
             DELETE FROM learned_chunks
             WHERE user_id = ?
@@ -101,7 +98,7 @@ def prune_knowledge(
             """,
             (uid, delete_cutoff, uid),
         )
-        stats["deleted"] = conn.total_changes - stats["archived"]
+        stats["deleted"] = delete_cursor.rowcount
 
         # 3. Deduplicate: find near-duplicate chunks via embedding similarity
         if embedder is not None:
@@ -119,13 +116,15 @@ def prune_knowledge(
 
 def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, threshold: float) -> int:
     """Find near-duplicate chunks via embedding similarity and archive duplicates."""
+    MAX_CANDIDATES = 1000
     rows = conn.execute(
         """
-        SELECT id, text, chunk_index FROM learned_chunks
+        SELECT id, text, chunk_index, access_count, created_at FROM learned_chunks
         WHERE user_id = ? AND id NOT IN (SELECT id FROM learned_chunks_archive WHERE user_id = ?)
         ORDER BY chunk_index
+        LIMIT ?
         """,
-        (user_id, user_id),
+        (user_id, user_id, MAX_CANDIDATES),
     ).fetchall()
 
     if len(rows) < 2:
@@ -134,6 +133,8 @@ def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, thresh
     texts = [row["text"] for row in rows]
     ids = [row["id"] for row in rows]
     indices = [row["chunk_index"] for row in rows]
+    access_counts = [row["access_count"] for row in rows]
+    created_ats = [row["created_at"] for row in rows]
 
     try:
         if hasattr(embedder, "embed_queries"):
@@ -145,7 +146,8 @@ def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, thresh
         norms[norms == 0] = 1
         vectors = vectors / norms
         sim = vectors @ vectors.T
-    except Exception:
+    except Exception as exc:
+        log.warning("Deduplication embedding/similarity failed: %s", exc)
         return 0
 
     to_archive = set()
@@ -157,11 +159,17 @@ def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, thresh
             if ids[j] in to_archive:
                 continue
             if sim[i, j] >= threshold:
-                # Archive the one with higher chunk_index (later occurrence)
-                if indices[i] < indices[j]:
+                # Retain the chunk with higher access_count; on tie, retain earlier created_at
+                if access_counts[i] > access_counts[j]:
                     to_archive.add(ids[j])
-                else:
+                elif access_counts[i] < access_counts[j]:
                     to_archive.add(ids[i])
+                else:
+                    # Access counts are equal, retain the earlier one
+                    if created_ats[i] <= created_ats[j]:
+                        to_archive.add(ids[j])
+                    else:
+                        to_archive.add(ids[i])
 
     if to_archive:
         now = utc_now_iso()
