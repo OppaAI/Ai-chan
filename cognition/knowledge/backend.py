@@ -586,7 +586,7 @@ def _knowledge_spread_extra(conn: sqlite3.Connection, uid: str, hits: list[dict]
                 ents = {str(e).strip().lower() for e in entities_from_json(row["entities"] or "[]") if e}
             except Exception:
                 continue
-            if not (ents & entities):
+            if len(ents & entities) < 2:
                 continue
             d = dict(row)
             d["score"] = float(KNOWLEDGE_SPREADING_SCORE_WEIGHT)
