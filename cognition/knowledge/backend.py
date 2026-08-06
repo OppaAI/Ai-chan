@@ -61,6 +61,11 @@ KNOWLEDGE_QUERY_INSTRUCT = os.getenv(
 KNOWLEDGE_WORKSPACE_DIR = os.getenv("KNOWLEDGE_WORKSPACE_DIR", "library").strip().strip("/") or "library"
 KNOWLEDGE_ENTITY_BOOST = float(os.getenv("KNOWLEDGE_ENTITY_BOOST", "0.003"))
 KNOWLEDGE_WRITE_DEDUP_THRESHOLD = float(os.getenv("KNOWLEDGE_WRITE_DEDUP_THRESHOLD", "0.95"))
+# Phase 18: near-dup → supersede old chunk instead of skip (when enabled).
+KNOWLEDGE_SUPERSEDE_ON_DEDUP = os.getenv("KNOWLEDGE_SUPERSEDE_ON_DEDUP", "1").strip().lower() in {"1", "true", "yes", "on"}
+KNOWLEDGE_SPREADING_ENABLED = os.getenv("KNOWLEDGE_SPREADING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+KNOWLEDGE_SPREADING_MAX_EXTRA = max(0, int(os.getenv("KNOWLEDGE_SPREADING_MAX_EXTRA", "2")))
+KNOWLEDGE_SPREADING_SCORE_WEIGHT = float(os.getenv("KNOWLEDGE_SPREADING_SCORE_WEIGHT", "0.003"))
 
 # ── search cache (mirrors memory/memorize.py's pattern) ─────────────────────
 
@@ -417,6 +422,7 @@ def ingest_text(
             ents_json = entities_to_json(extract_entities(chunk))
             vec = vectors[index] if index < len(vectors) else None
 
+            supersedes_id = None
             if KNOWLEDGE_WRITE_DEDUP_THRESHOLD > 0 and vec is not None:
                 try:
                     neighbors = user_scoped_vec_knn(
@@ -432,15 +438,29 @@ def ingest_text(
                         dist = float(neighbors[0]["dist"])
                         sim = 1.0 - dist
                         if sim >= KNOWLEDGE_WRITE_DEDUP_THRESHOLD:
-                            log.debug("knowledge dedup skip chunk sim=%.3f", sim)
-                            continue
+                            old_id = str(neighbors[0]["id"])
+                            if KNOWLEDGE_SUPERSEDE_ON_DEDUP and old_id:
+                                # Phase 18: replace near-dup with lineage instead of silent skip
+                                supersedes_id = old_id
+                                try:
+                                    conn.execute(
+                                        "UPDATE learned_chunks SET status = 'superseded' "
+                                        "WHERE id = ? AND user_id = ? AND (status = 'active' OR status IS NULL)",
+                                        (old_id, uid),
+                                    )
+                                except Exception as sup_exc:
+                                    log.debug("knowledge supersede mark failed: %s", sup_exc)
+                                log.debug("knowledge supersede chunk sim=%.3f old=%s", sim, old_id[:8])
+                            else:
+                                log.debug("knowledge dedup skip chunk sim=%.3f", sim)
+                                continue
                 except Exception as dedup_exc:
                     log.debug("knowledge dedup skipped: %s", dedup_exc)
 
             chunk_id = str(uuid.uuid4())
             conn.execute(
-                "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at,entities,status) VALUES(?,?,?,?,?,?,?,?)",
-                (chunk_id, doc_id, uid, index, chunk, created_at, ents_json, "active"),
+                "INSERT INTO learned_chunks(id,doc_id,user_id,chunk_index,text,created_at,entities,status,supersedes_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                (chunk_id, doc_id, uid, index, chunk, created_at, ents_json, "active", supersedes_id),
             )
             if vec is not None:
                 insert_vector(conn, "learned_chunks_vec", chunk_id, vec)
@@ -521,6 +541,51 @@ def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sql
     )
 
 
+
+def _knowledge_spread_extra(conn: sqlite3.Connection, uid: str, hits: list[dict], limit: int) -> list[dict]:
+    """Phase 18 optional: pull active chunks sharing an entity with hits."""
+    if not KNOWLEDGE_SPREADING_ENABLED or limit <= 0 or not hits:
+        return []
+    seen = {str(h.get("id") or "") for h in hits}
+    entities: set[str] = set()
+    for h in hits:
+        try:
+            for e in entities_from_json(h.get("entities") or "[]"):
+                if e:
+                    entities.add(str(e).strip().lower())
+        except Exception:
+            continue
+    if not entities:
+        return []
+    extra: list[dict] = []
+    try:
+        rows = conn.execute(
+            "SELECT id, text, chunk_index, created_at, entities, status FROM learned_chunks "
+            "WHERE user_id = ? AND (status = 'active' OR status IS NULL) LIMIT 200",
+            (uid,),
+        ).fetchall()
+        for row in rows:
+            rid = str(row["id"])
+            if rid in seen:
+                continue
+            try:
+                ents = {str(e).strip().lower() for e in entities_from_json(row["entities"] or "[]") if e}
+            except Exception:
+                continue
+            if not (ents & entities):
+                continue
+            d = dict(row)
+            d["score"] = float(KNOWLEDGE_SPREADING_SCORE_WEIGHT)
+            d["_from_spreading"] = True
+            extra.append(d)
+            seen.add(rid)
+            if len(extra) >= limit:
+                break
+    except Exception as exc:
+        log.debug("knowledge spreading skipped: %s", exc)
+    return extra
+
+
 def search_knowledge(
     query: str,
     limit: int = 5,
@@ -560,7 +625,10 @@ def search_knowledge(
             if score >= KNOWLEDGE_RECALL_SCORE_THRESHOLD:
                 scored.append((score, cid))
         scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
-        return [dict(by_id[cid]) | {"score": score} for score, cid in scored[:limit]]
+        results = [dict(by_id[cid]) | {"score": score} for score, cid in scored[:limit]]
+        if KNOWLEDGE_SPREADING_ENABLED and KNOWLEDGE_SPREADING_MAX_EXTRA > 0:
+            results.extend(_knowledge_spread_extra(conn, uid, results, KNOWLEDGE_SPREADING_MAX_EXTRA))
+        return results
     except Exception as exc:
         log.warning("Knowledge search failed: %s", exc)
         return []
