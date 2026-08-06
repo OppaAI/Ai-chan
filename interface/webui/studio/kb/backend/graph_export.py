@@ -21,8 +21,8 @@ log = get_logger(__name__)
 
 # Prefer knowledge module path helpers when available
 try:
-    from memory.knowledge import KNOWLEDGE_DB_PATH, _connect as knowledge_connect
-except Exception:  # pragma: no cover
+    from cognition.knowledge import KNOWLEDGE_DB_PATH, _connect as knowledge_connect
+except Exception:
     KNOWLEDGE_DB_PATH = os.getenv("KNOWLEDGE_DB_PATH", "knowledge/knowledge.db")
     knowledge_connect = None  # type: ignore
 
