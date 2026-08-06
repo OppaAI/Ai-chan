@@ -126,7 +126,7 @@ class KnowledgeSchema:
     """Owns DB connection, DDL, and schema migrations for learned knowledge."""
 
     def connect(self, user_id: str | None = None) -> sqlite3.Connection:
-        return _connect(user_id)
+        return connect(user_id)
 
     def ensure_migrated(self, conn: sqlite3.Connection, user_id: str | None = None) -> None:
         _ensure_knowledge_schema_migrated(conn, user_id)
@@ -135,7 +135,7 @@ class KnowledgeSchema:
         vacuum_knowledge_db(user_id)
 
 
-def _connect(user_id: str | None = None) -> sqlite3.Connection:
+def connect(user_id: str | None = None) -> sqlite3.Connection:
     conn = initialize_store_db(KNOWLEDGE_DB_PATH, _DDL, user_id=user_id, vector=True)
     _ensure_knowledge_schema_migrated(conn, user_id)
     return conn
@@ -180,7 +180,7 @@ def _now() -> str:
 def vacuum_knowledge_db(user_id: str | None = None) -> None:
     """VACUUM the knowledge DB to reclaim space after deletions."""
     uid = user_id or current_user_id()
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         conn.execute("VACUUM")
         conn.execute("ANALYZE")
