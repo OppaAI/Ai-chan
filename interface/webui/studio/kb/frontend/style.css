@@ -93,6 +93,13 @@ header .sub {
   background: #3b2258;
 }
 
+.btn:focus-visible,
+.zoom-ctl button:focus-visible,
+.sidebar input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 #canvas {
   flex: 1;
   position: relative;
