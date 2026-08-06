@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+import struct
 import threading
 from collections import defaultdict, deque
 from typing import Deque
@@ -121,14 +122,25 @@ def load_memory_vectors(conn, ids: list[str]) -> dict[str, list[float]]:
             emb = row["embedding"] if hasattr(row, "keys") else row[1]
             if emb is None:
                 continue
-            if isinstance(emb, (bytes, bytearray)):
-                continue  # unexpected format
             try:
-                vec = list(emb) if not isinstance(emb, list) else emb
+                # Handle serialized float32 binary blobs (from sqlite_vec.serialize_float32)
+                if isinstance(emb, (bytes, bytearray)):
+                    # Validate length is divisible by 4 (float32 size)
+                    if len(emb) % 4 != 0:
+                        continue  # corrupted/invalid blob
+                    # Decode little-endian float32 array
+                    n = len(emb) // 4
+                    vec = list(struct.unpack(f"{n}f", emb))
+                else:
+                    # Handle list/array-like embeddings
+                    vec = list(emb) if not isinstance(emb, list) else emb
+
+                # Normalize the vector
                 normed = _normalize([float(x) for x in vec])
                 if normed:
                     out[str(mid)] = normed
             except Exception:
+                # Skip on any decode error (invalid format, struct error, etc.)
                 continue
     except Exception:
         return {}
