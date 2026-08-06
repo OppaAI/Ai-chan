@@ -638,6 +638,7 @@ _PHASE_A_COLUMNS: tuple[tuple[str, str], ...] = (
   # Phase 4: turn-level emotion / salience tags (cheap, no LLM).
     ("valence_tag", "TEXT NOT NULL DEFAULT 'neutral'"),
     ("valence_score", "INTEGER"),  # -2..+2; NULL = legacy/unknown
+    ("arousal_score", "INTEGER"),  # Phase 19: −2..+2 intensity; NULL = legacy
     ("salience_hit", "INTEGER NOT NULL DEFAULT 0"),
     ("state_json", "TEXT"),  # Phase 16: optional {"local_hour": 0-23}
 )
@@ -778,6 +779,149 @@ def infer_valence_score(text: str) -> int:
         return -1
     return 0
 
+# ── config ────────────────────────────────────────────────────────────────────
+
+def _env_bool(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _arousal_enabled() -> bool:
+    return _env_bool("MEMORY_AROUSAL_ENABLED", "1")
+
+
+def _arousal_rank_weight() -> float:
+    try:
+        return float(os.getenv("MEMORY_AROUSAL_RANK_WEIGHT", "0.01"))
+    except ValueError:
+        return 0.01
+
+
+def _neg_hard_filter_enabled() -> bool:
+    return _env_bool("MEMORY_NEG_HARD_FILTER", "1")
+
+
+def _neg_hard_threshold() -> int:
+    try:
+        return int(os.getenv("MEMORY_NEG_HARD_THRESHOLD", "-1"))
+    except ValueError:
+        return -1
+
+
+# ── arousal inference (heuristic, no LLM) ─────────────────────────────────────
+
+_AROUSAL_HIGH_RE = re.compile(
+    r"\b(?:panic|panick(?:ed|ing)?|terrified|furious|ecstatic|urgent|emergency|"
+    r"scream(?:ed|ing)?|shock(?:ed|ing)?|adrenaline|frantic|hyper|"
+    r"can't sleep|cant sleep|all-nighter|meltdown|breakdown)\b|!{2,}",
+    re.IGNORECASE,
+)
+_AROUSAL_MID_RE = re.compile(
+    r"\b(?:excited|anxious|nervous|stressed|worried|angry|upset|thrilled|"
+    r"deadline|interview|hackathon|fight|"
+    r"argument|crying|tears)\b",
+    re.IGNORECASE,
+)
+_AROUSAL_LOW_RE = re.compile(
+    r"\b(?:calm|peaceful|quiet|tired|sleepy|bored|meh|whatever|"
+    r"routine|ordinary|mundane)\b",
+    re.IGNORECASE,
+)
+
+
+def infer_arousal_score(text: str) -> int:
+    """Return −1…+2 activation intensity from lexicon (no LLM).
+
+    Convention (parallel to valence magnitude, signed only for calm):
+      +2 strong high arousal, +1 moderate high, 0 neutral/unknown,
+      -1 low activation (calm/flat). -2 is reserved and not yet produced
+      by this heuristic.
+    Ranking uses abs(score); sign is for analytics/Studio.
+    """
+    t = text or ""
+    if _AROUSAL_HIGH_RE.search(t):
+        return 2
+    if _AROUSAL_MID_RE.search(t):
+        return 1
+    if _AROUSAL_LOW_RE.search(t):
+        return -1
+    return 0
+
+
+def arousal_rank_bonus(arousal_score: int | None) -> float:
+    """Additive score term; 0 when disabled or missing."""
+    if not _arousal_enabled() or arousal_score is None:
+        return 0.0
+    try:
+        a = int(arousal_score)
+    except (TypeError, ValueError):
+        return 0.0
+    return _arousal_rank_weight() * (min(abs(a), 2) / 2.0)
+
+
+# ── neg hard filter ───────────────────────────────────────────────────────────
+
+_EMOTION_QUERY_RE = re.compile(
+    r"\b(?:feel(?:ing)?|emotion|upset|sad|angry|anxious|stress(?:ed)?|"
+    r"embarrass(?:ed|ing)?|ashamed|guilt|hate|conflict|fight|problem with|"
+    r"what's wrong|what is wrong|are you ok|worried about)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_sticky_neg(mem: dict[str, Any]) -> bool:
+    thr = _neg_hard_threshold()
+    vs = mem.get("valence_score")
+    if vs is not None:
+        try:
+            return int(vs) <= thr
+        except (TypeError, ValueError):
+            pass
+    tag = (mem.get("valence_tag") or "").strip().lower()
+    return tag in ("neg", "negative") and thr >= -1
+
+
+def _query_engages_memory(query: str, mem: dict[str, Any]) -> bool:
+    q = (query or "").casefold()
+    if not q:
+        return False
+    if _EMOTION_QUERY_RE.search(query or ""):
+        return True
+    text = (mem.get("memory") or mem.get("text") or "").casefold()
+    if text:
+        mem_tokens = set(re.findall(r"\w+", text))
+        q_tokens = {t for t in re.findall(r"\w+", q) if len(t) >= 4}
+        if mem_tokens & q_tokens:
+            # light token overlap; prefer entity overlap when present
+            return True
+    ents = mem.get("entities") or []
+    if isinstance(ents, str):
+        try:
+            ents = json.loads(ents)
+        except (ValueError, TypeError):
+            ents = []
+    for e in ents:
+        if e and str(e).casefold() in q:
+            return True
+    return False
+
+
+def apply_neg_hard_filter(
+    memories: list[dict[str, Any]],
+    query: str,
+) -> list[dict[str, Any]]:
+    """Drop sticky-neg rows unless the user query engages them.
+
+    Unsolicited = no engagement signal. Explicit reference or emotion-seeking
+    query keeps the memory.
+    """
+    if not _neg_hard_filter_enabled():
+        return memories
+    out: list[dict[str, Any]] = []
+    for m in memories:
+        if _is_sticky_neg(m) and not _query_engages_memory(query, m):
+            continue
+        out.append(m)
+    return out
 
 def tag_from_score(score: int) -> str:
     try:
@@ -1560,6 +1704,7 @@ class _MemoryBackend:
         base_vals: list[Any] = [mem_id, user_id, text, now, 0, "never", pinned]
         ext_cols: list[str] = []
         ext_vals = []
+        a_score = infer_arousal_score(text) if _arousal_enabled() else None
         if "status" in cols:
             ext_cols += ["status", "supersedes_id", "kind", "source", "entities"]
             ext_vals  += [STATUS_ACTIVE, supersedes_id, kind_val, source, ents_json]
@@ -1585,6 +1730,9 @@ class _MemoryBackend:
                 ext_vals.append(state_json)
             except Exception:
                 pass
+        if "arousal_score" in cols and a_score is not None:
+            ext_cols.append("arousal_score")
+            ext_vals.append(int(a_score))
         all_cols = base_cols + ext_cols
         placeholders = ", ".join("?" * len(all_cols))
         self._conn.execute(
@@ -2265,6 +2413,12 @@ class _MemoryBackend:
                 if int(row["pinned"] or 0):
                     score += MEMORY_RANK_PINNED_WEIGHT
 
+                # Phase 19: arousal intensity (small tiebreaker)
+                try:
+                    score += arousal_rank_bonus(row["arousal_score"] if row.get("arousal_score") is not None else None)
+                except Exception:
+                    pass
+
                 # Phase 3: entity importance boost
                 if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0 and entity_importance_map:
                     try:
@@ -2469,7 +2623,9 @@ class _MemoryBackend:
                         key = "_recall_score"  # or "score" — match your pipeline
                         r[key] = float(r.get(key) or 0.0) - w
                 results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
-
+  
+        # Phase 19: sticky-neg not volunteered unless query engages them
+        results = apply_neg_hard_filter(results, query)
         return results[:limit]
 
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
@@ -2580,6 +2736,35 @@ class _MemoryBackend:
             params.append(limit)
         with self._db_lock:
             rows = self._conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+      
+    def get_by_id(self, mem_id: str, user_id: str | None = None) -> dict | None:
+        uid = user_id  # require user_id from caller for safety
+        with self._db_lock:
+            row = self._conn.execute(
+                """
+                SELECT id, memory, created_at, status, supersedes_id, pinned,
+                       kind, source, valence_score, arousal_score, entities, access_count
+                FROM memories
+                WHERE id = ? AND (? IS NULL OR user_id = ?)
+                """,
+                (mem_id, uid, uid),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def find_by_supersedes(self, mem_id: str, user_id: str | None = None) -> list[dict]:
+        with self._db_lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, memory, created_at, status, supersedes_id, pinned,
+                       kind, source, valence_score, arousal_score, entities, access_count
+                FROM memories
+                WHERE supersedes_id = ? AND (? IS NULL OR user_id = ?)
+                ORDER BY created_at ASC
+                LIMIT 16
+                """,
+                (mem_id, user_id, user_id),
+            ).fetchall()
         return [dict(r) for r in rows]
 
     # ── delete ────────────────────────────────────────────────────────────────
@@ -4109,7 +4294,13 @@ class AikoMemorize:
         """Return memories created in [start, end), oldest first."""
         user_id = self._resolve_user_id(user_id)
         return self._mem.get_between(start, end, user_id=user_id)
-
+      
+    def get_lineage(self, mem_id: str, user_id: str | None = None) -> dict:
+        from cognition.memory.lineage import walk_supersession_lineage
+        uid = user_id or self.get_user_id()
+        store = self._mem
+        return walk_supersession_lineage(store, mem_id, user_id=uid)
+      
     def delete(self, memory_id: str) -> None:
         """Delete one memory from the store and clear search cache."""
         self._mem.delete(memory_id)
