@@ -2413,7 +2413,7 @@ class _MemoryBackend:
 
                 # Phase 19: arousal intensity (small tiebreaker)
                 try:
-                    score += arousal_rank_bonus(row["arousal_score"] if "arousal_score" in row.keys() else row.get("arousal_score"))
+                    score += arousal_rank_bonus(row["arousal_score"] if row.get("arousal_score") is not None else None)
                 except Exception:
                     pass
 
