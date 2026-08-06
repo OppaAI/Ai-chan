@@ -119,7 +119,10 @@ function showDetails(d) {
 }
 
 function render() {
-  if (simulation) simulation.stop();
+  if (simulation) {
+    simulation.stop();
+    simulation = null;
+  }
   const svg = d3.select('#svg');
   svg.selectAll('*').remove();
   const canvas = document.getElementById('canvas');
