@@ -26,7 +26,7 @@ from .schema import (
     KnowledgeSchema,
     now,
 )
-from .search import _maybe_clear_knowledge_cache
+from .search import maybe_clear_knowledge_cache
 
 log = get_logger(__name__)
 
@@ -378,7 +378,7 @@ def ingest_text(
             return None
 
         conn.commit()
-        _maybe_clear_knowledge_cache()
+        maybe_clear_knowledge_cache()
         return doc_id
     except Exception as exc:
         conn.rollback()
