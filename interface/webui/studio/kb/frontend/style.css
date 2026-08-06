@@ -137,7 +137,7 @@ svg {
 }
 
 .detail-value {
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .score-bar {
