@@ -817,7 +817,7 @@ _AROUSAL_HIGH_RE = re.compile(
 )
 _AROUSAL_MID_RE = re.compile(
     r"\b(?:excited|anxious|nervous|stressed|worried|angry|upset|thrilled|"
-    r"glitch|bug|crash(?:ed|ing)?|deadline|interview|hackathon|fight|"
+    r"deadline|interview|hackathon|fight|"
     r"argument|crying|tears)\b",
     re.IGNORECASE,
 )
