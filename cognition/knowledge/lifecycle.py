@@ -166,12 +166,13 @@ def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, thresh
                     to_archive.add(ids[j])
                 elif access_counts[i] < access_counts[j]:
                     to_archive.add(ids[i])
+                    break
                 else:
-                    # Access counts are equal, retain the earlier one
                     if created_ats[i] <= created_ats[j]:
                         to_archive.add(ids[j])
                     else:
                         to_archive.add(ids[i])
+                        break
 
     if to_archive:
         now = utc_now_iso()
