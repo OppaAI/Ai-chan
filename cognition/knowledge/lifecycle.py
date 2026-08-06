@@ -10,7 +10,7 @@ from cognition.memory.vecstore import utc_now_iso
 from system.log import get_logger
 from system.userspace import current_user_id
 
-from .schema import Embedder, KnowledgeSchema, _connect, vacuum_knowledge_db
+from .schema import connect, Embedder, KnowledgeSchema, vacuum_knowledge_db
 
 log = get_logger(__name__)
 
@@ -59,7 +59,7 @@ def prune_knowledge(
     deduplicate near-duplicates. Returns stats dict.
     """
     uid = user_id or current_user_id()
-    conn = _connect(uid)
+    conn = connect(uid)
     stats = {"archived": 0, "deleted": 0, "deduped": 0, "errors": 0}
     now = utc_now_iso()
     try:
