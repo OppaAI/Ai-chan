@@ -105,7 +105,6 @@ async def memory_lineage(
 ):
     from cognition.memory.memorize import AikoMemorize
     from system.userspace import current_user_id
-    # walk_supersession_lineage from backend or cognition/memory/lineage.py
 
     uid = (user_id or "").strip() or current_user_id()
     memorize = AikoMemorize(silent=True)
