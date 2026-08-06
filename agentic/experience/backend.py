@@ -290,31 +290,31 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
                     record_engram_relation(
                         row_id, hid, rel, confidence=min(1.0, sim), user_id=uid
                     )
-                    # Phase 18: very high similarity → mark older run superseded
-                    if (if (
+                    if (
                         EXPERIENCE_SUPERSEDE_ON_NEAR_DUP
                         and sim >= EXPERIENCE_SUPERSEDE_THRESHOLD
                         and (best_sup is None or sim > best_sup[1])
                     ):
                         best_sup = (hid, sim)
 
-                    if best_sup is not None:
-                        hid, sim = best_sup
-                        try:
-                            conn.execute(
-                                "UPDATE experiences SET status = 'superseded' "
-                                "WHERE id = ? AND user_id = ? "
-                                "AND (status = 'active' OR status IS NULL OR status = '')",
-                                (hid, uid),
-                            )
-                            conn.execute(
-                                "UPDATE experiences SET supersedes_id = ? WHERE id = ? AND user_id = ?",
-                                (hid, row_id, uid),
-                            )
-                            conn.commit()
-                            log.debug("experience supersede sim=%.3f old=%s", sim, hid[:8])
-                        except Exception as sup_exc:
-                            log.debug("experience supersede skipped: %s", sup_exc)
+                # after the for nb loop (same indent as `for nb`)
+                if best_sup is not None:
+                    hid, sim = best_sup
+                    try:
+                        conn.execute(
+                            "UPDATE experiences SET status = 'superseded' "
+                            "WHERE id = ? AND user_id = ? "
+                            "AND (status = 'active' OR status IS NULL OR status = '')",
+                            (hid, uid),
+                        )
+                        conn.execute(
+                            "UPDATE experiences SET supersedes_id = ? WHERE id = ? AND user_id = ?",
+                            (hid, row_id, uid),
+                        )
+                        conn.commit()
+                        log.debug("experience supersede sim=%.3f old=%s", sim, hid[:8])
+                    except Exception as sup_exc:
+                        log.debug("experience supersede skipped: %s", sup_exc)
             except Exception as rel_exc:
                 log.debug("auto engram relate skipped: %s", rel_exc)
 
