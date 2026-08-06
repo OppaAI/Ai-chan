@@ -192,6 +192,8 @@ def search_knowledge(
     embedder: Embedder | None = None,
     user_id: str | None = None,
 ) -> list[dict]:
+    """Legacy free-function shim: sole implementation that :class:`KnowledgeSearch`
+    delegates to. Kept for the historical import path."""
     uid = user_id or current_user_id()
     conn = connect(uid)
     try:
@@ -245,7 +247,11 @@ def knowledge_context_for(
     embedder: Embedder | None = None,
     user_id: str | None = None,
 ) -> str:
-    """Retrieve knowledge context for a query, tracking access counts.
+    """Legacy free-function shim: sole implementation that
+    :class:`KnowledgeSearch.context_for` delegates to. Kept for the historical
+    import path.
+
+    Retrieve knowledge context for a query, tracking access counts.
 
     Args:
         query: Search query

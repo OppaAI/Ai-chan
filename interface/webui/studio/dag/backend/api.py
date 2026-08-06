@@ -21,11 +21,12 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STUDIO_DIR = BASE_DIR
-STATIC_DIR = STUDIO_DIR / "static"
 FRONTEND_DIR = STUDIO_DIR / "frontend"
 
-if (BASE_DIR / "static").exists():
-    app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+# Serve the frontend assets (style.css, script.js) so the SPA works when
+# mounted at /studio/dag or run standalone. Matches the approval studio's
+# convention: frontend files stay in frontend/, served under /static.
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="dag-frontend")
 
 
 # ── Playbook helpers ──────────────────────────────────────────────────────────

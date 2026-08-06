@@ -142,6 +142,9 @@ class KnowledgeSchema:
 
 
 def connect(user_id: str | None = None) -> sqlite3.Connection:
+    """Legacy free-function shim: sole implementation that
+    :class:`KnowledgeSchema.connect` delegates to. Kept for the historical
+    import path."""
     conn = initialize_store_db(KNOWLEDGE_DB_PATH, _DDL, user_id=user_id, vector=True)
     ensure_knowledge_schema_migrated(conn, user_id)
     return conn
@@ -193,7 +196,9 @@ def now() -> str:
 
 
 def vacuum_knowledge_db(user_id: str | None = None) -> None:
-    """VACUUM the knowledge DB to reclaim space after deletions."""
+    """Legacy free-function shim: sole implementation that
+    :class:`KnowledgeSchema.vacuum` delegates to. VACUUM the knowledge DB to
+    reclaim space after deletions."""
     uid = user_id or current_user_id()
     conn = connect(uid)
     try:

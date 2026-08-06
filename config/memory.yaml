@@ -1,7 +1,7 @@
 # Learned knowledge vector-store config
 #
-# Settings for cognition/knowledge/backend.py, Aiko's machine-writable RAG store for
-# durable learned facts, user-ingested document/PDF text, and self-learning
+# Settings for cognition/knowledge/ (schema.py + ingest.py), Aiko's machine-writable
+# RAG store for durable learned facts, user-ingested document/PDF text, and self-learning
 # research notes. This is separate from agentic/wiki.py, which indexes
 # human-authored wiki/skill/persona/config files.
 

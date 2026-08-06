@@ -93,6 +93,8 @@ from system.userspace import current_user_id, user_state_path, user_workspace_ro
 
 log = get_logger(__name__)
 
+_knowledge_folder_watcher = None  # KnowledgeFolderWatcher instance (lazy)
+
 def workspace_root() -> Path:
     """Resolve the active user workspace root lazily."""
     override = os.getenv("WORKSPACE_ROOT")
@@ -990,14 +992,29 @@ def bootstrap_non_system_jobs(
         try:
             from cognition.knowledge import ingest_workspace_knowledge_folder
 
-            register_system_handler(
-                "workspace_knowledge_scan",
-                lambda _memorize: ingest_workspace_knowledge_folder(
+            def _scan_knowledge_folder(_memorize) -> None:
+                ingest_workspace_knowledge_folder(
                     embedder=_memorize._mem._embedder,
                     user_id=_memorize.get_user_id(),
-                ),
-            )
-            ensure_workspace_knowledge_job(timezone, user_id=user_id)
+                )
+
+            register_system_handler("workspace_knowledge_scan", _scan_knowledge_folder)
+
+            # Event-driven ingest: inotify watcher replaces the periodic poll.
+            from cognition.knowledge.watcher import KnowledgeFolderWatcher
+            from cognition.knowledge.schema import KNOWLEDGE_WORKSPACE_DIR
+
+            global _knowledge_folder_watcher
+            if _knowledge_folder_watcher is None:
+                _knowledge_folder_watcher = KnowledgeFolderWatcher(
+                    knowledge_dir=KNOWLEDGE_WORKSPACE_DIR,
+                    on_files=lambda files: _scan_knowledge_folder(memorize),
+                )
+            if not _knowledge_folder_watcher.start():
+                # inotify unavailable — keep the interval job as a safety net.
+                ensure_workspace_knowledge_job(timezone, user_id=user_id)
+            else:
+                log.info("Knowledge folder watcher active — interval scan disabled.")
         except Exception:
             log.exception("Failed to bootstrap workspace knowledge schedule job.")
 

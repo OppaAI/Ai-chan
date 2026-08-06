@@ -39,9 +39,16 @@ try:
 except ImportError as e:
     log.warning(f"Could not mount DAG studio: {e}")
 
+# KB Storage Viewer Studio
+try:
+    from interface.webui.studio.kb.backend.api import app as kb_studio_app
+    app.mount("/studio/kb", kb_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount KB studio: {e}")
+
 # Approval Studio
 try:
-    from interface.webui.studio.approval.backend.approval_studio import app as approval_studio_app
+    from interface.webui.studio.approval.backend.api import app as approval_studio_app
     app.mount("/studio/approval", approval_studio_app)
 except ImportError as e:
     log.warning(f"Could not mount approval studio: {e}")

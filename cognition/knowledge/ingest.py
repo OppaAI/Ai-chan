@@ -1,6 +1,7 @@
 """Knowledge ingestion and source extraction."""
 from __future__ import annotations
 
+import importlib.util
 import re
 import sqlite3
 import uuid
@@ -201,11 +202,31 @@ def _epub_text(path: Path, max_chars: int = 200_000) -> str:
     return "\n".join(texts)
 
 
+def _extract_with_markitdown(path: Path, max_chars: int = 200_000) -> str | None:
+    """Convert a document to Markdown via MarkItDown if installed.
+
+    Returns text on success, or None when MarkItDown is unavailable or
+    conversion fails so the caller can fall back to built-in extractors.
+    """
+    if importlib.util.find_spec("markitdown") is None:
+        return None
+    try:
+        from markitdown import MarkItDown  # type: ignore
+        result = MarkItDown().convert(str(path))
+        text = (getattr(result, "text_content", None) or "").strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    return text[:max_chars]
+
+
 def extract_text_from_file(relative_path: str, *, user_id: str | None = None, max_chars: int = 200_000) -> tuple[str, str]:
     """Extract text from a workspace document for learned-knowledge ingest.
 
-    Supports plain text/Markdown/config files directly, HTML via trafilatura
-    when installed, and PDF via pypdf/PyPDF2 when installed. Returns
+    Document formats (html, pdf, docx, xlsx, epub, pptx, ...) are converted
+    via MarkItDown when installed, falling back to built-in extractors.
+    Plain text/Markdown/config files are read directly. Returns
     (text, source_path). Raises ValueError with a user-facing reason when the
     file cannot be read/extracted.
     """
@@ -213,29 +234,40 @@ def extract_text_from_file(relative_path: str, *, user_id: str | None = None, ma
     if not path.is_file():
         raise ValueError(f"workspace file not found: {relative_path}")
     suffix = path.suffix.casefold()
-    if suffix in {".txt", ".md", ".rst", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log", ".py", ".js", ".ts", ".html", ".htm", ".tex", ".latex", ".rtf"}:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-        if suffix in {".html", ".htm"}:
-            try:
-                import trafilatura  # type: ignore
-                raw = trafilatura.extract(raw, include_links=False, include_tables=False) or raw
-            except Exception:
-                log.warning("knowledge: trafilatura extraction failed")
-        return _sanitize_text(raw, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+    source = str(path.relative_to(user_workspace_root(user_id)))
+
+    # Plain text / code / config formats: read directly.
+    if suffix in {".txt", ".md", ".rst", ".json", ".yaml", ".yml", ".toml", ".csv", ".tsv", ".log", ".py", ".js", ".ts", ".tex", ".latex", ".rtf"}:
+        return _sanitize_text(path.read_text(encoding="utf-8", errors="replace"), max_chars), source
+
+    # Document formats: prefer MarkItDown, fall back to built-in extractors.
+    md_text = _extract_with_markitdown(path, max_chars)
+    if md_text is not None:
+        return md_text, source
+
+    if suffix in {".html", ".htm"}:
+        try:
+            import trafilatura  # type: ignore
+            raw = trafilatura.extract(path.read_text(encoding="utf-8", errors="replace"), include_links=False, include_tables=False)
+        except Exception:
+            raw = None
+        if not raw:
+            raw = path.read_text(encoding="utf-8", errors="replace")
+        return _sanitize_text(raw, max_chars), source
     if suffix == ".docx":
         try:
             text = _xml_text_from_zip(path, ["word/document.xml"], max_chars)
-            return _sanitize_text(text, max_chars), str(path.relative_to(user_workspace_root(user_id)))
+            return _sanitize_text(text, max_chars), source
         except Exception as exc:
             raise ValueError(f"Failed to extract .docx file: {exc}") from exc
     if suffix == ".xlsx":
         try:
-            return _sanitize_text(_xlsx_text(path, max_chars), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+            return _sanitize_text(_xlsx_text(path, max_chars), max_chars), source
         except Exception as exc:
             raise ValueError(f"Failed to extract .xlsx file: {exc}") from exc
     if suffix == ".epub":
         try:
-            return _sanitize_text(_epub_text(path, max_chars), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+            return _sanitize_text(_epub_text(path, max_chars), max_chars), source
         except Exception as exc:
             raise ValueError(f"Failed to extract .epub file: {exc}") from exc
     if suffix == ".pdf":
@@ -256,7 +288,7 @@ def extract_text_from_file(relative_path: str, *, user_id: str | None = None, ma
                 pages.append(page.extract_text() or "")
                 if sum(len(p) for p in pages) >= max_chars:
                     break
-            return _sanitize_text("\n\n".join(pages), max_chars), str(path.relative_to(user_workspace_root(user_id)))
+            return _sanitize_text("\n\n".join(pages), max_chars), source
         except Exception as exc:
             raise ValueError(f"Failed to read or extract PDF file: {exc}") from exc
     raise ValueError(f"unsupported knowledge file type: {suffix or 'no extension'}")
@@ -271,7 +303,9 @@ def ingest_file(
     user_id: str | None = None,
     schema: KnowledgeSchema | None = None,
 ) -> str | None:
-    """Extract a workspace file and store it in learned knowledge RAG."""
+    """Legacy free-function shim: sole implementation that
+    :class:`KnowledgeIngest.ingest_file` delegates to. Kept for the historical
+    import path. Extract a workspace file and store it in learned knowledge RAG."""
     try:
         text, source = extract_text_from_file(relative_path, user_id=user_id)
     except ValueError as exc:
@@ -289,7 +323,9 @@ def ingest_text(
     user_id: str | None = None,
     schema: KnowledgeSchema | None = None,
 ) -> str | None:
-    """Chunk, embed, and persist durable learned knowledge."""
+    """Legacy free-function shim: sole implementation that
+    :class:`KnowledgeIngest.ingest_text` delegates to. Kept for the historical
+    import path. Chunk, embed, and persist durable learned knowledge."""
     clean = _sanitize_text(text)
     if not clean:
         return None
