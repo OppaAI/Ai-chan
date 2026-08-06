@@ -114,27 +114,73 @@ def prune_knowledge(
     return stats
 
 
-def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, threshold: float) -> int:
-    """Find near-duplicate chunks via embedding similarity and archive duplicates."""
+def _get_dedupe_cursor(conn: sqlite3.Connection, user_id: str) -> str:
+    row = conn.execute(
+        "SELECT last_id FROM knowledge_prune_meta WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    return str(row["last_id"]) if row and row["last_id"] is not None else ""
+
+
+def _set_dedupe_cursor(conn: sqlite3.Connection, user_id: str, last_id: str) -> None:
+    now = utc_now_iso()
+    conn.execute(
+        """
+        INSERT INTO knowledge_prune_meta(user_id, last_id, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            last_id = excluded.last_id,
+            updated_at = excluded.updated_at
+        """,
+        (user_id, last_id, now),
+    )
+
+
+def _deduplicate_chunks(
+    conn: sqlite3.Connection,
+    user_id: str,
+    embedder,
+    threshold: float,
+) -> int:
+    """Find near-duplicate active chunks via embedding similarity and archive dups.
+
+    Scans in keyset pages ordered by id so each prune advances through the
+    store; when the page is empty the cursor resets to the start.
+    """
     MAX_CANDIDATES = 1000
+
+    cursor = _get_dedupe_cursor(conn, user_id)
+
     rows = conn.execute(
         """
-        SELECT id, text, chunk_index, access_count, created_at FROM learned_chunks
+        SELECT id, text, chunk_index, access_count, created_at
+        FROM learned_chunks
         WHERE user_id = ?
           AND (status = 'active' OR status IS NULL)
-          AND id NOT IN (SELECT id FROM learned_chunks_archive WHERE user_id = ?)
-        ORDER BY chunk_index
+          AND id NOT IN (
+              SELECT id FROM learned_chunks_archive WHERE user_id = ?
+          )
+          AND id > ?
+        ORDER BY id
         LIMIT ?
         """,
-        (user_id, user_id, MAX_CANDIDATES),
+        (user_id, user_id, cursor, MAX_CANDIDATES),
     ).fetchall()
+
+    # End of store → reset for next prune
+    if not rows:
+        _set_dedupe_cursor(conn, user_id, "")
+        return 0
+
+    # Advance cursor past this page (even if no dups found)
+    page_last_id = str(rows[-1]["id"])
+    _set_dedupe_cursor(conn, user_id, page_last_id)
 
     if len(rows) < 2:
         return 0
 
     texts = [row["text"] for row in rows]
     ids = [row["id"] for row in rows]
-    indices = [row["chunk_index"] for row in rows]
     access_counts = [row["access_count"] for row in rows]
     created_ats = [row["created_at"] for row in rows]
 
@@ -152,7 +198,7 @@ def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, thresh
         log.warning("Deduplication embedding/similarity failed: %s", exc)
         return 0
 
-    to_archive = set()
+    to_archive: set[str] = set()
     n = len(ids)
     for i in range(n):
         if ids[i] in to_archive:
@@ -160,36 +206,54 @@ def _deduplicate_chunks(conn: sqlite3.Connection, user_id: str, embedder, thresh
         for j in range(i + 1, n):
             if ids[j] in to_archive:
                 continue
-            if sim[i, j] >= threshold:
-                # Retain the chunk with higher access_count; on tie, retain earlier created_at
-                if access_counts[i] > access_counts[j]:
+            if sim[i, j] < threshold:
+                continue
+            # Keep higher access_count; on tie keep earlier created_at
+            if access_counts[i] > access_counts[j]:
+                to_archive.add(ids[j])
+            elif access_counts[i] < access_counts[j]:
+                to_archive.add(ids[i])
+                break  # i is out; stop pairing against it
+            else:
+                if created_ats[i] <= created_ats[j]:
                     to_archive.add(ids[j])
-                elif access_counts[i] < access_counts[j]:
+                else:
                     to_archive.add(ids[i])
                     break
-                else:
-                    if created_ats[i] <= created_ats[j]:
-                        to_archive.add(ids[j])
-                    else:
-                        to_archive.add(ids[i])
-                        break
 
-    if to_archive:
-        now = utc_now_iso()
-        for cid in to_archive:
-            row = conn.execute("SELECT * FROM learned_chunks WHERE id = ?", (cid,)).fetchone()
-            if row:
-                conn.execute(
-                    """
-                    INSERT INTO learned_chunks_archive
-                    (id, doc_id, user_id, chunk_index, text, created_at, access_count, last_accessed, archived_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (row["id"], row["doc_id"], row["user_id"], row["chunk_index"],
-                     row["text"], row["created_at"], row["access_count"],
-                     row["last_accessed"], now),
-                )
-                conn.execute("DELETE FROM learned_chunks WHERE id = ?", (cid,))
+    if not to_archive:
+        return 0
+
+    now = utc_now_iso()
+    for cid in to_archive:
+        row = conn.execute(
+            "SELECT * FROM learned_chunks WHERE id = ? AND user_id = ?",
+            (cid, user_id),
+        ).fetchone()
+        if not row:
+            continue
+        conn.execute(
+            """
+            INSERT INTO learned_chunks_archive
+            (id, doc_id, user_id, chunk_index, text, created_at,
+             access_count, last_accessed, archived_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                row["id"],
+                row["doc_id"],
+                row["user_id"],
+                row["chunk_index"],
+                row["text"],
+                row["created_at"],
+                row["access_count"],
+                row["last_accessed"],
+                now,
+            ),
+        )
+        conn.execute(
+            "DELETE FROM learned_chunks WHERE id = ? AND user_id = ?",
+            (cid, user_id),
+        )
 
     return len(to_archive)
-
