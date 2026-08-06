@@ -201,7 +201,8 @@ function render() {
 
 function svgZoom(k) {
   if (!zoomBeh) return;
-  d3.select('#svg').transition().call(zoomBeh.scaleBy, k);
+    const svg = d3.select('`#svg`');
+    svg.transition().call(zoomBeh.scaleBy, k);
 }
 
 function init() {
@@ -210,6 +211,7 @@ function init() {
   document.getElementById('z-in').onclick = () => svgZoom(1.25);
   document.getElementById('z-out').onclick = () => svgZoom(0.8);
   document.getElementById('z-fit').onclick = () => {
+    if (!zoomBeh) return;
     d3.select('#svg').transition().call(zoomBeh.transform, d3.zoomIdentity);
   };
 
