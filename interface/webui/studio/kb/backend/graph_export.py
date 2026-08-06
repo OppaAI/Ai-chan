@@ -271,17 +271,14 @@ def export_knowledge_graph(
     nodes.extend(chunk_nodes)
 
     # Entity hubs (top by degree among visible chunks)
-    ent_list = sorted(entity_degree.items(), key=lambda kv: -kv[1])[:_MAX_ENTITIES]
+    visible_degree: dict[str, int] = {}
+    for n in chunk_nodes:
+        for e in n.get("entities") or []:
+            k = e.casefold()
+            visible_degree[k] = visible_degree.get(k, 0) + 1
+    ent_list = sorted(visible_degree.items(), key=lambda kv: -kv[1])[:_MAX_ENTITIES]
     max_deg = max((d for _, d in ent_list), default=1) or 1
     for name, deg in ent_list:
-        # Only include entities mentioned by kept chunks
-        mentioned = False
-        for n in chunk_nodes:
-            if any(e.casefold() == name for e in (n.get("entities") or [])):
-                mentioned = True
-                break
-        if not mentioned:
-            continue
         imp = min(1.0, deg / max_deg)
         size = round(0.25 + 0.9 * (imp ** 1.1), 4)
         eid = f"ent:{name}"
