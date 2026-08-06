@@ -256,3 +256,16 @@ MEMORY_SUPERSESSION_NARRATIVE_MAX: "2"   # max chains to narrate per turn
 MEMORY_SESSION_ANCHOR_ENABLED: "1"
 MEMORY_SESSION_ANCHOR_K: "8"           # Last K query vectors in this process/session
 MEMORY_SESSION_ANCHOR_WEIGHT: "0.006"  # Cosine-to-session-mean boost (same order as rank recency)
+
+# -- Phase 18: knowledge / experience store parity --
+# Near-dup writes can supersede older rows (status=superseded + supersedes_id).
+# Optional entity/engram spreading is OFF by default (enable if desired).
+KNOWLEDGE_SUPERSEDE_ON_DEDUP: "1"       # 1 = supersede near-dup instead of skip
+KNOWLEDGE_SPREADING_ENABLED: "0"
+KNOWLEDGE_SPREADING_MAX_EXTRA: "2"
+KNOWLEDGE_SPREADING_SCORE_WEIGHT: "0.003"
+EXPERIENCE_SUPERSEDE_ON_NEAR_DUP: "1"
+EXPERIENCE_SUPERSEDE_THRESHOLD: "0.95"  # cosine sim to mark older run superseded
+EXPERIENCE_SPREADING_ENABLED: "0"
+EXPERIENCE_SPREADING_MAX_EXTRA: "2"
+EXPERIENCE_SPREADING_SCORE_WEIGHT: "0.003"
