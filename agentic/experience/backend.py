@@ -69,6 +69,11 @@ EXPERIENCE_MAX_ROWS = int(os.getenv("EXPERIENCE_MAX_ROWS", "5000"))
 EXPERIENCE_CONTEXT_CHARS = int(os.getenv("EXPERIENCE_CONTEXT_CHARS", "2500"))
 EXPERIENCE_ENTITY_BOOST = float(os.getenv("EXPERIENCE_ENTITY_BOOST", "0.003"))
 EXPERIENCE_AUTO_RELATE_THRESHOLD = float(os.getenv("EXPERIENCE_AUTO_RELATE_THRESHOLD", "0.90"))
+EXPERIENCE_SUPERSEDE_ON_NEAR_DUP = os.getenv("EXPERIENCE_SUPERSEDE_ON_NEAR_DUP", "1").strip().lower() in {"1", "true", "yes", "on"}
+EXPERIENCE_SUPERSEDE_THRESHOLD = float(os.getenv("EXPERIENCE_SUPERSEDE_THRESHOLD", "0.95"))
+EXPERIENCE_SPREADING_ENABLED = os.getenv("EXPERIENCE_SPREADING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+EXPERIENCE_SPREADING_MAX_EXTRA = max(0, int(os.getenv("EXPERIENCE_SPREADING_MAX_EXTRA", "2")))
+EXPERIENCE_SPREADING_SCORE_WEIGHT = float(os.getenv("EXPERIENCE_SPREADING_SCORE_WEIGHT", "0.003"))
 
 _SECRET_RE = re.compile(r"(?i)(api[_-]?key|token|secret|password)(\s*[:=]\s*)([^\s,;]+)")
 
@@ -86,7 +91,9 @@ CREATE TABLE IF NOT EXISTS experiences (
     score          REAL NOT NULL,
     answer_excerpt TEXT NOT NULL,
     entities       TEXT NOT NULL DEFAULT '[]',
-    created_at     TEXT NOT NULL
+    created_at     TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'active',
+    supersedes_id  TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_experiences_user ON experiences(user_id);
@@ -142,6 +149,7 @@ def _connect(user_id: str | None = None) -> sqlite3.Connection:
     if "entities" not in cols:
         conn.execute("ALTER TABLE experiences ADD COLUMN entities TEXT NOT NULL DEFAULT '[]'")
         conn.commit()
+    _ensure_experience_schema(conn)
     return conn
 
 
@@ -164,6 +172,20 @@ class ExperienceStep:
     error_type: str | None = None
     arg_keys: list[str] = field(default_factory=list)
     args_preview: dict[str, str] = field(default_factory=dict)
+
+
+
+def _ensure_experience_schema(conn: sqlite3.Connection) -> None:
+    """Phase 18: status + supersedes_id on experiences."""
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(experiences)").fetchall()}
+        if "status" not in cols:
+            conn.execute("ALTER TABLE experiences ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+        if "supersedes_id" not in cols:
+            conn.execute("ALTER TABLE experiences ADD COLUMN supersedes_id TEXT")
+        conn.commit()
+    except Exception as exc:
+        log.debug("experience schema migrate skipped: %s", exc)
 
 
 def record_experience(owner, goal: str, steps: list[dict], final_answer: str, verified_ok: bool, score: float, embedder=None) -> str | None:
@@ -197,7 +219,7 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
     conn = _connect(uid)
     try:
         conn.execute(
-            "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO experiences(id,user_id,goal,record_text,steps_json,outcome,score,answer_excerpt,entities,created_at,status,supersedes_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 row_id,
                 uid,
@@ -209,6 +231,8 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
                 _sanitize(final_answer, 500),
                 ents_json,
                 _now(),
+                "active",
+                None,
             ),
         )
         conn.commit()
@@ -236,12 +260,13 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
                     limit=5,
                     threshold=EXPERIENCE_AUTO_RELATE_THRESHOLD,
                 )
+                best_sup = None  # (hid, sim)
                 for nb in neighbors:
                     hid = str(nb["id"])
                     if hid == row_id:
                         continue
                     dist = float(nb["dist"])
-                    sim = 1.0 - dist  # cosine similarity
+                    sim = 1.0 - dist
                     if sim < EXPERIENCE_AUTO_RELATE_THRESHOLD:
                         continue
                     old = conn.execute(
@@ -265,6 +290,31 @@ def record_experience(owner, goal: str, steps: list[dict], final_answer: str, ve
                     record_engram_relation(
                         row_id, hid, rel, confidence=min(1.0, sim), user_id=uid
                     )
+                    if (
+                        EXPERIENCE_SUPERSEDE_ON_NEAR_DUP
+                        and sim >= EXPERIENCE_SUPERSEDE_THRESHOLD
+                        and (best_sup is None or sim > best_sup[1])
+                    ):
+                        best_sup = (hid, sim)
+
+                # after the for nb loop (same indent as `for nb`)
+                if best_sup is not None:
+                    hid, sim = best_sup
+                    try:
+                        conn.execute(
+                            "UPDATE experiences SET status = 'superseded' "
+                            "WHERE id = ? AND user_id = ? "
+                            "AND (status = 'active' OR status IS NULL OR status = '')",
+                            (hid, uid),
+                        )
+                        conn.execute(
+                            "UPDATE experiences SET supersedes_id = ? WHERE id = ? AND user_id = ?",
+                            (hid, row_id, uid),
+                        )
+                        conn.commit()
+                        log.debug("experience supersede sim=%.3f old=%s", sim, hid[:8])
+                    except Exception as sup_exc:
+                        log.debug("experience supersede skipped: %s", sup_exc)
             except Exception as rel_exc:
                 log.debug("auto engram relate skipped: %s", rel_exc)
 
@@ -319,6 +369,51 @@ def _fts(conn: sqlite3.Connection, query: str, uid: str, limit: int) -> list[sql
     )
 
 
+
+def _experience_spread_extra(conn: sqlite3.Connection, uid: str, hits: list[dict], limit: int) -> list[dict]:
+    """Phase 18 optional: pull related engrams via engram_relations."""
+    if limit <= 0 or not hits:
+        return []
+    seen = {str(h.get("id") or "") for h in hits}
+    extra: list[dict] = []
+    try:
+        for h in hits:
+            hid = str(h.get("id") or "")
+            if not hid:
+                continue
+            rels = conn.execute(
+                "SELECT to_engram AS oid FROM engram_relations WHERE from_engram = ? "
+                "UNION SELECT from_engram AS oid FROM engram_relations WHERE to_engram = ?",
+                (hid, hid),
+            ).fetchall()
+            for rel in rels:
+                oid = str(rel["oid"] if hasattr(rel, "keys") else rel[0])
+                if not oid or oid in seen:
+                    continue
+                row = conn.execute(
+                    "SELECT * FROM experiences WHERE id = ? AND user_id = ?",
+                    (oid, uid),
+                ).fetchone()
+                if row is None:
+                    continue
+                try:
+                    st = (row["status"] if "status" in row.keys() else "active") or "active"
+                    if str(st).strip().lower() == "superseded":
+                        continue
+                except Exception:
+                    pass
+                d = dict(row)
+                d["recall_score"] = float(EXPERIENCE_SPREADING_SCORE_WEIGHT)
+                d["_from_spreading"] = True
+                extra.append(d)
+                seen.add(oid)
+                if len(extra) >= limit:
+                    return extra
+    except Exception as exc:
+        log.debug("experience spreading skipped: %s", exc)
+    return extra
+
+
 def search_experience(query: str, limit: int = 3, embedder=None, user_id: str | None = None) -> list[dict]:
     uid = user_id or current_user_id()
     conn = _connect(uid)
@@ -338,6 +433,12 @@ def search_experience(query: str, limit: int = 3, embedder=None, user_id: str | 
             if row is None:
                 continue
             try:
+                st = (row["status"] if "status" in row.keys() else "active") or "active"
+                if str(st).strip().lower() == "superseded":
+                    continue
+            except Exception:
+                pass
+            try:
                 ents = entities_from_json(row["entities"] if "entities" in row.keys() else "[]")
             except Exception:
                 ents = []
@@ -345,7 +446,10 @@ def search_experience(query: str, limit: int = 3, embedder=None, user_id: str | 
             if score >= EXPERIENCE_RECALL_SCORE_THRESHOLD:
                 scored.append((score, cid))
         scored.sort(key=lambda pair: (-pair[0], by_id[pair[1]]["created_at"]))
-        return [dict(by_id[eid]) | {"recall_score": score} for score, eid in scored[:limit]]
+        results = [dict(by_id[eid]) | {"recall_score": score} for score, eid in scored[:limit]]
+        if EXPERIENCE_SPREADING_ENABLED and EXPERIENCE_SPREADING_MAX_EXTRA > 0 and results:
+            results.extend(_experience_spread_extra(conn, uid, results, EXPERIENCE_SPREADING_MAX_EXTRA))
+        return results
     except Exception as exc:
         log.warning("Experience search failed: %s", exc)
         return []
