@@ -115,6 +115,32 @@ _DAY_RECORD_PREFIX_TMPL = _DAY_JOURNAL_PREFIX_TMPL
 
 # ── daily summary mode unlock ─────────────────────────────────────────────────
 
+_DAILY_TAG_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2})\]\s")
+_DAILY_BLOB_RE = re.compile(
+    r"^(?:Daily journal of |Daily experience summary for |Day record for )"
+    r"(\d{4}-\d{2}-\d{2})",
+    re.IGNORECASE,
+)
+
+def filter_reflect_snippets(
+    memories: list[dict],
+    target_date: datetime,
+) -> list[dict]:
+    """Drop prior-day pins / daily blobs so they are not re-summarized as 'today'."""
+    target = target_date.strftime("%Y-%m-%d")
+    out: list[dict] = []
+    for m in memories:
+        text = (m.get("memory") or m.get("text") or "").strip()
+        if not text:
+            continue
+        m_tag = _DAILY_TAG_RE.match(text)
+        if m_tag and m_tag.group(1) != target:
+            continue
+        if _DAILY_BLOB_RE.match(text):
+            continue
+        out.append(m)
+    return out
+
 _DAILY_SUMMARY_UNLOCK = textwrap.dedent("""
     [DAILY EXPERIENCE SUMMARY MODE]
     Write a factual daily summary from the provided chat turns and memory
