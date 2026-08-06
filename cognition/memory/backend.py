@@ -4296,7 +4296,7 @@ class AikoMemorize:
     def get_lineage(self, mem_id: str, user_id: str | None = None) -> dict:
         from cognition.memory.lineage import walk_supersession_lineage
         uid = user_id or self.get_user_id()
-        store = self._mem  # or self, depending on how AikoMemorize wraps backend
+        store = self._mem
         return walk_supersession_lineage(store, mem_id, user_id=uid)
       
     def delete(self, memory_id: str) -> None:
