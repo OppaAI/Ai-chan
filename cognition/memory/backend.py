@@ -2411,6 +2411,12 @@ class _MemoryBackend:
                 if int(row["pinned"] or 0):
                     score += MEMORY_RANK_PINNED_WEIGHT
 
+                # Phase 19: arousal intensity (small tiebreaker)
+                try:
+                    score += arousal_rank_bonus(row["arousal_score"] if "arousal_score" in row.keys() else row.get("arousal_score"))
+                except Exception:
+                    pass
+
                 # Phase 3: entity importance boost
                 if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0 and entity_importance_map:
                     try:
@@ -2616,7 +2622,9 @@ class _MemoryBackend:
                         r[key] = float(r.get(key) or 0.0) - w
                 results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
 
-        return results[:limit]
+        # Phase 19: sticky-neg not volunteered unless query engages them
+        results = apply_neg_hard_filter(results, query)
+        return results
 
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
         """
@@ -2727,7 +2735,42 @@ class _MemoryBackend:
         with self._db_lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+      
+    def get_by_id(self, mem_id: str, user_id: str | None = None) -> dict | None:
+        uid = user_id  # require user_id from caller for safety
+        with self._db_lock:
+            row = self._conn.execute(
+                """
+                SELECT id, memory, created_at, status, supersedes_id, pinned,
+                       kind, source, valence_score, arousal_score, entities, access_count
+                FROM memories
+                WHERE id = ? AND (? IS NULL OR user_id = ?)
+                """,
+                (mem_id, uid, uid),
+            ).fetchone()
+        return dict(row) if row else None
 
+    def find_by_supersedes(self, mem_id: str, user_id: str | None = None) -> list[dict]:
+        with self._db_lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, memory, created_at, status, supersedes_id, pinned,
+                       kind, source, valence_score, arousal_score, entities, access_count
+                FROM memories
+                WHERE supersedes_id = ? AND (? IS NULL OR user_id = ?)
+                ORDER BY created_at ASC
+                LIMIT 16
+                """,
+                (mem_id, user_id, user_id),
+            ).fetchall()
+        return [dict(r) for r in rows]
+      
+    def get_lineage(self, mem_id: str, user_id: str | None = None) -> dict:
+        from cognition.memory.lineage import walk_supersession_lineage
+        uid = user_id or self.get_user_id()
+        store = self._mem  # or self, depending on how AikoMemorize wraps backend
+        return walk_supersession_lineage(store, mem_id, user_id=uid)
+      
     # ── delete ────────────────────────────────────────────────────────────────
 
     def delete(self, memory_id: str) -> None:
