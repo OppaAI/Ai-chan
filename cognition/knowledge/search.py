@@ -47,12 +47,6 @@ _KNOWLEDGE_MIN_CLEAR_INTERVAL: float = 0.5  # seconds — debounce window
 _KNOWLEDGE_SEARCH_CACHE: OrderedDict[
     tuple[str, str, int], tuple[float, list[dict]]
 ] = OrderedDict()
-_KNOWLEDGE_SEARCH_CACHE_LOCK = threading.RLock()
-_KNOWLEDGE_SEARCH_CACHE_TTL: float = 20.0
-_KNOWLEDGE_SEARCH_CACHE_MAX: int = 128
-
-_LAST_KNOWLEDGE_CLEAR_TIME: float = 0.0
-_KNOWLEDGE_MIN_CLEAR_INTERVAL: float = 0.5  # seconds — debounce window
 
 
 def _cache_key(query: str, user_id: str, limit: int) -> tuple[str, str, int]:
