@@ -297,7 +297,8 @@ def ingest_text(
     doc_id = str(uuid.uuid4())
     created_at = now()
     chunks = reason.chunk_text(clean, KNOWLEDGE_CHUNK_CHARS) or [clean]
-    conn = connect(uid)
+    store = schema or KnowledgeSchema()
+    conn = store.connect(uid)
     try:
         conn.execute(
             "INSERT INTO learned_docs(id,user_id,title,source,kind,created_at) VALUES(?,?,?,?,?,?)",
