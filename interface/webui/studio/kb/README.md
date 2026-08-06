@@ -25,6 +25,14 @@ connectivity = min(1.0, entity_count / 6.0)
 entity importance = entity_degree / maximum_visible_entity_degree
 ```
 
+Inactive knowledge records reduce access and recency before importance is calculated.
+
+## Frontend rendering
+
+```
+knowledge radius = 5 + 24 × importance^1.35 +entity radius = 5 + 16 × importance^1.25 +opacity = 0.22 + 0.78 × importance +
+```
+
 ## Edges
 
 | Type | Meaning |
