@@ -101,6 +101,12 @@ CREATE TABLE IF NOT EXISTS learned_chunks_archive (
     archived_at     TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_prune_meta (
+    user_id   TEXT PRIMARY KEY,
+    last_id   TEXT NOT NULL DEFAULT '',
+    updated_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_archive_user ON learned_chunks_archive(user_id);
 CREATE INDEX IF NOT EXISTS idx_learned_chunks_archive_created ON learned_chunks_archive(created_at);
 
@@ -160,6 +166,15 @@ def ensure_knowledge_schema_migrated(conn: sqlite3.Connection, user_id: str | No
     if "supersedes_id" not in cols:
         conn.execute("ALTER TABLE learned_chunks ADD COLUMN supersedes_id TEXT")
 
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_prune_meta (
+            user_id   TEXT PRIMARY KEY,
+            last_id   TEXT NOT NULL DEFAULT '',
+            updated_at TEXT
+        )
+        """
+    )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_learned_chunks_access ON learned_chunks(access_count, last_accessed)")
 
     archive_cols = [r[1] for r in conn.execute("PRAGMA table_info(learned_chunks_archive)").fetchall()]
