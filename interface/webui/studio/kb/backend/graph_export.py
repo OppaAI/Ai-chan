@@ -9,6 +9,7 @@ No personal memory or experience nodes.
 """
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import sqlite3
@@ -155,13 +156,14 @@ def export_knowledge_graph(
         meta["error"] = "open failed"
         return {"nodes": [], "edges": [], "meta": meta}
 
-    try:
-        # Discover columns
+    with contextlib.closing(conn):
         try:
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(learned_chunks)").fetchall()}
-        except sqlite3.OperationalError:
-            meta["error"] = "no learned_chunks table"
-            return {"nodes": [], "edges": [], "meta": meta}
+            # Discover columns
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info(learned_chunks)").fetchall()}
+            except sqlite3.OperationalError:
+                meta["error"] = "no learned_chunks table"
+                return {"nodes": [], "edges": [], "meta": meta}
 
         has_entities = "entities" in cols
         has_status = "status" in cols
