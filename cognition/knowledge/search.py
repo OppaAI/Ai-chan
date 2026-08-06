@@ -26,7 +26,7 @@ from .schema import (
     KNOWLEDGE_SPREADING_MAX_EXTRA,
     KNOWLEDGE_SPREADING_SCORE_WEIGHT,
     KnowledgeSchema,
-    _connect,
+    connect,
 )
 
 log = get_logger(__name__)
@@ -193,7 +193,7 @@ def search_knowledge(
     user_id: str | None = None,
 ) -> list[dict]:
     uid = user_id or current_user_id()
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         rank_knn = rank_by_id(_knn(conn, query, embedder, uid, KNOWLEDGE_KNN_LIMIT))
         rank_fts = rank_by_id(_fts(conn, query, uid, KNOWLEDGE_FTS_LIMIT))
@@ -287,7 +287,7 @@ def _increment_access_count(chunk_ids: list[str], user_id: str | None = None) ->
     if not chunk_ids:
         return
     uid = user_id or current_user_id()
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         now = utc_now_iso()
         placeholders = ",".join("?" * len(chunk_ids))
