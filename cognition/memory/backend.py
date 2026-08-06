@@ -791,9 +791,9 @@ def _arousal_enabled() -> bool:
 
 def _arousal_rank_weight() -> float:
     try:
-        return float(os.getenv("MEMORY_AROUSAL_RANK_WEIGHT", "0.08"))
+        return float(os.getenv("MEMORY_AROUSAL_RANK_WEIGHT", "0.01"))
     except ValueError:
-        return 0.08
+        return 0.01
 
 
 def _neg_hard_filter_enabled() -> bool:
@@ -829,11 +829,11 @@ _AROUSAL_LOW_RE = re.compile(
 
 
 def infer_arousal_score(text: str) -> int:
-    """Return −2…+2 activation intensity from lexicon (no LLM).
+    """Return −1…+2 activation intensity from lexicon (no LLM).
 
-    Convention (parallel to valence magnitude, signed only for extreme calm):
+    Convention (parallel to valence magnitude, signed only for calm):
       +2 strong high arousal, +1 moderate high, 0 neutral/unknown,
-      −1 low activation (calm/flat), −2 very flat/withdrawn if clearly marked.
+      −1 low activation (calm/flat).
     Ranking uses abs(score); sign is for analytics/Studio.
     """
     t = text or ""
@@ -854,7 +854,7 @@ def arousal_rank_bonus(arousal_score: int | None) -> float:
         a = int(arousal_score)
     except (TypeError, ValueError):
         return 0.0
-    return _arousal_rank_weight() * (abs(a) / 2.0)
+    return _arousal_rank_weight() * (min(abs(a), 2) / 2.0)
 
 
 # ── neg hard filter ───────────────────────────────────────────────────────────
@@ -872,8 +872,7 @@ def _is_sticky_neg(mem: dict[str, Any]) -> bool:
     vs = mem.get("valence_score")
     if vs is not None:
         try:
-            if int(vs) <= thr:
-                return True
+            return int(vs) <= thr
         except (TypeError, ValueError):
             pass
     tag = (mem.get("valence_tag") or "").strip().lower()
