@@ -2621,10 +2621,10 @@ class _MemoryBackend:
                         key = "_recall_score"  # or "score" — match your pipeline
                         r[key] = float(r.get(key) or 0.0) - w
                 results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
-
+  
         # Phase 19: sticky-neg not volunteered unless query engages them
         results = apply_neg_hard_filter(results, query)
-        return results
+        return results[:limit]
 
     def _expand_supersession_chains(self, query: str, user_id: str, results: list[dict], limit: int = 5) -> list[dict]:
         """
@@ -2764,13 +2764,7 @@ class _MemoryBackend:
                 (mem_id, user_id, user_id),
             ).fetchall()
         return [dict(r) for r in rows]
-      
-    def get_lineage(self, mem_id: str, user_id: str | None = None) -> dict:
-        from cognition.memory.lineage import walk_supersession_lineage
-        uid = user_id or self.get_user_id()
-        store = self._mem  # or self, depending on how AikoMemorize wraps backend
-        return walk_supersession_lineage(store, mem_id, user_id=uid)
-      
+
     # ── delete ────────────────────────────────────────────────────────────────
 
     def delete(self, memory_id: str) -> None:
@@ -4298,7 +4292,13 @@ class AikoMemorize:
         """Return memories created in [start, end), oldest first."""
         user_id = self._resolve_user_id(user_id)
         return self._mem.get_between(start, end, user_id=user_id)
-
+      
+    def get_lineage(self, mem_id: str, user_id: str | None = None) -> dict:
+        from cognition.memory.lineage import walk_supersession_lineage
+        uid = user_id or self.get_user_id()
+        store = self._mem  # or self, depending on how AikoMemorize wraps backend
+        return walk_supersession_lineage(store, mem_id, user_id=uid)
+      
     def delete(self, memory_id: str) -> None:
         """Delete one memory from the store and clear search cache."""
         self._mem.delete(memory_id)
