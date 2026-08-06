@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS learned_chunks (
     last_accessed   TEXT,
     entities        TEXT NOT NULL DEFAULT '[]',
     status          TEXT NOT NULL DEFAULT 'active',
-    supersedes_id   TEXT
+    supersedes_id   TEXT,
+    archived_at     TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_learned_docs_user ON learned_docs(user_id);
