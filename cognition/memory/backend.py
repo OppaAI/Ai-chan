@@ -887,9 +887,12 @@ def _query_engages_memory(query: str, mem: dict[str, Any]) -> bool:
     if _EMOTION_QUERY_RE.search(query or ""):
         return True
     text = (mem.get("memory") or mem.get("text") or "").casefold()
-    if text and any(tok in text for tok in q.split() if len(tok) >= 4):
-        # light token overlap; prefer entity overlap when present
-        return True
+    if text:
+        mem_tokens = set(re.findall(r"\w+", text))
+        q_tokens = {t for t in re.findall(r"\w+", q) if len(t) >= 4}
+        if mem_tokens & q_tokens:
+            # light token overlap; prefer entity overlap when present
+            return True
     ents = mem.get("entities") or []
     if isinstance(ents, str):
         try:
