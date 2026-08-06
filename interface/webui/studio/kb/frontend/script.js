@@ -45,9 +45,10 @@ function escapeHtml(s) {
 
 async function loadGraph() {
   const limit = document.getElementById('limit').value || 200;
-  const url = `${API_BASE}/api/graph?limit=${encodeURIComponent(limit)}`;
-  const res = await fetch(url);
+  const res = await fetch(`${API_BASE}/api/graph?limit=${encodeURIComponent(limit)}`);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
   graph = await res.json();
+  if (graph.meta && graph.meta.error) throw new Error(graph.meta.error);
   render();
 }
 
@@ -118,6 +119,7 @@ function showDetails(d) {
 }
 
 function render() {
+  if (simulation) simulation.stop();
   const svg = d3.select('#svg');
   svg.selectAll('*').remove();
   const canvas = document.getElementById('canvas');
@@ -198,8 +200,8 @@ function render() {
 }
 
 function svgZoom(k) {
-  const svg = d3.select('#svg');
-  svg.transition().call(zoomBeh.scaleBy, k);
+  if (!zoomBeh) return;
+  d3.select('#svg').transition().call(zoomBeh.scaleBy, k);
 }
 
 function init() {
