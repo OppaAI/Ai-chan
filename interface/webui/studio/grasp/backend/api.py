@@ -10,12 +10,17 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Aiko Grasp Studio")
+# Local studio only — same-origin SPA + explicit localhost allowlist.
+# Do not pair allow_credentials=True with wildcard origins (CWE-942).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[
+        "http://127.0.0.1:8003",
+        "http://localhost:8003",
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -137,4 +142,5 @@ async def serve_studio():
 
 if __name__ == "__main__":
     import uvicorn
+    # Local only — use a TLS reverse proxy for remote access.
     uvicorn.run(app, host="127.0.0.1", port=8003)
