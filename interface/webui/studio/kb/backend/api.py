@@ -40,7 +40,6 @@ def api_search(q: str = Query(""), limit: int = Query(20, ge=1, le=100)):
 
 @app.get("/")
 def index():
-    from fastapi import HTTPException
     p = _FRONTEND / "index.html"
     if p.is_file():
         return FileResponse(p)
