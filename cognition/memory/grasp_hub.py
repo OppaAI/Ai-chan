@@ -165,6 +165,25 @@ def snapshot_age_seconds() -> float | None:
         return None
 
 
+def get_context_block(*, max_tokens: int | None = 1200, touch: bool = True) -> str:
+    """Return the scored WM block for injection into the LLM system prompt.
+
+    Empty string when disabled or buffer is empty. touch=True bumps recall_count
+    on included slots so frequently-used focus items stick longer.
+    """
+    if not GRASP_LIVE_ENABLED:
+        return ""
+    try:
+        buf = get_live_buffer()
+        with _lock:
+            block = buf.get_context_block(max_tokens=max_tokens, touch=touch)
+            if block:
+                _publish_unlocked()
+            return block or ""
+    except Exception:
+        return ""
+
+
 def install_into_think(think: Any) -> bool:
     """Wrap AikoThink._store_async / reset_context for live WM recording.
 
