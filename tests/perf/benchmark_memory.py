@@ -49,7 +49,7 @@ try:
         AikoMemorize,
         MEMORY_LIFECYCLE_BATCH_SIZE,
         MEMORY_SEARCH_CACHE_TTL,
-        _MemoryBackend,
+        MemoryBackend,
     )
 except ImportError as e:  # pragma: no cover
     pytest.skip(f"cognition.memory.memorize not importable in this environment: {e}", allow_module_level=True)
@@ -65,14 +65,14 @@ pytestmark = pytest.mark.perf
 @pytest.fixture(scope="module")
 def real_backend(tmp_path_factory):
     """
-    A real _MemoryBackend with the actual configured HarrierEmbedder and
+    A real MemoryBackend with the actual configured HarrierEmbedder and
     (if LLM_BASE_URL is reachable) the real extraction LLM. Skips the whole
     module if the embedder can't load -- e.g. running this on a dev laptop
     without the GGUF model present, or in CI where it doesn't belong.
     """
     db_path = tmp_path_factory.mktemp("perf") / "perf_memory.db"
     try:
-        backend = _MemoryBackend(
+        backend = MemoryBackend(
             db_path=str(db_path),
             llm_base_url="http://localhost:8080/v1",
             model="ministral",

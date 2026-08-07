@@ -32,7 +32,7 @@ from agentic.toolkit.research import deep_research
 from agentic.capability import match_capabilities, filtered_tool_schemas
 from agentic.agentic import _verify_final_answer
 from agentic.toolkit.reports import write_report
-from cognition.knowledge import search_knowledge, knowledge_context_for, ingest_text
+from cognition.knowledge import search_knowledge, knowledge_context_for, ingest_text, connect
 
 
 class FakeEmbedder:
@@ -206,7 +206,7 @@ class TestRetrievalAccuracy:
     def setup_method(self):
         self.tmp_path = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmp_path, "eval.db")
-        self.conn = _connect(self.db_path)
+        self.conn = connect(self.db_path)
         self._seed_eval_data()
 
     def teardown_method(self):
@@ -242,7 +242,7 @@ class TestRetrievalAccuracy:
 
     def test_search_recalls_relevant_doc(self):
         """Search should find the most relevant document."""
-        with patch("cognition.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge.connect", return_value=self.conn):
             results = search_knowledge("quantum qubits superposition", limit=5, embedder=FakeEmbedder(), user_id="eval_user")
 
         assert len(results) > 0
@@ -252,7 +252,7 @@ class TestRetrievalAccuracy:
 
     def test_search_filters_irrelevant(self):
         """Search should not return irrelevant docs in top-k."""
-        with patch("cognition.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge.connect", return_value=self.conn):
             results = search_knowledge("shor algorithm factoring", limit=3, embedder=FakeEmbedder(), user_id="eval_user")
 
         # Should find quantum algorithms, not classical computing
@@ -261,7 +261,7 @@ class TestRetrievalAccuracy:
 
     def test_knowledge_context_format(self):
         """knowledge_context_for should produce valid XML with scores."""
-        with patch("cognition.knowledge._connect", return_value=self.conn):
+        with patch("cognition.knowledge.connect", return_value=self.conn):
             ctx = knowledge_context_for("quantum algorithms", limit=3, embedder=FakeEmbedder(), user_id="eval_user")
 
         assert "<knowledge_context>" in ctx

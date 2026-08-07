@@ -227,12 +227,12 @@ class TestMemoryKnowledgeStress:
 
     def test_concurrent_memory_searches(self):
         """Concurrent memory searches don't corrupt cache."""
-        from cognition.memory.memorize import AikoMemorize, _MemoryBackend
+        from cognition.memory.memorize import AikoMemorize, MemoryBackend
 
         # Create backend with some data
         import tempfile
         db_path = tempfile.mktemp(suffix=".db")
-        backend = _MemoryBackend(db_path=db_path, llm_base_url="http://unused", model="unused")
+        backend = MemoryBackend(db_path=db_path, llm_base_url="http://unused", model="unused")
         backend._embedder = FakeEmbedder()
 
         # Seed some memories

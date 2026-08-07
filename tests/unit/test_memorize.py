@@ -5,7 +5,7 @@ Starter test suite for memory/memorize.py.
 Layers covered:
   1. Pure functions        — no DB, no embedder, no LLM
   2. Ranking/scoring logic — real sqlite-vec DB, hand-seeded rows, no embedder
-  3. Integration           — real _MemoryBackend wired to a FakeEmbedder
+  3. Integration           — real MemoryBackend wired to a FakeEmbedder
 
 Run with:
   pytest tests/test_memorize.py -v
@@ -14,7 +14,7 @@ Assumptions (adjust if your vecstore.py differs):
   - initialize_store_db(db_path, ddl, user_id=..., vector=True) returns a
     sqlite3.Connection with sqlite_vec already loaded and row_factory set
     to sqlite3.Row.
-  - HarrierEmbedder is only ever touched through _MemoryBackend._embed /
+  - HarrierEmbedder is only ever touched through MemoryBackend._embed /
     _embed_batch, so swapping self._embedder after construction is safe.
 """
 from __future__ import annotations
@@ -32,7 +32,7 @@ import pytest
 import sqlite_vec
 
 from cognition.memory.memorize import (
-    _MemoryBackend,
+    MemoryBackend,
     AikoMemorize,
     EMBED_DIMS,
     MEMORY_RECALL_SCORE_THRESHOLD,
@@ -40,10 +40,10 @@ from cognition.memory.memorize import (
     MEMORY_WRITE_IDLE_GRACE,
     MEMORY_WRITE_MAX_WAIT,
     WRITE_DEDUP_THRESHOLD,
-    _is_trivial_input,
-    _sanitize_fts_query,
-    _normalize_memory_text,
-    _first_json_array,
+    is_trivial_input,
+    sanitize_fts_query,
+    memory_normalize_text,
+    first_json_array,
     ensure_phase_a_schema,
     ensure_entity_relations_schema,
     infer_salience_hit,
@@ -68,62 +68,62 @@ from system import userspace
 
 class TestTrivialInput:
     def test_wake_word_alone(self):
-        assert _is_trivial_input("aiko")
+        assert is_trivial_input("aiko")
 
     def test_wake_word_plus_question_not_trivial(self):
-        assert not _is_trivial_input("hi aiko, what's the weather")
+        assert not is_trivial_input("hi aiko, what's the weather")
 
     def test_greeting_phrase(self):
-        assert _is_trivial_input("how are you doing")
+        assert is_trivial_input("how are you doing")
 
     def test_ragged_asr_transcript(self):
-        assert _is_trivial_input("Hi, I. How are you doing.")
+        assert is_trivial_input("Hi, I. How are you doing.")
 
     def test_multi_clause_one_real_clause(self):
-        assert not _is_trivial_input("ok, remind me about the deadline")
+        assert not is_trivial_input("ok, remind me about the deadline")
 
     def test_empty_string(self):
-        assert _is_trivial_input("")
+        assert is_trivial_input("")
 
     def test_pure_filler_with_punctuation(self):
-        assert _is_trivial_input("thanks! bye.")
+        assert is_trivial_input("thanks! bye.")
 
 
 class TestFtsSanitize:
     def test_strips_syntax_chars(self):
-        result = _sanitize_fts_query('what is "Max" (the cat)?')
+        result = sanitize_fts_query('what is "Max" (the cat)?')
         assert result is not None
         assert '"' not in result and "(" not in result
 
     def test_bare_symbols_returns_none(self):
-        assert _sanitize_fts_query("***") is None
+        assert sanitize_fts_query("***") is None
 
     def test_empty_returns_none(self):
-        assert _sanitize_fts_query("") is None
-        assert _sanitize_fts_query(None) is None
+        assert sanitize_fts_query("") is None
+        assert sanitize_fts_query(None) is None
 
 
 class TestNormalizeMemoryText:
     def test_case_and_whitespace_collapse(self):
-        a = _normalize_memory_text("Max  is\na cat")
-        b = _normalize_memory_text("max is a cat")
+        a = memory_normalize_text("Max  is\na cat")
+        b = memory_normalize_text("max is a cat")
         assert a == b
 
     def test_none_safe(self):
-        assert _normalize_memory_text(None) == ""
+        assert memory_normalize_text(None) == ""
 
 
 class TestFirstJsonArray:
     def test_nested_brackets(self):
         raw = 'garbage [ "a[1]", "b" ] trailing'
-        assert _first_json_array(raw) == '[ "a[1]", "b" ]'
+        assert first_json_array(raw) == '[ "a[1]", "b" ]'
 
     def test_no_array_returns_none(self):
-        assert _first_json_array("no brackets here") is None
+        assert first_json_array("no brackets here") is None
 
     def test_escaped_quote_inside_string(self):
         raw = r'[ "she said \"hi\"" ]'
-        assert _first_json_array(raw) == raw
+        assert first_json_array(raw) == raw
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -173,9 +173,9 @@ def near_duplicate_text(base: str) -> str:
 
 @pytest.fixture
 def backend(tmp_path, monkeypatch):
-    """A real _MemoryBackend against a throwaway sqlite file, with the
+    """A real MemoryBackend against a throwaway sqlite file, with the
     GGUF embedder swapped for FakeEmbedder so no model load happens."""
-    b = _MemoryBackend(
+    b = MemoryBackend(
         db_path=str(tmp_path / "test_memory.db"),
         llm_base_url="http://unused",
         model="unused",
@@ -962,7 +962,7 @@ class TestEntityImportance:
 
 class TestConsolidateRetentionScoring:
     def _score(self, **row):
-        return consolidate_mod._score_daily_row(
+        return consolidate_mod.score_daily_row(
             row,
             static_anchors=None,
             dynamic_anchors=None,
@@ -1002,7 +1002,7 @@ class TestConsolidateRetentionScoring:
     def test_entity_importance_blends_into_connectivity(self):
         base = self._score(_text="a fact", salience_hit=0, valence_tag="neutral",
                            access_day_count=1, access_count=1, entities='["Grace"]')
-        boosted = consolidate_mod._score_daily_row(
+        boosted = consolidate_mod.score_daily_row(
             {"_text": "a fact", "salience_hit": 0, "valence_tag": "neutral",
              "access_day_count": 1, "access_count": 1, "entities": '["Grace"]'},
             static_anchors=None,

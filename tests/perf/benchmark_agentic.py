@@ -30,7 +30,7 @@ from agentic.toolkit.research import condense_evidence
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
 from agentic.toolkit.reports import write_report
 from agentic.agentic import _validate_args, _classify_result, _owner_embedder
-from cognition.knowledge import search_knowledge, knowledge_context_for, ingest_text
+from cognition.knowledge import search_knowledge, knowledge_context_for, ingest_text, connect
 from cognition.reason import batch_cosine_scores, keyword_overlap_score
 
 
@@ -303,7 +303,7 @@ class TestMemoryPerformance:
     def test_search_knowledge_latency(self, benchmark, embedder, tmp_path):
         """Benchmark search_knowledge with seeded DB."""
         db_path = tmp_path / "bench.db"
-        conn = _connect(str(db_path))
+        conn = connect(str(db_path))
 
         # Seed 1000 docs
         from cognition.knowledge import _knn, _fts, KNOWLEDGE_KNN_LIMIT, KNOWLEDGE_FTS_LIMIT
@@ -325,7 +325,7 @@ class TestMemoryPerformance:
         conn.commit()
 
         def _run():
-            with patch("cognition.knowledge._connect", return_value=conn):
+            with patch("cognition.knowledge.connect", return_value=conn):
                 return search_knowledge("topic 500", limit=10, embedder=embedder, user_id="bench_user")
 
         results = benchmark(_run)
@@ -334,7 +334,7 @@ class TestMemoryPerformance:
     def test_knowledge_context_for_latency(self, benchmark, embedder, tmp_path):
         """Benchmark knowledge_context_for formatting."""
         db_path = tmp_path / "bench.db"
-        conn = _connect(str(db_path))
+        conn = connect(str(db_path))
         import sqlite_vec
         now = "2024-01-01T00:00:00"
         for i in range(100):
@@ -353,7 +353,7 @@ class TestMemoryPerformance:
         conn.commit()
 
         def _run():
-            with patch("cognition.knowledge._connect", return_value=conn):
+            with patch("cognition.knowledge.connect", return_value=conn):
                 return knowledge_context_for("topic 50", limit=10, embedder=embedder, user_id="bench_user")
 
         ctx = benchmark(_run)
