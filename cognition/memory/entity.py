@@ -1,7 +1,9 @@
-"""Phase 3: entity importance I_e and supersession chain helpers.
+"""Entity tagging, importance (I_e), and supersession-chain helpers.
 
-I_e = (1-α)·centrality + α·recency
-No LLM. Used by monthly consolidation and mild recall boost.
+I_e = (1-α)·centrality + α·recency. No LLM. Used by monthly consolidation and
+mild recall boost. Also hosts rule-based entity extraction / kind / write-op
+classification, valence/arousal/salience inference, and the entity_relations
+co-mention graph (formerly memory/entities.py + backend blocks).
 """
 from __future__ import annotations
 
@@ -10,9 +12,18 @@ import os
 import re
 from datetime import datetime, timezone
 
+import json
+import sqlite3
+from itertools import combinations
+from typing import Any, Iterable
+
+from .schema import KIND_FACT, _WS_RE, ensure_phase_a_schema, existing_columns
+
+
 from system.log import get_logger
 
 log = get_logger(__name__)
+
 
 ENTITY_IMPORTANCE_ALPHA = float(os.getenv("ENTITY_IMPORTANCE_ALPHA", "0.4"))
 ENTITY_IMPORTANCE_BETA = float(os.getenv("ENTITY_IMPORTANCE_BETA", "0.05"))
@@ -270,36 +281,592 @@ def walk_supersession_chain(conn, mem_id: str, user_id: str, max_depth: int = 12
         log.debug("supersession chain walk failed for %s: %s", mem_id, exc)
         return []
 
-
-# Entity extraction/classification helpers still live with the write backend while
-# the backend is being decomposed; expose lazy wrappers here so entity-related
-# imports have a single home without forcing backend/numpy imports at module load.
-def extract_entities(text: str):
-    from .backend import extract_entities as _impl
-    return _impl(text)
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Entity extraction / valence / arousal / write-op classification  (from backend)
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
-def entities_to_json(entities):
-    from .backend import entities_to_json as _impl
-    return _impl(entities)
+# Multi-word Proper Case spans: "Hugging Face", "San Francisco"
+_PROPER_SPAN_RE = re.compile(
+    r"\b([A-Z][a-zA-Z0-9]+(?:\s+[A-Z][a-zA-Z0-9]+){0,4})\b"
+)
+# Short ALLCAPS tokens often used as project codes: GRACE, ROS2, API
+_ALLCAPS_RE = re.compile(r"\b([A-Z]{2,12}[0-9]*)\b")
+# Quoted names: "Max", 'Aiko'
+_QUOTED_RE = re.compile(r"[\"']([^\"']{2,40})[\"']")
+# Explicit name patterns: called X, named X, project X
+_CALLED_RE = re.compile(
+    r"\b(?:called|named|project|robot|dog|cat|company|team)\s+([A-Z][\w.-]{1,40})",
+    re.IGNORECASE,
+)
+
+_STOP_ENTITIES = frozenset({
+    "the", "a", "an", "and", "or", "but", "for", "with", "from", "into",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "january", "february", "march", "april", "may", "june", "july", "august",
+    "september", "october", "november", "december",
+    "today", "yesterday", "tomorrow", "user", "assistant", "aiko",
+    "he", "she", "they", "his", "her", "their", "this", "that",
+})
+
+# Kind heuristics (keyword → kind). First match wins.
+_KIND_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("identity", ("name is", "birthday", "lives in", "nationality", "age is", "is from ")),
+    ("preference", ("likes", "loves", "hates", "dislikes", "prefers", "favorite", "favourite")),
+    ("plan", ("deadline", "due ", "will ", "going to", "plans to", "wants to")),
+    ("event", ("hackathon", "interview", "meeting", "appointment", "lost ", "joined")),
+)
 
 
-def entities_from_json(raw):
-    from .backend import entities_from_json as _impl
-    return _impl(raw)
+def _clean_entity(raw: str) -> str | None:
+    s = (raw or "").strip(" .,;:!?()[]{}").strip()
+    if len(s) < 2 or len(s) > 80:
+        return None
+    if s.casefold() in _STOP_ENTITIES:
+        return None
+    # Drop pure numbers
+    if s.isdigit():
+        return None
+    return s
 
 
-def entity_overlap_score(a, b) -> float:
-    from .backend import entity_overlap_score as _impl
-    return _impl(a, b)
+def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
+    """Extract entity-like tokens from a memory fact string.
+
+    Deterministic and cheap. Prefer precision over recall — empty is fine.
+    """
+    if not (text or "").strip():
+        return []
+
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(raw: str) -> None:
+        ent = _clean_entity(raw)
+        if not ent:
+            return
+        key = ent.casefold()
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(ent)
+
+    for m in _QUOTED_RE.finditer(text):
+        _add(m.group(1))
+    for m in _CALLED_RE.finditer(text):
+        _add(m.group(1))
+    for m in _PROPER_SPAN_RE.finditer(text):
+        span = m.group(1)
+        # Sentence-initial single word is usually grammar capitalization, not an entity.
+        if m.start() == 0 and " " not in span:
+            continue
+        _add(span)
+    for m in _ALLCAPS_RE.finditer(text):
+        _add(m.group(1))
+
+    return found[:max_entities]
 
 
-def backfill_entities(conn) -> int:
-    from .backend import backfill_entities as _impl
-    return _impl(conn)
+def classify_kind(text: str, default: str = "fact") -> str:
+    """Heuristic memory kind from fact text. No LLM."""
+    low = (text or "").casefold()
+    for kind, needles in _KIND_RULES:
+        if any(n in low for n in needles):
+            return kind
+    return default
+
+
+_VALENCE_POS_RE = re.compile(
+    r"[\U0001F600-\U0001F64F\U0001F970-\U0001F973\U0001F929\U0001F60A\U0001F60D\U0001F389]|"
+    r"\b(?:happy|glad|love|great|awesome|excited|relief|yay|wonderful|proud)\b",
+    re.IGNORECASE,
+)
+_VALENCE_NEG_RE = re.compile(
+    r"[\U0001F622\U0001F62D\U0001F614\U0001F61E\U0001F620\U0001F621\U0001F624]|"
+    r"\b(?:sad|angry|frustrated|afraid|scared|hate|awful|terrible|worried|anxious|cry|pain)\b",
+    re.IGNORECASE,
+)
+# Shared salience policy (write-time tags + monthly legacy fallback).
+SALIENCE_POLICY_RE = re.compile(
+    r"\b(?:deadline|birthday|anniversary|appointment|hackathon|interview|lost|"
+    r"passport|license|wallet|important|breakthrough|problem|always|never|"
+    r"favorite|favourite|remember this|never forget)\b|!{2,}",
+    re.IGNORECASE,
+)
+
+_VALENCE_STRONG_RE = re.compile(
+    r"\b(?:very|so|extremely|furious|devastat|ecstatic|hate this|love this|terrified|overjoyed)\b|!{2,}",
+    re.IGNORECASE,
+)
+
+def infer_valence_score(text: str) -> int:
+    """Return −2…+2 from emoji + lexicon + intensifiers. No LLM / no Harrier."""
+    t = text or ""
+    neg = bool(_VALENCE_NEG_RE.search(t))
+    pos = bool(_VALENCE_POS_RE.search(t))
+    strong = bool(_VALENCE_STRONG_RE.search(t))
+    if neg and not pos:
+        return -2 if strong else -1
+    if pos and not neg:
+        return 2 if strong else 1
+    if neg and pos:
+        return -1
+    return 0
+
+# ── config ────────────────────────────────────────────────────────────────────
+
+def _env_bool(name: str, default: str = "1") -> bool:
+    return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off")
+
+
+def _arousal_enabled() -> bool:
+    return _env_bool("MEMORY_AROUSAL_ENABLED", "1")
+
+
+def _arousal_rank_weight() -> float:
+    try:
+        return float(os.getenv("MEMORY_AROUSAL_RANK_WEIGHT", "0.01"))
+    except ValueError:
+        return 0.01
+
+
+def _neg_hard_filter_enabled() -> bool:
+    return _env_bool("MEMORY_NEG_HARD_FILTER", "1")
+
+
+def _neg_hard_threshold() -> int:
+    try:
+        return int(os.getenv("MEMORY_NEG_HARD_THRESHOLD", "-1"))
+    except ValueError:
+        return -1
+
+
+# ── arousal inference (heuristic, no LLM) ─────────────────────────────────────
+
+_AROUSAL_HIGH_RE = re.compile(
+    r"\b(?:panic|panick(?:ed|ing)?|terrified|furious|ecstatic|urgent|emergency|"
+    r"scream(?:ed|ing)?|shock(?:ed|ing)?|adrenaline|frantic|hyper|"
+    r"can't sleep|cant sleep|all-nighter|meltdown|breakdown)\b|!{2,}",
+    re.IGNORECASE,
+)
+_AROUSAL_MID_RE = re.compile(
+    r"\b(?:excited|anxious|nervous|stressed|worried|angry|upset|thrilled|"
+    r"deadline|interview|hackathon|fight|"
+    r"argument|crying|tears)\b",
+    re.IGNORECASE,
+)
+_AROUSAL_LOW_RE = re.compile(
+    r"\b(?:calm|peaceful|quiet|tired|sleepy|bored|meh|whatever|"
+    r"routine|ordinary|mundane)\b",
+    re.IGNORECASE,
+)
+
+
+def infer_arousal_score(text: str) -> int:
+    """Return −1…+2 activation intensity from lexicon (no LLM).
+
+    Convention (parallel to valence magnitude, signed only for calm):
+      +2 strong high arousal, +1 moderate high, 0 neutral/unknown,
+      -1 low activation (calm/flat). -2 is reserved and not yet produced
+      by this heuristic.
+    Ranking uses abs(score); sign is for analytics/Studio.
+    """
+    t = text or ""
+    if _AROUSAL_HIGH_RE.search(t):
+        return 2
+    if _AROUSAL_MID_RE.search(t):
+        return 1
+    if _AROUSAL_LOW_RE.search(t):
+        return -1
+    return 0
+
+
+def arousal_rank_bonus(arousal_score: int | None) -> float:
+    """Additive score term; 0 when disabled or missing."""
+    if not _arousal_enabled() or arousal_score is None:
+        return 0.0
+    try:
+        a = int(arousal_score)
+    except (TypeError, ValueError):
+        return 0.0
+    return _arousal_rank_weight() * (min(abs(a), 2) / 2.0)
+
+
+# ── neg hard filter ───────────────────────────────────────────────────────────
+
+_EMOTION_QUERY_RE = re.compile(
+    r"\b(?:feel(?:ing)?|emotion|upset|sad|angry|anxious|stress(?:ed)?|"
+    r"embarrass(?:ed|ing)?|ashamed|guilt|hate|conflict|fight|problem with|"
+    r"what's wrong|what is wrong|are you ok|worried about)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_sticky_neg(mem: dict[str, Any]) -> bool:
+    thr = _neg_hard_threshold()
+    vs = mem.get("valence_score")
+    if vs is not None:
+        try:
+            return int(vs) <= thr
+        except (TypeError, ValueError):
+            pass
+    tag = (mem.get("valence_tag") or "").strip().lower()
+    return tag in ("neg", "negative") and thr >= -1
+
+
+def _query_engages_memory(query: str, mem: dict[str, Any]) -> bool:
+    q = (query or "").casefold()
+    if not q:
+        return False
+    if _EMOTION_QUERY_RE.search(query or ""):
+        return True
+    text = (mem.get("memory") or mem.get("text") or "").casefold()
+    if text:
+        mem_tokens = set(re.findall(r"\w+", text))
+        q_tokens = {t for t in re.findall(r"\w+", q) if len(t) >= 4}
+        if mem_tokens & q_tokens:
+            # light token overlap; prefer entity overlap when present
+            return True
+    ents = mem.get("entities") or []
+    if isinstance(ents, str):
+        try:
+            ents = json.loads(ents)
+        except (ValueError, TypeError):
+            ents = []
+    for e in ents:
+        if e and str(e).casefold() in q:
+            return True
+    return False
+
+
+def apply_neg_hard_filter(
+    memories: list[dict[str, Any]],
+    query: str,
+) -> list[dict[str, Any]]:
+    """Drop sticky-neg rows unless the user query engages them.
+
+    Unsolicited = no engagement signal. Explicit reference or emotion-seeking
+    query keeps the memory.
+    """
+    if not _neg_hard_filter_enabled():
+        return memories
+    out: list[dict[str, Any]] = []
+    for m in memories:
+        if _is_sticky_neg(m) and not _query_engages_memory(query, m):
+            continue
+        out.append(m)
+    return out
+
+def tag_from_score(score: int) -> str:
+    try:
+        s = int(score)
+    except (TypeError, ValueError):
+        return "neutral"
+    if s <= -1:
+        return "neg"
+    if s >= 1:
+        return "pos"
+    return "neutral"
+
+
+def infer_valence_tag(text: str) -> str:
+    """Backward-compatible 3-way tag derived from 5-pt score."""
+    return tag_from_score(infer_valence_score(text))
+
+
+def infer_salience_hit(text: str) -> int:
+    return 1 if SALIENCE_POLICY_RE.search(text or "") else 0
+
+def entity_overlap_score(query: str, entities: Iterable[str]) -> float:
+    """Return 0..1 fraction of entities mentioned in the query (casefold)."""
+    ents = [e for e in entities if e]
+    if not ents:
+        return 0.0
+    q = (query or "").casefold()
+    hits = sum(1 for e in ents if e.casefold() in q)
+    return hits / len(ents)
+
+
+def normalize_memory_text(text: str) -> str:
+    """Normalize for write-op classification (lowercase, collapse whitespace)."""
+    return _WS_RE.sub(" ", (text or "").strip()).lower()
+
+
+def entities_to_json(entities: list[str] | None) -> str:
+    """Serialize a deduped entity list into a JSON string column value."""
+    if not entities:
+        return "[]"
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for e in entities:
+        s = str(e).strip()
+        if not s:
+            continue
+        key = s.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(s[:80])
+        if len(cleaned) >= 16:
+            break
+    return json.dumps(cleaned, ensure_ascii=False)
+
+
+def entities_from_json(raw: Any) -> list[str]:
+    """Parse an entities column value (JSON string or raw list) back to list."""
+    if raw is None or raw == "":
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(x).strip() for x in data if str(x).strip()]
+
+
+def classify_write_op(
+    *,
+    similarity: float | None,
+    new_text: str,
+    old_text: str | None,
+    dedup_threshold: float,
+) -> str:
+    """Return 'noop' | 'supersede' | 'add' — rule-only, no LLM."""
+    if similarity is None or similarity < dedup_threshold:
+        return "add"
+    if normalize_memory_text(new_text) == normalize_memory_text(old_text or ""):
+        return "noop"
+    return "supersede"
+
+RELATION_CO_MENTION = "co_mentions"
+RELATION_RELATED = "related_to"
+
+_ENTITY_RELATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS entity_relations (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    entity_a    TEXT NOT NULL,
+    entity_b    TEXT NOT NULL,
+    relation    TEXT NOT NULL DEFAULT 'co_mentions',
+    weight      REAL NOT NULL DEFAULT 1.0,
+    memory_id   TEXT,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_rel_user ON entity_relations(user_id);
+CREATE INDEX IF NOT EXISTS idx_entity_rel_a ON entity_relations(user_id, entity_a);
+CREATE INDEX IF NOT EXISTS idx_entity_rel_b ON entity_relations(user_id, entity_b);
+-- delete() runs "DELETE FROM entity_relations WHERE memory_id = ?" on every
+-- single memory deletion (cleanup's decay sweep, dream()'s merge-loser
+-- deletes) — without this index that's a full table scan every time.
+CREATE INDEX IF NOT EXISTS idx_entity_rel_memory_id ON entity_relations(memory_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_entity_rel_pair
+    ON entity_relations(user_id, entity_a, entity_b, relation);
+"""
+
+
+def _norm_entity(e: str) -> str:
+    return (e or "").strip()
+
+
+def _ordered_pair(a: str, b: str) -> tuple[str, str]:
+    """Canonical unordered pair key (casefold order, display preserves first-seen casing via callers)."""
+    aa, bb = _norm_entity(a), _norm_entity(b)
+    if aa.casefold() <= bb.casefold():
+        return aa, bb
+    return bb, aa
+
+
+def ensure_entity_relations_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(_ENTITY_RELATIONS_DDL)
+    conn.commit()
+
+
+def upsert_co_mentions(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    entities: Iterable[str],
+    memory_id: str | None = None,
+    updated_at: str | None = None,
+) -> int:
+    """Record co-mention pairs for entities on one memory. Returns pairs touched."""
+    from cognition.memory.vecstore import utc_now_iso
+
+    # Store casefolded identity, not display casing: entity_relations is a
+    # traversal index, never shown to the user directly, and the unique
+    # index on (user_id, entity_a, entity_b, relation) is a plain TEXT
+    # comparison — "GRACE" and "Grace" would otherwise collide in `seen`
+    # here (so we'd correctly dedup THIS memory's pairs) but still create
+    # two distinct rows across different memories that used different
+    # casing for the same entity, splitting one node's edges into two.
+    ents = []
+    seen: set[str] = set()
+    for e in entities:
+        n = _norm_entity(e)
+        if not n:
+            continue
+        key = n.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ents.append(key)
+    if len(ents) < 2:
+        return 0
+
+    ensure_entity_relations_schema(conn)
+    now = updated_at or utc_now_iso()
+    touched = 0
+    for a, b in combinations(ents, 2):
+        # No casefold-equality guard needed here: `ents` was already
+        # deduped by casefold via `seen` above, so combinations() can
+        # never hand us a == b.
+        ea, eb = _ordered_pair(a, b)
+        conn.execute(
+            """
+            INSERT INTO entity_relations (user_id, entity_a, entity_b, relation, weight, memory_id, updated_at)
+            VALUES (?, ?, ?, ?, 1.0, ?, ?)
+            ON CONFLICT(user_id, entity_a, entity_b, relation) DO UPDATE SET
+                weight = entity_relations.weight + 1.0,
+                memory_id = COALESCE(excluded.memory_id, entity_relations.memory_id),
+                updated_at = excluded.updated_at
+            """,
+            (user_id, ea, eb, RELATION_CO_MENTION, memory_id, now),
+        )
+        touched += 1
+    return touched
+
+
+def rebuild_entity_relations(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    clear: bool = True,
+) -> dict[str, int]:
+    """Rebuild co-mention edges from memories.entities JSON for one user."""
+    ensure_entity_relations_schema(conn)
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(memories)").fetchall()}
+    if "entities" not in cols:
+        return {"pairs": 0, "memories": 0, "note": 1}
+
+    if clear:
+        conn.execute(
+            "DELETE FROM entity_relations WHERE user_id = ? AND relation = ?",
+            (user_id, RELATION_CO_MENTION),
+        )
+
+    rows = conn.execute(
+        """
+        SELECT id, entities FROM memories
+        WHERE user_id = ?
+          AND (status IS NULL OR status = 'active')
+        """,
+        (user_id,),
+    ).fetchall()
+
+    pairs = 0
+    for row in rows:
+        ents = entities_from_json(row["entities"])
+        pairs += upsert_co_mentions(
+            conn, user_id=user_id, entities=ents, memory_id=str(row["id"])
+        )
+    conn.commit()
+    log.info("entity_relations rebuild user=%s memories=%d pairs=%d", user_id, len(rows), pairs)
+    return {"pairs": pairs, "memories": len(rows)}
+
+def backfill_entities(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str | None = None,
+    limit: int = 0,
+    only_empty: bool = True,
+) -> int:
+    """Fill entities/kind for existing rows using rule-based extractors.
+
+    No re-embed. Returns number of rows updated.
+    """
+    ensure_phase_a_schema(conn)
+    cols = existing_columns(conn)
+    if "entities" not in cols:
+        return 0
+
+    sql = "SELECT id, memory, entities, kind FROM memories WHERE 1=1"
+    params: list[Any] = []
+    if user_id:
+        sql += " AND user_id = ?"
+        params.append(user_id)
+    if only_empty:
+        sql += " AND (entities IS NULL OR entities = '' OR entities = '[]')"
+    sql += " ORDER BY created_at DESC"
+    if limit and limit > 0:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+
+    rows = conn.execute(sql, params).fetchall()
+    updated = 0
+    for row in rows:
+        text = row["memory"] or ""
+        ents = extract_entities(text)
+        kind = classify_kind(text, default=str(row["kind"] or KIND_FACT))
+        conn.execute(
+            "UPDATE memories SET entities = ?, kind = ? WHERE id = ?",
+            (entities_to_json(ents), kind, row["id"]),
+        )
+        updated += 1
+    if updated:
+        conn.commit()
+        log.info("memory Phase B backfill: updated %d rows", updated)
+    return updated
 
 
 __all__ = [
+    "_ALLCAPS_RE",
+    "_AROUSAL_HIGH_RE",
+    "_AROUSAL_LOW_RE",
+    "_AROUSAL_MID_RE",
+    "_CALLED_RE",
+    "_EMOTION_QUERY_RE",
+    "_ENTITY_RELATIONS_DDL",
+    "_KIND_RULES",
+    "_PROPER_SPAN_RE",
+    "_QUOTED_RE",
+    "_STOP_ENTITIES",
+    "_VALENCE_NEG_RE",
+    "_VALENCE_POS_RE",
+    "_VALENCE_STRONG_RE",
+    "_clean_entity",
+    "_env_bool",
+    "_is_sticky_neg",
+    "_norm_entity",
+    "_ordered_pair",
+    "_query_engages_memory",
+    "RELATION_CO_MENTION",
+    "RELATION_RELATED",
+    "SALIENCE_POLICY_RE",
+    "apply_neg_hard_filter",
+    "arousal_rank_bonus",
+    "backfill_entities",
+    "classify_kind",
+    "classify_write_op",
+    "ensure_entity_relations_schema",
+    "entities_from_json",
+    "entities_to_json",
+    "entity_overlap_score",
+    "extract_entities",
+    "infer_arousal_score",
+    "infer_salience_hit",
+    "infer_valence_score",
+    "infer_valence_tag",
+    "normalize_memory_text",
+    "rebuild_entity_relations",
+    "tag_from_score",
+    "upsert_co_mentions",
+    "_arousal_enabled",
+    "_arousal_rank_weight",
+    "_neg_hard_filter_enabled",
+    "_neg_hard_threshold",
     "ENTITY_IMPORTANCE_ALPHA",
     "ENTITY_IMPORTANCE_BETA",
     "MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT",
@@ -309,15 +876,11 @@ __all__ = [
     "MEMORY_SPREADING_MAX_DEPTH",
     "MEMORY_SPREADING_DECAY",
     "MEMORY_SPREADING_MIN_STRENGTH",
-    "backfill_entities",
     "compute_entity_importance_map",
-    "entities_from_json",
-    "entities_to_json",
-    "entity_overlap_score",
-    "extract_entities",
     "memory_max_activation",
     "memory_max_entity_importance",
     "should_expand_supersession_chain",
     "spread_activation",
     "walk_supersession_chain",
 ]
+
