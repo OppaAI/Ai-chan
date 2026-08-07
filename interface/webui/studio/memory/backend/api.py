@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Aiko Memory Graph Studio")
 
@@ -19,6 +20,10 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+
+# Serve frontend assets (style.css, script.js) under /static, matching the
+# other studios (approval, dag, kb).
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="memory-frontend")
 
 
 @app.get("/api/graph")

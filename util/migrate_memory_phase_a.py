@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Local imports after path setup so `uv run python -m util...` works from repo root.
-    from cognition.memory.memorize import _PHASE_A_COLUMNS, ensure_phase_a_schema, existing_columns
+    from cognition.memory.memorize import PHASE_A_COLUMNS, ensure_phase_a_schema, existing_columns
     from cognition.memory.vecstore import initialize_store_db, resolve_user_db_path
     from system.userspace import current_user_id
 
@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
             print("No memories table found — open Aiko once or run with a real memory.db.")
             return 1
 
-        missing = [name for name, _ in _PHASE_A_COLUMNS if name not in cols]
+        missing = [name for name, _ in PHASE_A_COLUMNS if name not in cols]
         if not missing:
             print("Already migrated: all Phase A columns present.")
             print(f"columns={sorted(cols)}")

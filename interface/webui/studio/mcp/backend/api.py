@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 import subprocess
 import json
 import os
@@ -23,6 +24,8 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="mcp-frontend")
 
 
 def _get_mcp_servers() -> list[dict]:

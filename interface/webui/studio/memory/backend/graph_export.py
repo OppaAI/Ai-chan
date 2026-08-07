@@ -703,7 +703,7 @@ def _add_knowledge_layer(
         cols = set()
     if not cols or "id" not in cols:
         try:
-            from cognition.knowledge import _connect as kb_connect
+            from cognition.knowledge import connect as kb_connect
             kb_conn = kb_connect(uid)
             owns = True
             cols = {r[1] for r in kb_conn.execute("PRAGMA table_info(learned_chunks)").fetchall()}
