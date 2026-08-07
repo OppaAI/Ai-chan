@@ -92,7 +92,7 @@ async def get_state(mode: str = Query("auto")):
     mode = (mode or "auto").strip().lower()
     if mode in ("auto", "live"):
         live = _live_state()
-        if live and (mode == "live" or live.get("live_fresh") or live.get("slots")):
+        if live and (mode == "live" or (mode == "auto" and live.get("live_fresh"))):
             return live
         if mode == "live":
             return {

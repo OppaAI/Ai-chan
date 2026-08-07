@@ -145,8 +145,17 @@ def _publish_unlocked() -> None:
         path = Path(GRASP_LIVE_STATE_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        # Create temp file with restrictive permissions
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, json.dumps(state, ensure_ascii=False).encode("utf-8"))
+        finally:
+            os.close(fd)
+        # Ensure temp file has 0600 before replace
+        os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        # Ensure final file has 0600 after replace
+        os.chmod(path, 0o600)
         _last_publish = time.time()
     except Exception:
         pass
@@ -234,40 +243,43 @@ def install_into_think(think: Any) -> bool:
     """
     if think is None or not GRASP_LIVE_ENABLED:
         return False
-    if getattr(think, "_grasp_live_installed", False):
-        return True
 
-    orig_store = think._store_async
-    orig_reset = think.reset_context
-    orig_stream = think._stream_response
+    with _lock:
+        if getattr(think, "_grasp_live_installed", False):
+            return True
 
-    def _store_async(user_input: str, response_text: str) -> None:
-        orig_store(user_input, response_text)
-        try:
-            record_turn(user_input, response_text)
-        except Exception:
-            pass
+        orig_store = think._store_async
+        orig_reset = think.reset_context
+        orig_stream = think._stream_response
 
-    def _reset_context() -> None:
-        orig_reset()
-        try:
-            clear_live()
-        except Exception:
-            pass
+        def _store_async(user_input: str, response_text: str) -> None:
+            orig_store(user_input, response_text)
+            try:
+                record_turn(user_input, response_text)
+            except Exception:
+                pass
 
-    def _stream_response(messages: list, system: str = "", token_callback=None) -> str:
-        try:
-            block = get_context_block(max_tokens=1200, touch=True)
-            if block:
-                system = f"{system}\n\n{block}" if system else block
-        except Exception:
-            pass
-        return orig_stream(messages, system=system, token_callback=token_callback)
+        def _reset_context() -> None:
+            orig_reset()
+            try:
+                clear_live()
+            except Exception:
+                pass
 
-    think._store_async = _store_async  # type: ignore[method-assign]
-    think.reset_context = _reset_context  # type: ignore[method-assign]
-    think._stream_response = _stream_response  # type: ignore[method-assign]
-    think._grasp_live_installed = True
+        def _stream_response(messages: list, system: str = "", token_callback=None) -> str:
+            try:
+                block = get_context_block(max_tokens=1200, touch=True)
+                if block:
+                    system = f"{system}\n\n{block}" if system else block
+            except Exception:
+                pass
+            return orig_stream(messages, system=system, token_callback=token_callback)
+
+        think._store_async = _store_async  # type: ignore[method-assign]
+        think.reset_context = _reset_context  # type: ignore[method-assign]
+        think._stream_response = _stream_response  # type: ignore[method-assign]
+        think._grasp_live_installed = True
+
     try:
         install_into_agentic()
     except Exception:
