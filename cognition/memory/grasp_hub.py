@@ -43,12 +43,23 @@ _last_publish = 0.0
 
 def _on_evict(turn: GraspTurn) -> None:
     with _lock:
+        emo = float(turn.emotion)
+        if hasattr(turn, "valence_label"):
+            vtag = turn.valence_label()
+        elif emo >= 0.25:
+            vtag = "positive"
+        elif emo <= -0.25:
+            vtag = "negative"
+        else:
+            vtag = "neutral"
         _evictions.insert(
             0,
             {
                 "user": (turn.user or "")[:160],
                 "assistant": (turn.assistant or "")[:160],
                 "score": round(float(turn.score), 4),
+                "emotion": round(emo, 4),
+                "valence_tag": vtag,
                 "recall_count": int(turn.recall_count),
                 "tokens": int(turn.tokens),
                 "created_turn": int(turn.created_turn),
@@ -114,7 +125,7 @@ def clear_live() -> None:
 def live_studio_state() -> dict[str, Any]:
     buf = get_live_buffer()
     with _lock:
-        state = buf.studio_state()
+        state = _enrich_valence(buf.studio_state())
         state["mode"] = "live"
         state["evictions"] = list(_evictions)
         state["updated_at"] = time.time()
@@ -127,7 +138,7 @@ def _publish_unlocked() -> None:
         return
     try:
         buf = get_live_buffer()
-        state = buf.studio_state()
+        state = _enrich_valence(buf.studio_state())
         state["mode"] = "live"
         state["evictions"] = list(_evictions)
         state["updated_at"] = time.time()
@@ -182,6 +193,34 @@ def get_context_block(*, max_tokens: int | None = 1200, touch: bool = True) -> s
             return block or ""
     except Exception:
         return ""
+
+
+def _enrich_valence(state: dict[str, Any]) -> dict[str, Any]:
+    """Attach valence_tag to studio slots from emotion factor or raw emotion."""
+    try:
+        from cognition.memory.grasp import valence_tag
+    except Exception:
+        def valence_tag(emotion: float) -> str:  # type: ignore[misc]
+            if emotion >= 0.25:
+                return "positive"
+            if emotion <= -0.25:
+                return "negative"
+            return "neutral"
+    slots = state.get("slots") or []
+    for s in slots:
+        if s.get("valence_tag"):
+            continue
+        emo = s.get("emotion")
+        if emo is None:
+            fe = (s.get("factors") or {}).get("emotion")
+            if fe is not None:
+                emo = float(fe) * 2.0 - 1.0
+            else:
+                emo = 0.0
+        s["emotion"] = round(float(emo), 4)
+        s["valence_score"] = s["emotion"]
+        s["valence_tag"] = valence_tag(float(emo))
+    return state
 
 
 def install_into_think(think: Any) -> bool:
