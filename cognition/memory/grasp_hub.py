@@ -10,6 +10,7 @@ Path (override with GRASP_LIVE_STATE_PATH):
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from cognition.memory.grasp import GraspBuffer, GraspTurn, build_grasp
+
+log = logging.getLogger("aiko.grasp_hub")
 
 
 def _env_flag(name: str, default: str = "1") -> bool:
@@ -39,6 +42,7 @@ _buffer: GraspBuffer | None = None
 _evictions: list[dict[str, Any]] = []
 _MAX_EVICT = 40
 _last_publish = 0.0
+_last_publish_error: str | None = None
 
 
 def _on_evict(turn: GraspTurn) -> None:
@@ -133,7 +137,7 @@ def live_studio_state() -> dict[str, Any]:
 
 
 def _publish_unlocked() -> None:
-    global _last_publish
+    global _last_publish, _last_publish_error
     if not GRASP_LIVE_ENABLED:
         return
     try:
@@ -145,7 +149,11 @@ def _publish_unlocked() -> None:
         path = Path(GRASP_LIVE_STATE_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        # Create temp file with restrictive permissions
+        # Drop stale temp from a prior crashed publish, then create 0600
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
             os.write(fd, json.dumps(state, ensure_ascii=False).encode("utf-8"))
@@ -157,8 +165,15 @@ def _publish_unlocked() -> None:
         # Ensure final file has 0600 after replace
         os.chmod(path, 0o600)
         _last_publish = time.time()
-    except Exception:
-        pass
+        _last_publish_error = None
+    except Exception as e:
+        _last_publish_error = f"{type(e).__name__}: {e}"
+        log.warning(
+            "grasp live snapshot publish failed path=%s err=%s",
+            GRASP_LIVE_STATE_PATH,
+            e,
+            exc_info=True,
+        )
 
 
 def read_live_snapshot() -> dict[str, Any] | None:
@@ -183,6 +198,15 @@ def snapshot_age_seconds() -> float | None:
         return max(0.0, time.time() - path.stat().st_mtime)
     except OSError:
         return None
+
+
+def publish_health() -> dict[str, Any]:
+    """Snapshot publication status for Studio /api/health."""
+    return {
+        "last_publish_at": _last_publish or None,
+        "last_publish_error": _last_publish_error,
+        "path": GRASP_LIVE_STATE_PATH,
+    }
 
 
 def get_context_block(*, max_tokens: int | None = 1200, touch: bool = True) -> str:
