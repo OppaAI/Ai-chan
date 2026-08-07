@@ -27,10 +27,10 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function esc(s) {
   return String(s)
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, """);
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function scoreOf(s) { return Number(s.score) || 0; }
@@ -46,7 +46,7 @@ function visualFromScore(score) {
 }
 
 function slotKey(s, i) {
-  return `${s.created_turn ?? i}-${(s.user || "").slice(0, 24)}`;
+  return `${s.user_ts ?? s.created_turn ?? i}`;
 }
 
 function measureDocks() {
@@ -73,7 +73,7 @@ function buildRack(miller) {
   rack.innerHTML = "";
   for (let i = 0; i < max; i++) {
     const dock = document.createElement("div");
-    dock.className = "slot-dock" + (i < center ? "" : "");
+    dock.className = "slot-dock" + (i < center ? "" : " overflow");
     dock.id = "dock-" + i;
     dock.innerHTML = `<span class="dock-num">${i + 1}</span>`;
     rack.appendChild(dock);
@@ -170,6 +170,7 @@ function updateMemEl(el, slot, rank) {
   const tx = el.querySelector(".mem-text");
   if (tx) tx.textContent = (slot.user || "").slice(0, 28);
   el.dataset.scale = String(vis.scale);
+  el.onclick = () => showFactors(slot);
 }
 
 function showFactors(slot) {
@@ -275,11 +276,14 @@ function renderEvictions(list) {
     return;
   }
   root.innerHTML = list.slice(0, 12).map((e) =>
-    `<div class="evict-item show">
+    `<div class="evict-item">
       <div><span class="sc">evicted</span> score ${(Number(e.score)||0).toFixed(3)} · t#${e.created_turn ?? "?"}</div>
       <div>${esc((e.user || "").slice(0, 64))}</div>
     </div>`
   ).join("");
+  requestAnimationFrame(() => {
+    root.querySelectorAll(".evict-item").forEach((el) => el.classList.add("show"));
+  });
 }
 
 async function applyState(data, { animateNew = false, filled = null } = {}) {
@@ -340,8 +344,14 @@ async function applyState(data, { animateNew = false, filled = null } = {}) {
 }
 
 async function refresh() {
-  const data = await api("/api/state");
-  await applyState(data, { animateNew: false });
+  if (isAnimating) return;
+  isAnimating = true;
+  try {
+    const data = await api("/api/state");
+    await applyState(data, { animateNew: false });
+  } finally {
+    isAnimating = false;
+  }
 }
 
 async function seed() {
@@ -380,26 +390,40 @@ async function seed() {
 
 async function touch() {
   if (isAnimating) return;
-  const data = await api("/api/touch", { method: "POST", body: "{}" });
-  document.querySelectorAll(".mem").forEach((el) => {
-    el.classList.add("touched");
-    const fl = document.createElement("div");
-    fl.className = "float";
-    fl.textContent = "+recall";
-    fl.style.left = el.style.left;
-    fl.style.top = el.style.top;
-    $("stage").appendChild(fl);
-    setTimeout(() => fl.remove(), 900);
-    setTimeout(() => el.classList.remove("touched"), 500);
-  });
-  await applyState(data, { animateNew: false });
+  isAnimating = true;
+  try {
+    const data = await api("/api/touch", { method: "POST", body: "{}" });
+    const stage = $("stage");
+    const stageRect = stage.getBoundingClientRect();
+    document.querySelectorAll(".mem").forEach((el) => {
+      el.classList.add("touched");
+      const fl = document.createElement("div");
+      fl.className = "float";
+      fl.textContent = "+recall";
+      const elRect = el.getBoundingClientRect();
+      fl.style.left = (elRect.left - stageRect.left) + "px";
+      fl.style.top = (elRect.top - stageRect.top) + "px";
+      stage.appendChild(fl);
+      setTimeout(() => fl.remove(), 900);
+      setTimeout(() => el.classList.remove("touched"), 500);
+    });
+    await applyState(data, { animateNew: false });
+  } finally {
+    isAnimating = false;
+  }
 }
 
 async function reset() {
-  const data = await api("/api/reset", { method: "POST", body: "{}" });
-  document.querySelectorAll(".mem").forEach((m) => m.remove());
-  knownIds.clear();
-  await applyState(data, { animateNew: false });
+  if (isAnimating) return;
+  isAnimating = true;
+  try {
+    const data = await api("/api/reset", { method: "POST", body: "{}" });
+    document.querySelectorAll(".mem").forEach((m) => m.remove());
+    knownIds.clear();
+    await applyState(data, { animateNew: false });
+  } finally {
+    isAnimating = false;
+  }
 }
 
 async function fill() {
