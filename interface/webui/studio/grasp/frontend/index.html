@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aiko Grasp Studio</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Grasp</h1>
+      <span class="badge" id="modeBadge">demo</span>
+    </div>
+    <div class="meta" id="metaBar">—</div>
+    <div class="actions">
+      <button id="btnSeed" title="Load canned conversation">Seed demo</button>
+      <button id="btnTouch" title="Simulate prompt injection (recall++)">Touch / recall</button>
+      <button id="btnReset" class="danger">Reset</button>
+      <button id="btnRefresh">Refresh</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <h2>Active buffer <span class="hint">high score → focus (left)</span></h2>
+      <div id="slots" class="slots empty">No slots yet — Seed demo or fill a turn.</div>
+    </section>
+
+    <section class="panel side">
+      <h2>Fill turn</h2>
+      <label for="inUser">User</label>
+      <textarea id="inUser" rows="2" placeholder="user message…"></textarea>
+      <label for="inAsst">Assistant</label>
+      <textarea id="inAsst" rows="2" placeholder="assistant reply…"></textarea>
+      <button id="btnFill" class="primary">Fill into grasp</button>
+
+      <h2 class="mt">Eviction log</h2>
+      <div id="evictions" class="evict-list empty">None yet</div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    Factors: emotion · importance · recency · relevance · novelty · question · entity · recall_freq · primacy
+    · Miller dual-guard · no embedder on hot path
+  </footer>
+  <script src="/static/script.js"></script>
+</body>
+</html>

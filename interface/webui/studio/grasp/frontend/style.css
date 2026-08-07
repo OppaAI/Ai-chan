@@ -1,0 +1,130 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #2a3140;
+  --text: #e8ecf4;
+  --muted: #8b95a8;
+  --accent: #7c9cff;
+  --good: #4ade80;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --slot: #1e2430;
+  --bar: #3b82f6;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: #12151c;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+.dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 10px var(--accent);
+}
+.badge {
+  font-size: 0.7rem; padding: 2px 8px; border-radius: 999px;
+  background: #243049; color: var(--accent); text-transform: uppercase;
+}
+.meta { color: var(--muted); font-size: 0.85rem; flex: 1; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+button {
+  background: #243049; color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 0.85rem;
+}
+button:hover { border-color: var(--accent); }
+button.primary { background: #2a3f6e; border-color: var(--accent); }
+button.danger { background: #3a2228; border-color: #6b3038; }
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  padding: 16px;
+  flex: 1;
+}
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.panel h2 {
+  margin: 0 0 12px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.hint { color: var(--muted); font-weight: 400; font-size: 0.75rem; }
+.mt { margin-top: 20px; }
+.slots { display: flex; flex-direction: column; gap: 10px; }
+.slots.empty, .evict-list.empty { color: var(--muted); font-size: 0.9rem; }
+.slot {
+  background: var(--slot);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 12px;
+}
+.slot .rank {
+  width: 48px; height: 48px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 1.1rem;
+  background: #243049; color: var(--accent);
+}
+.slot.weak .rank { color: var(--muted); }
+.slot .body { min-width: 0; }
+.slot .lines {
+  font-size: 0.82rem; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-bottom: 4px;
+}
+.slot .lines .u { color: #a5b4fc; }
+.slot .lines .a { color: #86efac; }
+.slot .stats {
+  display: flex; flex-wrap: wrap; gap: 8px 14px;
+  font-size: 0.72rem; color: var(--muted); margin-bottom: 8px;
+}
+.factors { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 10px; }
+@media (max-width: 700px) { .factors { grid-template-columns: repeat(2, 1fr); } }
+.factor { font-size: 0.68rem; color: var(--muted); }
+.factor .name { display: flex; justify-content: space-between; margin-bottom: 2px; }
+.factor .track {
+  height: 5px; background: #2a3140; border-radius: 3px; overflow: hidden;
+}
+.factor .fill { height: 100%; background: var(--bar); border-radius: 3px; }
+label { display: block; font-size: 0.75rem; color: var(--muted); margin: 8px 0 4px; }
+textarea {
+  width: 100%; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px; font: inherit; resize: vertical;
+}
+.side button.primary { width: 100%; margin-top: 10px; }
+.evict-list { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow: auto; }
+.evict {
+  font-size: 0.78rem; padding: 8px; border-radius: 8px;
+  background: #1a1520; border: 1px solid #3a2a35; color: #e7c6c6;
+}
+.evict .sc { color: var(--bad); font-weight: 600; }
+.foot {
+  padding: 10px 18px; border-top: 1px solid var(--border);
+  color: var(--muted); font-size: 0.72rem;
+}
