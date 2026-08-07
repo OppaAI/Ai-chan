@@ -239,7 +239,8 @@ body {
 }
 .mem-text {
   font-size: 9px; color: var(--dim-text); line-height: 1.2; max-width: 72px;
-  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
 }
 .mem-tokens { font-size: 8px; color: var(--dim-text); margin-top: 1px; }
 
