@@ -37,11 +37,11 @@ CREATE INDEX IF NOT EXISTS idx_journals_user_date ON journals(user_id, entry_dat
 """
 
 
-def _connect(user_id: str | None = None):
+def connect(user_id: str | None = None):
     return initialize_store_db(JOURNAL_DB_PATH, _DDL, user_id=user_id, vector=False)
 
 
-def _now() -> str:
+def now() -> str:
     return utc_now_iso()
 
 
@@ -60,9 +60,9 @@ def pin_daily_journal(body: str, date: datetime, *, user_id: str | None = None) 
     uid = user_id or current_user_id()
     entry_date = date.strftime("%Y-%m-%d")
     tag = daily_journal_tag(entry_date)
-    now = _now()
+    ts = now()
     row_id = str(uuid.uuid4())
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         conn.execute(
             """
@@ -74,7 +74,7 @@ def pin_daily_journal(body: str, date: datetime, *, user_id: str | None = None) 
                 pinned=1,
                 updated_at=excluded.updated_at
             """,
-            (row_id, uid, entry_date, tag, body, 1, now, now),
+            (row_id, uid, entry_date, tag, body, 1, ts, ts),
         )
         conn.commit()
         row = conn.execute(
@@ -100,7 +100,7 @@ def get_between(start: datetime, end: datetime, *, user_id: str | None = None) -
     uid = user_id or current_user_id()
     start_s = start.strftime("%Y-%m-%d")
     end_s = end.strftime("%Y-%m-%d")
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         rows = conn.execute(
             """
@@ -117,7 +117,7 @@ def get_between(start: datetime, end: datetime, *, user_id: str | None = None) -
 
 def delete(entry_id: str, *, user_id: str | None = None) -> bool:
     uid = user_id or current_user_id()
-    conn = _connect(uid)
+    conn = connect(uid)
     try:
         deleted = delete_user_row(conn, "journals", entry_id, uid)
         conn.commit()

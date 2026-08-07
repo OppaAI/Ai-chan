@@ -119,7 +119,7 @@ _MUST_KEEP_KEYWORDS = (
 )
 
 
-def _is_must_keep(text: str) -> bool:
+def is_must_keep(text: str) -> bool:
     kind = classify_kind(text, default="fact")
     if kind in ("event", "plan"):
         return True
@@ -189,7 +189,7 @@ def _bounded_lines(items: list[str]) -> str:
     return "\n".join(lines) or "- none"
 
 
-def _entity_connectivity_weights(memorize, user_id: str) -> dict[str, float]:
+def entity_connectivity_weights(memorize, user_id: str) -> dict[str, float]:
     try:
         lock = getattr(getattr(memorize, "_mem", None), "_db_lock", None)
         if lock is not None:
@@ -219,7 +219,7 @@ def _entity_connectivity_weights(memorize, user_id: str) -> dict[str, float]:
     return weights
 
 
-def _build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
+def build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
     # Phase 6: get_all + filter is OK monthly; SQL limit if this ever shows up in profiles.
     try:
         all_mems = memorize.get_all(user_id=user_id)
@@ -262,7 +262,7 @@ def _build_static_anchors(memorize, user_id: str) -> "np.ndarray | None":
 
 
 
-def _build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
+def build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
     """Mean vector of recently active memories — 'what has been active lately'.
 
     Used at monthly gate time (not turn-level WMC). Prefers rows with recent
@@ -330,7 +330,7 @@ def _build_dynamic_anchors(memorize, user_id: str) -> "np.ndarray | None":
     return np.mean(vectors, axis=0, keepdims=True)
 
 
-def _score_daily_row(
+def score_daily_row(
     row: dict,
     *,
     static_anchors: "np.ndarray | None",
@@ -424,7 +424,7 @@ def _score_daily_row(
     )
 
 
-def _apply_retention_gate(
+def apply_retention_gate(
     memorize,
     user_id: str,
     daily_rows: list[dict],
@@ -434,7 +434,7 @@ def _apply_retention_gate(
 
     for row in daily_rows:
         text = row.get("_text", "") or ""
-        if _is_must_keep(text):
+        if is_must_keep(text):
             must_keep_rows.append(row)
         else:
             candidate_rows.append(row)
@@ -447,9 +447,9 @@ def _apply_retention_gate(
             "dropped_candidates": 0,
         }
 
-    static_anchors = _build_static_anchors(memorize, user_id)
-    dynamic_anchors = _build_dynamic_anchors(memorize, user_id)
-    entity_weights = _entity_connectivity_weights(memorize, user_id)
+    static_anchors = build_static_anchors(memorize, user_id)
+    dynamic_anchors = build_dynamic_anchors(memorize, user_id)
+    entity_weights = entity_connectivity_weights(memorize, user_id)
     entity_weight_cap = max(entity_weights.values(), default=1.0) or 1.0
     entity_importance: dict[str, float] = {}
     try:
@@ -472,7 +472,7 @@ def _apply_retention_gate(
     scored: list[tuple[float, dict]] = []
     for i, row in enumerate(candidate_rows):
         vec = candidate_vectors[i] if candidate_vectors is not None else None
-        score = _score_daily_row(
+        score = score_daily_row(
             row,
             static_anchors=static_anchors,
             dynamic_anchors=dynamic_anchors,
@@ -568,13 +568,13 @@ _MONTHLY_MERGE_USER = textwrap.dedent("""
 """).strip()
 
 
-def _parse_fact_array(raw: str) -> list[str]:
+def parse_fact_array(raw: str) -> list[str]:
     """Legacy: plain string facts only."""
-    items = _parse_fact_items(raw)
+    items = parse_fact_items(raw)
     return [it["fact"] for it in items if it.get("fact")]
 
 
-def _parse_fact_items(raw: str) -> list[dict]:
+def parse_fact_items(raw: str) -> list[dict]:
     """Parse monthly facts as {fact, source_ids[]} or plain strings."""
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
@@ -613,7 +613,7 @@ def _parse_fact_items(raw: str) -> list[dict]:
     return []
 
 
-def _extract_monthly_facts_chunk(
+def extract_monthly_facts_chunk(
     month_key: str,
     rows: list[dict],
     idx: int,
@@ -640,10 +640,10 @@ def _extract_monthly_facts_chunk(
         facts=_bounded_lines(lines),
     )
     raw = _chat(_MONTHLY_FACTS_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=1100, temperature=0.1)
-    return _parse_fact_items(raw)
+    return parse_fact_items(raw)
 
 
-def _merge_monthly_facts(month_key: str, chunk_items: list[list[dict]]) -> list[dict]:
+def merge_monthly_facts(month_key: str, chunk_items: list[list[dict]]) -> list[dict]:
     if len(chunk_items) == 1:
         return chunk_items[0]
     # Flatten with provenance preserved; LLM merge drops source_ids — re-attach by fact text best-effort later if needed.
@@ -657,7 +657,7 @@ def _merge_monthly_facts(month_key: str, chunk_items: list[list[dict]]) -> list[
     )
     user_prompt = _MONTHLY_MERGE_USER.format(month_key=month_key, chunks=chunks_text)
     raw = _chat(_MONTHLY_MERGE_SYSTEM.format(USER_ID=current_display_name()), user_prompt, max_tokens=1200, temperature=0.1)
-    merged = _parse_fact_items(raw)
+    merged = parse_fact_items(raw)
     if not merged:
         return flat
 
@@ -682,7 +682,7 @@ def _merge_monthly_facts(month_key: str, chunk_items: list[list[dict]]) -> list[
     return merged
 
 
-def _hard_provenance_ok(kept_rows: list[dict], fact_items: list[dict]) -> tuple[bool, set[str]]:
+def hard_provenance_ok(kept_rows: list[dict], fact_items: list[dict]) -> tuple[bool, set[str]]:
     """Every kept day-pin id must appear in some output source_ids."""
     kept_ids = {str(r.get("id")).strip() for r in kept_rows if r.get("id")}
     covered: set[str] = set()
@@ -706,7 +706,7 @@ _DATE_FROM_JOURNAL_RE = re.compile(
 )
 
 
-def _journal_fragment_lines(body: str) -> list[str]:
+def journal_fragment_lines(body: str) -> list[str]:
     """Split a journal blob into candidate fact-like lines."""
     lines: list[str] = []
     for raw in (body or "").splitlines():
@@ -719,10 +719,10 @@ def _journal_fragment_lines(body: str) -> list[str]:
     return lines
 
 
-def _score_journal_fragment(text: str) -> float:
+def score_journal_fragment(text: str) -> float:
     """Cheap promote score: must_keep / salience / length (no LLM)."""
     score = 0.2
-    if _is_must_keep(text):
+    if is_must_keep(text):
         score += 0.5
     if SALIENCE_POLICY_RE.search(text or ""):
         score += 0.3
@@ -730,7 +730,7 @@ def _score_journal_fragment(text: str) -> float:
     return score
 
 
-def _promote_journal_fragments(
+def promote_journal_fragments(
     memorize,
     user_id: str,
     month_key: str,
@@ -759,7 +759,7 @@ def _promote_journal_fragments(
             day = str(j.get("entry_date") or j.get("date") or "")[:10]
             if not re.match(r"\d{4}-\d{2}-\d{2}", day):
                 continue
-        for line in _journal_fragment_lines(body):
+        for line in journal_fragment_lines(body):
             tagged = f"[{day}] {line}"
             norm = re.sub(r"\s+", " ", tagged.casefold().strip())
             if norm in existing_norms:
@@ -768,7 +768,7 @@ def _promote_journal_fragments(
             line_norm = re.sub(r"\s+", " ", line.casefold().strip())
             if any(line_norm in e for e in existing_norms if len(line_norm) > 30):
                 continue
-            candidates.append((_score_journal_fragment(line), day, line))
+            candidates.append((score_journal_fragment(line), day, line))
 
     candidates.sort(key=lambda x: x[0], reverse=True)
     picked = candidates[:JOURNAL_PROMOTE_K]
@@ -855,7 +855,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
         log.warning("Failed to load daily journals for monthly consolidation: %s", exc)
 
     # Phase 7: selective journal promote into day pins (before gate + min-count).
-    promoted_rows, journal_promoted = _promote_journal_fragments(
+    promoted_rows, journal_promoted = promote_journal_fragments(
         memorize, user_id, month_key, journal_day_rows, memory_day_rows,
     )
     if promoted_rows:
@@ -873,13 +873,13 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
             "memory_day_count": len(memory_day_rows),
         }
 
-    kept_rows, gate_stats = _apply_retention_gate(memorize, user_id, memory_day_rows)
+    kept_rows, gate_stats = apply_retention_gate(memorize, user_id, memory_day_rows)
 
     kept_for_llm = [m for m in kept_rows if (m.get("_text") or "").strip()]
     chunks = [kept_for_llm[i:i + CONSOLIDATION_CHUNK_MEMS] for i in range(0, len(kept_for_llm), CONSOLIDATION_CHUNK_MEMS)]
 
     chunk_items = [
-        _extract_monthly_facts_chunk(month_key, chunk, i + 1, len(chunks))
+        extract_monthly_facts_chunk(month_key, chunk, i + 1, len(chunks))
         for i, chunk in enumerate(chunks)
     ]
     chunk_items = [c for c in chunk_items if c]
@@ -887,7 +887,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     if not chunk_items:
         return {"ran": False, "reason": "empty_extraction", "month": month_key, "count": source_count, **gate_stats}
 
-    final_items = _merge_monthly_facts(month_key, chunk_items)
+    final_items = merge_monthly_facts(month_key, chunk_items)
     if not final_items:
         return {"ran": False, "reason": "empty_merge", "month": month_key, "count": source_count, **gate_stats}
 
@@ -915,7 +915,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     kept_count = len(kept_rows)
     hard_ok, covered_ids = True, set()
     if HARD_SOURCE_PROVENANCE:
-        hard_ok, covered_ids = _hard_provenance_ok(kept_rows, final_items)
+        hard_ok, covered_ids = hard_provenance_ok(kept_rows, final_items)
 
     if CONSOLIDATION_DELETE_DAILY_SUMMARIES:
         if not _delete_coverage_ok(facts_written, kept_count):
@@ -966,7 +966,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     # hard_ok available in locals when Phase 11 enabled
 
     try:
-        maintenance_results = _maintenance_run(user_id, memorize=memorize)
+        maintenance_results = maintenance_run(user_id, memorize=memorize)
         log.info("monthly_maintenance complete: %s", maintenance_results)
     except Exception as exc:
         log.warning("monthly_maintenance failed: %s", exc)
@@ -986,7 +986,7 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     }
 
 
-def _archive_reports(user_id: str | None = None, keep_days: int = 90) -> dict:
+def archive_reports(user_id: str | None = None, keep_days: int = 90) -> dict:
     import shutil
     from datetime import datetime, timedelta
     from system.userspace import user_workspace_root
@@ -1037,12 +1037,12 @@ def _resolve_embedder(memorize=None):
     except Exception:
         return None
 
-def _maintenance_run(user_id: str | None = None, memorize=None) -> dict:
+def maintenance_run(user_id: str | None = None, memorize=None) -> dict:
     uid = user_id or current_user_id()
     results = {}
 
     try:
-        results["archive_reports"] = _archive_reports(uid, keep_days=90)
+        results["archive_reports"] = archive_reports(uid, keep_days=90)
     except Exception as exc:
         log.warning("archive_reports failed: %s", exc)
         results["archive_reports"] = {"error": str(exc)}

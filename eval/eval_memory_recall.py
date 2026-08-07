@@ -71,7 +71,7 @@ GOLDEN_QUERIES = [
 
 def _seed_store(backend, user_id: str) -> dict:
     """
-    Seed target facts + distractor noise into a real _MemoryBackend.
+    Seed target facts + distractor noise into a real MemoryBackend.
     Returns {fact_text: memory_id} for the target facts, so we can check
     whether the RIGHT id came back, not just a text substring match
     (protects against near-duplicate distractor text producing a false
@@ -122,9 +122,9 @@ def _rank_of(results: list[dict], target_id: str) -> int | None:
 
 
 def run_eval(verbose: bool = False) -> dict:
-    from cognition.memory.memorize import _MemoryBackend
+    from cognition.memory.memorize import MemoryBackend
 
-    backend = _MemoryBackend(
+    backend = MemoryBackend(
         db_path="/tmp/eval_memory_recall.db",
         llm_base_url="http://localhost:8080/v1",
         model="ministral",

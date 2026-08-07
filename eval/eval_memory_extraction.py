@@ -189,13 +189,13 @@ def _contains_forbidden(extracted: list[str], forbidden: list[str], embed_fn) ->
 
 def _load_real_backend():
     """
-    Import the real _MemoryBackend + embedder. Fails loudly and early if
+    Import the real MemoryBackend + embedder. Fails loudly and early if
     the environment (LLM_BASE_URL, GGUF model, etc.) isn't set up --
     this eval is meant to run on the actual device with real components.
     """
-    from cognition.memory.memorize import _MemoryBackend
+    from cognition.memory.memorize import MemoryBackend
 
-    backend = _MemoryBackend(
+    backend = MemoryBackend(
         db_path="/tmp/eval_memory_extraction.db",
         llm_base_url="http://localhost:8080/v1",
         model="ministral",

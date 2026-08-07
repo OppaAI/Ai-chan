@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from .backend import _journal_fragment_lines, _promote_journal_fragments, _score_journal_fragment
+from .backend import journal_fragment_lines, promote_journal_fragments, score_journal_fragment
 
-__all__ = ["_journal_fragment_lines", "_promote_journal_fragments", "_score_journal_fragment"]
+__all__ = ["journal_fragment_lines", "promote_journal_fragments", "score_journal_fragment"]
