@@ -12,22 +12,18 @@ from __future__ import annotations
 import json
 import os
 from collections import OrderedDict
-from itertools import combinations
-from typing import Any, Iterable
+from typing import Any
 import queue
 import threading
-import re
 import sqlite3
-import struct
-import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from system import bioclock
-from cognition.memory.vecstore import initialize_store_db, resolve_user_db_path
-from system.userspace import current_display_name, current_user_id, user_state_path
+from cognition.memory.vecstore import initialize_store_db
+from system.userspace import current_display_name, current_user_id
 import sqlite_vec
 from openai import OpenAI
 
@@ -114,6 +110,7 @@ from .schema import (
     ensure_l2_scene_schema,
     ensure_phase_a_schema,
     existing_columns,
+    parse_json_array,
     vacuum_memory_db,
 )
 
@@ -430,7 +427,6 @@ class _MemoryBackend:
         }
 
         raw = None
-        used_schema = False
         if self._json_schema_supported is not False:
             # Grammar-constrained output: no markdown fences, no repeated
             # arrays, no <think> preamble possible (schema forces token 0
@@ -439,7 +435,6 @@ class _MemoryBackend:
             try:
                 resp = self._client.chat.completions.create(**base_kwargs, **schema_kwargs)
                 raw = (resp.choices[0].message.content or "").strip()
-                used_schema = True
                 self._json_schema_supported = True
             except Exception as e:
                 if self._json_schema_supported is None:
@@ -466,13 +461,11 @@ class _MemoryBackend:
 
         # With schema enforcement, parsing is a plain json.loads. Without
         # it (fallback path), the model may wrap the array in markdown
-        # fences or add a preamble, so salvage the first top-level JSON
-        # array before parsing.
-        try:
-            parsed = json.loads(raw if used_schema else (_first_json_array(raw) or raw))
-            if not isinstance(parsed, list):
-                return []
-        except json.JSONDecodeError:
+        # fences or add a preamble, or truncate it mid-response when the
+        # token cap is hit — salvage the first complete array, or recover
+        # the complete objects emitted so far so truncated facts aren't lost.
+        parsed = parse_json_array(raw)
+        if parsed is None:
             log.warning(f"Failed to parse extraction JSON: {raw[:200]!r}")
             return []
 

@@ -14,6 +14,7 @@ import sqlite3
 import struct
 import tempfile
 import threading
+import json
 
 import sqlite_vec
 from system.log import get_logger
@@ -485,6 +486,58 @@ def _first_json_array(raw: str) -> str | None:
         i = j
     return None
 
+def _json_objects(text: str) -> list[dict]:
+    """Pull every complete top-level JSON object out of some text.
+
+    Used to salvage facts from a model response truncated mid-array (by a
+    max_tokens cap) before the closing ``]`` ever arrives: each fully-formed
+    ``{...}`` object is decoded and kept; a trailing incomplete object is
+    skipped rather than failing the whole turn.
+    """
+    dec = json.JSONDecoder()
+    out: list[dict] = []
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "{":
+            try:
+                obj, end = dec.raw_decode(text, i)
+            except json.JSONDecodeError:
+                i += 1
+                continue
+            if isinstance(obj, dict):
+                out.append(obj)
+            i = end
+        else:
+            i += 1
+    return out
+
+
+def parse_json_array(raw) -> list | None:
+    """Return an LLM response as a fact array without dropping truncated data.
+
+    Tries a clean top-level-array parse first; if that fails (e.g. the response
+    was cut off by a token cap), every complete JSON object is recovered so no
+    already-extracted fact is lost. Returns a list or None when nothing usable.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return raw
+    text = str(raw).strip()
+    if not text:
+        return None
+    arr = _first_json_array(text)
+    if arr is not None:
+        try:
+            val = json.loads(arr)
+            if isinstance(val, list):
+                return val
+        except json.JSONDecodeError:
+            pass
+    objs = _json_objects(text)
+    return objs if objs else None
+
 def _memory_db_path_for_user(uid: str) -> str:
     if uid == "guest":
         return _guest_memory_db()
@@ -604,6 +657,7 @@ __all__ = [
     "ensure_l2_scene_schema",
     "ensure_phase_a_schema",
     "existing_columns",
+    "parse_json_array",
     "vacuum_memory_db",
 ]
 
