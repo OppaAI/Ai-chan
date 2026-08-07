@@ -229,4 +229,44 @@ def install_into_think(think: Any) -> bool:
     think.reset_context = _reset_context  # type: ignore[method-assign]
     think._stream_response = _stream_response  # type: ignore[method-assign]
     think._grasp_live_installed = True
+    try:
+        install_into_agentic()
+    except Exception:
+        pass
+    return True
+
+
+def install_into_agentic() -> bool:
+    """Inject Grasp into agentic turns by wrapping _stream_agent_message.
+
+    That helper receives the full messages list (system first); we append the
+    scored <grasp> block onto messages[0]["content"] once per call.
+    """
+    if not GRASP_LIVE_ENABLED:
+        return False
+    try:
+        from agentic import agentic as ag
+    except Exception:
+        return False
+    if getattr(ag, "_grasp_live_installed", False):
+        return True
+    if not hasattr(ag, "_stream_agent_message"):
+        return False
+    orig = ag._stream_agent_message
+
+    def _stream_agent_message(owner, messages, tools, token_callback=None):
+        try:
+            if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+                block = get_context_block(max_tokens=1200, touch=True)
+                if block:
+                    content = messages[0].get("content") or ""
+                    if "<grasp>" not in content:
+                        messages[0] = dict(messages[0])
+                        messages[0]["content"] = f"{content}\n\n{block}" if content else block
+        except Exception:
+            pass
+        return orig(owner, messages, tools, token_callback)
+
+    ag._stream_agent_message = _stream_agent_message  # type: ignore[method-assign]
+    ag._grasp_live_installed = True
     return True
