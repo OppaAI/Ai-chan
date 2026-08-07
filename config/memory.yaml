@@ -206,7 +206,7 @@ MONTHLY_CONSOLIDATION_LLM_TIMEOUT: "120"  # Seconds before monthly summary LLM c
 MONTHLY_CONSOLIDATION_STATE_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/monthly_consolidation_state.jsonl.
 
 # -- Phase 7: journal promote + safer day-pin delete --
-MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE: "1"  # Promote top journal fragments into day pins before the retention gate.
+MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE: "0"  # Promote top journal fragments into day pins before the retention gate.
 MONTHLY_CONSOLIDATION_JOURNAL_PROMOTE_K: "4"  # Max journal lines promoted per month (selective, not random).
 MONTHLY_CONSOLIDATION_DELETE_REQUIRE_COVERAGE: "1"  # Require soft archival coverage before deleting day pins.
 MONTHLY_CONSOLIDATION_DELETE_MIN_WRITTEN: "1"  # Min [YYYY-MM] facts written before delete is allowed.
@@ -269,3 +269,10 @@ EXPERIENCE_SUPERSEDE_THRESHOLD: "0.95"  # cosine sim to mark older run supersede
 EXPERIENCE_SPREADING_ENABLED: "0"
 EXPERIENCE_SPREADING_MAX_EXTRA: "2"
 EXPERIENCE_SPREADING_SCORE_WEIGHT: "0.003"
+
+# -- Phase 19: arousal + neg hard filter + lineage --
+MEMORY_AROUSAL_ENABLED: "1"           # Write/rank arousal_score (−2..+2).
+MEMORY_AROUSAL_RANK_WEIGHT: "0.01"    # Small additive rank term: weight * |arousal|/2.
+MEMORY_NEG_HARD_FILTER: "1"           # Exclude strong-neg from unsolicited context inject.
+MEMORY_NEG_HARD_THRESHOLD: "-1"       # valence_score <= this counts as sticky-neg.
+MEMORY_LINEAGE_MAX_DEPTH: "32"        # Max supersession chain nodes returned by lineage API.

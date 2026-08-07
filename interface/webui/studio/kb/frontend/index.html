@@ -1,54 +1,40 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aiko KB Storage</title>
-    <link rel="stylesheet" href="static/style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aiko · Knowledge Graph</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 </head>
 <body>
-    <header class="studio-header">
-        <div style="display: flex; align-items: center; gap: 14px;">
-            <a href="javascript:history.back();" title="Return" class="back-btn">←</a>
-            <h1>Aiko KB Storage</h1>
-        </div>
-        <div class="header-actions">
-            <span class="header-status" id="header-status">read-only</span>
-            <button id="refresh-btn" class="btn">Refresh</button>
-        </div>
-    </header>
-
-    <div class="studio-body">
-        <aside class="sidebar">
-            <div class="stat-cards">
-                <div class="stat-card"><span class="stat-num" id="stat-docs">–</span><span class="stat-label">Documents</span></div>
-                <div class="stat-card"><span class="stat-num" id="stat-chunks">–</span><span class="stat-label">Chunks</span></div>
-                <div class="stat-card"><span class="stat-num" id="stat-active">–</span><span class="stat-label">Active</span></div>
-                <div class="stat-card"><span class="stat-num" id="stat-superseded">–</span><span class="stat-label">Superseded</span></div>
-                <div class="stat-card"><span class="stat-num" id="stat-archived">–</span><span class="stat-label">Archived</span></div>
-            </div>
-
-            <h2>Filters</h2>
-            <div class="filter-row">
-                <input id="search-input" type="text" placeholder="Search title / source…">
-            </div>
-            <div class="filter-row">
-                <select id="kind-filter">
-                    <option value="">All kinds</option>
-                </select>
-            </div>
-            <div id="kind-stats"></div>
-        </aside>
-
-        <main class="main-area">
-            <div id="docs-list" class="docs-list"></div>
-            <div id="detail-view" class="detail-view" style="display:none">
-                <button id="back-btn" class="btn">← Docs</button>
-                <div id="detail-content"></div>
-            </div>
-        </main>
+  <header>
+    <h1>Knowledge Graph</h1>
+    <span class="sub">learned chunks · entities only · size = importance</span>
+  </header>
+  <div class="wrap">
+    <aside class="sidebar">
+      <label>Limit <input type="number" id="limit" value="200" min="20" max="500" /></label>
+      <label>Min importance <input type="number" id="min-imp" value="0" min="0" max="1" step="0.05" /></label>
+      <label>Entity contains <input type="text" id="filter-entity" placeholder="e.g. ros2" /></label>
+      <button class="btn" id="reload" style="margin-top:10px">Load graph</button>
+      <button class="btn" id="refilter" style="margin-top:6px">Re-filter</button>
+      <div class="legend">
+        <div><span class="swatch" style="background:#4ade80"></span>Knowledge chunk</div>
+        <div><span class="swatch" style="background:#a78bfa"></span>Entity hub</div>
+        <div style="margin-top:6px">Larger + brighter = higher importance<br/>(access · recency · entities)</div>
+      </div>
+      <div class="details" id="details"></div>
+    </aside>
+    <div id="canvas">
+      <svg id="svg"></svg>
+      <div class="zoom-ctl">
+        <button type="button" id="z-in" aria-label="Zoom in" title="Zoom in">+</button>
+        <button type="button" id="z-out" aria-label="Zoom out" title="Zoom out">−</button>
+        <button type="button" id="z-fit" aria-label="Reset zoom" title="Reset zoom">⊡</button>
+      </div>
     </div>
-
-    <script src="static/script.js"></script>
+  </div>
+  <script src="/static/script.js"></script>
 </body>
 </html>
