@@ -1,0 +1,34 @@
+/* Valence (parity with Neural Memory studio) */
+.mem.valence-pos { border-color: rgba(240, 193, 74, 0.55); }
+.mem.valence-neg { border-color: rgba(61, 224, 255, 0.55); }
+.mem.valence-neutral { border-color: rgba(138, 155, 184, 0.35); }
+.mem.valence-pos svg circle.ring { stroke: #f0c14a; }
+.mem.valence-neg svg circle.ring { stroke: #3de0ff; }
+.mem.valence-neutral svg circle.ring { stroke: #8a9bb8; }
+.mem.valence-pos .mem-score {
+  background: linear-gradient(180deg, #f0c14a, #d4a017);
+  -webkit-background-clip: text; background-clip: text;
+}
+.mem.valence-neg .mem-score {
+  background: linear-gradient(180deg, #3de0ff, #1aa6c4);
+  -webkit-background-clip: text; background-clip: text;
+}
+.mem-valence {
+  font-size: 8px; font-weight: 700; letter-spacing: .08em;
+  margin-top: 1px; opacity: 0.85;
+}
+.mem.valence-pos .mem-valence { color: #f0c14a; }
+.mem.valence-neg .mem-valence { color: #3de0ff; }
+.mem.valence-neutral .mem-valence { color: #8a9bb8; }
+.valence-legend {
+  display: flex; gap: 10px; align-items: center;
+  font-size: 10px; color: var(--dim-text); margin: 6px 12px 0;
+  flex-wrap: wrap;
+}
+.valence-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.valence-legend i {
+  width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+}
+.valence-legend .pos i { background: #f0c14a; box-shadow: 0 0 6px #f0c14a; }
+.valence-legend .neg i { background: #3de0ff; box-shadow: 0 0 6px #3de0ff; }
+.valence-legend .neu i { background: #8a9bb8; }
