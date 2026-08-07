@@ -20,12 +20,7 @@ from system.log import get_logger
 
 log = get_logger(__name__)
 
-# Prefer knowledge module path helpers when available
-try:
-    from cognition.knowledge import KNOWLEDGE_DB_PATH, connect as knowledge_connect
-except Exception:
-    KNOWLEDGE_DB_PATH = os.getenv("KNOWLEDGE_DB_PATH", "knowledge/knowledge.db")
-    knowledge_connect = None  # type: ignore
+_KNOWLEDGE_DB_PATH_FALLBACK = os.getenv("KNOWLEDGE_DB_PATH", "knowledge/knowledge.db")
 
 try:
     from cognition.memory.memorize import entities_from_json
@@ -120,12 +115,15 @@ def _chunk_importance(
 
 
 def _open_conn(user_id: str | None) -> sqlite3.Connection:
-    if knowledge_connect is not None:
-        return knowledge_connect(user_id)
-    path = KNOWLEDGE_DB_PATH
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        from cognition.knowledge import connect as kb_connect
+        return kb_connect(user_id)
+    except Exception as exc:
+        log.warning("knowledge graph: deferred connect failed, using fallback: %s", exc)
+        path = _KNOWLEDGE_DB_PATH_FALLBACK
+        conn = sqlite3.connect(path)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def export_knowledge_graph(
