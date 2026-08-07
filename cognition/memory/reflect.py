@@ -766,7 +766,7 @@ def generate_and_post(
     if memorize is not None:
         # Set user context before image generation so _load_reference_images()
         # uses the correct user_id from memorize (not "guest" from scheduler thread)
-        from system.userspace import set_current_user_id, set_current_display_name
+        from system.userspace import set_current_user_id, set_current_display_name, reset_current_user_id, reset_current_display_name
         uid = memorize.get_user_id()
         user_id_token = set_current_user_id(uid)
         display_token = set_current_display_name(display_name)
@@ -798,8 +798,8 @@ def generate_and_post(
 
     finally:
         if _set_user_context:
-            set_current_user_id(user_id_token)
-            set_current_display_name(display_token)
+            reset_current_user_id(user_id_token)
+            reset_current_display_name(display_token)
 
     # Step 3: build Hugo post (with or without image)
     _, content = _build_hugo_post(

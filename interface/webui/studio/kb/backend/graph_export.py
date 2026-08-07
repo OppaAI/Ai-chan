@@ -204,14 +204,14 @@ def export_knowledge_graph(
         params.append(int(fetch_n))
 
         rows = conn.execute(sql, params).fetchall()
-    except Exception as exc:
-        log.warning("knowledge graph: query failed: %s", exc)
-        meta["error"] = str(exc)
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return {"nodes": [], "edges": [], "meta": meta}
+        except Exception as exc:
+            log.warning("knowledge graph: query failed: %s", exc)
+            meta["error"] = str(exc)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return {"nodes": [], "edges": [], "meta": meta}
 
     # Build chunk nodes + entity degree
     entity_degree: dict[str, int] = {}
