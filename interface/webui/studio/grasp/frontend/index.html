@@ -3,70 +3,45 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Aiko Grasp Studio</title>
+  <title>Grasp Studio — Working Memory</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
-    <defs>
-      <linearGradient id="scoreGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stop-color="#a888e8"/>
-        <stop offset="100%" stop-color="#c651a8"/>
-      </linearGradient>
-      <linearGradient id="weakGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stop-color="#e8843a"/>
-        <stop offset="100%" stop-color="#f0c14a"/>
-      </linearGradient>
-      <radialGradient id="nodeGlow" cx="50%" cy="40%" r="55%">
-        <stop offset="0%" stop-color="rgba(168,136,232,0.35)"/>
-        <stop offset="100%" stop-color="rgba(5,5,16,0)"/>
-      </radialGradient>
-    </defs>
-  </svg>
-
   <header class="top">
     <div class="brand">
-      <a href="#" id="backBtn" class="back" title="Back">←</a>
-      <span class="dot"></span>
-      <h1>Grasp</h1>
+      <a class="back" href="/">← studios</a>
+      <h1>Grasp Studio</h1>
       <span class="badge" id="modeBadge">demo</span>
     </div>
     <div class="meta" id="metaBar">—</div>
     <div class="actions">
-      <button class="btn primary" id="btnSeed">Seed demo</button>
-      <button class="btn" id="btnTouch">Touch / recall</button>
-      <button class="btn" id="btnRefresh">Refresh</button>
-      <button class="btn danger" id="btnReset">Reset</button>
+      <button class="btn" id="btnSeed">Seed demo</button>
+      <button class="btn" id="btnReset">Reset</button>
     </div>
   </header>
 
-  <div class="budget">
-    <span class="budget-label">Tokens</span>
-    <div class="budget-track"><div class="budget-fill" id="budgetFill"></div></div>
-    <span class="budget-label" id="budgetText">0</span>
-  </div>
-
-  <div class="stage-wrap">
-    <div class="stage" id="stage">
-      <div class="zone-label zl-in">Incoming → merge</div>
-      <div class="zone-label zl-wm">Working memory (Miller)</div>
-      <div class="zone-label zl-out">Eviction drain</div>
-
-      <div class="merge-zone" id="mergeZone">
-        <div class="merge-arrow" id="mergeArrow">⤵</div>
+  <div class="layout">
+    <div class="stage-wrap">
+      <div class="stage" id="stage">
+        <div class="merge-zone" id="mergeZone">
+          <div class="pill-slot" id="pillUser"></div>
+          <div class="merge-arrow" id="mergeArrow">→</div>
+          <div class="pill-slot" id="pillAsst"></div>
+        </div>
+        <div class="rack" id="rack"></div>
+        <div class="evict-panel" id="evictPanel">
+          <h3>Eviction drain</h3>
+          <div id="evictList"></div>
+        </div>
       </div>
 
-      <div class="rack" id="rack"></div>
-
-      <div class="miller" id="miller">
-        <span>Miller</span>
-        <div class="miller-dots" id="millerDots"></div>
+      <div class="chrome">
+        <div class="budget">
+          <div class="budget-bar"><div class="budget-fill" id="budgetFill"></div></div>
+          <span id="budgetText">—</span>
+        </div>
+        <div class="miller" id="millerDots"></div>
         <span id="gmLabel">0/7</span>
-      </div>
-
-      <div class="evict-zone" id="evictZone">
-        <div class="evict-title">Evicted</div>
-        <div id="evictList"></div>
       </div>
 
       <div class="legend">
@@ -74,6 +49,12 @@
         <span><i class="lg-hi"></i> high focus</span>
         <span><i class="lg-lo"></i> weak / about to recede</span>
         <span>rim fill = score · larger = more salient</span>
+      </div>
+      <div class="valence-legend">
+        <span class="pos"><i></i> positive</span>
+        <span class="neu"><i></i> neutral</span>
+        <span class="neg"><i></i> negative</span>
+        <span>hue = valence (same as memory graph)</span>
       </div>
     </div>
 
