@@ -8,7 +8,8 @@ def main():
     print("Starting Aiko Grasp Studio at http://127.0.0.1:8003")
     import uvicorn
     from interface.webui.studio.grasp.backend.api import app
-    uvicorn.run(app, host="0.0.0.0", port=8003)
+    # Local-only by default (mutable demo state; no auth).
+    uvicorn.run(app, host="127.0.0.1", port=8003)
 
 if __name__ == "__main__":
     main()
