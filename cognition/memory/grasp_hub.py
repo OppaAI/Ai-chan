@@ -185,10 +185,13 @@ def get_context_block(*, max_tokens: int | None = 1200, touch: bool = True) -> s
 
 
 def install_into_think(think: Any) -> bool:
-    """Wrap AikoThink._store_async / reset_context for live WM recording.
+    """Wrap AikoThink for live WM recording + prompt injection.
 
-    Called once from system.wakeup after think is constructed. Covers
-    localchat, webchat, and agentic (all end in _store_async).
+    Called once from system.wakeup after think is constructed.
+    - _store_async: fill Grasp buffer after every completed turn
+    - reset_context: clear buffer on /reset
+    - _stream_response: inject scored <grasp> block into system prompt
+      (covers localchat + webchat; agentic builds its own system string)
     """
     if think is None or not GRASP_LIVE_ENABLED:
         return False
@@ -197,6 +200,7 @@ def install_into_think(think: Any) -> bool:
 
     orig_store = think._store_async
     orig_reset = think.reset_context
+    orig_stream = think._stream_response
 
     def _store_async(user_input: str, response_text: str) -> None:
         orig_store(user_input, response_text)
@@ -212,7 +216,17 @@ def install_into_think(think: Any) -> bool:
         except Exception:
             pass
 
+    def _stream_response(messages: list, system: str = "", token_callback=None) -> str:
+        try:
+            block = get_context_block(max_tokens=1200, touch=True)
+            if block:
+                system = f"{system}\n\n{block}" if system else block
+        except Exception:
+            pass
+        return orig_stream(messages, system=system, token_callback=token_callback)
+
     think._store_async = _store_async  # type: ignore[method-assign]
     think.reset_context = _reset_context  # type: ignore[method-assign]
+    think._stream_response = _stream_response  # type: ignore[method-assign]
     think._grasp_live_installed = True
     return True
