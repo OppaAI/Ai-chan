@@ -5,8 +5,12 @@
     if (v === "pos") v = "positive";
     if (v === "neg") v = "negative";
     if (!v || v === "neutral") {
-      const s = Number(slot.emotion ?? slot.valence_score);
-      if (!Number.isNaN(s) && s !== 0) {
+      let s = Number(slot.emotion ?? slot.valence_score);
+      if (Number.isNaN(s) || (s === 0 && slot.emotion == null && slot.valence_score == null)) {
+        const fe = slot.factors && slot.factors.emotion;
+        if (fe != null) s = Number(fe) * 2 - 1; // factor is 0..1
+      }
+      if (!Number.isNaN(s)) {
         if (s >= 0.25) v = "positive";
         else if (s <= -0.25) v = "negative";
         else v = "neutral";
