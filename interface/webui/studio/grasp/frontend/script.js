@@ -463,8 +463,14 @@ $("backBtn").onclick = (e) => {
   else location.href = "/";
 };
 
+let resizeRaf = 0;
 window.addEventListener("resize", () => {
-  if (lastState) layoutNodes(lastState.slots || [], false);
+  if (!lastState) return;
+  if (resizeRaf) cancelAnimationFrame(resizeRaf);
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = 0;
+    layoutNodes(lastState.slots || [], false);
+  });
 });
 
 refresh().catch((e) => {
