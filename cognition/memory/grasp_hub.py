@@ -95,7 +95,6 @@ def record_turn(
             user_ts=user_ts if user_ts is not None else time.time(),
             assistant_ts=assistant_ts if assistant_ts is not None else time.time(),
         )
-        # Context injection rehearsal for items that remain in focus
         try:
             buf.get_context_block(touch=True)
         except Exception:
@@ -113,7 +112,6 @@ def clear_live() -> None:
 
 
 def live_studio_state() -> dict[str, Any]:
-    """In-process snapshot (same process as Aiko)."""
     buf = get_live_buffer()
     with _lock:
         state = buf.studio_state()
@@ -124,7 +122,6 @@ def live_studio_state() -> dict[str, Any]:
 
 
 def _publish_unlocked() -> None:
-    """Atomic write of live state JSON for the studio process."""
     global _last_publish
     if not GRASP_LIVE_ENABLED:
         return
@@ -137,8 +134,7 @@ def _publish_unlocked() -> None:
         path = Path(GRASP_LIVE_STATE_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
-        payload = json.dumps(state, ensure_ascii=False)
-        tmp.write_text(payload, encoding="utf-8")
+        tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)
         _last_publish = time.time()
     except Exception:
@@ -146,7 +142,6 @@ def _publish_unlocked() -> None:
 
 
 def read_live_snapshot() -> dict[str, Any] | None:
-    """Read published snapshot (studio process). None if missing/stale empty."""
     path = Path(GRASP_LIVE_STATE_PATH)
     if not path.is_file():
         return None
@@ -168,3 +163,37 @@ def snapshot_age_seconds() -> float | None:
         return max(0.0, time.time() - path.stat().st_mtime)
     except OSError:
         return None
+
+
+def install_into_think(think: Any) -> bool:
+    """Wrap AikoThink._store_async / reset_context for live WM recording.
+
+    Called once from system.wakeup after think is constructed. Covers
+    localchat, webchat, and agentic (all end in _store_async).
+    """
+    if think is None or not GRASP_LIVE_ENABLED:
+        return False
+    if getattr(think, "_grasp_live_installed", False):
+        return True
+
+    orig_store = think._store_async
+    orig_reset = think.reset_context
+
+    def _store_async(user_input: str, response_text: str) -> None:
+        orig_store(user_input, response_text)
+        try:
+            record_turn(user_input, response_text)
+        except Exception:
+            pass
+
+    def _reset_context() -> None:
+        orig_reset()
+        try:
+            clear_live()
+        except Exception:
+            pass
+
+    think._store_async = _store_async  # type: ignore[method-assign]
+    think.reset_context = _reset_context  # type: ignore[method-assign]
+    think._grasp_live_installed = True
+    return True
