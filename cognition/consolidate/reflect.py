@@ -305,13 +305,6 @@ def _generate_daily_facts(
     facts = [f for f in facts if len(f) <= 200]
     return facts
 
-_DAILY_TAG_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2})\]\s")
-_DAILY_BLOB_RE = re.compile(
-    r"^(?:Daily journal of |Daily experience summary for |Day record for )"
-    r"(\d{4}-\d{2}-\d{2})",
-    re.IGNORECASE,
-)
-
 _DAILY_SUMMARY_PREFIX_TMPL = "Daily experience summary for {date_str}:"
 _DAY_JOURNAL_PREFIX_TMPL = "Daily journal of {date_str}:"
 _DAY_RECORD_PREFIX_TMPL = _DAY_JOURNAL_PREFIX_TMPL
