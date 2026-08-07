@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Entrypoint for WMC Studio."""
+import os
+import sys
+from pathlib import Path
+
+def main():
+    os.chdir(Path(__file__).parent)
+    print("Starting Aiko WMC Studio at http://127.0.0.1:8003")
+    import uvicorn
+    from interface.webui.studio.wmc.backend.api import app
+    uvicorn.run(app, host="0.0.0.0", port=8003)
+
+if __name__ == "__main__":
+    main()
