@@ -1380,7 +1380,7 @@ class ScheduleRunner:
             query_start = target_local.astimezone(timezone.utc)
             query_end   = target_end_local.astimezone(timezone.utc)
 
-            from cognition.memory.reflect import REFLECT_MAX_MEMS, filter_reflect_snippets
+            from cognition.consolidate.reflect import REFLECT_MAX_MEMS, filter_reflect_snippets
             memories = self._memorize.get_between(
                 query_start, query_end, user_id=self._memorize.get_user_id()
             )
@@ -1612,8 +1612,7 @@ def start_scheduler(
     subsystems and then delegates the rest here.
     """
     from agentic.graph_engine import ensure_playbooks
-    from cognition.memory.reflect import generate_and_post
-    from cognition.consolidate import maybe_run_consolidation
+    from cognition.consolidate import generate_and_post, maybe_run_consolidation
 
     ensure_playbooks(user_id=user_id)
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import os
 import textwrap
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -18,8 +19,6 @@ from openai import OpenAI
 
 from system.log import get_logger
 from system.userspace import current_display_name
-
-from .reflect import _load_soul, _generate_reflection
 
 log = get_logger(__name__)
 

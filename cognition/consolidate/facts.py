@@ -10,7 +10,7 @@ import textwrap
 
 from system.log import get_logger
 from system.userspace import current_display_name
-from cognition.memory.reflect import _extract_json_arrays, _salvage_truncated_facts
+from cognition.consolidate.reflect import _extract_json_arrays, _salvage_truncated_facts
 
 from .schema import _bounded_lines, _chat, HARD_SOURCE_PROVENANCE
 

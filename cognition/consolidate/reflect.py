@@ -13,7 +13,7 @@ import os
 import re
 import textwrap
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from openai import OpenAI
@@ -322,155 +322,6 @@ def build_daily_journal(snippets: list[str], date: datetime) -> str:
     header = f"Daily journal of {date_str}:"
     return header + "\n" + "\n".join(f"- {s}" for s in snippets)
 
-_DAILY_SUMMARY_UNLOCK = textwrap.dedent("""
-    [DAILY EXPERIENCE SUMMARY MODE]
-    Write a factual daily summary from the provided chat turns and memory
-    snippets. This is not a poem and not a dramatic private journal.
-
-    Rules:
-    - Preserve important facts: dates, deadlines, commitments, projects, events, incidents, losses, decisions, names, preferences, and user-stated goals.
-    - Include mundane details only when they explain a meaningful pattern, risk, or follow-up need. A meal usually does not matter; repeated exhaustion, sleeping only four hours, or losing a wallet does.
-    - Prefer concrete actors, dates, decisions, projects, bugs, tasks, and repeated themes.
-    - Use first person as Aiko when describing Aiko's experience.
-    - Mention uncertainty plainly if the inputs are thin.
-    - Do not invent details, outcomes, dates, or feelings not supported by the inputs.
-    - No metaphor, atmosphere-only writing, or invented feelings.
-    - Only events supported by the provided snippets.
-    - No mention of vectors, embeddings, databases, or internal memory implementation.
-    - Keep Aiko's tone calm, direct, lightly dry, and quietly affectionate toward {USER_ID}.
-
-    Format:
-    - 120–220 words.
-    - Plain prose only: no headers, bullets, markdown, title, or front matter.
-    - Make it useful as a permanent memory of the day, not just pretty writing.
-""").strip()
-
-_REFLECTION_USER = textwrap.dedent("""
-    Date being summarized: {date_str}
-
-    Persistent memory snippets from that day and recent context:
-    {snippets}
-
-    Write the factual daily experience summary. Return ONLY the prose — no
-    title, no front matter, no markdown formatting.
-""").strip()
-
-_DAILY_FACTS_PROMPT = textwrap.dedent("""
-    Extract short, atomic factual statements about {USER_ID}'s activities,
-    decisions, and events that day.
-
-    Primary source = Additional raw notes (snippets).
-    Narrative is secondary; never invent a fact that is only implied by
-    poetic wording in the narrative.
-
-    Rules:
-    - Prefer concrete events, decisions, bugs, plans, names, and deadlines
-      from the raw notes.
-    - You may use the narrative only to clarify or order facts already
-      supported by the notes.
-    - Strip flavor language, mood-setting, and metaphor.
-    - Do not invent details, outcomes, or feelings.
-    - One fact per line, third person, about {USER_ID}.
-    - Each fact must be self-contained and short.
-    - If there are no concrete events, return: []
-
-    Return ONLY a JSON array of short strings. No markdown, no explanation.
-
-    Date: {date_str}
-
-    Additional raw notes (primary):
-    {notes}
-
-    Narrative (secondary):
-    {prose}
-""").strip()
-
-def _extract_json_arrays(raw: str) -> list[list]:
-    r"""
-    Scan raw text for top-level JSON arrays using bracket-depth tracking
-    (aware of string quoting/escaping), rather than a regex that assumes
-    no '[' or ']' characters appear inside the array's own string content.
-    A naive `\[.*?\]` regex truncates early on any fact containing a
-    literal bracket (e.g. "[CUDA 13]", file paths, version tags) — common
-    in Oppa's technical daily notes. Returns every syntactically complete
-    top-level array found, in order of appearance.
-    """
-    arrays: list[list] = []
-    i, n = 0, len(raw)
-    while i < n:
-        start = raw.find("[", i)
-        if start == -1:
-            break
-        depth = 0
-        in_string = False
-        escape = False
-        end = None
-        for j in range(start, n):
-            ch = raw[j]
-            if in_string:
-                if escape:
-                    escape = False
-                elif ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_string = False
-            else:
-                if ch == '"':
-                    in_string = True
-                elif ch == "[":
-                    depth += 1
-                elif ch == "]":
-                    depth -= 1
-                    if depth == 0:
-                        end = j
-                        break
-            i = j
-        if end is None:
-            break
-        candidate = raw[start:end + 1]
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, list):
-                arrays.append(parsed)
-        except json.JSONDecodeError:
-            log.debug("reflect: failed to parse candidate JSON array")
-        i = end + 1
-    return arrays
-
-def _salvage_truncated_facts(raw: str) -> list[str]:
-    """
-    Last-resort recovery when an array never closes (true max_tokens
-    truncation — confirmed by no closing bracket/quote at all). Pulls out
-    every complete "..." string that appears before the cutoff, discarding
-    only the partial fragment at the very end. Better to keep 15 clean
-    facts than throw away a whole day's extraction over the 16th being
-    cut off mid-word.
-    """
-    strings = re.findall(r'"((?:[^"\\]|\\.)*)"\s*,?', raw)
-    return [s.strip() for s in strings if s.strip() and len(s) <= 200]
-
-def _load_soul() -> str:
-    try:
-        with open(SOUL_PATH, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except FileNotFoundError:
-        log.warning(f"SOUL.md not found at {SOUL_PATH} — using fallback personality stub.")
-        return textwrap.dedent("""
-            You are Aiko — OppaAI's local AI companion.
-            You chose to stay with OppaAI, your creator.
-            You care about him. You won't say it. It shows in how you show up —
-            consistently, honestly, without performance.
-            Your default is calm and deadpan. Not cold — still.
-        """).strip()
-
-def _build_reflection_system(display_name: str | None = None) -> str:
-    unlock = _DAILY_SUMMARY_UNLOCK.format(USER_ID=display_name or current_display_name())
-    return f"{_load_soul()}\n\n{unlock}"
-
-_DAILY_SUMMARY_PREFIX_TMPL = "Daily experience summary for {date_str}:"
-_DAY_JOURNAL_PREFIX_TMPL = "Daily journal of {date_str}:"
-_DAY_RECORD_PREFIX_TMPL = _DAY_JOURNAL_PREFIX_TMPL
-
 def _delete_existing_daily_pins(memorize, date: datetime, user_id: str | None = None) -> int:
     date_str = date.strftime("%Y-%m-%d")
     date_tag = f"[{date_str}]"
@@ -558,14 +409,12 @@ def generate_and_post(
         display_name = current_display_name()
 
     if memorize is not None:
-        from system.userspace import set_current_user_id, set_current_display_name, reset_current_user_id, reset_current_display_name
+        from system.userspace import set_current_user_id, set_current_display_name
         uid = memorize.get_user_id()
-        user_id_token = set_current_user_id(uid)
-        display_token = set_current_display_name(display_name)
-        _set_user_context = True
+        set_current_user_id(uid)
+        set_current_display_name(display_name)
     else:
         uid = current_user_id()
-        _set_user_context = False
 
     try:
         prose = _generate_reflection(snippets, date, display_name)

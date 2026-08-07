@@ -70,6 +70,64 @@ from .lifecycle import (
 from . import journal  # noqa: F401
 
 
+def generate_and_post(
+    memories: list[dict],
+    date=None,
+    dry_run: bool = False,
+    memorize=None,
+    display_name: str | None = None,
+) -> dict:
+    """
+    Full daily pipeline, composed from the split modules:
+      facts/half: reflect.generate_and_post()  → factual prose + atomic pins
+      dream/half: dream.dream_and_post()       → feelings + FLUX image + Hugo post
+
+    Keeps the historical ``cognition.memory.reflect.generate_and_post`` entry
+    point used by schedule and tests: chats + memories → summary → feelings →
+    FLUX image → pin facts → journal → (optional) GitHub push.
+
+    Returns the combined dict (reflect result merged with dream fields):
+    {success, word_count, mem_count, duration_s, prose, facts, pinned,
+     journal_pinned, scene_id, feelings, image_generated, pushed, slug, dream}
+    """
+    from .reflect import generate_and_post as _reflect_post
+    from .dream import dream_and_post
+
+    import datetime as _dt
+
+    if date is None:
+        date = _dt.datetime.now() - _dt.timedelta(days=1)
+
+    factual = _reflect_post(
+        memories,
+        date=date,
+        dry_run=dry_run,
+        memorize=memorize,
+        display_name=display_name,
+    )
+    if not factual.get("success"):
+        return factual
+
+    prose = factual.get("prose") or ""
+    result = dict(factual)
+
+    dream = dream_and_post(
+        prose=prose,
+        date=date,
+        snippets_count=int(factual.get("mem_count", 0)),
+        display_name=display_name,
+        dry_run=dry_run,
+    )
+    result["slug"]            = dream.get("slug")
+    result["feelings"]        = dream.get("feelings")
+    result["image_generated"] = dream.get("image_generated")
+    result["pushed"]          = dream.get("pushed")
+    result["dream"]           = dream
+    result["word_count"]      = dream.get("word_count", factual.get("word_count"))
+    result["success"]         = bool(dream.get("success", factual.get("success")))
+    return result
+
+
 class ConsolidationStore:
     """Shared coordinator for the monthly consolidation subsystem."""
 
@@ -106,6 +164,7 @@ __all__ = [
     "DELETE_REQUIRE_COVERAGE",
     "entity_connectivity_weights",
     "extract_monthly_facts_chunk",
+    "generate_and_post",
     "hard_provenance_ok",
     "HARD_SOURCE_PROVENANCE",
     "is_must_keep",
