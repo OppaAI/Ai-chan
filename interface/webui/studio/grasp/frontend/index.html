@@ -7,44 +7,89 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <linearGradient id="scoreGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#a888e8"/>
+        <stop offset="100%" stop-color="#c651a8"/>
+      </linearGradient>
+      <linearGradient id="weakGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#e8843a"/>
+        <stop offset="100%" stop-color="#f0c14a"/>
+      </linearGradient>
+      <radialGradient id="nodeGlow" cx="50%" cy="40%" r="55%">
+        <stop offset="0%" stop-color="rgba(168,136,232,0.35)"/>
+        <stop offset="100%" stop-color="rgba(5,5,16,0)"/>
+      </radialGradient>
+    </defs>
+  </svg>
+
   <header class="top">
     <div class="brand">
+      <a href="#" id="backBtn" class="back" title="Back">←</a>
       <span class="dot"></span>
       <h1>Grasp</h1>
       <span class="badge" id="modeBadge">demo</span>
     </div>
     <div class="meta" id="metaBar">—</div>
     <div class="actions">
-      <button id="btnSeed" title="Load canned conversation">Seed demo</button>
-      <button id="btnTouch" title="Simulate prompt injection (recall++)">Touch / recall</button>
-      <button id="btnReset" class="danger">Reset</button>
-      <button id="btnRefresh">Refresh</button>
+      <button class="btn primary" id="btnSeed">Seed demo</button>
+      <button class="btn" id="btnTouch">Touch / recall</button>
+      <button class="btn" id="btnRefresh">Refresh</button>
+      <button class="btn danger" id="btnReset">Reset</button>
     </div>
   </header>
 
-  <main class="layout">
-    <section class="panel">
-      <h2>Active buffer <span class="hint">high score → focus (left)</span></h2>
-      <div id="slots" class="slots empty">No slots yet — Seed demo or fill a turn.</div>
-    </section>
+  <div class="budget">
+    <span class="budget-label">Tokens</span>
+    <div class="budget-track"><div class="budget-fill" id="budgetFill"></div></div>
+    <span class="budget-label" id="budgetText">0</span>
+  </div>
 
-    <section class="panel side">
+  <div class="stage-wrap">
+    <div class="stage" id="stage">
+      <div class="zone-label zl-in">Incoming → merge</div>
+      <div class="zone-label zl-wm">Working memory (Miller)</div>
+      <div class="zone-label zl-out">Eviction drain</div>
+
+      <div class="merge-zone" id="mergeZone">
+        <div class="merge-arrow" id="mergeArrow">⤵</div>
+      </div>
+
+      <div class="rack" id="rack"></div>
+
+      <div class="miller" id="miller">
+        <span>Miller</span>
+        <div class="miller-dots" id="millerDots"></div>
+        <span id="gmLabel">0/7</span>
+      </div>
+
+      <div class="evict-zone" id="evictZone">
+        <div class="evict-title">Evicted</div>
+        <div id="evictList"></div>
+      </div>
+
+      <div class="legend">
+        <span><b>Size + glow</b> = score (like retain)</span>
+        <span><i class="lg-hi"></i> high focus</span>
+        <span><i class="lg-lo"></i> weak / about to recede</span>
+        <span>rim fill = score · larger = more salient</span>
+      </div>
+    </div>
+
+    <aside class="side">
       <h2>Fill turn</h2>
       <label for="inUser">User</label>
       <textarea id="inUser" rows="2" placeholder="user message…"></textarea>
       <label for="inAsst">Assistant</label>
       <textarea id="inAsst" rows="2" placeholder="assistant reply…"></textarea>
-      <button id="btnFill" class="primary">Fill into grasp</button>
+      <button class="btn primary block" id="btnFill">Fill into grasp</button>
 
-      <h2 class="mt">Eviction log</h2>
-      <div id="evictions" class="evict-list empty">None yet</div>
-    </section>
-  </main>
+      <h2 class="mt">Factors (selected)</h2>
+      <div id="factorPanel" class="factor-panel muted">Click a node</div>
+    </aside>
+  </div>
 
-  <footer class="foot">
-    Factors: emotion · importance · recency · relevance · novelty · question · entity · recall_freq · primacy
-    · Miller dual-guard · no embedder on hot path
-  </footer>
   <script src="/static/script.js"></script>
 </body>
 </html>
