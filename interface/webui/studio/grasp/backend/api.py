@@ -78,11 +78,19 @@ def _live_state() -> dict[str, Any] | None:
 @app.get("/api/health")
 async def health():
     live = _live_state()
+    pub: dict = {}
+    try:
+        from cognition.memory.grasp_hub import publish_health
+        pub = publish_health()
+    except Exception:
+        pub = {}
     return {
         "ok": True,
         "service": "grasp-studio",
         "live_available": live is not None,
         "live_fresh": bool(live and live.get("live_fresh")),
+        "publish_error": pub.get("last_publish_error"),
+        "last_publish_at": pub.get("last_publish_at"),
     }
 
 
