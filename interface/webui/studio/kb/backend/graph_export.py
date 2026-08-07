@@ -80,6 +80,21 @@ def _recency_01(raw: Any, *, half_life_days: float = 45.0) -> float:
     return float(max(0.05, min(1.0, 0.5 ** (days / max(half_life_days, 1.0)))))
 
 
+def _norm_date(value: Any, *, end: bool) -> str | None:
+    """Normalize a YYYY-MM-DD or full ISO timestamp for created_at comparisons.
+
+    Bare dates are padded to start-of-day (end=False) or end-of-day (end=True)
+    so string comparison against ISO-8601 created_at stays correct.
+    """
+    v = str(value or "").strip()
+    if not v:
+        return None
+    v = v[:19]
+    if len(v) == 10:
+        return v + ("T23:59:59.999999" if end else "T00:00:00")
+    return v
+
+
 def _chunk_importance(
     *,
     access_count: int,
@@ -132,6 +147,10 @@ def export_knowledge_graph(
     *,
     user_id: str | None = None,
     limit: int | None = None,
+    include_history: bool = True,
+    include_entities: bool = True,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> dict[str, Any]:
     """Return {nodes, edges, meta} for knowledge-only studio."""
     try:
@@ -147,6 +166,10 @@ def export_knowledge_graph(
         "store": "knowledge",
         "include_memory": False,
         "include_experience": False,
+        "include_history": include_history,
+        "include_entities": include_entities,
+        "date_from": date_from,
+        "date_to": date_to,
     }
 
     try:
@@ -198,8 +221,21 @@ def export_knowledge_graph(
                 WHERE c.user_id = ?
             """
             params: list[Any] = [uid]
-            if has_status:
+            
+            # Status filter: only active unless include_history
+            if has_status and not include_history:
                 sql += " AND (c.status = 'active' OR c.status IS NULL OR c.status = '')"
+            
+            # Date range filters (normalize ISO dates)
+            from_dt = _norm_date(date_from, end=False)
+            to_dt = _norm_date(date_to, end=True)
+            if from_dt:
+                sql += " AND c.created_at >= ?"
+                params.append(from_dt)
+            if to_dt:
+                sql += " AND c.created_at <= ?"
+                params.append(to_dt)
+            
             sql += " ORDER BY c.created_at DESC LIMIT ?"
             params.append(int(fetch_n))
     
