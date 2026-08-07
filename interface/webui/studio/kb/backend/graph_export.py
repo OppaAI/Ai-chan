@@ -20,6 +20,8 @@ from system.log import get_logger
 
 log = get_logger(__name__)
 
+from system.userspace import user_state_path
+
 _KNOWLEDGE_DB_PATH_FALLBACK = os.getenv("KNOWLEDGE_DB_PATH", "knowledge/knowledge.db")
 
 try:
@@ -120,7 +122,7 @@ def _open_conn(user_id: str | None) -> sqlite3.Connection:
         return kb_connect(user_id)
     except Exception as exc:
         log.warning("knowledge graph: deferred connect failed, using fallback: %s", exc)
-        path = _KNOWLEDGE_DB_PATH_FALLBACK
+        path = user_state_path(_KNOWLEDGE_DB_PATH_FALLBACK, user_id=user_id)
         conn = sqlite3.connect(path)
         conn.row_factory = sqlite3.Row
         return conn

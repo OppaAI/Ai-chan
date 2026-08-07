@@ -1,4 +1,4 @@
-"""Experience recording/ingestion."""
+"""Experience acquisition (record/ingest)."""
 from __future__ import annotations
 
 import json

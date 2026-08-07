@@ -9,7 +9,11 @@
 </head>
 <body>
   <header>
-    <h1>Knowledge Graph</h1>
+    <div style="display: flex; align-items: center; gap: 14px;">
+      <a href="#" id="back-btn" title="Back"
+         style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:#1a1028;border:1px solid var(--dim);border-radius:50%;color:var(--purple);text-decoration:none;font-weight:bold;">←</a>
+      <h1>Knowledge Graph</h1>
+    </div>
     <span class="sub">learned chunks · entities only · size = importance</span>
   </header>
   <div class="wrap">
@@ -36,5 +40,15 @@
     </div>
   </div>
   <script src="static/script.js"></script>
+  <script>
+    document.getElementById('back-btn').addEventListener('click', function(e) {
+      e.preventDefault();
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = '/';
+      }
+    });
+  </script>
 </body>
 </html>

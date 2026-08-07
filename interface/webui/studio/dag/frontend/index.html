@@ -10,7 +10,7 @@
 <body>
     <header class="studio-header">
         <div style="display: flex; align-items: center; gap: 14px;">
-            <a href="javascript:history.back();" title="Return to previous page" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: #1a1028; border: 1px solid var(--dim); border-radius: 50%; color: var(--purple); text-decoration: none; transition: all 0.2s; font-weight: bold; font-size: 16px;">←</a>
+            <a href="#" id="back-btn" title="Return to previous page" style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: #1a1028; border: 1px solid var(--dim); border-radius: 50%; color: var(--purple); text-decoration: none; transition: all 0.2s; font-weight: bold; font-size: 16px;">←</a>
             <h1>Aiko Graph Studio</h1>
         </div>
         <div class="header-actions">
@@ -49,5 +49,15 @@
 
     <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
     <script src="static/script.js"></script>
+    <script>
+      document.getElementById('back-btn').addEventListener('click', function(e) {
+        e.preventDefault();
+        if (window.history.length > 1) {
+          window.history.back();
+        } else {
+          window.location.href = '/';
+        }
+      });
+    </script>
 </body>
 </html>

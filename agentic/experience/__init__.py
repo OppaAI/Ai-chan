@@ -3,7 +3,7 @@
 Implementation is split by responsibility:
 
 - :mod:`.schema` — connection, DDL, migrations, sanitization, constants
-- :mod:`.write` — experience record write path (insert/embed/auto-relate/prune)
+- :mod:`.acquire` — experience record write path (insert/embed/auto-relate/prune)
 - :mod:`.search` — hybrid retrieval, spreading, context formatting
 - :mod:`.lifecycle` — engram-relation graph
 
@@ -60,7 +60,7 @@ from .search import (
     experience_context_for,
     search_experience,
 )
-from .write import (
+from .acquire import (
     ExperienceWriter,
     _prune,
     record_experience,
