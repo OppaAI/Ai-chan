@@ -165,45 +165,45 @@ def export_knowledge_graph(
                 meta["error"] = "no learned_chunks table"
                 return {"nodes": [], "edges": [], "meta": meta}
 
-        has_entities = "entities" in cols
-        has_status = "status" in cols
-        has_access = "access_count" in cols
-        has_last = "last_accessed" in cols
-
-        select = [
-            "c.id", "c.text", "c.chunk_index", "c.created_at", "c.doc_id",
-            "d.title AS doc_title", "d.source AS doc_source", "d.kind AS doc_kind",
-        ]
-        if has_entities:
-            select.append("c.entities")
-        if has_status:
-            select.append("c.status")
-        if has_access:
-            select.append("c.access_count")
-        if has_last:
-            select.append("c.last_accessed")
-
-        try:
-            req = int(limit) if limit is not None else _MAX_CHUNKS
-        except (TypeError, ValueError):
-            req = _MAX_CHUNKS
-        if req < 1:
-            req = _MAX_CHUNKS
-        fetch_n = min(max(req * 2, req), _MAX_CHUNKS * 2)
-
-        sql = f"""
-            SELECT {", ".join(select)}
-            FROM learned_chunks c
-            LEFT JOIN learned_docs d ON d.id = c.doc_id
-            WHERE c.user_id = ?
-        """
-        params: list[Any] = [uid]
-        if has_status:
-            sql += " AND (c.status = 'active' OR c.status IS NULL OR c.status = '')"
-        sql += " ORDER BY c.created_at DESC LIMIT ?"
-        params.append(int(fetch_n))
-
-        rows = conn.execute(sql, params).fetchall()
+            has_entities = "entities" in cols
+            has_status = "status" in cols
+            has_access = "access_count" in cols
+            has_last = "last_accessed" in cols
+    
+            select = [
+                "c.id", "c.text", "c.chunk_index", "c.created_at", "c.doc_id",
+                "d.title AS doc_title", "d.source AS doc_source", "d.kind AS doc_kind",
+            ]
+            if has_entities:
+                select.append("c.entities")
+            if has_status:
+                select.append("c.status")
+            if has_access:
+                select.append("c.access_count")
+            if has_last:
+                select.append("c.last_accessed")
+    
+            try:
+                req = int(limit) if limit is not None else _MAX_CHUNKS
+            except (TypeError, ValueError):
+                req = _MAX_CHUNKS
+            if req < 1:
+                req = _MAX_CHUNKS
+            fetch_n = min(max(req * 2, req), _MAX_CHUNKS * 2)
+    
+            sql = f"""
+                SELECT {", ".join(select)}
+                FROM learned_chunks c
+                LEFT JOIN learned_docs d ON d.id = c.doc_id
+                WHERE c.user_id = ?
+            """
+            params: list[Any] = [uid]
+            if has_status:
+                sql += " AND (c.status = 'active' OR c.status IS NULL OR c.status = '')"
+            sql += " ORDER BY c.created_at DESC LIMIT ?"
+            params.append(int(fetch_n))
+    
+            rows = conn.execute(sql, params).fetchall()
         except Exception as exc:
             log.warning("knowledge graph: query failed: %s", exc)
             meta["error"] = str(exc)
