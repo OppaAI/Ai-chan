@@ -2,122 +2,141 @@
 
 > Cognitively-inspired active buffer for Aiko's *current conversational focus*.
 
-Status: **framework only** (not yet wired into `cognition/think.py`).  
+Status: **framework + daily journal** (not yet wired into `cognition/think.py`).  
 Branch: `feat/working-memory-cortex`
 
 ---
 
 ## Motivation
 
-Most agent memory systems are strong on long-term storage but leave working memory as "whatever still fits in the context window".  
-WMC adds an explicit, capacity-limited, multi-factor scored buffer that:
-
-- Respects Miller's Law (7±2) as a soft slot limit
-- Uses a token budget as the primary governor
-- Ranks turn-pairs by **8 lightweight dimensions** (no embedder / LLM on the hot path)
-- Tracks **recall frequency** while resident (frequently injected slots gain score)
-- Evicts low-score items deterministically into an episodic hand-off path
-- Adds essentially zero latency
+Most agent memory systems leave working memory as "whatever still fits in the context window".  
+WMC adds an explicit, capacity-limited, multi-factor scored buffer plus a **single daily JSONL journal** for nightly dream/reflect.
 
 ## Lifecycle
 
 ```
 Induction  -> form turn-pair after assistant reply
-Filling    -> append into the active buffer
+Filling    -> append into buffer + async journal line (day = user_ts)
 Sustaining -> re-score & reorder (high score = current focus)
 Receding   -> low-score items drift to the end
-Evicting   -> overflow items leave the buffer -> episodic hand-off
+Evicting   -> overflow → on_evict (+ optional event=evict journal line)
 ```
-
-When the active set is kept in the prompt, "recalling" is free.  
-Each `get_context_block(touch=True)` increments `recall_count` on included slots.
 
 ## Capacity (dual-guard)
 
 | Guard | Default | Notes |
 |-------|---------|-------|
 | Slot limit (Miller) | min 5 / center 7 / max 9 | Soft preference for center |
-| Token budget | 0 (unlimited) | Set via `WMC_TOKEN_BUDGET` or per-call |
+| Token budget | 0 (unlimited) | `WMC_TOKEN_BUDGET` |
 
-## Scoring factors (8 dimensions — all pure Python)
+## Scoring factors (9 dimensions — pure Python)
 
-| Factor | Range | Weight default | Source |
-|--------|-------|----------------|--------|
-| Emotion | −1…+1 → 0…1 | 0.15 | Emoji + tiny pos/neg lexicon |
-| Importance | 0…1 | 0.18 | Keywords ("remember", "prefer", "from now on"…), length |
-| Recency | 0…1 | 0.15 | Exponential decay by turn distance |
-| Relevance | 0…1 | 0.12 | Lexical overlap with **precomputed** static-anchor token set |
-| Novelty | 0…1 | 0.12 | 1 − max Jaccard vs other resident slots |
-| Question | 0…1 | 0.10 | Interrogatives / `?` density on user side |
-| Entity | 0…1 | 0.08 | Proper-name-like tokens + numbers |
-| **Recall frequency** | 0…1 | 0.10 | Soft-capped count of times included in context while resident |
+| Factor | Weight default | Source |
+|--------|----------------|--------|
+| Emotion | 0.14 | Emoji + lexicon |
+| Importance | 0.17 | Keywords, length |
+| Recency | 0.14 | Turn-distance decay |
+| Relevance | 0.11 | Lexical overlap with precomputed static anchor |
+| Novelty | 0.11 | 1 − max Jaccard vs peer slots |
+| Question | 0.09 | Interrogatives / `?` |
+| Entity | 0.08 | Name-like tokens + numbers |
+| Recall frequency | 0.09 | Soft-capped context injections |
+| **Primacy** | 0.07 | Early session turns stick a bit longer |
 
-Static anchor is built **once at boot** (or after consolidation) from high-retain / pinned memory text — lexical token set only. No embedder on the hot path.
+No embedder / LLM on the hot path.
 
-**Embedder involvement:** none inside WMC. Optional once-at-boot if you later want a vector centroid; evicted turns still go through the existing LTM extract+embed path asynchronously.
+## Daily journal (one JSONL, not two)
+
+**Single file per local calendar day:**
+
+```text
+~/.local/share/aiko/journal/YYYY-MM-DD.jsonl
+```
+
+| Rule | Behavior |
+|------|----------|
+| When written | **On fill** (faithful trail) — async daemon thread |
+| Day boundary | **User turn** local datetime only |
+| Straddle midnight | User `23:59:59`, assistant `00:00:10` → **still previous day** |
+| New day | First user turn at `00:00:00` or later → new file |
+| Eviction debug | Optional same-file line `event: "evict"` (not a second JSONL) |
+| Nightly job | At ~00:05 process **yesterday's** file → reflect / dream |
+| Pinning / LTM consolidate | Unchanged (memory DB) |
+
+Record shape:
+
+```json
+{
+  "ts": "2026-08-07T23:59:59+07:00",
+  "ts_unix": 1786142399,
+  "day": "2026-08-07",
+  "event": "fill",
+  "turn": 47,
+  "user": "...",
+  "assistant": "...",
+  "tokens": 128,
+  "score": 0.71,
+  "factors": { "emotion": 0.6, "importance": 0.8 }
+}
+```
+
+Helpers:
+
+```python
+from cognition.memory.wmc import load_journal_day, build_wmc
+
+# Nightly reflect / dream input
+rows = load_journal_day()  # yesterday by default
+rows = load_journal_day("2026-08-07")
+
+wmc = build_wmc()
+wmc.fill(user, assistant, user_ts=user_msg_datetime)
+wmc.flush_resident_to_journal(event="day_close")  # optional EOD
+```
 
 ## Public API
 
 ```python
-from cognition.memory.wmc import build_wmc, WMTurn
+from cognition.memory.wmc import build_wmc, load_journal_day
 
 wmc = build_wmc(
-    static_anchor_tokens={"cats", "jetson", "preference"},
-    on_evict=lambda turn: episodic_buffer.append(turn),
+    static_anchor_tokens={"cats", "jetson"},
+    on_evict=lambda t: ...,  # episodic hand-off
 )
-
-evicted = wmc.fill(user_text, assistant_text)
-block = wmc.get_context_block(max_tokens=1200)  # touches recall_count
-state = wmc.studio_state()  # for WMC Studio / debug
-wmc.clear()
+evicted = wmc.fill(user, asst, user_ts=user_dt)
+block = wmc.get_context_block(max_tokens=1200)
+state = wmc.studio_state()
 ```
 
-## Config knobs
+## Config
 
-| Env key | Default | Meaning |
-|---------|---------|---------|
+| Env | Default | Meaning |
+|-----|---------|---------|
 | `WMC_ENABLED` | `1` | Master switch |
-| `WMC_MILLER_MIN` | `5` | Soft lower slot bound |
-| `WMC_MILLER_CENTER` | `7` | Preferred size |
-| `WMC_MILLER_MAX` | `9` | Hard slot ceiling |
+| `WMC_MILLER_MIN/CENTER/MAX` | `5/7/9` | Slot bounds |
 | `WMC_TOKEN_BUDGET` | `0` | 0 = slot-only |
-| `WMC_W_EMOTION` | `0.15` | Weight |
-| `WMC_W_IMPORTANCE` | `0.18` | Weight |
-| `WMC_W_RECENCY` | `0.15` | Weight |
-| `WMC_W_RELEVANCE` | `0.12` | Weight |
-| `WMC_W_NOVELTY` | `0.12` | Weight |
-| `WMC_W_QUESTION` | `0.10` | Weight |
-| `WMC_W_ENTITY` | `0.08` | Weight |
-| `WMC_W_RECALL_FREQ` | `0.10` | Weight |
+| `WMC_W_*` | see code | Factor weights incl. `WMC_W_PRIMACY` |
 | `WMC_RECENCY_HALF_LIFE` | `4.0` | Turns |
-| `WMC_RECALL_FREQ_CAP` | `6` | Soft cap for recall_freq normalization |
+| `WMC_RECALL_FREQ_CAP` | `6` | Soft cap |
+| `WMC_PRIMACY_SPAN` | `6.0` | Turns over which primacy decays |
+| `WMC_JOURNAL_ENABLED` | `1` | Daily JSONL on/off |
+| `WMC_JOURNAL_DIR` | `~/.local/share/aiko/journal` | Journal root |
 
-## Context size vs before
+## Studio
 
-Current Aiko uses a flat rolling window (`CONTEXT_WINDOW_TURNS` ≈ 8).  
-WMC targets the same ballpark (5–9) with **better ordering** and earlier eviction of weak turns, so typical prompt tokens should be similar or slightly lower, with higher signal density.
-
-## Studio (planned)
-
-`studio_state()` exposes slots + full factor breakdown for a WMC Studio sibling to the Memory Graph Studio:
-
-- Live buffer strip (slots, scores)
-- Per-slot radar/bars for all 8 factors
-- Eviction log
-- Static-anchor panel
-- Live config knobs
+`interface/webui/studio/wmc/` — buffer strip, factor bars, eviction log, demo seed.  
+Run: `uv run python -m interface.webui.studio.wmc.backend.api` → `:8003`
 
 ## Integration plan (follow-up)
 
-1. One `WorkingMemoryCortex` per user/session in `AikoThink`
-2. Sit in front of / replace raw `CONTEXT_WINDOW_TURNS`
-3. `fill()` after assistant commit; inject `get_context_block()` into prompt assembly
-4. `on_evict` → existing async memory / episodic path
-5. Build static anchor at boot from pinned / high-retain memories
+1. Wire one WMC per session in `AikoThink`
+2. Pass real `user_ts` from the inbound message
+3. Nightly job: `load_journal_day()` → reflect → `journal.db` / dream → blog
+4. Pinning + consolidate pipelines stay on existing memory DB
+5. Optional: warm-load recent journal lines into WMC on boot
 
 ## Non-goals (this PR)
 
-- Full wiring into `think.py`
-- Vector relevance on the hot path
-- Cross-process persistence of the buffer
-- Replacing sqlite-vec LTM
+- Wiring into `think.py`
+- Replacing sqlite-vec LTM or pin paths
+- Second debug-only JSONL file
