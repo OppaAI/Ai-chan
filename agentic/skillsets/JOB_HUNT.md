@@ -54,7 +54,7 @@ https://example/job
 - 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)
 ```
 
-Capped by `MAX_JOBS_PER_DRAFT` / `max_jobs_per_draft` (default 5). Full job descriptions are never copied into the draft. RSS sources often only supply title, org, and URL — other keys stay blank and are omitted unless the LLM can extract them from the summary.
+Capped per source by `JOB_HUNT_MAX_RSS_POSTS` / `max_rss_posts` and `JOB_HUNT_MAX_EMAIL_POSTS` / `max_email_posts` (default 10 each). Full job descriptions are never copied into the draft. RSS sources often only supply title, org, and URL — other keys stay blank and are omitted unless the LLM can extract them from the summary.
 
 `draft_policy` in the node result is `post_fields_llm` when enrichment ran, otherwise `post_fields`.
 
@@ -92,7 +92,8 @@ The folder you keep under user space is **`skillsets/`** — same as other per-u
   ],
   "tech_job_keywords": ["software", "developer", "cloud", "cybersecurity"],
   "max_results": 30,
-  "max_jobs_per_draft": 5,
+  "max_rss_posts": 10,
+  "max_email_posts": 10,
   "auto_post": false,
   "post_fields": [
     {"label": "Job Post - ", "key": "date"},

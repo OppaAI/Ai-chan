@@ -32,6 +32,14 @@ USER_SKILLSETS_PATH: ""  # Override path for per-user skillsets. Defaults to <US
 # -- job hunt config path --
 JOB_HUNT_CONFIG_PATH: ""  # Path to job_hunt.json config file. Can be absolute or relative to workspace. Defaults to <USER_SPACE_ROOT>/<user_id>/skillsets/job_hunt.json if exists, otherwise <workspace>/agentic/skillsets/job_hunt.json.
 
+# -- Lane D job-hunt behavior --
+JOB_HUNT_DEDUP_DAYS: "3"  # Cross-run dedup retention window (days). Seen/rejected jobs are kept deduped for this many days (default 3 = same-day + 1 day buffer), then may reappear. Published jobs are removed from the ledger immediately on post success.
+JOB_HUNT_MAX_RSS_POSTS: "10"  # Max job posts drafted from RSS feeds per run.
+JOB_HUNT_MAX_EMAIL_POSTS: "10"  # Max job posts drafted from email alerts per run (LinkedIn/Glassdoor/Indeed).
+# Email job alerts are read via the already-registered Proton Mail MCP tools
+# (read_protonmail / search_protonmail) from interface/mcp_server/social/services/protonmail.py.
+# Mailbox credentials are configured separately for that MCP server.
+
 # Agentic config
 #
 # Settings for agentic/agentic.py plus chat-vs-agent routing used by cognition/think.py.

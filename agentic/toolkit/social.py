@@ -1264,7 +1264,20 @@ def post_job_post_draft(draft_dir: str | Path) -> dict[str, Any]:
         meta["posted"] = post_meta["posted"]
         meta["post_results"] = [result]
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    if post_meta["posted"]:
+        _purge_published_jobs_from_ledger(path)
     return post_meta
+
+
+def _purge_published_jobs_from_ledger(draft_dir: Path) -> None:
+    """Remove a successfully posted job from the cross-run dedup ledger so it
+    can legitimately reappear after the retention window (published jobs are
+    meant to be deleted from the ledger once the social post succeeds)."""
+    try:
+        from agentic.toolkit.job_hunt import mark_jobs_published
+        mark_jobs_published([str(draft_dir)])
+    except Exception as e:
+        log.warning("social: failed to purge published job from ledger: %s", e)
 
 
 # ══════════════════════════════════════════════════════════════════════════

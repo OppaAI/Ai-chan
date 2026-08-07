@@ -86,6 +86,13 @@
     "quality assurance",
     "technical support"
   ],
-  "max_jobs_per_draft": 5,
-  "date_range_days": 2
+  "date_range_days": 2,
+  "dedup_days": 3,
+  "include_email": true,
+  "max_rss_posts": 10,
+  "max_email_posts": 10,
+  "email_source": {
+    "enabled": true,
+    "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
+  }
 }
