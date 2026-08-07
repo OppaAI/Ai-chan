@@ -45,11 +45,25 @@ function escapeHtml(s) {
 
 async function loadGraph() {
   const limit = document.getElementById('limit').value || 200;
-  const res = await fetch(`${API_BASE}/api/graph?limit=${encodeURIComponent(limit)}`);
+  const includeHistory = document.getElementById('include-history').checked;
+  const includeEntities = document.getElementById('include-entities').checked;
+  const dateFrom = document.getElementById('date-from').value || '';
+  const dateTo = document.getElementById('date-to').value || '';
+
+  const params = new URLSearchParams({
+    limit: encodeURIComponent(limit),
+    include_history: includeHistory ? 'true' : 'false',
+    include_entities: includeEntities ? 'true' : 'false',
+  });
+  if (dateFrom) params.append('date_from', dateFrom);
+  if (dateTo) params.append('date_to', dateTo);
+
+  const res = await fetch(`${API_BASE}/api/graph?${params.toString()}`);
   if (!res.ok) throw new Error(`graph request failed: ${res.status}`);
-   graph = await res.json();
+  graph = await res.json();
   if (graph && graph.meta && graph.meta.error) {
     throw new Error(`graph export failed: ${graph.meta.error}`);
+  }
   render();
 }
 
@@ -205,12 +219,18 @@ function render() {
 
 function svgZoom(k) {
   if (!zoomBeh) return;
-    const svg = d3.select('`#svg`');
-    svg.transition().call(zoomBeh.scaleBy, k);
+  const svg = d3.select('#svg');
+  svg.transition().call(zoomBeh.scaleBy, k);
 }
 
 function init() {
-  document.getElementById('reload').onclick = loadGraph;
+  document.getElementById('reload').onclick = () => {
+    loadGraph().catch(err => {
+      const el = document.getElementById('details');
+      el.style.display = 'block';
+      el.textContent = 'Load failed: ' + err;
+    });
+  };
   document.getElementById('refilter').onclick = () => render();
   document.getElementById('z-in').onclick = () => svgZoom(1.25);
   document.getElementById('z-out').onclick = () => svgZoom(0.8);
