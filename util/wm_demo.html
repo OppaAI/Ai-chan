@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grasp Studio — Circular WM</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #0f1115;
+      color: #e8ecf4;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .top {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px 20px;
+      padding: 14px 18px;
+      border-bottom: 1px solid #2a3140;
+      background: #12151c;
+      flex-shrink: 0;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #7c9cff; box-shadow: 0 0 10px #7c9cff;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .badge {
+      font-size: 0.7rem; padding: 2px 8px; border-radius: 999px;
+      background: #243049; color: #7c9cff; text-transform: uppercase;
+    }
+    .meta { color: #8b95a8; font-size: 0.85rem; flex: 1; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    button {
+      background: #243049; color: #e8ecf4; border: 1px solid #2a3140;
+      border-radius: 8px; padding: 7px 12px; cursor: pointer; font-size: 0.85rem;
+      transition: border-color 0.2s, transform 0.1s, background 0.2s;
+    }
+    button:hover { border-color: #7c9cff; }
+    button:active { transform: scale(0.96); }
+    button.primary { background: #2a3f6e; border-color: #7c9cff; }
+    button.danger { background: #3a2228; border-color: #6b3038; }
+    button.stop {
+      background: #3a2228; border-color: #f87171; color: #f87171;
+      animation: breathe 1.5s ease-in-out infinite;
+    }
+    @keyframes breathe {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(248,113,113,0); }
+      50% { box-shadow: 0 0 12px 2px rgba(248,113,113,0.2); }
+    }
+
+    .budget {
+      flex-shrink: 0;
+      height: 28px;
+      background: #12151c;
+      border: 1px solid #2a3140;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 10px;
+      margin: 16px 16px 0;
+    }
+    .budget-track { flex: 1; height: 6px; background: #2a3140; border-radius: 3px; overflow: hidden; position: relative; }
+    .budget-fill { height: 100%; background: linear-gradient(90deg, #3b82f6, #7c9cff); border-radius: 3px; width: 0%; transition: width 0.6s ease; }
+    .budget-label { font-size: 0.7rem; color: #8b95a8; white-space: nowrap; }
+
+    .stage-wrap {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+    }
+    .stage {
+      position: relative;
+      flex: 1;
+      background: #12151c;
+      border: 1px solid #2a3140;
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .zone-label {
+      position: absolute;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #5a6380;
+      font-weight: 600;
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    .merge-zone {
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 100px;
+      border-bottom: 1px dashed #2a3140;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .pill {
+      position: absolute;
+      padding: 7px 16px;
+      border-radius: 20px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      white-space: nowrap;
+      opacity: 0;
+      transform: scale(0.6);
+      transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pill.u { background: #2a2f55; color: #a5b4fc; border: 1px solid #4b5580; }
+    .pill.a { background: #1a3a2a; color: #86efac; border: 1px solid #3a6b4a; }
+    .pill.show { opacity: 1; transform: scale(1); }
+    .pill.merged {
+      background: #1e2430;
+      color: #e8ecf4;
+      border: 1px solid #7c9cff;
+      box-shadow: 0 0 20px rgba(124,156,255,0.15);
+    }
+    .merge-arrow {
+      position: absolute;
+      font-size: 1.4rem;
+      color: #8b95a8;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .merge-arrow.show { opacity: 1; }
+
+    .rack {
+      position: absolute;
+      top: 110px; left: 0; right: 220px; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 0 20px;
+    }
+    .slot-dock {
+      width: 110px;
+      height: 140px;
+      border-radius: 16px;
+      border: 1px dashed #2a3140;
+      background: rgba(30,36,48,0.2);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      position: relative;
+      transition: border-color 0.3s, background 0.3s;
+      flex-shrink: 0;
+    }
+    .slot-dock.active {
+      border-color: #3b82f6;
+      background: rgba(59,130,246,0.06);
+      box-shadow: 0 0 20px rgba(59,130,246,0.05);
+    }
+    .dock-num {
+      font-size: 0.65rem;
+      color: #5a6380;
+      font-weight: 600;
+      position: absolute;
+      top: 8px;
+    }
+
+    .mem {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      background: #1e2430;
+      border: 1px solid #2a3140;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      opacity: 0;
+      transform: scale(0.2);
+      transition: transform 0.7s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease, border-color 0.3s, box-shadow 0.3s;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      z-index: 10;
+      cursor: default;
+      overflow: hidden;
+    }
+    .mem.entered { opacity: 1; transform: scale(1); }
+    .mem.weak { border-color: #f87171; box-shadow: 0 0 20px rgba(248,113,113,0.12); }
+    .mem.touched { animation: touched 0.5s ease; }
+    @keyframes touched {
+      0% { transform: scale(1); }
+      40% { transform: scale(1.12); border-color: #4ade80; box-shadow: 0 0 28px rgba(74,222,128,0.2); }
+      100% { transform: scale(1); }
+    }
+    .mem svg {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100px; height: 100px;
+      pointer-events: none;
+      transform: rotate(-90deg);
+    }
+    .mem svg circle.track { fill: none; stroke: #2a3140; stroke-width: 3; }
+    .mem svg circle.ring {
+      fill: none;
+      stroke: url(#scoreGrad);
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-dasharray: 0 283;
+      transition: stroke-dasharray 0.8s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .mem.weak svg circle.ring { stroke: url(#weakGrad); }
+    .mem-inner {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      padding: 8px;
+    }
+    .mem-rank { font-size: 0.65rem; color: #5a6380; font-weight: 600; }
+    .mem-score {
+      font-size: 1.3rem;
+      font-weight: 700;
+      background: linear-gradient(180deg, #7c9cff, #a5b4fc);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .mem.weak .mem-score {
+      background: linear-gradient(180deg, #f87171, #fbbf24);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .mem-text {
+      font-size: 0.6rem;
+      color: #8b95a8;
+      line-height: 1.2;
+      max-width: 80px;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .mem-tokens { font-size: 0.55rem; color: #5a6380; margin-top: 2px; }
+
+    .evict-zone {
+      position: absolute;
+      top: 0; right: 0; width: 219px; bottom: 0;
+      border-left: 1px solid #2a3140;
+      background: rgba(26,21,32,0.4);
+      padding: 14px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .evict-item {
+      background: #1a1520;
+      border: 1px solid #3a2a35;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.72rem;
+      color: #e7c6c6;
+      opacity: 0;
+      transform: translateX(20px) scale(0.9);
+      transition: all 0.5s ease;
+    }
+    .evict-item.show { opacity: 1; transform: translateX(0) scale(1); }
+    .evict-item .sc { color: #f87171; font-weight: 600; }
+
+    .float {
+      position: absolute;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: #4ade80;
+      pointer-events: none;
+      animation: floatUp 1s ease forwards;
+      z-index: 20;
+    }
+    @keyframes floatUp {
+      0% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-30px); }
+    }
+
+    .miller {
+      position: absolute;
+      bottom: 10px; left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .miller span { font-size: 0.6rem; color: #5a6380; text-transform: uppercase; letter-spacing: 0.05em; }
+    .miller-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: #2a3140;
+      transition: background 0.3s;
+    }
+    .miller-dot.on { background: #7c9cff; box-shadow: 0 0 6px #7c9cff; }
+    .miller-dot.warn { background: #fbbf24; box-shadow: 0 0 6px #fbbf24; }
+    .miller-dot.danger { background: #f87171; box-shadow: 0 0 6px #f87171; }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <linearGradient id="scoreGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#3b82f6"/>
+        <stop offset="100%" stop-color="#7c9cff"/>
+      </linearGradient>
+      <linearGradient id="weakGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#f87171"/>
+        <stop offset="100%" stop-color="#fbbf24"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <header class="top">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Grasp</h1>
+      <span class="badge" id="modeBadge">demo</span>
+    </div>
+    <div class="meta" id="metaBar">—</div>
+    <div class="actions">
+      <button class="primary" id="btnSeed">▶ Seed loop</button>
+      <button class="stop" id="btnStop" style="display:none">⏹ Stop</button>
+      <button id="btnTouch">Touch / recall</button>
+      <button id="btnFill">Fill turn</button>
+      <button class="danger" id="btnReset">Reset</button>
+    </div>
+  </header>
+
+  <div class="budget">
+    <span class="budget-label">Token budget</span>
+    <div class="budget-track">
+      <div class="budget-fill" id="budgetFill"></div>
+    </div>
+    <span class="budget-label" id="budgetText">0 / 2000</span>
+  </div>
+
+  <div class="stage-wrap">
+    <div class="stage" id="stage">
+      <div class="zone-label" style="top:10px;left:14px">Incoming turns → Merge → WM Slot</div>
+      <div class="zone-label" style="top:10px;right:234px">Working Memory (7±2 slots)</div>
+      <div class="zone-label" style="top:10px;right:14px">Eviction Drain</div>
+
+      <div class="merge-zone" id="mergeZone">
+        <div class="merge-arrow" id="mergeArrow">⤵</div>
+      </div>
+
+      <div class="rack" id="rack"></div>
+
+      <div class="miller" id="miller">
+        <span>Miller guard</span>
+        <div class="miller-dot" id="gm1"></div>
+        <div class="miller-dot" id="gm2"></div>
+        <div class="miller-dot" id="gm3"></div>
+        <div class="miller-dot" id="gm4"></div>
+        <div class="miller-dot" id="gm5"></div>
+        <div class="miller-dot" id="gm6"></div>
+        <div class="miller-dot" id="gm7"></div>
+        <span id="gmLabel">0/7</span>
+      </div>
+
+      <div class="evict-zone" id="evictZone"></div>
+    </div>
+  </div>
+
+  <script>
+  (function() {
+    const FACTORS = ["emotion","importance","recency","relevance","novelty","question","entity","recall_freq","primacy"];
+    const MAX_SLOTS = 7;
+    const TOKEN_LIMIT = 2000;
+    const CIRC = 2 * Math.PI * 46;
+
+    const DEMO_TURNS = [
+      { u: "Hey Aiko, plan a trip to Japan?", a: "Absolutely! What kind — cultural, food, or nature?" },
+      { u: "Food and temples. 10 days.", a: "Tokyo 3d → Kyoto 4d → Osaka 3d." },
+      { u: "Best cherry blossom time?", a: "Late March to early April." },
+      { u: "JR Pass needed?", a: "7-day pass pays off with 2+ Shinkansen rides." },
+      { u: "Must-try foods in Osaka?", a: "Takoyaki, okonomiyaki, kushikatsu. Dotonbori!" },
+      { u: "Kyoto crowded?", a: "Yes. Go early morning to Kiyomizu-dera." },
+      { u: "Ryokan recommendation?", a: "Tawaraya is legendary. Book months ahead." },
+      { u: "Weather in April?", a: "Mild 15–20°C. Bring a light jacket." },
+      { u: "Should I learn basic Japanese?", a: "Helpful but not required. English signs are common in cities." },
+      { u: "How do I get from Narita to Tokyo?", a: "Narita Express or Keisei Skyliner. About 1 hour to central Tokyo." },
+      { u: "Is Tokyo expensive?", a: "It can be, but convenience stores and ramen shops keep costs down." },
+      { u: "Best ramen in Tokyo?", a: "Ichiran, Afuri, or Menya Sou for tsukemen." },
+      { u: "Do temples allow photos?", a: "Most do, but avoid flash and be respectful during ceremonies." },
+      { u: "What about SIM cards?", a: "Pocket WiFi or prepaid SIM at the airport. Easy to set up." },
+      { u: "Any day trips from Kyoto?", a: "Nara for deer and Todai-ji, or Arashiyama bamboo grove." },
+    ];
+
+    let slots = [], evictions = [], turnCounter = 0, totalTokens = 0, isAnimating = false, dockRects = [];
+    let loopId = null, loopIdx = 0, isLooping = false;
+
+    function $(id) { return document.getElementById(id); }
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    function randFactors() { const f={}; FACTORS.forEach(k=>f[k]=Math.random()); return f; }
+    function scoreFrom(f) { return FACTORS.reduce((s,k)=>s+(f[k]||0),0)/FACTORS.length; }
+    function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+    function updateMeta() {
+      $("modeBadge").textContent = isLooping ? "looping" : "demo";
+      $("metaBar").textContent = `slots ${slots.length} · tokens ${totalTokens} · turn #${turnCounter}`;
+      const pct = Math.min(100, (totalTokens/TOKEN_LIMIT)*100);
+      $("budgetFill").style.width = pct+"%";
+      $("budgetText").textContent = `${totalTokens} / ${TOKEN_LIMIT}`;
+      for (let i=1;i<=7;i++) {
+        const d = $("gm"+i); d.className = "miller-dot";
+        if (i <= slots.length) {
+          if (slots.length <= 5) d.classList.add("on");
+          else if (slots.length === 6) d.classList.add("warn");
+          else d.classList.add("danger");
+        }
+      }
+      $("gmLabel").textContent = `${slots.length}/${MAX_SLOTS}`;
+    }
+
+    function buildRack() {
+      const rack = $("rack"); rack.innerHTML = "";
+      for (let i=0; i<MAX_SLOTS; i++) {
+        const dock = document.createElement("div");
+        dock.className = "slot-dock";
+        dock.id = "dock-"+i;
+        dock.innerHTML = `<span class="dock-num">${i+1}</span>`;
+        rack.appendChild(dock);
+      }
+      requestAnimationFrame(() => {
+        dockRects = [];
+        for (let i=0; i<MAX_SLOTS; i++) {
+          const d = $("dock-"+i); if (!d) continue;
+          const r = d.getBoundingClientRect(), sr = $("stage").getBoundingClientRect();
+          dockRects.push({ x: r.left - sr.left + (r.width-100)/2, y: r.top - sr.top + (r.height-100)/2 });
+        }
+      });
+    }
+
+    function createMem(slot) {
+      const d = document.createElement("div");
+      d.className = "mem" + (slot.score < 0.35 ? " weak" : "");
+      d.id = "mem-"+slot.id;
+      const dash = Math.max(0, Math.min(1, slot.score)) * CIRC;
+      d.innerHTML = `
+        <svg viewBox="0 0 100 100">
+          <circle class="track" cx="50" cy="50" r="46"/>
+          <circle class="ring" cx="50" cy="50" r="46" stroke-dasharray="${dash} ${CIRC-dash}"/>
+        </svg>
+        <div class="mem-inner">
+          <div class="mem-rank">#${slot.rank}</div>
+          <div class="mem-score">${slot.score.toFixed(2)}</div>
+          <div class="mem-text">${esc(slot.u.slice(0,28))}</div>
+          <div class="mem-tokens">${slot.tokens}t · r×${slot.recall}</div>
+        </div>`;
+      $("stage").appendChild(d);
+      return d;
+    }
+
+    async function addMem(user, assistant) {
+      if (isAnimating) return;
+      isAnimating = true;
+      const sr = $("stage").getBoundingClientRect();
+      const mr = $("mergeZone").getBoundingClientRect();
+      const mx = mr.left - sr.left, my = mr.top - sr.top, mw = mr.width, mh = mr.height;
+
+      const pU = document.createElement("div");
+      pU.className = "pill u"; pU.textContent = "U: " + user.slice(0,32);
+      pU.style.left = (mx + 30) + "px"; pU.style.top = (my + mh/2 - 16) + "px";
+      $("stage").appendChild(pU);
+      const pA = document.createElement("div");
+      pA.className = "pill a"; pA.textContent = "A: " + assistant.slice(0,32);
+      pA.style.left = (mx + mw - 30 - 220) + "px"; pA.style.top = (my + mh/2 - 16) + "px";
+      $("stage").appendChild(pA);
+      await sleep(50); pU.classList.add("show"); pA.classList.add("show"); await sleep(400);
+
+      const cx = mx + mw/2 - 50, cy = my + mh/2 - 16;
+      pU.style.transform = `translate(${cx - (mx+30)}px, 0) scale(0.9)`;
+      pA.style.transform = `translate(${cx - (mx+mw-30-220)}px, 0) scale(0.9)`;
+      await sleep(400);
+
+      $("mergeArrow").classList.add("show");
+      pU.style.opacity = "0"; pA.style.opacity = "0";
+      const merged = document.createElement("div");
+      merged.className = "pill merged show";
+      merged.textContent = "Interaction #" + (turnCounter+1);
+      merged.style.left = (cx+20) + "px"; merged.style.top = cy + "px";
+      $("stage").appendChild(merged);
+      await sleep(500);
+
+      turnCounter++;
+      const factors = randFactors();
+      const score = scoreFrom(factors);
+      const tokens = Math.floor(30 + Math.random()*90);
+      const mem = { id: turnCounter, u: user, a: assistant, score, factors, tokens, turn: turnCounter, recall: 0, rank: 0 };
+      let insertIdx = slots.findIndex(s => s.score < score);
+      if (insertIdx === -1) insertIdx = slots.length;
+      const actualIdx = Math.min(insertIdx, MAX_SLOTS - 1);
+      mem.rank = actualIdx + 1;
+
+      const circle = createMem(mem);
+      circle.style.left = (cx + 20) + "px"; circle.style.top = cy + "px"; circle.style.opacity = "1";
+      await sleep(30); circle.classList.add("entered"); merged.style.opacity = "0";
+
+      slots.forEach((s, i) => {
+        const ni = i >= actualIdx ? i + 1 : i;
+        if (ni >= MAX_SLOTS) return;
+        const el = $("mem-"+s.id);
+        if (el && dockRects[ni]) {
+          el.style.transform = `translate(${dockRects[ni].x - parseFloat(el.style.left)}px, ${dockRects[ni].y - parseFloat(el.style.top)}px) scale(1)`;
+          const re = el.querySelector(".mem-rank"); if (re) re.textContent = "#" + (ni+1);
+        }
+      });
+      await sleep(50);
+      if (dockRects[actualIdx]) {
+        circle.style.transform = `translate(${dockRects[actualIdx].x - (cx+20)}px, ${dockRects[actualIdx].y - cy}px) scale(1)`;
+      }
+      slots.splice(actualIdx, 0, mem);
+      totalTokens += tokens; updateMeta();
+      await sleep(600);
+      pU.remove(); pA.remove(); merged.remove(); $("mergeArrow").classList.remove("show");
+
+      if (slots.length > MAX_SLOTS) await evictMem();
+      isAnimating = false;
+    }
+
+    async function evictMem() {
+      const victim = slots[MAX_SLOTS];
+      const el = $("mem-" + victim.id); if (!el) { slots.pop(); return; }
+      el.style.borderColor = "#f87171"; el.style.boxShadow = "0 0 30px rgba(248,113,113,0.3)";
+      await sleep(300);
+      const er = $("evictZone").getBoundingClientRect(), sr = $("stage").getBoundingClientRect();
+      const tx = er.left - sr.left + 20, ty = er.top - sr.top + 20 + evictions.length * 60;
+      el.style.transition = "transform 0.7s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.5s ease 0.3s";
+      el.style.transform = `translate(${tx - parseFloat(el.style.left)}px, ${ty - parseFloat(el.style.top)}px) scale(0.7)`;
+      el.style.opacity = "0.5"; await sleep(700); el.remove();
+
+      const card = document.createElement("div");
+      card.className = "evict-item";
+      card.innerHTML = `<div><span class="sc">evicted</span> score ${victim.score.toFixed(3)} · t#${victim.turn}</div><div>${esc(victim.u.slice(0,55))}</div>`;
+      $("evictZone").appendChild(card); await sleep(30); card.classList.add("show");
+
+      slots.pop(); evictions.unshift(victim);
+      if (evictions.length > 6) { evictions.pop(); const cards = $("evictZone").querySelectorAll(".evict-item"); if (cards.length > 6) cards[cards.length-1].remove(); }
+      totalTokens -= victim.tokens; updateMeta();
+    }
+
+    async function touchMem() {
+      if (!slots.length) return;
+      const idx = Math.floor(Math.random() * slots.length);
+      const mem = slots[idx];
+      mem.recall++; mem.factors.recall_freq = Math.min(1, (mem.factors.recall_freq || 0) + 0.2);
+      mem.score = scoreFrom(mem.factors);
+      const el = $("mem-" + mem.id);
+      if (el) {
+        el.classList.add("touched");
+        const se = el.querySelector(".mem-score"); if (se) se.textContent = mem.score.toFixed(2);
+        const ring = el.querySelector("circle.ring"); if (ring) { const dash = Math.max(0, Math.min(1, mem.score)) * CIRC; ring.setAttribute("stroke-dasharray", `${dash} ${CIRC-dash}`); }
+        if (mem.score < 0.35) el.classList.add("weak"); else el.classList.remove("weak");
+        const r = el.getBoundingClientRect(), sr = $("stage").getBoundingClientRect();
+        const fl = document.createElement("div"); fl.className = "float"; fl.textContent = "+recall";
+        fl.style.left = (r.left - sr.left + 30) + "px"; fl.style.top = (r.top - sr.top) + "px";
+        $("stage").appendChild(fl); setTimeout(() => fl.remove(), 1000);
+      }
+      await sleep(200);
+      slots.sort((a,b) => b.score - a.score);
+      slots.forEach((s, i) => {
+        const el = $("mem-"+s.id);
+        if (el && dockRects[i]) {
+          el.style.transform = `translate(${dockRects[i].x - parseFloat(el.style.left)}px, ${dockRects[i].y - parseFloat(el.style.top)}px) scale(1)`;
+          const re = el.querySelector(".mem-rank"); if (re) re.textContent = "#" + (i+1);
+        }
+      });
+      updateMeta(); await sleep(500); if (el) el.classList.remove("touched");
+    }
+
+    function reset() {
+      stopLoop();
+      slots = []; evictions = []; turnCounter = 0; totalTokens = 0; isAnimating = false;
+      $("rack").innerHTML = ""; $("evictZone").innerHTML = "";
+      document.querySelectorAll(".mem").forEach(m => m.remove());
+      buildRack(); updateMeta();
+    }
+
+    async function seed() {
+      reset();
+      for (let i = 0; i < DEMO_TURNS.length; i++) {
+        await addMem(DEMO_TURNS[i].u, DEMO_TURNS[i].a);
+        await sleep(150);
+      }
+    }
+
+    async function fill() {
+      const u = prompt("User message:", "Tell me about neural networks");
+      if (u === null) return;
+      const a = prompt("Assistant reply:", "Neural networks are computational models...");
+      if (a === null) return;
+      await addMem(u, a);
+    }
+
+    // ─── Loop ───
+    async function tick() {
+      if (!isLooping) return;
+      const t = DEMO_TURNS[loopIdx % DEMO_TURNS.length];
+      await addMem(t.u, t.a);
+      loopIdx++;
+      // Occasionally trigger a touch (20% chance)
+      if (Math.random() < 0.2 && slots.length > 0) {
+        await sleep(200);
+        await touchMem();
+      }
+      if (isLooping) {
+        loopId = setTimeout(tick, 900 + Math.random() * 600);
+      }
+    }
+
+    function startLoop() {
+      if (isLooping) return;
+      isLooping = true;
+      $("btnSeed").style.display = "none";
+      $("btnStop").style.display = "";
+      tick();
+    }
+
+    function stopLoop() {
+      isLooping = false;
+      if (loopId) { clearTimeout(loopId); loopId = null; }
+      $("btnSeed").style.display = "";
+      $("btnStop").style.display = "none";
+      updateMeta();
+    }
+
+    $("btnSeed").onclick = () => startLoop();
+    $("btnStop").onclick = () => stopLoop();
+    $("btnTouch").onclick = () => touchMem().catch(console.error);
+    $("btnReset").onclick = reset;
+    $("btnFill").onclick = () => fill().catch(console.error);
+
+    buildRack(); updateMeta();
+    // Auto-start a single seed after load
+    setTimeout(() => seed().catch(console.error), 700);
+
+    window.addEventListener("resize", () => {
+      dockRects = [];
+      for (let i=0; i<MAX_SLOTS; i++) {
+        const d = $("dock-"+i); if (!d) continue;
+        const r = d.getBoundingClientRect(), sr = $("stage").getBoundingClientRect();
+        dockRects.push({ x: r.left - sr.left + (r.width-100)/2, y: r.top - sr.top + (r.height-100)/2 });
+      }
+      slots.forEach((s, i) => {
+        const el = $("mem-"+s.id);
+        if (el && dockRects[i]) {
+          el.style.transition = "none";
+          el.style.transform = `translate(${dockRects[i].x - parseFloat(el.style.left)}px, ${dockRects[i].y - parseFloat(el.style.top)}px) scale(1)`;
+          el.offsetWidth; el.style.transition = "";
+        }
+      });
+    });
+  })();
+  </script>
+</body>
+</html>
