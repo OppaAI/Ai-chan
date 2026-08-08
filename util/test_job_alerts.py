@@ -18,6 +18,8 @@ import re
 import sys
 import time
 from pathlib import Path
+import threading
+import itertools
 
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,7 +37,16 @@ log = get_logger(__name__)
 
 def progress(msg):
     """Print progress message to stderr for immediate visibility."""
-    print(f"[PROGRESS] {msg}", file=sys.stderr, flush=True)
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+
+
+def spinner_thread(stop_event):
+    """Display a spinner while waiting for long operations."""
+    spinner = itertools.cycle(['|', '/', '-', '\\'])
+    while not stop_event.is_set():
+        print(f"\r[WAITING] {next(spinner)}", end='', file=sys.stderr, flush=True)
+        time.sleep(0.2)
+    print("\r" + " " * 40, end='\r', file=sys.stderr, flush=True)
 
 JOB_KEYWORDS = [
     "linkedin", "glassdoor", "indeed", "job alert", "job notification",
@@ -65,8 +76,22 @@ async def main():
     progress(f"MCP server connected in {connect_time:.2f}s")
 
     # 1) List messages with 300-char snippets
-    progress("Fetching latest messages (max_results=20)...")
+    progress("Fetching messages from ProtonMail...")
+    progress("  This may take 10-30 seconds on first login...")
+    
+    # Start spinner for long operation
+    stop_spinner = threading.Event()
+    spinner = threading.Thread(target=spinner_thread, args=(stop_spinner,))
+    spinner.daemon = True
+    spinner.start()
+    
     result = await client.call_tool("read_protonmail", {"max_results": 20})
+    
+    stop_spinner.set()
+    spinner.join(timeout=1)
+    print("", file=sys.stderr)  # newline after spinner
+    
+    progress("  Received messages from ProtonMail")
     
     if not result.get("ok"):
         progress("ERROR: read_protonmail failed")
@@ -75,6 +100,10 @@ async def main():
 
     messages = result.get("messages", [])
     progress(f"Got {len(messages)} messages")
+    for i, msg in enumerate(messages):
+        subject = msg.get("subject", "")[:50]
+        sender = msg.get("from", "")[:40]
+        progress(f"  [{i+1}/{len(messages)}] {sender}: {subject}")
     log.info("Got %d messages", len(messages))
 
     # 2) Filter for job alerts using 300-char snippets
