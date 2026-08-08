@@ -32,6 +32,14 @@ try:
 except ImportError as e:
     log.warning(f"Could not mount memory studio: {e}")
 
+
+# Grasp / working memory Studio (combined STM/WTM/KB entry)
+try:
+    from interface.webui.studio.grasp.backend.api import app as grasp_studio_app
+    app.mount("/studio/grasp", grasp_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount grasp studio: {e}")
+
 # DAG Studio
 try:
     from interface.webui.studio.dag.backend.api import app as dag_studio_app

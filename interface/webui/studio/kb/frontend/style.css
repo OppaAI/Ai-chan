@@ -178,3 +178,33 @@ svg {
   color: var(--text);
   cursor: pointer;
 }
+
+/* Shared STM / WTM / KB studio tabs, styled like Approval Studio filters. */
+.memory-studio-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--dim);
+}
+.memory-studio-tab {
+  flex: 1;
+  background: #120a1c;
+  border: 1px solid var(--dim);
+  color: var(--muted);
+  text-align: center;
+  text-decoration: none;
+  font-size: 10px;
+  letter-spacing: .12em;
+  padding: 6px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  transition: border-color .15s, color .15s, background .15s, box-shadow .15s;
+}
+.memory-studio-tab:hover,
+.memory-studio-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(192, 132, 252, 0.12);
+  box-shadow: 0 0 8px rgba(192, 132, 252, 0.22);
+}

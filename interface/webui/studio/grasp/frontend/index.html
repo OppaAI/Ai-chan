@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Aiko Grasp Studio</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <link rel="stylesheet" href="/static/valence.css" />
+  <link rel="stylesheet" href="static/style.css" />
+  <link rel="stylesheet" href="static/valence.css" />
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
@@ -81,6 +81,11 @@
     </div>
 
     <aside class="side">
+      <nav class="memory-studio-tabs" aria-label="Memory studio sections">
+        <a class="memory-studio-tab active" href="/studio/grasp/">STM</a>
+        <a class="memory-studio-tab" href="/studio/memory/">WTM</a>
+        <a class="memory-studio-tab" href="/studio/kb/">KB</a>
+      </nav>
       <h2>Fill turn</h2>
       <label for="inUser">User</label>
       <textarea id="inUser" rows="2" placeholder="user message…"></textarea>
@@ -93,7 +98,7 @@
     </aside>
   </div>
 
-  <script src="/static/script.js"></script>
-  <script src="/static/valence.js"></script>
+  <script src="static/script.js"></script>
+  <script src="static/valence.js"></script>
 </body>
 </html>
