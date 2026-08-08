@@ -11,6 +11,9 @@ const CIRC = 2 * Math.PI * 44; // r≈44 in viewBox 0..100
 let isAnimating = false;
 let dockRects = [];
 let lastState = null;
+let livePaused = false;
+let livePollTimer = null;
+let lastTurnSeen = null;
 
 function $(id) { return document.getElementById(id); }
 
@@ -240,6 +243,7 @@ async function playMergeIntro(user, assistant, turnLabel) {
 
   await sleep(40);
   pU.classList.add("show");
+  await sleep(360);
   pA.classList.add("show");
   await sleep(320);
 
@@ -347,6 +351,7 @@ async function refresh() {
   try {
     const data = await api("/api/state");
     await applyState(data, { animateNew: false });
+    lastTurnSeen = Number((data.state || data).turn_counter ?? 0);
   } finally {
     isAnimating = false;
   }
@@ -448,6 +453,12 @@ async function fill() {
 }
 
 $("btnRefresh").onclick = () => refresh().catch(console.error);
+$("btnPause").onclick = () => {
+  livePaused = !livePaused;
+  $("btnPause").textContent = livePaused ? "Play live" : "Pause live";
+  $("btnPause").setAttribute("aria-pressed", String(livePaused));
+  if (!livePaused) pollLive();
+};
 $("btnSeed").onclick = () => seed().catch(console.error);
 $("btnTouch").onclick = () => touch().catch(console.error);
 $("btnReset").onclick = () => reset().catch(console.error);
@@ -468,7 +479,28 @@ window.addEventListener("resize", () => {
   });
 });
 
+async function pollLive() {
+  if (livePaused || isAnimating) return;
+  try {
+    const data = await api("/api/state?mode=auto");
+    const state = data.state || data;
+    const turn = Number(state.turn_counter ?? 0);
+    const live = state.mode === "live";
+    if (!live) return;
+    if (live && lastTurnSeen !== null && turn > lastTurnSeen) {
+      const slot = (state.slots || []).reduce((a, s) => !a || Number(s.created_turn ?? -1) > Number(a.created_turn ?? -1) ? s : a, null);
+      lastTurnSeen = turn;
+      await applyState(data, { animateNew: true, filled: slot ? { user: slot.user || "", assistant: slot.assistant || "" } : null });
+    } else {
+      await applyState(data, { animateNew: false });
+      if (lastTurnSeen === null || (live && turn > lastTurnSeen)) lastTurnSeen = turn;
+    }
+  } catch (e) { console.debug("STM live poll failed", e); }
+}
+
 refresh().catch((e) => {
   $("metaBar").textContent = "API offline — start STM studio backend";
   console.error(e);
 });
+
+livePollTimer = setInterval(pollLive, 600);
