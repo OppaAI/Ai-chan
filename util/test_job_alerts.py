@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 import threading
 import itertools
+import argparse
 
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +32,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from agentic.mcp_client import init_mcp_client, get_mcp_client
 from system.log import get_logger
+from system.userspace import user_state_path
 
 log = get_logger(__name__)
 
@@ -61,7 +63,32 @@ def is_job_alert(snippet: str, subject: str, sender: str) -> bool:
     return any(kw in text for kw in JOB_KEYWORDS)
 
 
+def manual_login(session_file: str, username: str, password: str) -> int:
+    """Interactively log in and save the documented ProtonMail session."""
+    try:
+        from protonmail import ProtonMail
+        from protonmail.models import CaptchaConfig
+    except ImportError as exc:
+        progress(f"ERROR: ProtonMail client unavailable: {exc}")
+        return 1
+    progress("Starting interactive ProtonMail login...")
+    progress("Follow the CAPTCHA instructions in your browser and paste the token when prompted.")
+    try:
+        client = ProtonMail()
+        client.login(username, password, captcha_config=CaptchaConfig(type=CaptchaConfig.CaptchaType.MANUAL))
+        Path(session_file).parent.mkdir(parents=True, exist_ok=True)
+        client.save_session(session_file)
+        progress(f"Login successful; session saved to {session_file}")
+        return 0
+    except Exception as exc:
+        progress(f"ERROR: ProtonMail login failed: {exc}")
+        return 1
+
+
 async def main():
+    parser = argparse.ArgumentParser(description="Test ProtonMail job-alert reading")
+    parser.add_argument("--login", action="store_true", help="Interactively log in and save a ProtonMail session")
+    args = parser.parse_args()
     progress("Starting job alert test...")
     
     # Check environment setup first
@@ -91,13 +118,16 @@ async def main():
     progress(f"Password configured: {visible} ({len(password)} chars)")
     
     # Check session cache
-    session_file = "/home/oppa-ai/Aiko-chan/.protonmail_session.json"
+    session_file = str(user_state_path("profile/protonmail_session.pickle"))
     if os.path.exists(session_file):
         size = os.path.getsize(session_file)
         progress(f"Session cache exists: {session_file} ({size} bytes)")
     else:
-        progress(f"Session cache NOT found: {session_file} (first-time login will be slow)")
+        progress(f"Session cache NOT found: {session_file}")
     
+    if args.login:
+        return manual_login(session_file, username, password)
+
     # Connect to MCP server (starts it if needed)
     progress("Connecting to MCP server...")
     start_time = time.time()

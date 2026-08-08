@@ -2,14 +2,23 @@ from typing import Optional, List, Dict
 import asyncio
 import os
 import sys
+from contextlib import redirect_stdout
+from pathlib import Path
 from social.services import env, err
+from system.userspace import user_state_path
 
 # Global client cache (kept alive across tool calls)
 _client_cache = None
 _cache_username = None
 
 # protonmail-api-client stores sessions as a binary pickle, not JSON.
-_SESSION_FILE = "/home/oppa-ai/Aiko-chan/.protonmail_session.pickle"
+_SESSION_FILE = str(user_state_path("profile/protonmail_session.pickle"))
+
+
+def _run_client_call(method, *args, **kwargs):
+    """Keep third-party client output off MCP stdout."""
+    with redirect_stdout(sys.stderr):
+        return method(*args, **kwargs)
 
 
 def _get_client():
@@ -32,11 +41,12 @@ def _get_client():
         client = ProtonMail()
         if os.path.exists(_SESSION_FILE):
             print(f"[PROTONMAIL] Loading session: {_SESSION_FILE}", file=sys.stderr, flush=True)
-            client.load_session(_SESSION_FILE, auto_save=True)
+            _run_client_call(client.load_session, _SESSION_FILE, auto_save=True)
         else:
             print("[PROTONMAIL] No saved session; performing login...", file=sys.stderr, flush=True)
-            client.login(username, password)
-            client.save_session(_SESSION_FILE)
+            _run_client_call(client.login, username, password)
+            Path(_SESSION_FILE).parent.mkdir(parents=True, exist_ok=True)
+            _run_client_call(client.save_session, _SESSION_FILE)
             print(f"[PROTONMAIL] Session saved: {_SESSION_FILE}", file=sys.stderr, flush=True)
         _client_cache = client
         _cache_username = username
@@ -58,7 +68,7 @@ def load_tools(mcp):
         try:
             # Get all messages (protonmail-api-client doesn't support folder filtering directly)
             print("[PROTONMAIL] Fetching messages list...", file=sys.stderr, flush=True)
-            messages = await asyncio.to_thread(client.get_messages)
+            messages = await asyncio.to_thread(_run_client_call, client.get_messages)
             print(f"[PROTONMAIL] Got {len(messages)} messages", file=sys.stderr, flush=True)
 
             if query:
@@ -69,7 +79,7 @@ def load_tools(mcp):
             for i, msg in enumerate(messages[:max_results]):
                 try:
                     print(f"[PROTONMAIL] Reading message {i+1}/{max_results} ({getattr(msg, 'id', 'unknown')[:10]}...)...", file=sys.stderr, flush=True)
-                    full = await asyncio.to_thread(client.read_message, msg)
+                    full = await asyncio.to_thread(_run_client_call, client.read_message, msg)
                     print(f"[PROTONMAIL] Read message {i+1}/{max_results} OK", file=sys.stderr, flush=True)
                     results.append({
                         "id": getattr(msg, "id", ""),
@@ -98,7 +108,7 @@ def load_tools(mcp):
             return err("protonmail", "query required")
 
         try:
-            messages = await asyncio.to_thread(client.get_messages)
+            messages = await asyncio.to_thread(_run_client_call, client.get_messages)
             q = query.lower()
             filtered = [m for m in messages if q in (m.subject or "").lower() or q in (m.sender.address if m.sender else "").lower()]
 
@@ -106,7 +116,7 @@ def load_tools(mcp):
             for i, msg in enumerate(filtered[:max_results]):
                 try:
                     print(f"[PROTONMAIL] Reading message {i+1}/{max_results} ({getattr(msg, 'id', 'unknown')[:10]}...)...", file=sys.stderr, flush=True)
-                    full = await asyncio.to_thread(client.read_message, msg)
+                    full = await asyncio.to_thread(_run_client_call, client.read_message, msg)
                     print(f"[PROTONMAIL] Read message {i+1}/{max_results} OK", file=sys.stderr, flush=True)
                     results.append({
                         "id": getattr(msg, "id", ""),
@@ -155,6 +165,7 @@ def load_tools(mcp):
         try:
             # protonmail-api-client requires two-step: create_message then send_message
             new_message = await asyncio.to_thread(
+                _run_client_call,
                 client.create_message,
                 recipients=recipients,
                 subject=subject,
@@ -164,7 +175,7 @@ def load_tools(mcp):
             )
 
             # Send the created message
-            sent_message = await asyncio.to_thread(client.send_message, new_message)
+            sent_message = await asyncio.to_thread(_run_client_call, client.send_message, new_message)
 
             return {
                 "ok": True,
@@ -186,11 +197,11 @@ def load_tools(mcp):
         if not message_id:
             return err("protonmail", "message_id required")
         try:
-            messages = await asyncio.to_thread(client.get_messages)
+            messages = await asyncio.to_thread(_run_client_call, client.get_messages)
             target = next((msg for msg in messages if getattr(msg, "id", "") == message_id), None)
             if target is None:
                 return err("protonmail", f"message not found: {message_id}")
-            await asyncio.to_thread(client.delete_messages, [target])
+            await asyncio.to_thread(_run_client_call, client.delete_messages, [target])
             return {"ok": True, "provider": "protonmail", "message_id": message_id, "status": "deleted"}
         except Exception as e:
             return err("protonmail", f"delete failed: {e}")
@@ -207,7 +218,7 @@ def load_tools(mcp):
         try:
             # Find the message by ID in the full message list
             print("[PROTONMAIL] Fetching messages list (read_protonmail_full)...", file=sys.stderr, flush=True)
-            messages = await asyncio.to_thread(client.get_messages)
+            messages = await asyncio.to_thread(_run_client_call, client.get_messages)
             print(f"[PROTONMAIL] Got {len(messages)} messages", file=sys.stderr, flush=True)
             target_msg = None
             for msg in messages:
@@ -219,7 +230,7 @@ def load_tools(mcp):
             if target_msg is None:
                 return err("protonmail", f"message not found: {message_id}")
 
-            full = await asyncio.to_thread(client.read_message, target_msg)
+            full = await asyncio.to_thread(_run_client_call, client.read_message, target_msg)
             return {
                 "ok": True,
                 "provider": "protonmail",
