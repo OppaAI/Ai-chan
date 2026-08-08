@@ -614,6 +614,8 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict
     now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
+    log.info("[job_hunt] fetch_today_jobs_from_rss: feeds=%d, keywords=%d, max_days=%d",
+             len(feeds), len(keywords), _max_days_back(config))
     for feed_url in feeds:
         resp = None
         for attempt in range(3):
@@ -672,6 +674,8 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict
                 "source_feed": feed_url,
                 "source": "rss",
             })
+    log.info("[job_hunt] fetch_today_jobs_from_rss: kept=%d postings after filtering",
+             len(kept))
     for posting in kept:
         lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
         for probe in (lk, gk):
@@ -796,6 +800,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
     """
     config = config if config is not None else _job_config()
     _, email_cap = _max_posts_per_source(config)
+    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d", email_cap)
     messages = _read_protonmail_messages(email_cap * 4)
     if not messages:
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
@@ -808,6 +813,8 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
     now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
+    log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages, keywords=%d",
+             len(messages), len(keywords))
     for msg in messages:
         posting = _email_message_to_posting(msg, today, max_days)
         if not posting:
@@ -821,6 +828,8 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
             continue
         seen_ids.update({link_key, guid_key})
         kept.append(posting)
+    log.info("[job_hunt] fetch_today_jobs_from_email: kept=%d postings after filtering",
+             len(kept))
     for posting in kept:
         lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
         for probe in (lk, gk):
@@ -848,7 +857,7 @@ def gen_job_search_plan(prompt: str = "", config_source: str = "") -> str:
     """Node 1: Read RSS config into a Lane D execution plan."""
     config = _job_config()
     queries = config.get("queries", [{"category": "jobs", "query": "jobs available today", "job_type": ""}])
-    return json.dumps({
+    result = json.dumps({
         "location": config.get("default_location", "Canada"),
         "queries": queries,
         "max_results": int(config.get("max_results", 30)),
@@ -856,6 +865,11 @@ def gen_job_search_plan(prompt: str = "", config_source: str = "") -> str:
         "tech_job_keywords": _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS),
         "auto_post": bool(config.get("auto_post", False)),
     }, ensure_ascii=False)
+    log.info("[job_hunt] gen_job_search_plan: location=%s, max_results=%d, feeds=%d, keywords=%d",
+             config.get("default_location", "Canada"), int(config.get("max_results", 30)),
+             len(_config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)),
+             len(_config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS)))
+    return result
 
 
 def _cap_from_config(config: dict[str, Any], key: str, env_key: str, default: int) -> int:
@@ -895,6 +909,8 @@ def execute_job_search_plan(plan_json: str, *, state=None, include_email: bool =
     plan = json.loads(plan_json)
     config = _job_config()
     include_email = bool(include_email) or bool(config.get("include_email"))
+    log.info("[job_hunt] execute_job_search_plan: include_email=%s, max_results=%d",
+             include_email, int(plan.get("max_results") or config.get("max_results") or 30))
     postings = fetch_today_jobs(config, include_email=include_email)
     max_results = int(plan.get("max_results") or config.get("max_results") or 30)
     queries_executed = [q.get("category", "jobs") for q in plan.get("queries", [])]
@@ -909,6 +925,8 @@ def execute_job_search_plan(plan_json: str, *, state=None, include_email: bool =
         "postings": postings[:max_results],
     }
     result_json = json.dumps(result, ensure_ascii=False)
+    log.info("[job_hunt] execute_job_search_plan: found=%d postings from sources=%s",
+             len(postings[:max_results]), sources)
     if state is not None:
         state.data["job_search_json"] = result_json
         state.data["job_raw_postings"] = postings[:max_results]
@@ -939,11 +957,15 @@ def draft_job_posts_from_results(
     config = _job_config()
     raw = state.data.get("job_raw_postings") if state is not None else None
     postings = raw if isinstance(raw, list) else results.get("postings", [])
+    log.info("[job_hunt] draft_job_posts_from_results: total_postings=%d, raw_available=%s",
+             len(postings), "yes" if raw else "no")
     if not postings:
+        log.warning("[job_hunt] draft_job_posts_from_results: no postings found")
         return json.dumps({"success": False, "reason": "no_jobs_found", "drafts": []}, ensure_ascii=False)
 
     fields = config.get("post_fields")
     if not isinstance(fields, list) or not fields:
+        log.error("[job_hunt] draft_job_posts_from_results: missing post_fields in config")
         return json.dumps({
             "success": False,
             "reason": "missing_post_fields",
@@ -956,6 +978,8 @@ def draft_job_posts_from_results(
     rss_selected = [p for p in postings if p.get("source", "rss") != "email"][:rss_cap]
     email_selected = [p for p in postings if p.get("source") == "email"][:email_cap]
     selected = (rss_selected + email_selected)
+    log.info("[job_hunt] draft_job_posts_from_results: selected=%d (rss=%d, email=%d), caps=(rss=%d, email=%d), used_llm=%s",
+             len(selected), len(rss_selected), len(email_selected), rss_cap, email_cap, used_llm)
     if not selected:
         return json.dumps({"success": False, "reason": "no_jobs_found", "drafts": []}, ensure_ascii=False)
     field_keys = _field_keys_from_config(config)
@@ -987,6 +1011,7 @@ def draft_job_posts_from_results(
         try:
             text = format_job_post(enriched, date_text=today, config=config)
         except ValueError as e:
+            log.error("[job_hunt] draft_job_posts_from_results: format failed for posting %d: %s", i, e)
             return json.dumps({"success": False, "reason": str(e), "drafts": []}, ensure_ascii=False)
         slug_src = str(enriched.get("title") or posting.get("title") or f"job_{i}")
         slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or f"job_{i}"
@@ -1022,7 +1047,10 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false", *, state
         if full:
             drafts_json = full
     drafts_data = json.loads(drafts_json)
+    log.info("[job_hunt] save_or_post_job_drafts: total_drafts=%d, auto_post=%s",
+             len(drafts_data.get("drafts", [])), auto_post)
     if not drafts_data.get("drafts"):
+        log.warning("[job_hunt] save_or_post_job_drafts: no drafts to save")
         return json.dumps({"success": False, "reason": "no_drafts", "saved": []}, ensure_ascii=False)
 
     auto_requested = str(auto_post).lower() in {"true", "1", "yes", "on"}
@@ -1066,6 +1094,8 @@ def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false", *, state
         }
         (draft_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         saved.append({"category": cat, "draft_dir": str(draft_dir), "auto_posted": False})
+        log.info("[job_hunt] save_or_post_job_drafts: saved draft %d/%d to %s",
+                 i+1, len(drafts_data.get("drafts", [])), draft_dir)
 
     return json.dumps({"success": True, "total_saved": len(saved), "auto_posted": False, "auto_post_requested": auto_requested, "saved": saved}, ensure_ascii=False)
 
@@ -1086,6 +1116,11 @@ def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str 
     search_data = _safe_json_loads(search)
     draft_data = _safe_json_loads(draft)
     save_data = _safe_json_loads(save)
+    log.info("[job_hunt] report_job_run: feeds=%d, found=%d, draft_policy=%s, drafts_saved=%d",
+             len(plan_data.get('rss_feeds', [])),
+             search_data.get('total_found', 0),
+             draft_data.get('draft_policy', draft_data.get('reason', 'n/a')),
+             save_data.get('total_saved', 0))
     lines = ["# Job Post Run Report", "", "## RSS Lane D", ""]
     lines.append(f"- Feeds: {len(plan_data.get('rss_feeds', []))}")
     lines.append(f"- Results found today: {search_data.get('total_found', 0)}")
