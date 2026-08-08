@@ -1,17 +1,15 @@
-"""Grasp Studio backend — visualize temporary working-memory slots."""
+"""Grasp Studio backend — demo buffer + live snapshot from Aiko process."""
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Aiko Grasp Studio")
-# Local studio only — same-origin SPA + explicit localhost allowlist.
-# Do not pair allow_credentials=True with wildcard origins (CWE-942).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -62,13 +60,60 @@ def _get_demo():
     return _demo
 
 
+def _live_state() -> dict[str, Any] | None:
+    try:
+        from cognition.memory.grasp_hub import read_live_snapshot, snapshot_age_seconds
+        snap = read_live_snapshot()
+        if not snap:
+            return None
+        age = snapshot_age_seconds()
+        snap["mode"] = "live"
+        snap["live_age_s"] = age
+        snap["live_fresh"] = age is not None and age < 120.0
+        return snap
+    except Exception:
+        return None
+
+
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": "grasp-studio"}
+    live = _live_state()
+    pub: dict = {}
+    try:
+        from cognition.memory.grasp_hub import publish_health
+        pub = publish_health()
+    except Exception:
+        pub = {}
+    return {
+        "ok": True,
+        "service": "grasp-studio",
+        "live_available": live is not None,
+        "live_fresh": bool(live and live.get("live_fresh")),
+        "publish_error": pub.get("last_publish_error"),
+        "last_publish_at": pub.get("last_publish_at"),
+    }
 
 
 @app.get("/api/state")
-async def get_state():
+async def get_state(mode: str = Query("auto")):
+    """mode=auto|live|demo — auto prefers live when a fresh snapshot exists."""
+    mode = (mode or "auto").strip().lower()
+    if mode in ("auto", "live"):
+        live = _live_state()
+        if live and (mode == "live" or (mode == "auto" and live.get("live_fresh"))):
+            return live
+        if mode == "live":
+            return {
+                "mode": "live",
+                "slots": [],
+                "size": 0,
+                "total_tokens": 0,
+                "turn_counter": 0,
+                "miller": {"min": 5, "center": 7, "max": 9},
+                "evictions": [],
+                "live_available": False,
+                "hint": "No live snapshot yet — talk to Aiko with GRASP_LIVE_ENABLED=1",
+            }
     buf = _get_demo()
     state = buf.studio_state()
     state["evictions"] = list(_eviction_log)
@@ -87,7 +132,7 @@ async def fill_turn(payload: dict = Body(...)):
     return {
         "ok": True,
         "evicted": len(evicted),
-        "state": buf.studio_state(),
+        "state": {**buf.studio_state(), "mode": "demo"},
         "evictions": list(_eviction_log),
     }
 
@@ -96,7 +141,7 @@ async def fill_turn(payload: dict = Body(...)):
 async def touch_context():
     buf = _get_demo()
     _ = buf.get_context_block(touch=True)
-    return {"ok": True, "state": buf.studio_state(), "evictions": list(_eviction_log)}
+    return {"ok": True, "state": {**buf.studio_state(), "mode": "demo"}, "evictions": list(_eviction_log)}
 
 
 @app.post("/api/reset")
@@ -105,7 +150,7 @@ async def reset():
     buf = _get_demo()
     buf.clear()
     _eviction_log = []
-    return {"ok": True, "state": buf.studio_state(), "evictions": []}
+    return {"ok": True, "state": {**buf.studio_state(), "mode": "demo"}, "evictions": []}
 
 
 @app.post("/api/demo/seed")
@@ -132,7 +177,7 @@ async def seed_demo():
         buf.fill(u, a)
     buf.get_context_block(touch=True)
     buf.get_context_block(touch=True)
-    return {"ok": True, "state": buf.studio_state(), "evictions": list(_eviction_log)}
+    return {"ok": True, "state": {**buf.studio_state(), "mode": "demo"}, "evictions": list(_eviction_log)}
 
 
 @app.get("/")
@@ -142,5 +187,4 @@ async def serve_studio():
 
 if __name__ == "__main__":
     import uvicorn
-    # Local only — use a TLS reverse proxy for remote access.
     uvicorn.run(app, host="127.0.0.1", port=8003)

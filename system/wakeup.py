@@ -338,6 +338,15 @@ class AikoWakeup:
             )
             raise RuntimeError("AikoThink boot failed") from think_exc                        # chain from previous error point so callers/tracebacks still see the root cause
 
+        # Live Grasp working-memory hub — records turns for studio + WM scoring.
+        # Non-fatal: Aiko continues if grasp is missing or disabled.
+        try:
+            from cognition.memory.grasp_hub import install_into_think
+            if install_into_think(think_ref):
+                log.info("[wakeup] Grasp live hub installed on AikoThink")
+        except Exception:
+            log.debug("[wakeup] Grasp live hub not installed", exc_info=True)
+
         # speak has no boot-time dependency on think or memorize, and nothing
         # inside init_think touches it — safe to construct after the parallel
         # phase instead of before it. Construction itself is non-fatal, same as
