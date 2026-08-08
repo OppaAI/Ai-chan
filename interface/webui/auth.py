@@ -27,16 +27,16 @@ app = FastAPI()
 # Mount studio backends
 # LTM Graph Studio
 try:
-    from interface.webui.studio.ltm.backend.api import app as ltm_studio_app
-    app.mount("/studio/ltm", ltm_studio_app)
+    from interface.webui.studio.memory.ltm.backend.api import app as ltm_studio_app
+    app.mount("/studio/memory/ltm", ltm_studio_app)
 except ImportError as e:
     log.warning(f"Could not mount LTM studio: {e}")
 
 
 # STM Studio (combined STM/LTM/KB entry)
 try:
-    from interface.webui.studio.stm.backend.api import app as stm_studio_app
-    app.mount("/studio/stm", stm_studio_app)
+    from interface.webui.studio.memory.stm.backend.api import app as stm_studio_app
+    app.mount("/studio/memory/stm", stm_studio_app)
 except ImportError as e:
     log.warning(f"Could not mount STM studio: {e}")
 
@@ -45,13 +45,13 @@ except ImportError as e:
 @app.get("/studio/grasp", include_in_schema=False)
 @app.get("/studio/grasp/", include_in_schema=False)
 async def redirect_legacy_grasp_studio():
-    return RedirectResponse(url="/studio/stm/", status_code=307)
+    return RedirectResponse(url="/studio/memory/stm/", status_code=307)
 
 
 @app.get("/studio/memory", include_in_schema=False)
 @app.get("/studio/memory/", include_in_schema=False)
 async def redirect_legacy_memory_studio():
-    return RedirectResponse(url="/studio/ltm/", status_code=307)
+    return RedirectResponse(url="/studio/memory/ltm/", status_code=307)
 
 # DAG Studio
 try:
@@ -62,8 +62,8 @@ except ImportError as e:
 
 # KB Storage Viewer Studio
 try:
-    from interface.webui.studio.kb.backend.api import app as kb_studio_app
-    app.mount("/studio/kb", kb_studio_app)
+    from interface.webui.studio.memory.kb.backend.api import app as kb_studio_app
+    app.mount("/studio/memory/kb", kb_studio_app)
 except ImportError as e:
     log.warning(f"Could not mount KB studio: {e}")
 
