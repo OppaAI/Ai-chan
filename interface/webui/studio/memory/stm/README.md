@@ -5,7 +5,7 @@ Visualize **grasp** — temporary working-memory slots, scores, and eviction flo
 ## Run
 
 ```bash
-uv run python -m interface.webui.studio.stm.backend.api
+uv run python -m interface.webui.studio.memory.stm.backend.api
 # → http://127.0.0.1:8003
 ```
 

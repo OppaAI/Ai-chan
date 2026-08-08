@@ -5,7 +5,7 @@ Neural graph of **learned knowledge only** (chunks + entities). No personal memo
 ## Run
 
 ```bash
-uv run uvicorn interface.webui.studio.kb.backend.api:app --host 127.0.0.1 --port 8002
+uv run uvicorn interface.webui.studio.memory.kb.backend.api:app --host 127.0.0.1 --port 8002
 ```
 
 Open `http://127.0.0.1:8002/` (or open `frontend/index.html` with `API_BASE` set).

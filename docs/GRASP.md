@@ -81,7 +81,7 @@ block = buf.get_context_block(max_tokens=1200)
 `interface/webui/studio/stm/` — buffer strip, factor bars, seed/fill/touch/reset.
 
 ```bash
-uv run python -m interface.webui.studio.stm.backend.api
+uv run python -m interface.webui.studio.memory.stm.backend.api
 # → http://127.0.0.1:8003
 ```
 

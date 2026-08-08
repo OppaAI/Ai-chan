@@ -47,15 +47,17 @@ def main():
     """Run the studio server."""
     check_dependencies()
 
-    # Load environment variables
-    os.chdir(Path(__file__).parent)
+    # Load environment variables - need project root in PYTHONPATH for imports
+    project_root = Path(__file__).resolve().parents[5]  # interface/webui/studio/memory/ltm -> project root
+    os.chdir(project_root)
+    sys.path.insert(0, str(project_root))
 
     # Run the API server
     print("Starting Aiko LTM Graph Studio server at http://localhost:8001")
     print("Visit the URL to access the studio interface")
 
     import uvicorn
-    from interface.webui.studio.ltm.backend.api import app
+    from interface.webui.studio.memory.ltm.backend.api import app
 
     uvicorn.run(app, host="0.0.0.0", port=8001)
 
