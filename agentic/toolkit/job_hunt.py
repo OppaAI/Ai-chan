@@ -679,6 +679,25 @@ def _read_protonmail_messages(max_results: int) -> list[dict]:
             log.warning("Lane D email: read_protonmail MCP tool is not registered")
             return []
         result = spec.handler(max_results=max_results)
+        search_spec = registry.get("search_protonmail")
+        if search_spec is not None and search_spec.handler is not None:
+            merged = (result.get("messages") or []) if isinstance(result, dict) and result.get("ok") else []
+            if not isinstance(merged, list):
+                merged = []
+            for query in ("linkedin", "glassdoor", "indeed"):
+                try:
+                    searched = search_spec.handler(query=query, max_results=max_results)
+                except Exception as search_error:
+                    log.debug("Lane D email: search %s failed: %s", query, search_error)
+                    continue
+                if isinstance(searched, dict) and searched.get("ok"):
+                    found = searched.get("messages") or []
+                    if isinstance(found, list):
+                        merged.extend(m for m in found if isinstance(m, dict))
+            if isinstance(result, dict):
+                result["messages"] = merged
+            elif merged:
+                result = {"ok": True, "messages": merged}
     except Exception as e:
         log.warning("Lane D email: read_protonmail MCP call failed: %s", e)
         return []
@@ -704,11 +723,15 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int) -> dict | No
                 return None
         except (TypeError, ValueError):
             pass  # unparseable date: keep and let keyword filter decide
-    sender = str(msg.get("from") or msg.get("from_address") or "").strip()
+    sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
     subject_l = subject.casefold()
-    if not any(f in subject_l for f in ("linkedin", "glassdoor", "indeed", "job")):
-        return None
     snippet = str(msg.get("snippet") or "").strip()
+    body = str(msg.get("body") or msg.get("text") or msg.get("html") or "").strip()
+    content = f"{subject} {sender} {snippet} {body}".casefold()
+    if not any(f in content for f in ("linkedin", "glassdoor", "indeed", "job")):
+        return None
+    if body:
+        snippet = f"{snippet} {body}".strip()
     msg_id = str(msg.get("id") or "") or subject_l
     return {
         "title": subject,
