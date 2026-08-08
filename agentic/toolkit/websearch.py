@@ -219,4 +219,5 @@ def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS,
         content = result.get("content", "").strip()
         lines.append(f"{i}. {title}\n   {url}\n   {content}")
 
-    return f"{'\n\n'.join(lines)}\n\nUser asked: {query}"
+    separator = '\n\n'
+    return f"{separator.join(lines)}\n\nUser asked: {query}"
