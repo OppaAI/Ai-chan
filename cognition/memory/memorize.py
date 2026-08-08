@@ -38,14 +38,11 @@ log = get_logger(__name__)
 from .schema import (
     BOOT_LABELS,
     EMBED_DIMS,
-    EMBED_MODEL,
-    EMBED_QUERY_INSTRUCT,
     FTS_LIMIT,
     GRAPH_LIMIT,
     KIND_FACT,
     KIND_SCENE,
     KNN_LIMIT,
-    L0_CONVERSATION_LOG_ENABLED,
     MEMORY_CONTEXT_FACT_CHARS,
     MEMORY_CONTEXT_TOTAL_CHARS,
     MEMORY_CROSS_STORE_CONTEXT_CHARS,
@@ -60,7 +57,6 @@ from .schema import (
     MEMORY_RANK_RECENCY_HALF_LIFE_DAYS,
     MEMORY_RANK_RECENCY_WEIGHT,
     MEMORY_RECALL_SCORE_THRESHOLD,
-    MEMORY_RECALL_TIMEOUT,
     MEMORY_RECENCY_RERANK_ENABLED,
     MEMORY_RECENCY_RERANK_THRESHOLD,
     MEMORY_SEARCH_CACHE_SIZE,
@@ -83,27 +79,16 @@ from .schema import (
     SCENE_CONTEXT_LIMIT,
     SCENE_MEMBER_LIMIT,
     SOURCE_CHAT,
-    SOURCE_LEGACY,
     SOURCE_PIN,
     STATUS_ACTIVE,
     STATUS_SUPERSEDED,
     _DDL,
-    _GUEST_DB,
-    _GUEST_DB_LOCK,
-    _L2_SCENE_COLUMN,
     _PHASE_A_COLUMNS,
-    _WS_RE,
     _active_sql,
-    _default_user_id,
-    _env_flag,
-    _env_float,
-    _env_int,
     _first_json_array,
-    _guest_memory_db,
     _memory_db_path_for_user,
     _sqlite_batch_get_payloads,
     _sqlite_get_vector,
-    _sqlite_is_pinned,
     _sqlite_knn_search,
     _sqlite_pinned_ids,
     _sqlite_set_payload,
@@ -115,48 +100,15 @@ from .schema import (
 )
 
 from .entity import (
-    ENTITY_IMPORTANCE_ALPHA,
-    ENTITY_IMPORTANCE_BETA,
     MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT,
-    MEMORY_SPREADING_DECAY,
     MEMORY_SPREADING_ENABLED,
-    MEMORY_SPREADING_MAX_DEPTH,
-    MEMORY_SPREADING_MIN_STRENGTH,
-    MEMORY_SUPERSESSION_CHAIN_EXPAND,
-    MEMORY_SUPERSESSION_CHAIN_KINDS,
-    RELATION_CO_MENTION,
-    RELATION_RELATED,
     SALIENCE_POLICY_RE,
-    _ALLCAPS_RE,
-    _AROUSAL_HIGH_RE,
-    _AROUSAL_LOW_RE,
-    _AROUSAL_MID_RE,
-    _CALLED_RE,
-    _EMOTION_QUERY_RE,
-    _ENTITY_RELATIONS_DDL,
-    _KIND_RULES,
-    _PROPER_SPAN_RE,
-    _QUOTED_RE,
-    _STOP_ENTITIES,
-    _VALENCE_NEG_RE,
-    _VALENCE_POS_RE,
-    _VALENCE_STRONG_RE,
     _arousal_enabled,
-    _arousal_rank_weight,
-    _clean_entity,
-    _env_bool,
-    _is_sticky_neg,
-    _neg_hard_filter_enabled,
-    _neg_hard_threshold,
-    _norm_entity,
-    _ordered_pair,
-    _query_engages_memory,
     apply_neg_hard_filter,
     arousal_rank_bonus,
     backfill_entities,
     classify_kind,
     classify_write_op,
-    compute_entity_importance_map,
     ensure_entity_relations_schema,
     entities_from_json,
     entities_to_json,
@@ -166,12 +118,9 @@ from .entity import (
     infer_salience_hit,
     infer_valence_score,
     infer_valence_tag,
-    memory_max_activation,
-    memory_max_entity_importance,
     normalize_memory_text,
     rebuild_entity_relations,
     should_expand_supersession_chain,
-    spread_activation,
     tag_from_score,
     upsert_co_mentions,
     walk_supersession_chain,
@@ -183,30 +132,21 @@ from .imprint import (
     _EXTRACT_PROMPT,
     _EXTRACT_TIMEOUT,
     _HEDGE_RE,
-    _HEDGE_SIGNALS,
     _force_subject_name,
     _valence_from_llm,
 )
 
 from .search import (
-    AI_NAME,
     _BROAD_RECALL_RE,
-    _CLAUSE_SPLIT_RE,
-    _FILLER_WORDS,
-    _GREETING_PHRASES,
-    _TRIVIAL_PHRASES,
     _is_trivial_input,
-    _name_alt,
     _normalize_memory_text,
     _sanitize_fts_query,
-    _trivial_alt,
 )
 
 from .lifecycle import (
     DREAM_BOOST_AMOUNT,
     DREAM_MERGE_THRESHOLD,
     WRITE_DEDUP_THRESHOLD,
-    _SALIENCE_KEYWORDS,
     _SALIENCE_RE,
 )
 
@@ -580,7 +520,6 @@ class _MemoryBackend:
             ext_vals.append(s_hit)
         if MEMORY_STATE_TAGS_ENABLED and "state_json" in cols:
             try:
-                from datetime import datetime
                 import json
                 hour = bioclock.local_now().hour
                 state_json = json.dumps({"local_hour": int(hour)}, ensure_ascii=False)
@@ -1493,7 +1432,6 @@ class _MemoryBackend:
         Result budget: up to max(limit, min(len, 2*limit)) so short chains
         still fit under limit while multi-hit reflective expand is bounded.
         """
-        from cognition.memory.entity import should_expand_supersession_chain, walk_supersession_chain
         if not results:
             return results
         expanded: list[dict] = []
@@ -1515,7 +1453,6 @@ class _MemoryBackend:
 
                 # Normalize: list[dict], oldest → newest
                 chain_rows = [dict(n) for n in chain]
-                tip_id = str(chain_rows[-1].get("id") or mid)
 
                 for node in chain_rows:
                     nid = str(node.get("id") or "")

@@ -1,6 +1,8 @@
 """
 Knowledge-only graph export for Knowledge Graph Studio.
 
+interface/webui/studio/memory/kb/backend/graph_export.py
+
 Nodes: learned_chunks (type=knowledge) + entity hubs.
 Edges: about (chunk → entity), same_doc (chunks sharing doc_id).
 

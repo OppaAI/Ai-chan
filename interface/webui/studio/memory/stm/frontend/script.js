@@ -1,7 +1,7 @@
 /* STM Studio — circular WM animation (memory-graph theme).
  * Size + glow track score (like retain). Live state from /api/*.
  */
-const API_BASE = window.location.pathname.startsWith("/studio/memory/stm") ? "/studio/memory/stm" : "";
+const API_ROOT = GraphBoot.apiBase();
 const FACTOR_ORDER = [
   "emotion", "importance", "recency", "relevance",
   "novelty", "question", "entity", "recall_freq", "primacy",
@@ -18,7 +18,7 @@ let lastTurnSeen = null;
 function $(id) { return document.getElementById(id); }
 
 async function api(path, opts) {
-  const r = await fetch(API_BASE + path, {
+  const r = await fetch(API_ROOT + path, {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
@@ -349,7 +349,7 @@ async function refresh() {
   if (isAnimating) return;
   isAnimating = true;
   try {
-    const data = await api("/api/state");
+    const data = await api("/state");
     await applyState(data, { animateNew: false });
     lastTurnSeen = Number((data.state || data).turn_counter ?? 0);
   } finally {
@@ -362,7 +362,7 @@ async function seed() {
   isAnimating = true;
   try {
     document.querySelectorAll(".mem").forEach((m) => m.remove());
-    const data = await api("/api/demo/seed", { method: "POST", body: "{}" });
+    const data = await api("/demo/seed", { method: "POST", body: "{}" });
     const state = data.state || data;
     const slots = state.slots || [];
     lastState = state;
@@ -393,7 +393,7 @@ async function touch() {
   if (isAnimating) return;
   isAnimating = true;
   try {
-    const data = await api("/api/touch", { method: "POST", body: "{}" });
+    const data = await api("/touch", { method: "POST", body: "{}" });
     const stage = $("stage");
     const stageRect = stage.getBoundingClientRect();
     document.querySelectorAll(".mem").forEach((el) => {
@@ -418,7 +418,7 @@ async function reset() {
   if (isAnimating) return;
   isAnimating = true;
   try {
-    const data = await api("/api/reset", { method: "POST", body: "{}" });
+    const data = await api("/reset", { method: "POST", body: "{}" });
     document.querySelectorAll(".mem").forEach((m) => m.remove());
     await applyState(data, { animateNew: false });
   } finally {
@@ -433,7 +433,7 @@ async function fill() {
   if (!user && !assistant) return;
   isAnimating = true;
   try {
-    const data = await api("/api/fill", {
+    const data = await api("/fill", {
       method: "POST",
       body: JSON.stringify({ user, assistant }),
     });
@@ -482,7 +482,7 @@ window.addEventListener("resize", () => {
 async function pollLive() {
   if (livePaused || isAnimating) return;
   try {
-    const data = await api("/api/state?mode=auto");
+    const data = await api("/state?mode=auto");
     const state = data.state || data;
     const turn = Number(state.turn_counter ?? 0);
     const live = state.mode === "live";

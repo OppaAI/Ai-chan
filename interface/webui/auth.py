@@ -10,7 +10,6 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request, Depends, WebSocket
 from fastapi.responses import RedirectResponse
-from fastapi.staticfiles import StaticFiles
 import httpx
 from system.config import load_config
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired

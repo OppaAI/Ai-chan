@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import threading
 from pathlib import Path
 
@@ -16,7 +15,6 @@ try:
         MatrixRoom,
         RoomMessageText,
         LoginResponse,
-        SyncResponse,
     )
 except ImportError:
     AsyncClient = None
@@ -52,23 +50,6 @@ class MatrixAdapter(AdapterBase):
             "password": self._get_env("MATRIX_PASSWORD"),
             "device_id": self._get_env("MATRIX_DEVICE_ID", "aiko-adapter"),
         }
-
-    @staticmethod
-    def _parse_user_map(raw: str) -> dict[str, str]:
-        mapping: dict[str, str] = {}
-        if not raw:
-            return mapping
-        for token in raw.replace(",", " ").split():
-            if "=" in token:
-                key, val = token.split("=", 1)
-            elif ":" in token:
-                key, val = token.split(":", 1)
-            else:
-                continue
-            key, val = key.strip(), val.strip()
-            if key and val:
-                mapping[key] = val
-        return mapping
 
     def _canonical_user_id(self, raw: str) -> str:
         if raw not in self._user_id_map:
@@ -138,7 +119,7 @@ class MatrixAdapter(AdapterBase):
 
         while not self._stop_evt.is_set():
             try:
-                sync_resp = await self._client.sync(timeout=30000)
+                await self._client.sync(timeout=30000)
             except Exception as exc:
                 log.error("[matrix] Sync error: %s", exc)
                 await asyncio.sleep(5)

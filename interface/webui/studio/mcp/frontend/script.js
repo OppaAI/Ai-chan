@@ -1,5 +1,5 @@
 // Detect base path for API calls (studio is mounted at /studio/mcp/)
-        const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+        const API_BASE = GraphBoot.apiBase();
 
         let currentServer = null;
         let allServers = [];

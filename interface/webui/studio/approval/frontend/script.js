@@ -8,7 +8,7 @@ document.querySelectorAll('.filter-tab').forEach(tab => {
 });
 
 // Detect base path for API calls (studio is mounted at /studio/approval/)
-const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+const API_BASE = GraphBoot.apiBase();
 
 let currentDraft = null;
 let allDrafts = [];

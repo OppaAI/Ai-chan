@@ -18,21 +18,13 @@ from pathlib import Path
 from typing import Any
 
 from cognition.memory.grasp import GraspBuffer, GraspTurn, build_grasp
+from cognition.memory.env import env_flag, env_str
 
 log = logging.getLogger("aiko.grasp_hub")
 
 
-def _env_flag(name: str, default: str = "1") -> bool:
-    return str(os.getenv(name, default)).strip().lower() not in ("0", "false", "no", "off", "")
-
-
-def _env_str(name: str, default: str) -> str:
-    v = os.getenv(name)
-    return default if v is None or str(v).strip() == "" else str(v).strip()
-
-
-GRASP_LIVE_ENABLED = _env_flag("GRASP_LIVE_ENABLED", "1")
-GRASP_LIVE_STATE_PATH = _env_str(
+GRASP_LIVE_ENABLED = env_flag("GRASP_LIVE_ENABLED", "1")
+GRASP_LIVE_STATE_PATH = env_str(
     "GRASP_LIVE_STATE_PATH",
     str(Path.home() / ".local" / "share" / "aiko" / "grasp" / "live_state.json"),
 )

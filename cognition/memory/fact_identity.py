@@ -41,7 +41,7 @@ def fix_fact_identity(
     if u.casefold() == a.casefold():
         return t
 
-    ue, ae = _user_re(u), _user_re(a)
+    ue = _user_re(u)
 
     # 1) "{User} dislikes/hates being human-like" → Aiko (persona self-talk)
     t2 = re.sub(

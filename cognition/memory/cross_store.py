@@ -9,28 +9,19 @@ as secondary context.
 from __future__ import annotations
 
 import html
-import os
 from typing import Any
 
 from system.log import get_logger
+from .env import env_bool, env_int
 
 log = get_logger(__name__)
 
-CROSS_STORE_ENABLED = os.getenv("MEMORY_CROSS_STORE_ENABLED", "1").lower() in {
-    "1", "true", "yes", "on",
-}
+CROSS_STORE_ENABLED = env_bool("MEMORY_CROSS_STORE_ENABLED", "1")
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-MAX_KNOWLEDGE = max(0, _env_int("MEMORY_CROSS_STORE_MAX_KNOWLEDGE", 2))
-MAX_EXPERIENCE = max(0, _env_int("MEMORY_CROSS_STORE_MAX_EXPERIENCE", 2))
-MIN_ENTITY_OVERLAP = max(0, _env_int("MEMORY_CROSS_STORE_MIN_ENTITY_OVERLAP", 1))
+MAX_KNOWLEDGE = max(0, env_int("MEMORY_CROSS_STORE_MAX_KNOWLEDGE", 2))
+MAX_EXPERIENCE = max(0, env_int("MEMORY_CROSS_STORE_MAX_EXPERIENCE", 2))
+MIN_ENTITY_OVERLAP = max(0, env_int("MEMORY_CROSS_STORE_MIN_ENTITY_OVERLAP", 1))
 
 
 def _entities_from_row(row: dict | Any) -> list[str]:

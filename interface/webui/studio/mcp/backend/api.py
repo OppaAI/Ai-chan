@@ -2,15 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from fastapi import FastAPI, Query, HTTPException
+import re
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-import subprocess
-import json
-import os
-import importlib.util
-import sys
 
 app = FastAPI(title="Aiko MCP Studio")
 
@@ -24,13 +20,15 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="mcp-frontend")
+
+app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
 
 def _get_mcp_servers() -> list[dict]:
     """Get list of MCP servers from the interface/mcp_server directory."""
-    import re
     mcp_root = Path(__file__).resolve().parents[5] / "interface" / "mcp_server"
     servers = []
 
@@ -84,7 +82,6 @@ def _get_mcp_servers() -> list[dict]:
 
 def _get_static_tools(tools_dir: Path) -> list[dict]:
     """Extract tool information by scanning tool files for @mcp.tool decorators."""
-    import re
     tools = []
     try:
         for tool_file in sorted(tools_dir.glob("*.py")):
@@ -131,8 +128,12 @@ def _check_server_status(server: dict) -> dict:
 
 
 @app.get("/api/servers")
-async def get_servers():
-    """Get all MCP servers with their status and tools."""
+def get_servers():
+    """Get all MCP servers with their status and tools.
+
+    sync def so the 1s-per-server socket probes run in FastAPI's threadpool
+    instead of freezing the event loop.
+    """
     servers = _get_mcp_servers()
     for server in servers:
         _check_server_status(server)
@@ -140,7 +141,7 @@ async def get_servers():
 
 
 @app.get("/api/servers/{server_name}")
-async def get_server(server_name: str):
+def get_server(server_name: str):
     """Get details for a specific MCP server."""
     servers = _get_mcp_servers()
     server = next((s for s in servers if s["name"] == server_name), None)

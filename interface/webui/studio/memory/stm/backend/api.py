@@ -23,7 +23,10 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+SHARED_DIR = Path(__file__).resolve().parents[3] / "_shared"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="stm-frontend")
+
+app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
 _demo = None
 _eviction_log: list[dict[str, Any]] = []
@@ -81,7 +84,7 @@ def _live_state() -> dict[str, Any] | None:
 
 
 @app.get("/api/health")
-async def health():
+def health():
     live = _live_state()
     pub: dict = {}
     try:
@@ -100,7 +103,7 @@ async def health():
 
 
 @app.get("/api/state")
-async def get_state(mode: str = Query("auto")):
+def get_state(mode: str = Query("auto")):
     """mode=auto|live|demo — auto prefers live whenever it is available."""
     mode = (mode or "auto").strip().lower()
     if mode in ("auto", "live"):
@@ -127,7 +130,7 @@ async def get_state(mode: str = Query("auto")):
 
 
 @app.post("/api/fill")
-async def fill_turn(payload: dict = Body(...)):
+def fill_turn(payload: dict = Body(...)):
     user = str(payload.get("user") or "").strip()
     assistant = str(payload.get("assistant") or "").strip()
     if not user and not assistant:
@@ -143,14 +146,14 @@ async def fill_turn(payload: dict = Body(...)):
 
 
 @app.post("/api/touch")
-async def touch_context():
+def touch_context():
     buf = _get_demo()
     _ = buf.get_context_block(touch=True)
     return {"ok": True, "state": {**buf.studio_state(), "mode": "demo"}, "evictions": list(_eviction_log)}
 
 
 @app.post("/api/reset")
-async def reset():
+def reset():
     global _eviction_log
     buf = _get_demo()
     buf.clear()
@@ -159,7 +162,7 @@ async def reset():
 
 
 @app.post("/api/demo/seed")
-async def seed_demo():
+def seed_demo():
     global _eviction_log
     buf = _get_demo()
     buf.clear()

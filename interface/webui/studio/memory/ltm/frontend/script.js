@@ -1,4 +1,4 @@
-const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+const API_BASE = GraphBoot.apiBase();
 const ARC_KEYS = ['salience', 'spacing', 'connectivity', 'valence', 'access'];
 /* quiet rim — low opacity, not competing with glass body */
 const ARC_COLORS = ['#ffd27a66', '#6bcf7f66', '#b794f666', '#3de0ff55', '#e8eef855'];
@@ -327,7 +327,7 @@ function render() {
   }
 
   const g = svg.append('g');
-  zoomBehavior = d3.zoom().scaleExtent([0.2, 4]).on('zoom', (ev) => g.attr('transform', ev.transform));
+  zoomBehavior = GraphBoot.makeZoom({ scaleExtent: [0.2, 4], target: g });
   svg.call(zoomBehavior);
 
   const defs = svg.append('defs');
@@ -349,12 +349,7 @@ function render() {
     d._op = op;
 
     const fid = `glow-${i}`;
-    const blur = glowStrength(d);
-    const filt = defs.append('filter').attr('id', fid)
-      .attr('x', '-80%').attr('y', '-80%').attr('width', '260%').attr('height', '260%');
-    filt.append('feGaussianBlur').attr('in', 'SourceGraphic').attr('stdDeviation', blur).attr('result', 'b');
-    filt.append('feMerge').selectAll('feMergeNode')
-      .data(['b', 'SourceGraphic']).join('feMergeNode').attr('in', x => x);
+    GraphBoot.addGlowFilter(defs, fid, glowStrength(d));
     d._glowId = fid;
   });
 
@@ -371,11 +366,7 @@ function render() {
   const node = g.append('g').selectAll('g').data(nodes).join('g')
     .style('cursor', 'pointer')
     .attr('opacity', d => d.status === 'superseded' ? 0.55 : 1)
-    .call(d3.drag()
-      .on('start', (event, d) => { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
-      .on('drag', (event, d) => { d.fx = event.x; d.fy = event.y; })
-      .on('end', (event, d) => { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
-    )
+    .call(GraphBoot.makeDrag(simulation))
     .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
 
   // outer glow disc (soft synapse halo)
@@ -437,13 +428,15 @@ function render() {
     }
   });
 
-  simulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(d => d.id)
-      .distance(d => d.type === 'mentions' ? 50 : (d.type === 'supersedes' ? 95 : 72))
-      .strength(0.4))
-    .force('charge', d3.forceManyBody().strength(-140))
-    .force('center', d3.forceCenter(w/2, h/2))
-    .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 6))
+  simulation = GraphBoot.makeSimulation(nodes, links, {
+    w,
+    h,
+    charge: -140,
+    nodeRadius,
+    collisionPadding: 6,
+    linkDistance: d => d.type === 'mentions' ? 50 : (d.type === 'supersedes' ? 95 : 72),
+    linkStrength: 0.4,
+  })
     .on('tick', () => {
       link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);

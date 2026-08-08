@@ -18,6 +18,7 @@ from itertools import combinations
 from typing import Any, Iterable
 
 from .schema import KIND_FACT, _WS_RE, ensure_phase_a_schema, existing_columns
+from .env import env_flag
 
 
 from system.log import get_logger
@@ -416,7 +417,7 @@ def infer_valence_score(text: str) -> int:
 # ── config ────────────────────────────────────────────────────────────────────
 
 def _env_bool(name: str, default: str = "1") -> bool:
-    return os.getenv(name, default).strip().lower() not in ("0", "false", "no", "off")
+    return env_flag(name, default)
 
 
 def _arousal_enabled() -> bool:

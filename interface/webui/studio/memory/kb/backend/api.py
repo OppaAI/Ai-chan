@@ -9,6 +9,7 @@ from system.log import get_logger
 log = get_logger(__name__)
 app = FastAPI(title="Aiko Knowledge Graph Studio", version="1.0")
 _FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
+_SHARED = Path(__file__).resolve().parents[3] / "_shared"
 @app.get("/api/health")
 def health():
     return {"ok": True, "studio": "knowledge-graph"}
@@ -64,6 +65,7 @@ def index():
     raise HTTPException(status_code=404, detail="frontend missing")
 if _FRONTEND.is_dir():
     app.mount("/static", StaticFiles(directory=str(_FRONTEND)), name="static")
+    app.mount("/shared", StaticFiles(directory=str(_SHARED), html=True), name="studio-shared")
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("KNOWLEDGE_STUDIO_PORT", "8002")))

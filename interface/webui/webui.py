@@ -220,7 +220,7 @@ class AikoWeb:
     async def _ws_handler(self, ws) -> None:
         from interface.webui.auth import sessions, signer, SESSION_MAX_AGE_SECONDS
         from itsdangerous import BadSignature, SignatureExpired
-        from datetime import datetime, timedelta
+        from datetime import timedelta
 
         cookie_value = ws.cookies.get("session_id")
         if not cookie_value:
@@ -262,7 +262,10 @@ class AikoWeb:
         display_context_token = set_current_display_name(self._current_display_name)
         os.environ["AIKO_USER_ID"] = uid
         if self._memorize:
-            self._memorize.switch_user(uid)
+            # switch_user can block on pending SQLite writes + connection
+            # reopen — offload so the event loop stays responsive for other
+            # browsers while a slow write drains.
+            await asyncio.to_thread(self._memorize.switch_user, uid)
             if self._current_display_name:
                 self._memorize.set_display_name(self._current_display_name)
         await ws.accept()
@@ -305,7 +308,8 @@ class AikoWeb:
                             set_current_display_name(self._current_display_name)
                             os.environ["AIKO_USER_ID"] = uid
                             if self._memorize:
-                                self._memorize.switch_user(uid)
+                                # same blocking concern as connect-time switch_user
+                                await asyncio.to_thread(self._memorize.switch_user, uid)
                                 if self._current_display_name:
                                     self._memorize.set_display_name(self._current_display_name)
                             self._input_q.put((text, uid, self._current_display_name))
@@ -328,9 +332,12 @@ class AikoWeb:
                         if self._listen is not None:
                             self._listen.trigger_barge_in()
                         if self._speak is not None:
-                            self._speak.stop()
+                            # stop() busy-waits for the stream thread to end;
+                            # run it off the event loop so a long TTS playback
+                            # doesn't freeze every other browser/request.
+                            await asyncio.to_thread(self._speak.stop)
         
-        except Exception as e:
+        except Exception:
             log.exception("[aiko-web] error in WebSocket loop")
         finally:
             reset_current_display_name(display_context_token)
@@ -474,7 +481,7 @@ class AikoWeb:
 
     def _push_vitals(self) -> None:
         try:
-            from system.health import _ram_used_str, _db_size_str, _fmt_uptime
+            from system.health import _ram_used_str, _fmt_uptime
             ram    = _ram_used_str()
             uptime = _fmt_uptime(time.time() - self._ts)
         except Exception:
@@ -603,6 +610,7 @@ class AikoWeb:
                 except queue.Empty:
                     log.debug("webui: voice input queue empty, retrying")
         finally:
+            self._mic_active.clear()
             self._broadcast({"type": "voice", "status": "idle"})
 
         if text_input is None:
@@ -639,5 +647,5 @@ def run_webui(args) -> None:
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
-    print(f"  Waiting for login before waking up subsystems...\n")
+    print("  Waiting for login before waking up subsystems...\n")
     run_session(ui, args)

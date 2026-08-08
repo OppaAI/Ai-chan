@@ -27,7 +27,6 @@ import logging
 import os
 import json
 import warnings
-import hashlib
 
 import numpy as np
 
@@ -37,7 +36,6 @@ logging.getLogger("torch").setLevel(logging.ERROR)
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 
 from datetime import datetime
-from datetime import time as dt_time
 from openai import OpenAI
 from pathlib import Path
 import re
@@ -45,8 +43,6 @@ import threading
 import time
 import unicodedata
 
-from cognition.memory.memorize import AikoMemorize
-from sensory.speak    import AikoSpeak
 from agentic.tools    import web_search_context
 from agentic.agentic  import run_agentic_chat
 from agentic.wiki import wiki_knowledge_context_for
@@ -54,7 +50,7 @@ from cognition.knowledge import knowledge_context_for
 from cognition import CONTEXT_POOL
 from system.log      import get_logger
 from system.schedule import DueJob, register_system_handler
-from system.userspace import current_user_id, current_display_name, user_profile_path, user_state_dir
+from system.userspace import current_user_id, current_display_name, user_profile_path
 from system import bioclock
 from agentic.toolkit.social import run_scheduled_weekly_social
 from cognition import reason
@@ -512,8 +508,12 @@ class AikoThink:
 
         Returns (memories, knowledge_block).
         """
-        embedder = self._get_memorize()._mem._embedder
-        mem_future = CONTEXT_POOL.submit(self._get_memorize().search, user_input, limit=mem_limit, query_vector=query_vector)
+        memorize = self._get_memorize()
+        if memorize is None:
+            log.warning("[think] Memory unavailable — skipping memory/KB recall.")
+            return [], ""
+        embedder = memorize._mem._embedder
+        mem_future = CONTEXT_POOL.submit(memorize.search, user_input, limit=mem_limit, query_vector=query_vector)
         know_future = CONTEXT_POOL.submit(
             knowledge_context_for, user_input, limit=know_limit, max_chars=2000, embedder=embedder
         )
@@ -595,7 +595,11 @@ class AikoThink:
             return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
     
         instruct = _ROUTE_INSTRUCT_QUATERNARY
-        embedder = self._get_memorize()._mem._embedder
+        memorize = self._get_memorize()
+        if memorize is None:
+            log.warning("[think] Memory unavailable — intent routing via LLM only")
+            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+        embedder = memorize._mem._embedder
         query_vec = embedder.embed_query(user_input, instruct=instruct)
         labels, example_vecs = self._semantic_example_vectors(_ROUTE_QUATERNARY_EXAMPLES, instruct)
         scores = reason.label_scores_topk(query_vec, labels, example_vecs, top_k=_SEMANTIC_LABEL_TOP_K)
@@ -857,11 +861,12 @@ class AikoThink:
         with self._active_users_lock:
             self._active_user_ids.add(user_id)
         try:
-            embedder = self._get_memorize()._mem._embedder
+            memorize = self._get_memorize()
+            embedder = memorize._mem._embedder if memorize is not None else None
             cap_vec = embedder.embed_query(
                 user_input,
                 instruct="Which capability/tool domain applies to this task?",
-            )
+            ) if embedder is not None else None
             return run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, cap_vec=cap_vec)
         finally:
             with self._active_users_lock:
@@ -1016,11 +1021,12 @@ class AikoThink:
         else:
             # Memory + KB — either resolved from route()'s post-intent future,
             # or fetched directly if this was called standalone.
+            memorize = self._get_memorize()
             memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-            memory_block = self._get_memorize().format_for_context(
+            memory_block = memorize.format_for_context(
               memories, query=user_input
-            )
-            persona_block = self._get_memorize().persona_context()
+            ) if memorize is not None else ""
+            persona_block = memorize.persona_context() if memorize is not None else ""
         
         system = self._current_system_prompt(user_input)
         system += "\n\n" + bioclock.current_datetime_block()
@@ -1038,9 +1044,11 @@ class AikoThink:
         # fetch above. Gated so casual chat doesn't pay for it every turn.
         if not skip_memory and _should_use_local_knowledge(user_input):
             try:
+                memorize = self._get_memorize()
+                embedder = memorize._mem._embedder if memorize is not None else None
                 wiki_context = wiki_knowledge_context_for(
                     user_input, limit=3, max_chars=3000,
-                    embedder=self._get_memorize()._mem._embedder,
+                    embedder=embedder,
                 )
                 system = f"{system}\n\n{wiki_context}"
             except Exception as e:

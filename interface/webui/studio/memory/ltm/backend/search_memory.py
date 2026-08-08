@@ -1,5 +1,5 @@
 """
-memory/studio/backend/search_memory.py
+memory/studio/ltm/backend/search_memory.py
 
 Phase B unified recall facade over personal memory + learned knowledge.
 
@@ -11,7 +11,7 @@ personal memory and an embedder for knowledge.
 from __future__ import annotations
 
 import os
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 from system.log import get_logger
 from system.userspace import current_user_id
@@ -207,15 +207,22 @@ def memories_for_entity(
         return []
     # status_sql is one of two hardcoded literals (not user input).
     status_clause = "" if include_history else "AND (status = 'active' OR status IS NULL)"
-    like = f'%"{_escape_like(needle)}"[,\]]%'
+    # Match `"needle"` as a full JSON array element, i.e. followed by a `,`
+    # (more elements) or a `]` (last element). The entities column stores a
+    # JSON array like ["a","b"], so a bare LIKE `%"needle"%` would also match
+    # `"needle-adjacent"`. Split into two predicates because SQLite LIKE
+    # cannot express `]` inside a character class.
+    needle_esc = _escape_like(needle)
+    like_next = f'%"{needle_esc}",%'
+    like_end = f'%"{needle_esc}"]%'
     sql = (
         "SELECT * FROM memories "
         "WHERE user_id = ? "
-        "AND entities LIKE ? ESCAPE '\\' "
+        "AND (entities LIKE ? ESCAPE '\\' OR entities LIKE ? ESCAPE '\\') "
         f"{status_clause} "
         "ORDER BY created_at DESC "
         "LIMIT ?"
     )
     with lock:
-        rows = conn.execute(sql, (uid, like, int(limit))).fetchall()
+        rows = conn.execute(sql, (uid, like_next, like_end, int(limit))).fetchall()
     return [_normalize_personal_hit(dict(r), needle) for r in rows]

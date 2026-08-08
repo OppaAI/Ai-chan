@@ -10,7 +10,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, Query, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from system.config import load_config
@@ -28,13 +28,14 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
 
 # Serve static files (CSS, JS)
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
+app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
 
 def _job_post_social_root() -> Path:
-    import os
     from system.userspace import user_workspace_root
     override = os.getenv("JOB_POST_SOCIAL_ROOT")
     if override:
@@ -287,7 +288,7 @@ async def reject_draft(draft_dir: str):
 
 
 @app.get("/api/fetch-url")
-async def fetch_url(url: str = Query(..., description="URL to fetch content from")):
+def fetch_url(url: str = Query(..., description="URL to fetch content from")):
     """Fetch a URL and convert it to Markdown using MarkItDown.
 
     We fetch the page ourselves (with browser-like headers + a retry) rather

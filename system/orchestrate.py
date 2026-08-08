@@ -1200,6 +1200,7 @@ def run_session(ui, args) -> None:
 
     # ── main loop ─────────────────────────────────────────────────────────────
 
+    last_turn: tuple[str, str] | None = None
     while True:
         try:
             voice_info = None
@@ -1268,11 +1269,11 @@ def run_session(ui, args) -> None:
                     ui.add_message('sys', 'All persistent memories cleared.')
 
             elif cmd == '/remember':
-                if not turn:
+                if last_turn is None:
                     ui.add_message('sys', 'Nothing to remember yet — send a message first.')
                 else:
                     think.wait_for_memory()
-                    user_text, ai_text = turn
+                    user_text, ai_text = last_turn
                     msgs = [
                         {"role": "user",      "content": user_text},
                         {"role": "assistant", "content": ai_text},
@@ -1448,7 +1449,8 @@ def run_session(ui, args) -> None:
             speak.reset_synth_timer()
 
         try:
-            think.route(user_input, token_callback=token_cb)
+            reply_text = think.route(user_input, token_callback=token_cb)
+            last_turn = (user_input, reply_text or "")
             current_latency["assistant_done_at"] = time.monotonic()
 
             usage = getattr(think, "last_usage", None) or {}

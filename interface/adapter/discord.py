@@ -33,28 +33,6 @@ class DiscordAdapter(AdapterBase):
             "prefix": self._get_env("DISCORD_COMMAND_PREFIX", "!"),
         }
 
-    @staticmethod
-    def _parse_user_map(raw: str) -> dict[str, str]:
-        """Parse DISCORD_USER_ID_MAP: a comma/space separated list of `id=user`
-        pairs (also accepts `id:user`). Collapses the Discord snowflake(s) onto
-        a single canonical Aiko user id so memory is shared across accounts /
-        channels, instead of a fresh folder per Discord id.
-        """
-        mapping: dict[str, str] = {}
-        if not raw:
-            return mapping
-        for token in raw.replace(",", " ").split():
-            if "=" in token:
-                key, val = token.split("=", 1)
-            elif ":" in token:
-                key, val = token.split(":", 1)
-            else:
-                continue
-            key, val = key.strip(), val.strip()
-            if key and val:
-                mapping[key] = val
-        return mapping
-
     def _canonical_user_id(self, raw: str) -> str:
         if raw not in self._user_id_map:
             log.debug("[discord] user %s -> %s (default)", raw, raw)

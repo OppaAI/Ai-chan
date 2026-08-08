@@ -20,6 +20,7 @@ import sqlite_vec
 from system.log import get_logger
 from system.userspace import current_user_id
 from cognition.memory.vecstore import initialize_store_db, resolve_user_db_path
+from cognition.memory.env import env_bool, env_flag, env_float, env_int
 
 log = get_logger(__name__)
 
@@ -51,7 +52,7 @@ BOOT_LABELS = {
 }
 
 def _env_bool(name: str, default: str = "1") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+    return env_bool(name, default)
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
@@ -139,19 +140,13 @@ MEMORY_CROSS_STORE_ENABLED = os.getenv("MEMORY_CROSS_STORE_ENABLED", "1").lower(
 }
 
 def _env_flag(name: str, default: str = "1") -> bool:
-    return str(os.getenv(name, default)).strip().lower() not in ("0", "false", "no", "")
+    return env_flag(name, default)
 
 def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+    return env_float(name, default)
 
 def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+    return env_int(name, default)
 
 MEMORY_STATE_TAGS_ENABLED = _env_flag("MEMORY_STATE_TAGS_ENABLED", "1")
 MEMORY_NEG_RECALL_AVOID = _env_flag("MEMORY_NEG_RECALL_AVOID", "1")
@@ -483,7 +478,6 @@ def _first_json_array(raw: str) -> str | None:
                 depth -= 1
                 if depth == 0:
                     return raw[start:j + 1]
-        i = j
     return None
 
 def _json_objects(text: str) -> list[dict]:

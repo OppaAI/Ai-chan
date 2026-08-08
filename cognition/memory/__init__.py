@@ -5,9 +5,9 @@ External consumers import from the hub:
 
     from cognition.memory.memorize import AikoMemorize, ...
 
-The unified recall facade (memory + KB interleaved) lives in the Studio backend
-(interface/webui/studio/memory/backend/search_memory.py) — it is user-facing UI
-tooling, not part of Aiko's own recall path.
+The unified recall facade (memory + KB interleaved) lives in the LTM Studio
+backend (interface/webui/studio/memory/ltm/backend/search_memory.py) — it is
+user-facing UI tooling, not part of Aiko's own recall path.
 
 Module layout (backend split):
   memorize    — engine classes (_MemoryBackend, AikoMemorize) + re-export hub

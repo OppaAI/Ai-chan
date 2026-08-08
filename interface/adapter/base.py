@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
 from system.log import get_logger
 from system.userspace import (
-    current_user_id,
     reset_current_display_name,
     reset_current_user_id,
     set_current_display_name,
@@ -171,6 +169,30 @@ class AdapterBase(ABC):
     @staticmethod
     def _get_env(name: str, default: str = "") -> str:
         return os.getenv(name, default)
+
+    @staticmethod
+    def _parse_user_map(raw: str) -> dict[str, str]:
+        """Parse a `USER_ID_MAP` env var into {platform_id: canonical_user}.
+
+        Accepts a comma/space separated list of `id=user` pairs (also
+        `id:user`). Collapses platform ids onto canonical Aiko user ids so
+        memory is shared across accounts/channels instead of a fresh folder
+        per platform id.
+        """
+        mapping: dict[str, str] = {}
+        if not raw:
+            return mapping
+        for token in raw.replace(",", " ").split():
+            if "=" in token:
+                key, val = token.split("=", 1)
+            elif ":" in token:
+                key, val = token.split(":", 1)
+            else:
+                continue
+            key, val = key.strip(), val.strip()
+            if key and val:
+                mapping[key] = val
+        return mapping
 
     def _read_config(self) -> dict[str, str]:
         return {}

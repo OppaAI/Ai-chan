@@ -1,5 +1,6 @@
 /* Knowledge Graph Studio — knowledge + entity nodes only */
-const API_BASE = window.KNOWLEDGE_API_BASE || (window.location.pathname.startsWith("/studio/memory/kb") ? "/studio/memory/kb" : "");
+const API_BASE = (window.KNOWLEDGE_API_BASE || GraphBoot.apiBase()).replace(/\/+$/, '');
+const API_ROOT = API_BASE.endsWith('/api') ? API_BASE : API_BASE + '/api';
 let graph = { nodes: [], edges: [], meta: {} };
 let simulation = null;
 let zoomBeh = null;
@@ -58,7 +59,7 @@ async function loadGraph() {
   if (dateFrom) params.append('date_from', dateFrom);
   if (dateTo) params.append('date_to', dateTo);
 
-  const res = await fetch(`${API_BASE}/api/graph?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
+  const res = await fetch(`${API_ROOT}/graph?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
   if (!res.ok) throw new Error(`graph request failed: ${res.status}`);
   graph = await res.json();
   if (graph && graph.meta && graph.meta.error) {
@@ -160,7 +161,7 @@ function render() {
   });
 
   const gRoot = svg.append('g');
-  zoomBeh = d3.zoom().scaleExtent([0.15, 4]).on('zoom', (ev) => gRoot.attr('transform', ev.transform));
+  zoomBeh = GraphBoot.makeZoom({ scaleExtent: [0.15, 4], target: gRoot });
   svg.call(zoomBeh);
 
   const defs = svg.append('defs');
@@ -183,19 +184,7 @@ function render() {
 
   const node = gRoot.append('g').selectAll('g').data(nodes).join('g')
     .style('cursor', 'pointer')
-    .call(d3.drag()
-      .on('start', (ev, d) => {
-        if (!ev.active) simulation.alphaTarget(0.3).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-      })
-      .on('drag', (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
-      .on('end', (ev, d) => {
-        if (!ev.active) simulation.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-      })
-    )
+    .call(GraphBoot.makeDrag(simulation))
     .on('click', (ev, d) => { ev.stopPropagation(); showDetails(d); });
 
   node.append('circle')
@@ -212,11 +201,14 @@ function render() {
     .attr('stroke-opacity', d => 0.35 + importanceOf(d) * 0.4)
     .attr('opacity', nodeOpacity);
 
-  simulation = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(70).strength(0.35))
-    .force('charge', d3.forceManyBody().strength(-180))
-    .force('center', d3.forceCenter(w / 2, h / 2))
-    .force('collision', d3.forceCollide().radius(d => nodeRadius(d) + 4))
+  simulation = GraphBoot.makeSimulation(nodes, links, {
+    w,
+    h,
+    charge: -180,
+    nodeRadius,
+    linkDistance: 70,
+    linkStrength: 0.35,
+  })
     .on('tick', () => {
       link
         .attr('x1', d => d.source.x).attr('y1', d => d.source.y)

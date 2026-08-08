@@ -171,7 +171,7 @@ def run_eval(verbose: bool = False) -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "num_queries": n,
         "distractor_count": DISTRACTOR_COUNT,
-        f"recall_at_k": round(recall_at_k, 3),
+        "recall_at_k": round(recall_at_k, 3),
         "mrr": round(mrr, 3),
         "cases": case_results,
     }

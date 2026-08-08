@@ -23,10 +23,15 @@ import json
 import os
 import re
 from collections import defaultdict, OrderedDict
+from pathlib import Path
 import threading
 from typing import Protocol
 
 import numpy as np
+
+from system.log import get_logger
+
+log = get_logger(__name__)
 
 _WORD_RE = re.compile(r"[a-z0-9_./-]+", re.IGNORECASE)
 

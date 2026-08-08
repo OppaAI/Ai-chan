@@ -1,5 +1,5 @@
 """
-interface/webui/studio/ltm/backend/graph_export.py
+interface/webui/studio/memory/ltm/backend/graph_export.py
 
 Export personal memory as a node/edge graph for LTM Graph Studio.
 

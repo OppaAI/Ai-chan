@@ -22,11 +22,14 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent.parent
 STUDIO_DIR = BASE_DIR
 FRONTEND_DIR = STUDIO_DIR / "frontend"
+SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
 
 # Serve the frontend assets (style.css, script.js) so the SPA works when
 # mounted at /studio/dag or run standalone. Matches the approval studio's
 # convention: frontend files stay in frontend/, served under /static.
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="dag-frontend")
+
+app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
 
 # ── Playbook helpers ──────────────────────────────────────────────────────────
@@ -69,7 +72,7 @@ except Exception as _pb_exc:
 
 
 @app.get("/api/playbooks")
-async def get_playbooks():
+def get_playbooks():
     """Get all playbooks for the studio (refreshed)."""
     global PLAYBOOKS
     PLAYBOOKS = load_playbooks_refresh()
@@ -77,7 +80,7 @@ async def get_playbooks():
 
 
 @app.get("/api/playbooks/{playbook_id}")
-async def get_playbook(playbook_id: str):
+def get_playbook(playbook_id: str):
     """Get a specific playbook by ID (refreshed)."""
     global PLAYBOOKS
     PLAYBOOKS = load_playbooks_refresh()

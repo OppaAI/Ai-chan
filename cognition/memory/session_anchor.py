@@ -8,34 +8,18 @@ without changing monthly consolidation novelty.
 from __future__ import annotations
 
 import math
-import os
 import struct
 import threading
 from collections import defaultdict, deque
 from typing import Deque
 
-def _env_flag(name: str, default: str = "1") -> bool:
-    return str(os.getenv(name, default)).strip().lower() not in ("0", "false", "no", "off", "")
+from .env import env_flag, env_float, env_int
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-MEMORY_SESSION_ANCHOR_ENABLED = _env_flag("MEMORY_SESSION_ANCHOR_ENABLED", "1")
-MEMORY_SESSION_ANCHOR_K = max(1, _env_int("MEMORY_SESSION_ANCHOR_K", 8))
+MEMORY_SESSION_ANCHOR_ENABLED = env_flag("MEMORY_SESSION_ANCHOR_ENABLED", "1")
+MEMORY_SESSION_ANCHOR_K = max(1, env_int("MEMORY_SESSION_ANCHOR_K", 8))
 # Mild boost; same order as MEMORY_RANK_RECENCY_WEIGHT (~0.004)
-MEMORY_SESSION_ANCHOR_WEIGHT = _env_float("MEMORY_SESSION_ANCHOR_WEIGHT", 0.006)
+MEMORY_SESSION_ANCHOR_WEIGHT = env_float("MEMORY_SESSION_ANCHOR_WEIGHT", 0.006)
 
 _lock = threading.RLock()
 _buffers: dict[str, Deque[list[float]]] = defaultdict(

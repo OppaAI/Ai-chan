@@ -1,6 +1,7 @@
 """LTM Graph Studio backend — visualize personal memory nodes & links."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI, Query
@@ -20,14 +21,35 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
+SHARED_DIR = Path(__file__).resolve().parents[3] / "_shared"
 
 # Serve frontend assets (style.css, script.js) under /static, matching the
 # other studios (approval, dag, kb).
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="ltm-frontend")
 
+# Shared studio frontend helpers (graph-bootstrap.js).
+app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
+
+# AikoMemorize __init__ opens a sqlite-vec connection AND spawns a daemon
+# write-worker thread. Constructing one per request leaks a connection +
+# thread for the lifetime of the process, so cache a single shared instance.
+_memorize = None
+_memorize_lock = threading.Lock()
+
+
+def _get_memorize():
+    global _memorize
+    if _memorize is None:
+        with _memorize_lock:
+            if _memorize is None:
+                from cognition.memory.memorize import AikoMemorize
+
+                _memorize = AikoMemorize(silent=True)
+    return _memorize
+
 
 @app.get("/api/graph")
-async def get_graph(
+def get_graph(
     user_id: str | None = Query(None, description="User id (default: current_user_id)"),
     limit: int = Query(200, ge=1, le=2000),
     include_history: bool = Query(True, description="Include superseded memories"),
@@ -59,7 +81,7 @@ async def health():
 
 
 @app.get("/api/search")
-async def search(
+def search(
     q: str = Query(..., description="Search query across memory + knowledge"),
     user_id: str | None = Query(None, description="User id (default: current_user_id)"),
     limit: int = Query(10, ge=1, le=100),
@@ -74,9 +96,7 @@ async def search(
         return {"query": "", "hits": [], "meta": {"user_id": uid}}
 
     try:
-        from cognition.memory.memorize import AikoMemorize
-
-        memorize = AikoMemorize(silent=True)
+        memorize = _get_memorize()
     except Exception as e:
         return {"query": query, "hits": [], "meta": {"user_id": uid, "error": str(e)}}
 
@@ -104,15 +124,14 @@ async def search(
 
 
 @app.get("/api/memory/{mem_id}/lineage")
-async def memory_lineage(
+def memory_lineage(
     mem_id: str,
     user_id: str | None = Query(None, description="User id (default: current_user_id)"),
 ):
-    from cognition.memory.memorize import AikoMemorize
     from system.userspace import current_user_id
 
     uid = (user_id or "").strip() or current_user_id()
-    memorize = AikoMemorize(silent=True)
+    memorize = _get_memorize()
     return memorize.get_lineage(mem_id, user_id=uid)
 
 

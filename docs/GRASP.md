@@ -2,7 +2,10 @@
 
 > Hold the current conversational focus for a few turns, then let go.
 
-Status: **framework + daily journal** (not yet wired into `cognition/think.py`).  
+Status: **wired into the cognitive core** — `system/wakeup.py` installs the
+live hub on `AikoThink` via `cognition.memory.grasp_hub.install_into_think()`
+(non-fatal if Grasp is missing or disabled). The studio polls `grasp_hub`'s
+live snapshot.  
 Branch: `feat/working-memory-cortex`
 
 Pairs with: `memorize` / `forget` / `imprint` / `learn`.
@@ -78,16 +81,17 @@ block = buf.get_context_block(max_tokens=1200)
 
 ## Studio
 
-`interface/webui/studio/stm/` — buffer strip, factor bars, seed/fill/touch/reset.
+`interface/webui/studio/memory/stm/` — buffer strip, factor bars, seed/fill/touch/reset.
 
 ```bash
 uv run python -m interface.webui.studio.memory.stm.backend.api
 # → http://127.0.0.1:8003
 ```
 
-## Integration (follow-up)
+## Integration
 
-1. One `GraspBuffer` per session in `AikoThink`
+1. One `GraspBuffer` per session — installed on `AikoThink` at boot by
+   `grasp_hub.install_into_think()` (see `system/wakeup.py`)
 2. Pass real `user_ts` from inbound message
 3. Nightly: `load_journal_day()` → reflect / dream
 4. Pins + consolidate stay on existing memory DB

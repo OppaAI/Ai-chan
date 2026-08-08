@@ -13,7 +13,6 @@ Writes are async (daemon thread) so fill() stays near-zero latency.
 from __future__ import annotations
 
 import json
-import os
 import re
 import threading
 import time
@@ -22,44 +21,27 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-def _env_flag(name: str, default: str = "1") -> bool:
-    return str(os.getenv(name, default)).strip().lower() not in ("0", "false", "no", "off", "")
+from .env import env_flag, env_float, env_int, env_str
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-def _env_str(name: str, default: str) -> str:
-    v = os.getenv(name)
-    return default if v is None or str(v).strip() == "" else str(v).strip()
-
-GRASP_ENABLED = _env_flag("GRASP_ENABLED", "1")
-GRASP_MILLER_MIN = max(1, _env_int("GRASP_MILLER_MIN", 5))
-GRASP_MILLER_MAX = max(GRASP_MILLER_MIN, _env_int("GRASP_MILLER_MAX", 9))
-GRASP_MILLER_CENTER = max(GRASP_MILLER_MIN, min(GRASP_MILLER_MAX, _env_int("GRASP_MILLER_CENTER", 7)))
-GRASP_TOKEN_BUDGET = max(0, _env_int("GRASP_TOKEN_BUDGET", 0))
-GRASP_W_EMOTION = _env_float("GRASP_W_EMOTION", 0.14)
-GRASP_W_IMPORTANCE = _env_float("GRASP_W_IMPORTANCE", 0.17)
-GRASP_W_RECENCY = _env_float("GRASP_W_RECENCY", 0.14)
-GRASP_W_RELEVANCE = _env_float("GRASP_W_RELEVANCE", 0.11)
-GRASP_W_NOVELTY = _env_float("GRASP_W_NOVELTY", 0.11)
-GRASP_W_QUESTION = _env_float("GRASP_W_QUESTION", 0.09)
-GRASP_W_ENTITY = _env_float("GRASP_W_ENTITY", 0.08)
-GRASP_W_RECALL_FREQ = _env_float("GRASP_W_RECALL_FREQ", 0.09)
-GRASP_W_PRIMACY = _env_float("GRASP_W_PRIMACY", 0.07)
-GRASP_RECENCY_HALF_LIFE = max(1.0, _env_float("GRASP_RECENCY_HALF_LIFE", 4.0))
-GRASP_RECALL_FREQ_CAP = max(1, _env_int("GRASP_RECALL_FREQ_CAP", 6))
-GRASP_PRIMACY_SPAN = max(1.0, _env_float("GRASP_PRIMACY_SPAN", 6.0))
-GRASP_JOURNAL_ENABLED = _env_flag("GRASP_JOURNAL_ENABLED", "1")
-GRASP_JOURNAL_DIR = _env_str("GRASP_JOURNAL_DIR", str(Path.home() / ".local" / "share" / "aiko" / "journal"))
+GRASP_ENABLED = env_flag("GRASP_ENABLED", "1")
+GRASP_MILLER_MIN = max(1, env_int("GRASP_MILLER_MIN", 5))
+GRASP_MILLER_MAX = max(GRASP_MILLER_MIN, env_int("GRASP_MILLER_MAX", 9))
+GRASP_MILLER_CENTER = max(GRASP_MILLER_MIN, min(GRASP_MILLER_MAX, env_int("GRASP_MILLER_CENTER", 7)))
+GRASP_TOKEN_BUDGET = max(0, env_int("GRASP_TOKEN_BUDGET", 0))
+GRASP_W_EMOTION = env_float("GRASP_W_EMOTION", 0.14)
+GRASP_W_IMPORTANCE = env_float("GRASP_W_IMPORTANCE", 0.17)
+GRASP_W_RECENCY = env_float("GRASP_W_RECENCY", 0.14)
+GRASP_W_RELEVANCE = env_float("GRASP_W_RELEVANCE", 0.11)
+GRASP_W_NOVELTY = env_float("GRASP_W_NOVELTY", 0.11)
+GRASP_W_QUESTION = env_float("GRASP_W_QUESTION", 0.09)
+GRASP_W_ENTITY = env_float("GRASP_W_ENTITY", 0.08)
+GRASP_W_RECALL_FREQ = env_float("GRASP_W_RECALL_FREQ", 0.09)
+GRASP_W_PRIMACY = env_float("GRASP_W_PRIMACY", 0.07)
+GRASP_RECENCY_HALF_LIFE = max(1.0, env_float("GRASP_RECENCY_HALF_LIFE", 4.0))
+GRASP_RECALL_FREQ_CAP = max(1, env_int("GRASP_RECALL_FREQ_CAP", 6))
+GRASP_PRIMACY_SPAN = max(1.0, env_float("GRASP_PRIMACY_SPAN", 6.0))
+GRASP_JOURNAL_ENABLED = env_flag("GRASP_JOURNAL_ENABLED", "1")
+GRASP_JOURNAL_DIR = env_str("GRASP_JOURNAL_DIR", str(Path.home() / ".local" / "share" / "aiko" / "journal"))
 _CHARS_PER_TOKEN = 4.0
 
 _POS_WORDS = re.compile(r"\b(love|great|awesome|amazing|happy|glad|thanks|thank you|yay|nice|good|wonderful|excellent|perfect)\b", re.I)

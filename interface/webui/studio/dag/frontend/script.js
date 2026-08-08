@@ -13,8 +13,8 @@ const SIDE = 60;
         let transform = d3.zoomIdentity;
         let currentZoom = null;
 
-        // Detect base path for API calls (studio is mounted at /studio/dag/)
-        const API_BASE = window.location.pathname.replace(/\/+$/, '') + '/api';
+        // Detect base path for API calls via the shared studio bootstrap
+        const API_BASE = GraphBoot.apiBase();
 
         async function fetchPlaybooks() {
             try {
@@ -187,12 +187,11 @@ const SIDE = 60;
             const g = svg.append('g');
 
             // Zoom
-            currentZoom = d3.zoom()
-                .scaleExtent([0.3, 3])
-                .on('zoom', (event) => {
-                    transform = event.transform;
-                    g.attr('transform', event.transform);
-                });
+            currentZoom = GraphBoot.makeZoom({
+                scaleExtent: [0.3, 3],
+                target: g,
+                onZoom: (event) => { transform = event.transform; },
+            });
             svg.call(currentZoom);
 
             // Compute center transform synchronously
