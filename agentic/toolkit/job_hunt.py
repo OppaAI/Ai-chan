@@ -667,7 +667,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict
 
 # ── Email-source job fetching (LinkedIn / Glassdoor / Indeed alerts) ──────
 # Reads same-day job-alert emails from Aiko's mailbox through the existing
-# Proton Mail MCP tools (read_protonmail / search_protonmail, registered as
+# Proton Mail MCP tools (read_protonmail, registered as
 # agent tools by interface/mcp_server/social/services/protonmail.py). It
 # reuses that pipeline instead of a separate IMAP connection and returns
 # postings in the exact same shape as the RSS path, tagged with source="email",
@@ -687,33 +687,36 @@ def _read_protonmail_messages(max_results: int) -> list[dict]:
         if spec is None or spec.handler is None:
             log.warning("Lane D email: read_protonmail MCP tool is not registered")
             return []
-        result = spec.handler(max_results=max_results)
-        search_spec = registry.get("search_protonmail")
-        if search_spec is not None and search_spec.handler is not None:
-            merged = (result.get("messages") or []) if isinstance(result, dict) and result.get("ok") else []
-            if not isinstance(merged, list):
-                merged = []
-            for query in ("linkedin", "glassdoor", "indeed"):
-                try:
-                    searched = search_spec.handler(query=query, max_results=max_results)
-                except Exception as search_error:
-                    log.debug("Lane D email: search %s failed: %s", query, search_error)
-                    continue
-                if isinstance(searched, dict) and searched.get("ok"):
-                    found = searched.get("messages") or []
-                    if isinstance(found, list):
-                        merged.extend(m for m in found if isinstance(m, dict))
-            if isinstance(result, dict):
-                result["messages"] = merged
-            elif merged:
-                result = {"ok": True, "messages": merged}
+        # Use query parameter to filter for job-related emails
+        # The combined tool supports query filtering server-side
+        result = spec.handler(query="linkedin", max_results=max_results)
+        if not isinstance(result, dict) or not result.get("ok"):
+            return []
+        messages = result.get("messages") or []
+        # Also search for glassdoor and indeed
+        for query in ("glassdoor", "indeed"):
+            try:
+                searched = spec.handler(query=query, max_results=max_results)
+            except Exception as search_error:
+                log.debug("Lane D email: search %s failed: %s", query, search_error)
+                continue
+            if isinstance(searched, dict) and searched.get("ok"):
+                found = searched.get("messages") or []
+                if isinstance(found, list):
+                    messages.extend(found)
+        # Deduplicate by message id
+        seen = set()
+        unique = []
+        for m in messages:
+            if isinstance(m, dict):
+                mid = m.get("id")
+                if mid and mid not in seen:
+                    seen.add(mid)
+                    unique.append(m)
+        return unique
     except Exception as e:
         log.warning("Lane D email: read_protonmail MCP call failed: %s", e)
         return []
-    if not isinstance(result, dict) or not result.get("ok"):
-        return []
-    messages = result.get("messages") or []
-    return messages if isinstance(messages, list) else []
 
 
 def _email_message_to_posting(msg: dict, today: Any, max_days: int) -> dict | None:

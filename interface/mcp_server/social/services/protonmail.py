@@ -70,9 +70,14 @@ def _get_client():
 def load_tools(mcp):
     @mcp.tool(
         name="read_protonmail",
-        description="Read messages from ProtonMail inbox (or specified folder). Returns list of messages with sender, subject, date, snippet.",
+        description="Read ProtonMail messages. If message_id is provided, returns full message body. Otherwise lists messages from inbox (or specified folder) with optional query filter. Returns sender, subject, date, and snippet (or full body if message_id given).",
     )
-    async def read_protonmail(folder: str = "inbox", query: str = "", max_results: int = 10) -> Dict:
+    async def read_protonmail(
+        message_id: str = "",
+        folder: str = "inbox",
+        query: str = "",
+        max_results: int = 10,
+    ) -> Dict:
         client, err_resp = await asyncio.to_thread(_get_client)
         if err_resp:
             return err_resp
@@ -83,6 +88,28 @@ def load_tools(mcp):
             messages = await asyncio.to_thread(_run_client_call, client.get_messages)
             print(f"[PROTONMAIL] Got {len(messages)} messages", file=sys.stderr, flush=True)
 
+            # If message_id provided, return full message
+            if message_id:
+                target_msg = None
+                for msg in messages:
+                    if getattr(msg, "id", "") == message_id:
+                        target_msg = msg
+                        break
+                if target_msg is None:
+                    return err("protonmail", f"message not found: {message_id}")
+                
+                full = await asyncio.to_thread(_run_client_call, client.read_message, target_msg)
+                return {
+                    "ok": True,
+                    "provider": "protonmail",
+                    "id": message_id,
+                    "from": full.sender.address if full.sender else "",
+                    "subject": full.subject or "",
+                    "date": str(full.time) if full.time else "",
+                    "body": full.body or "",
+                }
+
+            # Otherwise list messages with optional query filter
             if query:
                 q = query.lower()
                 messages = [m for m in messages if q in (m.subject or "").lower() or q in (m.sender.address if m.sender else "").lower()]
@@ -106,43 +133,6 @@ def load_tools(mcp):
             return {"ok": True, "provider": "protonmail", "folder": folder, "count": len(results), "messages": results}
         except Exception as e:
             return err("protonmail", f"read failed: {e}")
-
-    @mcp.tool(
-        name="search_protonmail",
-        description="Search ProtonMail messages by keyword across all folders. Returns matching messages.",
-    )
-    async def search_protonmail(query: str, max_results: int = 20) -> Dict:
-        client, err_resp = await asyncio.to_thread(_get_client)
-        if err_resp:
-            return err_resp
-
-        if not query:
-            return err("protonmail", "query required")
-
-        try:
-            messages = await asyncio.to_thread(_run_client_call, client.get_messages)
-            q = query.lower()
-            filtered = [m for m in messages if q in (m.subject or "").lower() or q in (m.sender.address if m.sender else "").lower()]
-
-            results = []
-            for i, msg in enumerate(filtered[:max_results]):
-                try:
-                    print(f"[PROTONMAIL] Reading message {i+1}/{max_results} ({getattr(msg, 'id', 'unknown')[:10]}...)...", file=sys.stderr, flush=True)
-                    full = await asyncio.to_thread(_run_client_call, client.read_message, msg)
-                    print(f"[PROTONMAIL] Read message {i+1}/{max_results} OK", file=sys.stderr, flush=True)
-                    results.append({
-                        "id": getattr(msg, "id", ""),
-                        "from": full.sender.address if full.sender else "",
-                        "subject": full.subject or "",
-                        "date": str(full.time) if full.time else "",
-                        "snippet": (full.body or "")[:300],
-                    })
-                except Exception:
-                    continue
-
-            return {"ok": True, "provider": "protonmail", "query": query, "count": len(results), "messages": results}
-        except Exception as e:
-            return err("protonmail", f"search failed: {e}")
 
     @mcp.tool(
         name="send_protonmail",
@@ -217,40 +207,3 @@ def load_tools(mcp):
             return {"ok": True, "provider": "protonmail", "message_id": message_id, "status": "deleted"}
         except Exception as e:
             return err("protonmail", f"delete failed: {e}")
-
-    @mcp.tool(
-        name="read_protonmail_full",
-        description="Fetch the complete body of a specific ProtonMail message by ID. Use after read_protonmail/search_protonmail to get full content (links, full description).",
-    )
-    async def read_protonmail_full(message_id: str) -> Dict:
-        client, err_resp = await asyncio.to_thread(_get_client)
-        if err_resp:
-            return err_resp
-
-        try:
-            # Find the message by ID in the full message list
-            print("[PROTONMAIL] Fetching messages list (read_protonmail_full)...", file=sys.stderr, flush=True)
-            messages = await asyncio.to_thread(_run_client_call, client.get_messages)
-            print(f"[PROTONMAIL] Got {len(messages)} messages", file=sys.stderr, flush=True)
-            target_msg = None
-            for msg in messages:
-                if getattr(msg, "id", "") == message_id:
-                    target_msg = msg
-                    print(f"[PROTONMAIL] Found target message {message_id}", file=sys.stderr, flush=True)
-                    break
-            
-            if target_msg is None:
-                return err("protonmail", f"message not found: {message_id}")
-
-            full = await asyncio.to_thread(_run_client_call, client.read_message, target_msg)
-            return {
-                "ok": True,
-                "provider": "protonmail",
-                "id": message_id,
-                "from": full.sender.address if full.sender else "",
-                "subject": full.subject or "",
-                "date": str(full.time) if full.time else "",
-                "body": full.body or "",
-            }
-        except Exception as e:
-            return err("protonmail", f"read full failed: {e}")

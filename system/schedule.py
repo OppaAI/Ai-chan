@@ -1000,6 +1000,67 @@ def bootstrap_non_system_jobs(
 
             register_system_handler("workspace_knowledge_scan", _scan_knowledge_folder)
 
+            # Email checking handler
+            def _check_email(_memorize) -> None:
+                """Check ProtonMail for new messages and notify about job postings."""
+                try:
+                    from agentic.registry import registry
+                    spec = registry.get("read_protonmail")
+                    if spec is None or spec.handler is None:
+                        log.warning("Email check: read_protonmail MCP tool is not registered")
+                        return
+                    result = spec.handler(max_results=20)
+                    if not isinstance(result, dict) or not result.get("ok"):
+                        return
+                    messages = result.get("messages") or []
+                    if not messages:
+                        return
+                    
+                    # Filter for job-related emails
+                    job_keywords = ["linkedin", "glassdoor", "indeed", "job alert", "job notification", 
+                                   "new job", "recommended job", "job match", "career", "hiring",
+                                   "software engineer", "developer", "programmer", "devops", "data scientist"]
+                    job_alerts = []
+                    for msg in messages:
+                        subject = str(msg.get("subject") or "").strip()
+                        sender = str(msg.get("from") or "").strip()
+                        snippet = str(msg.get("snippet") or "").strip()
+                        content = f"{subject} {sender} {snippet}".casefold()
+                        if any(kw in content for kw in job_keywords):
+                            job_alerts.append(f"📧 {sender}: {subject[:80]}")
+                    
+                    if job_alerts:
+                        # Use the memorize's think reference to speak
+                        think = getattr(_memorize, '_think', None) or getattr(_memorize, '_think_ref', None)
+                        if think:
+                            speak = think._get_speak()
+                            if speak:
+                                speak.speak("New job alerts in email: " + "; ".join(job_alerts))
+                            else:
+                                log.info("Email job alerts found: %s", job_alerts)
+                        else:
+                            log.info("Email job alerts found: %s", job_alerts)
+                except Exception as e:
+                    log.warning("Email check handler failed: %s", e)
+
+            register_system_handler("check_email", _check_email)
+            
+            # Seed email checking job (every 30 minutes during day hours)
+            try:
+                from system.schedule import schedule_job_record
+                schedule_job_record(
+                    title="Check email for job alerts",
+                    task="Check ProtonMail inbox for new job alert emails and notify me",
+                    time_of_day="08:00",
+                    frequency="interval",
+                    interval_seconds=1800,  # every 30 minutes
+                    timezone=timezone,
+                    handler="check_email",
+                    user_id=user_id,
+                )
+            except Exception:
+                pass
+
             # Event-driven ingest: inotify watcher replaces the periodic poll.
             from cognition.knowledge.watcher import KnowledgeFolderWatcher
             from cognition.knowledge.schema import KNOWLEDGE_WORKSPACE_DIR

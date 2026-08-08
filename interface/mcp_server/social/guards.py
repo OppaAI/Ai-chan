@@ -22,7 +22,6 @@ RATE_LIMITS: dict[str, dict[str, int]] = {
     "post_discord": {"per_hour": 30, "per_day": 200},
     "post_social": {"per_hour": 30, "per_day": 100},
     "read_protonmail": {"per_hour": 30, "per_day": 100},
-    "search_protonmail": {"per_hour": 20, "per_day": 50},
     "send_protonmail": {"per_hour": 20, "per_day": 50},
 }
 
@@ -38,8 +37,6 @@ def _get_limits(tool_name: str) -> tuple[int, int]:
 # means Aiko misses new emails entirely until the cache expires.
 _SKIP_IDEMPOTENCY = frozenset({
     "read_protonmail",
-    "search_protonmail",
-    "read_protonmail_full",
 })
 
 
