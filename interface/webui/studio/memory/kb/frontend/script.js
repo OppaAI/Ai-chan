@@ -1,5 +1,5 @@
 /* Knowledge Graph Studio — knowledge + entity nodes only */
-const API_BASE = window.KNOWLEDGE_API_BASE || '';
+const API_BASE = window.KNOWLEDGE_API_BASE || (window.location.pathname.startsWith("/studio/memory/kb") ? "/studio/memory/kb" : "");
 let graph = { nodes: [], edges: [], meta: {} };
 let simulation = null;
 let zoomBeh = null;

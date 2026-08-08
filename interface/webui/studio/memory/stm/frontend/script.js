@@ -1,6 +1,7 @@
 /* STM Studio — circular WM animation (memory-graph theme).
  * Size + glow track score (like retain). Live state from /api/*.
  */
+const API_BASE = window.location.pathname.startsWith("/studio/memory/stm") ? "/studio/memory/stm" : "";
 const FACTOR_ORDER = [
   "emotion", "importance", "recency", "relevance",
   "novelty", "question", "entity", "recall_freq", "primacy",
@@ -14,7 +15,7 @@ let lastState = null;
 function $(id) { return document.getElementById(id); }
 
 async function api(path, opts) {
-  const r = await fetch(path, {
+  const r = await fetch(API_BASE + path, {
     headers: { "Content-Type": "application/json" },
     ...opts,
   });
