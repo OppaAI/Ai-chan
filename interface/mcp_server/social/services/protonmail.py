@@ -1,59 +1,49 @@
 from typing import Optional, List, Dict
 import asyncio
+import os
+import sys
 from social.services import env, err
-from social.state import get_db
 
 # Global client cache (kept alive across tool calls)
 _client_cache = None
 _cache_username = None
 
-# Session cache file path
-_SESSION_FILE = "/home/oppa-ai/Aiko-chan/.protonmail_session.json"
+# protonmail-api-client stores sessions as a binary pickle, not JSON.
+_SESSION_FILE = "/home/oppa-ai/Aiko-chan/.protonmail_session.pickle"
 
 
 def _get_client():
-    """Get or create cached ProtonMail client."""
+    """Return an authenticated client using the documented session flow."""
     global _client_cache, _cache_username
-    
     try:
         from protonmail import ProtonMail
     except ImportError:
-        return None, err("protonmail", "protonmail-api-client not installed — pip install protonmail-api-client")
-
+        return None, err("protonmail", "protonmail-api-client not installed")
     username = env("PROTONMAIL_USERNAME")
     password = env("PROTONMAIL_PASSWORD")
-    if not username or not password:
-        return None, err("protonmail", "PROTONMAIL_USERNAME and PROTONMAIL_PASSWORD not set")
-
-    # Show login progress to stderr
-    import sys
-    print(f"[PROTONMAIL] Attempting login as {username[:3]}{'*'*(len(username)-3) if len(username)>3 else ''}...", 
-          file=sys.stderr, flush=True)
-    
-    # Always create a fresh client to avoid ServerProof errors
-    # protonmail-api-client caches sessions internally via save_session
+    if not username:
+        return None, err("protonmail", "PROTONMAIL_USERNAME not set")
+    if _client_cache is not None and _cache_username == username:
+        return _client_cache, None
+    if not os.path.exists(_SESSION_FILE) and not password:
+        return None, err("protonmail", "PROTONMAIL_PASSWORD not set for first login")
+    print(f"[PROTONMAIL] Authenticating as {username[:3]}{chr(42) * max(0, len(username) - 3)}...", file=sys.stderr, flush=True)
     try:
         client = ProtonMail()
-        print("[PROTONMAIL] ProtonMail() instantiated, calling login()...", file=sys.stderr, flush=True)
-        
-        # Try loading session from cache first (faster than full login)
-        import os
         if os.path.exists(_SESSION_FILE):
-            print(f"[PROTONMAIL] Loading session from cache: {_SESSION_FILE}", file=sys.stderr, flush=True)
-            client.load_session(_SESSION_FILE)
-        
-        client.login(username, password)
-        
-        # Save session for next time (makes subsequent logins faster)
-        print("[PROTONMAIL] Saving session to cache...", file=sys.stderr, flush=True)
-        client.save_session(_SESSION_FILE)
-        
-        print("[PROTONMAIL] Login successful", file=sys.stderr, flush=True)
+            print(f"[PROTONMAIL] Loading session: {_SESSION_FILE}", file=sys.stderr, flush=True)
+            client.load_session(_SESSION_FILE, auto_save=True)
+        else:
+            print("[PROTONMAIL] No saved session; performing login...", file=sys.stderr, flush=True)
+            client.login(username, password)
+            client.save_session(_SESSION_FILE)
+            print(f"[PROTONMAIL] Session saved: {_SESSION_FILE}", file=sys.stderr, flush=True)
+        _client_cache = client
+        _cache_username = username
         return client, None
     except Exception as e:
-        print(f"[PROTONMAIL] Login failed: {e}", file=sys.stderr, flush=True)
-        return None, err("protonmail", f"login failed: {e}")
-
+        print(f"[PROTONMAIL] Authentication failed: {e}", file=sys.stderr, flush=True)
+        return None, err("protonmail", f"authentication failed: {e}")
 
 def load_tools(mcp):
     @mcp.tool(
@@ -184,9 +174,26 @@ def load_tools(mcp):
             }
         except Exception as e:
             return err("protonmail", f"send failed: {e}")
-        finally:
-            # protonmail-api-client doesn't have close() method
-            pass
+
+    @mcp.tool(
+        name="delete_protonmail",
+        description="Delete a ProtonMail message by ID.",
+    )
+    async def delete_protonmail(message_id: str) -> Dict:
+        client, err_resp = await asyncio.to_thread(_get_client)
+        if err_resp:
+            return err_resp
+        if not message_id:
+            return err("protonmail", "message_id required")
+        try:
+            messages = await asyncio.to_thread(client.get_messages)
+            target = next((msg for msg in messages if getattr(msg, "id", "") == message_id), None)
+            if target is None:
+                return err("protonmail", f"message not found: {message_id}")
+            await asyncio.to_thread(client.delete_messages, [target])
+            return {"ok": True, "provider": "protonmail", "message_id": message_id, "status": "deleted"}
+        except Exception as e:
+            return err("protonmail", f"delete failed: {e}")
 
     @mcp.tool(
         name="read_protonmail_full",

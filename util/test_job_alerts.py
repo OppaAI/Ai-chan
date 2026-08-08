@@ -25,9 +25,9 @@ import itertools
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-# Load env early for config
-from system.config import load_config
-load_config()
+# Skip config loading - env vars already set manually
+# from system.config import load_config
+# load_config()
 
 from agentic.mcp_client import init_mcp_client, get_mcp_client
 from system.log import get_logger
@@ -91,7 +91,6 @@ async def main():
     progress(f"Password configured: {visible} ({len(password)} chars)")
     
     # Check session cache
-    import os
     session_file = "/home/oppa-ai/Aiko-chan/.protonmail_session.json"
     if os.path.exists(session_file):
         size = os.path.getsize(session_file)
