@@ -1,4 +1,4 @@
-"""Memory Graph Studio backend — visualize personal memory nodes & links."""
+"""LTM Graph Studio backend — visualize personal memory nodes & links."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-app = FastAPI(title="Aiko Memory Graph Studio")
+app = FastAPI(title="Aiko LTM Graph Studio")
 
 app.add_middleware(
     CORSMiddleware,
@@ -23,7 +23,7 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 
 # Serve frontend assets (style.css, script.js) under /static, matching the
 # other studios (approval, dag, kb).
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="memory-frontend")
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="ltm-frontend")
 
 
 @app.get("/api/graph")
@@ -37,7 +37,7 @@ async def get_graph(
     date_from: str | None = Query(None, description="Only include items created at/after this date (YYYY-MM-DD)"),
     date_to: str | None = Query(None, description="Only include items created at/before this date (YYYY-MM-DD)"),
 ):
-    from interface.webui.studio.memory.backend.graph_export import export_memory_graph
+    from interface.webui.studio.ltm.backend.graph_export import export_memory_graph
     from system.userspace import current_user_id
 
     uid = (user_id or "").strip() or current_user_id()
@@ -55,7 +55,7 @@ async def get_graph(
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "service": "memory-graph-studio"}
+    return {"ok": True, "service": "ltm-graph-studio"}
 
 
 @app.get("/api/search")
@@ -65,7 +65,7 @@ async def search(
     limit: int = Query(10, ge=1, le=100),
     include_history: bool = Query(False, description="Include superseded memories"),
 ):
-    from interface.webui.studio.memory.backend.search_memory import search_memory
+    from interface.webui.studio.ltm.backend.search_memory import search_memory
     from system.userspace import current_user_id
 
     uid = (user_id or "").strip() or current_user_id()

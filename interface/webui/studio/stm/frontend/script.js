@@ -1,4 +1,4 @@
-/* Grasp Studio — circular WM animation (memory-graph theme).
+/* STM Studio — circular WM animation (memory-graph theme).
  * Size + glow track score (like retain). Live state from /api/*.
  */
 const FACTOR_ORDER = [
@@ -468,6 +468,6 @@ window.addEventListener("resize", () => {
 });
 
 refresh().catch((e) => {
-  $("metaBar").textContent = "API offline — start grasp studio backend";
+  $("metaBar").textContent = "API offline — start STM studio backend";
   console.error(e);
 });

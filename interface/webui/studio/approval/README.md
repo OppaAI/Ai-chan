@@ -35,5 +35,5 @@ This directory contains the frontend and backend for the job post approval inter
 - Left sidebar: List of job post drafts with status badges
 - Top right panel: Draft metadata and action buttons
 - Bottom right panel: Full draft content display (larger area for reading URLs and content)
-- Similar visual design to Memory Graph Studio and DAG Studio
+- Similar visual design to LTM Graph Studio and DAG Studio
 """

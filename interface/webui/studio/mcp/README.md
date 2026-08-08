@@ -34,5 +34,5 @@ This directory contains the frontend and backend for the MCP server status and t
 
 - Left sidebar: List of MCP servers with status badges and tool counts
 - Right panel: Server details (path, port, status) and available tools
-- Similar visual design to Memory Graph Studio, DAG Studio, and Approval Studio
+- Similar visual design to LTM Graph Studio, DAG Studio, and Approval Studio
 """

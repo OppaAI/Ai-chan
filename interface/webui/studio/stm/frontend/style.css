@@ -1,5 +1,5 @@
 :root {
-  /* Match Neural Memory / Aiko purple studio theme */
+  /* Match Neural LTM / Aiko purple studio theme */
   --bg: #050510;
   --bg2: #0a0a14;
   --border: #1e1428;
@@ -343,7 +343,7 @@ textarea {
   display: block; height: 100%; background: var(--purple); opacity: .85;
 }
 
-/* Shared STM / WTM / KB studio tabs, styled like Approval Studio filters. */
+/* Shared STM / LTM / KB studio tabs, styled like Approval Studio filters. */
 .memory-studio-tabs {
   display: flex;
   gap: 4px;

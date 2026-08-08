@@ -179,7 +179,7 @@ svg {
   cursor: pointer;
 }
 
-/* Shared STM / WTM / KB studio tabs, styled like Approval Studio filters. */
+/* Shared STM / LTM / KB studio tabs, styled like Approval Studio filters. */
 .memory-studio-tabs {
   display: flex;
   gap: 4px;

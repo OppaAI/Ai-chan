@@ -92,7 +92,7 @@ header h1 {
 }
 .node-label { fill: var(--text); font-size: 9px; pointer-events: none; opacity: 0.55; }
 
-/* Shared STM / WTM / KB studio tabs, styled like Approval Studio filters. */
+/* Shared STM / LTM / KB studio tabs, styled like Approval Studio filters. */
 .memory-studio-tabs {
   display: flex;
   gap: 4px;

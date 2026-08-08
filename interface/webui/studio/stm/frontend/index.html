@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Aiko Grasp Studio</title>
+  <title>Aiko STM Studio</title>
   <link rel="stylesheet" href="static/style.css" />
   <link rel="stylesheet" href="static/valence.css" />
 </head>
@@ -25,7 +25,7 @@
     <div class="brand">
       <a href="#" id="backBtn" class="back" title="Back" aria-label="Back">←</a>
       <span class="dot"></span>
-      <h1>Grasp</h1>
+      <h1>STM</h1>
       <span class="badge" id="modeBadge">demo</span>
     </div>
     <div class="meta" id="metaBar">—</div>
@@ -76,14 +76,14 @@
         <span class="pos"><i></i> positive</span>
         <span class="neu"><i></i> neutral</span>
         <span class="neg"><i></i> negative</span>
-        <span>hue = valence (same as memory graph)</span>
+        <span>hue = valence (same as LTM graph)</span>
       </div>
     </div>
 
     <aside class="side">
       <nav class="memory-studio-tabs" aria-label="Memory studio sections">
-        <a class="memory-studio-tab active" href="/studio/grasp/">STM</a>
-        <a class="memory-studio-tab" href="/studio/memory/">WTM</a>
+        <a class="memory-studio-tab active" href="/studio/stm/">STM</a>
+        <a class="memory-studio-tab" href="/studio/ltm/">LTM</a>
         <a class="memory-studio-tab" href="/studio/kb/">KB</a>
       </nav>
       <h2>Fill turn</h2>
@@ -91,7 +91,7 @@
       <textarea id="inUser" rows="2" placeholder="user message…"></textarea>
       <label for="inAsst">Assistant</label>
       <textarea id="inAsst" rows="2" placeholder="assistant reply…"></textarea>
-      <button class="btn primary block" id="btnFill">Fill into grasp</button>
+      <button class="btn primary block" id="btnFill">Fill into STM</button>
 
       <h2 class="mt">Factors (selected)</h2>
       <div id="factorPanel" class="factor-panel muted">Click a node</div>
