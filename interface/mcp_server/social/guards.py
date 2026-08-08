@@ -33,6 +33,16 @@ def _get_limits(tool_name: str) -> tuple[int, int]:
     return limits["per_hour"], limits["per_day"]
 
 
+# Tools that must always hit live data — never serve cached results.
+# Read/search tools need fresh inbox state; serving a 24h-old snapshot
+# means Aiko misses new emails entirely until the cache expires.
+_SKIP_IDEMPOTENCY = frozenset({
+    "read_protonmail",
+    "search_protonmail",
+    "read_protonmail_full",
+})
+
+
 def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
     """
     Wrap tool with rate limiting, idempotency cache, and audit logging.
@@ -43,6 +53,8 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
 
     Inline: Check idempotency cache first (return cached result if hit),
     then check rate limits, execute tool, log result, cache on success.
+    Read/search tools bypass the idempotency cache entirely so they always
+    return live data.
     """
     per_hour, per_day = _get_limits(tool_name)
     fn_is_coro = inspect.iscoroutinefunction(fn)
@@ -53,18 +65,24 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
         db = get_db()
         t0 = time.time()
 
-        # Extract service name from tool_name (e.g., "post_x" → "x")
-        service = tool_name.replace("post_", "").replace("send_", "").replace("read_", "")
+        # Extract service name from tool_name (e.g., "post_x" → "x", "search_protonmail" → "protonmail")
+        service = tool_name
+        for prefix in ("post_", "send_", "read_", "search_", "delete_"):
+            if service.startswith(prefix):
+                service = service[len(prefix):]
+                break
 
         # ── Idempotency check ─────────────────────────────────────────────
         # If same tool + same arguments called recently, return cached result.
         # Prevents duplicate posts if Aiko crashes mid-call and retries.
-        cached = db.get_idempotent_result(tool_name, kwargs)
-        if cached is not None:
-            elapsed = (time.time() - t0) * 1000
-            with db.transaction():
-                db.log_tool_call(tool_name, kwargs, cached, elapsed)
-            return cached
+        # Read/search tools are excluded — they must always return live data.
+        if tool_name not in _SKIP_IDEMPOTENCY:
+            cached = db.get_idempotent_result(tool_name, kwargs)
+            if cached is not None:
+                elapsed = (time.time() - t0) * 1000
+                with db.transaction():
+                    db.log_tool_call(tool_name, kwargs, cached, elapsed)
+                return cached
 
         # ── Rate limit check ──────────────────────────────────────────────
         # Block if over quota (hour or day).
@@ -96,10 +114,14 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
             if result.get("ok"):
                 # Success: increment rate limit, cache result for 24 hours
                 db.increment_rate_limit(service)
-                db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=24)
+                # Skip idempotency caching for read/search tools (live-data tools).
+                if tool_name not in _SKIP_IDEMPOTENCY:
+                    db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=24)
             else:
                 # Failure: cache for shorter time (1 hour) to allow retry
-                db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=1)
+                # Read/search tools: skip failure cache too (let them retry immediately)
+                if tool_name not in _SKIP_IDEMPOTENCY:
+                    db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=1)
 
         return result
 
