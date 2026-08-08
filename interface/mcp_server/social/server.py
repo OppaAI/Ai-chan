@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
+
+# Suppress CryptographyDeprecationWarning for TripleDES (used by protonmail-api-client)
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message="TripleDES has been moved to cryptography.hazmat.decrepit.ciphers.algorithms.TripleDES",
+)
 
 # Load config FIRST, before anything else
 from system.config import load_config

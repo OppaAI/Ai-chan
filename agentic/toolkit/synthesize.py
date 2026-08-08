@@ -380,8 +380,8 @@ def synthesize_report(
             try:
                 u = resp.usage
                 state.set("_usage", {
-                    "prompt_tokens": u.prompt_tokens,
-                    "completion_tokens": u.completion_tokens,
+                    "input_tokens": u.prompt_tokens,
+                    "output_tokens": u.completion_tokens,
                     "total_tokens": u.total_tokens,
                 })
             except Exception:
@@ -410,6 +410,7 @@ def polish_text(
     model: str | None = None,
     style: str = "professional",
     max_tokens: int = 800,
+    state=None,
 ) -> str:
     text = (text or "").strip()
     if not text:
@@ -435,6 +436,16 @@ def polish_text(
             temperature=0.2,
         )
         out = (resp.choices[0].message.content or "").strip()
+        if state is not None:
+            try:
+                u = resp.usage
+                state.set("_usage", {
+                    "input_tokens": u.prompt_tokens,
+                    "output_tokens": u.completion_tokens,
+                    "total_tokens": u.total_tokens,
+                })
+            except Exception:
+                log.warning("synthesize: failed to record usage stats")
         return out or text
     except Exception as e:
         log.debug("[synthesize.polish_text] LLM call failed: %s", e)

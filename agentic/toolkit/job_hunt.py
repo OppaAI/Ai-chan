@@ -460,6 +460,7 @@ def _llm_chat_completion(client, *, model: str, messages: list[dict[str, str]], 
     Falls back without response_format when the backend rejects it (common
     on local OpenAI-compatible servers). Raises on other failures so the
     caller can log and skip enrichment for that posting.
+    Returns (response, usage_dict) where usage_dict has input_tokens, output_tokens, total_tokens.
     """
     base: dict[str, Any] = {
         "model": model,
@@ -470,18 +471,30 @@ def _llm_chat_completion(client, *, model: str, messages: list[dict[str, str]], 
         "response_format": {"type": "json_object"},
     }
     try:
-        return chat_completions_create(client, **base)
+        resp = chat_completions_create(client, **base)
     except TypeError:
         slim = dict(base)
         slim.pop("response_format", None)
-        return chat_completions_create(client, **slim)
+        resp = chat_completions_create(client, **slim)
     except Exception as e:
         label = str(e).casefold()
         if "response_format" in label or "json_object" in label:
             retry = dict(base)
             retry.pop("response_format", None)
-            return chat_completions_create(client, **retry)
-        raise
+            resp = chat_completions_create(client, **retry)
+        else:
+            raise
+    usage = None
+    try:
+        u = resp.usage
+        usage = {
+            "input_tokens": u.prompt_tokens,
+            "output_tokens": u.completion_tokens,
+            "total_tokens": u.total_tokens,
+        }
+    except Exception:
+        pass
+    return resp, usage
 
 
 def enrich_posting_fields_with_llm(
@@ -490,6 +503,7 @@ def enrich_posting_fields_with_llm(
     *,
     client=None,
     model: str | None = None,
+    state=None,
 ) -> dict[str, Any]:
     """Fill empty post_fields keys from title + summary via one LLM call.
 
@@ -536,7 +550,7 @@ def enrich_posting_fields_with_llm(
     )
 
     try:
-        resp = _llm_chat_completion(
+        resp, usage = _llm_chat_completion(
             client,
             model=model,
             messages=[
@@ -545,6 +559,8 @@ def enrich_posting_fields_with_llm(
             ],
             max_tokens=400,
         )
+        if usage and state is not None:
+            state.set("_usage", usage)
         raw = (resp.choices[0].message.content or "").strip()
     except Exception as e:
         log.warning("job_hunt: LLM field enrichment failed: %s", e)
@@ -965,7 +981,7 @@ def draft_job_posts_from_results(
             if page_texts and page_texts[i]:
                 enriched["page_content"] = page_texts[i]
             enriched = enrich_posting_fields_with_llm(
-                enriched, field_keys, client=client, model=model,
+                enriched, field_keys, client=client, model=model, state=state,
             )
         enriched.pop("page_content", None)
         try:

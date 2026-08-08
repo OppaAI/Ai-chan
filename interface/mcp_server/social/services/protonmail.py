@@ -2,10 +2,18 @@ from typing import Optional, List, Dict
 import asyncio
 import os
 import sys
+import warnings
 from contextlib import redirect_stdout
 from pathlib import Path
 from social.services import env, err
 from system.userspace import user_state_path
+
+# Suppress CryptographyDeprecationWarning for TripleDES (used by protonmail-api-client)
+warnings.filterwarnings(
+    "ignore",
+    category=DeprecationWarning,
+    message="TripleDES has been moved to cryptography.hazmat.decrepit.ciphers.algorithms.TripleDES",
+)
 
 # Global client cache (kept alive across tool calls)
 _client_cache = None

@@ -66,11 +66,11 @@ adapters = [
 
 [tool.uv]
 environments = [
-    "platform_machine == 'aarch64'",
+    "platform_machine == 'x86_64'",
 ]
 override-dependencies = [
     "onnxruntime; sys_platform == 'ignore_this_marker'",
-    "onnxruntime-gpu>=1.17.0"
+    "onnxruntime-gpu==1.27.0"
 ]
 
 [tool.uv.sources]
