@@ -59,7 +59,7 @@ def load_tools(mcp):
                         "from": full.sender.address if full.sender else "",
                         "subject": full.subject or "",
                         "date": str(full.date) if full.date else "",
-                        "snippet": (full.body or "")[:300],
+                        "snippet": (full.body or "")[:20000],
                     })
                 except Exception:
                     continue
@@ -94,7 +94,7 @@ def load_tools(mcp):
                         "from": full.sender.address if full.sender else "",
                         "subject": full.subject or "",
                         "date": str(full.date) if full.date else "",
-                        "snippet": (full.body or "")[:300],
+                        "snippet": (full.body or "")[:20000],
                     })
                 except Exception:
                     continue

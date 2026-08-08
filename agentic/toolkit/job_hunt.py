@@ -128,6 +128,15 @@ def _max_days_back(config: dict[str, Any]) -> int:
         return 1
 
 
+def _email_max_days_back(config: dict[str, Any]) -> int:
+    """Email alerts contain current listings but may be created days earlier."""
+    raw = os.getenv("JOB_HUNT_EMAIL_DATE_RANGE_DAYS", config.get("email_date_range_days", 7))
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 7
+
+
 def _parse_rss_datetime(value: str) -> datetime | None:
     if not value:
         return None
@@ -775,7 +784,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
     keywords = [kw.casefold() for kw in _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS)]
     today = local_now().date()
     days = _dedup_days(config)
-    max_days = _max_days_back(config)
+    max_days = _email_max_days_back(config)
     ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
     now_iso = local_now().isoformat()
     kept: list[dict] = []

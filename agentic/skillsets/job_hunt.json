@@ -87,6 +87,7 @@
     "technical support"
   ],
   "date_range_days": 2,
+  "email_date_range_days": 7,
   "dedup_days": 3,
   "include_email": true,
   "max_rss_posts": 10,
