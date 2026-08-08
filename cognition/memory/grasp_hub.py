@@ -38,14 +38,34 @@ GRASP_LIVE_STATE_PATH = _env_str(
 )
 
 _lock = threading.RLock()
-_buffer: GraspBuffer | None = None
-_evictions: list[dict[str, Any]] = []
+_buffers: dict[str, GraspBuffer] = {}
+_evictions: dict[str, list[dict[str, Any]]] = {}
 _MAX_EVICT = 40
-_last_publish = 0.0
-_last_publish_error: str | None = None
+_last_publish: dict[str, float] = {}
+_last_publish_error: dict[str, str | None] = {}
+
+_DEFAULT_IDENTITY = "default"
 
 
-def _on_evict(turn: GraspTurn) -> None:
+def _resolve_identity(identity: str | None) -> str:
+    """Resolve identity from argument or current_user_id() context or fallback."""
+    if identity:
+        return identity
+    try:
+        from system.userspace import current_user_id
+        return current_user_id() or _DEFAULT_IDENTITY
+    except Exception:
+        return _DEFAULT_IDENTITY
+
+
+def _live_state_path(identity: str) -> Path:
+    """Return per-identity snapshot path."""
+    base = Path(GRASP_LIVE_STATE_PATH)
+    return base.with_name(f"{base.stem}.{identity}{base.suffix}")
+
+
+def _on_evict(identity: str, turn: GraspTurn) -> None:
+    """Eviction callback bound to a specific identity."""
     with _lock:
         emo = float(turn.emotion)
         if hasattr(turn, "valence_label"):
@@ -56,7 +76,8 @@ def _on_evict(turn: GraspTurn) -> None:
             vtag = "negative"
         else:
             vtag = "neutral"
-        _evictions.insert(
+        bucket = _evictions.setdefault(identity, [])
+        bucket.insert(
             0,
             {
                 "user": (turn.user or "")[:160],
@@ -69,22 +90,22 @@ def _on_evict(turn: GraspTurn) -> None:
                 "created_turn": int(turn.created_turn),
             },
         )
-        del _evictions[_MAX_EVICT:]
+        del bucket[_MAX_EVICT:]
 
 
-def get_live_buffer() -> GraspBuffer:
-    """Lazy singleton used by the Aiko process."""
-    global _buffer
+def get_live_buffer(identity: str | None = None) -> GraspBuffer:
+    """Lazy per-identity buffer used by the Aiko process."""
+    ident = _resolve_identity(identity)
     with _lock:
-        if _buffer is None:
-            _buffer = build_grasp(on_evict=_on_evict)
-        return _buffer
+        if ident not in _buffers:
+            _buffers[ident] = build_grasp(on_evict=lambda turn, _id=ident: _on_evict(_id, turn))
+        return _buffers[ident]
 
 
-def set_static_anchor_tokens(tokens: set[str] | list[str] | None) -> None:
+def set_static_anchor_tokens(tokens: set[str] | list[str] | None, identity: str | None = None) -> None:
     if not tokens:
         return
-    buf = get_live_buffer()
+    buf = get_live_buffer(identity=identity)
     buf.set_static_anchor(tokens)
 
 
@@ -94,6 +115,7 @@ def record_turn(
     *,
     user_ts: float | None = None,
     assistant_ts: float | None = None,
+    identity: str | None = None,
 ) -> list[GraspTurn]:
     """Fill live buffer after a completed conversation turn. No-op if disabled."""
     if not GRASP_LIVE_ENABLED:
@@ -102,7 +124,8 @@ def record_turn(
     assistant = (assistant or "").strip()
     if not user and not assistant:
         return []
-    buf = get_live_buffer()
+    ident = _resolve_identity(identity)
+    buf = get_live_buffer(identity=ident)
     with _lock:
         evicted = buf.fill(
             user,
@@ -114,39 +137,41 @@ def record_turn(
             buf.get_context_block(touch=True)
         except Exception:
             pass
-        _publish_unlocked()
+        _publish_unlocked(identity=ident)
         return list(evicted)
 
 
-def clear_live() -> None:
+def clear_live(identity: str | None = None) -> None:
+    ident = _resolve_identity(identity)
     with _lock:
-        if _buffer is not None:
-            _buffer.clear()
-        _evictions.clear()
-        _publish_unlocked()
+        if ident in _buffers:
+            _buffers[ident].clear()
+        _evictions.pop(ident, None)
+        _publish_unlocked(identity=ident)
 
 
-def live_studio_state() -> dict[str, Any]:
-    buf = get_live_buffer()
+def live_studio_state(identity: str | None = None) -> dict[str, Any]:
+    ident = _resolve_identity(identity)
+    buf = get_live_buffer(identity=ident)
     with _lock:
         state = _enrich_valence(buf.studio_state())
         state["mode"] = "live"
-        state["evictions"] = list(_evictions)
+        state["evictions"] = list(_evictions.get(ident, []))
         state["updated_at"] = time.time()
         return state
 
 
-def _publish_unlocked() -> None:
-    global _last_publish, _last_publish_error
+def _publish_unlocked(identity: str) -> None:
+    """Publish per-identity snapshot. Caller must resolve identity and hold _lock."""
     if not GRASP_LIVE_ENABLED:
         return
     try:
-        buf = get_live_buffer()
+        path = _live_state_path(identity)
+        buf = get_live_buffer(identity=identity)
         state = _enrich_valence(buf.studio_state())
         state["mode"] = "live"
-        state["evictions"] = list(_evictions)
+        state["evictions"] = list(_evictions.get(identity, []))
         state["updated_at"] = time.time()
-        path = Path(GRASP_LIVE_STATE_PATH)
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         # Drop stale temp from a prior crashed publish, then create 0600
@@ -164,20 +189,22 @@ def _publish_unlocked() -> None:
         os.replace(tmp, path)
         # Ensure final file has 0600 after replace
         os.chmod(path, 0o600)
-        _last_publish = time.time()
-        _last_publish_error = None
+        _last_publish[identity] = time.time()
+        _last_publish_error[identity] = None
     except Exception as e:
-        _last_publish_error = f"{type(e).__name__}: {e}"
+        _last_publish_error[identity] = f"{type(e).__name__}: {e}"
         log.warning(
-            "grasp live snapshot publish failed path=%s err=%s",
-            GRASP_LIVE_STATE_PATH,
+            "grasp live snapshot publish failed identity=%s path=%s err=%s",
+            identity,
+            path,
             e,
             exc_info=True,
         )
 
 
-def read_live_snapshot() -> dict[str, Any] | None:
-    path = Path(GRASP_LIVE_STATE_PATH)
+def read_live_snapshot(identity: str | None = None) -> dict[str, Any] | None:
+    ident = _resolve_identity(identity)
+    path = _live_state_path(ident)
     if not path.is_file():
         return None
     try:
@@ -190,8 +217,9 @@ def read_live_snapshot() -> dict[str, Any] | None:
         return None
 
 
-def snapshot_age_seconds() -> float | None:
-    path = Path(GRASP_LIVE_STATE_PATH)
+def snapshot_age_seconds(identity: str | None = None) -> float | None:
+    ident = _resolve_identity(identity)
+    path = _live_state_path(ident)
     if not path.is_file():
         return None
     try:
@@ -200,16 +228,17 @@ def snapshot_age_seconds() -> float | None:
         return None
 
 
-def publish_health() -> dict[str, Any]:
+def publish_health(identity: str | None = None) -> dict[str, Any]:
     """Snapshot publication status for Studio /api/health."""
+    ident = _resolve_identity(identity)
     return {
-        "last_publish_at": _last_publish or None,
-        "last_publish_error": _last_publish_error,
-        "path": GRASP_LIVE_STATE_PATH,
+        "last_publish_at": _last_publish.get(ident) or None,
+        "last_publish_error": _last_publish_error.get(ident),
+        "path": str(_live_state_path(ident)),
     }
 
 
-def get_context_block(*, max_tokens: int | None = 1200, touch: bool = True) -> str:
+def get_context_block(*, max_tokens: int | None = 1200, touch: bool = True, identity: str | None = None) -> str:
     """Return the scored WM block for injection into the LLM system prompt.
 
     Empty string when disabled or buffer is empty. touch=True bumps recall_count
@@ -218,11 +247,12 @@ def get_context_block(*, max_tokens: int | None = 1200, touch: bool = True) -> s
     if not GRASP_LIVE_ENABLED:
         return ""
     try:
-        buf = get_live_buffer()
+        ident = _resolve_identity(identity)
+        buf = get_live_buffer(identity=ident)
         with _lock:
             block = buf.get_context_block(max_tokens=max_tokens, touch=touch)
             if block:
-                _publish_unlocked()
+                _publish_unlocked(identity=ident)
             return block or ""
     except Exception:
         return ""
@@ -279,20 +309,23 @@ def install_into_think(think: Any) -> bool:
         def _store_async(user_input: str, response_text: str) -> None:
             orig_store(user_input, response_text)
             try:
-                record_turn(user_input, response_text)
+                ident = _resolve_identity(None)
+                record_turn(user_input, response_text, identity=ident)
             except Exception:
                 pass
 
         def _reset_context() -> None:
             orig_reset()
             try:
-                clear_live()
+                ident = _resolve_identity(None)
+                clear_live(identity=ident)
             except Exception:
                 pass
 
         def _stream_response(messages: list, system: str = "", token_callback=None) -> str:
             try:
-                block = get_context_block(max_tokens=1200, touch=True)
+                ident = _resolve_identity(None)
+                block = get_context_block(max_tokens=1200, touch=True, identity=ident)
                 if block:
                     system = f"{system}\n\n{block}" if system else block
             except Exception:
@@ -332,7 +365,8 @@ def install_into_agentic() -> bool:
     def _stream_agent_message(owner, messages, tools, token_callback=None):
         try:
             if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
-                block = get_context_block(max_tokens=1200, touch=True)
+                ident = _resolve_identity(None)
+                block = get_context_block(max_tokens=1200, touch=True, identity=ident)
                 if block:
                     content = messages[0].get("content") or ""
                     if "<grasp>" not in content:
