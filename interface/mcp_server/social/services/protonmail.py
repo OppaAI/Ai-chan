@@ -59,7 +59,7 @@ def load_tools(mcp):
                         "from": full.sender.address if full.sender else "",
                         "subject": full.subject or "",
                         "date": str(full.date) if full.date else "",
-                        "snippet": (full.body or "")[:20000],
+                        "snippet": (full.body or "")[:300],
                     })
                 except Exception:
                     continue
@@ -94,7 +94,7 @@ def load_tools(mcp):
                         "from": full.sender.address if full.sender else "",
                         "subject": full.subject or "",
                         "date": str(full.date) if full.date else "",
-                        "snippet": (full.body or "")[:20000],
+                        "snippet": (full.body or "")[:300],
                     })
                 except Exception:
                     continue
@@ -158,3 +158,37 @@ def load_tools(mcp):
         finally:
             # protonmail-api-client doesn't have close() method
             pass
+
+    @mcp.tool(
+        name="read_protonmail_full",
+        description="Fetch the complete body of a specific ProtonMail message by ID. Use after read_protonmail/search_protonmail to get full content (links, full description).",
+    )
+    async def read_protonmail_full(message_id: str) -> Dict:
+        client, err_resp = await asyncio.to_thread(_get_client)
+        if err_resp:
+            return err_resp
+
+        try:
+            # Find the message by ID in the full message list
+            messages = await asyncio.to_thread(client.get_messages)
+            target_msg = None
+            for msg in messages:
+                if getattr(msg, "id", "") == message_id:
+                    target_msg = msg
+                    break
+            
+            if target_msg is None:
+                return err("protonmail", f"message not found: {message_id}")
+
+            full = await asyncio.to_thread(client.read_message, target_msg)
+            return {
+                "ok": True,
+                "provider": "protonmail",
+                "id": message_id,
+                "from": full.sender.address if full.sender else "",
+                "subject": full.subject or "",
+                "date": str(full.date) if full.date else "",
+                "body": full.body or "",
+            }
+        except Exception as e:
+            return err("protonmail", f"read full failed: {e}")
