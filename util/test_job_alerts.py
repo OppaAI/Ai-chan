@@ -64,6 +64,41 @@ def is_job_alert(snippet: str, subject: str, sender: str) -> bool:
 async def main():
     progress("Starting job alert test...")
     
+    # Check environment setup first
+    progress("Checking ProtonMail configuration...")
+    username = os.environ.get("PROTONMAIL_USERNAME", "")
+    password = os.environ.get("PROTONMAIL_PASSWORD", "")
+    
+    if not username:
+        progress("ERROR: PROTONMAIL_USERNAME not set in environment")
+        return 1
+    if not password:
+        progress("ERROR: PROTONMAIL_PASSWORD not set in environment")
+        return 1
+    
+    # Show masked username (first 3 chars visible)
+    if len(username) > 3:
+        visible = username[:3] + "*" * (len(username) - 3)
+    else:
+        visible = username
+    progress(f"Username configured: {visible}")
+    
+    # Show password is set (show first 2 chars)
+    if len(password) > 2:
+        visible = password[:2] + "*" * (len(password) - 2)
+    else:
+        visible = password
+    progress(f"Password configured: {visible} ({len(password)} chars)")
+    
+    # Check session cache
+    import os
+    session_file = "/home/oppa-ai/Aiko-chan/.protonmail_session.json"
+    if os.path.exists(session_file):
+        size = os.path.getsize(session_file)
+        progress(f"Session cache exists: {session_file} ({size} bytes)")
+    else:
+        progress(f"Session cache NOT found: {session_file} (first-time login will be slow)")
+    
     # Connect to MCP server (starts it if needed)
     progress("Connecting to MCP server...")
     start_time = time.time()

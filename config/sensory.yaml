@@ -92,6 +92,7 @@ MIOTTS_API_URL: "http://localhost:18089"  # MioTTS synthesis API base URL.
 MIOTTS_MODEL: "MioTTS-0.4B-Q4_K_M"  # Display/model label for the TTS model served externally.
 MIOTTS_PRESET: "normaldere"  # Voice reference_key name registered in MioTTS; examples: jp_female, deredere, kuudere, normaldere, tsundere, custom cloned voice.
 MIOTTS_DEVICE: "1"  # sounddevice output index; -1 means system default.
+LISTEN_DEVICE: "-1"  # sounddevice input index; -1 means system default.
 MIOTTS_MAX_TOKENS: 300  # Max audio-codec tokens per synthesis call; caps how long a chunk (and any trailing artifact) can run.
 MIOTTS_TEMPERATURE: 0.8  # Sampling temperature for the TTS LLM; lower = more deterministic/stable delivery.
 MIOTTS_TOP_P: 1.0  # Nucleus sampling threshold; 1.0 = no truncation of the token distribution.

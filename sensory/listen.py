@@ -82,9 +82,10 @@ Wake word (see config/sensory.yaml):
 Dependencies:
     pip install sherpa-onnx numpy huggingface_hub rapidfuzz
     pip install livekit-wakeword   # optional — acoustic wake word engine
+    pip install sounddevice        # microphone capture (PortAudio backend)
     Models: SenseVoice + Silero VAD auto-downloaded to HF cache on first use
     (see ASR_MODEL in .env; the VAD weights come from csukuangfj/vad on HF).
-    parec (PulseAudio) required for mic capture — no PortAudio/sounddevice
+    sounddevice (PortAudio) for mic capture — no parec/PulseAudio required.
     rapidfuzz is optional — falls back to stdlib difflib if not installed,
     just slower (only exercised by the fuzzy wake-word fallback now, not
     the VAD path).
@@ -137,9 +138,7 @@ import re
 
 log = _logging.getLogger(__name__)
 
-import select
 import sherpa_onnx
-import subprocess
 import threading
 import time
 import warnings
@@ -175,6 +174,7 @@ BOOT_LABELS = {
 ASR_DEVICE      = os.getenv("ASR_DEVICE", "cpu")       # resolved from config/sensory.yaml via load_config()
 ASR_LANGUAGE    = os.getenv("ASR_LANGUAGE", "auto")    # auto, zh, en, ja, ko, yue, nospeech
 ASR_NUM_THREADS = int(os.getenv("ASR_NUM_THREADS", "4"))
+LISTEN_DEVICE   = int(os.getenv("LISTEN_DEVICE", "-1"))  # sounddevice input index; -1 = default
 
 # HuggingFace repo — model.int8.onnx + tokens.txt downloaded on first use
 ASR_MODEL = os.getenv(
@@ -244,15 +244,6 @@ _MAX_CHUNKS        = int(MAX_RECORD_SECONDS * 1000 / _CHUNK_MS_ACTUAL)
 # (32ms @ 16kHz) regardless of that config value, so using it here silently
 # drifted MAX_RECORD_SECONDS off its configured value. CHUNK_DURATION_MS is
 # kept only as a documented constant; see sensory.yaml comment.
-
-# parec command — captures at 16kHz mono float32, uses default PulseAudio source
-_PAREC_CMD = [
-    "parec",
-    "--rate=16000",
-    "--channels=1",
-    "--format=float32le",
-    "--latency-msec=30",
-]
 
 
 # ── native gate flags (formerly sensory/voice_gates.py, then listen_native.py) ─
@@ -481,7 +472,7 @@ class AikoListen:
     Microphone capture + SenseVoice ASR transcription (+ optional speaker
     verification against one enrolled voice, + optional wake word / trigger
     phrase gating).
-    Uses parec (PulseAudio) for mic capture — no PortAudio/sounddevice.
+    Uses sounddevice (PortAudio) for mic capture — unified with TTS playback backend.
     Silero VAD gates recording for robust, noise-resilient speech detection,
     for every audio source (local mic and WebUI alike).
 
@@ -545,6 +536,9 @@ class AikoListen:
         # set while _record() is running — pauses barge-in to avoid mic conflict
         self._recording = threading.Event()
 
+        # sounddevice (lazy-loaded, silencing ALSA noise)
+        self._sd = None
+
         # speaker verification — None if disabled or model missing
         self._speaker_extractor: sherpa_onnx.SpeakerEmbeddingExtractor | None = None
         self._enrolled_embedding: np.ndarray | None = None
@@ -554,6 +548,15 @@ class AikoListen:
         # "asleep", i.e. the configured phrase(s) must be said again.
         self._activation_lock = threading.Lock()
         self._active_until: float = 0.0
+
+    def _load_sd(self):
+        """Lazy-load sounddevice, silencing ALSA noise."""
+        if self._sd is None:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore")
+                import sounddevice as sd
+                self._sd = sd
+        return self._sd
 
     # ── staged init ───────────────────────────────────────────────────────────
 
@@ -765,56 +768,54 @@ class AikoListen:
 
     def _barge_in_loop(self) -> None:
         """
-        Always-on VAD monitor via parec. Pauses while _record() is active.
+        Always-on VAD monitor via sounddevice. Pauses while _record() is active.
 
-        Idles (checking BARGE_IN_ENABLED roughly every 0.5s, no parec
-        process spawned) while disabled — this is the master switch. The
-        check happens on every idle tick and again on every scoring
-        iteration, not just once when the thread starts (audit fix: the
-        previous version checked barge_in_enabled() a single time before
-        entering its main loop, so toggling BARGE_IN_ENABLED live had no
-        effect on an already-running monitor thread until it was stopped
-        and restarted).
+        Idles (checking BARGE_IN_ENABLED roughly every 0.5s) while disabled —
+        this is the master switch. The check happens on every idle tick and
+        again on every scoring iteration.
         """
         bytes_per_chunk = _CHUNK_SAMPLES_VAD * 4
+        samples_per_chunk = _CHUNK_SAMPLES_VAD
 
         while self._barge_in_active:
             if not barge_in_enabled():
                 time.sleep(0.5)
                 continue
 
-            proc = None
+            stream = None
             try:
-                proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
+                sd = self._load_sd()
+                device = LISTEN_DEVICE if LISTEN_DEVICE >= 0 else None
+                stream = sd.RawInputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=1,
+                    dtype='float32',
+                    blocksize=samples_per_chunk,
+                    device=device,
+                )
+                stream.start()
+
                 consecutive = 0
-                paused = False
                 while self._barge_in_active and barge_in_enabled():
                     if self._recording.is_set() or (not barge_in_always_on() and not self._barge_in_armed.is_set()):
                         time.sleep(0.05)
                         consecutive = 0
-                        paused = True
                         continue
 
-                    if paused:
-                        # parec kept writing into the pipe the whole time we
-                        # weren't reading — discard the backlog so the next
-                        # score is against live audio, not ~1s of stale buffer.
-                        # Also reset the VAD's own internal state (hangover
-                        # window / pending segment) so it doesn't carry over
-                        # from whatever it was scoring before the pause.
-                        _drain_stale_audio(proc.stdout, bytes_per_chunk)
-                        self._barge_vad_model.reset()
-                        paused = False
-
-                    raw = proc.stdout.read(bytes_per_chunk)
-                    if len(raw) < bytes_per_chunk:
-                        break
-
                     if self._barge_in_event.is_set():
+                        # Still consume data to keep the stream buffer from filling
+                        try:
+                            stream.read(samples_per_chunk)
+                        except Exception:
+                            pass
                         consecutive = 0
                         continue
 
-                    chunk = np.frombuffer(raw, dtype=np.float32).copy()
+                    data, overflowed = stream.read(samples_per_chunk)
+                    if overflowed:
+                        log.warning("[listen] barge-in input overflow")
+                    chunk = data.flatten().copy()
+
                     is_speech = self._is_speech(self._barge_vad_model, chunk)
 
                     if is_speech:
@@ -831,12 +832,12 @@ class AikoListen:
             except Exception as exc:
                 log.warning("listen: barge-in monitor died: %s", exc)
             finally:
-                if proc is not None:
+                if stream is not None:
                     try:
-                        proc.terminate()
-                        proc.wait(timeout=5)
+                        stream.stop()
+                        stream.close()
                     except Exception:
-                        log.warning("listen: failed to terminate barge-in monitor process")
+                        log.warning("listen: failed to close barge-in input stream")
 
     # ── public api ────────────────────────────────────────────────────────────
 
@@ -1042,9 +1043,9 @@ class AikoListen:
         authoritative speech/silence gate.
 
         chunk_source: optional callable(bytes_per_chunk) -> bytes | None.
-            If None (default), audio is captured locally via parec — this is
-            the path used by the robot/TUI, unchanged.
-            If provided, that callable is polled instead of parec — used by
+            If None (default), audio is captured locally via sounddevice — this is
+            the path used by the robot/TUI.
+            If provided, that callable is polled instead — used by
             the WebUI to feed mic audio streamed in from the browser over the
             WebSocket. Must return exactly `bytes_per_chunk` bytes of
             float32LE PCM, or None to signal end-of-stream (e.g. the browser
@@ -1066,6 +1067,7 @@ class AikoListen:
         speech_count   = 0
         hearing_speech = False
         bytes_per_chunk = _CHUNK_SAMPLES_VAD * 4
+        samples_per_chunk = _CHUNK_SAMPLES_VAD
 
         # Acoustic wake gate: only relevant if a wake model is loaded AND
         # the session isn't already active. If either is false, wake_needed
@@ -1080,27 +1082,36 @@ class AikoListen:
         _cb(status_callback, "__LISTENING__")
         self._recording.set()
 
-        proc = None
         use_external = chunk_source is not None
+        stream = None
 
         try:
             if not use_external:
-                proc = subprocess.Popen(_PAREC_CMD, stdout=subprocess.PIPE)
+                sd = self._load_sd()
+                device = LISTEN_DEVICE if LISTEN_DEVICE >= 0 else None
+                stream = sd.RawInputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=1,
+                    dtype='float32',
+                    blocksize=samples_per_chunk,
+                    device=device,
+                )
+                stream.start()
 
             self._vad_model.reset()
 
             for _ in range(_MAX_CHUNKS):
                 if use_external:
                     raw = chunk_source(bytes_per_chunk)
+                    if raw is None or len(raw) < bytes_per_chunk:
+                        break
+                    chunk = np.frombuffer(raw, dtype=np.float32).copy()
                 else:
-                    raw = proc.stdout.read(bytes_per_chunk)
-
-                if raw is None or len(raw) < bytes_per_chunk:
-                    # None  → browser end-of-utterance sentinel (b"") or timeout
-                    # short → parec pipe closed / underrun
-                    break
-
-                chunk = np.frombuffer(raw, dtype=np.float32).copy()
+                    # Read from sounddevice (blocking read with timeout via blocksize)
+                    data, overflowed = stream.read(samples_per_chunk)
+                    if overflowed:
+                        log.warning("[listen] input overflow")
+                    chunk = data.flatten().copy()
 
                 if wake_needed:
                     # Asleep and using the acoustic engine: score for the
@@ -1142,12 +1153,12 @@ class AikoListen:
             return None, False
         finally:
             self._recording.clear()
-            if proc is not None:
+            if stream is not None:
                 try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
+                    stream.stop()
+                    stream.close()
                 except Exception:
-                    log.warning("listen: failed to terminate record process")
+                    log.warning("listen: failed to close input stream")
 
         if not audio_chunks:
             return None, woke_this_call
@@ -1204,31 +1215,6 @@ class AikoListen:
             log.warning("listen: warmup failed")
         finally:
             self._warmup_done.set()
-
-
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-def _drain_stale_audio(stream, chunk_size: int, max_iters: int = 64) -> None:
-    """
-    Non-blocking discard of any backlog sitting in a pipe's OS buffer.
-
-    parec keeps writing continuously even while _barge_in_loop stops reading
-    (e.g. while paused for _record() or while disarmed) — on typical Linux
-    pipe buffers (~64KB) that's roughly a second of stale audio. Call this
-    right before resuming reads so the first score after a pause is against
-    live audio, not backlog.
-    """
-    fd = stream.fileno()
-    for _ in range(max_iters):
-        ready, _, _ = select.select([fd], [], [], 0)
-        if not ready:
-            break
-        try:
-            chunk = os.read(fd, chunk_size)
-        except OSError:
-            break
-        if not chunk:
-            break
 
 
 def _cb(callback, msg: str) -> None:
