@@ -29,6 +29,7 @@ import html
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -589,12 +590,25 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict
     kept: list[dict] = []
     seen_ids: set[str] = set()
     for feed_url in feeds:
+        resp = None
+        for attempt in range(3):
+            try:
+                resp = requests.get(feed_url, timeout=30, headers={"User-Agent": "Aiko-chan job RSS/1.0"})
+                resp.raise_for_status()
+                break
+            except Exception as e:
+                if attempt == 2:
+                    log.warning("Lane D RSS feed fetch/parse failed for %s after 3 attempts: %s", feed_url, e)
+                    resp = None
+                    break
+                # Exponential backoff: 2s, 4s
+                time.sleep(2 * (attempt + 1))
+        if resp is None:
+            continue
         try:
-            resp = requests.get(feed_url, timeout=30, headers={"User-Agent": "Aiko-chan job RSS/1.0"})
-            resp.raise_for_status()
             root = ET.fromstring(resp.content)
         except Exception as e:
-            log.warning("Lane D RSS feed fetch/parse failed for %s: %s", feed_url, e)
+            log.warning("Lane D RSS feed parse failed for %s: %s", feed_url, e)
             continue
         entries = list(root.findall(".//item")) or list(root.findall(".//{*}entry"))
         for entry in entries:

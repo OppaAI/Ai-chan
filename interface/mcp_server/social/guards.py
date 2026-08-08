@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import time
 from functools import wraps
 from typing import Any, Callable
@@ -43,12 +45,14 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
     then check rate limits, execute tool, log result, cache on success.
     """
     per_hour, per_day = _get_limits(tool_name)
+    fn_is_coro = inspect.iscoroutinefunction(fn)
+    fn_sig = inspect.signature(fn)
 
     @wraps(fn)
-    def wrapped(**kwargs: Any) -> dict:
+    async def wrapped(*args: Any, **kwargs: Any) -> dict:
         db = get_db()
         t0 = time.time()
-        
+
         # Extract service name from tool_name (e.g., "post_x" → "x")
         service = tool_name.replace("post_", "").replace("send_", "").replace("read_", "")
 
@@ -76,7 +80,10 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
 
         # ── Execute tool ──────────────────────────────────────────────────
         try:
-            result = fn(**kwargs)
+            if fn_is_coro:
+                result = await fn(*args, **kwargs)
+            else:
+                result = await asyncio.to_thread(fn, *args, **kwargs)
         except Exception as e:
             result = {"ok": False, "error": str(e)}
 
@@ -96,4 +103,6 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
 
         return result
 
+    # Preserve the original function's signature for FastMCP schema introspection
+    wrapped.__signature__ = fn_sig
     return wrapped
