@@ -1351,6 +1351,12 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 _append_step_trace(trace_ctx, "graph_node", {"node_id": getattr(_node, "node_id", ""), "tool": getattr(_node, "tool", ""), "ok": getattr(_node, "ok", False), "error_type": getattr(_node, "error_type", None)})
             _graph_ok = not any(not r.ok for r in graph_result.results)
 
+            # DEBUG: Log each node result
+            for r in graph_result.results:
+                status = "OK" if r.ok else "FAILED"
+                content_preview = str(r.content)[:500] if r.content else "None"
+                log.info(f"GRAPH NODE {status}: tool={r.tool} node_id={r.node_id if hasattr(r, 'node_id') else '?'} error_type={r.error_type} content={content_preview}")
+
             # Build a TaskState from the graph's node results so the SAME
             # final-answer verifier used by ReAct also scrutinizes graph-
             # executed answers. Previously the graph path never called
@@ -1366,10 +1372,15 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
 
             graph_verdict: VerificationResult | None = None
             if AGENT_VERIFY_FINAL:
+                log.info(f"VERIFY: calling _verify_final_answer, final_answer_len={len(str(graph_result.final_answer)) if graph_result.final_answer else 0}")
                 graph_verdict = _verify_final_answer(owner, user_input, graph_result.final_answer, graph_state)
+                log.info(f"VERIFY: result ok={graph_verdict.ok} score={graph_verdict.score} feedback_len={len(graph_verdict.feedback) if graph_verdict.feedback else 0}")
                 _append_step_trace(trace_ctx, "verify", {"ok": graph_verdict.ok, "score": graph_verdict.score, "feedback": graph_verdict.feedback[:500], "mode": "graph"})
+            else:
+                log.info("VERIFY: skipped (AGENT_VERIFY_FINAL=0)")
 
             graph_trustworthy = _graph_ok and (graph_verdict is None or graph_verdict.ok)
+            log.info(f"GRAPH TRUSTWORTHY: _graph_ok={_graph_ok} verdict_ok={graph_verdict.ok if graph_verdict else None} -> {graph_trustworthy}")
 
             if graph_trustworthy:
                 def _safe_dict(obj):
