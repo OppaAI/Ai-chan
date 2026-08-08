@@ -709,7 +709,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
                  "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}},
             ],
         },
-        {
+{
             "id": "gen_job_post",
             "name": "Fetch, draft, and save job listings from configured RSS feeds",
             "triggers": [
@@ -727,15 +727,17 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "capabilities": ["research"],
             "nodes": [
                 {"id": "plan",   "tool": "gen_job_search_plan",   "args": {"prompt": "$prompt", "config_source": ""}},
-                {"id": "search", "tool": "execute_job_search_plan", "depends_on": ["plan"],
-                 "args": {"plan_json": "$result:plan"}},
-                {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search"],
-                 "args": {"results_json": "$result:search", "template": ""}},
+                {"id": "search_rss", "tool": "execute_job_search_plan", "depends_on": ["plan"],
+                 "args": {"plan_json": "$result:plan", "include_email": False}},
+                {"id": "search_email", "tool": "execute_job_search_plan", "depends_on": ["plan"],
+                 "args": {"plan_json": "$result:plan", "include_email": True}},
+                {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search_rss", "search_email"],
+                 "args": {"results_json": "$result:search_rss", "template": ""}},
                 {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
                  "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
                 {"id": "report", "tool": "report_job_run", "depends_on": ["save"],
-                 "args": {"plan": "$result:plan", "search": "$result:search",
-                          "draft": "$result:draft", "save": "$result:save"}},
+                 "args": {"plan": "$result:plan", "search": "$result:search_rss",
+                           "draft": "$result:draft", "save": "$result:save"}},
             ],
         },
     ]

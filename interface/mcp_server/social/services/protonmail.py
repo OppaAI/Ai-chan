@@ -85,8 +85,21 @@ def load_tools(mcp):
         try:
             # Get all messages (protonmail-api-client doesn't support folder filtering directly)
             print("[PROTONMAIL] Fetching messages list...", file=sys.stderr, flush=True)
-            messages = await asyncio.to_thread(_run_client_call, client.get_messages)
-            print(f"[PROTONMAIL] Got {len(messages)} messages", file=sys.stderr, flush=True)
+            all_messages = await asyncio.to_thread(_run_client_call, client.get_messages)
+            print(f"[PROTONMAIL] Got {len(all_messages)} messages", file=sys.stderr, flush=True)
+
+            # Filter by folder (protonmail-api-client returns all folders; filter client-side)
+            # Message objects have .label or .folder attribute indicating the folder
+            folder = folder.lower()
+            messages = []
+            for msg in all_messages:
+                msg_folder = (getattr(msg, "label", "") or getattr(msg, "folder", "") or "").lower()
+                if folder == "inbox" and msg_folder in ("inbox", ""):
+                    messages.append(msg)
+                elif folder != "inbox" and msg_folder == folder:
+                    messages.append(msg)
+                # Default: if folder attr is empty/missing, assume inbox
+            print(f"[PROTONMAIL] After folder filter ({folder}): {len(messages)} messages", file=sys.stderr, flush=True)
 
             # If message_id provided, return full message
             if message_id:
