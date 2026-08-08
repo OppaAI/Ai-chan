@@ -61,12 +61,17 @@ def _get_demo():
 
 
 def _live_state() -> dict[str, Any] | None:
+    """Read the snapshot, falling back to the live buffer in this process."""
     try:
         from cognition.memory.grasp_hub import read_live_snapshot, snapshot_age_seconds
         snap = read_live_snapshot()
+        age = snapshot_age_seconds() if snap else None
+        if not snap:
+            from cognition.memory.grasp_hub import live_studio_state
+            snap = live_studio_state()
+            age = 0.0
         if not snap:
             return None
-        age = snapshot_age_seconds()
         snap["mode"] = "live"
         snap["live_age_s"] = age
         snap["live_fresh"] = age is not None and age < 120.0
@@ -96,11 +101,11 @@ async def health():
 
 @app.get("/api/state")
 async def get_state(mode: str = Query("auto")):
-    """mode=auto|live|demo — auto prefers live when a fresh snapshot exists."""
+    """mode=auto|live|demo — auto prefers live whenever it is available."""
     mode = (mode or "auto").strip().lower()
     if mode in ("auto", "live"):
         live = _live_state()
-        if live and (mode == "live" or (mode == "auto" and live.get("live_fresh"))):
+        if live:
             return live
         if mode == "live":
             return {

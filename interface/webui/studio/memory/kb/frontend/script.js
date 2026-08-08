@@ -51,20 +51,28 @@ async function loadGraph() {
   const dateTo = document.getElementById('date-to').value || '';
 
   const params = new URLSearchParams({
-    limit: encodeURIComponent(limit),
+    limit,
     include_history: includeHistory ? 'true' : 'false',
     include_entities: includeEntities ? 'true' : 'false',
   });
   if (dateFrom) params.append('date_from', dateFrom);
   if (dateTo) params.append('date_to', dateTo);
 
-  const res = await fetch(`${API_BASE}/api/graph?${params.toString()}`);
+  const res = await fetch(`${API_BASE}/api/graph?${params.toString()}`, { headers: { 'Accept': 'application/json' } });
   if (!res.ok) throw new Error(`graph request failed: ${res.status}`);
   graph = await res.json();
   if (graph && graph.meta && graph.meta.error) {
     throw new Error(`graph export failed: ${graph.meta.error}`);
   }
   render();
+  const count = (graph.nodes || []).length;
+  const details = document.getElementById('details');
+  if (!count) {
+    details.style.display = 'block';
+    details.textContent = graph.meta?.error
+      ? `No knowledge nodes loaded: ${graph.meta.error}`
+      : 'No knowledge nodes found for the current user and filters.';
+  }
 }
 
 function filteredNodesEdges() {
