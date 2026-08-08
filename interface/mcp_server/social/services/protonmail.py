@@ -14,9 +14,18 @@ _cache_username = None
 # protonmail-api-client stores sessions as a binary pickle, not JSON.
 _SESSION_FILE = str(user_state_path("profile/protonmail_session.pickle"))
 
+# stderr-bound print for ProtonMail's internal logger.
+# ProtonMail.__init__ defaults logging_func=print (stdout). Since the MCP
+# server runs on stdio transport any write to stdout corrupts the JSON-RPC
+# wire, causing the client to hang waiting for a valid response.
+def _stderr_print(*args, **kwargs):
+    kwargs.setdefault("file", sys.stderr)
+    kwargs.setdefault("flush", True)
+    print(*args, **kwargs)
+
 
 def _run_client_call(method, *args, **kwargs):
-    """Keep third-party client output off MCP stdout."""
+    """Keep third-party client output (including tqdm progress bars) off MCP stdout."""
     with redirect_stdout(sys.stderr):
         return method(*args, **kwargs)
 
@@ -38,7 +47,10 @@ def _get_client():
         return None, err("protonmail", "PROTONMAIL_PASSWORD not set for first login")
     print(f"[PROTONMAIL] Authenticating as {username[:3]}{chr(42) * max(0, len(username) - 3)}...", file=sys.stderr, flush=True)
     try:
-        client = ProtonMail()
+        # logging_func=_stderr_print routes ALL internal ProtonMail log output
+        # (including tqdm_asyncio progress bars in get_messages) to stderr so
+        # it never touches the MCP stdio wire.
+        client = ProtonMail(logging_func=_stderr_print)
         if os.path.exists(_SESSION_FILE):
             print(f"[PROTONMAIL] Loading session: {_SESSION_FILE}", file=sys.stderr, flush=True)
             _run_client_call(client.load_session, _SESSION_FILE, auto_save=True)
@@ -85,7 +97,7 @@ def load_tools(mcp):
                         "id": getattr(msg, "id", ""),
                         "from": full.sender.address if full.sender else "",
                         "subject": full.subject or "",
-                        "date": str(full.date) if full.date else "",
+                        "date": str(full.time) if full.time else "",
                         "snippet": (full.body or "")[:300],
                     })
                 except Exception:
@@ -122,7 +134,7 @@ def load_tools(mcp):
                         "id": getattr(msg, "id", ""),
                         "from": full.sender.address if full.sender else "",
                         "subject": full.subject or "",
-                        "date": str(full.date) if full.date else "",
+                        "date": str(full.time) if full.time else "",
                         "snippet": (full.body or "")[:300],
                     })
                 except Exception:
@@ -237,7 +249,7 @@ def load_tools(mcp):
                 "id": message_id,
                 "from": full.sender.address if full.sender else "",
                 "subject": full.subject or "",
-                "date": str(full.date) if full.date else "",
+                "date": str(full.time) if full.time else "",
                 "body": full.body or "",
             }
         except Exception as e:

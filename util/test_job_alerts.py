@@ -149,7 +149,7 @@ async def main():
     spinner.daemon = True
     spinner.start()
     
-    result = await client.call_tool("read_protonmail", {"max_results": 20})
+    result = client.call_tool_sync("read_protonmail", {"max_results": 20})
     
     stop_spinner.set()
     spinner.join(timeout=1)
@@ -209,7 +209,7 @@ async def main():
         log.info("Calling read_protonmail_full for id=%s", msg_id)
         
         full_start = time.time()
-        full_result = await client.call_tool("read_protonmail_full", {"message_id": msg_id})
+        full_result = client.call_tool_sync("read_protonmail_full", {"message_id": msg_id})
         full_time = time.time() - full_start
         
         if not full_result.get("ok"):
