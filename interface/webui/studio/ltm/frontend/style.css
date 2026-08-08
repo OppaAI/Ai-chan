@@ -91,3 +91,33 @@ header h1 {
   border-radius: 4px; cursor: pointer;
 }
 .node-label { fill: var(--text); font-size: 9px; pointer-events: none; opacity: 0.55; }
+
+/* Shared STM / LTM / KB studio tabs, styled like Approval Studio filters. */
+.memory-studio-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.memory-studio-tab {
+  flex: 1;
+  background: #120a1c;
+  border: 1px solid var(--dim);
+  color: var(--dim);
+  text-align: center;
+  text-decoration: none;
+  font-size: 10px;
+  letter-spacing: .12em;
+  padding: 6px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  transition: border-color .15s, color .15s, background .15s, box-shadow .15s;
+}
+.memory-studio-tab:hover,
+.memory-studio-tab.active {
+  color: var(--purple);
+  border-color: var(--purple);
+  background: rgba(168, 136, 232, 0.12);
+  box-shadow: 0 0 8px rgba(168, 136, 232, 0.22);
+}

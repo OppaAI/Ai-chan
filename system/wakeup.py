@@ -129,7 +129,7 @@ class BootResult:
     speak:    AikoSpeak | None                              # speaking module — None if TTS boot failed
     listen:   AikoListen | None                             # listening module — None if ASR/VAD boot failed
 
-type BootCallback = Callable[[str], None]                   # Callback for boot progress: takes step key (string)
+BootCallback = Callable[[str], None]                        # Callback for boot progress: takes step key (string)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

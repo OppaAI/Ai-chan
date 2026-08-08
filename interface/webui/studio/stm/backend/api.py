@@ -1,4 +1,4 @@
-"""Grasp Studio backend — demo buffer + live snapshot from Aiko process."""
+"""STM Studio backend — demo buffer + live snapshot from Aiko process."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-app = FastAPI(title="Aiko Grasp Studio")
+app = FastAPI(title="Aiko STM Studio")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -23,7 +23,7 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
-app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="grasp-frontend")
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="stm-frontend")
 
 _demo = None
 _eviction_log: list[dict[str, Any]] = []
@@ -86,7 +86,7 @@ async def health():
         pub = {}
     return {
         "ok": True,
-        "service": "grasp-studio",
+        "service": "stm-studio",
         "live_available": live is not None,
         "live_fresh": bool(live and live.get("live_fresh")),
         "publish_error": pub.get("last_publish_error"),

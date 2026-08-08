@@ -51,11 +51,11 @@ def main():
     os.chdir(Path(__file__).parent)
 
     # Run the API server
-    print("Starting Aiko Memory Graph Studio server at http://localhost:8001")
+    print("Starting Aiko LTM Graph Studio server at http://localhost:8001")
     print("Visit the URL to access the studio interface")
 
     import uvicorn
-    from interface.webui.studio.memory.backend.api import app
+    from interface.webui.studio.ltm.backend.api import app
 
     uvicorn.run(app, host="0.0.0.0", port=8001)
 

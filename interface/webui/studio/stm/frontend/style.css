@@ -1,5 +1,5 @@
 :root {
-  /* Match Neural Memory / Aiko purple studio theme */
+  /* Match Neural LTM / Aiko purple studio theme */
   --bg: #050510;
   --bg2: #0a0a14;
   --border: #1e1428;
@@ -95,24 +95,12 @@ body {
 
 .stage-wrap {
   flex: 1; min-height: 0;
-  display: grid; grid-template-columns: 1fr 280px; gap: 0;
-}
-@media (max-width: 960px) {
-  .stage-wrap {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr auto;
-  }
-  .stage {
-    min-height: 400px;
-  }
-  .side {
-    border-left: none;
-    border-top: 1px solid var(--border);
-    max-height: 300px;
-  }
+  display: grid; grid-template-columns: 280px 1fr; gap: 0;
 }
 
 .stage {
+  grid-column: 2;
+  grid-row: 1;
   position: relative;
   background:
     radial-gradient(ellipse at 45% 45%, #0c1830 0%, #080812 42%, #050510 78%);
@@ -301,12 +289,34 @@ body {
 .lg-lo { background: var(--orange); box-shadow: 0 0 6px var(--orange); }
 
 .side {
-  border-left: 1px solid var(--border);
+  grid-column: 1;
+  grid-row: 1;
+  border-right: 1px solid var(--border);
   background: var(--bg2);
   padding: 14px;
   overflow-y: auto;
   font-size: 12px;
 }
+
+@media (max-width: 960px) {
+  .stage-wrap {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr auto;
+  }
+  .stage {
+    grid-column: auto;
+    grid-row: auto;
+    min-height: 400px;
+  }
+  .side {
+    grid-column: auto;
+    grid-row: auto;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    max-height: 300px;
+  }
+}
+
 .side h2 {
   font-size: 10px; letter-spacing: .16em; color: var(--pink);
   text-transform: uppercase; margin: 0 0 10px;
@@ -333,4 +343,34 @@ textarea {
 }
 .factor-row .bar > i {
   display: block; height: 100%; background: var(--purple); opacity: .85;
+}
+
+/* Shared STM / LTM / KB studio tabs, styled like Approval Studio filters. */
+.memory-studio-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.memory-studio-tab {
+  flex: 1;
+  background: #120a1c;
+  border: 1px solid var(--dim);
+  color: var(--dim-text);
+  text-align: center;
+  text-decoration: none;
+  font-size: 10px;
+  letter-spacing: .12em;
+  padding: 6px 8px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  transition: border-color .15s, color .15s, background .15s, box-shadow .15s;
+}
+.memory-studio-tab:hover,
+.memory-studio-tab.active {
+  color: var(--purple);
+  border-color: var(--purple);
+  background: rgba(168, 136, 232, 0.12);
+  box-shadow: 0 0 8px rgba(168, 136, 232, 0.22);
 }

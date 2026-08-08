@@ -1,7 +1,7 @@
 """
-interface/webui/studio/memory/backend/graph_export.py
+interface/webui/studio/ltm/backend/graph_export.py
 
-Export personal memory as a node/edge graph for Memory Graph Studio.
+Export personal memory as a node/edge graph for LTM Graph Studio.
 
 Phase C: memory + entity nodes, supersedes / mentions edges.
 Phase D: entity co-mention edges from entity_relations.
@@ -669,7 +669,7 @@ def relations_as_graph_edges(
     user_id: str,
     limit: int = 500,
 ) -> list[dict[str, Any]]:
-    """Emit edges compatible with Memory Graph Studio (entity node ids)."""
+    """Emit edges compatible with LTM Graph Studio (entity node ids)."""
     edges = []
     for rel in list_entity_relations(conn, user_id=user_id, limit=limit):
         a = rel["entity_a"]

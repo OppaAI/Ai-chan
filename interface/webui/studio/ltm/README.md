@@ -1,4 +1,4 @@
-# Aiko Memory Graph Studio
+# Aiko LTM Graph Studio
 
 Visualize personal memory as a **neural graph** — facts, supersession chains, entity hubs, knowledge, experience, and retain scores.
 
@@ -6,14 +6,14 @@ Visualize personal memory as a **neural graph** — facts, supersession chains, 
 
 ```bash
 # from repo root (deps: fastapi uvicorn)
-uv run python -m interface.webui.studio.memory.backend.api
+uv run python -m interface.webui.studio.ltm.backend.api
 # → http://127.0.0.1:8001
 ```
 
 Or:
 
 ```bash
-uv run uvicorn interface.webui.studio.memory.backend.api:app --host 127.0.0.1 --port 8001
+uv run uvicorn interface.webui.studio.ltm.backend.api:app --host 127.0.0.1 --port 8001
 ```
 
 Local only (`127.0.0.1`). For remote access, put an authenticated TLS-terminating reverse proxy in front; do not expose plain HTTP on `0.0.0.0`.

@@ -1,11 +1,11 @@
-# Aiko Grasp Studio
+# Aiko STM Studio
 
 Visualize **grasp** — temporary working-memory slots, scores, and eviction flow.
 
 ## Run
 
 ```bash
-uv run python -m interface.webui.studio.grasp.backend.api
+uv run python -m interface.webui.studio.stm.backend.api
 # → http://127.0.0.1:8003
 ```
 
