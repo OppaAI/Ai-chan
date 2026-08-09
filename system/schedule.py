@@ -1622,7 +1622,7 @@ class ScheduleRunner:
             _write_schedule_graphs(graphs, user_id=self._user_id)
 
     def _run_schedule_graph(self, graph_def: dict) -> None:
-        from agentic.graph_engine import PlanNode, PlanGraph, execute_graph, get_playbook_by_id
+        from agentic.graph_engine import PlanGraph, execute_graph, get_playbook_by_id
 
         graph_id = graph_def.get("graph_id") or graph_def.get("id", "")
         playbook = get_playbook_by_id(graph_id)
@@ -1630,25 +1630,47 @@ class ScheduleRunner:
             log.warning("Schedule graph %r references unknown playbook %r — skipping", graph_def.get("id"), graph_id)
             return
 
-        nodes = []
-        for raw in playbook.get("nodes", []):
-            if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
-                nodes.append(PlanNode(
-                    id=str(raw["id"]),
-                    tool=str(raw["tool"]),
-                    args=dict(raw.get("args", {})),
-                    depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
-                ))
-        if not nodes:
-            log.warning("Playbook %r has no valid nodes — skipping", graph_id)
-            return
+        # Try to get a pre-registered PlanGraph from the graph module registry
+        registered_graph = None
+        try:
+            from agentic.graph.job_hunt import get_graph as _get_graph
+            registered_graph = _get_graph(graph_id)
+        except Exception as exc:
+            log.debug("Schedule graph: failed to import graph module: %s", exc)
 
-        graph = PlanGraph(
-            id=graph_id,
-            name=playbook.get("name", graph_id),
-            goal=playbook.get("goal", f"Scheduled run: {graph_id}"),
-            nodes=tuple(nodes),
-        )
+        if registered_graph is not None:
+            # Use the registered graph with the scheduled goal
+            graph = PlanGraph(
+                id=registered_graph.id,
+                name=registered_graph.name,
+                goal=playbook.get("goal", f"Scheduled run: {graph_id}"),
+                nodes=registered_graph.nodes,
+                source=registered_graph.source,
+                reducers=registered_graph.reducers,
+            )
+        else:
+            # Fallback: build from playbook nodes (legacy)
+            nodes = []
+            for raw in playbook.get("nodes", []):
+                if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
+                    nodes.append(PlanNode(
+                        id=str(raw["id"]),
+                        tool=str(raw["tool"]),
+                        args=dict(raw.get("args", {})),
+                        depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
+                        loop_to=str(raw["loop_to"]) if raw.get("loop_to") else None,
+                        loop_condition=dict(raw["loop_condition"]) if raw.get("loop_condition") else None,
+                        max_visits=int(raw["max_visits"]) if raw.get("max_visits") else 0,
+                    ))
+            if not nodes:
+                log.warning("Playbook %r has no valid nodes — skipping", graph_id)
+                return
+            graph = PlanGraph(
+                id=graph_id,
+                name=playbook.get("name", graph_id),
+                goal=playbook.get("goal", f"Scheduled run: {graph_id}"),
+                nodes=tuple(nodes),
+            )
 
         try:
             result = execute_graph(

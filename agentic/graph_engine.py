@@ -390,10 +390,17 @@ def _gen_job_worker_nodes(
     """Build the gen_job_post node list for `max_workers` parallel worker chains.
 
     Each worker is an independent chain:
-        check_more_N (loops while jobs remain) -> get_job_N -> draft_one_N -> save_one_N
+        get_job_N (LOOPS while jobs remain) -> draft_one_N -> save_one_N
     `report_tool` runs once all workers' save steps finish. Tuning the playbook's
     `max_workers` (JSON) or the JOB_HUNT_MAX_WORKERS env increases throughput at
     the cost of more concurrent LLM calls.
+
+    The loop lives on get_next_job — the ONLY tool that advances
+    job_current_index — NOT on a read-only "check" node. An earlier design put
+    the "more/next" loop on check_jobs_remaining, which only *reads* the index;
+    get_next_job (the index advancer) ran after the loop exits, so the condition
+    could never change (current=0 < total=N forever) and every run burned its
+    max_visits budget looping on "more" without ever processing a job.
     """
     max_workers = max(1, int(max_workers or 1))
     nodes: list[dict[str, Any]] = [
@@ -401,16 +408,16 @@ def _gen_job_worker_nodes(
     ]
     save_deps: list[str] = []
     for idx in range(1, max_workers + 1):
-        worker = str(idx)
-        chk = f"check_more_{idx}"
         get = f"get_job_{idx}"
         draft = f"draft_one_{idx}"
         save = f"save_one_{idx}"
         nodes.extend([
-            {"id": chk, "tool": check_tool, "depends_on": ["fetch_all"],
-             "loop_to": chk, "loop_condition": {"equals": "more"}, "max_visits": 200},
-            {"id": get, "tool": get_tool, "depends_on": [chk],
-             "args": {"worker_id": f"w{idx}"}},
+            # Loop on the index-advancing node: continue pulling the next job
+            # until get_next_job reports {"done": true, ...}.
+            {"id": get, "tool": get_tool, "depends_on": ["fetch_all"],
+             "args": {"worker_id": f"w{idx}"},
+             "loop_to": get, "loop_condition": {"not": {"contains": '"done": true'}},
+             "max_visits": 500},
             {"id": draft, "tool": draft_tool, "depends_on": [get],
              "args": {"job_json": f"$result:{get}", "template": ""}},
             {"id": save, "tool": save_tool, "depends_on": [draft],
@@ -1095,6 +1102,32 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
         if not ranked or ranked[0][0] <= 0:
             return None
     plan = ranked[0][1]
+
+    # If the playbook references a registered graph (graph_id), use it directly
+    # instead of building from inline nodes. This allows graph modules to be
+    # the single source of truth for graph structure.
+    graph_id = plan.get("graph_id") or plan.get("id")
+    if graph_id:
+        try:
+            from agentic.graph.job_hunt import get_graph as _get_graph
+        except Exception as exc:
+            log.debug("graph_engine: failed to import graph module: %s", exc)
+            _get_graph = None
+        if _get_graph is not None:
+            registered_graph = _get_graph(graph_id)
+            if registered_graph is not None:
+                # Clone with the current goal and extras
+                registered_graph = PlanGraph(
+                    id=registered_graph.id,
+                    name=registered_graph.name,
+                    goal=user_input,
+                    nodes=registered_graph.nodes,
+                    source=registered_graph.source,
+                    reducers=registered_graph.reducers,
+                    _extras={**extras, "max_workers": plan.get("max_workers") or 2},
+                )
+                return registered_graph
+
     # Tunable parallel workers: regenerate the gen_job_post worker chains from
     # the playbook's max_workers setting (JSON / env) rather than trusting the
     # possibly-stale node list baked into playbook.json.
