@@ -1,78 +1,57 @@
 {
-  "default_location": "California, USA",
-  "radius_km": 80,
-  "nearby_locations": [
-    "San Francisco",
-    "Los Angeles",
-    "San Diego",
-    "San Jose",
-    "Sacramento",
-    "Oakland",
-    "Irvine",
-    "Mountain View",
-    "Palo Alto",
-    "Santa Clara"
+  "rss_feeds": [
+    "https://www.dice.com/rss?q=software+engineer&l=California",
+    "https://www.dice.com/rss?q=devops&l=California",
+    "https://www.dice.com/rss?q=data+scientist&l=California",
+    "https://stackoverflow.com/jobs/feed?q=software+engineer&l=California",
+    "https://jobs.lever.co/feed?location=California",
+    "https://api.greenhouse.io/v1/boards/feed?location=California"
   ],
-  "max_results": 30,
-  "max_age_days": 30,
-  "fallback_max_age_days": 60,
-  "default_job_type": "",
-  "include_remote": true,
-  "queries": [
-    {
-      "category": "tech",
-      "query": "software engineer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "devops engineer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "data scientist",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "full stack developer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "backend engineer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "frontend developer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "machine learning engineer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "cloud engineer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "site reliability engineer",
-      "job_type": ""
-    },
-    {
-      "category": "tech",
-      "query": "mobile developer",
-      "job_type": ""
-    }
+  "date_range_days": 2,
+  "max_rss_posts": 10,
+  "job_keywords": [
+    "software",
+    "developer",
+    "programmer",
+    "engineer",
+    "devops",
+    "cloud",
+    "data",
+    "database",
+    "systems",
+    "network",
+    "cybersecurity",
+    "security",
+    "information technology",
+    "web",
+    "frontend",
+    "backend",
+    "full stack",
+    "qa",
+    "quality assurance",
+    "technical support",
+    "machine learning",
+    "ai",
+    "kubernetes",
+    "aws",
+    "gcp",
+    "azure",
+    "react",
+    "python",
+    "go",
+    "rust",
+    "typescript"
   ],
-  "min_salary_hourly": 50,
-  "min_salary_annual": 100000,
-  "auto_post": false,
+  "fetch_job_page": true,
+  "include_email": true,
+  "email_source": {
+    "enabled": true,
+    "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
+  },
+  "email_date_range_days": 7,
+  "email_max_messages": 20,
+  "max_email_posts": 10,
+  "topic_tag": "California",
   "post_fields": [
     {
       "label": "Job Post - ",
@@ -116,57 +95,11 @@
     }
   ],
   "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)",
-  "rss_feeds": [
-    "https://www.dice.com/rss?q=software+engineer&l=California",
-    "https://www.dice.com/rss?q=devops&l=California",
-    "https://www.dice.com/rss?q=data+scientist&l=California",
-    "https://stackoverflow.com/jobs/feed?q=software+engineer&l=California",
-    "https://jobs.lever.co/feed?location=California",
-    "https://api.greenhouse.io/v1/boards/feed?location=California"
-  ],
-  "tech_job_keywords": [
-    "software",
-    "developer",
-    "programmer",
-    "engineer",
-    "devops",
-    "cloud",
-    "data",
-    "database",
-    "systems",
-    "network",
-    "cybersecurity",
-    "security",
-    "information technology",
-    "web",
-    "frontend",
-    "backend",
-    "full stack",
-    "qa",
-    "quality assurance",
-    "technical support",
-    "machine learning",
-    "ai",
-    "kubernetes",
-    "aws",
-    "gcp",
-    "azure",
-    "react",
-    "python",
-    "go",
-    "rust",
-    "typescript"
-  ],
-  "date_range_days": 2,
-  "email_date_range_days": 7,
+  "include_remote": true,
+  "min_salary_hourly": 50,
+  "min_salary_annual": 100000,
+  "auto_post": false,
+  "max_results": 30,
   "dedup_days": 3,
-  "include_email": true,
-  "max_rss_posts": 10,
-  "max_email_posts": 10,
-  "email_max_messages": 20,
-  "cache_fetch_minutes": 30,
-  "email_source": {
-    "enabled": true,
-    "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
-  }
+  "cache_fetch_minutes": 30
 }

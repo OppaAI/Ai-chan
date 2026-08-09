@@ -512,7 +512,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict
     """Fetch configured RSS feeds, keeping postings from the last N days."""
     config = config or _job_config()
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
-    keywords = [kw.casefold() for kw in _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS")]
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS", "TECH_JOB_KEYWORDS")]
     today = local_now().date()
     max_days = _config_int(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1)
     days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
@@ -697,7 +697,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
         return []
     
-    keywords = [kw.casefold() for kw in _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS")]
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS", "TECH_JOB_KEYWORDS")]
     today = local_now().date()
     max_days = _config_int(config, "email_date_range_days", "JOB_HUNT_EMAIL_DATE_RANGE_DAYS", 7)
     days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
