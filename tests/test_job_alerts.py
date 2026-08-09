@@ -30,9 +30,13 @@ sys.path.insert(0, str(REPO_ROOT))
 # from system.config import load_config
 # load_config()
 
+# Set user ID early to avoid guest fallback during testing
+import os
+os.environ["AIKO_USER_ID"] = "github_205369547"
+
 from agentic.mcp_client import init_mcp_client, get_mcp_client
 from system.log import get_logger
-from system.userspace import user_state_path
+from system.userspace import user_state_path, user_state_dir
 
 log = get_logger(__name__)
 
