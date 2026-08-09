@@ -27,6 +27,7 @@ Config lookup order:
 
 from __future__ import annotations
 
+import concurrent.futures
 import email.utils
 import html
 import json
@@ -790,11 +791,15 @@ def _extract_first_url(*texts: str) -> str:
     return ""
 
 
-def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[dict]:
+def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx: int = 0) -> list[dict]:
     """Fetch job-alert emails via ProtonMail MCP bridge.
     
     Filters by date range (email_date_range_days config) and keywords.
     Returns postings in the same shape as RSS results with source="email".
+    
+    Args:
+        config: Job hunt config dict
+        email_idx: Index of this email source (for per-message cache naming)
     """
     config = config if config is not None else _job_config()
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
@@ -837,8 +842,17 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
     except Exception as e:
         log.warning("[job_hunt] failed to save email debug cache: %s", e)
     
-    for msg in messages:
+    # Save each individual email message for fine-grained debugging/filtering
+    date_str = local_now().strftime("%Y-%m-%d")
+    email_idx = 0  # Will be set by caller
+    
+    for msg_idx, msg in enumerate(messages):
         posting = _email_message_to_posting(msg, today, max_days, config)
+        matched = posting is not None
+        
+        # Write individual email message cache
+        _job_email_message_cache_write(date_str, email_idx, msg_idx, msg, posting, matched)
+        
         if not posting:
             continue
         
@@ -877,12 +891,12 @@ def search_jobs(
     return fetch_today_jobs_from_rss(config)[:limit]
 
 
-# ── Cache directory and legacy single-file cache (backwards compat) ──────
+# ── Simple cache: one JSONL per source ─────────────────────────────────────
+
 def _job_cache_dir() -> Path:
     """Directory for persisted fetch results (RSS+email)."""
-    from system.userspace import user_state_dir
-    # User folder: <user_state>/agentic/workflows/job_hunt/cache/
-    d = user_state_dir() / "agentic" / "workflows" / "job_hunt" / "cache"
+    base = Path("/home/oppa-ai/.aiko/github_205369547")
+    d = base / "agentic" / "workflows" / "job_hunt" / "cache"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -890,137 +904,80 @@ def _job_cache_dir() -> Path:
     return d
 
 
-def _job_cache_path(date_str: str) -> Path:
-    """Legacy single-file cache path (for backwards compat)."""
-    return _job_cache_dir() / f"fetch_{date_str}.json"
+def _job_rss_cache_path(date_str: str, feed_idx: int) -> Path:
+    """Path to RSS feed cache JSONL: fetch_YYYY-MM-DD_rss_<idx>.jsonl"""
+    return _job_cache_dir() / f"fetch_{date_str}_rss_{feed_idx}.jsonl"
 
 
-def _job_cache_read(date_str: str) -> dict[str, Any] | None:
-    """Try to read legacy single-file cache."""
+def _job_email_cache_path(date_str: str, msg_idx: int) -> Path:
+    """Path to single email message cache JSONL: fetch_YYYY-MM-DD_email_<idx>.jsonl"""
+    return _job_cache_dir() / f"fetch_{date_str}_email_{msg_idx}.jsonl"
+
+
+def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, Any]]) -> None:
+    """Write RSS postings to JSONL (one per line)."""
     try:
-        data = json.loads(_job_cache_path(date_str).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _job_cache_write(date_str: str, data: dict[str, Any]) -> None:
-    """Write legacy single-file cache (kept for backwards compat, but now
-    also writes per-source files + manifest)."""
-    try:
-        _job_cache_path(date_str).write_text(
-            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
-        )
-    except OSError as e:
-        log.warning("job_hunt: failed to write fetch cache: %s", e)
-
-
-# ── Per-source cache (industrial design) ──────────────────────────────────
-
-def _job_source_cache_metadata_path(date_str: str, source_type: str, source_idx: int) -> Path:
-    """Path to a per-source metadata file: fetch_YYYY-MM-DD_<type>_<idx>.json"""
-    filename = f"fetch_{date_str}_{source_type}_{source_idx}.json"
-    return _job_cache_dir() / filename
-
-
-def _job_source_cache_postings_path(date_str: str, source_type: str, source_idx: int) -> Path:
-    """Path to a per-source postings file (JSONL): fetch_YYYY-MM-DD_<type>_<idx>.jsonl"""
-    filename = f"fetch_{date_str}_{source_type}_{source_idx}.jsonl"
-    return _job_cache_dir() / filename
-
-
-def _job_manifest_cache_path(date_str: str) -> Path:
-    """Path to the manifest summarizing all sources for a day."""
-    return _job_cache_dir() / f"fetch_{date_str}_manifest.json"
-
-
-def _job_source_cache_write(
-    date_str: str,
-    source_type: str,
-    source_idx: int,
-    source_url: str,
-    raw_count: int,
-    filtered_count: int,
-    postings: list[dict[str, Any]],
-    status: str = "ok",
-) -> None:
-    """Write a per-source cache file with metadata (JSON) and postings (JSONL)."""
-    metadata = {
-        "source_type": source_type,
-        "source_idx": source_idx,
-        "source_url": source_url,
-        "cached_at": local_now().isoformat(),
-        "raw_count": raw_count,
-        "filtered_count": filtered_count,
-        "status": status,
-    }
-    try:
-        # Write metadata
-        meta_path = _job_source_cache_metadata_path(date_str, source_type, source_idx)
-        meta_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        
-        # Write postings as JSONL (one per line)
-        postings_path = _job_source_cache_postings_path(date_str, source_type, source_idx)
+        path = _job_rss_cache_path(date_str, feed_idx)
         lines = [json.dumps(p, ensure_ascii=False) for p in postings]
-        postings_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        log.info("[job_hunt] wrote %d postings to %s", len(postings), path.name)
     except OSError as e:
-        log.warning("job_hunt: failed to write per-source cache %s_%s_%d: %s", date_str, source_type, source_idx, e)
+        log.warning("job_hunt: failed to write RSS cache %s: %s", path.name, e)
 
 
-def _job_manifest_cache_write(
-    date_str: str,
-    sources: list[dict[str, Any]],
-    total_postings: int,
-    overall_status: str = "complete",
-) -> None:
-    """Write the manifest file listing all sources and their statuses."""
-    data = {
-        "cached_at": local_now().isoformat(),
-        "date": date_str,
-        "status": overall_status,
-        "sources": sources,
-        "total_postings": total_postings,
-    }
+def _job_read_rss_cache(date_str: str, feed_idx: int) -> list[dict[str, Any]]:
+    """Read RSS postings from JSONL."""
     try:
-        path = _job_manifest_cache_path(date_str)
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    except OSError as e:
-        log.warning("job_hunt: failed to write manifest cache: %s", e)
-
-
-def _job_cache_read_manifest(date_str: str) -> dict[str, Any] | None:
-    """Read the manifest for a date to check freshness + source statuses."""
-    try:
-        data = json.loads(_job_manifest_cache_path(date_str).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _job_cache_read_source(date_str: str, source_type: str, source_idx: int) -> dict[str, Any] | None:
-    """Read a single per-source cache (metadata + postings from JSONL)."""
-    try:
-        # Read metadata
-        meta_path = _job_source_cache_metadata_path(date_str, source_type, source_idx)
-        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
-        
-        # Read postings from JSONL
-        postings_path = _job_source_cache_postings_path(date_str, source_type, source_idx)
+        path = _job_rss_cache_path(date_str, feed_idx)
+        if not path.exists():
+            return []
         postings = []
-        if postings_path.exists():
-            with open(postings_path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        postings.append(json.loads(line))
-        
-        metadata["postings"] = postings
-        return metadata
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    postings.append(json.loads(line))
+        return postings
     except (OSError, json.JSONDecodeError):
-        return None
+        return []
 
 
-# ── Graph step 1: fetch_rss_and_email_into_state (refactored with per-source caching) ──
+def _job_write_email_cache(date_str: str, msg_idx: int, raw_message: dict[str, Any], posting: dict[str, Any] | None) -> None:
+    """Write single email message to JSONL with match status."""
+    try:
+        path = _job_email_cache_path(date_str, msg_idx)
+        data = {
+            "msg_index": msg_idx,
+            "raw_message": {
+                "id": raw_message.get("id"),
+                "from": raw_message.get("from"),
+                "subject": raw_message.get("subject"),
+                "date": raw_message.get("date"),
+                "snippet": raw_message.get("snippet", "")[:500],
+            },
+            "matched": posting is not None,
+            "posting": posting,
+            "cached_at": local_now().isoformat(),
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
+    except OSError as e:
+        log.warning("job_hunt: failed to write email cache %s: %s", path.name, e)
+
+
+def _cache_is_fresh_simple(cache_dir: Path, date_str: str, config: dict[str, Any]) -> bool:
+    """Check if any cache file for this date exists and is fresh."""
+    try:
+        cache_minutes = _config_int(config, "cache_fetch_minutes", "JOB_HUNT_CACHE_FETCH_MINUTES", 30)
+        cutoff = local_now() - timedelta(minutes=cache_minutes)
+        for f in cache_dir.glob(f"fetch_{date_str}_*.jsonl"):
+            if f.stat().st_mtime > cutoff.timestamp():
+                return True
+    except OSError:
+        pass
+    return False
+
+
+# ── Graph step 1: fetch_rss_and_email_into_state (simplified) ──
 
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     """Fetch all RSS and email job listings with per-source caching into state.
@@ -1060,78 +1017,104 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     manifest = _job_cache_read_manifest(date_str)
     can_reuse_manifest = manifest and _cache_is_fresh(manifest, config)
     
-    # ── RSS Feeds ──────────────────────────────────────────────────────
+    # ── RSS Feeds (parallel) ───────────────────────────────────────────────
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
     rss_cap = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
+    rss_max_workers = _config_int(config, "rss_max_workers", "JOB_HUNT_RSS_MAX_WORKERS", 4)
     
+    # Separate feeds into cached vs fresh-fetch
+    rss_to_fetch = []
     for feed_idx, feed_url in enumerate(feeds):
-        try:
-            log.info("[job_hunt] processing RSS feed %d/%d: %s", feed_idx + 1, len(feeds), feed_url[:80])
+        if can_reuse_manifest:
+            src_info = next((s for s in manifest.get("sources", []) if s.get("type") == "rss" and s.get("index") == feed_idx), None)
+            source_cache = _job_cache_read_source(date_str, "rss", feed_idx) if src_info and src_info.get("status") == "ok" else None
             
-            # Check if we can reuse this source's cache
-            if can_reuse_manifest:
-                src_info = next((s for s in manifest.get("sources", []) if s.get("type") == "rss" and s.get("index") == feed_idx), None)
-                source_cache = _job_cache_read_source(date_str, "rss", feed_idx) if src_info and src_info.get("status") == "ok" else None
+            if source_cache:
+                log.info("[job_hunt]   (cached) rss feed %d: raw=%d filtered=%d",
+                         feed_idx, source_cache.get("raw_count", 0), source_cache.get("filtered_count", 0))
+                postings = source_cache.get("postings", [])
+                for p in postings:
+                    p["_source_idx"] = feed_idx
+                    p["_source_type"] = "rss"
+                    p["_source_name"] = f"rss_{feed_idx}"
+                all_postings.extend(postings)
+                source_info.append({
+                    "type": "rss",
+                    "index": feed_idx,
+                    "url": feed_url,
+                    "raw_count": source_cache.get("raw_count", 0),
+                    "filtered_count": source_cache.get("filtered_count", 0),
+                    "status": "cached",
+                })
+                continue
+        rss_to_fetch.append((feed_idx, feed_url))
+    
+    # Parallel fetch for fresh RSS feeds
+    if rss_to_fetch:
+        log.info("[job_hunt] fetching %d RSS feeds in parallel (max_workers=%d)", len(rss_to_fetch), rss_max_workers)
+        
+        def fetch_single_rss(feed_data: tuple[int, str]) -> dict[str, Any]:
+            feed_idx, feed_url = feed_data
+            try:
+                log.info("[job_hunt] processing RSS feed %d/%d: %s", feed_idx + 1, len(feeds), feed_url[:80])
+                postings = fetch_today_jobs_from_rss(_job_config_with_single_feed(config, feed_url))[:rss_cap]
+                raw_count = len(postings) * 3  # Estimate: assume 3:1 filter ratio
                 
-                if source_cache:
-                    log.info("[job_hunt]   (cached) rss feed %d: raw=%d filtered=%d",
-                             feed_idx, source_cache.get("raw_count", 0), source_cache.get("filtered_count", 0))
-                    postings = source_cache.get("postings", [])
-                    for p in postings:
-                        p["_source_idx"] = feed_idx
-                        p["_source_type"] = "rss"
-                        p["_source_name"] = f"rss_{feed_idx}"
-                    all_postings.extend(postings)
+                for p in postings:
+                    p["_source_idx"] = feed_idx
+                    p["_source_type"] = "rss"
+                    p["_source_name"] = f"rss_{feed_idx}"
+                
+                # Write per-source cache (metadata + JSONL postings)
+                _job_source_cache_write(
+                    date_str, "rss", feed_idx, feed_url,
+                    raw_count, len(postings), postings, status="ok"
+                )
+                
+                return {
+                    "success": True,
+                    "feed_idx": feed_idx,
+                    "feed_url": feed_url,
+                    "postings": postings,
+                    "raw_count": raw_count,
+                    "filtered_count": len(postings),
+                }
+            except Exception as e:
+                log.error("[job_hunt] rss feed %d failed: %s", feed_idx, e)
+                return {
+                    "success": False,
+                    "feed_idx": feed_idx,
+                    "feed_url": feed_url,
+                    "error": str(e)[:100],
+                }
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=rss_max_workers) as executor:
+            future_to_feed = {executor.submit(fetch_single_rss, fd): fd for fd in rss_to_fetch}
+            for future in concurrent.futures.as_completed(future_to_feed):
+                result = future.result()
+                if result["success"]:
+                    all_postings.extend(result["postings"])
                     source_info.append({
                         "type": "rss",
-                        "index": feed_idx,
-                        "url": feed_url,
-                        "raw_count": source_cache.get("raw_count", 0),
-                        "filtered_count": source_cache.get("filtered_count", 0),
-                        "status": "cached",
+                        "index": result["feed_idx"],
+                        "url": result["feed_url"],
+                        "raw_count": result["raw_count"],
+                        "filtered_count": result["filtered_count"],
+                        "status": "ok",
                     })
-                    continue
-            
-            # Fresh fetch for this RSS feed
-            postings = fetch_today_jobs_from_rss(_job_config_with_single_feed(config, feed_url))[:rss_cap]
-            raw_count = len(postings) * 3  # Estimate: assume 3:1 filter ratio
-            
-            for p in postings:
-                p["_source_idx"] = feed_idx
-                p["_source_type"] = "rss"
-                p["_source_name"] = f"rss_{feed_idx}"
-            
-            all_postings.extend(postings)
-            
-            # Write per-source cache (metadata + JSONL postings)
-            _job_source_cache_write(
-                date_str, "rss", feed_idx, feed_url,
-                raw_count, len(postings), postings, status="ok"
-            )
-            
-            source_info.append({
-                "type": "rss",
-                "index": feed_idx,
-                "url": feed_url,
-                "raw_count": raw_count,
-                "filtered_count": len(postings),
-                "status": "ok",
-            })
-            log.info("[job_hunt]   rss feed %d: raw=%d filtered=%d",
-                     feed_idx, raw_count, len(postings))
-            
-        except Exception as e:
-            log.error("[job_hunt] rss feed %d failed: %s", feed_idx, e)
-            source_failures.append(f"rss_{feed_idx}")
-            source_info.append({
-                "type": "rss",
-                "index": feed_idx,
-                "url": feed_url,
-                "raw_count": 0,
-                "filtered_count": 0,
-                "status": "error",
-                "error": str(e)[:100],
-            })
+                    log.info("[job_hunt]   rss feed %d: raw=%d filtered=%d",
+                             result["feed_idx"], result["raw_count"], result["filtered_count"])
+                else:
+                    source_failures.append(f"rss_{result['feed_idx']}")
+                    source_info.append({
+                        "type": "rss",
+                        "index": result["feed_idx"],
+                        "url": result["feed_url"],
+                        "raw_count": 0,
+                        "filtered_count": 0,
+                        "status": "error",
+                        "error": result["error"],
+                    })
     
     # ── Email ──────────────────────────────────────────────────────────
     if include_email:
@@ -1164,7 +1147,7 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
                     })
                 else:
                     # Fresh fetch
-                    postings = fetch_today_jobs_from_email(config)[:email_cap]
+                    postings = fetch_today_jobs_from_email(config, email_idx)[:email_cap]
                     raw_count = 20  # Standard: read up to 20 raw emails from ProtonMail
                     
                     for p in postings:
@@ -1190,7 +1173,7 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
                     log.info("[job_hunt]   email: raw=%d filtered=%d", raw_count, len(postings))
             else:
                 # Fresh fetch (manifest expired or doesn't exist)
-                postings = fetch_today_jobs_from_email(config)[:email_cap]
+                postings = fetch_today_jobs_from_email(config, email_idx)[:email_cap]
                 raw_count = 20
                 
                 for p in postings:

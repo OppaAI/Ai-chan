@@ -237,9 +237,9 @@ async def main():
     parser = argparse.ArgumentParser(description="Test ProtonMail job-alert reading")
     parser.add_argument("--login", action="store_true", help="Interactively log in and save a ProtonMail session")
     parser.add_argument("--pipeline", action="store_true",
-                         help="After the raw ProtonMail check, also walk the job_hunt graph nodes "
+                         help="Walk the job_hunt graph nodes "
                               "(fetch_rss_and_email_into_state -> get_next_job -> draft_single_job -> "
-                              "save_single_job_draft -> report_job_run) with the same highlighting")
+                              "save_single_job_draft -> report_job_run) with 'senior' highlighting")
     parser.add_argument("--max-jobs", type=int, default=None, help="Cap jobs walked in --pipeline mode")
     parser.add_argument("--save-drafts", action="store_true", help="In --pipeline mode, actually persist drafts to disk")
     parser.add_argument("--context", type=int, default=80, help="Chars of context shown around a 'senior' match")
@@ -251,143 +251,51 @@ async def main():
     username = os.environ.get("PROTONMAIL_USERNAME", "")
     password = os.environ.get("PROTONMAIL_PASSWORD", "")
     
-    if not username:
-        progress("ERROR: PROTONMAIL_USERNAME not set in environment")
-        return 1
-    if not password:
-        progress("ERROR: PROTONMAIL_PASSWORD not set in environment")
-        return 1
+    have_email_creds = bool(username and password)
     
-    # Show masked username (first 3 chars visible)
-    if len(username) > 3:
-        visible = username[:3] + "*" * (len(username) - 3)
+    if not have_email_creds:
+        progress("WARNING: PROTONMAIL_USERNAME/PASSWORD not set — skipping email stage")
     else:
-        visible = username
-    progress(f"Username configured: {visible}")
+        # Show masked username (first 3 chars visible)
+        if len(username) > 3:
+            visible = username[:3] + "*" * (len(username) - 3)
+        else:
+            visible = username
+        progress(f"Username configured: {visible}")
+        
+        # Show password is set (show first 2 chars)
+        if len(password) > 2:
+            visible = password[:2] + "*" * (len(password) - 2)
+        else:
+            visible = password
+        progress(f"Password configured: {visible} ({len(password)} chars)")
+        
+        # Check session cache
+        session_file = str(user_state_path("profile/protonmail_session.pickle"))
+        if os.path.exists(session_file):
+            size = os.path.getsize(session_file)
+            progress(f"Session cache exists: {session_file} ({size} bytes)")
+        else:
+            progress(f"Session cache NOT found: {session_file}")
+        
+        if args.login:
+            return manual_login(session_file, username, password)
     
-    # Show password is set (show first 2 chars)
-    if len(password) > 2:
-        visible = password[:2] + "*" * (len(password) - 2)
+    # Only connect to MCP if we have email credentials
+    client = None
+    if have_email_creds:
+        # Connect to MCP server (starts it if needed)
+        progress("Connecting to MCP server...")
+        start_time = time.time()
+        client = init_mcp_client()
+        if client is None:
+            progress("ERROR: Failed to connect to MCP server")
+            log.error("Failed to connect to MCP server")
+            return 1
+        connect_time = time.time() - start_time
+        progress(f"MCP server connected in {connect_time:.2f}s")
     else:
-        visible = password
-    progress(f"Password configured: {visible} ({len(password)} chars)")
-    
-    # Check session cache
-    session_file = str(user_state_path("profile/protonmail_session.pickle"))
-    if os.path.exists(session_file):
-        size = os.path.getsize(session_file)
-        progress(f"Session cache exists: {session_file} ({size} bytes)")
-    else:
-        progress(f"Session cache NOT found: {session_file}")
-    
-    if args.login:
-        return manual_login(session_file, username, password)
-
-    # Connect to MCP server (starts it if needed)
-    progress("Connecting to MCP server...")
-    start_time = time.time()
-    client = init_mcp_client()
-    if client is None:
-        progress("ERROR: Failed to connect to MCP server")
-        log.error("Failed to connect to MCP server")
-        return 1
-    connect_time = time.time() - start_time
-    progress(f"MCP server connected in {connect_time:.2f}s")
-
-    # 1) List messages with 300-char snippets
-    progress("Fetching messages from ProtonMail...")
-    progress("  This may take 10-30 seconds on first login...")
-    
-    # Start spinner for long operation
-    stop_spinner = threading.Event()
-    spinner = threading.Thread(target=spinner_thread, args=(stop_spinner,))
-    spinner.daemon = True
-    spinner.start()
-    
-    result = client.call_tool_sync("read_protonmail", {"max_results": 20})
-    
-    stop_spinner.set()
-    spinner.join(timeout=1)
-    print("", file=sys.stderr)  # newline after spinner
-    
-    progress("  Received messages from ProtonMail")
-    
-    if not result.get("ok"):
-        progress("ERROR: read_protonmail failed")
-        log.error("read_protonmail failed: %s", result.get("error"))
-        return 1
-
-    messages = result.get("messages", [])
-    progress(f"Got {len(messages)} messages")
-    for i, msg in enumerate(messages):
-        subject = msg.get("subject", "")[:50]
-        sender = msg.get("from", "")[:40]
-        progress(f"  [{i+1}/{len(messages)}] {sender}: {subject}")
-    log.info("Got %d messages", len(messages))
-
-    # 2) Filter for job alerts using 300-char snippets
-    progress("Scanning messages for job alerts...")
-    job_alerts = []
-    for i, msg in enumerate(messages):
-        if i % 5 == 0 and i > 0:
-            progress(f"  Checked {i}/{len(messages)} messages...")
-        
-        snippet = msg.get("snippet", "")
-        subject = msg.get("subject", "")
-        sender = msg.get("from", "")
-        msg_id = msg.get("id", "")
-        
-        if is_job_alert(snippet, subject, sender):
-            job_alerts.append(msg)
-            progress(f"  JOB ALERT found: id={msg_id}")
-            log.info("JOB ALERT found: id=%s subject=%s sender=%s snippet=%.100s",
-                     msg_id, subject, sender, snippet)
-            highlight_senior(f"{subject} {snippet}", label=f"snippet id={msg_id}", context_chars=args.context)
-
-    progress(f"Scanned all {len(messages)} messages, found {len(job_alerts)} job alert(s)")
-    log.info("Scanned all %d messages, found %d job alert(s)", len(messages), len(job_alerts))
-
-    if not job_alerts:
-        progress("WARNING: No job alerts detected in snippets")
-        log.warning("No job alerts detected in snippets")
-        # Show first few for manual inspection
-        progress("Showing first 5 messages for reference:")
-        for msg in messages[:5]:
-            log.info("  id=%s subject=%s sender=%s snippet=%.100s",
-                     msg.get("id"), msg.get("subject"), msg.get("from"), msg.get("snippet", ""))
-        return 0
-
-    # 3) For each job alert, fetch full body via read_protonmail_full
-    progress(f"Fetching full bodies for {len(job_alerts)} job alert(s)...")
-    for i, alert in enumerate(job_alerts):
-        msg_id = alert.get("id")
-        progress(f"  [{i+1}/{len(job_alerts)}] Fetching message {msg_id}...")
-        log.info("Calling read_protonmail_full for id=%s", msg_id)
-        
-        full_start = time.time()
-        full_result = client.call_tool_sync("read_protonmail_full", {"message_id": msg_id})
-        full_time = time.time() - full_start
-        
-        if not full_result.get("ok"):
-            progress(f"  ERROR: read_protonmail_full failed: {full_result.get('error')}")
-            log.error("  read_protonmail_full failed: %s", full_result.get("error"))
-            continue
-
-        body = full_result.get("body", "")
-        progress(f"  Message {msg_id}: {len(body)} chars in {full_time:.2f}s")
-        log.info("  Full body length: %d chars", len(body))
-        log.info("  Body preview (first 500 chars):")
-        log.info("  %s", body[:500])
-        highlight_senior(body, label=f"full body id={msg_id}", context_chars=args.context)
-
-        # Check for apply links
-        urls = re.findall(r'https?://\S+', body)
-        if urls:
-            progress(f"  Found {len(urls)} URL(s) in email:")
-            log.info("  Found %d URL(s) in full body:", len(urls))
-            for url in urls[:5]:
-                log.info("    %s", url)
-                progress(f"    - {url}")
+        start_time = time.time()
 
     if args.pipeline:
         pipeline_rc = run_pipeline_steps(args)

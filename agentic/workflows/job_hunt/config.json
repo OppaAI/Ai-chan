@@ -10,6 +10,7 @@
   "date_range_days": 2,
   "max_rss_posts": 10,
   "max_rss_chars": 15000,
+  "rss_max_workers": 4,
   "job_keywords": [
     "software",
     "developer",
@@ -50,7 +51,7 @@
     "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
   },
   "email_date_range_days": 7,
-  "email_max_messages": 20,
+  "email_max_messages": 10,
   "max_email_posts": 10,
   "email_source_domains": [
     "linkedin",
