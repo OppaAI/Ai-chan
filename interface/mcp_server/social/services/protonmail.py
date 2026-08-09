@@ -103,20 +103,33 @@ def load_tools(mcp):
                 print(f"[PROTONMAIL]   msg {i}: folder='{msg_folder}', id={getattr(msg, 'id', 'N/A')[:20]}", file=sys.stderr, flush=True)
 
             # Filter by folder (protonmail-api-client returns all folders; filter client-side)
-            # Message objects have .label or .folder attribute indicating the folder
+            # Message objects have .labels attribute (list of ints: 0=inbox, 3=trash, 4=spam)
+            # Only read unread messages from inbox (label 0)
             folder = folder.lower()
             messages = []
             folder_counts = {}
             for msg in all_messages:
-                msg_folder = (getattr(msg, "label", "") or getattr(msg, "folder", "") or "").lower()
+                msg_folder = ""
+                if hasattr(msg, "labels") and msg.labels:
+                    label_list = msg.labels if isinstance(msg.labels, list) else [msg.labels]
+                    first_label = str(label_list[0]) if label_list else ""
+                    # Map numeric labels to folder names
+                    if first_label == "0":
+                        msg_folder = "inbox"
+                    elif first_label == "3":
+                        msg_folder = "trash"
+                    elif first_label == "4":
+                        msg_folder = "spam"
+                    else:
+                        msg_folder = first_label
                 folder_counts[msg_folder] = folder_counts.get(msg_folder, 0) + 1
-                # Exclude trash/spam folders explicitly
-                if msg_folder in ("trash", "spam", "junk", "deleted"):
-                    continue
-                # Include all folders (not just inbox)
-                messages.append(msg)
+                # Only include inbox (label 0) and unread messages
+                is_inbox = (first_label == "0")
+                is_unread = getattr(msg, "unread", False)
+                if is_inbox and is_unread:
+                    messages.append(msg)
             print(f"[PROTONMAIL] Folder counts: {folder_counts}", file=sys.stderr, flush=True)
-            print(f"[PROTONMAIL] After folder filter ({folder}): {len(messages)} messages", file=sys.stderr, flush=True)
+            print(f"[PROTONMAIL] Unread inbox messages: {len(messages)}", file=sys.stderr, flush=True)
 
             # If message_id provided, return full message
             if message_id:
@@ -173,7 +186,7 @@ def load_tools(mcp):
                 except Exception:
                     continue
 
-            return {"ok": True, "provider": "protonmail", "folder": folder, "count": len(results), "messages": results}
+            return {"ok": True, "provider": "protonmail", "count": len(results), "messages": results}
         except Exception as e:
             return err("protonmail", f"read failed: {e}")
 
