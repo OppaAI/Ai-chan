@@ -629,7 +629,7 @@ def _read_protonmail_messages(max_results: int) -> list[dict]:
         return []
 
 
-def _email_message_to_posting(msg: dict, today: Any, max_days: int) -> dict | None:
+def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict[str, Any]) -> dict | None:
     """Convert one MCP Proton message dict into a posting."""
     subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
     if not subject:
@@ -665,13 +665,9 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int) -> dict | No
     if not from_job_domain:
         return None
     
-    # Secondary keyword check for allowed domains (catch non-job emails from same domain)
-    job_keywords = ("job", "position", "career", "hiring", "role", "opening", "vacancy", "opportunity",
-                    "apply", "application", "candidate", "interview", "recruit", "talent",
-                    "analyst", "architect", "engineer", "developer", "manager", "specialist",
-                    "director", "lead", "principal", "senior", "junior", "intern")
-    
-    has_job_keyword = any(k in content for k in job_keywords)
+    # Keyword check using config's job_keywords (same as RSS filtering)
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS", "TECH_JOB_KEYWORDS")]
+    has_job_keyword = any(k in content for k in keywords)
     if not has_job_keyword:
         return None
     
@@ -742,7 +738,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
         log.warning("[job_hunt] failed to save email debug cache: %s", e)
     
     for msg in messages:
-        posting = _email_message_to_posting(msg, today, max_days)
+        posting = _email_message_to_posting(msg, today, max_days, config)
         if not posting:
             continue
         
