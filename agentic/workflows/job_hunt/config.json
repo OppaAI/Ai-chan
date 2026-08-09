@@ -57,7 +57,7 @@
     "glassdoor",
     "indeed"
   ],
-  "max_email_chars": 15000,
+  "max_email_chars": 10000,
   "topic_tag": "California",
   "post_fields": [
     {
@@ -109,4 +109,4 @@
   "dedup_days": 3,
   "cache_fetch_minutes": 30,
   "auto_post": false
- }
+}

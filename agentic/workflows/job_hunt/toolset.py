@@ -61,6 +61,25 @@ _LLM_FILLABLE_KEYS = frozenset({
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
+# Tags whose entire contents (including the tags themselves) should be
+# dropped outright before any text extraction — these never contain
+# postable content, and in HTML emails (LinkedIn/Glassdoor/Indeed) the
+# <style> blocks alone can run to thousands of lines of CSS.
+_STRIP_BLOCK_TAGS_RE = re.compile(
+    r"<(style|script|head|noscript|iframe|svg|template|meta|link)[^>]*>.*?</\1\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Inline style="..." / style='...' attributes. Email HTML frequently repeats
+# large chunks of CSS (media queries, vendor prefixes) inline on every tag.
+_INLINE_STYLE_ATTR_RE = re.compile(r'\s*style\s*=\s*"[^"]*"', re.IGNORECASE)
+_INLINE_STYLE_ATTR_SQ_RE = re.compile(r"\s*style\s*=\s*'[^']*'", re.IGNORECASE)
+
+# If, after removing block tags and inline styles, the remaining text is
+# still mostly HTML tags (dense tables/divs with little text), markitdown
+# tends to hang or emit nothing useful. Bail to a fast regex strip instead.
+_TAG_DENSITY_BAILOUT = 0.5
+
 
 def _user_skillsets_dir() -> Path:
     """Per-user skillsets folder: USER_SKILLSETS_PATH or <user_state>/skillsets."""
@@ -291,14 +310,56 @@ def _draft_dedup_keys(draft_dirs) -> set[str]:
 
 def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] | None = None) -> str:
     """Best-effort plain text from HTML. Uses markitdown for markdown conversion if available.
-    
+
     max_chars: hard limit override. If None, uses config['max_email_chars'] or config['max_rss_chars'] or default.
     config: optional config dict for tunable limits.
+
+    Email HTML (LinkedIn, Glassdoor, Indeed, etc.) commonly embeds thousands
+    of characters of inline <style> CSS — media queries, @font-face rules,
+    utility classes — ahead of any actual content, plus repeated inline
+    style="..." attributes on nearly every tag. Left as-is, this bloat can
+    make markitdown hang or return nothing useful, and can dilute the
+    regex-strip fallback's output. So this function:
+
+      1. Drops <style>/<script>/<head>/<meta>/<link>/<svg>/<template>/
+         <noscript>/<iframe> blocks (tag + full contents) before anything
+         else touches the text.
+      2. Strips inline style="..." attributes.
+      3. Measures tag density on what's left. If more than half of the
+         remaining text is still HTML tags (dense table/div markup with
+         little real content), skips markitdown entirely and goes straight
+         to the fast regex-strip path, since markitdown offers no benefit
+         there and can be slow.
+      4. Otherwise runs markitdown as before, with the same regex fallback
+         on failure.
     """
     if not text:
         return ""
-    
-    # Try markitdown for better HTML->markdown conversion
+
+    # 1) Remove style/script/head/meta/link/svg/template/noscript/iframe
+    #    blocks entirely, tag and contents together.
+    text = _STRIP_BLOCK_TAGS_RE.sub(" ", text)
+
+    # 2) Strip inline style attributes (double- and single-quoted).
+    text = _INLINE_STYLE_ATTR_RE.sub("", text)
+    text = _INLINE_STYLE_ATTR_SQ_RE.sub("", text)
+
+    # 3) Tag-density bailout: bloated/dense markup skips markitdown.
+    tag_count = len(_HTML_TAG_RE.findall(text))
+    tag_density = tag_count / max(len(text), 1)
+    if tag_density > _TAG_DENSITY_BAILOUT:
+        log.debug(
+            "_strip_html: tag density %.0f%% exceeds bailout threshold, using fast regex path",
+            tag_density * 100,
+        )
+        plain = _HTML_TAG_RE.sub(" ", text)
+        plain = html.unescape(plain)
+        plain = _WS_RE.sub(" ", plain).strip()
+        if max_chars is None:
+            max_chars = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000) if config else 15000
+        return plain[:max_chars]
+
+    # 4) Try markitdown for better HTML->markdown conversion.
     try:
         from markitdown import MarkItDown
         md = MarkItDown()
@@ -309,15 +370,15 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
         plain = _HTML_TAG_RE.sub(" ", text)
         plain = html.unescape(plain)
         plain = _WS_RE.sub(" ", plain).strip()
-    
+
     # Determine character limit
     if max_chars is None and config is not None:
         # Use different limits for email vs RSS
         max_chars = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000)
-    
+
     if max_chars is None:
         max_chars = 15000  # default
-    
+
     return plain[:max_chars]
 
 
@@ -757,12 +818,22 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
     log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages",
              len(messages))
     
-    # Save raw email messages to cache for debugging
+    # Save email messages + markdown conversion to cache for debugging
     try:
         cache_dir = _job_cache_dir()
         debug_file = cache_dir / f"email_raw_{local_now().strftime('%Y%m%d_%H%M%S')}.json"
-        debug_file.write_text(json.dumps(messages, ensure_ascii=False, indent=2))
-        log.info("[job_hunt] saved %d raw email messages to %s", len(messages), debug_file)
+        
+        debug_msgs = []
+        for msg in messages:
+            dbg_msg = {"id": msg.get("id"), "from": msg.get("from"), "subject": msg.get("subject")}
+            # MCP returns full body in snippet; show truncated markdown (what Aiko sees)
+            html_content = msg.get("snippet") or msg.get("body") or ""
+            if html_content:
+                dbg_msg["content_md"] = _strip_html(html_content, config=config)
+            debug_msgs.append(dbg_msg)
+        
+        debug_file.write_text(json.dumps(debug_msgs, ensure_ascii=False, indent=2))
+        log.info("[job_hunt] saved %d email messages (with truncated markdown) to %s", len(debug_msgs), debug_file)
     except Exception as e:
         log.warning("[job_hunt] failed to save email debug cache: %s", e)
     
