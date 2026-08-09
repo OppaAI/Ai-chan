@@ -813,11 +813,8 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "requires_any": ["job", "jobs", "posting", "hiring", "career"],
             "capabilities": ["research", "job_hunt"],
             "max_workers": 2,
-            "nodes": _gen_job_worker_nodes(
-"fetch_rss_and_email_into_state", "check_jobs_remaining", "get_next_job",
-            "draft_single_job", "save_single_job_draft", "report_job_run",
-            int(os.getenv("JOB_HUNT_MAX_WORKERS", "2")),
-            ),
+            "graph_id": "gen_job_post",
+            "nodes": [],
         },
     ]
 
@@ -1237,6 +1234,12 @@ def _tool_map() -> dict[str, Callable[..., Any]]:
 
 
 def _build_tool_map() -> dict[str, Callable[..., Any]]:
+    # Import graph modules to trigger @tool registration
+    try:
+        import agentic.graph.job_hunt  # noqa: F401
+    except Exception as exc:
+        log.debug("graph_engine: failed to import graph modules: %s", exc)
+
     # Import focused toolkit modules lazily so model-free graph planning can be
     # imported/tested without loading optional heavy research dependencies.
     from agentic.toolkit.plan import make_plan, create_checklist, save_note, read_workspace_file, summarize_task_state
