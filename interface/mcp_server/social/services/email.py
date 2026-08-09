@@ -52,6 +52,17 @@ def _get_provider_client(provider_name: str):
 
 def load_tools(mcp):
     """Load generic email tools that delegate to configured provider."""
+    # Ensure ProtonMail provider is registered
+    from social.services.protonmail import _get_client as _proton_get_client
+    from social.services.email import _email_providers
+    if "protonmail" not in _email_providers:
+        from social.services.protonmail import _get_client as _proton_get_client
+        register_email_provider("protonmail", {
+            "get_client": lambda: __import__("social.services.protonmail", fromlist=["_get_client"])._get_client(),
+            "read_messages": _proton_read_messages,
+            "send_message": _proton_send_message,
+            "delete_message": _proton_delete_message,
+        })
     
     @mcp.tool(
         name="read_email",
@@ -267,11 +278,12 @@ async def _proton_delete_message(client, message_id: str) -> Dict:
     if not message_id:
         return {"ok": False, "error": "message_id required", "provider": "protonmail"}
     
-    # Auto-register ProtonMail provider
-from social.services.protonmail import get_client as _proton_get_client
-register_email_provider("protonmail", {
-    "get_client": lambda: __import__("social.services.protonmail", fromlist=["_get_client"])._get_client(),
-    "read_messages": _proton_read_messages,
-    "send_message": _proton_send_message,
-    "delete_message": _proton_delete_message,
-})
+    try:
+        messages = await asyncio.to_thread(_run_client_call, client.get_messages)
+        target = next((msg for msg in messages if getattr(msg, "id", "") == message_id), None)
+        if target is None:
+            return {"ok": False, "error": f"message not found: {message_id}", "provider": "protonmail"}
+        await asyncio.to_thread(_run_client_call, client.delete_messages, [target])
+        return {"ok": True, "provider": "protonmail", "message_id": message_id, "status": "deleted"}
+    except Exception as e:
+        return {"ok": False, "error": f"delete failed: {e}", "provider": "protonmail"}
