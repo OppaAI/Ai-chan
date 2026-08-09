@@ -693,7 +693,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
     return kept
 
 
-def _read_protonmail_messages(max_results: int) -> list[dict]:
+def _read_protonmail_messages(max_results: int, folder: str = "inbox") -> list[dict]:
     """Call the already-registered read_protonmail MCP bridge tool."""
     try:
         from agentic.registry import registry
@@ -701,7 +701,7 @@ def _read_protonmail_messages(max_results: int) -> list[dict]:
         if spec is None or spec.handler is None:
             log.warning("Lane D email: read_protonmail MCP tool is not registered")
             return []
-        result = spec.handler(max_results=max_results)
+        result = spec.handler(max_results=max_results, folder=folder)
         if not isinstance(result, dict) or not result.get("ok"):
             return []
         messages = result.get("messages") or []
@@ -814,10 +814,11 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     date_str = local_now().strftime("%Y-%m-%d")
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
     email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
+    email_folder = _config_list(config, "email_folder", "JOB_HUNT_EMAIL_FOLDER", ["inbox"])[0]
     
-    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d", email_cap, email_max_msgs)
+    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d, folder=%s", email_cap, email_max_msgs, email_folder)
     
-    messages = _read_protonmail_messages(email_max_msgs)
+    messages = _read_protonmail_messages(email_max_msgs, folder=email_folder)
     raw_count = len(messages)
     if not messages:
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
@@ -830,30 +831,11 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
-    
+
     log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages",
              len(messages))
-    
-    # Save email messages + markdown conversion to cache for debugging
-    try:
-        cache_dir = _job_cache_dir()
-        debug_file = cache_dir / f"fetch_{date_str}_email_raw.json"
-        
-        debug_msgs = []
-        for msg in messages:
-            dbg_msg = {"id": msg.get("id"), "from": msg.get("from"), "subject": msg.get("subject")}
-            # MCP returns full body in snippet; show truncated markdown (what Aiko sees)
-            html_content = msg.get("snippet") or msg.get("body") or ""
-            if html_content:
-                dbg_msg["content_md"] = _strip_html(html_content, config=config)
-            debug_msgs.append(dbg_msg)
-        
-        debug_file.write_text(json.dumps(debug_msgs, ensure_ascii=False, indent=2))
-        log.info("[job_hunt] saved %d email messages (with truncated markdown) to %s", len(debug_msgs), debug_file)
-    except Exception as e:
-        log.warning("[job_hunt] failed to save email debug cache: %s", e)
-    
-    # Save each individual email message for fine-grained debugging/filtering
+
+    # Save each individual email message as JSONL (one per message)
     for msg_idx, msg in enumerate(messages):
         posting = _email_message_to_posting(msg, today, max_days, config)
         matched = posting is not None

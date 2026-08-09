@@ -53,6 +53,7 @@
   "email_date_range_days": 7,
   "email_max_messages": 10,
   "max_email_posts": 10,
+  "email_folder": "inbox",
   "email_source_domains": [
     "linkedin",
     "glassdoor",
