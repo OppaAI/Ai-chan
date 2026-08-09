@@ -42,7 +42,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import os
 os.environ["AIKO_USER_ID"] = "github_205369547"
 
-from agentic.mcp_client import init_mcp_client, get_mcp_client
+from agentic.mcp_client import get_mcp_client
 from agentic.mcp_client.bridge import bootstrap_mcp
 from system.log import get_logger
 from system.userspace import user_state_path, user_state_dir
@@ -172,9 +172,24 @@ def run_pipeline_steps(args) -> int:
     state = DebugState()
 
     progress("=== PIPELINE NODE: fetch_rss_and_email_into_state ===")
+    fetch_start = time.time()
     fetch_raw = jh.fetch_rss_and_email_into_state(json.dumps({"max_results": 30}), state=state)
+    fetch_elapsed = time.time() - fetch_start
     fetch_result = json.loads(fetch_raw)
     progress(f"total_found={fetch_result.get('total_found')}  sources={fetch_result.get('sources')}")
+    progress(f"fetch elapsed: {fetch_elapsed:.2f}s")
+
+    # List cache files that were written
+    from system.bioclock import local_now
+    cache_dir = jh._job_cache_dir()
+    date_str = local_now().strftime("%Y-%m-%d")
+    cache_files = sorted(cache_dir.glob(f"fetch_{date_str}_*"))
+    if cache_files:
+        progress(f"Cache files written ({len(cache_files)}):")
+        for cf in cache_files:
+            progress(f"  {cf.name} ({cf.stat().st_size} bytes)")
+    else:
+        progress("No cache files found for today")
 
     all_postings = state.data.get("job_all_postings", [])
     print(f"\n{BOLD}Raw postings fetched ({len(all_postings)}):{RESET}\n")
@@ -249,7 +264,7 @@ def run_pipeline_steps(args) -> int:
 async def main():
     parser = argparse.ArgumentParser(description="Test ProtonMail job-alert reading")
     parser.add_argument("--login", action="store_true", help="Interactively log in and save a ProtonMail session")
-    parser.add_argument("--pipeline", action="store_true",
+    parser.add_argument("--pipeline", action="store_true", default=None,
                          help="Walk the job_hunt graph nodes "
                               "(fetch_rss_and_email_into_state -> get_next_job -> draft_single_job -> "
                               "save_single_job_draft -> report_job_run) with 'senior' highlighting")
@@ -308,9 +323,14 @@ async def main():
             progress("WARNING: MCP client not available — continuing with RSS only")
         connect_time = time.time() - start_time
         progress(f"MCP server connected in {connect_time:.2f}s")
+        start_time = time.time()  # reset timer to exclude MCP connect time
     else:
         start_time = time.time()
 
+    # Default to pipeline mode (run fetch + email/rss cache creation)
+    if args.pipeline is None:
+        args.pipeline = True
+    
     if args.pipeline:
         pipeline_rc = run_pipeline_steps(args)
         if pipeline_rc != 0:

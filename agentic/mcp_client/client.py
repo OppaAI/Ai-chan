@@ -9,7 +9,7 @@ import warnings
 from typing import Any
 
 # Suppress pydantic-settings IncompleteFieldDefinitionWarning for the MCP library's
-# ServerSettings.lifespan field (a Callable forward reference that pydantic can't fully resolve).
+# ServerSettings.lifespan field (a Callable forward reference).
 warnings.filterwarnings(
     "ignore",
     message="Field 'lifespan' has an incomplete definition.*",

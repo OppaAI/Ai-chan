@@ -811,6 +811,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
         email_idx: Index of this email source (for per-message cache naming)
     """
     config = config if config is not None else _job_config()
+    date_str = local_now().strftime("%Y-%m-%d")
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
     email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
     
@@ -898,7 +899,7 @@ def search_jobs(
     return fetch_today_jobs_from_rss(config)[:limit]
 
 
-# ── Simple cache: one JSONL per source ─────────────────────────────────────
+# ── Simple cache: one JSONL per source ─────────────────────────────────
 
 def _job_cache_dir() -> Path:
     """Directory for persisted fetch results (RSS+email).
@@ -919,81 +920,6 @@ def _job_rss_cache_path(date_str: str, feed_idx: int) -> Path:
     return _job_cache_dir() / f"fetch_{date_str}_rss_{feed_idx}.jsonl"
 
 
-def _job_email_cache_path(date_str: str, msg_idx: int) -> Path:
-    """Path to single email message cache JSONL: fetch_YYYY-MM-DD_email_<idx>.jsonl"""
-    return _job_cache_dir() / f"fetch_{date_str}_email_{msg_idx}.jsonl"
-
-
-def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, Any]]) -> None:
-    """Write RSS postings to JSONL (one per line)."""
-    try:
-        path = _job_rss_cache_path(date_str, feed_idx)
-        lines = [json.dumps(p, ensure_ascii=False) for p in postings]
-        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-        log.info("[job_hunt] wrote %d postings to %s", len(postings), path.name)
-    except OSError as e:
-        log.warning("job_hunt: failed to write RSS cache %s: %s", path.name, e)
-
-
-def _job_read_rss_cache(date_str: str, feed_idx: int) -> list[dict[str, Any]]:
-    """Read RSS postings from JSONL."""
-    try:
-        path = _job_rss_cache_path(date_str, feed_idx)
-        if not path.exists():
-            return []
-        postings = []
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    postings.append(json.loads(line))
-        return postings
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def _job_write_email_cache(date_str: str, msg_idx: int, raw_message: dict[str, Any], posting: dict[str, Any] | None) -> None:
-    """Write single email message to JSONL with match status."""
-    try:
-        path = _job_email_cache_path(date_str, msg_idx)
-        data = {
-            "msg_index": msg_idx,
-            "raw_message": {
-                "id": raw_message.get("id"),
-                "from": raw_message.get("from"),
-                "subject": raw_message.get("subject"),
-                "date": raw_message.get("date"),
-                "snippet": raw_message.get("snippet", "")[:500],
-            },
-            "matched": posting is not None,
-            "posting": posting,
-            "cached_at": local_now().isoformat(),
-        }
-        path.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
-    except OSError as e:
-        log.warning("job_hunt: failed to write email cache %s: %s", path.name, e)
-
-
-def _cache_is_fresh_simple(cache_dir: Path, date_str: str, config: dict[str, Any]) -> bool:
-    """Check if any cache file for this date exists and is fresh."""
-    try:
-        cache_minutes = _config_int(config, "cache_fetch_minutes", "JOB_HUNT_CACHE_FETCH_MINUTES", 30)
-        cutoff = local_now() - timedelta(minutes=cache_minutes)
-        for f in cache_dir.glob(f"fetch_{date_str}_*.jsonl"):
-            if f.stat().st_mtime > cutoff.timestamp():
-                return True
-    except OSError:
-        pass
-    return False
-
-
-# ── Simple cache: one JSONL per source ─────────────────────────────────
-
-def _job_rss_cache_path(date_str: str, feed_idx: int) -> Path:
-    """Path to RSS feed cache JSONL: fetch_YYYY-MM-DD_rss_<idx>.jsonl"""
-    return _job_cache_dir() / f"fetch_{date_str}_rss_{feed_idx}.jsonl"
-
-
 def _job_email_msg_cache_path(date_str: str, msg_idx: int) -> Path:
     """Path to single email message cache JSONL: fetch_YYYY-MM-DD_email_<idx>.jsonl"""
     return _job_cache_dir() / f"fetch_{date_str}_email_{msg_idx}.jsonl"
@@ -1003,8 +929,13 @@ def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, 
     """Write RSS postings to JSONL (one posting per line)."""
     try:
         path = _job_rss_cache_path(date_str, feed_idx)
+        if not postings:
+            log.warning("[job_hunt] wrote 0 postings to %s (empty feed)", path.name)
+            # Still write the file (empty) so cache freshness is tracked
+            path.write_text("", encoding="utf-8")
+            return
         lines = [json.dumps(p, ensure_ascii=False) for p in postings]
-        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         log.info("[job_hunt] wrote %d postings to %s", len(postings), path.name)
     except OSError as e:
         log.warning("job_hunt: failed to write RSS cache %s: %s", path.name, e)
