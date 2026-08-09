@@ -732,7 +732,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 {"id": "search_email", "tool": "execute_job_search_plan", "depends_on": ["plan"],
                  "args": {"plan_json": "$result:plan", "include_email": True}},
                 {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search_rss", "search_email"],
-                 "args": {"results_json": "$result:search_rss", "template": ""}},
+                 "args": {"results_json": "$result:search_rss", "results_email_json": "$result:search_email", "template": ""}},
                 {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
                  "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
                 {"id": "report", "tool": "report_job_run", "depends_on": ["save"],

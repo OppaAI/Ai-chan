@@ -928,8 +928,12 @@ def execute_job_search_plan(plan_json: str, *, state=None, include_email: bool =
     log.info("[job_hunt] execute_job_search_plan: found=%d postings from sources=%s",
              len(postings[:max_results]), sources)
     if state is not None:
-        state.data["job_search_json"] = result_json
-        state.data["job_raw_postings"] = postings[:max_results]
+        if include_email:
+            state.data["job_search_email_json"] = result_json
+            state.data["job_raw_postings_email"] = postings[:max_results]
+        else:
+            state.data["job_search_json"] = result_json
+            state.data["job_raw_postings"] = postings[:max_results]
     return result_json
 
 
@@ -940,6 +944,7 @@ def draft_job_posts_from_results(
     client=None,
     model: str | None = None,
     state=None,
+    results_email_json: str = "",
 ) -> str:
     """Node 3: Enrich fields (optional LLM) then format one draft per job.
 
@@ -953,10 +958,26 @@ def draft_job_posts_from_results(
         full = state.data.get("job_search_json")
         if full:
             results_json = full
+        # Also check for email results in state
+        full_email = state.data.get("job_search_email_json")
+        if full_email:
+            results_email_json = full_email
     results = json.loads(results_json)
     config = _job_config()
     raw = state.data.get("job_raw_postings") if state is not None else None
     postings = raw if isinstance(raw, list) else results.get("postings", [])
+    
+    # Merge email postings if provided
+    if results_email_json:
+        try:
+            email_results = json.loads(results_email_json)
+            email_postings = email_results.get("postings", [])
+            if email_postings:
+                log.info("[job_hunt] draft_job_posts_from_results: merging %d email postings", len(email_postings))
+                postings.extend(email_postings)
+        except Exception as e:
+            log.warning("[job_hunt] draft_job_posts_from_results: failed to parse email results: %s", e)
+    
     log.info("[job_hunt] draft_job_posts_from_results: total_postings=%d, raw_available=%s",
              len(postings), "yes" if raw else "no")
     if not postings:
