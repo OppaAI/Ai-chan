@@ -24,15 +24,35 @@ from agentic.registry import tool
 # available to the graph executor. The actual implementations live in
 # agentic/toolkit/job_hunt.py — this module only handles graph-layer wiring.
 
-# Import the implementations
-from agentic.toolkit.job_hunt import (
-    fetch_rss_and_email_into_state as _fetch_rss_and_email_into_state,
-    get_next_job as _get_next_job,
-    draft_single_job as _draft_single_job,
-    save_single_job_draft as _save_single_job_draft,
-    check_jobs_remaining as _check_jobs_remaining,
-    report_job_run as _report_job_run,
-)
+# Import the implementations with graceful fallback for missing deps
+try:
+    from agentic.toolkit.job_hunt import (
+        fetch_rss_and_email_into_state as _fetch_rss_and_email_into_state,
+        get_next_job as _get_next_job,
+        draft_single_job as _draft_single_job,
+        save_single_job_draft as _save_single_job_draft,
+        check_jobs_remaining as _check_jobs_remaining,
+        report_job_run as _report_job_run,
+    )
+    _IMPORTS_OK = True
+except Exception as exc:
+    import logging
+    logging.getLogger(__name__).warning("job_hunt toolkit import failed (missing deps?): %s", exc)
+    _IMPORTS_OK = False
+
+    # Dummy implementations for registration purposes
+    def _fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
+        return '{"error": "toolkit not available"}'
+    def _get_next_job(state=None, worker_id: str = "0") -> str:
+        return '{"error": "toolkit not available"}'
+    def _draft_single_job(job_json: str, template: str = "", *, client=None, model: str | None = None, state=None) -> str:
+        return '{"error": "toolkit not available"}'
+    def _save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
+        return '{"error": "toolkit not available"}'
+    def _check_jobs_remaining(state=None) -> str:
+        return '{"error": "toolkit not available"}'
+    def _report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
+        return '{"error": "toolkit not available"}'
 
 
 # Register each as a graph tool (not react) using inline specs
