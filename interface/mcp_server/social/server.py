@@ -4,6 +4,13 @@ import os
 import sys
 import warnings
 
+# Suppress pydantic-settings IncompleteFieldDefinitionWarning for the MCP library's
+# ServerSettings.lifespan field (a Callable forward reference).
+warnings.filterwarnings(
+    "ignore",
+    message="Field 'lifespan' has an incomplete definition.*",
+)
+
 # Suppress CryptographyDeprecationWarning for TripleDES (used by protonmail-api-client)
 # Note: CryptographyDeprecationWarning subclasses UserWarning, not DeprecationWarning.
 warnings.filterwarnings(

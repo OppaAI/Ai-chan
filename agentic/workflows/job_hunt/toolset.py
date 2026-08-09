@@ -797,11 +797,14 @@ def _extract_first_url(*texts: str) -> str:
     return ""
 
 
-def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx: int = 0) -> list[dict]:
+def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx: int = 0) -> tuple[list[dict], int]:
     """Fetch job-alert emails via ProtonMail MCP bridge.
     
     Filters by date range (email_date_range_days config) and keywords.
     Returns postings in the same shape as RSS results with source="email".
+    
+    Returns (postings, raw_message_count) where raw_message_count is the 
+    total number of messages fetched from ProtonMail before filtering.
     
     Args:
         config: Job hunt config dict
@@ -814,9 +817,10 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d", email_cap, email_max_msgs)
     
     messages = _read_protonmail_messages(email_max_msgs)
+    raw_count = len(messages)
     if not messages:
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
-        return []
+        return [], 0
     
     today = local_now().date()
     max_days = _config_int(config, "email_date_range_days", "JOB_HUNT_EMAIL_DATE_RANGE_DAYS", 7)
@@ -832,7 +836,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     # Save email messages + markdown conversion to cache for debugging
     try:
         cache_dir = _job_cache_dir()
-        debug_file = cache_dir / f"email_raw_{local_now().strftime('%Y%m%d_%H%M%S')}.json"
+        debug_file = cache_dir / f"fetch_{date_str}_email_raw.json"
         
         debug_msgs = []
         for msg in messages:
@@ -877,7 +881,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
             if probe:
                 ledger[probe] = {"state": DEDUP_STATE_SEEN, "seen_at": now_iso}
     _dedup_ledger_save(ledger)
-    return kept
+    return kept, raw_count
 
 
 @tool(TOOLS["search_jobs"])
@@ -1132,6 +1136,9 @@ def _fetch_rss_branch(date_str: str, config: dict[str, Any], can_reuse: bool) ->
                     "type": "rss",
                     "index": feed_idx,
                     "url": feed_url,
+                    "raw_count": len(cached),
+                    "filtered_count": len(cached),
+                    "matched_count": len(cached_filtered),
                     "status": "cached",
                 })
                 continue
@@ -1227,6 +1234,8 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
             source_info.append({
                 "type": "email",
                 "index": email_idx,
+                "raw_count": len(cached_postings),
+                "filtered_count": len(cached_postings),
                 "status": "cached",
             })
             return postings, source_info, source_failures
@@ -1235,8 +1244,8 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
     try:
         email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
         log.info("[job_hunt] processing email (max %d messages, cap %d postings)", email_max_msgs, email_cap)
-        email_postings = fetch_today_jobs_from_email(config, email_idx)[:email_cap]
-        raw_count = email_max_msgs
+        email_postings, raw_count = fetch_today_jobs_from_email(config, email_idx)
+        email_postings = email_postings[:email_cap]
         
         for p in email_postings:
             p["_source_idx"] = email_idx

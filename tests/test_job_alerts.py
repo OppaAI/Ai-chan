@@ -17,10 +17,18 @@ import os
 import re
 import sys
 import time
+import warnings
 from pathlib import Path
 import threading
 import itertools
 import argparse
+
+# Suppress pydantic-settings IncompleteFieldDefinitionWarning for the MCP library's
+# ServerSettings.lifespan field (a Callable forward reference).
+warnings.filterwarnings(
+    "ignore",
+    message="Field 'lifespan' has an incomplete definition.*",
+)
 
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -35,6 +43,7 @@ import os
 os.environ["AIKO_USER_ID"] = "github_205369547"
 
 from agentic.mcp_client import init_mcp_client, get_mcp_client
+from agentic.mcp_client.bridge import bootstrap_mcp
 from system.log import get_logger
 from system.userspace import user_state_path, user_state_dir
 
@@ -291,11 +300,12 @@ async def main():
         # Connect to MCP server (starts it if needed)
         progress("Connecting to MCP server...")
         start_time = time.time()
-        client = init_mcp_client()
+        mcp_ok = bootstrap_mcp()
+        if not mcp_ok:
+            progress("WARNING: MCP bridge failed — email checking will be unavailable")
+        client = get_mcp_client()
         if client is None:
-            progress("ERROR: Failed to connect to MCP server")
-            log.error("Failed to connect to MCP server")
-            return 1
+            progress("WARNING: MCP client not available — continuing with RSS only")
         connect_time = time.time() - start_time
         progress(f"MCP server connected in {connect_time:.2f}s")
     else:

@@ -5,8 +5,15 @@ import json
 import os
 import sys
 import threading
+import warnings
 from typing import Any
 
+# Suppress pydantic-settings IncompleteFieldDefinitionWarning for the MCP library's
+# ServerSettings.lifespan field (a Callable forward reference that pydantic can't fully resolve).
+warnings.filterwarnings(
+    "ignore",
+    message="Field 'lifespan' has an incomplete definition.*",
+)
 from system.log import get_logger
 
 log = get_logger(__name__)
