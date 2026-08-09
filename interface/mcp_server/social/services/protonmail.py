@@ -79,13 +79,14 @@ def _get_client():
 def load_tools(mcp):
     @mcp.tool(
         name="read_protonmail",
-        description="Read ProtonMail messages. If message_id is provided, returns full message body. Otherwise lists messages from inbox (or specified folder) with optional query filter. Returns sender, subject, date, and snippet (or full body if message_id given).",
+        description="Read ProtonMail messages. If message_id is provided, returns full message body. Otherwise lists messages from inbox (or specified folder) with optional query filter. If list_only is true, returns sender/subject/date only (no body read). Returns sender, subject, date, and snippet (or full body if message_id given).",
     )
     async def read_protonmail(
         message_id: str = "",
         folder: str = "inbox",
         query: str = "",
         max_results: int = 10,
+        list_only: bool = False,
     ) -> Dict:
         client, err_resp = await asyncio.to_thread(_get_client)
         if err_resp:
@@ -138,6 +139,19 @@ def load_tools(mcp):
 
             results = []
             for i, msg in enumerate(messages[:max_results]):
+                # list_only: screen messages by subject/sender WITHOUT reading
+                # the body — the list metadata already carries both. This stops
+                # the periodic check_email job from downloading 20 message
+                # bodies every cycle just to see if a subject mentions a job.
+                if list_only:
+                    results.append({
+                        "id": getattr(msg, "id", ""),
+                        "from": msg.sender.address if getattr(msg, "sender", None) else "",
+                        "subject": getattr(msg, "subject", "") or "",
+                        "date": str(getattr(msg, "time", "") or ""),
+                        "snippet": "",
+                    })
+                    continue
                 try:
                     print(f"[PROTONMAIL] Reading message {i+1}/{max_results} ({getattr(msg, 'id', 'unknown')[:10]}...)...", file=sys.stderr, flush=True)
                     full = await asyncio.to_thread(_run_client_call, client.read_message, msg)

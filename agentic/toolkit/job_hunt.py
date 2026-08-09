@@ -740,6 +740,12 @@ def _read_protonmail_messages(max_results: int) -> list[dict]:
 
     Returns the list of messages on success, [] on any failure (unregistered
     tool, MCP not connected, login error, etc.).
+
+    Reads the mailbox ONCE. The old code issued one MCP call per search
+    query ("linkedin", "glassdoor", "indeed"), and every call re-listed the
+    whole inbox and re-read up to ``max_results`` bodies — so a single graph
+    fetch touched the mailbox 3 times. Keyword filtering happens client-side
+    in fetch_today_jobs_from_email, so a single unfiltered read is enough.
     """
     try:
         from agentic.registry import registry
@@ -747,23 +753,10 @@ def _read_protonmail_messages(max_results: int) -> list[dict]:
         if spec is None or spec.handler is None:
             log.warning("Lane D email: read_protonmail MCP tool is not registered")
             return []
-        # Use query parameter to filter for job-related emails
-        # The combined tool supports query filtering server-side
-        result = spec.handler(query="linkedin", max_results=max_results)
+        result = spec.handler(max_results=max_results)
         if not isinstance(result, dict) or not result.get("ok"):
             return []
         messages = result.get("messages") or []
-        # Also search for glassdoor and indeed
-        for query in ("glassdoor", "indeed"):
-            try:
-                searched = spec.handler(query=query, max_results=max_results)
-            except Exception as search_error:
-                log.debug("Lane D email: search %s failed: %s", query, search_error)
-                continue
-            if isinstance(searched, dict) and searched.get("ok"):
-                found = searched.get("messages") or []
-                if isinstance(found, list):
-                    messages.extend(found)
         # Deduplicate by message id
         seen = set()
         unique = []
@@ -1015,11 +1008,13 @@ def get_next_job(state=None, worker_id: str = "0") -> str:
     if state is None:
         return json.dumps({"done": True, "reason": "no_state"})
     
-    # Use a lock in state for thread-safe index access
-    lock = state.data.get("_job_index_lock")
+    # Use a lock in state.runtime for thread-safe index access. runtime is the
+    # non-serializable bucket of GraphState — never checkpointed, so this lock
+    # can't break the json.dumps(state.data) snapshot path unlike a data key.
+    lock = state.runtime.get("_job_index_lock")
     if lock is None:
         lock = threading.Lock()
-        state.data["_job_index_lock"] = lock
+        state.runtime["_job_index_lock"] = lock
     
     with lock:
         all_postings = state.data.get("job_all_postings", [])

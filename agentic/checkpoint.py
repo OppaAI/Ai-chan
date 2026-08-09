@@ -126,16 +126,26 @@ def load_checkpoint(run_id: str, node_result_cls) -> list:
 
 
 def save_graph_state(run_id: str, state: dict) -> None:
-    """Persist a standalone state snapshot keyed by run_id."""
+    """Persist a standalone state snapshot keyed by run_id.
+
+    Non-serializable values (threading.Lock, live handles) are coerced to
+    their repr so a tool that stashes one in state can never kill the graph
+    run with a ``TypeError: ... is not JSON serializable`` at snapshot time.
+    """
+    state = state or {}
     _add_state_column_if_missing()
     with _lock:
         conn = _get_conn()
         try:
+            try:
+                state_json = json.dumps(state)
+            except TypeError:
+                state_json = json.dumps(state, default=str)
             conn.execute(
                 "INSERT OR REPLACE INTO node_checkpoints "
                 "(run_id, node_id, tool, ok, content, args, error_type, seq, state_json) "
                 "VALUES (?, '__graph_state__', '', 1, '', '{}', NULL, 0, ?)",
-                (run_id, json.dumps(state)),
+                (run_id, state_json),
             )
             conn.commit()
         finally:

@@ -1009,7 +1009,7 @@ def bootstrap_non_system_jobs(
                     if spec is None or spec.handler is None:
                         log.warning("Email check: read_protonmail MCP tool is not registered")
                         return
-                    result = spec.handler(max_results=20)
+                    result = spec.handler(max_results=20, list_only=True)
                     if not isinstance(result, dict) or not result.get("ok"):
                         return
                     messages = result.get("messages") or []

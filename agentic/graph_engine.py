@@ -248,6 +248,13 @@ class GraphState:
     """
     data: dict[str, Any] = field(default_factory=dict)
     reducers: dict[str, str] = field(default_factory=dict)
+    # Non-serializable / runtime-only scratch (locks, live handles) that is
+    # NEVER checkpointed. json.dumps(state.data) and save_graph_state both
+    # serialize only `data`, so tools that need a threading.Lock or a live
+    # handle must keep it here — not in `data` — to avoid a
+    # "not JSON serializable" crash on the checkpoint path. See _job_index_lock
+    # in job_hunt.get_next_job.
+    runtime: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def get(self, key: str, default: Any = None) -> Any:
         return self.data.get(key, default)
@@ -286,6 +293,29 @@ class GraphState:
         if tool_name:
             return [e for e in exec_log if e["tool"] == tool_name]
         return exec_log
+
+
+def _state_json(state: GraphState) -> str:
+    """Serialize a GraphState snapshot for checkpointing.
+
+    Uses the safe encoder so a non-serializable value that leaks into
+    state.data (a threading.Lock, a live handle, numpy array, etc.) is
+    coerced to its repr instead of raising TypeError and aborting the
+    whole graph mid-run — resuming those keys is impossible anyway.
+    """
+    return json.dumps(_safe_state_dict(state))
+
+
+def _safe_state_dict(state: GraphState) -> dict[str, Any]:
+    """Return a checkpoint-safe copy of state.data (values coerced to str)."""
+    out: dict[str, Any] = {}
+    for k, v in state.data.items():
+        try:
+            json.dumps(v)
+            out[k] = v
+        except TypeError:
+            out[k] = str(v)
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -1566,7 +1596,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 ordered.append(nr)
                 pending.pop(node.id, None)
                 if run_id:
-                    save_node_result(run_id, seq, nr, state_json=json.dumps(state.data)); seq += 1
+                    save_node_result(run_id, seq, nr, state_json=_state_json(state)); seq += 1
                 if _yield:
                     _yield(nr)
             for node in skipped:
@@ -1575,7 +1605,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 ordered.append(nr)
                 pending.pop(node.id, None)
                 if run_id:
-                    save_node_result(run_id, seq, nr, state_json=json.dumps(state.data)); seq += 1
+                    save_node_result(run_id, seq, nr, state_json=_state_json(state)); seq += 1
                 if _yield:
                     _yield(nr)
             if not runnable:
@@ -1599,8 +1629,8 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                 ordered.append(result)
                 pending.pop(node.id, None)
                 if run_id:
-                    save_node_result(run_id, seq, result, state_json=json.dumps(state.data)); seq += 1
-                    save_graph_state(run_id, state.data)
+                    save_node_result(run_id, seq, result, state_json=_state_json(state)); seq += 1
+                    save_graph_state(run_id, _safe_state_dict(state))
                 if _yield:
                     _yield(result)
 
@@ -1645,8 +1675,8 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                                     ordered.append(fallback_result)
                                     pending.pop(fallback_node.id, None)
                                     if run_id:
-                                        save_node_result(run_id, seq, fallback_result, state_json=json.dumps(state.data)); seq += 1
-                                    save_graph_state(run_id, state.data)
+                                        save_node_result(run_id, seq, fallback_result, state_json=_state_json(state)); seq += 1
+                                    save_graph_state(run_id, _safe_state_dict(state))
                                     if _yield:
                                         _yield(fallback_result)
                                     log.info("Fallback node %s succeeded", fallback_node.id)
