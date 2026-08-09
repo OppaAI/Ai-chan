@@ -777,9 +777,9 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "capabilities": ["research"],
             "max_workers": 2,
             "nodes": _gen_job_worker_nodes(
-                "fetch_all_sources_into_state", "check_jobs_remaining", "get_next_job",
-                "draft_single_job", "save_single_job_draft", "report_job_run",
-                int(os.getenv("JOB_HUNT_MAX_WORKERS", "2")),
+"fetch_rss_and_email_into_state", "check_jobs_remaining", "get_next_job",
+            "draft_single_job", "save_single_job_draft", "report_job_run",
+            int(os.getenv("JOB_HUNT_MAX_WORKERS", "2")),
             ),
         },
     ]
@@ -856,12 +856,11 @@ def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = N
     text = prompt.casefold()
     triggers = [str(t).casefold() for t in plan.get("triggers", [])]
     required = [str(t).casefold() for t in plan.get("requires_any", [])]
-    score = sum(3 for t in triggers if t and t in text)
-    if required and any(t in text for t in required):
-        score += 1
-    domains = set(plan.get("capabilities", []))
-    if cap_ids and domains.intersection(cap_ids):
-        score += 3
+
+    # A plan is only eligible when a REAL trigger matched (keyword or semantic).
+    # requires_any / capability bonuses alone ("job", "architecture", "posting"
+    # appearing incidentally in an unrelated sentence) must NOT select a graph.
+    trigger_pad = sum(3 for t in triggers if t and t in text)
 
     # Semantic scoring: if the playbook has semantic_triggers and an embedder
     # is available, score by cosine similarity against the prompt. This
@@ -878,13 +877,28 @@ def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = N
                 best = float(np.max(matrix @ prompt_vec))
                 # Scale: 0.7+ cos = strong match (adds ~5), 0.5+ = moderate (adds ~3)
                 if best >= 0.7:
-                    score += 5
+                    boost = 5
                 elif best >= 0.5:
-                    score += 3
+                    boost = 3
                 elif best >= 0.35:
-                    score += 1
+                    boost = 1
+                else:
+                    boost = 0
+                trigger_pad += boost
         except Exception:
             log.warning("graph_engine: keyword scoring embedding failed")
+
+    # Cannot select a plan from incidental requires_any / capability bonuses
+    # alone — at least one keyword or semantic trigger must have matched.
+    if trigger_pad <= 0:
+        return 0
+
+    score = trigger_pad
+    if required and any(t in text for t in required):
+        score += 1
+    domains = set(plan.get("capabilities", []))
+    if cap_ids and domains.intersection(cap_ids):
+        score += 3
 
     return score
 
@@ -970,7 +984,7 @@ _POST_EXISTING_REF = (
 _DRAFT_ACTION_TERMS = ("draft", "search", "find", "fetch", "create", "make",
                        "write", "generate", "collect", "scrape", "list",
                        "run", "schedule", "daily", "look for", "hunt", "scan",
-                       "do")
+                       "do", "today's", "today")
 
 
 def _is_post_existing_content(prompt: str) -> bool:
@@ -1062,7 +1076,7 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
         except (TypeError, ValueError):
             mw_int = 2
         plan = {**plan, "max_workers": mw_int, "nodes": _gen_job_worker_nodes(
-            "fetch_all_sources_into_state", "check_jobs_remaining", "get_next_job",
+            "fetch_rss_and_email_into_state", "check_jobs_remaining", "get_next_job",
             "draft_single_job", "save_single_job_draft", "report_job_run", mw_int,
         )}
         extras = _placeholder_extras(user_input)
@@ -1259,13 +1273,13 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
         from agentic.toolkit.job_hunt import (
             search_jobs,
             report_job_run,
-            fetch_all_sources_into_state, get_next_job, draft_single_job,
+            fetch_rss_and_email_into_state, get_next_job, draft_single_job,
             save_single_job_draft, check_jobs_remaining,
         )
         mapping.update({
             "search_jobs": search_jobs,
             "report_job_run": report_job_run,
-            "fetch_all_sources_into_state": fetch_all_sources_into_state,
+            "fetch_rss_and_email_into_state": fetch_rss_and_email_into_state,
             "get_next_job": get_next_job,
             "draft_single_job": draft_single_job,
             "save_single_job_draft": save_single_job_draft,

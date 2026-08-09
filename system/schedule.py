@@ -1045,19 +1045,24 @@ def bootstrap_non_system_jobs(
 
             register_system_handler("check_email", _check_email)
             
-            # Seed email checking job (every 30 minutes during day hours)
+            # Seed email checking job (every 30 minutes during day hours).
+            # Guard by title like the other seeders — the old seeder appended a
+            # fresh record on every boot, producing N duplicate "Check email for
+            # job alerts" jobs that all fired at once and read the whole mailbox.
             try:
-                from system.schedule import schedule_job_record
-                schedule_job_record(
-                    title="Check email for job alerts",
-                    task="Check ProtonMail inbox for new job alert emails and notify me",
-                    time_of_day="08:00",
-                    frequency="interval",
-                    interval_seconds=1800,  # every 30 minutes
-                    timezone=timezone,
-                    handler="check_email",
-                    user_id=user_id,
-                )
+                from system.schedule import _read_all, schedule_job_record
+                existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
+                if "Check email for job alerts" not in existing_titles:
+                    schedule_job_record(
+                        title="Check email for job alerts",
+                        task="Check ProtonMail inbox for new job alert emails and notify me",
+                        time_of_day="08:00",
+                        frequency="interval",
+                        interval_seconds=1800,  # every 30 minutes
+                        timezone=timezone,
+                        handler="check_email",
+                        user_id=user_id,
+                    )
             except Exception:
                 pass
 

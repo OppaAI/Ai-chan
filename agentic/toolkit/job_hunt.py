@@ -910,7 +910,7 @@ def _max_posts_per_source(config: dict[str, Any]) -> tuple[int, int]:
 
 # ── Incremental job processing for graph loops ───────────────────────────
 
-def fetch_all_sources_into_state(plan_json: str, *, state=None) -> str:
+def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     """Fetch all RSS + email jobs into state, one source at a time.
 
     Returns a summary and stores ALL postings in state.job_all_postings
@@ -920,10 +920,10 @@ def fetch_all_sources_into_state(plan_json: str, *, state=None) -> str:
     fetch_<date>.json). A fresh cache is reused to avoid re-reading the whole
     mailbox on every graph re-run; only stale caches trigger a live fetch.
     """
-    plan = json.loads(plan_json)
+    plan = _safe_json_loads(plan_json)
     config = _job_config()
     include_email = bool(config.get("include_email") and config.get("email_source", {}).get("enabled", True))
-    log.info("[job_hunt] fetch_all_sources_into_state: include_email=%s", include_email)
+    log.info("[job_hunt] fetch_rss_and_email_into_state: include_email=%s", include_email)
 
     all_postings = []
     source_info = []
@@ -936,7 +936,7 @@ def fetch_all_sources_into_state(plan_json: str, *, state=None) -> str:
         stored = cached.get("postings") or []
         all_postings = [dict(p) for p in stored if isinstance(p, dict)]
         source_info = list(cached.get("sources") or [])
-        log.info("[job_hunt] fetch_all_sources_into_state: reused fresh cache (%d postings, cached_at=%s)",
+        log.info("[job_hunt] fetch_rss_and_email_into_state: reused fresh cache (%d postings, cached_at=%s)",
                  len(all_postings), cached.get("cached_at", "?"))
     else:
         # 2) No fresh cache → fetch each RSS feed separately and tag postings.
@@ -944,7 +944,7 @@ def fetch_all_sources_into_state(plan_json: str, *, state=None) -> str:
         feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)
 
         for feed_idx, feed_url in enumerate(feeds):
-            log.info("[job_hunt] fetch_all_sources_into_state: fetching RSS feed %d/%d: %s",
+            log.info("[job_hunt] fetch_rss_and_email_into_state: fetching RSS feed %d/%d: %s",
                      feed_idx + 1, len(feeds), feed_url[:80])
             config_single = dict(config)
             config_single["rss_feeds"] = [feed_url]
@@ -963,7 +963,7 @@ def fetch_all_sources_into_state(plan_json: str, *, state=None) -> str:
 
         # 3) Fetch email if enabled (message count tunable via email_max_messages).
         if include_email and email_cap:
-            log.info("[job_hunt] fetch_all_sources_into_state: fetching email " +
+            log.info("[job_hunt] fetch_rss_and_email_into_state: fetching email " +
                      "(max %d messages)", _email_max_messages(config))
             email_postings = fetch_today_jobs_from_email(config)[:email_cap]
             email_idx = len(feeds)
@@ -988,7 +988,7 @@ def fetch_all_sources_into_state(plan_json: str, *, state=None) -> str:
             "max_results": max_results,
         })
 
-    log.info("[job_hunt] fetch_all_sources_into_state: total=%d postings from %d sources",
+    log.info("[job_hunt] fetch_rss_and_email_into_state: total=%d postings from %d sources",
              len(all_postings), len(source_info))
     
     # Store in state for incremental processing
