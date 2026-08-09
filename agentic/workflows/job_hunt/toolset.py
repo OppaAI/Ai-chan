@@ -649,11 +649,30 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int) -> dict | No
     
     sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
     subject_l = subject.casefold()
+    sender_l = sender.casefold()
     snippet = str(msg.get("snippet") or "").strip()
     body = str(msg.get("body") or msg.get("text") or msg.get("html") or "").strip()
+    # MCP returns full email body in snippet field; use as fallback
+    if not body:
+        body = snippet
     content = f"{subject} {sender} {snippet} {body}".casefold()
     
-    if not any(f in content for f in ("linkedin", "glassdoor", "indeed", "job")):
+    # Only accept from known job alert domains (anti-spam)
+    job_domains = ("linkedin", "glassdoor", "indeed")
+    
+    from_job_domain = any(d in sender_l for d in job_domains)
+    
+    if not from_job_domain:
+        return None
+    
+    # Secondary keyword check for allowed domains (catch non-job emails from same domain)
+    job_keywords = ("job", "position", "career", "hiring", "role", "opening", "vacancy", "opportunity",
+                    "apply", "application", "candidate", "interview", "recruit", "talent",
+                    "analyst", "architect", "engineer", "developer", "manager", "specialist",
+                    "director", "lead", "principal", "senior", "junior", "intern")
+    
+    has_job_keyword = any(k in content for k in job_keywords)
+    if not has_job_keyword:
         return None
     
     if body:
@@ -663,7 +682,7 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int) -> dict | No
     return {
         "title": subject,
         "organization": sender,
-        "url": _extract_first_url(subject, snippet) or "",
+        "url": _extract_first_url(subject, snippet, body) or "",
         "guid": msg_id,
         "summary": snippet,
         "location": "",
@@ -702,7 +721,6 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
         return []
     
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS", "TECH_JOB_KEYWORDS")]
     today = local_now().date()
     max_days = _config_int(config, "email_date_range_days", "JOB_HUNT_EMAIL_DATE_RANGE_DAYS", 7)
     days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
@@ -711,8 +729,17 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
     kept: list[dict] = []
     seen_ids: set[str] = set()
     
-    log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages, keywords=%d",
-             len(messages), len(keywords))
+    log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages",
+             len(messages))
+    
+    # Save raw email messages to cache for debugging
+    try:
+        cache_dir = _job_cache_dir()
+        debug_file = cache_dir / f"email_raw_{local_now().strftime('%Y%m%d_%H%M%S')}.json"
+        debug_file.write_text(json.dumps(messages, ensure_ascii=False, indent=2))
+        log.info("[job_hunt] saved %d raw email messages to %s", len(messages), debug_file)
+    except Exception as e:
+        log.warning("[job_hunt] failed to save email debug cache: %s", e)
     
     for msg in messages:
         posting = _email_message_to_posting(msg, today, max_days)
@@ -724,9 +751,8 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
             continue
         if _job_known_state(ledger, link_key, guid_key) is not None:
             continue
-        if keywords and not any(kw in f"{posting.get('title','')} {posting.get('summary','')}".casefold() for kw in keywords):
-            continue
-        
+        # Email alerts (LinkedIn/Glassdoor/Indeed) are already pre-filtered job alerts.
+        # Don't apply job_keywords filter here — it's for RSS feed filtering.
         seen_ids.update({link_key, guid_key})
         kept.append(posting)
     
