@@ -1,11 +1,11 @@
 {
   "rss_feeds": [
-    "https://www.dice.com/rss?q=software+engineer&l=California",
-    "https://www.dice.com/rss?q=devops&l=California",
-    "https://www.dice.com/rss?q=data+scientist&l=California",
-    "https://stackoverflow.com/jobs/feed?q=software+engineer&l=California",
-    "https://jobs.lever.co/feed?location=California",
-    "https://api.greenhouse.io/v1/boards/feed?location=California"
+    "https://remoteok.io/remote-dev-jobs.rss",
+    "https://weworkremotely.com/categories/remote-programming-jobs.rss",
+    "https://jobs.github.com/positions.rss?description=software+engineer&location=california",
+    "https://rss.indeed.com/rss?q=software+engineer&l=California",
+    "https://rss.indeed.com/rss?q=devops&l=California",
+    "https://rss.indeed.com/rss?q=data+scientist&l=California"
   ],
   "date_range_days": 2,
   "max_rss_posts": 10,
