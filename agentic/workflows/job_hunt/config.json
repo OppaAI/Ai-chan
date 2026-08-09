@@ -10,7 +10,7 @@
   "date_range_days": 2,
   "max_rss_posts": 10,
   "max_rss_chars": 15000,
-  "rss_max_workers": 4,
+  "max_workers": 2,
   "job_keywords": [
     "software",
     "developer",
