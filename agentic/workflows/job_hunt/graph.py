@@ -95,15 +95,7 @@ def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str 
 def build_gen_job_post_graph(
     goal: str = "Fetch, draft, and save job listings from configured RSS feeds",
 ) -> PlanGraph:
-    """Build the simplified gen_job_post graph.
-    
-    Single sequential workflow:
-      1. Fetch all RSS + email jobs into state
-      2. Loop: get next job → draft → save (until no jobs remain)
-      3. Report results
-    
-    Works identically for both user prompt ("draft jobs") and scheduled 11pm run.
-    """
+    """Build the simplified gen_job_post graph."""
     nodes = [
         PlanNode(
             id="fetch_all",

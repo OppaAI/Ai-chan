@@ -1,5 +1,5 @@
 """
-toolkit/job_hunt.py
+agentic/workflows/job_hunt/toolset.py
 
 Lane D job posting pipeline. Everything is config-driven.
 
@@ -672,32 +672,36 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
     sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
     subject_l = subject.casefold()
     sender_l = sender.casefold()
-    snippet = str(msg.get("snippet") or "").strip()
-    body = str(msg.get("body") or msg.get("text") or msg.get("html") or "").strip()
-    # MCP returns full email body in snippet field; use as fallback
-    if not body:
-        body = snippet
-    content = f"{subject} {sender} {snippet} {body}".casefold()
     
-    # Only accept from known job alert domains (anti-spam) - configurable
+    # ✅ KEY FIX: Convert HTML snippet/body to clean text using _strip_html
+    snippet_raw = str(msg.get("snippet") or "").strip()
+    snippet = _strip_html(snippet_raw, config=config)
+    
+    # Try all body fields, converting HTML to text as we go
+    body = (
+        _strip_html(str(msg.get("body") or ""), config=config) or
+        _strip_html(str(msg.get("text") or ""), config=config) or
+        _strip_html(str(msg.get("html") or ""), config=config) or
+        snippet
+    )
+    
+    content = f"{subject} {sender} {body}".casefold()
+    
+    # Only accept from known job alert domains (anti-spam)
     job_domains = [d.casefold() for d in _config_list(config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS", ["linkedin", "glassdoor", "indeed"])]
-    
     from_job_domain = any(d in sender_l for d in job_domains)
     
     if not from_job_domain:
+        log.debug("[job_hunt] email rejected: domain filter. sender=%s", sender[:60])
         return None
     
-    if not from_job_domain:
-        return None
-    
-    # Keyword check using config's job_keywords (same as RSS filtering)
+    # ✅ Keyword check on cleaned text (much more reliable now)
     keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS", "TECH_JOB_KEYWORDS")]
     has_job_keyword = any(k in content for k in keywords)
-    if not has_job_keyword:
-        return None
     
-    if body:
-        snippet = f"{snippet} {body}".strip()
+    if not has_job_keyword:
+        log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
+        return None
     
     msg_id = str(msg.get("id") or "") or subject_l
     return {
@@ -705,7 +709,7 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
         "organization": sender,
         "url": _extract_first_url(subject, snippet, body) or "",
         "guid": msg_id,
-        "summary": snippet,
+        "summary": body[:500],
         "location": "",
         "employment_type": "",
         "salary": "",
