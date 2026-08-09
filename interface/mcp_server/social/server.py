@@ -63,9 +63,9 @@ def _load_tools() -> None:
     """Load tool modules and register with MCP."""
     from social.services import x, threads, youtube, medium
     from social.services import reddit, bluesky, mastodon, pixelset, multipost
-    from social.services import discord, protonmail
+    from social.services import discord, email
 
-    for mod in (x, threads, youtube, medium, reddit, bluesky, mastodon, pixelset, discord, protonmail, multipost):
+    for mod in (x, threads, youtube, medium, reddit, bluesky, mastodon, pixelset, discord, email, multipost):
         if hasattr(mod, "load_tools"):
             mod.load_tools(mcp)
 

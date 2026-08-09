@@ -688,18 +688,27 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
             })
     
     log.info("[job_hunt] fetch_today_jobs_from_rss: kept=%d postings after filtering", len(kept))
+    
+    # Write to dedup ledger so we don't re-fetch these in future runs
+    for posting in kept:
+        lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
+        for probe in (lk, gk):
+            if probe:
+                ledger[probe] = {"state": DEDUP_STATE_SEEN, "seen_at": now_iso}
+    _dedup_ledger_save(ledger)
+    
     return kept
 
 
-def _read_protonmail_messages(max_results: int, folder: str = "inbox") -> list[dict]:
-    """Call the already-registered read_protonmail MCP bridge tool."""
+def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool = True) -> list[dict]:
+    """Call the already-registered read_email MCP bridge tool."""
     try:
         from agentic.registry import registry
-        spec = registry.get("read_protonmail")
+        spec = registry.get("read_email")
         if spec is None or spec.handler is None:
-            log.warning("Lane D email: read_protonmail MCP tool is not registered")
+            log.warning("Lane D email: read_email MCP tool is not registered")
             return []
-        result = spec.handler(max_results=max_results, folder=folder)
+        result = spec.handler(max_results=max_results, folder=folder, unread=unread)
         if not isinstance(result, dict) or not result.get("ok"):
             return []
         messages = result.get("messages") or []
@@ -713,7 +722,7 @@ def _read_protonmail_messages(max_results: int, folder: str = "inbox") -> list[d
                     unique.append(m)
         return unique
     except Exception as e:
-        log.warning("Lane D email: read_protonmail MCP call failed: %s", e)
+        log.warning("Lane D email: read_email MCP call failed: %s", e)
         return []
 
 
@@ -815,10 +824,11 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
     email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
     email_folder = _config_list(config, "email_folder", "JOB_HUNT_EMAIL_FOLDER", ["inbox"])[0]
+    email_unread = _config_bool(config, "email_unread_only", "JOB_HUNT_EMAIL_UNREAD_ONLY", True)
     
-    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d, folder=%s", email_cap, email_max_msgs, email_folder)
+    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d, folder=%s, unread=%s", email_cap, email_max_msgs, email_folder, email_unread)
     
-    messages = _read_protonmail_messages(email_max_msgs, folder=email_folder)
+    messages = _read_email_messages(email_max_msgs, folder=email_folder, unread=email_unread)
     raw_count = len(messages)
     if not messages:
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
@@ -927,9 +937,7 @@ def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, 
     try:
         path = _job_rss_cache_path(date_str, feed_idx)
         if not postings:
-            log.warning("[job_hunt] wrote 0 postings to %s (empty feed)", path.name)
-            # Still write the file (empty) so cache freshness is tracked
-            path.write_text("", encoding="utf-8")
+            log.warning("[job_hunt] skipping RSS cache for %s (empty feed)", path.name)
             return
         lines = [json.dumps(p, ensure_ascii=False) for p in postings]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
