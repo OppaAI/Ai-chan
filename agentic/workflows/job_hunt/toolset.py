@@ -72,13 +72,15 @@ def _job_config_path() -> Path:
         p = Path(env_path).expanduser()
         return p if p.is_absolute() else Path(__file__).resolve().parents[2] / p
     try:
-        user_path = _user_skillsets_dir() / "job_hunt.json"
+        from system.userspace import user_state_dir
+        # User folder: <user_state>/agentic/workflows/job_hunt/config.json
+        user_path = user_state_dir() / "agentic" / "workflows" / "job_hunt" / "config.json"
         if user_path.exists():
             return user_path
     except Exception:
         log.warning("job_hunt: failed to resolve per-user config path")
-    # Check workflows/job_hunt/ first (new grouped location)
-    workflow_path = Path(__file__).resolve().parent / "job_hunt.json"
+    # Check repo workflows/job_hunt/ (for dev)
+    workflow_path = Path(__file__).resolve().parent / "config.json"
     if workflow_path.exists():
         return workflow_path
     # Fallback to old location
@@ -188,7 +190,10 @@ DEDUP_STATE_PUBLISHED = "published"
 
 
 def _dedup_ledger_path() -> Path:
-    return _user_skillsets_dir() / "job_hunt_ledger.json"
+    """Path to the dedup ledger in user's workflow folder."""
+    from system.userspace import user_state_dir
+    # User folder: <user_state>/agentic/workflows/job_hunt/ledger.json
+    return user_state_dir() / "agentic" / "workflows" / "job_hunt" / "ledger.json"
 
 
 def _dedup_ledger_load() -> dict[str, dict[str, Any]]:
@@ -747,7 +752,9 @@ def search_jobs(
 
 def _job_cache_dir() -> Path:
     """Directory for persisted fetch results (RSS+email)."""
-    d = _user_skillsets_dir() / "job_fetch_cache"
+    from system.userspace import user_state_dir
+    # User folder: <user_state>/agentic/workflows/job_hunt/cache/
+    d = user_state_dir() / "agentic" / "workflows" / "job_hunt" / "cache"
     try:
         d.mkdir(parents=True, exist_ok=True)
     except OSError:

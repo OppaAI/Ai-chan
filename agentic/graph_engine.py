@@ -1336,7 +1336,7 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("repo tools unavailable for graph executor: %s", exc)
     try:
-        from agentic.workflows.job_hunt.job_hunt import (
+        from agentic.workflows.job_hunt.toolset import (
             search_jobs,
             report_job_run,
             fetch_rss_and_email_into_state, get_next_job, draft_single_job,
@@ -1759,7 +1759,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
     # run finishes (success OR failure) so the next run re-fetches fresh jobs.
     try:
         if graph.id == "gen_job_post":
-            from agentic.workflows.job_hunt.job_hunt import clear_job_fetch_cache
+            from agentic.workflows.job_hunt.toolset import clear_job_fetch_cache
             clear_job_fetch_cache()
     except Exception as exc:
         log.warning("graph_engine: failed to clear job fetch cache: %s", exc)

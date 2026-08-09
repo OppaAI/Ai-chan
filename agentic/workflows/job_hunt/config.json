@@ -1,7 +1,18 @@
 {
-  "default_location": "Canada",
-  "radius_km": 50,
-  "nearby_locations": [],
+  "default_location": "California, USA",
+  "radius_km": 80,
+  "nearby_locations": [
+    "San Francisco",
+    "Los Angeles",
+    "San Diego",
+    "San Jose",
+    "Sacramento",
+    "Oakland",
+    "Irvine",
+    "Mountain View",
+    "Palo Alto",
+    "Santa Clara"
+  ],
   "max_results": 30,
   "max_age_days": 30,
   "fallback_max_age_days": 60,
@@ -10,12 +21,57 @@
   "queries": [
     {
       "category": "tech",
-      "query": "tech jobs available today",
+      "query": "software engineer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "devops engineer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "data scientist",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "full stack developer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "backend engineer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "frontend developer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "machine learning engineer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "cloud engineer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "site reliability engineer",
+      "job_type": ""
+    },
+    {
+      "category": "tech",
+      "query": "mobile developer",
       "job_type": ""
     }
   ],
-  "min_salary_hourly": 20,
-  "min_salary_annual": 45000,
+  "min_salary_hourly": 50,
+  "min_salary_annual": 100000,
   "auto_post": false,
   "post_fields": [
     {
@@ -61,8 +117,12 @@
   ],
   "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)",
   "rss_feeds": [
-    "https://www.civicjobs.ca/rss/region?id=9&region=Lower+Mainland+-+BC",
-    "https://www.jobbank.gc.ca/jobsearch/feed/jobSearchRSSfeed?d=250&fage=2&mid=39070&sort=D&rows=100&fskl=%C2%AC15141&fcat=1"
+    "https://www.dice.com/rss?q=software+engineer&l=California",
+    "https://www.dice.com/rss?q=devops&l=California",
+    "https://www.dice.com/rss?q=data+scientist&l=California",
+    "https://stackoverflow.com/jobs/feed?q=software+engineer&l=California",
+    "https://jobs.lever.co/feed?location=California",
+    "https://api.greenhouse.io/v1/boards/feed?location=California"
   ],
   "tech_job_keywords": [
     "software",
@@ -84,7 +144,18 @@
     "full stack",
     "qa",
     "quality assurance",
-    "technical support"
+    "technical support",
+    "machine learning",
+    "ai",
+    "kubernetes",
+    "aws",
+    "gcp",
+    "azure",
+    "react",
+    "python",
+    "go",
+    "rust",
+    "typescript"
   ],
   "date_range_days": 2,
   "email_date_range_days": 7,

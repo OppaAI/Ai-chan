@@ -22,7 +22,7 @@ from agentic.registry import tool
 # ──────────────────────────────────────────────────────────────────────────────
 
 try:
-    from agentic.workflows.job_hunt.job_hunt import (
+    from agentic.workflows.job_hunt.toolset import (
         fetch_rss_and_email_into_state as _fetch_rss_and_email_into_state,
         get_next_job as _get_next_job,
         draft_single_job as _draft_single_job,
