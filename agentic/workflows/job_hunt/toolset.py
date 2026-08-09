@@ -597,13 +597,14 @@ def enrich_posting_fields_with_llm(
     return enriched
 
 
-def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywords: bool = True) -> list[dict]:
+def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True, filter_dedup: bool = True) -> list[dict]:
     """Fetch configured RSS feeds, keeping postings from the last N days.
     
     Args:
         config: Job hunt config dict
-        filter_keywords: If True, apply keyword filter. If False, return all
-                        recent postings (for caching the full feed).
+        filter_keywords: If True, apply keyword filter. If False, skip keyword filter.
+        filter_date: If True, apply date filter. If False, return all entries (for raw cache).
+        filter_dedup: If True, apply deduplication. If False, skip dedup (for raw cache).
     """
     config = config or _job_config()
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
@@ -611,13 +612,17 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
     today = local_now().date()
     max_days = _config_int(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1)
     days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
-    ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
     now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
     
-    log.info("[job_hunt] fetch_today_jobs_from_rss: feeds=%d, keywords=%d, max_days=%d",
-             len(feeds), len(keywords), max_days)
+    if filter_dedup:
+        ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
+    else:
+        ledger = {}
+    
+    log.info("[job_hunt] fetch_today_jobs_from_rss: feeds=%d, keywords=%d, max_days=%d, filter_date=%s, filter_dedup=%s",
+             len(feeds), len(keywords), max_days, filter_date, filter_dedup)
     
     for feed_url in feeds:
         resp = None
@@ -652,7 +657,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
             org = _rss_text(entry, ("author", "creator"))
             posted = _parse_rss_datetime(_rss_text(entry, ("pubDate", "published", "updated")))
             
-            if not posted or posted.date() < today - timedelta(days=max_days - 1):
+            if filter_date and (not posted or posted.date() < today - timedelta(days=max_days - 1)):
                 continue
             if keywords and not any(kw in f"{title} {summary}".casefold() for kw in keywords):
                 continue
@@ -683,13 +688,6 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
             })
     
     log.info("[job_hunt] fetch_today_jobs_from_rss: kept=%d postings after filtering", len(kept))
-    
-    for posting in kept:
-        lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
-        for probe in (lk, gk):
-            if probe:
-                ledger[probe] = {"state": DEDUP_STATE_SEEN, "seen_at": now_iso}
-    _dedup_ledger_save(ledger)
     return kept
 
 
@@ -732,7 +730,9 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=local_now().tzinfo)
             dt = dt.astimezone(local_now().tzinfo)
+            log.debug("[job_hunt] _email_message_to_posting date check: %s vs cutoff %s", dt.date(), today - timedelta(days=max_days - 1))
             if dt.date() < today - timedelta(days=max_days - 1):
+                log.debug("[job_hunt] _email_message_to_posting rejecting email: date %s < cutoff %s", dt.date(), today - timedelta(days=max_days - 1))
                 return None
         except (TypeError, ValueError):
             pass
@@ -835,8 +835,30 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages",
              len(messages))
 
+    # Filter emails by date range BEFORE caching (skip emails outside date range entirely)
+    cutoff_date = today - timedelta(days=max_days - 1)
+    filtered_messages = []
+    for msg in messages:
+        date_str = str(msg.get("date") or "")
+        if date_str:
+            try:
+                dt = email.utils.parsedate_to_datetime(date_str) or datetime.fromisoformat(date_str)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=local_now().tzinfo)
+                dt = dt.astimezone(local_now().tzinfo)
+                log.debug("[job_hunt] email date parsed: %s -> %s", date_str, dt.date())
+                if dt.date() < cutoff_date:
+                    log.debug("[job_hunt] email outside date range, skipping: %s", date_str)
+                    continue  # Skip emails outside date range
+            except (TypeError, ValueError) as e:
+                log.debug("[job_hunt] email date parse failed: %s, error: %s", date_str, e)
+                pass  # If date parsing fails, keep the message
+        filtered_messages.append(msg)
+
+    log.info("[job_hunt] fetch_today_jobs_from_email: %d messages within date range (cutoff=%s)", len(filtered_messages), cutoff_date)
+
     # Save each individual email message as JSONL (one per message)
-    for msg_idx, msg in enumerate(messages):
+    for msg_idx, msg in enumerate(filtered_messages):
         posting = _email_message_to_posting(msg, today, max_days, config)
         matched = posting is not None
         
@@ -857,13 +879,6 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
         kept.append(posting)
     
     log.info("[job_hunt] fetch_today_jobs_from_email: kept=%d postings after filtering", len(kept))
-    
-    for posting in kept:
-        lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
-        for probe in (lk, gk):
-            if probe:
-                ledger[probe] = {"state": DEDUP_STATE_SEEN, "seen_at": now_iso}
-    _dedup_ledger_save(ledger)
     return kept, raw_count
 
 
@@ -1059,7 +1074,7 @@ def _fetch_rss_branch(date_str: str, config: dict[str, Any], can_reuse: bool) ->
         # Fetch fresh RSS feed (ALL entries, no keyword filter - save to cache)
         try:
             log.info("[job_hunt] processing RSS feed %d/%d: %s", feed_idx + 1, len(feeds), feed_url[:80])
-            feed_postings = fetch_today_jobs_from_rss(_job_config_with_single_feed(config, feed_url), filter_keywords=False)
+            feed_postings = fetch_today_jobs_from_rss(_job_config_with_single_feed(config, feed_url), filter_keywords=False, filter_date=False)
             raw_count = len(feed_postings)
             
             # Write ALL postings to JSONL cache (no keyword filtering)

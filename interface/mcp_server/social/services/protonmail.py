@@ -51,18 +51,18 @@ def _get_client():
     if not username:
         return None, err("protonmail", "PROTONMAIL_USERNAME not set")
     if _client_cache is not None and _cache_username == username:
+        print("[PROTONMAIL] Using cached client", file=sys.stderr, flush=True)
         return _client_cache, None
     if not os.path.exists(_SESSION_FILE) and not password:
         return None, err("protonmail", "PROTONMAIL_PASSWORD not set for first login")
     print(f"[PROTONMAIL] Authenticating as {username[:3]}{chr(42) * max(0, len(username) - 3)}...", file=sys.stderr, flush=True)
+    print(f"[PROTONMAIL] Session file exists: {os.path.exists(_SESSION_FILE)} ({_SESSION_FILE})", file=sys.stderr, flush=True)
     try:
-        # logging_func=_stderr_print routes ALL internal ProtonMail log output
-        # (including tqdm_asyncio progress bars in get_messages) to stderr so
-        # it never touches the MCP stdio wire.
         client = ProtonMail(logging_func=_stderr_print)
         if os.path.exists(_SESSION_FILE):
             print(f"[PROTONMAIL] Loading session: {_SESSION_FILE}", file=sys.stderr, flush=True)
             _run_client_call(client.load_session, _SESSION_FILE, auto_save=True)
+            print("[PROTONMAIL] Session loaded successfully", file=sys.stderr, flush=True)
         else:
             print("[PROTONMAIL] No saved session; performing login...", file=sys.stderr, flush=True)
             _run_client_call(client.login, username, password)
@@ -97,18 +97,25 @@ def load_tools(mcp):
             print("[PROTONMAIL] Fetching messages list...", file=sys.stderr, flush=True)
             all_messages = await asyncio.to_thread(_run_client_call, client.get_messages)
             print(f"[PROTONMAIL] Got {len(all_messages)} messages", file=sys.stderr, flush=True)
+            # Debug: print folder of first few messages
+            for i, msg in enumerate(all_messages[:5]):
+                msg_folder = (getattr(msg, "label", "") or getattr(msg, "folder", "") or "").lower()
+                print(f"[PROTONMAIL]   msg {i}: folder='{msg_folder}', id={getattr(msg, 'id', 'N/A')[:20]}", file=sys.stderr, flush=True)
 
             # Filter by folder (protonmail-api-client returns all folders; filter client-side)
             # Message objects have .label or .folder attribute indicating the folder
             folder = folder.lower()
             messages = []
+            folder_counts = {}
             for msg in all_messages:
                 msg_folder = (getattr(msg, "label", "") or getattr(msg, "folder", "") or "").lower()
-                if folder == "inbox" and msg_folder in ("inbox", ""):
-                    messages.append(msg)
-                elif folder != "inbox" and msg_folder == folder:
-                    messages.append(msg)
-                # Default: if folder attr is empty/missing, assume inbox
+                folder_counts[msg_folder] = folder_counts.get(msg_folder, 0) + 1
+                # Exclude trash/spam folders explicitly
+                if msg_folder in ("trash", "spam", "junk", "deleted"):
+                    continue
+                # Include all folders (not just inbox)
+                messages.append(msg)
+            print(f"[PROTONMAIL] Folder counts: {folder_counts}", file=sys.stderr, flush=True)
             print(f"[PROTONMAIL] After folder filter ({folder}): {len(messages)} messages", file=sys.stderr, flush=True)
 
             # If message_id provided, return full message
