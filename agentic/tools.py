@@ -30,7 +30,7 @@ from agentic.toolkit import photography  # noqa: F401
 from agentic.toolkit import self_improve  # noqa: F401
 from agentic.toolkit import reports  # noqa: F401
 from agentic.toolkit import research  # noqa: F401
-from agentic.toolkit import job_hunt  # noqa: F401
+from agentic.workflows.job_hunt import toolset  # noqa: F401
 from agentic.toolkit import social  # noqa: F401
 
 # Re-export registry for tool registration

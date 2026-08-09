@@ -14,7 +14,7 @@ import os
 from typing import Any
 
 from agentic.graph_engine import PlanGraph, PlanNode
-from agentic.registry import tool
+from agentic.registry import TOOLS, tool
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -51,44 +51,17 @@ except Exception as exc:
 
 
 # Register each as a graph tool
-@tool(
-    "fetch_rss_and_email_into_state",
-    "Fetch all RSS + email jobs into state for incremental graph processing.",
-    props={"plan_json": {"type": "string", "description": "JSON plan with max_results, etc."}},
-    required=["plan_json"],
-    domain="jobs",
-    react=False,
-    graph=True,
-)
+@tool(TOOLS["fetch_rss_and_email_into_state"])
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     return _fetch_rss_and_email_into_state(plan_json, state=state)
 
 
-@tool(
-    "get_next_job",
-    "Get the next unprocessed job from state.job_all_postings (thread-safe).",
-    props={"worker_id": {"type": "string", "description": "Worker identifier for logging"}},
-    required=[],
-    domain="jobs",
-    react=False,
-    graph=True,
-)
+@tool(TOOLS["get_next_job"])
 def get_next_job(state=None, worker_id: str = "0") -> str:
     return _get_next_job(state=state, worker_id=worker_id)
 
 
-@tool(
-    "draft_single_job",
-    "Draft a single job post from one job dict, optionally enriching with LLM.",
-    props={
-        "job_json": {"type": "string", "description": "JSON from get_next_job with job dict"},
-        "template": {"type": "string", "description": "Optional template override"},
-    },
-    required=["job_json"],
-    domain="jobs",
-    react=False,
-    graph=True,
-)
+@tool(TOOLS["draft_single_job"])
 def draft_single_job(
     job_json: str,
     template: str = "",
@@ -100,46 +73,17 @@ def draft_single_job(
     return _draft_single_job(job_json, template, client=client, model=model, state=state)
 
 
-@tool(
-    "save_single_job_draft",
-    "Save the most recently drafted job to disk as a Threads draft.",
-    props={"auto_post": {"type": "string", "description": "Auto-post flag (false = draft only)"}},
-    required=[],
-    domain="jobs",
-    react=False,
-    graph=True,
-)
+@tool(TOOLS["save_single_job_draft"])
 def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     return _save_single_job_draft(auto_post, state=state)
 
 
-@tool(
-    "check_jobs_remaining",
-    "Check if more jobs remain to be processed. Returns 'more' or 'done'.",
-    props={},
-    required=[],
-    domain="jobs",
-    react=False,
-    graph=True,
-)
+@tool(TOOLS["check_jobs_remaining"])
 def check_jobs_remaining(state=None) -> str:
     return _check_jobs_remaining(state=state)
 
 
-@tool(
-    "report_job_run",
-    "Generate an RSS Lane D audit report from accumulated results.",
-    props={
-        "plan": {"type": "string", "description": "JSON from fetch_rss_and_email_into_state"},
-        "search": {"type": "string", "description": "JSON search results"},
-        "draft": {"type": "string", "description": "JSON draft results"},
-        "save": {"type": "string", "description": "JSON save results"},
-    },
-    required=[],
-    domain="jobs",
-    react=False,
-    graph=True,
-)
+@tool(TOOLS["report_job_run"])
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     return _report_job_run(plan, search, draft, save)
 

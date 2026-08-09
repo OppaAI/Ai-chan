@@ -37,8 +37,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import logging
 import requests
-from defusedxml import ElementTree as ET
+try:
+    from defusedxml import ElementTree as ET
+except ImportError:
+    import xml.etree.ElementTree as ET
+    logging.getLogger(__name__).warning("defusedxml not available, using stdlib xml.etree.ElementTree (less secure)")
 
 from agentic.registry import TOOLS, tool
 from agentic.toolkit.common import chat_completions_create
