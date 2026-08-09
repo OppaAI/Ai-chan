@@ -9,6 +9,7 @@
   ],
   "date_range_days": 2,
   "max_rss_posts": 10,
+  "max_rss_chars": 15000,
   "job_keywords": [
     "software",
     "developer",
@@ -51,6 +52,12 @@
   "email_date_range_days": 7,
   "email_max_messages": 20,
   "max_email_posts": 10,
+  "email_source_domains": [
+    "linkedin",
+    "glassdoor",
+    "indeed"
+  ],
+  "max_email_chars": 15000,
   "topic_tag": "California",
   "post_fields": [
     {
@@ -102,4 +109,4 @@
   "dedup_days": 3,
   "cache_fetch_minutes": 30,
   "auto_post": false
-}
+ }

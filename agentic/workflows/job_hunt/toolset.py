@@ -289,17 +289,39 @@ def _draft_dedup_keys(draft_dirs) -> set[str]:
     return keys
 
 
-def _strip_html(text: str, max_chars: int = 2500) -> str:
-    """Best-effort plain text from RSS description HTML."""
+def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] | None = None) -> str:
+    """Best-effort plain text from HTML. Uses markitdown for markdown conversion if available.
+    
+    max_chars: hard limit override. If None, uses config['max_email_chars'] or config['max_rss_chars'] or default.
+    config: optional config dict for tunable limits.
+    """
     if not text:
         return ""
-    plain = _HTML_TAG_RE.sub(" ", text)
-    plain = html.unescape(plain)
-    plain = _WS_RE.sub(" ", plain).strip()
+    
+    # Try markitdown for better HTML->markdown conversion
+    try:
+        from markitdown import MarkItDown
+        md = MarkItDown()
+        result = md.convert(text)
+        plain = result.text_content if hasattr(result, 'text_content') else str(result)
+    except Exception:
+        # Fallback: regex strip
+        plain = _HTML_TAG_RE.sub(" ", text)
+        plain = html.unescape(plain)
+        plain = _WS_RE.sub(" ", plain).strip()
+    
+    # Determine character limit
+    if max_chars is None and config is not None:
+        # Use different limits for email vs RSS
+        max_chars = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000)
+    
+    if max_chars is None:
+        max_chars = 15000  # default
+    
     return plain[:max_chars]
 
 
-def _fetch_job_page_text(url: str, timeout: float = 10.0, max_chars: int = 8000) -> str:
+def _fetch_job_page_text(url: str, timeout: float = 10.0, max_chars: int | None = None, config: dict[str, Any] | None = None) -> str:
     """Best-effort plain text from a job listing page; '' on any failure."""
     url = str(url or "").strip()
     if not url:
@@ -317,7 +339,7 @@ def _fetch_job_page_text(url: str, timeout: float = 10.0, max_chars: int = 8000)
         log.debug("job_hunt: page fetch failed for %s: %s", url, e)
         return ""
     body = re.sub(r"<(script|style|head|noscript|iframe|svg|template)[^>]*>.*?</\1\s*>", " ", body, flags=re.IGNORECASE | re.DOTALL)
-    return _strip_html(body, max_chars=max_chars)
+    return _strip_html(body, max_chars=max_chars, config=config)
 
 
 def format_job_post(posting: dict, date_text: str | None = None, config: dict[str, Any] | None = None) -> str:
@@ -558,7 +580,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict
             link = _rss_link(entry)
             guid = _rss_text(entry, ("guid", "id")) or link
             summary_raw = _rss_text(entry, ("description", "summary"))
-            summary = _strip_html(summary_raw)
+            summary = _strip_html(summary_raw, config=config)
             org = _rss_text(entry, ("author", "creator"))
             posted = _parse_rss_datetime(_rss_text(entry, ("pubDate", "published", "updated")))
             
@@ -657,10 +679,13 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
         body = snippet
     content = f"{subject} {sender} {snippet} {body}".casefold()
     
-    # Only accept from known job alert domains (anti-spam)
-    job_domains = ("linkedin", "glassdoor", "indeed")
+    # Only accept from known job alert domains (anti-spam) - configurable
+    job_domains = [d.casefold() for d in _config_list(config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS", ["linkedin", "glassdoor", "indeed"])]
     
     from_job_domain = any(d in sender_l for d in job_domains)
+    
+    if not from_job_domain:
+        return None
     
     if not from_job_domain:
         return None
@@ -1008,7 +1033,7 @@ def draft_single_job(
     if used_llm and fetch_pages:
         url = str(job.get("url") or "").strip()
         if url:
-            enriched["page_content"] = _fetch_job_page_text(url)
+            enriched["page_content"] = _fetch_job_page_text(url, config=config)
     
     if used_llm:
         enriched = enrich_posting_fields_with_llm(
