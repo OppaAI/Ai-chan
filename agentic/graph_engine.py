@@ -774,7 +774,7 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "today's jobs",
             ],
             "requires_any": ["job", "jobs", "posting", "hiring", "career"],
-            "capabilities": ["research"],
+            "capabilities": ["research", "job_hunt"],
             "max_workers": 2,
             "nodes": _gen_job_worker_nodes(
 "fetch_rss_and_email_into_state", "check_jobs_remaining", "get_next_job",
