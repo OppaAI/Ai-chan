@@ -597,11 +597,17 @@ def enrich_posting_fields_with_llm(
     return enriched
 
 
-def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None) -> list[dict]:
-    """Fetch configured RSS feeds, keeping postings from the last N days."""
+def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywords: bool = True) -> list[dict]:
+    """Fetch configured RSS feeds, keeping postings from the last N days.
+    
+    Args:
+        config: Job hunt config dict
+        filter_keywords: If True, apply keyword filter. If False, return all
+                        recent postings (for caching the full feed).
+    """
     config = config or _job_config()
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS", "TECH_JOB_KEYWORDS")]
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")] if filter_keywords else []
     today = local_now().date()
     max_days = _config_int(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1)
     days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
@@ -758,7 +764,7 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
         return None
     
     # ✅ Keyword check on cleaned text (much more reliable now)
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS", "TECH_JOB_KEYWORDS")]
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
     has_job_keyword = any(k in content for k in keywords)
     
     if not has_job_keyword:
@@ -803,9 +809,9 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     """
     config = config if config is not None else _job_config()
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
-    email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 20)
+    email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
     
-    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d", email_cap)
+    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d", email_cap, email_max_msgs)
     
     messages = _read_protonmail_messages(email_max_msgs)
     if not messages:
@@ -843,14 +849,12 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
         log.warning("[job_hunt] failed to save email debug cache: %s", e)
     
     # Save each individual email message for fine-grained debugging/filtering
-    date_str = local_now().strftime("%Y-%m-%d")
-    
     for msg_idx, msg in enumerate(messages):
         posting = _email_message_to_posting(msg, today, max_days, config)
         matched = posting is not None
         
         # Write individual email message cache (one JSONL per message)
-        _job_email_message_cache_write(date_str, email_idx, msg_idx, msg, posting, matched)
+        _job_write_email_msg_cache(date_str, msg_idx, msg, posting)
         
         if not posting:
             continue
@@ -979,54 +983,87 @@ def _cache_is_fresh_simple(cache_dir: Path, date_str: str, config: dict[str, Any
     return False
 
 
-# ── Per-source cache (metadata + JSONL postings) ─────────────────────────────────
+# ── Simple cache: one JSONL per source ─────────────────────────────────
 
-def _job_source_cache_path(date_str: str, source_type: str, source_idx: int) -> Path:
-    """Path to per-source cache: fetch_YYYY-MM-DD_<type>_<idx>.json"""
-    return _job_cache_dir() / f"fetch_{date_str}_{source_type}_{source_idx}.json"
+def _job_rss_cache_path(date_str: str, feed_idx: int) -> Path:
+    """Path to RSS feed cache JSONL: fetch_YYYY-MM-DD_rss_<idx>.jsonl"""
+    return _job_cache_dir() / f"fetch_{date_str}_rss_{feed_idx}.jsonl"
 
 
-def _job_source_cache_write(
-    date_str: str,
-    source_type: str,
-    source_idx: int,
-    source_url: str,
-    raw_count: int,
-    filtered_count: int,
-    postings: list[dict[str, Any]],
-    status: str = "ok",
-    error: str | None = None,
-) -> None:
-    """Write per-source cache with metadata + postings."""
+def _job_email_msg_cache_path(date_str: str, msg_idx: int) -> Path:
+    """Path to single email message cache JSONL: fetch_YYYY-MM-DD_email_<idx>.jsonl"""
+    return _job_cache_dir() / f"fetch_{date_str}_email_{msg_idx}.jsonl"
+
+
+def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, Any]]) -> None:
+    """Write RSS postings to JSONL (one posting per line)."""
     try:
-        path = _job_source_cache_path(date_str, source_type, source_idx)
-        data = {
-            "cached_at": local_now().isoformat(),
-            "source_type": source_type,
-            "source_idx": source_idx,
-            "source_url": source_url,
-            "raw_count": raw_count,
-            "filtered_count": filtered_count,
-            "postings": postings,
-            "status": status,
-            "error": error,
-        }
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        log.info("[job_hunt] wrote source cache %s", path.name)
+        path = _job_rss_cache_path(date_str, feed_idx)
+        lines = [json.dumps(p, ensure_ascii=False) for p in postings]
+        path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+        log.info("[job_hunt] wrote %d postings to %s", len(postings), path.name)
     except OSError as e:
-        log.warning("job_hunt: failed to write source cache: %s", e)
+        log.warning("job_hunt: failed to write RSS cache %s: %s", path.name, e)
 
 
-def _job_cache_read_source(date_str: str, source_type: str, source_idx: int) -> dict[str, Any] | None:
-    """Read per-source cache, returns None if missing or invalid."""
+def _job_read_rss_cache(date_str: str, feed_idx: int) -> list[dict[str, Any]]:
+    """Read RSS postings from JSONL."""
     try:
-        path = _job_source_cache_path(date_str, source_type, source_idx)
+        path = _job_rss_cache_path(date_str, feed_idx)
         if not path.exists():
-            return None
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) and data.get("status") == "ok" else None
+            return []
+        postings = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    postings.append(json.loads(line))
+        return postings
     except (OSError, json.JSONDecodeError):
-        return None
+        return []
+
+
+def _job_write_email_msg_cache(date_str: str, msg_idx: int, raw_message: dict[str, Any], posting: dict[str, Any] | None) -> None:
+    """Write single email message to JSONL with match status."""
+    try:
+        path = _job_email_msg_cache_path(date_str, msg_idx)
+        full_body = (
+            raw_message.get("body") or
+            raw_message.get("text") or
+            raw_message.get("html") or
+            raw_message.get("snippet") or
+            ""
+        )
+        data = {
+            "from": str(raw_message.get("from") or raw_message.get("from_address") or raw_message.get("sender") or ""),
+            "subject": str(raw_message.get("subject") or ""),
+            "full_body": full_body,
+            "date": str(raw_message.get("date") or ""),
+            "id": str(raw_message.get("id") or ""),
+            "matched": posting is not None,
+            "posting": posting,
+            "cached_at": local_now().isoformat(),
+        }
+        path.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
+    except OSError as e:
+        log.warning("job_hunt: failed to write email cache %s: %s", path.name, e)
+
+
+def _cache_is_fresh_simple(date_str: str, config: dict[str, Any]) -> bool:
+    """Check if any cache file for this date exists and is fresh."""
+    try:
+        cache_minutes = _config_int(config, "cache_fetch_minutes", "JOB_HUNT_CACHE_FETCH_MINUTES", 30)
+        cutoff = local_now() - timedelta(minutes=cache_minutes)
+        cache_dir = _job_cache_dir()
+        for f in cache_dir.glob(f"fetch_{date_str}_*.jsonl"):
+            if f.stat().st_mtime > cutoff.timestamp():
+                return True
+        manifest = _job_cache_read_manifest(date_str)
+        if manifest:
+            return _cache_is_fresh(manifest, config)
+    except OSError:
+        pass
+    return False
 
 
 def _job_manifest_path(date_str: str) -> Path:
@@ -1063,65 +1100,10 @@ def _job_cache_read_manifest(date_str: str) -> dict[str, Any] | None:
         return None
 
 
-# ── Email message cache (per-message) ─────────────────────────────────
-
-def _job_email_message_path(date_str: str, msg_idx: int) -> Path:
-    """Path to per-message email cache: email_YYYY-MM-DD_<idx>.jsonl"""
-    return _job_cache_dir() / f"email_{date_str}_{msg_idx}.jsonl"
-
-
-def _job_email_message_cache_write(
-    date_str: str,
-    email_idx: int,
-    msg_idx: int,
-    raw_message: dict[str, Any],
-    posting: dict[str, Any] | None,
-    matched: bool,
-) -> None:
-    """Write single email message to JSONL with match status.
-    
-    Email JSON format (per-message cache):
-    {
-      "from": "sender@example.com",
-      "subject": "Job Alert: Senior Software Engineer",
-      "full_body": "...",
-      "date": "2026-08-09",
-      "id": "msg123",
-      "matched": true,
-      "cached_at": "2026-08-09T10:00:00Z"
-    }
-    """
-    try:
-        path = _job_email_message_path(date_str, msg_idx)
-        
-        # Extract full body from various possible MCP response fields
-        full_body = (
-            raw_message.get("body") or
-            raw_message.get("text") or
-            raw_message.get("html") or
-            raw_message.get("snippet") or
-            ""
-        )
-        
-        data = {
-            "from": raw_message.get("from") or raw_message.get("from_address") or raw_message.get("sender") or "",
-            "subject": raw_message.get("subject") or "",
-            "full_body": full_body,
-            "date": raw_message.get("date") or "",
-            "id": raw_message.get("id") or "",
-            "matched": matched,
-            "cached_at": local_now().isoformat(),
-        }
-        path.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
-        log.debug("[job_hunt] wrote email message cache %s", path.name)
-    except OSError as e:
-        log.warning("job_hunt: failed to write email cache: %s", e)
-
-
 # ── Graph step 1: fetch_rss_and_email_into_state (parallel RSS + email) ──
 
-def _fetch_rss_branch(date_str: str, config: dict[str, Any], can_reuse_manifest: bool, manifest: dict[str, Any]) -> tuple[list[dict], list[dict], list[str]]:
-    """Fetch RSS feeds. Returns (postings, source_info, source_failures)."""
+def _fetch_rss_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
+    """Fetch RSS feeds (sequential within this worker). Returns (postings, source_info, source_failures)."""
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
     rss_cap = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
     
@@ -1130,56 +1112,61 @@ def _fetch_rss_branch(date_str: str, config: dict[str, Any], can_reuse_manifest:
     source_failures: list[str] = []
     
     for feed_idx, feed_url in enumerate(feeds):
-        if can_reuse_manifest:
-            src_info = next((s for s in manifest.get("sources", []) if s.get("type") == "rss" and s.get("index") == feed_idx), None)
-            source_cache = _job_cache_read_source(date_str, "rss", feed_idx) if src_info and src_info.get("status") == "ok" else None
-            
-            if source_cache:
-                log.info("[job_hunt]   (cached) rss feed %d: raw=%d filtered=%d",
-                         feed_idx, source_cache.get("raw_count", 0), source_cache.get("filtered_count", 0))
-                feed_postings = source_cache.get("postings", [])
-                for p in feed_postings:
+        # Check if cached JSONL exists and is fresh
+        if can_reuse and _cache_is_fresh_simple(date_str, config):
+            cached = _job_read_rss_cache(date_str, feed_idx)
+            if cached:
+                log.info("[job_hunt]   (cached) rss feed %d: %d postings in cache", feed_idx, len(cached))
+                # Apply keyword filter to cached postings
+                keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+                cached_filtered = cached[:rss_cap]
+                if keywords:
+                    cached_filtered = [p for p in cached_filtered if any(kw in f"{p.get('title', '')} {p.get('summary', '')}".casefold() for kw in keywords)]
+                
+                for p in cached_filtered:
                     p["_source_idx"] = feed_idx
                     p["_source_type"] = "rss"
                     p["_source_name"] = f"rss_{feed_idx}"
-                postings.extend(feed_postings)
+                postings.extend(cached_filtered)
                 source_info.append({
                     "type": "rss",
                     "index": feed_idx,
                     "url": feed_url,
-                    "raw_count": source_cache.get("raw_count", 0),
-                    "filtered_count": source_cache.get("filtered_count", 0),
                     "status": "cached",
                 })
                 continue
         
-        # Fetch fresh RSS feed
+        # Fetch fresh RSS feed (ALL entries, no keyword filter - save to cache)
         try:
             log.info("[job_hunt] processing RSS feed %d/%d: %s", feed_idx + 1, len(feeds), feed_url[:80])
-            feed_postings = fetch_today_jobs_from_rss(_job_config_with_single_feed(config, feed_url))[:rss_cap]
-            raw_count = len(feed_postings) * 3  # Estimate: assume 3:1 filter ratio
+            feed_postings = fetch_today_jobs_from_rss(_job_config_with_single_feed(config, feed_url), filter_keywords=False)
+            raw_count = len(feed_postings)
             
-            for p in feed_postings:
+            # Write ALL postings to JSONL cache (no keyword filtering)
+            _job_write_rss_cache(date_str, feed_idx, feed_postings)
+            
+            # Apply keyword filter for the graph state
+            keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+            filtered = feed_postings[:rss_cap]  # Cap at rss_cap
+            if keywords:
+                filtered = [p for p in filtered if any(kw in f"{p.get('title', '')} {p.get('summary', '')}".casefold() for kw in keywords)]
+            
+            for p in filtered:
                 p["_source_idx"] = feed_idx
                 p["_source_type"] = "rss"
                 p["_source_name"] = f"rss_{feed_idx}"
             
-            # Write per-source cache
-            _job_source_cache_write(
-                date_str, "rss", feed_idx, feed_url,
-                raw_count, len(feed_postings), feed_postings, status="ok"
-            )
-            
-            postings.extend(feed_postings)
+            postings.extend(filtered)
             source_info.append({
                 "type": "rss",
                 "index": feed_idx,
                 "url": feed_url,
                 "raw_count": raw_count,
                 "filtered_count": len(feed_postings),
+                "matched_count": len(filtered),
                 "status": "ok",
             })
-            log.info("[job_hunt]   rss feed %d: raw=%d filtered=%d", feed_idx, raw_count, len(feed_postings))
+            log.info("[job_hunt]   rss feed %d: raw=%d cache=%d filtered=%d", feed_idx, raw_count, len(feed_postings), len(filtered))
         except Exception as e:
             log.error("[job_hunt] rss feed %d failed: %s", feed_idx, e)
             source_failures.append(f"rss_{feed_idx}")
@@ -1196,53 +1183,65 @@ def _fetch_rss_branch(date_str: str, config: dict[str, Any], can_reuse_manifest:
     return postings, source_info, source_failures
 
 
-def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse_manifest: bool, manifest: dict[str, Any]) -> tuple[list[dict], list[dict], list[str]]:
-    """Fetch email job alerts. Returns (postings, source_info, source_failures)."""
+def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
+    """Fetch email job alerts. Returns (postings, source_info, source_failures).
+    
+    Individual email messages are cached as JSONL files inside fetch_today_jobs_from_email.
+    """
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
-    email_idx = 0  # Email is a single source (not multiple feeds)
+    email_idx = 0
     
     postings: list[dict] = []
     source_info: list[dict] = []
     source_failures: list[str] = []
     
-    if can_reuse_manifest:
-        src_info = next((s for s in manifest.get("sources", []) if s.get("type") == "email"), None)
-        source_cache = _job_cache_read_source(date_str, "email", email_idx) if src_info and src_info.get("status") == "ok" else None
+    # Check if we have cached email messages
+    if can_reuse and _cache_is_fresh_simple(date_str, config):
+        # Try to load postings from cached email messages
+        msg_idx = 0
+        cached_postings = []
+        while True:
+            cache_path = _job_email_msg_cache_path(date_str, msg_idx)
+            if not cache_path.exists():
+                break
+            try:
+                with open(cache_path, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            data = json.loads(line)
+                            if data.get("matched") and data.get("posting"):
+                                p = dict(data["posting"])
+                                p["_source_idx"] = email_idx
+                                p["_source_type"] = "email"
+                                p["_source_name"] = "email"
+                                cached_postings.append(p)
+                msg_idx += 1
+            except (OSError, json.JSONDecodeError):
+                msg_idx += 1
+                continue
         
-        if source_cache:
-            log.info("[job_hunt]   (cached) email: raw=%d filtered=%d",
-                     source_cache.get("raw_count", 0), source_cache.get("filtered_count", 0))
-            email_postings = source_cache.get("postings", [])
-            for p in email_postings:
-                p["_source_idx"] = email_idx
-                p["_source_type"] = "email"
-                p["_source_name"] = "email"
-            postings.extend(email_postings)
+        if cached_postings:
+            log.info("[job_hunt]   (cached) email: %d postings", len(cached_postings))
+            postings.extend(cached_postings[:email_cap])
             source_info.append({
                 "type": "email",
                 "index": email_idx,
-                "raw_count": source_cache.get("raw_count", 0),
-                "filtered_count": source_cache.get("filtered_count", 0),
                 "status": "cached",
             })
             return postings, source_info, source_failures
     
-    # Fresh email fetch
+    # Fresh email fetch (per-message JSONL caching happens inside fetch_today_jobs_from_email)
     try:
-        log.info("[job_hunt] processing email (max %d messages)", email_cap)
+        email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
+        log.info("[job_hunt] processing email (max %d messages, cap %d postings)", email_max_msgs, email_cap)
         email_postings = fetch_today_jobs_from_email(config, email_idx)[:email_cap]
-        raw_count = 20  # Standard: read up to 20 raw emails from ProtonMail
+        raw_count = email_max_msgs
         
         for p in email_postings:
             p["_source_idx"] = email_idx
             p["_source_type"] = "email"
             p["_source_name"] = "email"
-        
-        # Write per-source cache
-        _job_source_cache_write(
-            date_str, "email", email_idx, "email",
-            raw_count, len(email_postings), email_postings, status="ok"
-        )
         
         postings.extend(email_postings)
         source_info.append({
@@ -1275,20 +1274,8 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     - Worker 1: RSS feeds (fetched sequentially within the worker)
     - Worker 2: Email fetch (single batch)
     
-    Writes individual JSONL files for each RSS feed and each email message,
-    plus a manifest file. Results are persisted to day-keyed per-source files
-    to allow selective replay and observability.
-    
-    Email JSON format (per-message cache):
-    {
-      "from": "sender@example.com",
-      "subject": "Job Alert: Senior Software Engineer",
-      "full_body": "...",
-      "date": "2026-08-09",
-      "id": "msg123",
-      "matched": true,
-      "cached_at": "2026-08-09T10:00:00Z"
-    }
+    Writes individual JSONL files for each RSS feed and each email message.
+    No manifest or metadata files - just one JSONL per source.
     """
     config = _job_config()
     include_email = _config_bool(config, "include_email", "JOB_HUNT_INCLUDE_EMAIL", True)
@@ -1307,28 +1294,25 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     
     max_results = int(plan.get("max_results") or _config_int(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30))
     
-    log.info("[job_hunt] fetch_rss_and_email_into_state: include_email=%s max_results=%d max_workers=2", include_email, max_results)
-
-    date_str = local_now().strftime("%Y-%m-%d")
+    log.info("[job_hunt] fetch_rss_and_email_into_state: include_email=%s max_results=%d", include_email, max_results)
     
-    # Check for fresh manifest (both branches share the same manifest)
-    manifest = _job_cache_read_manifest(date_str)
-    can_reuse_manifest = manifest and _cache_is_fresh(manifest, config)
+    date_str = local_now().strftime("%Y-%m-%d")
+    can_reuse = _cache_is_fresh_simple(date_str, config)
     
     all_postings: list[dict] = []
     source_info: list[dict] = []
     source_failures: list[str] = []
     
     # Run RSS and Email in parallel (2 workers: 1 for RSS, 1 for Email)
-    max_workers = _config_int(config, "max_workers", "JOB_HUNT_MAX_WORKERS", 2)
+    max_workers = 2
     
     def rss_task() -> tuple[list[dict], list[dict], list[str]]:
-        return _fetch_rss_branch(date_str, config, can_reuse_manifest, manifest)
+        return _fetch_rss_branch(date_str, config, can_reuse)
     
     def email_task() -> tuple[list[dict], list[dict], list[str]]:
         if not include_email:
             return [], [], []
-        return _fetch_email_branch(date_str, config, can_reuse_manifest, manifest)
+        return _fetch_email_branch(date_str, config, can_reuse)
     
     tasks = {"rss": rss_task}
     if include_email:
@@ -1346,29 +1330,9 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     # ── Final merge + cap ──────────────────────────────────────────────
     all_postings = all_postings[:max_results]
     
-    # ── Write manifest ─────────────────────────────────────────────────
     overall_status = "complete" if not source_failures else f"partial_{'_'.join(source_failures)}"
-    _job_manifest_cache_write(date_str, source_info, len(all_postings), overall_status)
-    log.info("[job_hunt] fetch_rss_and_email_into_state: manifest status=%s total=%d postings",
-             overall_status, len(all_postings))
-    
-    # ── Update state ───────────────────────────────────────────────────
-    if state is not None:
-        state.data["job_all_postings"] = all_postings
-        state.data["job_source_info"] = source_info
-        state.data["job_current_index"] = 0
-        state.data["job_total"] = len(all_postings)
-    
-    result = {
-        "total_found": len(all_postings),
-        "sources": source_info,
-        "overall_status": overall_status,
-        "max_results": max_results,
-    }
-    return json.dumps(result, ensure_ascii=False)
-            
-    log.info("[job_hunt] fetch_rss_and_email_into_state: manifest status=%s total=%d postings",
-             overall_status, len(all_postings))
+    log.info("[job_hunt] fetch_rss_and_email_into_state: total=%d postings, status=%s",
+             len(all_postings), overall_status)
     
     # ── Update state ───────────────────────────────────────────────────
     if state is not None:
