@@ -9,7 +9,7 @@ keywords, dedupes by link/guid, and produces structured Threads drafts
 (one per job) using post_fields / post_signature from job_hunt.json for
 human review.
 
-When the graph executor injects an LLM client/model, draft_job_posts_from_results
+When the graph executor injects an LLM client/model, draft_single_job
 enriches sparse postings by extracting post_fields keys from title + summary
 before formatting. Values are never invented beyond the source text.
 LLM calls use the global LLM_TIMEOUT (config/agentic.yaml).
@@ -137,6 +137,99 @@ def _email_max_days_back(config: dict[str, Any]) -> int:
         return 7
 
 
+def _email_max_messages(config: dict[str, Any]) -> int:
+    """How many inbox messages the ProtonMail bridge may read per fetch run."""
+    raw = os.getenv("JOB_HUNT_EMAIL_MAX_MESSAGES", config.get("email_max_messages", 20))
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 20
+
+
+def _job_cache_dir() -> Path:
+    """Directory for persisted fetch results (RSS+email), keyed by run date."""
+    d = _user_skillsets_dir() / "job_fetch_cache"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+
+def _job_cache_path(date_str: str) -> Path:
+    return _job_cache_dir() / f"fetch_{date_str}.json"
+
+
+def _job_cache_read(date_str: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(_job_cache_path(date_str).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _job_cache_write(date_str: str, data: dict[str, Any]) -> None:
+    try:
+        _job_cache_path(date_str).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+        )
+    except OSError as e:
+        log.warning("job_hunt: failed to write fetch cache: %s", e)
+
+
+def clear_job_fetch_cache(date_str: str | None = None) -> int:
+    """Remove cached fetch files (default: today's) after a graph run finishes.
+
+    The disk cache exists only to avoid re-reading the whole mailbox while a
+    pipeline is mid-run (retries, worker restart). Once the job finishes OR
+    fails, the stale cache is deleted so the next run re-fetches fresh jobs.
+
+    Returns the number of files deleted.
+    """
+    target = date_str or local_now().strftime("%Y-%m-%d")
+    removed = 0
+    cache_dir = _job_cache_dir()
+    try:
+        if date_str:
+            paths = [cache_dir / f"fetch_{date_str}.json"]
+        else:
+            paths = sorted(cache_dir.glob("fetch_*.json"))
+    except OSError:
+        return 0
+    for path in paths:
+        try:
+            if path.exists():
+                path.unlink()
+                removed += 1
+        except OSError as e:
+            log.warning("job_hunt: failed to delete fetch cache %s: %s", path, e)
+    if removed:
+        log.info("[job_hunt] cleared %d fetch cache file(s) (%s)", removed, target)
+    return removed
+
+
+def _cache_is_fresh(meta: dict[str, Any] | None, config: dict[str, Any]) -> bool:
+    """True when the stored fetch is recent enough to reuse (avoids re-reading
+    the whole mailbox on every graph re-run)."""
+    if not isinstance(meta, dict):
+        return False
+    stamp = meta.get("cached_at")
+    if not stamp:
+        return False
+    try:
+        cached_dt = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return False
+    if cached_dt.tzinfo is None:
+        cached_dt = cached_dt.replace(tzinfo=local_now().tzinfo)
+    try:
+        minutes = max(0, int(os.getenv("JOB_HUNT_FETCH_CACHE_MINUTES",
+                                        config.get("cache_fetch_minutes", 30))))
+    except (TypeError, ValueError):
+        minutes = 30
+    return (local_now() - cached_dt).total_seconds() <= minutes * 60
+
+
 def _parse_rss_datetime(value: str) -> datetime | None:
     if not value:
         return None
@@ -245,46 +338,6 @@ def _job_known_state(ledger: dict[str, dict[str, Any]], link_key: str, guid_key:
     return None
 
 
-def _ledger_emit(entry_key: str, link_key: str, state: str, now: str) -> None:
-    """Record both the link-key and guid-key for dedup coverage."""
-    ledger = _dedup_ledger_load()
-    ledger.setdefault(entry_key, {})["state"] = state
-    ledger[entry_key]["seen_at"] = now
-    _dedup_ledger_save(ledger)
-
-
-def mark_job_seen(link: str, guid: str, config: dict[str, Any] | None = None) -> None:
-    """Persist that a job (by link/guid) was already fetched/drafted."""
-    config = config if config is not None else _job_config()
-    link_key, guid_key = _dedupe_key(link, guid)
-    now = local_now().isoformat()
-    days = _dedup_days(config)
-    ledger = _dedup_ledger_load()
-    ledger = _prune_dedup_ledger(ledger, days)
-    ledger[link_key] = {"state": DEDUP_STATE_SEEN, "seen_at": now}
-    if guid_key:
-        ledger[guid_key] = {"state": DEDUP_STATE_SEEN, "seen_at": now}
-    _dedup_ledger_save(ledger)
-
-
-def reject_jobs(link: str | None, guid: str | None, config: dict[str, Any] | None = None) -> None:
-    """Mark one or more jobs as rejected by Aiko so they stay deduped for the
-    retention window instead of being brought back (e.g. after she declines a
-    draft). link/guid may be comma/pipe separated or a single string."""
-    for name in (link, guid):
-        if not name:
-            continue
-        for token in re.split(r"[,;|]+", str(name)):
-            token = token.strip()
-            if not token:
-                continue
-            lk, gk = _dedupe_key(token, token)
-            entry = lk or gk
-            if not entry:
-                continue
-            _mark_ledger_change(entry, lk, DEDUP_STATE_REJECTED, config)
-
-
 def mark_jobs_published(draft_dirs: list[str] | str | None, config: dict[str, Any] | None = None) -> None:
     """Remove jobs from the ledger once their drafts were posted successfully.
     Accepts a list of draft dir paths or a JSON/bare list; each draft.json
@@ -327,19 +380,6 @@ def _draft_dedup_keys(draft_dirs) -> set[str]:
             lk, gk = _dedupe_key(url, guid)
             keys.update({lk, gk})
     return keys
-
-
-def _mark_ledger_change(entry: str, link_key: str, state: str, config: dict[str, Any] | None) -> None:
-    config = config if config is not None else _job_config()
-    now = local_now().isoformat()
-    days = _dedup_days(config)
-    ledger = _dedup_ledger_load()
-    ledger = _prune_dedup_ledger(ledger, days)
-    for probe in {entry, link_key}:
-        if not probe:
-            continue
-        ledger[probe] = {"state": state, "seen_at": now}
-    _dedup_ledger_save(ledger)
 
 
 def _strip_html(text: str, max_chars: int = 2500) -> str:
@@ -801,7 +841,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None) -> list[di
     config = config if config is not None else _job_config()
     _, email_cap = _max_posts_per_source(config)
     log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d", email_cap)
-    messages = _read_protonmail_messages(email_cap * 4)
+    messages = _read_protonmail_messages(_email_max_messages(config))
     if not messages:
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
         return []
@@ -853,25 +893,6 @@ def search_jobs(
     return fetch_today_jobs_from_rss(config)[:limit]
 
 
-def gen_job_search_plan(prompt: str = "", config_source: str = "") -> str:
-    """Node 1: Read RSS config into a Lane D execution plan."""
-    config = _job_config()
-    queries = config.get("queries", [{"category": "jobs", "query": "jobs available today", "job_type": ""}])
-    result = json.dumps({
-        "location": config.get("default_location", "Canada"),
-        "queries": queries,
-        "max_results": int(config.get("max_results", 30)),
-        "rss_feeds": _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS),
-        "tech_job_keywords": _config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS),
-        "auto_post": bool(config.get("auto_post", False)),
-    }, ensure_ascii=False)
-    log.info("[job_hunt] gen_job_search_plan: location=%s, max_results=%d, feeds=%d, keywords=%d",
-             config.get("default_location", "Canada"), int(config.get("max_results", 30)),
-             len(_config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)),
-             len(_config_list(config, "tech_job_keywords", "TECH_JOB_KEYWORDS", DEFAULT_TECH_JOB_KEYWORDS)))
-    return result
-
-
 def _cap_from_config(config: dict[str, Any], key: str, env_key: str, default: int) -> int:
     raw = os.getenv(env_key, "").strip() or config.get(key)
     try:
@@ -887,238 +908,281 @@ def _max_posts_per_source(config: dict[str, Any]) -> tuple[int, int]:
     return rss_cap, email_cap
 
 
-def fetch_today_jobs(config: dict[str, Any] | None = None, *, include_email: bool = False) -> list[dict]:
-    """Combined RSS (+ optional email) fetch, capped per source and deduped."""
-    config = config if config is not None else _job_config()
-    rss_cap, email_cap = _max_posts_per_source(config)
-    postings = fetch_today_jobs_from_rss(config)[:rss_cap] if rss_cap else []
-    if include_email and email_cap:
-        postings += fetch_today_jobs_from_email(config)[:email_cap]
-    return postings
+# ── Incremental job processing for graph loops ───────────────────────────
 
+def fetch_all_sources_into_state(plan_json: str, *, state=None) -> str:
+    """Fetch all RSS + email jobs into state, one source at a time.
 
-def execute_job_search_plan(plan_json: str, *, state=None, include_email: bool = False) -> str:
-    """Node 2: Execute the Lane D job search plan (RSS + optional email).
+    Returns a summary and stores ALL postings in state.job_all_postings
+    with metadata about which source each came from.
 
-    When include_email is set (or the config enables it), same-day email job
-    alerts are folded in and capped per source. Raw postings are ALSO stashed
-    under state.data["job_raw_postings"] as Python objects (RAM, not a JSON
-    string) so per-post drafting can inject one posting's source at a time
-    without serializing the whole batch through a 4000-char $result: string.
+    Fetch results are persisted to a local disk cache (skillsets/job_fetch_cache/
+    fetch_<date>.json). A fresh cache is reused to avoid re-reading the whole
+    mailbox on every graph re-run; only stale caches trigger a live fetch.
     """
     plan = json.loads(plan_json)
     config = _job_config()
-    include_email = bool(include_email) or bool(config.get("include_email"))
-    log.info("[job_hunt] execute_job_search_plan: include_email=%s, max_results=%d",
-             include_email, int(plan.get("max_results") or config.get("max_results") or 30))
-    postings = fetch_today_jobs(config, include_email=include_email)
+    include_email = bool(config.get("include_email") and config.get("email_source", {}).get("enabled", True))
+    log.info("[job_hunt] fetch_all_sources_into_state: include_email=%s", include_email)
+
+    all_postings = []
+    source_info = []
+    date_str = local_now().strftime("%Y-%m-%d")
     max_results = int(plan.get("max_results") or config.get("max_results") or 30)
-    queries_executed = [q.get("category", "jobs") for q in plan.get("queries", [])]
-    sources = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)
-    if include_email:
-        sources = list(sources) + ["email"]
-    result = {
-        "location": plan.get("location", config.get("default_location", "Canada")),
-        "total_found": len(postings[:max_results]),
-        "queries_executed": queries_executed,
-        "sources": sources,
-        "postings": postings[:max_results],
-    }
-    result_json = json.dumps(result, ensure_ascii=False)
-    log.info("[job_hunt] execute_job_search_plan: found=%d postings from sources=%s",
-             len(postings[:max_results]), sources)
+
+    # 1) Fresh disk cache → reuse, skip live fetch/email reads entirely.
+    cached = _job_cache_read(date_str)
+    if _cache_is_fresh(cached, config):
+        stored = cached.get("postings") or []
+        all_postings = [dict(p) for p in stored if isinstance(p, dict)]
+        source_info = list(cached.get("sources") or [])
+        log.info("[job_hunt] fetch_all_sources_into_state: reused fresh cache (%d postings, cached_at=%s)",
+                 len(all_postings), cached.get("cached_at", "?"))
+    else:
+        # 2) No fresh cache → fetch each RSS feed separately and tag postings.
+        rss_cap, email_cap = _max_posts_per_source(config)
+        feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", DEFAULT_TECH_JOB_FEEDS)
+
+        for feed_idx, feed_url in enumerate(feeds):
+            log.info("[job_hunt] fetch_all_sources_into_state: fetching RSS feed %d/%d: %s",
+                     feed_idx + 1, len(feeds), feed_url[:80])
+            config_single = dict(config)
+            config_single["rss_feeds"] = [feed_url]
+            feed_postings = fetch_today_jobs_from_rss(config_single)[:rss_cap]
+            for p in feed_postings:
+                p["_source_idx"] = feed_idx
+                p["_source_type"] = "rss"
+                p["_source_name"] = f"rss_{feed_idx}"
+            all_postings.extend(feed_postings)
+            source_info.append({
+                "type": "rss",
+                "index": feed_idx,
+                "url": feed_url,
+                "count": len(feed_postings),
+            })
+
+        # 3) Fetch email if enabled (message count tunable via email_max_messages).
+        if include_email and email_cap:
+            log.info("[job_hunt] fetch_all_sources_into_state: fetching email " +
+                     "(max %d messages)", _email_max_messages(config))
+            email_postings = fetch_today_jobs_from_email(config)[:email_cap]
+            email_idx = len(feeds)
+            for p in email_postings:
+                p["_source_idx"] = email_idx
+                p["_source_type"] = "email"
+                p["_source_name"] = "email"
+            all_postings.extend(email_postings)
+            source_info.append({
+                "type": "email",
+                "index": email_idx,
+                "count": len(email_postings),
+            })
+
+        all_postings = all_postings[:max_results]
+
+        # 4) Persist so subsequent graph runs reuse disk instead of re-reading.
+        _job_cache_write(date_str, {
+            "cached_at": local_now().isoformat(),
+            "postings": all_postings,
+            "sources": source_info,
+            "max_results": max_results,
+        })
+
+    log.info("[job_hunt] fetch_all_sources_into_state: total=%d postings from %d sources",
+             len(all_postings), len(source_info))
+    
+    # Store in state for incremental processing
     if state is not None:
-        if include_email:
-            state.data["job_search_email_json"] = result_json
-            state.data["job_raw_postings_email"] = postings[:max_results]
-        else:
-            state.data["job_search_json"] = result_json
-            state.data["job_raw_postings"] = postings[:max_results]
-    return result_json
+        state.data["job_all_postings"] = all_postings
+        state.data["job_source_info"] = source_info
+        state.data["job_current_index"] = 0
+        state.data["job_total"] = len(all_postings)
+    
+    result = {
+        "total_found": len(all_postings),
+        "sources": source_info,
+        "max_results": max_results,
+    }
+    return json.dumps(result, ensure_ascii=False)
 
 
-def draft_job_posts_from_results(
-    results_json: str,
+def get_next_job(state=None, worker_id: str = "0") -> str:
+    """Get the next unprocessed job from state.job_all_postings (thread-safe).
+    
+    Uses atomic increment of state.job_current_index. Returns empty when done.
+    """
+    import threading
+    if state is None:
+        return json.dumps({"done": True, "reason": "no_state"})
+    
+    # Use a lock in state for thread-safe index access
+    lock = state.data.get("_job_index_lock")
+    if lock is None:
+        lock = threading.Lock()
+        state.data["_job_index_lock"] = lock
+    
+    with lock:
+        all_postings = state.data.get("job_all_postings", [])
+        current_idx = state.data.get("job_current_index", 0)
+        
+        if current_idx >= len(all_postings):
+            log.info("[job_hunt] get_next_job: worker=%s all %d jobs processed", worker_id, len(all_postings))
+            return json.dumps({"done": True, "total_processed": current_idx})
+        
+        job = all_postings[current_idx]
+        state.data["job_current_index"] = current_idx + 1
+        state.data["job_current"] = job
+        
+        log.info("[job_hunt] get_next_job: worker=%s returning job %d/%d (source=%s, title=%s)",
+                 worker_id, current_idx + 1, len(all_postings), job.get("_source_name"), job.get("title", "")[:50])
+        
+        return json.dumps({
+            "done": False,
+            "job": job,
+            "index": current_idx,
+            "total": len(all_postings),
+            "remaining": len(all_postings) - current_idx - 1,
+            "worker_id": worker_id,
+        })
+
+
+def draft_single_job(
+    job_json: str,
     template: str = "",
     *,
     client=None,
     model: str | None = None,
     state=None,
-    results_email_json: str = "",
 ) -> str:
-    """Node 3: Enrich fields (optional LLM) then format one draft per job.
-
-    When the graph executor injects client/model, empty post_fields keys are
-    filled from each posting's title + RSS summary (and its fetched page)
-    before format_job_post. Falls back to pure mapping when no LLM is
-    available. Large results/draft payloads are carried through graph state
-    because $result: substitution truncates node output at 4000 chars.
-    """
-    if state is not None:
-        full = state.data.get("job_search_json")
-        if full:
-            results_json = full
-        # Also check for email results in state
-        full_email = state.data.get("job_search_email_json")
-        if full_email:
-            results_email_json = full_email
-    results = json.loads(results_json)
+    """Draft a single job post from one job dict."""
+    if state is None:
+        return json.dumps({"success": False, "reason": "no_state"})
+    
+    job = json.loads(job_json).get("job")
+    if not job:
+        return json.dumps({"success": False, "reason": "no_job_in_input"})
+    
     config = _job_config()
-    raw = state.data.get("job_raw_postings") if state is not None else None
-    postings = raw if isinstance(raw, list) else results.get("postings", [])
-    
-    # Merge email postings if provided
-    if results_email_json:
-        try:
-            email_results = json.loads(results_email_json)
-            email_postings = email_results.get("postings", [])
-            if email_postings:
-                log.info("[job_hunt] draft_job_posts_from_results: merging %d email postings", len(email_postings))
-                postings.extend(email_postings)
-        except Exception as e:
-            log.warning("[job_hunt] draft_job_posts_from_results: failed to parse email results: %s", e)
-    
-    log.info("[job_hunt] draft_job_posts_from_results: total_postings=%d, raw_available=%s",
-             len(postings), "yes" if raw else "no")
-    if not postings:
-        log.warning("[job_hunt] draft_job_posts_from_results: no postings found")
-        return json.dumps({"success": False, "reason": "no_jobs_found", "drafts": []}, ensure_ascii=False)
-
-    fields = config.get("post_fields")
-    if not isinstance(fields, list) or not fields:
-        log.error("[job_hunt] draft_job_posts_from_results: missing post_fields in config")
-        return json.dumps({
-            "success": False,
-            "reason": "missing_post_fields",
-            "config_path": str(_job_config_path()),
-            "drafts": [],
-        }, ensure_ascii=False)
-
     today = local_now().strftime("%Y-%m-%d")
-    rss_cap, email_cap = _max_posts_per_source(config)
-    rss_selected = [p for p in postings if p.get("source", "rss") != "email"][:rss_cap]
-    email_selected = [p for p in postings if p.get("source") == "email"][:email_cap]
-    selected = (rss_selected + email_selected)
-    log.info("[job_hunt] draft_job_posts_from_results: selected=%d (rss=%d, email=%d), caps=(rss=%d, email=%d), used_llm=%s",
-             len(selected), len(rss_selected), len(email_selected), rss_cap, email_cap, used_llm)
-    if not selected:
-        return json.dumps({"success": False, "reason": "no_jobs_found", "drafts": []}, ensure_ascii=False)
+    
+    # Enrich with LLM if available
     field_keys = _field_keys_from_config(config)
     used_llm = client is not None and bool(model)
     fetch_pages = _should_fetch_job_page(config)
-
-    # Fetch page text lazily per source so we never hold every posting's page
-    # content in RAM at once; each posting's source is injected only while that
-    # single post is being synthesized, then dropped.
-    page_texts: list[str] = []
+    
+    enriched = dict(job)
     if used_llm and fetch_pages:
-        from concurrent.futures import ThreadPoolExecutor
-
-        urls = [str(p.get("url") or "").strip() for p in selected]
-        if urls:
-            with ThreadPoolExecutor(max_workers=min(5, len(urls))) as ex:
-                page_texts = list(ex.map(_fetch_job_page_text, urls))
-
-    drafts = []
-    for i, posting in enumerate(selected):
-        enriched = dict(posting)
-        if used_llm:
-            if page_texts and page_texts[i]:
-                enriched["page_content"] = page_texts[i]
-            enriched = enrich_posting_fields_with_llm(
-                enriched, field_keys, client=client, model=model, state=state,
-            )
-        enriched.pop("page_content", None)
-        try:
-            text = format_job_post(enriched, date_text=today, config=config)
-        except ValueError as e:
-            log.error("[job_hunt] draft_job_posts_from_results: format failed for posting %d: %s", i, e)
-            return json.dumps({"success": False, "reason": str(e), "drafts": []}, ensure_ascii=False)
-        slug_src = str(enriched.get("title") or posting.get("title") or f"job_{i}")
-        slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or f"job_{i}"
-        drafts.append({
-            "text": text,
-            "posting": enriched,
-            "postings": [enriched],
-            "category": slug if len(selected) > 1 else "",
-            "llm_enriched": used_llm and enriched != posting,
-            "topic_tag": _job_post_topic_tag(config),
-        })
-
-    result_json = json.dumps({
-        "success": True,
-        "total_drafts": len(drafts),
-        "draft_policy": "post_fields_llm" if used_llm else "post_fields",
-        "config_path": str(_job_config_path()),
-        "location": results.get("location", ""),
-        "date": today,
-        "drafts": drafts,
-    }, ensure_ascii=False)
-    if state is not None:
-        state.data["job_drafts_json"] = result_json
-    return result_json
-
-
-def save_or_post_job_drafts(drafts_json: str, auto_post: str = "false", *, state=None) -> str:
-    """Node 4: Save Lane D draft(s) for human review; posting happens after approval."""
-    from agentic.toolkit.social import job_post_social_root
-
-    if state is not None:
-        full = state.data.get("job_drafts_json")
-        if full:
-            drafts_json = full
-    drafts_data = json.loads(drafts_json)
-    log.info("[job_hunt] save_or_post_job_drafts: total_drafts=%d, auto_post=%s",
-             len(drafts_data.get("drafts", [])), auto_post)
-    if not drafts_data.get("drafts"):
-        log.warning("[job_hunt] save_or_post_job_drafts: no drafts to save")
-        return json.dumps({"success": False, "reason": "no_drafts", "saved": []}, ensure_ascii=False)
-
-    auto_requested = str(auto_post).lower() in {"true", "1", "yes", "on"}
-    date_str = drafts_data.get("date", local_now().strftime("%Y-%m-%d"))
-    base_dir = job_post_social_root() / date_str
-    saved = []
-
-    for i, draft in enumerate(drafts_data.get("drafts", [])):
-        cat = draft.get("category", f"post_{i}")
-        draft_dir = base_dir / cat if cat else base_dir
-        draft_dir.mkdir(parents=True, exist_ok=True)
-        text = draft.get("text", "").strip()
-        (draft_dir / "draft_post.txt").write_text(text + "\n", encoding="utf-8")
-        (draft_dir / "review.md").write_text(
-            f"# Job Post Draft — {date_str} ({cat})\n\n"
-            f"## Draft post\n\n{text}\n\n"
-            "## Review checklist\n\n"
-            "- [ ] Job details look correct\n"
-            "- [ ] Link opens to the source posting\n"
-            "- [ ] Approved to post to Meta Threads\n",
-            encoding="utf-8",
+        url = str(job.get("url") or "").strip()
+        if url:
+            enriched["page_content"] = _fetch_job_page_text(url)
+    
+    if used_llm:
+        enriched = enrich_posting_fields_with_llm(
+            enriched, field_keys, client=client, model=model, state=state,
         )
-        posting_meta = dict(draft.get("posting") or {})
-        posting_meta.pop("page_content", None)
-        postings_meta = []
-        for p in draft.get("postings") or []:
-            item = dict(p)
-            item.pop("page_content", None)
-            postings_meta.append(item)
-        meta = {
-            "success": True,
-            "draft_dir": str(draft_dir),
-            "provider": "threads",
-            "posting": posting_meta,
-            "postings": postings_meta,
-            "llm_enriched": bool(draft.get("llm_enriched")),
-            "created_at": datetime.now().isoformat(),
-            "posted": False,
-            "human_approved": False,
-            "topic_tag": draft.get("topic_tag", ""),
-        }
-        (draft_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        saved.append({"category": cat, "draft_dir": str(draft_dir), "auto_posted": False})
-        log.info("[job_hunt] save_or_post_job_drafts: saved draft %d/%d to %s",
-                 i+1, len(drafts_data.get("drafts", [])), draft_dir)
+    enriched.pop("page_content", None)
+    
+    try:
+        text = format_job_post(enriched, date_text=today, config=config)
+    except ValueError as e:
+        log.error("[job_hunt] draft_single_job: format failed: %s", e)
+        return json.dumps({"success": False, "reason": str(e)})
+    
+    slug_src = str(enriched.get("title") or job.get("title") or "job")
+    slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or "job"
+    
+    draft = {
+        "text": text,
+        "posting": enriched,
+        "postings": [enriched],
+        "category": slug,
+        "llm_enriched": used_llm and enriched != job,
+        "topic_tag": _job_post_topic_tag(config),
+        "source_name": job.get("_source_name"),
+        "source_type": job.get("_source_type"),
+    }
+    
+    # Store in state
+    drafts_list = state.data.get("job_drafts_list", [])
+    drafts_list.append(draft)
+    state.data["job_drafts_list"] = drafts_list
+    
+    log.info("[job_hunt] draft_single_job: drafted job %s (source=%s)", slug, job.get("_source_name"))
+    return json.dumps({"success": True, "draft": draft})
 
-    return json.dumps({"success": True, "total_saved": len(saved), "auto_posted": False, "auto_post_requested": auto_requested, "saved": saved}, ensure_ascii=False)
+
+def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
+    """Save the most recently drafted job to disk."""
+    if state is None:
+        return json.dumps({"success": False, "reason": "no_state"})
+    
+    drafts_list = state.data.get("job_drafts_list", [])
+    if not drafts_list:
+        return json.dumps({"success": False, "reason": "no_drafts"})
+    
+    draft = drafts_list[-1]  # Get most recent
+    from agentic.toolkit.social import job_post_social_root
+    
+    date_str = local_now().strftime("%Y-%m-%d")
+    cat = draft.get("category", "post")
+    draft_dir = job_post_social_root() / date_str / cat
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    
+    text = draft.get("text", "").strip()
+    (draft_dir / "draft_post.txt").write_text(text + "\n", encoding="utf-8")
+    (draft_dir / "review.md").write_text(
+        f"# Job Post Draft — {date_str} ({cat})\n\n"
+        f"## Draft post\n\n{text}\n\n"
+        "## Review checklist\n\n"
+        "- [ ] Job details look correct\n"
+        "- [ ] Link opens to the source posting\n"
+        "- [ ] Approved to post to Meta Threads\n",
+        encoding="utf-8",
+    )
+    
+    posting_meta = dict(draft.get("posting") or {})
+    posting_meta.pop("page_content", None)
+    postings_meta = []
+    for p in draft.get("postings") or []:
+        item = dict(p)
+        item.pop("page_content", None)
+        postings_meta.append(item)
+    
+    meta = {
+        "success": True,
+        "draft_dir": str(draft_dir),
+        "provider": "threads",
+        "posting": posting_meta,
+        "postings": postings_meta,
+        "llm_enriched": bool(draft.get("llm_enriched")),
+        "created_at": datetime.now().isoformat(),
+        "posted": False,
+        "human_approved": False,
+        "topic_tag": draft.get("topic_tag", ""),
+        "source_name": draft.get("source_name"),
+        "source_type": draft.get("source_type"),
+    }
+    (draft_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    
+    log.info("[job_hunt] save_single_job_draft: saved to %s", draft_dir)
+    return json.dumps({"success": True, "draft_dir": str(draft_dir)})
+
+
+def check_jobs_remaining(state=None) -> str:
+    """Check if more jobs remain to be processed. Used for loop condition.
+    
+    Returns "more" if jobs remain, "done" if all processed.
+    """
+    if state is None:
+        return "done"
+    
+    current_idx = state.data.get("job_current_index", 0)
+    total = state.data.get("job_total", 0)
+    more = current_idx < total
+    
+    result = "more" if more else "done"
+    log.info("[job_hunt] check_jobs_remaining: %s (current=%d, total=%d)", result, current_idx, total)
+    return result
 
 
 def _safe_json_loads(text: str | None, default: dict | None = None) -> dict:

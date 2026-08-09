@@ -257,6 +257,9 @@ def _log_ctx(logger, label: str, tok: int, latency_ms: float,
                 label, latency_ms, tok, preview)
 
 
+_TOKENIZE_FAILED_ONCE = False
+
+
 def _count_tokens(text: str) -> int:
     """
     Best-effort token count via the local LLM server's /tokenize endpoint
@@ -264,6 +267,7 @@ def _count_tokens(text: str) -> int:
     Falls back to a crude whitespace-split estimate on any failure so
     debug output degrades gracefully instead of raising.
     """
+    global _TOKENIZE_FAILED_ONCE
     if not text:
         return 0
     try:
@@ -280,7 +284,13 @@ def _count_tokens(text: str) -> int:
             if isinstance(tokens, list):
                 return len(tokens)
     except Exception:
-        log.warning("orchestrate: tokenizer failed, falling back to word count")
+        if not _TOKENIZE_FAILED_ONCE:
+            _TOKENIZE_FAILED_ONCE = True
+            log.warning(
+                "orchestrate: tokenizer endpoint unavailable (%s/tokenize); "
+                "using word-count estimate (warning shown once)",
+                _TOKENIZE_BASE_URL,
+            )
     # crude fallback — roughly ~0.75 tokens/word for English text
     return max(1, int(len(text.split()) * 1.3))
 

@@ -348,6 +348,54 @@ def _playbook_file() -> Path:
     return user_state_dir(current_user_id()) / raw
 
 
+def _gen_job_worker_nodes(
+    fetch_tool: str,
+    check_tool: str,
+    get_tool: str,
+    draft_tool: str,
+    save_tool: str,
+    report_tool: str,
+    max_workers: int,
+) -> list[dict[str, Any]]:
+    """Build the gen_job_post node list for `max_workers` parallel worker chains.
+
+    Each worker is an independent chain:
+        check_more_N (loops while jobs remain) -> get_job_N -> draft_one_N -> save_one_N
+    `report_tool` runs once all workers' save steps finish. Tuning the playbook's
+    `max_workers` (JSON) or the JOB_HUNT_MAX_WORKERS env increases throughput at
+    the cost of more concurrent LLM calls.
+    """
+    max_workers = max(1, int(max_workers or 1))
+    nodes: list[dict[str, Any]] = [
+        {"id": "fetch_all", "tool": fetch_tool, "args": {"plan_json": "$prompt"}},
+    ]
+    save_deps: list[str] = []
+    for idx in range(1, max_workers + 1):
+        worker = str(idx)
+        chk = f"check_more_{idx}"
+        get = f"get_job_{idx}"
+        draft = f"draft_one_{idx}"
+        save = f"save_one_{idx}"
+        nodes.extend([
+            {"id": chk, "tool": check_tool, "depends_on": ["fetch_all"],
+             "loop_to": chk, "loop_condition": {"equals": "more"}, "max_visits": 200},
+            {"id": get, "tool": get_tool, "depends_on": [chk],
+             "args": {"worker_id": f"w{idx}"}},
+            {"id": draft, "tool": draft_tool, "depends_on": [get],
+             "args": {"job_json": f"$result:{get}", "template": ""}},
+            {"id": save, "tool": save_tool, "depends_on": [draft],
+             "args": {"auto_post": "false"}},
+        ])
+        save_deps.append(save)
+    nodes.append({
+        "id": "report",
+        "tool": report_tool,
+        "depends_on": save_deps,
+        "args": {"plan": "$result:fetch_all", "search": "{}", "draft": "{}", "save": "{}"},
+    })
+    return nodes
+
+
 def _default_playbooks() -> list[dict[str, Any]]:
     """Built-in starter plans. User-promoted plans are appended on disk.
 
@@ -711,10 +759,10 @@ def _default_playbooks() -> list[dict[str, Any]]:
         },
 {
             "id": "gen_job_post",
-            "name": "Fetch, draft, and save job listings from configured RSS feeds",
+            "name": "Fetch, draft, and save job listings from configured RSS feeds (parallel workers)",
             "triggers": [
                 "draft job", "draft a job posting", "job listing",
-                "daily job", "find jobs", "fetch jobs", "search job listings",
+                "daily job", "today's job", "today's job posts", "find jobs", "fetch jobs", "search job listings",
             ],
             "semantic_triggers": [
                 "draft a job posting for social media",
@@ -722,23 +770,17 @@ def _default_playbooks() -> list[dict[str, Any]]:
                 "create draft job posts from RSS results",
                 "run the daily job draft pipeline",
                 "search for job listings",
+                "today's job posts",
+                "today's jobs",
             ],
             "requires_any": ["job", "jobs", "posting", "hiring", "career"],
             "capabilities": ["research"],
-            "nodes": [
-                {"id": "plan",   "tool": "gen_job_search_plan",   "args": {"prompt": "$prompt", "config_source": ""}},
-                {"id": "search_rss", "tool": "execute_job_search_plan", "depends_on": ["plan"],
-                 "args": {"plan_json": "$result:plan", "include_email": False}},
-                {"id": "search_email", "tool": "execute_job_search_plan", "depends_on": ["plan"],
-                 "args": {"plan_json": "$result:plan", "include_email": True}},
-                {"id": "draft",  "tool": "draft_job_posts_from_results", "depends_on": ["search_rss", "search_email"],
-                 "args": {"results_json": "$result:search_rss", "results_email_json": "$result:search_email", "template": ""}},
-                {"id": "save",   "tool": "save_or_post_job_drafts", "depends_on": ["draft"],
-                 "args": {"drafts_json": "$result:draft", "auto_post": "false"}},
-                {"id": "report", "tool": "report_job_run", "depends_on": ["save"],
-                 "args": {"plan": "$result:plan", "search": "$result:search_rss",
-                           "draft": "$result:draft", "save": "$result:save"}},
-            ],
+            "max_workers": 2,
+            "nodes": _gen_job_worker_nodes(
+                "fetch_all_sources_into_state", "check_jobs_remaining", "get_next_job",
+                "draft_single_job", "save_single_job_draft", "report_job_run",
+                int(os.getenv("JOB_HUNT_MAX_WORKERS", "2")),
+            ),
         },
     ]
 
@@ -912,19 +954,44 @@ def _substitute(value: Any, prompt: str, results: dict[str, NodeResult],
 _POST_ACTION_TERMS = ("post", "publish", "submit", "share", "post now", "upload", "send")
 _POST_CONTENT_TERMS = ("job", "draft", "post", "story", "article", "update",
                        "content", "note", "message", "listing")
+# Explicit references to an artifact that ALREADY exists (definite/possessive/
+# deictic + noun). These unambiguously publish content, even when a word like
+# "draft" also appears ("post the draft", "share this report", "get the note").
+_POST_EXISTING_REF = (
+    "post the draft", "post the post", "post my draft", "publish the draft",
+    "publish this ", "publish my ", "publish the note", "post the report",
+    "publish the report", "post this ", "post that ", "post my ", "post it",
+    "post them", "my post", "share the ", "share this ", "share that ",
+    "share my ", "share it", "submit the ", "submit this ", "submit my ",
+    "send the note", "send the post", "send it", "upload the ", "the draft",
+    "the post", "the note", "the report", "the listing", "the job posts",
+    "the posts", "it on", "it to", "in thread", "now", "right away",
+)
 _DRAFT_ACTION_TERMS = ("draft", "search", "find", "fetch", "create", "make",
                        "write", "generate", "collect", "scrape", "list",
-                       "run", "schedule", "daily", "look for", "hunt", "scan")
+                       "run", "schedule", "daily", "look for", "hunt", "scan",
+                       "do")
 
 
 def _is_post_existing_content(prompt: str) -> bool:
     """True when the prompt asks to post/publish something already produced,
-    rather than to draft/search for new content."""
+    rather than to draft/search for new content.
+
+    Resolution order:
+      1. Explicit existing-content reference ("post the draft", "share it",
+         "the job posts", "send the note") -> publish intent.
+      2. Creation verb ("do", "draft", "generate", "run", "today's") -> the
+         plural noun "posts" is the OUTPUT of generation, not a publish target.
+      3. Bare publish verb + content noun -> publish intent (e.g. "post a job").
+    """
     t = prompt.casefold()
+    if any(v in t for v in _POST_EXISTING_REF):
+        return True
+    if any(v in t for v in _DRAFT_ACTION_TERMS):
+        return False
     has_action = any(v in t for v in _POST_ACTION_TERMS)
     has_content = any(n in t for n in _POST_CONTENT_TERMS)
-    has_draft = any(v in t for v in _DRAFT_ACTION_TERMS)
-    return has_action and has_content and not has_draft
+    return bool(has_action and has_content)
 
 
 _EMAIL_ACTION_TERMS = ("send", "email", "mail", "inbox", "reply to", "draft an email")
@@ -983,7 +1050,21 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
         ranked = [(s, p) for s, p in ranked if p is not plan]
         if not ranked or ranked[0][0] <= 0:
             return None
-        plan = ranked[0][1]
+    plan = ranked[0][1]
+    # Tunable parallel workers: regenerate the gen_job_post worker chains from
+    # the playbook's max_workers setting (JSON / env) rather than trusting the
+    # possibly-stale node list baked into playbook.json.
+    if plan.get("id") == "gen_job_post":
+        env_mw = os.getenv("JOB_HUNT_MAX_WORKERS", "").strip()
+        mw = env_mw if env_mw else (plan.get("max_workers") or "2")
+        try:
+            mw_int = max(1, int(mw))
+        except (TypeError, ValueError):
+            mw_int = 2
+        plan = {**plan, "max_workers": mw_int, "nodes": _gen_job_worker_nodes(
+            "fetch_all_sources_into_state", "check_jobs_remaining", "get_next_job",
+            "draft_single_job", "save_single_job_draft", "report_job_run", mw_int,
+        )}
         extras = _placeholder_extras(user_input)
     nodes = []
     for raw in plan.get("nodes", []):
@@ -1013,7 +1094,7 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
         goal=user_input,
         nodes=tuple(nodes),
         reducers=dict(plan.get("reducers") or {}),
-        _extras=extras,
+        _extras={**extras, "max_workers": plan.get("max_workers") or 2},
     )
     return graph
 
@@ -1177,16 +1258,18 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     try:
         from agentic.toolkit.job_hunt import (
             search_jobs,
-            gen_job_search_plan, execute_job_search_plan,
-            draft_job_posts_from_results, save_or_post_job_drafts, report_job_run,
+            report_job_run,
+            fetch_all_sources_into_state, get_next_job, draft_single_job,
+            save_single_job_draft, check_jobs_remaining,
         )
         mapping.update({
             "search_jobs": search_jobs,
-            "gen_job_search_plan": gen_job_search_plan,
-            "execute_job_search_plan": execute_job_search_plan,
-            "draft_job_posts_from_results": draft_job_posts_from_results,
-            "save_or_post_job_drafts": save_or_post_job_drafts,
             "report_job_run": report_job_run,
+            "fetch_all_sources_into_state": fetch_all_sources_into_state,
+            "get_next_job": get_next_job,
+            "draft_single_job": draft_single_job,
+            "save_single_job_draft": save_single_job_draft,
+            "check_jobs_remaining": check_jobs_remaining,
         })
     except Exception as exc:
         log.debug("job tools unavailable for graph executor: %s", exc)
@@ -1443,7 +1526,9 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
 
     seq = len(ordered)
 
-    with ThreadPoolExecutor(max_workers=GRAPH_MAX_WORKERS) as pool:
+    graph_max_workers = int(extras.get("max_workers") or GRAPH_MAX_WORKERS)
+
+    with ThreadPoolExecutor(max_workers=graph_max_workers) as pool:
         while pending:
             ready = [node for node in pending.values() if all(dep in results for dep in node.depends_on)]
             if not ready:
@@ -1585,9 +1670,19 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
                                 delete_node_checkpoint(run_id, reset_id)
                         ordered = [r for r in ordered if r.node_id not in to_reset]
 
-    final_answer = _synthesize_without_llm(graph, tuple(ordered))
-    if run_id:
-        clear_checkpoint(run_id)
+    try:
+        final_answer = _synthesize_without_llm(graph, tuple(ordered))
+    finally:
+        if run_id:
+            clear_checkpoint(run_id)
+    # Job pipeline: the fetch cache is a mid-run scratch pad. Delete it once the
+    # run finishes (success OR failure) so the next run re-fetches fresh jobs.
+    try:
+        if graph.id == "gen_job_post":
+            from agentic.toolkit.job_hunt import clear_job_fetch_cache
+            clear_job_fetch_cache()
+    except Exception as exc:
+        log.warning("graph_engine: failed to clear job fetch cache: %s", exc)
     return GraphRunResult(graph=graph, results=tuple(ordered), final_answer=final_answer, final_state=dict(state.data))
 
 

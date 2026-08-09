@@ -9,9 +9,10 @@ from social.services import env, err
 from system.userspace import user_state_path
 
 # Suppress CryptographyDeprecationWarning for TripleDES (used by protonmail-api-client)
+# Note: CryptographyDeprecationWarning subclasses UserWarning, not DeprecationWarning.
 warnings.filterwarnings(
     "ignore",
-    category=DeprecationWarning,
+    category=Warning,
     message="TripleDES has been moved to cryptography.hazmat.decrepit.ciphers.algorithms.TripleDES",
 )
 

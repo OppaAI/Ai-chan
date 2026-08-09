@@ -92,6 +92,8 @@
   "include_email": true,
   "max_rss_posts": 10,
   "max_email_posts": 10,
+  "email_max_messages": 20,
+  "cache_fetch_minutes": 30,
   "email_source": {
     "enabled": true,
     "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
