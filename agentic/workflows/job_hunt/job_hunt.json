@@ -1,0 +1,101 @@
+{
+  "default_location": "Canada",
+  "radius_km": 50,
+  "nearby_locations": [],
+  "max_results": 30,
+  "max_age_days": 30,
+  "fallback_max_age_days": 60,
+  "default_job_type": "",
+  "include_remote": true,
+  "queries": [
+    {
+      "category": "tech",
+      "query": "tech jobs available today",
+      "job_type": ""
+    }
+  ],
+  "min_salary_hourly": 20,
+  "min_salary_annual": 45000,
+  "auto_post": false,
+  "post_fields": [
+    {
+      "label": "Job Post - ",
+      "key": "date"
+    },
+    {
+      "label": "Organization: ",
+      "key": "organization"
+    },
+    {
+      "label": "Position: ",
+      "key": "title"
+    },
+    {
+      "label": "Type: ",
+      "key": "employment_type"
+    },
+    {
+      "label": "Location: ",
+      "key": "location"
+    },
+    {
+      "label": "Salary: ",
+      "key": "salary"
+    },
+    {
+      "label": "Experience: ",
+      "key": "experience"
+    },
+    {
+      "label": "Close: ",
+      "key": "close_date"
+    },
+    {
+      "label": "",
+      "key": ""
+    },
+    {
+      "label": "See details at:\n",
+      "key": "url"
+    }
+  ],
+  "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)",
+  "rss_feeds": [
+    "https://www.civicjobs.ca/rss/region?id=9&region=Lower+Mainland+-+BC",
+    "https://www.jobbank.gc.ca/jobsearch/feed/jobSearchRSSfeed?d=250&fage=2&mid=39070&sort=D&rows=100&fskl=%C2%AC15141&fcat=1"
+  ],
+  "tech_job_keywords": [
+    "software",
+    "developer",
+    "programmer",
+    "engineer",
+    "devops",
+    "cloud",
+    "data",
+    "database",
+    "systems",
+    "network",
+    "cybersecurity",
+    "security",
+    "information technology",
+    "web",
+    "frontend",
+    "backend",
+    "full stack",
+    "qa",
+    "quality assurance",
+    "technical support"
+  ],
+  "date_range_days": 2,
+  "email_date_range_days": 7,
+  "dedup_days": 3,
+  "include_email": true,
+  "max_rss_posts": 10,
+  "max_email_posts": 10,
+  "email_max_messages": 20,
+  "cache_fetch_minutes": 30,
+  "email_source": {
+    "enabled": true,
+    "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
+  }
+}

@@ -77,6 +77,11 @@ def _job_config_path() -> Path:
             return user_path
     except Exception:
         log.warning("job_hunt: failed to resolve per-user config path")
+    # Check workflows/job_hunt/ first (new grouped location)
+    workflow_path = Path(__file__).resolve().parent / "job_hunt.json"
+    if workflow_path.exists():
+        return workflow_path
+    # Fallback to old location
     return Path(__file__).resolve().parents[2] / "agentic" / "skillsets" / "job_hunt.json"
 
 

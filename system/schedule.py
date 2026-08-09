@@ -1633,7 +1633,7 @@ class ScheduleRunner:
         # Try to get a pre-registered PlanGraph from the graph module registry
         registered_graph = None
         try:
-            from agentic.graph.job_hunt import get_graph as _get_graph
+            from agentic.workflows.job_hunt.graph import get_graph as _get_graph
             registered_graph = _get_graph(graph_id)
         except Exception as exc:
             log.debug("Schedule graph: failed to import graph module: %s", exc)

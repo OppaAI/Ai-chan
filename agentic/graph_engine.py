@@ -1106,7 +1106,7 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
     graph_id = plan.get("graph_id") or plan.get("id")
     if graph_id:
         try:
-            from agentic.graph.job_hunt import get_graph as _get_graph
+            from agentic.workflows.job_hunt.graph import get_graph as _get_graph
         except Exception as exc:
             log.debug("graph_engine: failed to import graph module: %s", exc)
             _get_graph = None
@@ -1236,7 +1236,7 @@ def _tool_map() -> dict[str, Callable[..., Any]]:
 def _build_tool_map() -> dict[str, Callable[..., Any]]:
     # Import graph modules to trigger @tool registration
     try:
-        import agentic.graph.job_hunt  # noqa: F401
+        import agentic.workflows.job_hunt.graph  # noqa: F401
     except Exception as exc:
         log.debug("graph_engine: failed to import graph modules: %s", exc)
 
@@ -1336,7 +1336,7 @@ def _build_tool_map() -> dict[str, Callable[..., Any]]:
     except Exception as exc:
         log.debug("repo tools unavailable for graph executor: %s", exc)
     try:
-        from agentic.toolkit.job_hunt import (
+        from agentic.workflows.job_hunt.job_hunt import (
             search_jobs,
             report_job_run,
             fetch_rss_and_email_into_state, get_next_job, draft_single_job,
@@ -1759,7 +1759,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
     # run finishes (success OR failure) so the next run re-fetches fresh jobs.
     try:
         if graph.id == "gen_job_post":
-            from agentic.toolkit.job_hunt import clear_job_fetch_cache
+            from agentic.workflows.job_hunt.job_hunt import clear_job_fetch_cache
             clear_job_fetch_cache()
     except Exception as exc:
         log.warning("graph_engine: failed to clear job fetch cache: %s", exc)

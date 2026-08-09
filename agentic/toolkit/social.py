@@ -1274,7 +1274,7 @@ def _purge_published_jobs_from_ledger(draft_dir: Path) -> None:
     can legitimately reappear after the retention window (published jobs are
     meant to be deleted from the ledger once the social post succeeds)."""
     try:
-        from agentic.toolkit.job_hunt import mark_jobs_published
+        from agentic.workflows.job_hunt.job_hunt import mark_jobs_published
         mark_jobs_published([str(draft_dir)])
     except Exception as e:
         log.warning("social: failed to purge published job from ledger: %s", e)
