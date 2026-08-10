@@ -86,9 +86,13 @@ def highlight_senior(text: str, label: str = "", context_chars: int = 80) -> boo
         return False
 
 
-def progress(msg):
+def progress(msg, elapsed: float | None = None):
     """Print progress message to stderr for immediate visibility."""
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
+    if elapsed is not None:
+        time_str = f" ({elapsed:.2f}s)"
+    else:
+        time_str = ""
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}{time_str}", file=sys.stderr, flush=True)
 
 
 def spinner_thread(stop_event):
@@ -176,8 +180,7 @@ def run_pipeline_steps(args) -> int:
     fetch_raw = jh.fetch_rss_and_email_into_state(json.dumps({"max_results": 30}), state=state)
     fetch_elapsed = time.time() - fetch_start
     fetch_result = json.loads(fetch_raw)
-    progress(f"total_found={fetch_result.get('total_found')}  sources={fetch_result.get('sources')}")
-    progress(f"fetch elapsed: {fetch_elapsed:.2f}s")
+    progress(f"total_found={fetch_result.get('total_found')}  sources={fetch_result.get('sources')}", fetch_elapsed)
 
     # List cache files that were written
     from system.bioclock import local_now
@@ -210,14 +213,19 @@ def run_pipeline_steps(args) -> int:
 
     progress("=== PIPELINE LOOP: get_next_job -> draft_single_job -> save_single_job_draft ===")
     processed = 0
+    loop_start = time.time()
+    
     while True:
         if args.max_jobs is not None and processed >= args.max_jobs:
             progress(f"Reached --max-jobs={args.max_jobs}, stopping loop early")
             break
 
+        step_start = time.time()
         next_result = json.loads(jh.get_next_job(state=state, worker_id="debug"))
+        step_elapsed = time.time() - step_start
+        
         if next_result.get("done"):
-            progress(f"get_next_job: done (total_processed={next_result.get('total_processed')})")
+            progress(f"get_next_job: done (total_processed={next_result.get('total_processed')})", step_elapsed)
             break
 
         job = next_result["job"]
@@ -227,37 +235,53 @@ def run_pipeline_steps(args) -> int:
         print(f"\n{BOLD}--- job {idx+1}/{total} ---{RESET}")
         highlight_senior(posting_text_for_highlight(job), label="raw", context_chars=args.context)
 
+        draft_start = time.time()
         draft_result = json.loads(
             jh.draft_single_job(json.dumps({"job": job}), "", client=None, model=None, state=state)
         )
+        draft_elapsed = time.time() - draft_start
+        
         if not draft_result.get("success"):
-            progress(f"  draft_single_job FAILED: {draft_result.get('reason')}")
+            progress(f"  draft_single_job FAILED: {draft_result.get('reason')}", draft_elapsed)
             continue
 
         draft = draft_result["draft"]
         highlight_senior(draft.get("text", ""), label="formatted draft", context_chars=args.context)
-        progress(f"  llm_enriched={draft.get('llm_enriched')}  category={draft.get('category')}")
+        progress(f"  llm_enriched={draft.get('llm_enriched')}  category={draft.get('category')}", draft_elapsed)
 
         if args.save_drafts:
+            save_start = time.time()
             save_result = json.loads(jh.save_single_job_draft("false", state=state))
+            save_elapsed = time.time() - save_start
+            
             if save_result.get("success"):
-                progress(f"  saved -> {save_result.get('draft_dir')}")
+                progress(f"  saved -> {save_result.get('draft_dir')}", save_elapsed)
             else:
-                progress(f"  save_single_job_draft FAILED: {save_result.get('reason')}")
+                progress(f"  save_single_job_draft FAILED: {save_result.get('reason')}", save_elapsed)
         else:
             progress("  (skipped disk write; pass --save-drafts to persist)")
 
+    loop_elapsed = time.time() - loop_start
+    progress(f"Processing loop completed", loop_elapsed)
+
     progress("=== PIPELINE NODE: check_jobs_remaining ===")
-    progress(f"check_jobs_remaining -> {jh.check_jobs_remaining(state=state)}")
+    check_start = time.time()
+    check_result = jh.check_jobs_remaining(state=state)
+    check_elapsed = time.time() - check_start
+    progress(f"check_jobs_remaining -> {check_result}", check_elapsed)
 
     progress("=== PIPELINE NODE: report_job_run ===")
+    report_start = time.time()
     report = jh.report_job_run(
         plan=fetch_raw,
         search=json.dumps({"total_found": fetch_result.get("total_found")}),
         draft="{}",
         save=json.dumps({"total_saved": processed if args.save_drafts else 0}),
     )
+    report_elapsed = time.time() - report_start
+    progress(f"report_job_run completed", report_elapsed)
     print(report)
+    
     return 0
 
 
@@ -272,6 +296,8 @@ async def main():
     parser.add_argument("--save-drafts", action="store_true", help="In --pipeline mode, actually persist drafts to disk")
     parser.add_argument("--context", type=int, default=80, help="Chars of context shown around a 'senior' match")
     args = parser.parse_args()
+    
+    overall_start = time.time()
     progress("Starting job alert test...")
     
     # Check environment setup first
@@ -314,18 +340,18 @@ async def main():
     if have_email_creds:
         # Connect to MCP server (starts it if needed)
         progress("Connecting to MCP server...")
-        start_time = time.time()
+        mcp_start = time.time()
         mcp_ok = bootstrap_mcp()
+        mcp_elapsed = time.time() - mcp_start
+        
         if not mcp_ok:
-            progress("WARNING: MCP bridge failed — email checking will be unavailable")
+            progress("WARNING: MCP bridge failed — email checking will be unavailable", mcp_elapsed)
+        else:
+            progress(f"MCP server connected", mcp_elapsed)
+        
         client = get_mcp_client()
         if client is None:
             progress("WARNING: MCP client not available — continuing with RSS only")
-        connect_time = time.time() - start_time
-        progress(f"MCP server connected in {connect_time:.2f}s")
-        start_time = time.time()  # reset timer to exclude MCP connect time
-    else:
-        start_time = time.time()
 
     # Default to pipeline mode (run fetch + email/rss cache creation)
     if args.pipeline is None:
@@ -336,8 +362,8 @@ async def main():
         if pipeline_rc != 0:
             return pipeline_rc
 
-    elapsed = time.time() - start_time
-    progress(f"Test completed successfully in {elapsed:.2f}s")
+    overall_elapsed = time.time() - overall_start
+    progress(f"Test completed successfully", overall_elapsed)
     log.info("Test completed successfully")
     return 0
 

@@ -758,6 +758,46 @@ def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool =
         return []
 
 
+def _extract_job_title_from_email_body(body: str) -> str:
+    """Extract job title from email body text.
+    
+    Job alert emails (LinkedIn, Glassdoor, Indeed) typically format the job
+    as "Job Title at Company Name" in the body. This extracts the title.
+    
+    Falls back to first ~50 chars of body if no clear pattern found.
+    """
+    if not body or len(body) < 10:
+        return ""
+    
+    # Common patterns in job alert emails:
+    # 1. "Job Title at Company" or "Title - Company"
+    # 2. First sentence before period
+    # 3. Line with "Position:" or "Job:" prefix
+    
+    lines = body.split("\n")
+    for line in lines:
+        line = line.strip()
+        if not line or len(line) < 5:
+            continue
+        
+        # Skip common non-job lines
+        if any(skip in line.lower() for skip in ["job alert", "new job", "recommended job", 
+                                                    "view job", "apply now", "learn more",
+                                                    "see all", "recently viewed"]):
+            continue
+        
+        # Found a good candidate - clean it up
+        # Remove common job alert prefixes
+        title = re.sub(r"^(position|job|role|title|opening):\s*", "", line, flags=re.IGNORECASE)
+        title = title.split("(")[0].strip()  # Remove parenthetical
+        
+        if len(title) > 10 and len(title) < 200:
+            return title[:150]
+    
+    # Fallback: first 100 chars of body
+    return body[:100].split("\n")[0].strip()
+
+
 def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict[str, Any]) -> dict | None:
     """Convert one MCP Proton message dict into a posting.
 
@@ -766,6 +806,9 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
     this). Only checks left here:
       1. Sender domain (email_source_domains)
       2. job_keywords against cleaned subject+sender+body
+    
+    For email job alerts, the subject is usually generic ("Job Alert", "New Job Recommendation")
+    so we extract the actual job title from the email body instead.
     """
     subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
     if not subject:
@@ -805,9 +848,15 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
         log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
         return None
 
+    # ── Extract actual job title from body (not subject) ────────────────
+    job_title = _extract_job_title_from_email_body(body)
+    if not job_title:
+        # Fallback: use subject if we can't extract from body
+        job_title = subject
+    
     msg_id = str(msg.get("id") or "") or subject.casefold()
     return {
-        "title": subject,
+        "title": job_title,  # ← Extracted from body, not subject
         "organization": sender,
         "url": _extract_first_url(subject, snippet, body) or "",
         "guid": msg_id,
