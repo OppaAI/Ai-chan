@@ -85,11 +85,20 @@ def get_client():
 async def read_messages(client, folder: str, unread: bool, max_results: int, query: str, list_only: bool, message_id: str = "") -> Dict:
     """Read messages using ProtonMail client."""
     try:
+        # Translate generic folder names to ProtonMail label IDs
+        folder_map = {
+            "inbox": "0",
+            "spam": "4",
+            "trash": "3",
+        }
+        folder_lower = folder.lower()
+        protonmail_label = folder_map.get(folder_lower, folder_lower)
+        
         # Get all messages
         all_messages = await asyncio.to_thread(_run_client_call, client.get_messages)
         
         # Filter by folder (0=inbox, 3=trash, 4=spam)
-        folder = folder.lower()
+        folder = protonmail_label
         messages = []
         folder_counts = {}
         
