@@ -1,15 +1,21 @@
 """Shared primitives for agentic workflows (job_hunt, aurora_forecast, …).
 
-Common stages across lanes:
-  trigger → ingest → synthesize → store → notify/post
+Layer 0 stack:
+  Spec → Graph → Nodes (execution.py) → Toolsets (registry/MCP)
 
-This package holds the cross-cutting pieces so each workflow only owns
-its domain-specific fetch/score logic.
+Helpers: config, store, notify, graph registry.
 """
 
 from agentic.workflows.common.config import load_workflow_config, resolve_config_value
+from agentic.workflows.common.execution import (
+    ingest_data,
+    output_user_results,
+    store_data,
+    synthesis_data,
+    verify_results,
+)
 from agentic.workflows.common.graphs import get_graph, list_graphs, register_graph
-from agentic.workflows.common.notify import notify_email, maybe_post_threads
+from agentic.workflows.common.notify import maybe_post_threads, notify_email
 from agentic.workflows.common.store import (
     append_record,
     load_records,
@@ -29,4 +35,9 @@ __all__ = [
     "workflow_data_dir",
     "notify_email",
     "maybe_post_threads",
+    "ingest_data",
+    "store_data",
+    "synthesis_data",
+    "verify_results",
+    "output_user_results",
 ]
