@@ -144,47 +144,44 @@ def _job_config() -> dict[str, Any]:
 
 
 # ── Config value resolution ─────────────────────────────────────────────
-# All three readers below (_config_list/_config_int/_config_bool) share the
-# same "env override wins, else raw config value, else default" resolution
-# order. _config_raw centralizes that so each reader only has to handle its
-# own type coercion.
+# Single entry point for reading a config value: env override wins, else the
+# config-file value, else the given default. `type_` controls coercion:
+# "str" (default), "list", "int", or "bool".
 
-def _config_raw(config: dict[str, Any], key: str, env_key: str) -> Any:
-    """Env override (as str) if set, else the raw config value (any type), else None."""
+def _cfg(config: dict[str, Any], key: str, env_key: str, default: Any = None, type_: str = "str") -> Any:
+    """Resolve a config value: env override > config file value > default.
+
+    type_="list"  -> list[str] (comma-split if env/string, passthrough if list)
+    type_="int"   -> int, clamped to a minimum of 1
+    type_="bool"  -> bool ("1"/"true"/"yes"/"on" are truthy strings)
+    type_="str"   -> raw value (or default if unset)
+    """
     env = os.getenv(env_key, "").strip()
-    if env:
-        return env
-    return config.get(key)
+    raw = env if env else config.get(key)
 
+    if type_ == "list":
+        if isinstance(raw, list):
+            return [str(item).strip() for item in raw if str(item).strip()]
+        if isinstance(raw, str) and raw.strip():
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        return default if default is not None else []
 
-def _config_list(config: dict[str, Any], key: str, env_key: str, default: list[str] | None = None) -> list[str]:
-    """Read a list from config, env, or default. No hardcoded defaults."""
-    raw = _config_raw(config, key, env_key)
-    if isinstance(raw, list):
-        return [str(item).strip() for item in raw if str(item).strip()]
-    if isinstance(raw, str) and raw.strip():
-        return [item.strip() for item in raw.split(",") if item.strip()]
-    return default or []
+    if type_ == "int":
+        try:
+            val = int(raw) if raw else None
+            return max(1, val) if val is not None else (default if default is not None else 1)
+        except (TypeError, ValueError):
+            return default if default is not None else 1
 
+    if type_ == "bool":
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, str):
+            return raw.lower() in {"1", "true", "yes", "on"}
+        return default if default is not None else True
 
-def _config_int(config: dict[str, Any], key: str, env_key: str, default: int | None = None) -> int:
-    """Read an int from config, env, or default."""
-    raw = _config_raw(config, key, env_key)
-    try:
-        val = int(raw) if raw else None
-        return max(1, val) if val is not None else (default or 1)
-    except (TypeError, ValueError):
-        return default or 1
-
-
-def _config_bool(config: dict[str, Any], key: str, env_key: str, default: bool = True) -> bool:
-    """Read a bool from config, env, or default."""
-    raw = _config_raw(config, key, env_key)
-    if isinstance(raw, bool):
-        return raw
-    if isinstance(raw, str):
-        return raw.lower() in {"1", "true", "yes", "on"}
-    return default
+    # type_ == "str"
+    return raw if raw is not None else default
 
 
 def _safe_json_loads(s: str) -> dict[str, Any]:
@@ -224,7 +221,7 @@ def _cache_is_fresh(meta: dict[str, Any] | None, config: dict[str, Any]) -> bool
         return False
     if cached_dt.tzinfo is None:
         cached_dt = cached_dt.replace(tzinfo=local_now().tzinfo)
-    minutes = _config_int(config, "cache_fetch_minutes", "JOB_HUNT_FETCH_CACHE_MINUTES", 30)
+    minutes = _cfg(config, "cache_fetch_minutes", "JOB_HUNT_FETCH_CACHE_MINUTES", 30, "int")
     return (local_now() - cached_dt).total_seconds() <= minutes * 60
 
 
@@ -267,10 +264,9 @@ def _dedupe_key(link: str, guid: str) -> tuple[str, str]:
 
 
 # ── Cross-run dedup ledger ────────────────────────────────────────────────
-DEDUP_STATE_SEEN = "seen"
-DEDUP_STATE_REJECTED = "rejected"
-DEDUP_STATE_PUBLISHED = "published"
-
+# Simple {key: seen_at_iso} map. A job's link/guid key is added the first
+# time it's seen, and removed once its draft has actually been published
+# (mark_jobs_published). No separate "rejected"/"published" states to track.
 
 def _dedup_ledger_path() -> Path:
     """Path to the dedup ledger in user's workflow folder."""
@@ -279,7 +275,8 @@ def _dedup_ledger_path() -> Path:
     return user_state_dir() / "agentic" / "workflows" / "job_hunt" / "ledger.json"
 
 
-def _dedup_ledger_load() -> dict[str, dict[str, Any]]:
+def _dedup_load() -> dict[str, str]:
+    """Load the dedup ledger as {key: seen_at_iso}. Empty dict on any failure."""
     try:
         data = json.loads(_dedup_ledger_path().read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -287,7 +284,7 @@ def _dedup_ledger_load() -> dict[str, dict[str, Any]]:
     return data if isinstance(data, dict) else {}
 
 
-def _dedup_ledger_save(ledger: dict[str, dict[str, Any]]) -> None:
+def _dedup_save(ledger: dict[str, str]) -> None:
     try:
         _dedup_ledger_path().write_text(
             json.dumps(ledger, ensure_ascii=False, indent=2) + "\n",
@@ -297,32 +294,22 @@ def _dedup_ledger_save(ledger: dict[str, dict[str, Any]]) -> None:
         log.warning("job_hunt: failed to persist dedup ledger: %s", e)
 
 
-def _prune_dedup_ledger(ledger: dict[str, dict[str, Any]], days: int) -> dict[str, dict[str, Any]]:
+def _dedup_prune(ledger: dict[str, str], days: int) -> dict[str, str]:
     """Drop entries older than `days`."""
     cutoff = local_now().date() - timedelta(days=days)
-    pruned: dict[str, dict[str, Any]] = {}
-    for key, rec in ledger.items():
-        seen_at = rec.get("seen_at") or rec.get("created_at")
+    pruned: dict[str, str] = {}
+    for key, seen_at in ledger.items():
         try:
             if seen_at and datetime.fromisoformat(seen_at).date() < cutoff:
                 continue
         except (TypeError, ValueError):
             pass
-        if rec.get("state") == DEDUP_STATE_PUBLISHED:
-            continue
-        pruned[key] = rec
+        pruned[key] = seen_at
     return pruned
 
 
-def _job_known_state(ledger: dict[str, dict[str, Any]], link_key: str, guid_key: str) -> str | None:
-    for probe in (link_key, guid_key):
-        rec = ledger.get(probe)
-        if rec is None:
-            continue
-        state = rec.get("state")
-        if state in (DEDUP_STATE_SEEN, DEDUP_STATE_REJECTED):
-            return state
-    return None
+def _dedup_is_known(ledger: dict[str, str], link_key: str, guid_key: str) -> bool:
+    return link_key in ledger or guid_key in ledger
 
 
 def mark_jobs_published(draft_dirs: list[str] | str | None, config: dict[str, Any] | None = None) -> None:
@@ -338,12 +325,11 @@ def mark_jobs_published(draft_dirs: list[str] | str | None, config: dict[str, An
     keys = list(_draft_dedup_keys(draft_dirs))
     if not keys:
         return
-    ledger = _dedup_ledger_load()
-    days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
-    ledger = _prune_dedup_ledger(ledger, days)
+    days = _cfg(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3, "int")
+    ledger = _dedup_prune(_dedup_load(), days)
     for key in keys:
         ledger.pop(key, None)
-    _dedup_ledger_save(ledger)
+    _dedup_save(ledger)
 
 
 def _draft_dedup_keys(draft_dirs) -> set[str]:
@@ -412,7 +398,7 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
         plain = html.unescape(plain)
         plain = _WS_RE.sub(" ", plain).strip()
         if max_chars is None:
-            max_chars = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000) if config else 15000
+            max_chars = _cfg(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000, "int") if config else 15000
         return plain[:max_chars]
 
     # 4) Try markitdown for better HTML→markdown conversion (keeps links).
@@ -429,7 +415,7 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
         plain = _WS_RE.sub(" ", plain).strip()
 
     if max_chars is None and config is not None:
-        max_chars = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000)
+        max_chars = _cfg(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000, "int")
     if max_chars is None:
         max_chars = 15000
 
@@ -663,19 +649,16 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
         filter_dedup: If True, apply deduplication. If False, skip dedup (for raw cache).
     """
     config = config or _job_config()
-    feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")] if filter_keywords else []
+    feeds = _cfg(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", [], "list")
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")] if filter_keywords else []
     today = local_now().date()
-    max_days = _config_int(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1)
-    days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
+    max_days = _cfg(config, "date_range_days", "JOB_HUNT_DATE_RANGE_DAYS", 1, "int")
+    days = _cfg(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3, "int")
     now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
 
-    if filter_dedup:
-        ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
-    else:
-        ledger = {}
+    ledger = _dedup_prune(_dedup_load(), days) if filter_dedup else {}
 
     log.info("[job_hunt] fetch_today_jobs_from_rss: feeds=%d, keywords=%d, max_days=%d, filter_date=%s, filter_dedup=%s",
              len(feeds), len(keywords), max_days, filter_date, filter_dedup)
@@ -721,7 +704,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
             link_key, guid_key = _dedupe_key(link, guid)
             if link_key in seen_ids or guid_key in seen_ids:
                 continue
-            if _job_known_state(ledger, link_key, guid_key) is not None:
+            if filter_dedup and _dedup_is_known(ledger, link_key, guid_key):
                 log.debug("job_hunt: skipping already-seen job %s", link_key or guid_key)
                 continue
 
@@ -746,12 +729,13 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
     log.info("[job_hunt] fetch_today_jobs_from_rss: kept=%d postings after filtering", len(kept))
 
     # Write to dedup ledger so we don't re-fetch these in future runs
-    for posting in kept:
-        lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
-        for probe in (lk, gk):
-            if probe:
-                ledger[probe] = {"state": DEDUP_STATE_SEEN, "seen_at": now_iso}
-    _dedup_ledger_save(ledger)
+    if filter_dedup:
+        for posting in kept:
+            lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
+            for probe in (lk, gk):
+                if probe:
+                    ledger[probe] = now_iso
+        _dedup_save(ledger)
 
     return kept
 
@@ -850,7 +834,7 @@ def _extract_jobs_from_cleaned_email(
         return []
 
     config = config or {}
-    max_summary = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000)
+    max_summary = _cfg(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000, "int")
 
     # 1) Collect URLs: prefer markdown links (label, url), then bare job-board URLs
     md_links: list[tuple[str, str]] = []  # (label, url)
@@ -1012,10 +996,10 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     """
     config = config if config is not None else _job_config()
     date_str = local_now().strftime("%Y-%m-%d")
-    email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
-    email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
-    email_folder = _config_list(config, "email_folder", "JOB_HUNT_EMAIL_FOLDER", ["inbox"])[0]
-    email_unread = _config_bool(config, "email_unread_only", "JOB_HUNT_EMAIL_UNREAD_ONLY", True)
+    email_cap = _cfg(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10, "int")
+    email_max_msgs = _cfg(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10, "int")
+    email_folder = _cfg(config, "email_folder", "JOB_HUNT_EMAIL_FOLDER", ["inbox"], "list")[0]
+    email_unread = _cfg(config, "email_unread_only", "JOB_HUNT_EMAIL_UNREAD_ONLY", True, "bool")
 
     log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d, folder=%s, unread=%s",
              email_cap, email_max_msgs, email_folder, email_unread)
@@ -1027,18 +1011,18 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
         return [], 0
 
     today = local_now().date()
-    max_days = _config_int(config, "email_date_range_days", "JOB_HUNT_EMAIL_DATE_RANGE_DAYS", 7)
+    max_days = _cfg(config, "email_date_range_days", "JOB_HUNT_EMAIL_DATE_RANGE_DAYS", 7, "int")
     cutoff_date = today - timedelta(days=max_days - 1)
 
     subject_keywords = [
-        kw.casefold() for kw in _config_list(
+        kw.casefold() for kw in _cfg(
             config, "email_subject_keywords", "JOB_HUNT_EMAIL_SUBJECT_KEYWORDS",
-            ["job", "appl", "opportunit", "hiring", "position", "career", "vacanc"],
+            ["job", "appl", "opportunit", "hiring", "position", "career", "vacanc"], "list",
         )
     ]
 
-    days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
-    ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
+    days = _cfg(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3, "int")
+    ledger = _dedup_prune(_dedup_load(), days)
     kept: list[dict] = []
     seen_ids: set[str] = set()
 
@@ -1073,12 +1057,12 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     )
 
     job_domains = [
-        d.casefold() for d in _config_list(
+        d.casefold() for d in _cfg(
             config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS",
-            ["linkedin", "glassdoor", "indeed"],
+            ["linkedin", "glassdoor", "indeed"], "list",
         )
     ]
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
 
     for msg_idx, msg in enumerate(filtered_messages):
         subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
@@ -1128,7 +1112,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
             link_key, guid_key = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
             if link_key in seen_ids or guid_key in seen_ids:
                 continue
-            if _job_known_state(ledger, link_key, guid_key) is not None:
+            if _dedup_is_known(ledger, link_key, guid_key):
                 continue
             seen_ids.update({k for k in (link_key, guid_key) if k})
             kept.append(posting)
@@ -1165,15 +1149,15 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
     cleaned = _strip_html(raw_body, config=config)
 
     job_domains = [
-        d.casefold() for d in _config_list(
+        d.casefold() for d in _cfg(
             config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS",
-            ["linkedin", "glassdoor", "indeed"],
+            ["linkedin", "glassdoor", "indeed"], "list",
         )
     ]
     if not _passes_domain_filter(sender_l, job_domains):
         return None
 
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
     if not _has_any_keyword(f"{subject} {sender} {cleaned}", keywords):
         return None
 
@@ -1198,7 +1182,7 @@ def search_jobs(
 ) -> list[dict]:
     """Return today's jobs from configured RSS feeds."""
     config = _job_config()
-    limit = int(max_results or _config_int(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30))
+    limit = int(max_results or _cfg(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30, "int"))
     return fetch_today_jobs_from_rss(config)[:limit]
 
 
@@ -1293,7 +1277,7 @@ def _job_write_email_msg_cache(date_str: str, msg_idx: int, raw_message: dict[st
 def _cache_is_fresh_simple(date_str: str, config: dict[str, Any]) -> bool:
     """Check if any cache file for this date exists and is fresh."""
     try:
-        cache_minutes = _config_int(config, "cache_fetch_minutes", "JOB_HUNT_CACHE_FETCH_MINUTES", 30)
+        cache_minutes = _cfg(config, "cache_fetch_minutes", "JOB_HUNT_CACHE_FETCH_MINUTES", 30, "int")
         cutoff = local_now() - timedelta(minutes=cache_minutes)
         cache_dir = _job_cache_dir()
         for f in cache_dir.glob(f"fetch_{date_str}_*.jsonl"):
@@ -1355,10 +1339,10 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
 
     config = config if config is not None else _job_config()
     cache_dir = _job_cache_dir()
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
 
-    max_rss_posts = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
-    max_email_posts = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
+    max_rss_posts = _cfg(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10, "int")
+    max_email_posts = _cfg(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10, "int")
 
     log.info("[job_hunt] STEP 2: processing jobs for %s (max_rss=%d, max_email=%d)",
              date_str, max_rss_posts, max_email_posts)
@@ -1494,8 +1478,8 @@ def _fetch_one_rss_feed(
     feed_url: str,
 ) -> tuple[list[dict], dict, str | None]:
     """Fetch or read-cache a single RSS feed."""
-    rss_cap = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+    rss_cap = _cfg(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10, "int")
+    keywords = [kw.casefold() for kw in _cfg(config, "job_keywords", "JOB_KEYWORDS", [], "list")]
 
     def _filter_by_keyword_then_cap(items: list[dict]) -> list[dict]:
         items = [
@@ -1566,7 +1550,7 @@ def _fetch_one_rss_feed(
 
 def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
     """Fetch email job alerts."""
-    email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
+    email_cap = _cfg(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10, "int")
     email_idx = 0
     postings: list[dict] = []
     source_info: list[dict] = []
@@ -1609,7 +1593,7 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
             return postings, source_info, source_failures
 
     try:
-        email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
+        email_max_msgs = _cfg(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10, "int")
         log.info("[job_hunt] processing email (max %d messages, cap %d postings)", email_max_msgs, email_cap)
         email_postings, raw_count = fetch_today_jobs_from_email(config, email_idx)
         email_postings = email_postings[:email_cap]
@@ -1644,21 +1628,22 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     """STEP 1: Fetch all RSS and email job listings with per-source caching into state."""
     config = _job_config()
-    include_email = _config_bool(config, "include_email", "JOB_HUNT_INCLUDE_EMAIL", True)
-    enable_email_source = _config_bool(
+    include_email = _cfg(config, "include_email", "JOB_HUNT_INCLUDE_EMAIL", True, "bool")
+    enable_email_source = _cfg(
         config.get("email_source", {}),
         "enabled",
         "JOB_HUNT_EMAIL_SOURCE_ENABLED",
         True,
+        "bool",
     )
     include_email = include_email and enable_email_source
 
     plan = _safe_json_loads(plan_json) if isinstance(plan_json, str) else (plan_json or {})
 
-    max_results = int(plan.get("max_results") or _config_int(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30))
+    max_results = int(plan.get("max_results") or _cfg(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30, "int"))
     date_str = local_now().strftime("%Y-%m-%d")
     can_reuse = _cache_is_fresh_simple(date_str, config)
-    feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
+    feeds = _cfg(config, "rss_feeds", "TECH_JOB_RSS_FEEDS", [], "list")
 
     log.info(
         "[job_hunt] fetch_rss_and_email_into_state: feeds=%d include_email=%s max_results=%d",
@@ -1676,7 +1661,7 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     if include_email:
         tasks["email"] = (_fetch_email_branch, date_str, config, can_reuse)
 
-    configured_max_workers = _config_int(config, "max_workers", "JOB_HUNT_MAX_WORKERS", 2)
+    configured_max_workers = _cfg(config, "max_workers", "JOB_HUNT_MAX_WORKERS", 2, "int")
     max_workers = max(1, min(len(tasks), configured_max_workers or len(tasks))) if tasks else 1
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
