@@ -1127,13 +1127,22 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
     bodies, formats using post_fields templates from config, and writes
     merged output to merge_DATE.jsonl (one job per line).
     
+    Respects per-source caps:
+      - max_rss_posts: Maximum RSS jobs to include (default: 10)
+      - max_email_posts: Maximum email jobs to include (default: 10)
+    
+    Stops processing and proceeds to Step 3 once both limits are reached.
+    
     Each output line is a complete job object with:
       - All original fields from cache (title, organization, url, etc.)
       - cleaned_summary: HTML-stripped body text (for emails)
       - source_type: 'rss' or 'email'
       - formatted_post: Ready-to-post text (optional, if post_fields defined)
     
-    Returns JSON string with merge stats.
+    Returns JSON string with merge stats, including:
+      - hit_rss_limit: True if max_rss_posts reached
+      - hit_email_limit: True if max_email_posts reached
+      - proceed_to_step3: True if ready to draft jobs
     """
     if date_str is None:
         date_str = local_now().strftime("%Y-%m-%d")
@@ -1142,7 +1151,12 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
     cache_dir = _job_cache_dir()
     keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
     
-    log.info("[job_hunt] STEP 2: processing jobs for %s", date_str)
+    # ── Get per-source caps ────────────────────────────────────────────
+    max_rss_posts = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
+    max_email_posts = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
+    
+    log.info("[job_hunt] STEP 2: processing jobs for %s (max_rss=%d, max_email=%d)", 
+             date_str, max_rss_posts, max_email_posts)
     
     # ── Load all RSS cache files ────────────────────────────────────────
     rss_jobs: list[dict] = []
@@ -1199,12 +1213,22 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
     log.info("[job_hunt] STEP 2: filtered RSS %d → %d, email %d → %d",
              len(rss_jobs), len(filtered_rss), len(email_jobs), len(filtered_email))
     
-    # ── Merge and format ────────────────────────────────────────────────
+    # ── Merge and format with per-source caps ────────────────────────────────────────────
     merged_jobs: list[dict] = []
     seen_urls: set[str] = set()
+    rss_count = 0
+    email_count = 0
+    hit_rss_limit = False
+    hit_email_limit = False
     
-    # Add RSS jobs
+    # Add RSS jobs up to max_rss_posts
     for job in filtered_rss:
+        if rss_count >= max_rss_posts:
+            hit_rss_limit = True
+            log.info("[job_hunt] STEP 2: RSS cap reached (%d/%d), stopping RSS processing", 
+                     rss_count, max_rss_posts)
+            break
+        
         url_key = str(job.get("url", "")).strip().casefold()
         if url_key and url_key in seen_urls:
             continue
@@ -1224,9 +1248,16 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
             pass  # Don't fail the whole merge; just skip formatting for this one
         
         merged_jobs.append(enriched)
+        rss_count += 1
     
-    # Add email jobs
+    # Add email jobs up to max_email_posts
     for job in filtered_email:
+        if email_count >= max_email_posts:
+            hit_email_limit = True
+            log.info("[job_hunt] STEP 2: Email cap reached (%d/%d), stopping email processing", 
+                     email_count, max_email_posts)
+            break
+        
         url_key = str(job.get("url", "")).strip().casefold()
         if url_key and url_key in seen_urls:
             log.debug("[job_hunt] skipping duplicate email job (URL already in RSS): %s", url_key[:60])
@@ -1247,6 +1278,7 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
             pass
         
         merged_jobs.append(enriched)
+        email_count += 1
     
     # ── Write merged output ────────────────────────────────────────────
     merge_path = _job_merged_cache_path(date_str)
@@ -1264,21 +1296,33 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
             "merged_path": str(merge_path),
         })
     
+    # ── Determine if we should proceed to Step 3 ────────────────────────
+    proceed_to_step3 = len(merged_jobs) > 0
+    
     result = {
         "success": True,
         "date": date_str,
         "merged_path": str(merge_path),
         "rss_total": len(rss_jobs),
         "rss_filtered": len(filtered_rss),
+        "rss_processed": rss_count,
+        "rss_cap": max_rss_posts,
+        "hit_rss_limit": hit_rss_limit,
         "email_total": len(email_jobs),
         "email_filtered": len(filtered_email),
+        "email_processed": email_count,
+        "email_cap": max_email_posts,
+        "hit_email_limit": hit_email_limit,
         "merged_total": len(merged_jobs),
-        "deduplicated_count": len(rss_jobs) + len(email_jobs) - len(merged_jobs),
+        "deduplicated_count": (rss_count + email_count) - len(merged_jobs),
+        "proceed_to_step3": proceed_to_step3,
+        "summary": f"Processed {rss_count} RSS + {email_count} email jobs (caps: {max_rss_posts}/{max_email_posts})"
     }
     
-    log.info("[job_hunt] STEP 2 complete: %d total jobs (RSS: %d, Email: %d, Dedup: %d)",
-             len(merged_jobs), len(filtered_rss), len(filtered_email), 
-             len(rss_jobs) + len(email_jobs) - len(merged_jobs))
+    log.info("[job_hunt] STEP 2 complete: %d total jobs (RSS: %d/%d, Email: %d/%d, Dedup: %d) → %s",
+             len(merged_jobs), rss_count, max_rss_posts, email_count, max_email_posts,
+             (rss_count + email_count) - len(merged_jobs),
+             "PROCEED TO STEP 3" if proceed_to_step3 else "NO JOBS TO PROCESS")
     
     return json.dumps(result, ensure_ascii=False)
 
