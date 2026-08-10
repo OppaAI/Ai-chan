@@ -2,7 +2,7 @@
 
 Foundation for shared workflow execution. Studio / spec codegen comes later.
 
-```
+```text
 Spec (planning)          ← user / future studio
     ↓
 Graph (orchestrate)      ← per-workflow graph.py + trigger
@@ -34,7 +34,7 @@ Config is loaded once per run and sliced into node args (or `state.config`).
 
 ## Per-workflow packages
 
-```
+```text
 workflows/
   common/           # Layer 0 nodes + store/notify/graphs
   job_hunt/         # graph.py + config.json (+ adapters until ingest is generic)
