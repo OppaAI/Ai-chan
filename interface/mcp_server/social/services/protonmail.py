@@ -82,51 +82,52 @@ def get_client():
     return _get_client()
 
 
+# ProtonMail label ids. Messages can carry several labels at once (e.g.
+# Inbox + a custom label), and the API gives no ordering guarantee over
+# msg.labels, so folder matching below checks membership across the full
+# list rather than assuming the target label sits at index 0.
+_FOLDER_LABEL_MAP = {
+    "inbox": "0",
+    "spam": "4",
+    "trash": "3",
+}
+
+
 async def read_messages(client, folder: str, unread: bool, max_results: int, query: str, list_only: bool, message_id: str = "") -> Dict:
     """Read messages using ProtonMail client."""
     try:
-        # Translate generic folder names to ProtonMail label IDs
-        folder_map = {
-            "inbox": "0",
-            "spam": "4",
-            "trash": "3",
-        }
+        # Translate generic folder name to a ProtonMail label id.
         folder_lower = folder.lower()
-        protonmail_label = folder_map.get(folder_lower, folder_lower)
-        
+        protonmail_label = _FOLDER_LABEL_MAP.get(folder_lower, folder_lower)
+
         # Get all messages
         all_messages = await asyncio.to_thread(_run_client_call, client.get_messages)
-        
-        # Filter by folder (0=inbox, 3=trash, 4=spam)
-        folder = protonmail_label
+
+        # Filter by folder (0=inbox, 3=trash, 4=spam).
         messages = []
         folder_counts = {}
-        
+
         for msg in all_messages:
-            msg_folder = ""
-            if hasattr(msg, "labels") and msg.labels:
-                label_list = msg.labels if isinstance(msg.labels, list) else [msg.labels]
-                first_label = str(label_list[0]) if label_list else ""
-                if first_label == "0":
-                    msg_folder = "inbox"
-                elif first_label == "3":
-                    msg_folder = "trash"
-                elif first_label == "4":
-                    msg_folder = "spam"
-                else:
-                    msg_folder = first_label
-            folder_counts[msg_folder] = folder_counts.get(msg_folder, 0) + 1
-            
-            # Only include inbox (label 0) and unread messages if requested
-            is_inbox = (first_label == "0")
+            label_list = []
+            if getattr(msg, "labels", None):
+                raw_labels = msg.labels if isinstance(msg.labels, list) else [msg.labels]
+                label_list = [str(l) for l in raw_labels]
+
+            # Tally every label the message carries (not just the first)
+            # so folder_counts actually reflects what's on the account.
+            for lbl in label_list or [""]:
+                folder_counts[lbl] = folder_counts.get(lbl, 0) + 1
+
+            # Match if the resolved target label id is anywhere in this
+            # message's label list - don't assume position/order.
+            in_target_folder = protonmail_label in label_list
             is_unread = getattr(msg, "unread", False)
-            if folder == "inbox" and is_inbox and (not unread or is_unread):
+
+            if in_target_folder and (not unread or is_unread):
                 messages.append(msg)
-            elif folder != "inbox" and msg_folder == folder:
-                messages.append(msg)
-        
-        print(f"[EMAIL] Provider=protonmail Folder counts: {folder_counts}, filtered={len(messages)}", file=sys.stderr, flush=True)
-        
+
+        print(f"[EMAIL] Provider=protonmail label={protonmail_label} Folder counts: {folder_counts}, filtered={len(messages)}", file=sys.stderr, flush=True)
+
         # If message_id provided, return full message
         if message_id:
             target_msg = None
@@ -136,7 +137,7 @@ async def read_messages(client, folder: str, unread: bool, max_results: int, que
                     break
             if target_msg is None:
                 return {"ok": False, "error": f"message not found: {message_id}", "provider": "protonmail"}
-            
+
             full = await asyncio.to_thread(_run_client_call, client.read_message, target_msg)
             return {
                 "ok": True,
@@ -147,12 +148,12 @@ async def read_messages(client, folder: str, unread: bool, max_results: int, que
                 "date": str(full.time) if full.time else "",
                 "body": full.body or "",
             }
-        
+
         # Filter by query
         if query:
             q = query.lower()
             messages = [m for m in messages if q in (m.subject or "").lower() or q in (m.sender.address if m.sender else "").lower()]
-        
+
         results = []
         for i, msg in enumerate(messages[:max_results]):
             if list_only:
@@ -177,7 +178,7 @@ async def read_messages(client, folder: str, unread: bool, max_results: int, que
                 })
             except Exception:
                 continue
-        
+
         return {"ok": True, "provider": "protonmail", "count": len(results), "messages": results}
     except Exception as e:
         return {"ok": False, "error": f"read failed: {e}", "provider": "protonmail"}
@@ -187,7 +188,7 @@ async def send_message(client, recipients: List[str], subject: str, body: str, c
     """Send email using ProtonMail client."""
     if not recipients:
         return {"ok": False, "error": "recipients required", "provider": "protonmail"}
-    
+
     try:
         # protonmail-api-client requires two-step: create_message then send_message
         new_message = await asyncio.to_thread(
@@ -199,10 +200,10 @@ async def send_message(client, recipients: List[str], subject: str, body: str, c
             cc=cc if cc else [],
             bcc=bcc if bcc else [],
         )
-        
+
         # Send the created message
         sent_message = await asyncio.to_thread(_run_client_call, client.send_message, new_message)
-        
+
         return {
             "ok": True,
             "provider": "protonmail",
@@ -217,7 +218,7 @@ async def delete_message(client, message_id: str) -> Dict:
     """Delete email using ProtonMail client."""
     if not message_id:
         return {"ok": False, "error": "message_id required", "provider": "protonmail"}
-    
+
     try:
         messages = await asyncio.to_thread(_run_client_call, client.get_messages)
         target = next((msg for msg in messages if getattr(msg, "id", "") == message_id), None)
