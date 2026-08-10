@@ -7,6 +7,10 @@
     "https://rss.indeed.com/rss?q=devops&l=California",
     "https://rss.indeed.com/rss?q=data+scientist&l=California"
   ],
+  "date_range_days": 2,
+  "max_rss_posts": 10,
+  "max_rss_chars": 15000,
+  "max_workers": 2,
   "job_keywords": [
     "software",
     "developer",
@@ -40,11 +44,12 @@
     "rust",
     "typescript"
   ],
-  "date_range_days": 2,
-  "max_results": 30,
-  "max_rss_posts": 10,
-  "max_email_posts": 10,
+  "fetch_job_page": true,
   "include_email": true,
+  "email_source": {
+    "enabled": true,
+    "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
+  },
   "email_subject_keywords": [
     "job",
     "appl",
@@ -57,25 +62,65 @@
     "new job",
     "now hiring"
   ],
+  "email_date_range_days": 7,
+  "email_max_messages": 10,
+  "max_email_posts": 10,
+  "email_folder": "inbox",
   "email_source_domains": [
     "linkedin",
     "glassdoor",
     "indeed"
   ],
-  "dedup_days": 3,
-  "cache_fetch_minutes": 30,
+  "max_email_chars": 10000,
   "topic_tag": "California",
   "post_fields": [
-    {"label": "Job Post - ", "key": "date"},
-    {"label": "Organization: ", "key": "organization"},
-    {"label": "Position: ", "key": "title"},
-    {"label": "Type: ", "key": "employment_type"},
-    {"label": "Location: ", "key": "location"},
-    {"label": "Salary: ", "key": "salary"},
-    {"label": "Experience: ", "key": "experience"},
-    {"label": "Close: ", "key": "close_date"},
-    {"label": "", "key": ""},
-    {"label": "See details at:\n", "key": "url"}
+    {
+      "label": "Job Post - ",
+      "key": "date"
+    },
+    {
+      "label": "Organization: ",
+      "key": "organization"
+    },
+    {
+      "label": "Position: ",
+      "key": "title"
+    },
+    {
+      "label": "Type: ",
+      "key": "employment_type"
+    },
+    {
+      "label": "Location: ",
+      "key": "location"
+    },
+    {
+      "label": "Salary: ",
+      "key": "salary"
+    },
+    {
+      "label": "Experience: ",
+      "key": "experience"
+    },
+    {
+      "label": "Close: ",
+      "key": "close_date"
+    },
+    {
+      "label": "",
+      "key": ""
+    },
+    {
+      "label": "See details at:\n",
+      "key": "url"
+    }
   ],
-  "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)"
+  "post_signature": "- 𝘨𝘦𝘯'𝘥 𝘣𝘺 𝘈𝘪𝘬𝘰 (𝘖𝘱𝘱𝘰𝘈𝘐'𝘴 𝘈𝘐 𝘈𝘨𝘦𝘯𝘵)",
+  "include_remote": true,
+  "min_salary_hourly": 50,
+  "min_salary_annual": 100000,
+  "max_results": 30,
+  "dedup_days": 3,
+  "cache_fetch_minutes": 30,
+  "auto_post": false
 }
