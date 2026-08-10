@@ -16,74 +16,143 @@ warnings.filterwarnings(
     message="TripleDES has been moved to cryptography.hazmat.decrepit.ciphers.algorithms.TripleDES",
 )
 
-# Global client cache (kept alive across tool calls)
-_client_cache = None
-_cache_username = None
-
-# protonmail-api-client stores sessions as a binary pickle, not JSON.
-_SESSION_FILE = str(user_state_path("profile/protonmail_session.pickle"))
-
-# stderr-bound print for ProtonMail's internal logger.
-# ProtonMail.__init__ defaults logging_func=print (stdout). Since the MCP
-# server runs on stdio transport any write to stdout corrupts the JSON-RPC
-# wire, causing the client to hang waiting for a valid response.
-def _stderr_print(*args, **kwargs):
-    kwargs.setdefault("file", sys.stderr)
-    kwargs.setdefault("flush", True)
-    print(*args, **kwargs)
+# Provider registry
+_email_providers = {}
 
 
-def _run_client_call(method, *args, **kwargs):
-    """Keep third-party client output (including tqdm progress bars) off MCP stdout."""
-    with redirect_stdout(sys.stderr):
-        return method(*args, **kwargs)
+def register_email_provider(name: str, provider_impl: dict):
+    """Register an email provider implementation.
+    
+    provider_impl should have:
+    - get_client(): returns (client, error) or (client, None)
+    - read_messages(client, folder, unread, max_results, query, list_only, message_id)
+    - send_message(client, recipients, subject, body, cc, bcc, attachments)
+    - delete_message(client, message_id)
+    """
+    _email_providers[name] = provider_impl
 
 
-def _get_client():
-    """Return an authenticated client using the documented session flow."""
-    global _client_cache, _cache_username
-    try:
-        from protonmail import ProtonMail
-    except ImportError:
-        return None, {"ok": False, "error": "protonmail-api-client not installed", "provider": "protonmail"}
-    username = env("PROTONMAIL_USERNAME")
-    password = env("PROTONMAIL_PASSWORD")
-    if not username:
-        return None, {"ok": False, "error": "PROTONMAIL_USERNAME not set", "provider": "protonmail"}
-    if _client_cache is not None and _cache_username == username:
-        print("[PROTONMAIL] Using cached client", file=sys.stderr, flush=True)
-        return _client_cache, None
-    if not os.path.exists(_SESSION_FILE) and not password:
-        return None, {"ok": False, "error": "PROTONMAIL_PASSWORD not set for first login", "provider": "protonmail"}
-    print(f"[PROTONMAIL] Authenticating as {username[:3]}{chr(42) * max(0, len(username) - 3)}...", file=sys.stderr, flush=True)
-    print(f"[PROTONMAIL] Session file exists: {os.path.exists(_SESSION_FILE)} ({_SESSION_FILE})", file=sys.stderr, flush=True)
-    try:
-        client = ProtonMail(logging_func=_stderr_print)
-        if os.path.exists(_SESSION_FILE):
-            print(f"[PROTONMAIL] Loading session: {_SESSION_FILE}", file=sys.stderr, flush=True)
-            _run_client_call(client.load_session, _SESSION_FILE, auto_save=True)
-            print("[PROTONMAIL] Session loaded successfully", file=sys.stderr, flush=True)
-        else:
-            print("[PROTONMAIL] No saved session; performing login...", file=sys.stderr, flush=True)
-            _run_client_call(client.login, username, password)
-            Path(_SESSION_FILE).parent.mkdir(parents=True, exist_ok=True)
-            _run_client_call(client.save_session, _SESSION_FILE)
-            print(f"[PROTONMAIL] Session saved: {_SESSION_FILE}", file=sys.stderr, flush=True)
-        _client_cache = client
-        _cache_username = username
-        return client, None
-    except Exception as e:
-        print(f"[PROTONMAIL] Authentication failed: {e}", file=sys.stderr, flush=True)
-        return None, {"ok": False, "error": f"authentication failed: {e}", "provider": "protonmail"}
+def get_email_provider(name: str):
+    """Get an email provider implementation by name."""
+    return _email_providers.get(name)
 
 
-def get_client():
-    """Get ProtonMail client. Returns (client, error_dict) or (client, None)."""
-    return _get_client()
+# Default provider from env
+def _get_default_provider() -> str:
+    return env("EMAIL_PROVIDER", "protonmail")
 
 
-async def read_messages(client, folder: str, unread: bool, max_results: int, query: str, list_only: bool, message_id: str = "") -> Dict:
+def _get_provider_client(provider_name: str):
+    """Get authenticated client for the specified provider."""
+    provider = get_email_provider(provider_name)
+    if not provider:
+        return None, {"ok": False, "error": f"email provider not registered: {provider_name}", "provider": "email"}
+    return provider.get_client()
+
+
+def load_tools(mcp):
+    """Load generic email tools that delegate to configured provider."""
+    # Ensure ProtonMail provider is registered
+    from social.services.protonmail import _get_client as _proton_get_client
+    from social.services.email import _email_providers
+    if "protonmail" not in _email_providers:
+        from social.services.protonmail import _get_client as _proton_get_client
+        register_email_provider("protonmail", {
+            "get_client": lambda: __import__("social.services.protonmail", fromlist=["_get_client"])._get_client(),
+            "read_messages": _proton_read_messages,
+            "send_message": _proton_send_message,
+            "delete_message": _proton_delete_message,
+        })
+    
+    @mcp.tool(
+        name="read_email",
+        description="Read email messages. If message_id is provided, returns full message body. Otherwise lists messages from specified folder with optional filters. If list_only is true, returns sender/subject/date only (no body read). Returns sender, subject, date, and snippet (or full body if message_id given).",
+    )
+    async def read_email(
+        provider: str = "",
+        message_id: str = "",
+        folder: str = "inbox",
+        unread: bool = True,
+        query: str = "",
+        max_results: int = 10,
+        list_only: bool = False,
+    ) -> Dict:
+        provider_name = provider or _get_default_provider()
+        client, err_resp = _get_provider_client(provider_name)
+        if err_resp:
+            return err_resp
+        
+        provider_impl = get_email_provider(provider_name)
+        if not provider_impl or "read_messages" not in provider_impl:
+            return {"ok": False, "error": f"provider {provider_name} does not support read_messages", "provider": "email"}
+        
+        return await provider_impl.read_messages(
+            client, folder, unread, max_results, query, list_only, message_id
+        )
+
+    @mcp.tool(
+        name="send_email",
+        description="Send an email. Supports HTML body, CC/BCC.",
+    )
+    async def send_email(
+        provider: str = "",
+        recipients: List[str] = None,
+        subject: str = "",
+        body: str = "",
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None,
+        attachments: Optional[List[Dict]] = None,
+    ) -> Dict:
+        provider_name = provider or _get_default_provider()
+        client, err_resp = _get_provider_client(provider_name)
+        if err_resp:
+            return err_resp
+        
+        provider_impl = get_email_provider(provider_name)
+        if not provider_impl or "send_message" not in provider_impl:
+            return {"ok": False, "error": f"provider {provider_name} does not support send_message", "provider": "email"}
+        
+        return await provider_impl.send_message(
+            client, recipients or [], subject, body, cc or [], bcc or [], attachments or []
+        )
+
+    @mcp.tool(
+        name="delete_email",
+        description="Delete an email message by ID.",
+    )
+    async def delete_email(
+        provider: str = "",
+        message_id: str = "",
+    ) -> Dict:
+        provider_name = provider or _get_default_provider()
+        client, err_resp = _get_provider_client(provider_name)
+        if err_resp:
+            return err_resp
+        
+        provider_impl = get_email_provider(provider_name)
+        if not provider_impl or "delete_message" not in provider_impl:
+            return {"ok": False, "error": f"provider {provider_name} does not support delete_message", "provider": "email"}
+        
+        return await provider_impl.delete_message(client, message_id)
+
+
+def load_protonmail_provider():
+    """Load the ProtonMail provider implementation."""
+    from social.services.protonmail import _get_client as _proton_get_client
+    
+    return {
+        "get_client": _proton_get_client,
+        "read_messages": _proton_read_messages,
+        "send_message": _proton_send_message,
+        "delete_message": _proton_delete_message,
+    }
+
+
+async def _proton_read_messages(client, folder: str, unread: bool, max_results: int, query: str, list_only: bool, message_id: str = "") -> Dict:
     """Read messages using ProtonMail client."""
+    import sys
+    from social.services.protonmail import _run_client_call
+    
     try:
         # Get all messages
         all_messages = await asyncio.to_thread(_run_client_call, client.get_messages)
@@ -111,7 +180,7 @@ async def read_messages(client, folder: str, unread: bool, max_results: int, que
             # Only include inbox (label 0) and unread messages if requested
             is_inbox = (first_label == "0")
             is_unread = getattr(msg, "unread", False)
-            if folder == "inbox" and is_inbox and (not unread or is_unread):
+            if folder == "inbox" and is_inbox and (not unread or getattr(msg, "unread", False)):
                 messages.append(msg)
             elif folder != "inbox" and msg_folder == folder:
                 messages.append(msg)
@@ -174,7 +243,7 @@ async def read_messages(client, folder: str, unread: bool, max_results: int, que
         return {"ok": False, "error": f"read failed: {e}", "provider": "protonmail"}
 
 
-async def send_message(client, recipients: List[str], subject: str, body: str, cc: List[str], bcc: List[str], attachments: List[Dict]) -> Dict:
+async def _proton_send_message(client, recipients: List[str], subject: str, body: str, cc: List[str], bcc: List[str], attachments: List[Dict]) -> Dict:
     """Send email using ProtonMail client."""
     if not recipients:
         return {"ok": False, "error": "recipients required", "provider": "protonmail"}
@@ -204,7 +273,7 @@ async def send_message(client, recipients: List[str], subject: str, body: str, c
         return {"ok": False, "error": f"send failed: {e}", "provider": "protonmail"}
 
 
-async def delete_message(client, message_id: str) -> Dict:
+async def _proton_delete_message(client, message_id: str) -> Dict:
     """Delete email using ProtonMail client."""
     if not message_id:
         return {"ok": False, "error": "message_id required", "provider": "protonmail"}
