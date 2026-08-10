@@ -8,6 +8,22 @@ within the configured range in the local bioclock timezone, filters by
 configured keywords, dedupes by link/guid, and produces structured Threads
 drafts using post_fields and post_signature from job_hunt.json for human review.
 
+STEP 1 (fetch_rss_and_email_into_state) fetches all sources and writes
+per-source cache files, gated by cheap pre-cache filters so disqualified
+items never touch disk:
+  - RSS: date range filter (date_range_days) applied before cache write.
+    job_keywords filtering happens AFTER cache read/write (cheap to retune
+    without re-fetching).
+  - Email: subject-keyword filter (email_subject_keywords) + date range
+    filter (email_date_range_days) applied before cache write. Sender
+    domain + job_keywords filtering happens AFTER (inside
+    _email_message_to_posting), only for messages that already passed
+    subject+date, and those results ARE cached (matched: true/false)
+    since domain/keyword tuning is cheap to re-run against cache.
+
+RSS feeds fetch concurrently, one task per feed (not one task for all
+feeds), plus one task for email, via ThreadPoolExecutor.
+
 When the graph executor injects an LLM client/model, draft_single_job
 enriches sparse postings by extracting post_fields keys from title + summary
 before formatting. Values are never invented beyond the source text.
@@ -40,11 +56,14 @@ from typing import Any
 
 import logging
 import requests
+import threading
 try:
     from defusedxml import ElementTree as ET
 except ImportError:
     import xml.etree.ElementTree as ET
     logging.getLogger(__name__).warning("defusedxml not available, using stdlib xml.etree.ElementTree (less secure)")
+
+_DEDUP_LOCK = threading.Lock()
 
 from agentic.registry import TOOLS, tool
 from agentic.toolkit.common import chat_completions_create
@@ -599,11 +618,13 @@ def enrich_posting_fields_with_llm(
 
 def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywords: bool = True, filter_date: bool = True, filter_dedup: bool = True) -> list[dict]:
     """Fetch configured RSS feeds, keeping postings from the last N days.
-    
+
     Args:
         config: Job hunt config dict
         filter_keywords: If True, apply keyword filter. If False, skip keyword filter.
-        filter_date: If True, apply date filter. If False, return all entries (for raw cache).
+        filter_date: If True, apply date filter (reject stale entries before they're
+            returned — used to keep the on-disk cache free of stale postings).
+            If False, return all entries regardless of date.
         filter_dedup: If True, apply deduplication. If False, skip dedup (for raw cache).
     """
     config = config or _job_config()
@@ -615,15 +636,15 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
     now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
-    
+
     if filter_dedup:
         ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
     else:
         ledger = {}
-    
+
     log.info("[job_hunt] fetch_today_jobs_from_rss: feeds=%d, keywords=%d, max_days=%d, filter_date=%s, filter_dedup=%s",
              len(feeds), len(keywords), max_days, filter_date, filter_dedup)
-    
+
     for feed_url in feeds:
         resp = None
         for attempt in range(3):
@@ -637,16 +658,16 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
                     resp = None
                     break
                 time.sleep(2 * (attempt + 1))
-        
+
         if resp is None:
             continue
-        
+
         try:
             root = ET.fromstring(resp.content)
         except Exception as e:
             log.warning("Lane D RSS feed parse failed for %s: %s", feed_url, e)
             continue
-        
+
         entries = list(root.findall(".//item")) or list(root.findall(".//{*}entry"))
         for entry in entries:
             title = re.sub(r"\s+", " ", _rss_text(entry, ("title",))).strip()
@@ -656,19 +677,19 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
             summary = _strip_html(summary_raw, config=config)
             org = _rss_text(entry, ("author", "creator"))
             posted = _parse_rss_datetime(_rss_text(entry, ("pubDate", "published", "updated")))
-            
+
             if filter_date and (not posted or posted.date() < today - timedelta(days=max_days - 1)):
                 continue
             if keywords and not any(kw in f"{title} {summary}".casefold() for kw in keywords):
                 continue
-            
+
             link_key, guid_key = _dedupe_key(link, guid)
             if link_key in seen_ids or guid_key in seen_ids:
                 continue
             if _job_known_state(ledger, link_key, guid_key) is not None:
                 log.debug("job_hunt: skipping already-seen job %s", link_key or guid_key)
                 continue
-            
+
             seen_ids.update({link_key, guid_key})
             rss_location = _rss_text(entry, ("location", "city", "region", "jobLocation", "workLocation")).strip()
             kept.append({
@@ -686,9 +707,9 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
                 "source_feed": feed_url,
                 "source": "rss",
             })
-    
+
     log.info("[job_hunt] fetch_today_jobs_from_rss: kept=%d postings after filtering", len(kept))
-    
+
     # Write to dedup ledger so we don't re-fetch these in future runs
     for posting in kept:
         lk, gk = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
@@ -696,7 +717,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
             if probe:
                 ledger[probe] = {"state": DEDUP_STATE_SEEN, "seen_at": now_iso}
     _dedup_ledger_save(ledger)
-    
+
     return kept
 
 
@@ -727,33 +748,26 @@ def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool =
 
 
 def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict[str, Any]) -> dict | None:
-    """Convert one MCP Proton message dict into a posting."""
+    """Convert one MCP Proton message dict into a posting.
+
+    Assumes the caller already passed subject + date pre-filtering (see
+    fetch_today_jobs_from_email, which filters and caches before calling
+    this). Only checks left here:
+      1. Sender domain (email_source_domains)
+      2. job_keywords against cleaned subject+sender+body
+    """
     subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
     if not subject:
         return None
-    
+
     date_str = str(msg.get("date") or "")
-    if date_str:
-        try:
-            dt = email.utils.parsedate_to_datetime(date_str) or datetime.fromisoformat(date_str)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=local_now().tzinfo)
-            dt = dt.astimezone(local_now().tzinfo)
-            log.debug("[job_hunt] _email_message_to_posting date check: %s vs cutoff %s", dt.date(), today - timedelta(days=max_days - 1))
-            if dt.date() < today - timedelta(days=max_days - 1):
-                log.debug("[job_hunt] _email_message_to_posting rejecting email: date %s < cutoff %s", dt.date(), today - timedelta(days=max_days - 1))
-                return None
-        except (TypeError, ValueError):
-            pass
-    
     sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
-    subject_l = subject.casefold()
     sender_l = sender.casefold()
-    
-    # ✅ KEY FIX: Convert HTML snippet/body to clean text using _strip_html
+
+    # Convert HTML snippet/body to clean text using _strip_html
     snippet_raw = str(msg.get("snippet") or "").strip()
     snippet = _strip_html(snippet_raw, config=config)
-    
+
     # Try all body fields, converting HTML to text as we go
     body = (
         _strip_html(str(msg.get("body") or ""), config=config) or
@@ -761,26 +775,26 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
         _strip_html(str(msg.get("html") or ""), config=config) or
         snippet
     )
-    
+
     content = f"{subject} {sender} {body}".casefold()
-    
-    # Only accept from known job alert domains (anti-spam)
+
+    # 1. Domain gate — only accept from known job alert domains (anti-spam)
     job_domains = [d.casefold() for d in _config_list(config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS", ["linkedin", "glassdoor", "indeed"])]
     from_job_domain = any(d in sender_l for d in job_domains)
-    
+
     if not from_job_domain:
         log.debug("[job_hunt] email rejected: domain filter. sender=%s", sender[:60])
         return None
-    
-    # ✅ Keyword check on cleaned text (much more reliable now)
+
+    # 2. job_keywords gate — check on cleaned text
     keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
     has_job_keyword = any(k in content for k in keywords)
-    
+
     if not has_job_keyword:
         log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
         return None
-    
-    msg_id = str(msg.get("id") or "") or subject_l
+
+    msg_id = str(msg.get("id") or "") or subject.casefold()
     return {
         "title": subject,
         "organization": sender,
@@ -808,13 +822,21 @@ def _extract_first_url(*texts: str) -> str:
 
 def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx: int = 0) -> tuple[list[dict], int]:
     """Fetch job-alert emails via ProtonMail MCP bridge.
-    
-    Filters by date range (email_date_range_days config) and keywords.
-    Returns postings in the same shape as RSS results with source="email".
-    
-    Returns (postings, raw_message_count) where raw_message_count is the 
-    total number of messages fetched from ProtonMail before filtering.
-    
+
+    Pre-cache gate (cheap, no HTML parsing needed): subject keywords
+    (email_subject_keywords) + date range (email_date_range_days). Messages
+    failing either are skipped entirely — no cache file written for them,
+    since we already know they're disqualified.
+
+    Post-fetch gate (inside _email_message_to_posting, only for messages
+    that passed the pre-cache gate): sender domain + job_keywords against
+    the full cleaned body. These stay after caching since they're more
+    likely to be retuned and the body-cleaning work is worth caching once
+    done.
+
+    Returns (postings, raw_message_count) where raw_message_count is the
+    total number of messages fetched from ProtonMail before any filtering.
+
     Args:
         config: Job hunt config dict
         email_idx: Index of this email source (for per-message cache naming)
@@ -825,69 +847,93 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
     email_folder = _config_list(config, "email_folder", "JOB_HUNT_EMAIL_FOLDER", ["inbox"])[0]
     email_unread = _config_bool(config, "email_unread_only", "JOB_HUNT_EMAIL_UNREAD_ONLY", True)
-    
+
     log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d, folder=%s, unread=%s", email_cap, email_max_msgs, email_folder, email_unread)
-    
+
     messages = _read_email_messages(email_max_msgs, folder=email_folder, unread=email_unread)
     raw_count = len(messages)
     if not messages:
         log.warning("Lane D email: no job-alert emails returned from ProtonMail MCP")
         return [], 0
-    
+
     today = local_now().date()
     max_days = _config_int(config, "email_date_range_days", "JOB_HUNT_EMAIL_DATE_RANGE_DAYS", 7)
+    cutoff_date = today - timedelta(days=max_days - 1)
+
+    subject_keywords = [
+        kw.casefold() for kw in _config_list(
+            config, "email_subject_keywords", "JOB_HUNT_EMAIL_SUBJECT_KEYWORDS",
+            ["job", "appl", "opportunit", "hiring", "position", "career", "vacanc"],
+        )
+    ]
+
     days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
     ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
     now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
 
-    log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages",
-             len(messages))
+    log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages", len(messages))
 
-    # Filter emails by date range BEFORE caching (skip emails outside date range entirely)
-    cutoff_date = today - timedelta(days=max_days - 1)
-    filtered_messages = []
+    # ── Pre-cache gate: subject + date. Disqualified messages skip entirely —
+    #    no cache write, no body cleaning, no domain/keyword check. ──
+    filtered_messages: list[dict] = []
+    skipped_subject = 0
+    skipped_date = 0
     for msg in messages:
-        date_str = str(msg.get("date") or "")
-        if date_str:
+        subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
+        subject_l = subject.casefold()
+
+        if subject_keywords and not any(kw in subject_l for kw in subject_keywords):
+            log.debug("[job_hunt] email pre-filtered: subject doesn't look like a job alert. subject=%s", subject[:60])
+            skipped_subject += 1
+            continue
+
+        msg_date_str = str(msg.get("date") or "")
+        if msg_date_str:
             try:
-                dt = email.utils.parsedate_to_datetime(date_str) or datetime.fromisoformat(date_str)
+                dt = email.utils.parsedate_to_datetime(msg_date_str) or datetime.fromisoformat(msg_date_str)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=local_now().tzinfo)
                 dt = dt.astimezone(local_now().tzinfo)
-                log.debug("[job_hunt] email date parsed: %s -> %s", date_str, dt.date())
+                log.debug("[job_hunt] email date parsed: %s -> %s", msg_date_str, dt.date())
                 if dt.date() < cutoff_date:
-                    log.debug("[job_hunt] email outside date range, skipping: %s", date_str)
-                    continue  # Skip emails outside date range
+                    log.debug("[job_hunt] email pre-filtered: outside date range. date=%s cutoff=%s", dt.date(), cutoff_date)
+                    skipped_date += 1
+                    continue
             except (TypeError, ValueError) as e:
-                log.debug("[job_hunt] email date parse failed: %s, error: %s", date_str, e)
+                log.debug("[job_hunt] email date parse failed: %s, error: %s", msg_date_str, e)
                 pass  # If date parsing fails, keep the message
+
         filtered_messages.append(msg)
 
-    log.info("[job_hunt] fetch_today_jobs_from_email: %d messages within date range (cutoff=%s)", len(filtered_messages), cutoff_date)
+    log.info(
+        "[job_hunt] fetch_today_jobs_from_email: %d/%d passed subject+date pre-filter (skipped subject=%d, date=%d), cutoff=%s",
+        len(filtered_messages), raw_count, skipped_subject, skipped_date, cutoff_date,
+    )
 
-    # Save each individual email message as JSONL (one per message)
+    # ── Post-filter gate: domain + job_keywords, only for messages that
+    #    already passed subject+date. Each is cached (matched true/false). ──
     for msg_idx, msg in enumerate(filtered_messages):
         posting = _email_message_to_posting(msg, today, max_days, config)
-        matched = posting is not None
-        
+
         # Write individual email message cache (one JSONL per message)
         _job_write_email_msg_cache(date_str, msg_idx, msg, posting)
-        
+
         if not posting:
             continue
-        
+
         link_key, guid_key = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
         if link_key in seen_ids or guid_key in seen_ids:
             continue
         if _job_known_state(ledger, link_key, guid_key) is not None:
             continue
-        # Email alerts (LinkedIn/Glassdoor/Indeed) are already pre-filtered job alerts.
-        # Don't apply job_keywords filter here — it's for RSS feed filtering.
+        # Email alerts (LinkedIn/Glassdoor/Indeed) are already pre-filtered job alerts,
+        # subject+date gated above. job_keywords check already applied inside
+        # _email_message_to_posting.
         seen_ids.update({link_key, guid_key})
         kept.append(posting)
-    
+
     log.info("[job_hunt] fetch_today_jobs_from_email: kept=%d postings after filtering", len(kept))
     return kept, raw_count
 
@@ -910,7 +956,7 @@ def search_jobs(
 
 def _job_cache_dir() -> Path:
     """Directory for persisted fetch results (RSS+email).
-    
+
     Location: <USER_SPACE_ROOT>/<user_id>/agentic/workflows/job_hunt/cache
     """
     from system.userspace import user_state_dir
@@ -933,11 +979,15 @@ def _job_email_msg_cache_path(date_str: str, msg_idx: int) -> Path:
 
 
 def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, Any]]) -> None:
-    """Write RSS postings to JSONL (one posting per line)."""
+    """Write RSS postings to JSONL (one posting per line).
+
+    Callers should pass only date-qualified postings — this function does
+    not itself filter by date; it just persists whatever list it's given.
+    """
     try:
         path = _job_rss_cache_path(date_str, feed_idx)
         if not postings:
-            log.warning("[job_hunt] skipping RSS cache for %s (empty feed)", path.name)
+            log.warning("[job_hunt] skipping RSS cache for %s (empty feed after date filter)", path.name)
             return
         lines = [json.dumps(p, ensure_ascii=False) for p in postings]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -964,7 +1014,13 @@ def _job_read_rss_cache(date_str: str, feed_idx: int) -> list[dict[str, Any]]:
 
 
 def _job_write_email_msg_cache(date_str: str, msg_idx: int, raw_message: dict[str, Any], posting: dict[str, Any] | None) -> None:
-    """Write single email message to JSONL with match status."""
+    """Write single email message to JSONL with match status.
+
+    Only called for messages that already passed the subject+date
+    pre-filter in fetch_today_jobs_from_email — messages rejected by
+    subject or date never reach this function, so no cache file is
+    written for them at all.
+    """
     try:
         path = _job_email_msg_cache_path(date_str, msg_idx)
         full_body = (
@@ -1040,104 +1096,115 @@ def _job_cache_read_manifest(date_str: str) -> dict[str, Any] | None:
         return None
 
 
-# ── Graph step 1: fetch_rss_and_email_into_state (parallel RSS + email) ──
+# ── Graph step 1: fetch_rss_and_email_into_state (concurrent per-feed + email) ──
 
-def _fetch_rss_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
-    """Fetch RSS feeds (sequential within this worker). Returns (postings, source_info, source_failures)."""
-    feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
+def _fetch_one_rss_feed(
+    date_str: str,
+    config: dict[str, Any],
+    can_reuse: bool,
+    feed_idx: int,
+    feed_url: str,
+) -> tuple[list[dict], dict, str | None]:
+    """Fetch or read-cache a single RSS feed. Returns (filtered_postings, source_info, failure_name_or_None).
+
+    Date filtering happens inside fetch_today_jobs_from_rss (filter_date=True)
+    so disqualified-by-date entries never reach the cache write. job_keywords
+    filtering happens AFTER cache read/write, since it's the filter most
+    likely to be retuned without wanting to re-fetch.
+    """
     rss_cap = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
-    
-    postings: list[dict] = []
-    source_info: list[dict] = []
-    source_failures: list[str] = []
-    
-    for feed_idx, feed_url in enumerate(feeds):
-        # Check if cached JSONL exists and is fresh
-        if can_reuse and _cache_is_fresh_simple(date_str, config):
-            cached = _job_read_rss_cache(date_str, feed_idx)
-            if cached:
-                log.info("[job_hunt]   (cached) rss feed %d: %d postings in cache", feed_idx, len(cached))
-                # Apply keyword filter to cached postings
-                keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
-                cached_filtered = cached[:rss_cap]
-                if keywords:
-                    cached_filtered = [p for p in cached_filtered if any(kw in f"{p.get('title', '')} {p.get('summary', '')}".casefold() for kw in keywords)]
-                
-                for p in cached_filtered:
-                    p["_source_idx"] = feed_idx
-                    p["_source_type"] = "rss"
-                    p["_source_name"] = f"rss_{feed_idx}"
-                postings.extend(cached_filtered)
-                source_info.append({
-                    "type": "rss",
-                    "index": feed_idx,
-                    "url": feed_url,
-                    "raw_count": len(cached),
-                    "filtered_count": len(cached),
-                    "matched_count": len(cached_filtered),
-                    "status": "cached",
-                })
-                continue
-        
-        # Fetch fresh RSS feed (ALL entries, no keyword filter - save to cache)
-        try:
-            log.info("[job_hunt] processing RSS feed %d/%d: %s", feed_idx + 1, len(feeds), feed_url[:80])
-            feed_postings = fetch_today_jobs_from_rss(_job_config_with_single_feed(config, feed_url), filter_keywords=False, filter_date=False)
-            raw_count = len(feed_postings)
-            
-            # Write ALL postings to JSONL cache (no keyword filtering)
-            _job_write_rss_cache(date_str, feed_idx, feed_postings)
-            
-            # Apply keyword filter for the graph state
-            keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
-            filtered = feed_postings[:rss_cap]  # Cap at rss_cap
-            if keywords:
-                filtered = [p for p in filtered if any(kw in f"{p.get('title', '')} {p.get('summary', '')}".casefold() for kw in keywords)]
-            
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+
+    def _filter_by_keyword_then_cap(items: list[dict]) -> list[dict]:
+        if keywords:
+            items = [
+                p for p in items
+                if any(kw in f"{p.get('title', '')} {p.get('summary', '')}".casefold() for kw in keywords)
+            ]
+        return items[:rss_cap]
+
+    # Check if cached JSONL exists and is fresh
+    if can_reuse and _cache_is_fresh_simple(date_str, config):
+        cached = _job_read_rss_cache(date_str, feed_idx)
+        if cached:
+            filtered = _filter_by_keyword_then_cap(cached)
             for p in filtered:
                 p["_source_idx"] = feed_idx
                 p["_source_type"] = "rss"
                 p["_source_name"] = f"rss_{feed_idx}"
-            
-            postings.extend(filtered)
-            source_info.append({
+            log.info(
+                "[job_hunt]   (cached) rss feed %d: %d date-qualified in cache, %d after keyword+cap",
+                feed_idx, len(cached), len(filtered),
+            )
+            return filtered, {
                 "type": "rss",
                 "index": feed_idx,
                 "url": feed_url,
-                "raw_count": raw_count,
-                "filtered_count": len(feed_postings),
+                "raw_count": len(cached),
+                "filtered_count": len(cached),
                 "matched_count": len(filtered),
-                "status": "ok",
-            })
-            log.info("[job_hunt]   rss feed %d: raw=%d cache=%d filtered=%d", feed_idx, raw_count, len(feed_postings), len(filtered))
-        except Exception as e:
-            log.error("[job_hunt] rss feed %d failed: %s", feed_idx, e)
-            source_failures.append(f"rss_{feed_idx}")
-            source_info.append({
-                "type": "rss",
-                "index": feed_idx,
-                "url": feed_url,
-                "raw_count": 0,
-                "filtered_count": 0,
-                "status": "error",
-                "error": str(e)[:100],
-            })
-    
-    return postings, source_info, source_failures
+                "status": "cached",
+            }, None
+
+    # Fetch fresh RSS feed, date-filtered (no keyword filter yet - save to cache)
+    try:
+        log.info("[job_hunt] processing RSS feed %d: %s", feed_idx, feed_url[:80])
+        feed_postings = fetch_today_jobs_from_rss(
+            _job_config_with_single_feed(config, feed_url),
+            filter_keywords=False,
+            filter_date=True,
+        )
+        raw_count = len(feed_postings)
+
+        # Write date-qualified postings to JSONL cache (no keyword filtering)
+        _job_write_rss_cache(date_str, feed_idx, feed_postings)
+
+        # Apply keyword filter + cap for the graph state
+        filtered = _filter_by_keyword_then_cap(feed_postings)
+        for p in filtered:
+            p["_source_idx"] = feed_idx
+            p["_source_type"] = "rss"
+            p["_source_name"] = f"rss_{feed_idx}"
+
+        log.info(
+            "[job_hunt]   rss feed %d: date-qualified=%d filtered+capped=%d",
+            feed_idx, raw_count, len(filtered),
+        )
+        return filtered, {
+            "type": "rss",
+            "index": feed_idx,
+            "url": feed_url,
+            "raw_count": raw_count,
+            "filtered_count": raw_count,
+            "matched_count": len(filtered),
+            "status": "ok",
+        }, None
+    except Exception as e:
+        log.error("[job_hunt] rss feed %d failed: %s", feed_idx, e)
+        return [], {
+            "type": "rss",
+            "index": feed_idx,
+            "url": feed_url,
+            "raw_count": 0,
+            "filtered_count": 0,
+            "status": "error",
+            "error": str(e)[:100],
+        }, f"rss_{feed_idx}"
 
 
 def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
     """Fetch email job alerts. Returns (postings, source_info, source_failures).
-    
-    Individual email messages are cached as JSONL files inside fetch_today_jobs_from_email.
+
+    Individual email messages are cached as JSONL files inside fetch_today_jobs_from_email,
+    only for messages that pass the subject+date pre-filter there.
     """
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
     email_idx = 0
-    
+
     postings: list[dict] = []
     source_info: list[dict] = []
     source_failures: list[str] = []
-    
+
     # Check if we have cached email messages
     if can_reuse and _cache_is_fresh_simple(date_str, config):
         # Try to load postings from cached email messages
@@ -1163,7 +1230,7 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
             except (OSError, json.JSONDecodeError):
                 msg_idx += 1
                 continue
-        
+
         if cached_postings:
             log.info("[job_hunt]   (cached) email: %d postings", len(cached_postings))
             postings.extend(cached_postings[:email_cap])
@@ -1175,19 +1242,20 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
                 "status": "cached",
             })
             return postings, source_info, source_failures
-    
-    # Fresh email fetch (per-message JSONL caching happens inside fetch_today_jobs_from_email)
+
+    # Fresh email fetch (per-message JSONL caching, subject+date pre-gated,
+    # happens inside fetch_today_jobs_from_email)
     try:
         email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
         log.info("[job_hunt] processing email (max %d messages, cap %d postings)", email_max_msgs, email_cap)
         email_postings, raw_count = fetch_today_jobs_from_email(config, email_idx)
         email_postings = email_postings[:email_cap]
-        
+
         for p in email_postings:
             p["_source_idx"] = email_idx
             p["_source_type"] = "email"
             p["_source_name"] = "email"
-        
+
         postings.extend(email_postings)
         source_info.append({
             "type": "email",
@@ -1208,19 +1276,29 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
             "status": "error",
             "error": str(e)[:100],
         })
-    
+
     return postings, source_info, source_failures
 
 
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
-    """Fetch all RSS and email job listings with per-source caching into state.
-    
-    Runs RSS and Email as two parallel branches using max_workers=2:
-    - Worker 1: RSS feeds (fetched sequentially within the worker)
-    - Worker 2: Email fetch (single batch)
-    
-    Writes individual JSONL files for each RSS feed and each email message.
-    No manifest or metadata files - just one JSONL per source.
+    """STEP 1: Fetch all RSS and email job listings with per-source caching into state.
+
+    Runs one task per RSS feed plus one task for email, all concurrently
+    via ThreadPoolExecutor — each feed is an independent unit of work
+    instead of one thread walking all feeds sequentially.
+
+    Both RSS (date range) and email (subject keywords + date range) apply
+    their cheap pre-cache filters before any cache file is written, so
+    disqualified items never touch disk. job_keywords (RSS) and domain +
+    job_keywords (email) are applied after caching.
+
+    Writes individual JSONL files for each RSS feed and each qualifying
+    email message. No manifest or metadata files - just one JSONL per source.
+
+    Step 1 ends once job_all_postings / job_source_info / job_current_index /
+    job_total are populated in state. Steps 2+ (get_next_job, draft_single_job,
+    save_single_job_draft, check_jobs_remaining, report_job_run) consume from
+    state and are unaffected by this function's internals.
     """
     config = _job_config()
     include_email = _config_bool(config, "include_email", "JOB_HUNT_INCLUDE_EMAIL", True)
@@ -1231,61 +1309,69 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
         True
     )
     include_email = include_email and enable_email_source
-    
+
     try:
         plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
     except (json.JSONDecodeError, TypeError):
         plan = {}
-    
+
     max_results = int(plan.get("max_results") or _config_int(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30))
-    
-    log.info("[job_hunt] fetch_rss_and_email_into_state: include_email=%s max_results=%d", include_email, max_results)
-    
+
     date_str = local_now().strftime("%Y-%m-%d")
     can_reuse = _cache_is_fresh_simple(date_str, config)
-    
+
+    feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
+
+    log.info(
+        "[job_hunt] fetch_rss_and_email_into_state: feeds=%d include_email=%s max_results=%d",
+        len(feeds), include_email, max_results,
+    )
+
     all_postings: list[dict] = []
     source_info: list[dict] = []
     source_failures: list[str] = []
-    
-    # Run RSS and Email in parallel (2 workers: 1 for RSS, 1 for Email)
-    max_workers = 2
-    
-    def rss_task() -> tuple[list[dict], list[dict], list[str]]:
-        return _fetch_rss_branch(date_str, config, can_reuse)
-    
-    def email_task() -> tuple[list[dict], list[dict], list[str]]:
-        if not include_email:
-            return [], [], []
-        return _fetch_email_branch(date_str, config, can_reuse)
-    
-    tasks = {"rss": rss_task}
+
+    # One task per RSS feed + one for email (email stays a single batched
+    # MCP call — no benefit to splitting it further).
+    tasks: dict[str, tuple] = {
+        f"rss_{i}": (_fetch_one_rss_feed, date_str, config, can_reuse, i, url)
+        for i, url in enumerate(feeds)
+    }
     if include_email:
-        tasks["email"] = email_task
-    
-    # Execute branches in parallel
+        tasks["email"] = (_fetch_email_branch, date_str, config, can_reuse)
+
+    configured_max_workers = _config_int(config, "max_workers", "JOB_HUNT_MAX_WORKERS", 2)
+    max_workers = max(1, min(len(tasks), configured_max_workers or len(tasks))) if tasks else 1
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {name: executor.submit(func) for name, func in tasks.items()}
+        futures = {name: executor.submit(fn, *args) for name, (fn, *args) in tasks.items()}
         for name, future in futures.items():
-            postings, src_info, failures = future.result()
-            all_postings.extend(postings)
-            source_info.extend(src_info)
-            source_failures.extend(failures)
-    
+            if name == "email":
+                postings, src_info, failures = future.result()
+                all_postings.extend(postings)
+                source_info.extend(src_info)
+                source_failures.extend(failures)
+            else:
+                postings, src_info, failure = future.result()
+                all_postings.extend(postings)
+                source_info.append(src_info)
+                if failure:
+                    source_failures.append(failure)
+
     # ── Final merge + cap ──────────────────────────────────────────────
     all_postings = all_postings[:max_results]
-    
+
     overall_status = "complete" if not source_failures else f"partial_{'_'.join(source_failures)}"
     log.info("[job_hunt] fetch_rss_and_email_into_state: total=%d postings, status=%s",
              len(all_postings), overall_status)
-    
+
     # ── Update state ───────────────────────────────────────────────────
     if state is not None:
         state.data["job_all_postings"] = all_postings
         state.data["job_source_info"] = source_info
         state.data["job_current_index"] = 0
         state.data["job_total"] = len(all_postings)
-    
+
     result = {
         "total_found": len(all_postings),
         "sources": source_info,
@@ -1307,30 +1393,30 @@ def _job_config_with_single_feed(config: dict[str, Any], feed_url: str) -> dict[
 def get_next_job(state=None, worker_id: str = "0") -> str:
     """Get the next unprocessed job from state.job_all_postings (thread-safe)."""
     import threading
-    
+
     if state is None:
         return json.dumps({"done": True, "reason": "no_state"})
-    
+
     lock = state.runtime.get("_job_index_lock")
     if lock is None:
         lock = threading.Lock()
         state.runtime["_job_index_lock"] = lock
-    
+
     with lock:
         all_postings = state.data.get("job_all_postings", [])
         current_idx = state.data.get("job_current_index", 0)
-        
+
         if current_idx >= len(all_postings):
             log.info("[job_hunt] get_next_job: worker=%s all %d jobs processed", worker_id, len(all_postings))
             return json.dumps({"done": True, "total_processed": current_idx})
-        
+
         job = all_postings[current_idx]
         state.data["job_current_index"] = current_idx + 1
         state.data["job_current"] = job
-        
+
         log.info("[job_hunt] get_next_job: worker=%s returning job %d/%d (source=%s, title=%s)",
                  worker_id, current_idx + 1, len(all_postings), job.get("_source_name"), job.get("title", "")[:50])
-        
+
         return json.dumps({
             "done": False,
             "job": job,
@@ -1354,46 +1440,46 @@ def draft_single_job(
     """Draft a single job post from one job dict."""
     if state is None:
         return json.dumps({"success": False, "reason": "no_state"})
-    
+
     try:
         job_data = json.loads(job_json)
         job = job_data.get("job") if isinstance(job_data, dict) else None
     except (json.JSONDecodeError, TypeError):
         job = None
-    
+
     if not job:
         return json.dumps({"success": False, "reason": "no_job_in_input"})
-    
+
     config = _job_config()
     today = local_now().strftime("%Y-%m-%d")
-    
+
     field_keys = _field_keys_from_config(config)
     used_llm = client is not None and bool(model)
     fetch_pages = _config_bool(config, "fetch_job_page", "JOB_FETCH_JOB_PAGE", True)
-    
+
     enriched = dict(job)
     if used_llm and fetch_pages:
         url = str(job.get("url") or "").strip()
         if url:
             enriched["page_content"] = _fetch_job_page_text(url, config=config)
-    
+
     if used_llm:
         enriched = enrich_posting_fields_with_llm(
             enriched, field_keys, client=client, model=model, state=state,
         )
     enriched.pop("page_content", None)
-    
+
     try:
         text = format_job_post(enriched, date_text=today, config=config)
     except ValueError as e:
         log.error("[job_hunt] draft_single_job: format failed: %s", e)
         return json.dumps({"success": False, "reason": str(e)})
-    
+
     slug_src = str(enriched.get("title") or job.get("title") or "job")
     slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or "job"
-    
+
     topic_tag = config.get("topic_tag", "").strip()[:50] or ""
-    
+
     draft = {
         "text": text,
         "posting": enriched,
@@ -1404,11 +1490,11 @@ def draft_single_job(
         "source_name": job.get("_source_name"),
         "source_type": job.get("_source_type"),
     }
-    
+
     drafts_list = state.data.get("job_drafts_list", [])
     drafts_list.append(draft)
     state.data["job_drafts_list"] = drafts_list
-    
+
     log.info("[job_hunt] draft_single_job: drafted job %s (source=%s)", slug, job.get("_source_name"))
     return json.dumps({"success": True, "draft": draft})
 
@@ -1419,19 +1505,19 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     """Save the most recently drafted job to disk."""
     if state is None:
         return json.dumps({"success": False, "reason": "no_state"})
-    
+
     drafts_list = state.data.get("job_drafts_list", [])
     if not drafts_list:
         return json.dumps({"success": False, "reason": "no_drafts"})
-    
+
     draft = drafts_list[-1]
     from agentic.toolkit.social import job_post_social_root
-    
+
     date_str = local_now().strftime("%Y-%m-%d")
     cat = draft.get("category", "post")
     draft_dir = job_post_social_root() / date_str / cat
     draft_dir.mkdir(parents=True, exist_ok=True)
-    
+
     text = draft.get("text", "").strip()
     (draft_dir / "draft_post.txt").write_text(text + "\n", encoding="utf-8")
     (draft_dir / "review.md").write_text(
@@ -1443,7 +1529,7 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
         "- [ ] Approved to post to Meta Threads\n",
         encoding="utf-8",
     )
-    
+
     posting_meta = dict(draft.get("posting") or {})
     posting_meta.pop("page_content", None)
     postings_meta = []
@@ -1451,7 +1537,7 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
         item = dict(p)
         item.pop("page_content", None)
         postings_meta.append(item)
-    
+
     meta = {
         "success": True,
         "draft_dir": str(draft_dir),
@@ -1467,7 +1553,7 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
         "source_type": draft.get("source_type"),
     }
     (draft_dir / "draft.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    
+
     log.info("[job_hunt] save_single_job_draft: saved to %s", draft_dir)
     return json.dumps({"success": True, "draft_dir": str(draft_dir)})
 
@@ -1478,11 +1564,11 @@ def check_jobs_remaining(state=None) -> str:
     """Check if more jobs remain to be processed."""
     if state is None:
         return "done"
-    
+
     current_idx = state.data.get("job_current_index", 0)
     total = state.data.get("job_total", 0)
     more = current_idx < total
-    
+
     result = "more" if more else "done"
     log.info("[job_hunt] check_jobs_remaining: %s (current=%d, total=%d)", result, current_idx, total)
     return result
@@ -1499,21 +1585,21 @@ def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str 
             return json.loads(s)
         except (json.JSONDecodeError, TypeError):
             return {}
-    
+
     plan_data = safe_loads(plan)
     search_data = safe_loads(search)
     draft_data = safe_loads(draft)
     save_data = safe_loads(save)
-    
+
     log.info("[job_hunt] report_job_run: feeds=%d, found=%d",
              len(plan_data.get('sources', [])),
              search_data.get('total_found', 0))
-    
+
     lines = ["# Job Post Run Report", "", "## RSS Lane D", ""]
     lines.append(f"- Feeds/sources: {len(plan_data.get('sources', []))}")
     lines.append(f"- Results found: {search_data.get('total_found', 0)}")
     if plan_data.get("max_results"):
         lines.append(f"- Limit: {plan_data.get('max_results')}")
     lines.append(f"- Drafts saved: {save_data.get('total_saved', 0)}")
-    
+
     return "\n".join(lines)

@@ -50,6 +50,18 @@
     "enabled": true,
     "note": "Job alerts from LinkedIn / Glassdoor / Indeed are read via the existing Proton Mail MCP tool (read_protonmail). Mailbox credentials are configured separately."
   },
+  "email_subject_keywords": [
+		"job",
+		"appl",
+		"opportunit",
+		"hiring",
+		"position",
+		"career",
+		"vacanc",
+		"job alert",
+		"new job",
+		"now hiring"
+	],
   "email_date_range_days": 7,
   "email_max_messages": 10,
   "max_email_posts": 10,
