@@ -229,18 +229,23 @@ def store_data(
         items = [items] if items else []
 
     paths = []
+    all_appends_ok = True
     for row in items:
         if not isinstance(row, dict):
             row = {"value": row}
-        paths.append(str(append_record(wid, row)))
+        path, append_ok = append_record(wid, row)
+        paths.append(str(path))
+        if not append_ok:
+            all_appends_ok = False
 
-    kept = prune_records(wid, days=days)
+    kept, prune_ok = prune_records(wid, days=days)
     if state is not None and hasattr(state, "data") and isinstance(state.data, dict):
         state.data["stored_count"] = len(items)
         state.data["workflow_id"] = wid
 
+    ok = all_appends_ok and prune_ok
     return _dumps({
-        "ok": True,
+        "ok": ok,
         "workflow_id": wid,
         "stored": len(items),
         "retained": kept,

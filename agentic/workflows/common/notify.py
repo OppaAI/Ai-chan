@@ -5,6 +5,7 @@ Best-effort: uses registered tools when present; never raises to callers.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from typing import Any
@@ -27,20 +28,23 @@ def notify_email(subject: str, body: str, *, to: str | None = None) -> dict[str,
         if spec is None or spec.handler is None:
             continue
         try:
-            args: dict[str, Any] = {"subject": subject, "body": body}
-            if to:
+            # Introspect handler signature to determine compatible arguments
+            sig = inspect.signature(spec.handler)
+            params = sig.parameters
+            args: dict[str, Any] = {}
+
+            # Always include subject and body if parameters accept them
+            if "subject" in params:
+                args["subject"] = subject
+            if "body" in params:
+                args["body"] = body
+            if to and "to" in params:
                 args["to"] = to
+
             result = spec.handler(**args)
             if isinstance(result, dict):
                 return {"ok": bool(result.get("ok", True)), "tool": name, "result": result}
             return {"ok": True, "tool": name, "result": result}
-        except TypeError:
-            # Try alternate signatures
-            try:
-                result = spec.handler(subject=subject, body=body)
-                return {"ok": True, "tool": name, "result": result}
-            except Exception as e2:
-                log.debug("notify_email: %s failed: %s", name, e2)
         except Exception as e:
             log.warning("notify_email: %s failed: %s", name, e)
             return {"ok": False, "tool": name, "error": str(e)}
@@ -77,14 +81,24 @@ def maybe_post_threads(
         if spec is None or spec.handler is None:
             continue
         try:
-            result = spec.handler(text=text)
+            # Introspect handler signature to determine compatible arguments
+            sig = inspect.signature(spec.handler)
+            params = sig.parameters
+            args: dict[str, Any] = {}
+
+            # Check which parameter name the handler expects
+            if "text" in params:
+                args["text"] = text
+            elif "message" in params:
+                args["message"] = text
+
+            result = spec.handler(**args)
+            # Check if handler returned a dict with ok field (Finding 5)
+            if isinstance(result, dict):
+                ok = bool(result.get("ok", True))
+                return {"ok": ok, "tool": name, "result": result, "reason": reason}
+            # Non-dict results are treated as success if truthy
             return {"ok": True, "tool": name, "result": result, "reason": reason}
-        except TypeError:
-            try:
-                result = spec.handler(message=text)
-                return {"ok": True, "tool": name, "result": result, "reason": reason}
-            except Exception as e2:
-                log.debug("maybe_post_threads: %s failed: %s", name, e2)
         except Exception as e:
             log.warning("maybe_post_threads: %s failed: %s", name, e)
             return {"ok": False, "tool": name, "error": str(e)}

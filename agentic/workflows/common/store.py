@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -34,8 +34,12 @@ def _records_path(workflow_id: str) -> Path:
     return workflow_data_dir(workflow_id) / "records.jsonl"
 
 
-def append_record(workflow_id: str, record: dict[str, Any], *, stored_at: str | None = None) -> Path:
-    """Append one record; stamps stored_at when missing."""
+def append_record(workflow_id: str, record: dict[str, Any], *, stored_at: str | None = None) -> tuple[Path, bool]:
+    """Append one record; stamps stored_at when missing.
+
+    Returns:
+        (path, success): Path to records file and whether write succeeded.
+    """
     path = _records_path(workflow_id)
     row = dict(record)
     if not row.get("stored_at"):
@@ -51,9 +55,10 @@ def append_record(workflow_id: str, record: dict[str, Any], *, stored_at: str | 
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return path, True
     except OSError as e:
         log.warning("workflow store: append failed %s: %s", path, e)
-    return path
+        return path, False
 
 
 def load_records(workflow_id: str, *, days: int | None = None) -> list[dict[str, Any]]:
@@ -69,6 +74,12 @@ def load_records(workflow_id: str, *, days: int | None = None) -> list[dict[str,
             cutoff = local_now() - timedelta(days=days)
         except Exception:
             cutoff = datetime.now() - timedelta(days=days)
+
+        # Normalize cutoff to UTC for consistent comparison
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        else:
+            cutoff = cutoff.astimezone(timezone.utc)
 
     out: list[dict[str, Any]] = []
     try:
@@ -88,8 +99,11 @@ def load_records(workflow_id: str, *, days: int | None = None) -> list[dict[str,
                     if stamp:
                         try:
                             dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
-                            if dt.tzinfo and cutoff.tzinfo is None:
-                                cutoff = cutoff.replace(tzinfo=dt.tzinfo)
+                            # Normalize record timestamp to UTC for comparison
+                            if dt.tzinfo is None:
+                                dt = dt.replace(tzinfo=timezone.utc)
+                            else:
+                                dt = dt.astimezone(timezone.utc)
                             if dt < cutoff:
                                 continue
                         except (TypeError, ValueError):
@@ -100,15 +114,19 @@ def load_records(workflow_id: str, *, days: int | None = None) -> list[dict[str,
     return out
 
 
-def prune_records(workflow_id: str, *, days: int = 3) -> int:
-    """Rewrite store keeping only records within ``days``. Returns kept count."""
+def prune_records(workflow_id: str, *, days: int = 3) -> tuple[int, bool]:
+    """Rewrite store keeping only records within ``days``.
+
+    Returns:
+        (kept_count, success): Number of records kept and whether write succeeded.
+    """
     kept = load_records(workflow_id, days=days)
     path = _records_path(workflow_id)
     try:
         with open(path, "w", encoding="utf-8") as f:
             for row in kept:
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return len(kept), True
     except OSError as e:
         log.warning("workflow store: prune failed %s: %s", path, e)
-        return 0
-    return len(kept)
+        return 0, False

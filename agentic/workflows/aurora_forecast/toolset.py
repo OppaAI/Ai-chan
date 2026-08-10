@@ -90,7 +90,9 @@ def _load_cfg(config_path: str = "") -> dict[str, Any]:
         p = Path(config_path)
         if p.is_file():
             try:
-                cfg.update(json.loads(p.read_text(encoding="utf-8")))
+                loaded = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    cfg.update(loaded)
             except (OSError, json.JSONDecodeError):
                 pass
     return cfg
@@ -196,6 +198,18 @@ def _score_level(aurora_pct: int, cloud_pct: int, kp: Optional[float], is_night:
     return level, "; ".join(reasons)
 
 
+def _is_valid_aurora_report(report: dict[str, Any]) -> bool:
+    """Validate that a dict represents a valid AuroraReport (not an error object)."""
+    if not isinstance(report, dict):
+        return False
+    # Must not be an error object
+    if "error" in report and not any(k in report for k in ("location_name", "aurora_probability_pct", "checked_at")):
+        return False
+    # Required fields for a valid Aurora report
+    required = {"location_name", "aurora_probability_pct", "cloud_cover_pct", "is_night", "viewable", "level", "summary", "explanation", "checked_at"}
+    return required.issubset(report.keys())
+
+
 def _build_summary(report_bits: dict[str, Any], cfg: dict, viewable: bool) -> str:
     lines = [
         f"Aurora Watch — {cfg['location_name']}",
@@ -280,8 +294,18 @@ def store_aurora_forecast(report_json: str = "", *, state=None) -> str:
     if not report:
         return json.dumps({"ok": False, "error": "no_report"})
 
-    path = append_record(WORKFLOW_ID, report)
-    kept = prune_records(WORKFLOW_ID, days=retain)
+    # Validate that report is a valid Aurora report, not an error object
+    if not _is_valid_aurora_report(report):
+        return json.dumps({"ok": False, "error": "invalid_report"})
+
+    path, append_ok = append_record(WORKFLOW_ID, report)
+    if not append_ok:
+        return json.dumps({"ok": False, "error": "append_failed"})
+
+    kept, prune_ok = prune_records(WORKFLOW_ID, days=retain)
+    if not prune_ok:
+        return json.dumps({"ok": False, "error": "prune_failed"})
+
     return json.dumps({"ok": True, "path": str(path), "retained": kept, "retain_days": retain})
 
 
@@ -299,6 +323,10 @@ def notify_aurora(report_json: str = "", *, state=None) -> str:
 
     if not report:
         return json.dumps({"ok": False, "error": "no_report"})
+
+    # Validate that report is a valid Aurora report, not an error object
+    if not _is_valid_aurora_report(report):
+        return json.dumps({"ok": False, "error": "invalid_report"})
 
     summary = str(report.get("summary") or "")
     level = str(report.get("level") or "low")
