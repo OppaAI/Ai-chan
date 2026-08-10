@@ -24,6 +24,11 @@ items never touch disk:
 RSS feeds fetch concurrently, one task per feed (not one task for all
 feeds), plus one task for email, via ThreadPoolExecutor.
 
+STEP 2 (process_and_merge_job_cache) reads all cache files from a date,
+filters by keywords, strips HTML from email bodies, formats with post_fields
+templates from config, and writes merged JSONL output (one job per line).
+Output file: merge_DATE.jsonl in the cache directory.
+
 When the graph executor injects an LLM client/model, draft_single_job
 enriches sparse postings by extracting post_fields keys from title + summary
 before formatting. Values are never invented beyond the source text.
@@ -99,6 +104,12 @@ _INLINE_STYLE_ATTR_SQ_RE = re.compile(r"\s*style\s*=\s*'[^']*'", re.IGNORECASE)
 # still mostly HTML tags (dense tables/divs with little text), markitdown
 # tends to hang or emit nothing useful. Bail to a fast regex strip instead.
 _TAG_DENSITY_BAILOUT = 0.5
+
+# URL patterns for job boards (email extraction)
+_JOB_BOARD_URLS_RE = re.compile(
+    r"https?://(?:www\.)?(?:glassdoor\.[a-z]{2,}|linkedin\.com|indeed\.[a-z]{2,}|jobbank\.gc\.ca|workopolis\.com|monster\.[a-z]{2,})/\S+",
+    re.IGNORECASE
+)
 
 
 def _user_skillsets_dir() -> Path:
@@ -813,10 +824,12 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
 
 
 def _extract_first_url(*texts: str) -> str:
+    """Extract first job board URL from texts."""
     for text in texts:
-        m = re.search(r"https?://\S+", text or "")
+        m = _JOB_BOARD_URLS_RE.search(text or "")
         if m:
-            return m.group(0).rstrip(".,;)")
+            url = m.group(0).rstrip(".,;)")
+            return url
     return ""
 
 
@@ -978,6 +991,14 @@ def _job_email_msg_cache_path(date_str: str, msg_idx: int) -> Path:
     return _job_cache_dir() / f"fetch_{date_str}_email_{msg_idx}.jsonl"
 
 
+def _job_merged_cache_path(date_str: str) -> Path:
+    """Path to merged cache JSONL: merge_YYYY-MM-DD.jsonl
+    
+    This is the Step 2 output file containing all processed jobs from both RSS and email.
+    """
+    return _job_cache_dir() / f"merge_{date_str}.jsonl"
+
+
 def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, Any]]) -> None:
     """Write RSS postings to JSONL (one posting per line).
 
@@ -1094,6 +1115,172 @@ def _job_cache_read_manifest(date_str: str) -> dict[str, Any] | None:
         return data if isinstance(data, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
+
+
+# ── STEP 2: Process and merge RSS + email caches into structured output ─────
+
+def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, Any] | None = None) -> str:
+    """STEP 2: Process all cached RSS and email jobs for a date.
+    
+    Reads all fetch_*_rss_*.jsonl and fetch_*_email_*.jsonl files from
+    the cache directory, filters by job_keywords, strips HTML from email
+    bodies, formats using post_fields templates from config, and writes
+    merged output to merge_DATE.jsonl (one job per line).
+    
+    Each output line is a complete job object with:
+      - All original fields from cache (title, organization, url, etc.)
+      - cleaned_summary: HTML-stripped body text (for emails)
+      - source_type: 'rss' or 'email'
+      - formatted_post: Ready-to-post text (optional, if post_fields defined)
+    
+    Returns JSON string with merge stats.
+    """
+    if date_str is None:
+        date_str = local_now().strftime("%Y-%m-%d")
+    
+    config = config if config is not None else _job_config()
+    cache_dir = _job_cache_dir()
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+    
+    log.info("[job_hunt] STEP 2: processing jobs for %s", date_str)
+    
+    # ── Load all RSS cache files ────────────────────────────────────────
+    rss_jobs: list[dict] = []
+    rss_files = sorted(cache_dir.glob(f"fetch_{date_str}_rss_*.jsonl"))
+    
+    for rss_file in rss_files:
+        try:
+            with open(rss_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        job = json.loads(line)
+                        rss_jobs.append(job)
+            log.debug("[job_hunt] loaded %d jobs from %s", len(rss_jobs), rss_file.name)
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("[job_hunt] failed to read RSS cache %s: %s", rss_file.name, e)
+            continue
+    
+    # ── Load all email cache files ──────────────────────────────────────
+    email_jobs: list[dict] = []
+    email_files = sorted(cache_dir.glob(f"fetch_{date_str}_email_*.jsonl"))
+    
+    for email_file in email_files:
+        try:
+            with open(email_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        data = json.loads(line)
+                        # Only include matched postings
+                        if data.get("matched") and data.get("posting"):
+                            posting = dict(data["posting"])
+                            # Add cleaned summary (HTML already stripped in fetch phase)
+                            full_body = data.get("full_body", "")
+                            posting["cleaned_summary"] = _strip_html(full_body, config=config)
+                            email_jobs.append(posting)
+            log.debug("[job_hunt] loaded %d matched jobs from %s", len([j for j in email_jobs if j]), email_file.name)
+        except (OSError, json.JSONDecodeError) as e:
+            log.warning("[job_hunt] failed to read email cache %s: %s", email_file.name, e)
+            continue
+    
+    # ── Filter by keywords ──────────────────────────────────────────────
+    def has_keywords(job: dict) -> bool:
+        if not keywords:
+            return True
+        title = str(job.get("title", "")).casefold()
+        summary = str(job.get("summary", "")).casefold()
+        content = f"{title} {summary}"
+        return any(kw in content for kw in keywords)
+    
+    filtered_rss = [j for j in rss_jobs if has_keywords(j)]
+    filtered_email = [j for j in email_jobs if has_keywords(j)]
+    
+    log.info("[job_hunt] STEP 2: filtered RSS %d → %d, email %d → %d",
+             len(rss_jobs), len(filtered_rss), len(email_jobs), len(filtered_email))
+    
+    # ── Merge and format ────────────────────────────────────────────────
+    merged_jobs: list[dict] = []
+    seen_urls: set[str] = set()
+    
+    # Add RSS jobs
+    for job in filtered_rss:
+        url_key = str(job.get("url", "")).strip().casefold()
+        if url_key and url_key in seen_urls:
+            continue
+        if url_key:
+            seen_urls.add(url_key)
+        
+        enriched = dict(job)
+        # Ensure source_type is set
+        if "source_type" not in enriched:
+            enriched["source_type"] = "rss"
+        
+        # Format using post_fields if available
+        try:
+            enriched["formatted_post"] = format_job_post(enriched, config=config)
+        except Exception as e:
+            log.debug("[job_hunt] failed to format RSS job %s: %s", enriched.get("title", "")[:50], e)
+            pass  # Don't fail the whole merge; just skip formatting for this one
+        
+        merged_jobs.append(enriched)
+    
+    # Add email jobs
+    for job in filtered_email:
+        url_key = str(job.get("url", "")).strip().casefold()
+        if url_key and url_key in seen_urls:
+            log.debug("[job_hunt] skipping duplicate email job (URL already in RSS): %s", url_key[:60])
+            continue
+        if url_key:
+            seen_urls.add(url_key)
+        
+        enriched = dict(job)
+        # Ensure source_type is set
+        if "source_type" not in enriched:
+            enriched["source_type"] = "email"
+        
+        # Format using post_fields if available
+        try:
+            enriched["formatted_post"] = format_job_post(enriched, config=config)
+        except Exception as e:
+            log.debug("[job_hunt] failed to format email job %s: %s", enriched.get("title", "")[:50], e)
+            pass
+        
+        merged_jobs.append(enriched)
+    
+    # ── Write merged output ────────────────────────────────────────────
+    merge_path = _job_merged_cache_path(date_str)
+    try:
+        with open(merge_path, "w", encoding="utf-8") as f:
+            for job in merged_jobs:
+                line = json.dumps(job, ensure_ascii=False)
+                f.write(line + "\n")
+        log.info("[job_hunt] STEP 2: wrote %d jobs to %s", len(merged_jobs), merge_path.name)
+    except OSError as e:
+        log.error("[job_hunt] failed to write merged cache %s: %s", merge_path.name, e)
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "merged_path": str(merge_path),
+        })
+    
+    result = {
+        "success": True,
+        "date": date_str,
+        "merged_path": str(merge_path),
+        "rss_total": len(rss_jobs),
+        "rss_filtered": len(filtered_rss),
+        "email_total": len(email_jobs),
+        "email_filtered": len(filtered_email),
+        "merged_total": len(merged_jobs),
+        "deduplicated_count": len(rss_jobs) + len(email_jobs) - len(merged_jobs),
+    }
+    
+    log.info("[job_hunt] STEP 2 complete: %d total jobs (RSS: %d, Email: %d, Dedup: %d)",
+             len(merged_jobs), len(filtered_rss), len(filtered_email), 
+             len(rss_jobs) + len(email_jobs) - len(merged_jobs))
+    
+    return json.dumps(result, ensure_ascii=False)
 
 
 # ── Graph step 1: fetch_rss_and_email_into_state (concurrent per-feed + email) ──
