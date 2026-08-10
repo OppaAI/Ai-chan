@@ -5,21 +5,17 @@ Graph module for job_hunt (Lane D) workflow.
 Registers graph tools and provides a single unified graph that works for both
 user prompts and scheduled runs.
 
-Importing this module auto-registers the graph with graph_engine.
+Importing this module auto-registers the graph with workflows.common.graphs
+(and a local alias for backward compatibility).
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any
-
 from agentic.graph_engine import PlanGraph, PlanNode
 from agentic.registry import TOOLS, tool
+from agentic.workflows.common.graphs import register_graph as _register_shared
+from agentic.workflows.common.graphs import get_graph as get_shared_graph
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Graph-tool registration (inline specs)
-# ──────────────────────────────────────────────────────────────────────────────
 
 try:
     from agentic.workflows.job_hunt.toolset import (
@@ -35,7 +31,7 @@ except Exception as exc:
     import logging
     logging.getLogger(__name__).warning("job_hunt toolkit import failed: %s", exc)
     _IMPORTS_OK = False
-    
+
     def _fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
         return '{"error": "toolkit not available"}'
     def _get_next_job(state=None, worker_id: str = "0") -> str:
@@ -50,7 +46,6 @@ except Exception as exc:
         return '{"error": "toolkit not available"}'
 
 
-# Register each as a graph tool
 @tool(TOOLS["fetch_rss_and_email_into_state"])
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     return _fetch_rss_and_email_into_state(plan_json, state=state)
@@ -87,10 +82,6 @@ def check_jobs_remaining(state=None) -> str:
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     return _report_job_run(plan, search, draft, save)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Single unified graph: sequential execution
-# ──────────────────────────────────────────────────────────────────────────────
 
 def build_gen_job_post_graph(
     goal: str = "Fetch, draft, and save job listings from configured RSS feeds",
@@ -139,26 +130,16 @@ def build_gen_job_post_graph(
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Graph registry (auto-populated on import)
-# ──────────────────────────────────────────────────────────────────────────────
-
-_GRAPH_REGISTRY: dict[str, PlanGraph] = {}
+# Local alias kept for callers that still import job_hunt.graph.get_graph
+def get_graph(graph_id: str):
+    return get_shared_graph(graph_id)
 
 
 def register_graph(graph: PlanGraph) -> None:
-    """Register a PlanGraph by ID for lookup by graph_engine."""
-    _GRAPH_REGISTRY[graph.id] = graph
+    _register_shared(graph)
 
 
-def get_graph(graph_id: str) -> PlanGraph | None:
-    """Retrieve a registered PlanGraph by ID."""
-    return _GRAPH_REGISTRY.get(graph_id)
-
-
-# Auto-register on import
 register_graph(build_gen_job_post_graph())
-
 
 __all__ = [
     "build_gen_job_post_graph",

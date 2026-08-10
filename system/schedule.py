@@ -495,6 +495,14 @@ def _default_schedule_graphs(user_id: str | None = None) -> list[dict]:
             "next_due": "",
             "last_ran_at": None,
         },
+        {
+            "id": "hourly_aurora_forecast",
+            "trigger": {"time": "00:05", "frequency": "hourly"},
+            "graph_id": "aurora_forecast",
+            "enabled": True,
+            "next_due": "",
+            "last_ran_at": None,
+        },
     ]
 
 
@@ -508,6 +516,19 @@ def ensure_schedule_graphs(user_id: str | None = None) -> None:
         now = bioclock.local_now()
         changed = False
         cfg = _job_post_social_config(user_id)
+        # Seed aurora graph if missing (existing installs)
+        if not any(g.get("id") == "hourly_aurora_forecast" or g.get("graph_id") == "aurora_forecast" for g in graphs):
+            graphs.append({
+                "id": "hourly_aurora_forecast",
+                "trigger": {"time": "00:05", "frequency": "hourly"},
+                "graph_id": "aurora_forecast",
+                "enabled": True,
+                "next_due": _schedule_graph_next_due(
+                    {"trigger": {"time": "00:05", "frequency": "hourly"}}, after=now
+                ).isoformat(),
+                "last_ran_at": None,
+            })
+            changed = True
         for g in graphs:
             if g.get("id") == JOB_POST_SOCIAL_JOB_TITLE or g.get("graph_id") == "gen_job_post":
                 if g.get("trigger", {}).get("time") != cfg["time"]:
@@ -1630,13 +1651,13 @@ class ScheduleRunner:
             log.warning("Schedule graph %r references unknown playbook %r — skipping", graph_def.get("id"), graph_id)
             return
 
-        # Try to get a pre-registered PlanGraph from the graph module registry
+        # Resolve PlanGraph from the shared workflow registry (job_hunt, aurora, …)
         registered_graph = None
         try:
-            from agentic.workflows.job_hunt.graph import get_graph as _get_graph
+            from agentic.workflows.common.graphs import get_graph as _get_graph
             registered_graph = _get_graph(graph_id)
         except Exception as exc:
-            log.debug("Schedule graph: failed to import graph module: %s", exc)
+            log.debug("Schedule graph: failed to resolve graph %r: %s", graph_id, exc)
 
         if registered_graph is not None:
             # Use the registered graph with the scheduled goal
