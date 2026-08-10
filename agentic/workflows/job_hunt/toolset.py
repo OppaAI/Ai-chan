@@ -100,6 +100,13 @@ _STRIP_BLOCK_TAGS_RE = re.compile(
 _INLINE_STYLE_ATTR_RE = re.compile(r'\s*style\s*=\s*"[^"]*"', re.IGNORECASE)
 _INLINE_STYLE_ATTR_SQ_RE = re.compile(r"\s*style\s*=\s*'[^']*'", re.IGNORECASE)
 
+# Convert <a href="url">text</a> → [text](url) so the fast regex path still
+# preserves job links for downstream extraction.
+_A_HREF_RE = re.compile(
+    r'<a\s+[^>]*href\s*=\s*["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+
 # If, after removing block tags and inline styles, the remaining text is
 # still mostly HTML tags (dense tables/divs with little text), markitdown
 # tends to hang or emit nothing useful. Bail to a fast regex strip instead.
@@ -108,8 +115,19 @@ _TAG_DENSITY_BAILOUT = 0.5
 # URL patterns for job boards (email extraction)
 _JOB_BOARD_URLS_RE = re.compile(
     r"https?://(?:www\.)?(?:glassdoor\.[a-z]{2,}|linkedin\.com|indeed\.[a-z]{2,}|jobbank\.gc\.ca|workopolis\.com|monster\.[a-z]{2,})/\S+",
-    re.IGNORECASE
+    re.IGNORECASE,
 )
+
+# Markdown link [text](url) — used after markitdown / fast-path conversion
+_MD_LINK_RE = re.compile(r"\[([^\]]{1,200})\]\((https?://[^\s\)]+)\)")
+
+# Common boilerplate phrases to skip when picking title candidates
+_BOILERPLATE = {
+    "apply now", "learn more", "view job", "job alert", "new job",
+    "recommended job", "see all", "recently viewed", "saved jobs",
+    "noreply@", "no-reply@", "view all jobs", "see more jobs",
+    "your job alert", "jobs you may be interested in",
+}
 
 
 def _user_skillsets_dir() -> Path:
@@ -340,29 +358,14 @@ def _draft_dedup_keys(draft_dirs) -> set[str]:
 
 
 def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] | None = None) -> str:
-    """Best-effort plain text from HTML. Uses markitdown for markdown conversion if available.
+    """Best-effort markdown/plain text from HTML.
 
-    max_chars: hard limit override. If None, uses config['max_email_chars'] or config['max_rss_chars'] or default.
-    config: optional config dict for tunable limits.
+    Uses markitdown for HTML→markdown (preserves links) when available and
+    tag density is reasonable. Fast path also rewrites <a href> into
+    markdown links so downstream job extraction still sees real URLs.
 
-    Email HTML (LinkedIn, Glassdoor, Indeed, etc.) commonly embeds thousands
-    of characters of inline <style> CSS — media queries, @font-face rules,
-    utility classes — ahead of any actual content, plus repeated inline
-    style="..." attributes on nearly every tag. Left as-is, this bloat can
-    make markitdown hang or return nothing useful, and can dilute the
-    regex-strip fallback's output. So this function:
-
-      1. Drops <style>/<script>/<head>/<meta>/<link>/<svg>/<template>/
-         <noscript>/<iframe> blocks (tag + full contents) before anything
-         else touches the text.
-      2. Strips inline style="..." attributes.
-      3. Measures tag density on what's left. If more than half of the
-         remaining text is still HTML tags (dense table/div markup with
-         little real content), skips markitdown entirely and goes straight
-         to the fast regex-strip path, since markitdown offers no benefit
-         there and can be slow.
-      4. Otherwise runs markitdown as before, with the same regex fallback
-         on failure.
+    max_chars: hard limit override. If None, uses config['max_email_chars']
+    or default 15000.
     """
     if not text:
         return ""
@@ -383,6 +386,13 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
             "_strip_html: tag density %.0f%% exceeds bailout threshold, using fast regex path",
             tag_density * 100,
         )
+        # Preserve links as markdown before stripping remaining tags
+        def _a_to_md(m: re.Match) -> str:
+            url = m.group(1).strip()
+            label = _HTML_TAG_RE.sub("", m.group(2)).strip() or url
+            label = _WS_RE.sub(" ", label)
+            return f"[{label}]({url})"
+        text = _A_HREF_RE.sub(_a_to_md, text)
         plain = _HTML_TAG_RE.sub(" ", text)
         plain = html.unescape(plain)
         plain = _WS_RE.sub(" ", plain).strip()
@@ -390,25 +400,28 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
             max_chars = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000) if config else 15000
         return plain[:max_chars]
 
-    # 4) Try markitdown for better HTML->markdown conversion.
+    # 4) Try markitdown for better HTML→markdown conversion (keeps links).
     try:
         from markitdown import MarkItDown
         md = MarkItDown()
         result = md.convert(text)
-        plain = result.text_content if hasattr(result, 'text_content') else str(result)
+        plain = result.text_content if hasattr(result, "text_content") else str(result)
     except Exception:
-        # Fallback: regex strip
+        # Fallback: convert <a> then regex strip
+        def _a_to_md(m: re.Match) -> str:
+            url = m.group(1).strip()
+            label = _HTML_TAG_RE.sub("", m.group(2)).strip() or url
+            label = _WS_RE.sub(" ", label)
+            return f"[{label}]({url})"
+        text = _A_HREF_RE.sub(_a_to_md, text)
         plain = _HTML_TAG_RE.sub(" ", text)
         plain = html.unescape(plain)
         plain = _WS_RE.sub(" ", plain).strip()
 
-    # Determine character limit
     if max_chars is None and config is not None:
-        # Use different limits for email vs RSS
         max_chars = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000)
-
     if max_chars is None:
-        max_chars = 15000  # default
+        max_chars = 15000
 
     return plain[:max_chars]
 
@@ -758,93 +771,8 @@ def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool =
         return []
 
 
-def _extract_job_title_from_email_body(body: str) -> str:
-    """Extract job title from email body text.
-    
-    Job alert emails (LinkedIn, Glassdoor, Indeed) typically format the job
-    as "Job Title at Company Name" or similar in the body. This extracts it.
-    
-    Strategy:
-    1. Split body into lines
-    2. Find first "substantial" line (30+ chars, not pure boilerplate)
-    3. Clean up and return
-    
-    Pure boilerplate lines to skip (< 30 chars, generic content):
-      - "See all of your recently viewed jobs"
-      - "Apply Now"
-      - "Learn More"
-      - "View Job"
-    
-    But DO include lines like:
-      - "Insurance Corporation of British Columbia: Apply Now" (contains job info + apply)
-      - "Senior Software Engineer - Company XYZ" (has job title)
-    """
-    if not body or len(body) < 10:
-        return ""
-    
-    # Pure boilerplate phrases that appear on their own or are very short
-    pure_boilerplate = {
-        "apply now",
-        "learn more",
-        "view job",
-        "job alert",
-        "new job",
-        "recommended job",
-        "see all",
-        "recently viewed",
-        "saved jobs",
-        "noreply@",
-        "no-reply@",
-    }
-    
-    lines = body.split("\n")
-    for line in lines:
-        line = line.strip()
-        if not line or len(line) < 15:
-            # Too short, skip
-            continue
-        
-        line_lower = line.lower()
-        
-        # Only skip if:
-        # 1. Line is SHORT (< 30 chars) AND contains pure boilerplate
-        # 2. Line is ONLY boilerplate phrases
-        if len(line) < 30:
-            if any(skip in line_lower for skip in pure_boilerplate):
-                continue
-        
-        # Check if entire line is just one of the boilerplate phrases
-        if line_lower in pure_boilerplate or any(line_lower == skip for skip in pure_boilerplate):
-            continue
-        
-        # Good candidate found!
-        # Clean up: remove email addresses, trim
-        title = re.sub(r"[a-z0-9._%+-]+@[a-z0-9.-]+", "", line, flags=re.IGNORECASE).strip()
-        
-        # Remove common email prefixes
-        title = re.sub(r"^(from|sender|to|subject):\s*", "", title, flags=re.IGNORECASE)
-        
-        # Remove trailing metadata in parens or after pipe
-        title = re.split(r"\s*[\|\(]", title)[0].strip()
-        
-        if len(title) >= 15 and len(title) < 250:
-            return title[:200]
-    
-    # Fallback: first non-empty line of body
-    for line in lines:
-        line = line.strip()
-        if line and len(line) > 10:
-            return line[:150]
-    
-    # Last resort: first 100 chars
-    return body[:100].strip()
-
-
 def _is_promotional_email(sender: str, subject: str) -> bool:
-    """Detect if email is a promotional multi-job notification (Glassdoor, LinkedIn, Indeed).
-    
-    These emails contain multiple job listings in the HTML body, not a single job.
-    """
+    """Detect if email is a promotional multi-job notification (Glassdoor, LinkedIn, Indeed)."""
     promotional_senders = {
         "noreply@glassdoor.com",
         "jobs-noreply@linkedin.com",
@@ -858,141 +786,217 @@ def _is_promotional_email(sender: str, subject: str) -> bool:
     return any(ps in sender_l for ps in promotional_senders)
 
 
-def _extract_promotional_email_jobs(body: str, sender: str, subject: str, config: dict[str, Any]) -> list[dict]:
-    """Extract multiple job listings from promotional email HTML.
-    
-    Glassdoor/LinkedIn/Indeed emails contain 6+ job cards in HTML format.
-    Uses regex patterns (no BeautifulSoup) to extract:
-      - Job title (job title keywords)
-      - Company name (text before ★ rating)
-      - Location (recognized city names)
-      - Salary ($XXK - $XXK patterns)
-      - Job ID from URL
-    
-    Returns list of job posting dicts (one per extracted job), or [] if no jobs found.
+def _extract_first_url(*texts: str) -> str:
+    """Extract first job board URL from texts (bare or markdown link)."""
+    for text in texts:
+        if not text:
+            continue
+        m = _MD_LINK_RE.search(text)
+        if m:
+            return m.group(2).rstrip(".,;)")
+        m = _JOB_BOARD_URLS_RE.search(text)
+        if m:
+            return m.group(0).rstrip(".,;)")
+    return ""
+
+
+def _is_boilerplate_line(line: str) -> bool:
+    low = line.lower().strip()
+    if not low or len(low) < 8:
+        return True
+    if low in _BOILERPLATE:
+        return True
+    if any(b in low for b in _BOILERPLATE) and len(low) < 40:
+        return True
+    return False
+
+
+def _looks_like_job_title(line: str) -> bool:
+    """Heuristic: line looks like a job title rather than prose/boilerplate."""
+    if not line or len(line) < 10 or len(line) > 180:
+        return False
+    if _is_boilerplate_line(line):
+        return False
+    # Prefer lines with role keywords or title-case multi-word
+    role_kw = re.compile(
+        r"\b(engineer|developer|architect|manager|analyst|specialist|"
+        r"consultant|director|scientist|designer|lead|sre|devops|"
+        r"programmer|intern)\b",
+        re.IGNORECASE,
+    )
+    if role_kw.search(line):
+        return True
+    # Title-ish: starts with capital, has spaces, not a full sentence
+    if re.match(r"^[A-Z][\w\s/\-&+]{8,}", line) and line.count(".") <= 1:
+        return True
+    return False
+
+
+def _extract_jobs_from_cleaned_email(
+    cleaned: str,
+    *,
+    sender: str = "",
+    subject: str = "",
+    msg_id: str = "",
+    date_str: str = "",
+    config: dict[str, Any] | None = None,
+) -> list[dict]:
+    """Extract one or more job postings from cleaned (MD/plain) email body.
+
+    This is the main path used for both single-job and promotional emails.
+    It prefers real job-board URLs (including markdown links produced by
+    _strip_html / markitdown) and pairs them with nearby title candidates
+    instead of just taking the first body line as the "title".
     """
-    if not body or len(body) < 100:
+    if not cleaned or len(cleaned) < 20:
         return []
-    
+
+    config = config or {}
+    max_summary = _config_int(config, "max_email_chars", "JOB_HUNT_MAX_EMAIL_CHARS", 15000)
+
+    # 1) Collect URLs: prefer markdown links (label, url), then bare job-board URLs
+    md_links: list[tuple[str, str]] = []  # (label, url)
+    for m in _MD_LINK_RE.finditer(cleaned):
+        label, url = m.group(1).strip(), m.group(2).rstrip(".,;)")
+        if _JOB_BOARD_URLS_RE.search(url) or any(
+            d in url.lower() for d in ("linkedin.com", "glassdoor.", "indeed.", "jobbank", "workopolis", "monster.")
+        ):
+            md_links.append((label, url))
+
+    bare_urls = []
+    for m in _JOB_BOARD_URLS_RE.finditer(cleaned):
+        u = m.group(0).rstrip(".,;)")
+        if not any(u == existing for _, existing in md_links):
+            bare_urls.append(u)
+
+    # Deduplicate URLs while preserving order
+    seen_u: set[str] = set()
+    urls: list[tuple[str, str]] = []  # (preferred_label_or_"", url)
+    for label, url in md_links:
+        key = url.split("?", 1)[0].rstrip("/").casefold()
+        if key not in seen_u:
+            seen_u.add(key)
+            urls.append((label, url))
+    for url in bare_urls:
+        key = url.split("?", 1)[0].rstrip("/").casefold()
+        if key not in seen_u:
+            seen_u.add(key)
+            urls.append(("", url))
+
+    # 2) Title candidates from lines
+    lines = [ln.strip() for ln in cleaned.splitlines() if ln.strip()]
+    title_candidates: list[str] = []
+    for ln in lines:
+        # Strip markdown link syntax for candidate text
+        candidate = _MD_LINK_RE.sub(r"\1", ln).strip()
+        candidate = re.sub(r"https?://\S+", "", candidate).strip()
+        candidate = re.sub(r"^[\*\-\#\d\.\)\s]+", "", candidate).strip()
+        if _looks_like_job_title(candidate):
+            title_candidates.append(candidate[:200])
+
+    # Also harvest labels from markdown links that look like titles
+    for label, _ in md_links:
+        if _looks_like_job_title(label) and label not in title_candidates:
+            title_candidates.append(label[:200])
+
+    # 3) Company / location / salary hints (lightweight)
+    company_from_star = re.findall(
+        r"([A-Z][A-Za-z0-9\s&.,\-']{2,}?)\s*[\|·]\s*\d+\.\d+\s*★",
+        cleaned,
+    )
+    salary_matches = re.findall(r"(\$[\d,]+[KMkm]?\s*[-–]\s*\$[\d,]+[KMkm]?)", cleaned)
+    location_hits = []
+    for kw in ("Remote", "Hybrid", "Vancouver", "Toronto", "Montreal", "Ottawa",
+               "Calgary", "Edmonton", "San Francisco", "New York", "Seattle",
+               "Los Angeles", "Austin", "Chicago", "Boston", "California"):
+        if re.search(rf"\b{re.escape(kw)}\b", cleaned, re.IGNORECASE):
+            location_hits.append(kw)
+
+    # 4) Build postings
     jobs: list[dict] = []
-    
-    # Extract all job board URLs with job IDs
-    job_url_pattern = r"https?://(?:www\.)?(?:glassdoor\.[a-z]{2,}|linkedin\.com|indeed\.[a-z]{2,}|jobbank\.gc\.ca|workopolis\.com|monster\.[a-z]{2,})/[^\"'\s<>]*"
-    job_urls = re.findall(job_url_pattern, body, re.IGNORECASE)
-    
-    # Extract job IDs from URLs (Glassdoor uses jobListingId)
-    job_ids = re.findall(r"jobListingId[=&\?](\d+)", body, re.IGNORECASE)
-    
-    # No jobs found if no URLs or IDs
-    if not (job_urls or job_ids):
-        return []
-    
-    # Extract job titles using multiple patterns
-    # Pattern 1: Job titles with common prefixes and suffixes
-    title_pattern_1 = r"\b((?:Sr\.?|Senior|Lead|Principal|Staff|Junior|Mid[- ]?Level)\s+[A-Z][a-z\s&/\-]*?(?:Engineer|Architect|Developer|Manager|Analyst|Specialist|Consultant|Director))"
-    titles_1 = re.findall(title_pattern_1, body, re.IGNORECASE)
-    
-    # Pattern 2: Multi-word titles in title case
-    title_pattern_2 = r"^([A-Z][A-Za-z\s&/\-]{10,80}(?:Engineer|Architect|Developer|Manager|Analyst|Specialist))$"
-    titles_2 = re.findall(title_pattern_2, body, re.MULTILINE | re.IGNORECASE)
-    
-    titles = list(dict.fromkeys(titles_1 + titles_2))  # Dedupe while preserving order
-    
-    # Extract companies (text before ★ rating)
-    company_pattern = r"([A-Z][A-Za-z0-9\s&.,\-']{2,}?)\s*\|\s*\d+\.\d+\s*★"
-    companies = re.findall(company_pattern, body)
-    
-    # Extract locations (recognized city/region names)
-    location_keywords = {
-        "North Vancouver": "North Vancouver",
-        "Vancouver": "Vancouver",
-        "Toronto": "Toronto",
-        "Langley": "Langley",
-        "Montreal": "Montreal",
-        "Ottawa": "Ottawa",
-        "Calgary": "Calgary",
-        "Edmonton": "Edmonton",
-        "Winnipeg": "Winnipeg",
-        "Quebec City": "Quebec City",
-        "Halifax": "Halifax",
-        "Canada": "Canada",
-        "Remote": "Remote",
-        "Hybrid": "Hybrid",
-    }
-    
-    locations = []
-    for keyword in location_keywords:
-        if keyword in body:
-            locations.append(location_keywords[keyword])
-    locations = list(dict.fromkeys(locations))  # Dedupe
-    
-    if not locations:
-        locations = ["Remote"]
-    
-    # Extract salaries ($XXK - $XXK format)
-    salary_pattern = r"(\$[\d,]+[KMkm]?\s*-\s*\$[\d,]+[KMkm]?)"
-    salaries = re.findall(salary_pattern, body)
-    
-    log.debug("[job_hunt] promotional email: titles=%d, companies=%d, locations=%d, salaries=%d",
-              len(titles), len(companies), len(locations), len(salaries))
-    
-    # Build jobs from extracted data
-    seen: set[tuple] = set()
-    
-    for idx in range(max(len(titles), len(job_ids)) if (titles or job_ids) else 0):
-        if idx >= max(len(job_ids), 1):
-            break
-        
-        title = titles[idx].strip() if idx < len(titles) else f"Job Listing {idx+1}"
-        if not title or title.lower() in {"apply now", "view job", "learn more"}:
-            continue
-        
-        company = companies[idx].strip() if idx < len(companies) else sender
-        if company.lower() in {"company", "employer", "unknown"}:
-            company = sender
-        
-        location = locations[idx % len(locations)] if locations else "Remote"
-        salary = salaries[idx % len(salaries)] if salaries else ""
-        job_id = job_ids[idx] if idx < len(job_ids) else f"promo_{idx}"
-        url = job_urls[idx] if idx < len(job_urls) else ""
-        
-        # Skip duplicates
-        key = (title, company, salary, location)
-        if key in seen:
-            continue
-        seen.add(key)
-        
-        job = {
-            "title": title,
-            "organization": company,
-            "location": location,
-            "salary": salary,
-            "url": url,
-            "guid": f"glassdoor_{job_id}" if "glassdoor" in sender.lower() else f"promo_{job_id}",
-            "summary": body[:500],
+    now_iso = local_now().isoformat()
+    posted = date_str or now_iso
+
+    if urls:
+        # One posting per distinct job URL when possible
+        for idx, (label, url) in enumerate(urls):
+            title = ""
+            if label and _looks_like_job_title(label):
+                title = label
+            elif idx < len(title_candidates):
+                title = title_candidates[idx]
+            elif title_candidates:
+                title = title_candidates[0]
+            else:
+                title = subject or f"Job listing {idx + 1}"
+
+            org = ""
+            if idx < len(company_from_star):
+                org = company_from_star[idx].strip()
+            if not org:
+                # Try "Title at Company" pattern
+                m = re.search(r"\bat\s+([A-Z][A-Za-z0-9\s&.,\-']{2,60})", title)
+                if m:
+                    org = m.group(1).strip()
+                    title = title[: m.start()].strip(" -–|") or title
+            if not org:
+                org = sender.split("@")[0] if "@" in sender else (sender or "")
+
+            loc = location_hits[idx % len(location_hits)] if location_hits else ""
+            sal = salary_matches[idx % len(salary_matches)] if salary_matches else ""
+
+            # Prefer a local window of cleaned text around this URL for summary
+            pos = cleaned.find(url)
+            if pos >= 0:
+                start = max(0, pos - 200)
+                end = min(len(cleaned), pos + 400)
+                snippet = cleaned[start:end].strip()
+            else:
+                snippet = cleaned[:800]
+
+            guid = f"email_{msg_id}_{idx}" if msg_id else f"email_url_{idx}_{url[-24:]}"
+            jobs.append({
+                "title": title[:200],
+                "organization": org[:120],
+                "url": url,
+                "guid": guid,
+                "summary": snippet[:1200] if snippet else cleaned[:1200],
+                "cleaned_summary": cleaned[:max_summary],
+                "location": loc,
+                "employment_type": "",
+                "salary": sal,
+                "experience": "",
+                "close_date": "",
+                "posted_date": posted,
+                "source_feed": "email",
+                "source": "email",
+            })
+    else:
+        # No job-board URL found — still emit one posting from best title + body
+        title = title_candidates[0] if title_candidates else (subject or "Job alert")
+        org = company_from_star[0].strip() if company_from_star else (sender or "")
+        jobs.append({
+            "title": title[:200],
+            "organization": org[:120],
+            "url": "",
+            "guid": msg_id or subject.casefold()[:80],
+            "summary": cleaned[:1200],
+            "cleaned_summary": cleaned[:max_summary],
+            "location": location_hits[0] if location_hits else "",
             "employment_type": "",
+            "salary": salary_matches[0] if salary_matches else "",
             "experience": "",
             "close_date": "",
-            "posted_date": local_now().isoformat(),
+            "posted_date": posted,
             "source_feed": "email",
             "source": "email",
-            "_is_promotional": True,
-        }
-        jobs.append(job)
-        log.debug("[job_hunt] extracted: '%s' @ %s (%s)", title[:50], company[:40], location)
-    
-    log.info("[job_hunt] extracted %d jobs from promotional email", len(jobs))
+        })
+
+    log.info(
+        "[job_hunt] extracted %d job(s) from cleaned email (urls=%d, title_candidates=%d)",
+        len(jobs), len(urls), len(title_candidates),
+    )
     return jobs
-
-
-def _extract_first_url(*texts: str) -> str:
-    """Extract first job board URL from texts."""
-    for text in texts:
-        m = _JOB_BOARD_URLS_RE.search(text or "")
-        if m:
-            url = m.group(0).rstrip(".,;)")
-            return url
-    return ""
 
 
 def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx: int = 0) -> tuple[list[dict], int]:
@@ -1000,21 +1004,13 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
 
     Pre-cache gate (cheap, no HTML parsing needed): subject keywords
     (email_subject_keywords) + date range (email_date_range_days). Messages
-    failing either are skipped entirely — no cache file written for them,
-    since we already know they're disqualified.
+    failing either are skipped entirely — no cache file written for them.
 
-    Post-fetch gate (inside _email_message_to_posting, only for messages
-    that passed the pre-cache gate): sender domain + job_keywords against
-    the full cleaned body. These stay after caching since they're more
-    likely to be retuned and the body-cleaning work is worth caching once
-    done.
+    Post-fetch: convert full_body → cleaned MD (with links), then extract
+    structured job postings (title/org/url/summary) via
+    _extract_jobs_from_cleaned_email. Domain + job_keywords filters still apply.
 
-    Returns (postings, raw_message_count) where raw_message_count is the
-    total number of messages fetched from ProtonMail before any filtering.
-
-    Args:
-        config: Job hunt config dict
-        email_idx: Index of this email source (for per-message cache naming)
+    Returns (postings, raw_message_count).
     """
     config = config if config is not None else _job_config()
     date_str = local_now().strftime("%Y-%m-%d")
@@ -1023,7 +1019,8 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     email_folder = _config_list(config, "email_folder", "JOB_HUNT_EMAIL_FOLDER", ["inbox"])[0]
     email_unread = _config_bool(config, "email_unread_only", "JOB_HUNT_EMAIL_UNREAD_ONLY", True)
 
-    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d, folder=%s, unread=%s", email_cap, email_max_msgs, email_folder, email_unread)
+    log.info("[job_hunt] fetch_today_jobs_from_email: email_cap=%d, email_max_msgs=%d, folder=%s, unread=%s",
+             email_cap, email_max_msgs, email_folder, email_unread)
 
     messages = _read_email_messages(email_max_msgs, folder=email_folder, unread=email_unread)
     raw_count = len(messages)
@@ -1044,14 +1041,12 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
 
     days = _config_int(config, "dedup_days", "JOB_HUNT_DEDUP_DAYS", 3)
     ledger = _prune_dedup_ledger(_dedup_ledger_load(), days)
-    now_iso = local_now().isoformat()
     kept: list[dict] = []
     seen_ids: set[str] = set()
 
     log.info("[job_hunt] fetch_today_jobs_from_email: fetched=%d messages", len(messages))
 
-    # ── Pre-cache gate: subject + date. Disqualified messages skip entirely —
-    #    no cache write, no body cleaning, no domain/keyword check. ──
+    # ── Pre-cache gate: subject + date ──
     filtered_messages: list[dict] = []
     skipped_subject = 0
     skipped_date = 0
@@ -1071,152 +1066,135 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=local_now().tzinfo)
                 dt = dt.astimezone(local_now().tzinfo)
-                log.debug("[job_hunt] email date parsed: %s -> %s", msg_date_str, dt.date())
                 if dt.date() < cutoff_date:
-                    log.debug("[job_hunt] email pre-filtered: outside date range. date=%s cutoff=%s", dt.date(), cutoff_date)
                     skipped_date += 1
                     continue
-            except (TypeError, ValueError) as e:
-                log.debug("[job_hunt] email date parse failed: %s, error: %s", msg_date_str, e)
-                pass  # If date parsing fails, keep the message
+            except (TypeError, ValueError):
+                pass
 
         filtered_messages.append(msg)
 
     log.info(
-        "[job_hunt] fetch_today_jobs_from_email: %d/%d passed subject+date pre-filter (skipped subject=%d, date=%d), cutoff=%s",
+        "[job_hunt] fetch_today_jobs_from_email: %d/%d passed subject+date pre-filter "
+        "(skipped subject=%d, date=%d), cutoff=%s",
         len(filtered_messages), raw_count, skipped_subject, skipped_date, cutoff_date,
     )
 
-    # ── Post-filter gate: domain + job_keywords, only for messages that
-    #    already passed subject+date. Each is cached (matched true/false). ──
+    job_domains = [
+        d.casefold() for d in _config_list(
+            config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS",
+            ["linkedin", "glassdoor", "indeed"],
+        )
+    ]
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+
     for msg_idx, msg in enumerate(filtered_messages):
         subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
         sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
-        
-        # Check if this is a promotional email with multiple jobs
-        is_promo = _is_promotional_email(sender, subject)
-        
-        if is_promo:
-            # Extract all jobs from promotional email
-            snippet_raw = str(msg.get("snippet") or "").strip()
-            snippet = _strip_html(snippet_raw, config=config)
-            body = (
-                _strip_html(str(msg.get("body") or ""), config=config) or
-                _strip_html(str(msg.get("text") or ""), config=config) or
-                _strip_html(str(msg.get("html") or ""), config=config) or
-                snippet
-            )
-            
-            promo_jobs = _extract_promotional_email_jobs(body, sender, subject, config)
-            log.info("[job_hunt] promotional email: extracted %d jobs from subject='%s'", len(promo_jobs), subject[:60])
-            
-            # Process each extracted job
-            for promo_job in promo_jobs:
-                link_key, guid_key = _dedupe_key(promo_job.get("url", ""), promo_job.get("guid", ""))
-                if link_key in seen_ids or guid_key in seen_ids:
-                    log.debug("[job_hunt] skipping duplicate promotional job: %s", link_key or guid_key)
-                    continue
-                if _job_known_state(ledger, link_key, guid_key) is not None:
-                    continue
-                seen_ids.update({link_key, guid_key})
-                kept.append(promo_job)
-        else:
-            # Regular single-job email
-            posting = _email_message_to_posting(msg, today, max_days, config)
+        sender_l = sender.casefold()
+        msg_id = str(msg.get("id") or "")
+        msg_date = str(msg.get("date") or "")
 
-            # Write individual email message cache (one JSONL per message)
-            _job_write_email_msg_cache(date_str, msg_idx, msg, posting)
+        # Domain gate
+        if job_domains and not any(d in sender_l for d in job_domains):
+            log.debug("[job_hunt] email rejected: domain filter. sender=%s", sender[:60])
+            _job_write_email_msg_cache(date_str, msg_idx, msg, None)
+            continue
 
-            if not posting:
-                continue
+        # Convert full body → cleaned MD (with links)
+        raw_body = (
+            str(msg.get("body") or "")
+            or str(msg.get("html") or "")
+            or str(msg.get("text") or "")
+            or str(msg.get("snippet") or "")
+        )
+        cleaned = _strip_html(raw_body, config=config)
+        if not cleaned:
+            cleaned = _strip_html(str(msg.get("snippet") or ""), config=config)
 
+        content_l = f"{subject} {sender} {cleaned}".casefold()
+        if keywords and not any(k in content_l for k in keywords):
+            log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
+            _job_write_email_msg_cache(date_str, msg_idx, msg, None)
+            continue
+
+        # Unified extraction from cleaned MD body
+        extracted = _extract_jobs_from_cleaned_email(
+            cleaned,
+            sender=sender,
+            subject=subject,
+            msg_id=msg_id,
+            date_str=msg_date,
+            config=config,
+        )
+
+        # Cache the first/primary posting (or None) for this message
+        primary = extracted[0] if extracted else None
+        _job_write_email_msg_cache(date_str, msg_idx, msg, primary)
+
+        for posting in extracted:
             link_key, guid_key = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
             if link_key in seen_ids or guid_key in seen_ids:
                 continue
             if _job_known_state(ledger, link_key, guid_key) is not None:
                 continue
-            # Email alerts (LinkedIn/Glassdoor/Indeed) are already pre-filtered job alerts,
-            # subject+date gated above. job_keywords check already applied inside
-            # _email_message_to_posting.
-            seen_ids.update({link_key, guid_key})
+            seen_ids.update({k for k in (link_key, guid_key) if k})
             kept.append(posting)
+            if len(kept) >= email_cap:
+                break
+        if len(kept) >= email_cap:
+            break
 
     log.info("[job_hunt] fetch_today_jobs_from_email: kept=%d postings after filtering", len(kept))
     return kept, raw_count
 
 
 def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict[str, Any]) -> dict | None:
-    """Convert one MCP Proton message dict into a posting.
+    """Convert one MCP Proton message into a posting (single primary job).
 
-    Assumes the caller already passed subject + date pre-filtering (see
-    fetch_today_jobs_from_email, which filters and caches before calling
-    this). Only checks left here:
-      1. Sender domain (email_source_domains)
-      2. job_keywords against cleaned subject+sender+body
-    
-    For email job alerts, the subject is usually generic ("Job Alert", "New Job Recommendation")
-    so we extract the actual job title from the email body instead.
+    Kept for compatibility; preferred path is _extract_jobs_from_cleaned_email
+    inside fetch_today_jobs_from_email which can return multiple jobs.
     """
     subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
     if not subject:
         return None
 
-    date_str = str(msg.get("date") or "")
     sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
     sender_l = sender.casefold()
-
-    # Convert HTML snippet/body to clean text using _strip_html
-    snippet_raw = str(msg.get("snippet") or "").strip()
-    snippet = _strip_html(snippet_raw, config=config)
-
-    # Try all body fields, converting HTML to text as we go
-    body = (
-        _strip_html(str(msg.get("body") or ""), config=config) or
-        _strip_html(str(msg.get("text") or ""), config=config) or
-        _strip_html(str(msg.get("html") or ""), config=config) or
-        snippet
-    )
-
-    content = f"{subject} {sender} {body}".casefold()
-
-    # 1. Domain gate — only accept from known job alert domains (anti-spam)
-    job_domains = [d.casefold() for d in _config_list(config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS", ["linkedin", "glassdoor", "indeed"])]
-    from_job_domain = any(d in sender_l for d in job_domains)
-
-    if not from_job_domain:
-        log.debug("[job_hunt] email rejected: domain filter. sender=%s", sender[:60])
-        return None
-
-    # 2. job_keywords gate — check on cleaned text
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
-    has_job_keyword = any(k in content for k in keywords)
-
-    if not has_job_keyword:
-        log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
-        return None
-
-    # ── Extract actual job title from body (not subject) ────────────────
-    job_title = _extract_job_title_from_email_body(body)
-    if not job_title:
-        # Fallback: use subject if we can't extract from body
-        job_title = subject
-    
     msg_id = str(msg.get("id") or "") or subject.casefold()
-    return {
-        "title": job_title,  # ← Extracted from body, not subject
-        "organization": sender,
-        "url": _extract_first_url(subject, snippet, body) or "",
-        "guid": msg_id,
-        "summary": body[:500],
-        "location": "",
-        "employment_type": "",
-        "salary": "",
-        "experience": "",
-        "close_date": "",
-        "posted_date": date_str or local_now().isoformat(),
-        "source_feed": "email",
-        "source": "email",
-    }
+    date_str = str(msg.get("date") or "")
+
+    raw_body = (
+        str(msg.get("body") or "")
+        or str(msg.get("html") or "")
+        or str(msg.get("text") or "")
+        or str(msg.get("snippet") or "")
+    )
+    cleaned = _strip_html(raw_body, config=config)
+
+    job_domains = [
+        d.casefold() for d in _config_list(
+            config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS",
+            ["linkedin", "glassdoor", "indeed"],
+        )
+    ]
+    if job_domains and not any(d in sender_l for d in job_domains):
+        return None
+
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+    content = f"{subject} {sender} {cleaned}".casefold()
+    if keywords and not any(k in content for k in keywords):
+        return None
+
+    jobs = _extract_jobs_from_cleaned_email(
+        cleaned,
+        sender=sender,
+        subject=subject,
+        msg_id=msg_id,
+        date_str=date_str,
+        config=config,
+    )
+    return jobs[0] if jobs else None
 
 
 @tool(TOOLS["search_jobs"])
@@ -1260,19 +1238,12 @@ def _job_email_msg_cache_path(date_str: str, msg_idx: int) -> Path:
 
 
 def _job_merged_cache_path(date_str: str) -> Path:
-    """Path to merged cache JSONL: merge_YYYY-MM-DD.jsonl
-    
-    This is the Step 2 output file containing all processed jobs from both RSS and email.
-    """
+    """Path to merged cache JSONL: merge_YYYY-MM-DD.jsonl"""
     return _job_cache_dir() / f"merge_{date_str}.jsonl"
 
 
 def _job_write_rss_cache(date_str: str, feed_idx: int, postings: list[dict[str, Any]]) -> None:
-    """Write RSS postings to JSONL (one posting per line).
-
-    Callers should pass only date-qualified postings — this function does
-    not itself filter by date; it just persists whatever list it's given.
-    """
+    """Write RSS postings to JSONL (one posting per line)."""
     try:
         path = _job_rss_cache_path(date_str, feed_idx)
         if not postings:
@@ -1303,13 +1274,7 @@ def _job_read_rss_cache(date_str: str, feed_idx: int) -> list[dict[str, Any]]:
 
 
 def _job_write_email_msg_cache(date_str: str, msg_idx: int, raw_message: dict[str, Any], posting: dict[str, Any] | None) -> None:
-    """Write single email message to JSONL with match status.
-
-    Only called for messages that already passed the subject+date
-    pre-filter in fetch_today_jobs_from_email — messages rejected by
-    subject or date never reach this function, so no cache file is
-    written for them at all.
-    """
+    """Write single email message to JSONL with match status."""
     try:
         path = _job_email_msg_cache_path(date_str, msg_idx)
         full_body = (
@@ -1389,184 +1354,123 @@ def _job_cache_read_manifest(date_str: str) -> dict[str, Any] | None:
 
 def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, Any] | None = None) -> str:
     """STEP 2: Process all cached RSS and email jobs for a date.
-    
-    Reads all fetch_*_rss_*.jsonl and fetch_*_email_*.jsonl files from
-    the cache directory, filters by job_keywords, strips HTML from email
-    bodies, formats using post_fields templates from config, and writes
-    merged output to merge_DATE.jsonl (one job per line).
-    
-    Respects per-source caps:
-      - max_rss_posts: Maximum RSS jobs to include (default: 10)
-      - max_email_posts: Maximum email jobs to include (default: 10)
-    
-    Stops processing and proceeds to Step 3 once both limits are reached.
-    
-    Each output line is a complete job object with:
-      - All original fields from cache (title, organization, url, etc.)
-      - cleaned_summary: HTML-stripped body text (for emails)
-      - source_type: 'rss' or 'email'
-      - formatted_post: Ready-to-post text (optional, if post_fields defined)
-    
-    Returns JSON string with merge stats, including:
-      - hit_rss_limit: True if max_rss_posts reached
-      - hit_email_limit: True if max_email_posts reached
-      - proceed_to_step3: True if ready to draft jobs
+
+    Reads all fetch_*_rss_*.jsonl and fetch_*_email_*.jsonl files,
+    filters by job_keywords, ensures cleaned_summary on email postings,
+    formats with post_fields, writes merge_DATE.jsonl.
     """
     if date_str is None:
         date_str = local_now().strftime("%Y-%m-%d")
-    
+
     config = config if config is not None else _job_config()
     cache_dir = _job_cache_dir()
     keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
-    
-    # ── Get per-source caps ────────────────────────────────────────────
+
     max_rss_posts = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
     max_email_posts = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
-    
-    log.info("[job_hunt] STEP 2: processing jobs for %s (max_rss=%d, max_email=%d)", 
+
+    log.info("[job_hunt] STEP 2: processing jobs for %s (max_rss=%d, max_email=%d)",
              date_str, max_rss_posts, max_email_posts)
-    
-    # ── Load all RSS cache files ────────────────────────────────────────
+
     rss_jobs: list[dict] = []
-    rss_files = sorted(cache_dir.glob(f"fetch_{date_str}_rss_*.jsonl"))
-    
-    for rss_file in rss_files:
+    for rss_file in sorted(cache_dir.glob(f"fetch_{date_str}_rss_*.jsonl")):
         try:
             with open(rss_file, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line:
-                        job = json.loads(line)
-                        rss_jobs.append(job)
-            log.debug("[job_hunt] loaded %d jobs from %s", len(rss_jobs), rss_file.name)
+                        rss_jobs.append(json.loads(line))
         except (OSError, json.JSONDecodeError) as e:
             log.warning("[job_hunt] failed to read RSS cache %s: %s", rss_file.name, e)
-            continue
-    
-    # ── Load all email cache files ──────────────────────────────────────
+
     email_jobs: list[dict] = []
-    email_files = sorted(cache_dir.glob(f"fetch_{date_str}_email_*.jsonl"))
-    
-    for email_file in email_files:
+    for email_file in sorted(cache_dir.glob(f"fetch_{date_str}_email_*.jsonl")):
         try:
             with open(email_file, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    if line:
-                        data = json.loads(line)
-                        # Only include matched postings
-                        if data.get("matched") and data.get("posting"):
-                            posting = dict(data["posting"])
-                            # Add cleaned summary (HTML already stripped in fetch phase)
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if data.get("matched") and data.get("posting"):
+                        posting = dict(data["posting"])
+                        # Prefer already-cleaned summary; otherwise strip full_body
+                        if not posting.get("cleaned_summary"):
                             full_body = data.get("full_body", "")
                             posting["cleaned_summary"] = _strip_html(full_body, config=config)
-                            email_jobs.append(posting)
-            log.debug("[job_hunt] loaded %d matched jobs from %s", len([j for j in email_jobs if j]), email_file.name)
+                        if not posting.get("summary") and posting.get("cleaned_summary"):
+                            posting["summary"] = posting["cleaned_summary"][:1200]
+                        email_jobs.append(posting)
         except (OSError, json.JSONDecodeError) as e:
             log.warning("[job_hunt] failed to read email cache %s: %s", email_file.name, e)
-            continue
-    
-    # ── Filter by keywords ──────────────────────────────────────────────
+
     def has_keywords(job: dict) -> bool:
         if not keywords:
             return True
         title = str(job.get("title", "")).casefold()
-        summary = str(job.get("summary", "")).casefold()
-        content = f"{title} {summary}"
-        return any(kw in content for kw in keywords)
-    
+        summary = str(job.get("summary", "") or job.get("cleaned_summary", "")).casefold()
+        return any(kw in f"{title} {summary}" for kw in keywords)
+
     filtered_rss = [j for j in rss_jobs if has_keywords(j)]
     filtered_email = [j for j in email_jobs if has_keywords(j)]
-    
+
     log.info("[job_hunt] STEP 2: filtered RSS %d → %d, email %d → %d",
              len(rss_jobs), len(filtered_rss), len(email_jobs), len(filtered_email))
-    
-    # ── Merge and format with per-source caps ────────────────────────────────────────────
+
     merged_jobs: list[dict] = []
     seen_urls: set[str] = set()
     rss_count = 0
     email_count = 0
     hit_rss_limit = False
     hit_email_limit = False
-    
-    # Add RSS jobs up to max_rss_posts
+
     for job in filtered_rss:
         if rss_count >= max_rss_posts:
             hit_rss_limit = True
-            log.info("[job_hunt] STEP 2: RSS cap reached (%d/%d), stopping RSS processing", 
-                     rss_count, max_rss_posts)
             break
-        
         url_key = str(job.get("url", "")).strip().casefold()
         if url_key and url_key in seen_urls:
             continue
         if url_key:
             seen_urls.add(url_key)
-        
         enriched = dict(job)
-        # Ensure source_type is set
-        if "source_type" not in enriched:
-            enriched["source_type"] = "rss"
-        
-        # Format using post_fields if available
+        enriched.setdefault("source_type", "rss")
         try:
             enriched["formatted_post"] = format_job_post(enriched, config=config)
-        except Exception as e:
-            log.debug("[job_hunt] failed to format RSS job %s: %s", enriched.get("title", "")[:50], e)
-            pass  # Don't fail the whole merge; just skip formatting for this one
-        
+        except Exception:
+            pass
         merged_jobs.append(enriched)
         rss_count += 1
-    
-    # Add email jobs up to max_email_posts
+
     for job in filtered_email:
         if email_count >= max_email_posts:
             hit_email_limit = True
-            log.info("[job_hunt] STEP 2: Email cap reached (%d/%d), stopping email processing", 
-                     email_count, max_email_posts)
             break
-        
         url_key = str(job.get("url", "")).strip().casefold()
         if url_key and url_key in seen_urls:
-            log.debug("[job_hunt] skipping duplicate email job (URL already in RSS): %s", url_key[:60])
             continue
         if url_key:
             seen_urls.add(url_key)
-        
         enriched = dict(job)
-        # Ensure source_type is set
-        if "source_type" not in enriched:
-            enriched["source_type"] = "email"
-        
-        # Format using post_fields if available
+        enriched.setdefault("source_type", "email")
         try:
             enriched["formatted_post"] = format_job_post(enriched, config=config)
-        except Exception as e:
-            log.debug("[job_hunt] failed to format email job %s: %s", enriched.get("title", "")[:50], e)
+        except Exception:
             pass
-        
         merged_jobs.append(enriched)
         email_count += 1
-    
-    # ── Write merged output ────────────────────────────────────────────
+
     merge_path = _job_merged_cache_path(date_str)
     try:
         with open(merge_path, "w", encoding="utf-8") as f:
             for job in merged_jobs:
-                line = json.dumps(job, ensure_ascii=False)
-                f.write(line + "\n")
+                f.write(json.dumps(job, ensure_ascii=False) + "\n")
         log.info("[job_hunt] STEP 2: wrote %d jobs to %s", len(merged_jobs), merge_path.name)
     except OSError as e:
         log.error("[job_hunt] failed to write merged cache %s: %s", merge_path.name, e)
-        return json.dumps({
-            "success": False,
-            "error": str(e),
-            "merged_path": str(merge_path),
-        })
-    
-    # ── Determine if we should proceed to Step 3 ────────────────────────
+        return json.dumps({"success": False, "error": str(e), "merged_path": str(merge_path)})
+
     proceed_to_step3 = len(merged_jobs) > 0
-    
     result = {
         "success": True,
         "date": date_str,
@@ -1584,14 +1488,10 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
         "merged_total": len(merged_jobs),
         "deduplicated_count": (rss_count + email_count) - len(merged_jobs),
         "proceed_to_step3": proceed_to_step3,
-        "summary": f"Processed {rss_count} RSS + {email_count} email jobs (caps: {max_rss_posts}/{max_email_posts})"
+        "summary": f"Processed {rss_count} RSS + {email_count} email jobs (caps: {max_rss_posts}/{max_email_posts})",
     }
-    
-    log.info("[job_hunt] STEP 2 complete: %d total jobs (RSS: %d/%d, Email: %d/%d, Dedup: %d) → %s",
-             len(merged_jobs), rss_count, max_rss_posts, email_count, max_email_posts,
-             (rss_count + email_count) - len(merged_jobs),
-             "PROCEED TO STEP 3" if proceed_to_step3 else "NO JOBS TO PROCESS")
-    
+    log.info("[job_hunt] STEP 2 complete: %d total jobs → %s",
+             len(merged_jobs), "PROCEED TO STEP 3" if proceed_to_step3 else "NO JOBS")
     return json.dumps(result, ensure_ascii=False)
 
 
@@ -1604,13 +1504,7 @@ def _fetch_one_rss_feed(
     feed_idx: int,
     feed_url: str,
 ) -> tuple[list[dict], dict, str | None]:
-    """Fetch or read-cache a single RSS feed. Returns (filtered_postings, source_info, failure_name_or_None).
-
-    Date filtering happens inside fetch_today_jobs_from_rss (filter_date=True)
-    so disqualified-by-date entries never reach the cache write. job_keywords
-    filtering happens AFTER cache read/write, since it's the filter most
-    likely to be retuned without wanting to re-fetch.
-    """
+    """Fetch or read-cache a single RSS feed."""
     rss_cap = _config_int(config, "max_rss_posts", "JOB_HUNT_MAX_RSS_POSTS", 10)
     keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
 
@@ -1622,7 +1516,6 @@ def _fetch_one_rss_feed(
             ]
         return items[:rss_cap]
 
-    # Check if cached JSONL exists and is fresh
     if can_reuse and _cache_is_fresh_simple(date_str, config):
         cached = _job_read_rss_cache(date_str, feed_idx)
         if cached:
@@ -1645,7 +1538,6 @@ def _fetch_one_rss_feed(
                 "status": "cached",
             }, None
 
-    # Fetch fresh RSS feed, date-filtered (no keyword filter yet - save to cache)
     try:
         log.info("[job_hunt] processing RSS feed %d: %s", feed_idx, feed_url[:80])
         feed_postings = fetch_today_jobs_from_rss(
@@ -1654,21 +1546,14 @@ def _fetch_one_rss_feed(
             filter_date=True,
         )
         raw_count = len(feed_postings)
-
-        # Write date-qualified postings to JSONL cache (no keyword filtering)
         _job_write_rss_cache(date_str, feed_idx, feed_postings)
-
-        # Apply keyword filter + cap for the graph state
         filtered = _filter_by_keyword_then_cap(feed_postings)
         for p in filtered:
             p["_source_idx"] = feed_idx
             p["_source_type"] = "rss"
             p["_source_name"] = f"rss_{feed_idx}"
-
-        log.info(
-            "[job_hunt]   rss feed %d: date-qualified=%d filtered+capped=%d",
-            feed_idx, raw_count, len(filtered),
-        )
+        log.info("[job_hunt]   rss feed %d: date-qualified=%d filtered+capped=%d",
+                 feed_idx, raw_count, len(filtered))
         return filtered, {
             "type": "rss",
             "index": feed_idx,
@@ -1692,21 +1577,14 @@ def _fetch_one_rss_feed(
 
 
 def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) -> tuple[list[dict], list[dict], list[str]]:
-    """Fetch email job alerts. Returns (postings, source_info, source_failures).
-
-    Individual email messages are cached as JSONL files inside fetch_today_jobs_from_email,
-    only for messages that pass the subject+date pre-filter there.
-    """
+    """Fetch email job alerts."""
     email_cap = _config_int(config, "max_email_posts", "JOB_HUNT_MAX_EMAIL_POSTS", 10)
     email_idx = 0
-
     postings: list[dict] = []
     source_info: list[dict] = []
     source_failures: list[str] = []
 
-    # Check if we have cached email messages
     if can_reuse and _cache_is_fresh_simple(date_str, config):
-        # Try to load postings from cached email messages
         msg_idx = 0
         cached_postings = []
         while True:
@@ -1742,19 +1620,15 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
             })
             return postings, source_info, source_failures
 
-    # Fresh email fetch (per-message JSONL caching, subject+date pre-gated,
-    # happens inside fetch_today_jobs_from_email)
     try:
         email_max_msgs = _config_int(config, "email_max_messages", "JOB_HUNT_EMAIL_MAX_MESSAGES", 10)
         log.info("[job_hunt] processing email (max %d messages, cap %d postings)", email_max_msgs, email_cap)
         email_postings, raw_count = fetch_today_jobs_from_email(config, email_idx)
         email_postings = email_postings[:email_cap]
-
         for p in email_postings:
             p["_source_idx"] = email_idx
             p["_source_type"] = "email"
             p["_source_name"] = "email"
-
         postings.extend(email_postings)
         source_info.append({
             "type": "email",
@@ -1780,32 +1654,14 @@ def _fetch_email_branch(date_str: str, config: dict[str, Any], can_reuse: bool) 
 
 
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
-    """STEP 1: Fetch all RSS and email job listings with per-source caching into state.
-
-    Runs one task per RSS feed plus one task for email, all concurrently
-    via ThreadPoolExecutor — each feed is an independent unit of work
-    instead of one thread walking all feeds sequentially.
-
-    Both RSS (date range) and email (subject keywords + date range) apply
-    their cheap pre-cache filters before any cache file is written, so
-    disqualified items never touch disk. job_keywords (RSS) and domain +
-    job_keywords (email) are applied after caching.
-
-    Writes individual JSONL files for each RSS feed and each qualifying
-    email message. No manifest or metadata files - just one JSONL per source.
-
-    Step 1 ends once job_all_postings / job_source_info / job_current_index /
-    job_total are populated in state. Steps 2+ (get_next_job, draft_single_job,
-    save_single_job_draft, check_jobs_remaining, report_job_run) consume from
-    state and are unaffected by this function's internals.
-    """
+    """STEP 1: Fetch all RSS and email job listings with per-source caching into state."""
     config = _job_config()
     include_email = _config_bool(config, "include_email", "JOB_HUNT_INCLUDE_EMAIL", True)
     enable_email_source = _config_bool(
         config.get("email_source", {}),
         "enabled",
         "JOB_HUNT_EMAIL_SOURCE_ENABLED",
-        True
+        True,
     )
     include_email = include_email and enable_email_source
 
@@ -1815,10 +1671,8 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
         plan = {}
 
     max_results = int(plan.get("max_results") or _config_int(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30))
-
     date_str = local_now().strftime("%Y-%m-%d")
     can_reuse = _cache_is_fresh_simple(date_str, config)
-
     feeds = _config_list(config, "rss_feeds", "TECH_JOB_RSS_FEEDS")
 
     log.info(
@@ -1830,8 +1684,6 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     source_info: list[dict] = []
     source_failures: list[str] = []
 
-    # One task per RSS feed + one for email (email stays a single batched
-    # MCP call — no benefit to splitting it further).
     tasks: dict[str, tuple] = {
         f"rss_{i}": (_fetch_one_rss_feed, date_str, config, can_reuse, i, url)
         for i, url in enumerate(feeds)
@@ -1857,27 +1709,23 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
                 if failure:
                     source_failures.append(failure)
 
-    # ── Final merge + cap ──────────────────────────────────────────────
     all_postings = all_postings[:max_results]
-
     overall_status = "complete" if not source_failures else f"partial_{'_'.join(source_failures)}"
     log.info("[job_hunt] fetch_rss_and_email_into_state: total=%d postings, status=%s",
              len(all_postings), overall_status)
 
-    # ── Update state ───────────────────────────────────────────────────
     if state is not None:
         state.data["job_all_postings"] = all_postings
         state.data["job_source_info"] = source_info
         state.data["job_current_index"] = 0
         state.data["job_total"] = len(all_postings)
 
-    result = {
+    return json.dumps({
         "total_found": len(all_postings),
         "sources": source_info,
         "overall_status": overall_status,
         "max_results": max_results,
-    }
-    return json.dumps(result, ensure_ascii=False)
+    }, ensure_ascii=False)
 
 
 def _job_config_with_single_feed(config: dict[str, Any], feed_url: str) -> dict[str, Any]:
@@ -1886,8 +1734,6 @@ def _job_config_with_single_feed(config: dict[str, Any], feed_url: str) -> dict[
     cfg["rss_feeds"] = [feed_url]
     return cfg
 
-
-# ── Graph step 2: get_next_job (unchanged from original) ─────────────────
 
 def get_next_job(state=None, worker_id: str = "0") -> str:
     """Get the next unprocessed job from state.job_all_postings (thread-safe)."""
@@ -1926,8 +1772,6 @@ def get_next_job(state=None, worker_id: str = "0") -> str:
         })
 
 
-# ── Graph step 3: draft_single_job ─────────────────────────────────────
-
 def draft_single_job(
     job_json: str,
     template: str = "",
@@ -1951,7 +1795,6 @@ def draft_single_job(
 
     config = _job_config()
     today = local_now().strftime("%Y-%m-%d")
-
     field_keys = _field_keys_from_config(config)
     used_llm = client is not None and bool(model)
     fetch_pages = _config_bool(config, "fetch_job_page", "JOB_FETCH_JOB_PAGE", True)
@@ -1976,7 +1819,6 @@ def draft_single_job(
 
     slug_src = str(enriched.get("title") or job.get("title") or "job")
     slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or "job"
-
     topic_tag = config.get("topic_tag", "").strip()[:50] or ""
 
     draft = {
@@ -1997,8 +1839,6 @@ def draft_single_job(
     log.info("[job_hunt] draft_single_job: drafted job %s (source=%s)", slug, job.get("_source_name"))
     return json.dumps({"success": True, "draft": draft})
 
-
-# ── Graph step 4: save_single_job_draft ────────────────────────────────
 
 def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     """Save the most recently drafted job to disk."""
@@ -2057,23 +1897,17 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     return json.dumps({"success": True, "draft_dir": str(draft_dir)})
 
 
-# ── Graph step 5: check_jobs_remaining ─────────────────────────────────
-
 def check_jobs_remaining(state=None) -> str:
     """Check if more jobs remain to be processed."""
     if state is None:
         return "done"
-
     current_idx = state.data.get("job_current_index", 0)
     total = state.data.get("job_total", 0)
     more = current_idx < total
-
     result = "more" if more else "done"
     log.info("[job_hunt] check_jobs_remaining: %s (current=%d, total=%d)", result, current_idx, total)
     return result
 
-
-# ── Graph step 6: report_job_run ───────────────────────────────────────
 
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     """Generate an RSS Lane D audit report."""
@@ -2087,12 +1921,11 @@ def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str 
 
     plan_data = safe_loads(plan)
     search_data = safe_loads(search)
-    draft_data = safe_loads(draft)
     save_data = safe_loads(save)
 
     log.info("[job_hunt] report_job_run: feeds=%d, found=%d",
-             len(plan_data.get('sources', [])),
-             search_data.get('total_found', 0))
+             len(plan_data.get("sources", [])),
+             search_data.get("total_found", 0))
 
     lines = ["# Job Post Run Report", "", "## RSS Lane D", ""]
     lines.append(f"- Feeds/sources: {len(plan_data.get('sources', []))}")
@@ -2100,5 +1933,4 @@ def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str 
     if plan_data.get("max_results"):
         lines.append(f"- Limit: {plan_data.get('max_results')}")
     lines.append(f"- Drafts saved: {save_data.get('total_saved', 0)}")
-
     return "\n".join(lines)
