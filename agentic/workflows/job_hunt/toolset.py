@@ -840,78 +840,149 @@ def _extract_job_title_from_email_body(body: str) -> str:
     return body[:100].strip()
 
 
-def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict[str, Any]) -> dict | None:
-    """Convert one MCP Proton message dict into a posting.
-
-    Assumes the caller already passed subject + date pre-filtering (see
-    fetch_today_jobs_from_email, which filters and caches before calling
-    this). Only checks left here:
-      1. Sender domain (email_source_domains)
-      2. job_keywords against cleaned subject+sender+body
+def _is_promotional_email(sender: str, subject: str) -> bool:
+    """Detect if email is a promotional multi-job notification (Glassdoor, LinkedIn, Indeed).
     
-    For email job alerts, the subject is usually generic ("Job Alert", "New Job Recommendation")
-    so we extract the actual job title from the email body instead.
+    These emails contain multiple job listings in the HTML body, not a single job.
     """
-    subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
-    if not subject:
-        return None
-
-    date_str = str(msg.get("date") or "")
-    sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
-    sender_l = sender.casefold()
-
-    # Convert HTML snippet/body to clean text using _strip_html
-    snippet_raw = str(msg.get("snippet") or "").strip()
-    snippet = _strip_html(snippet_raw, config=config)
-
-    # Try all body fields, converting HTML to text as we go
-    body = (
-        _strip_html(str(msg.get("body") or ""), config=config) or
-        _strip_html(str(msg.get("text") or ""), config=config) or
-        _strip_html(str(msg.get("html") or ""), config=config) or
-        snippet
-    )
-
-    content = f"{subject} {sender} {body}".casefold()
-
-    # 1. Domain gate — only accept from known job alert domains (anti-spam)
-    job_domains = [d.casefold() for d in _config_list(config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS", ["linkedin", "glassdoor", "indeed"])]
-    from_job_domain = any(d in sender_l for d in job_domains)
-
-    if not from_job_domain:
-        log.debug("[job_hunt] email rejected: domain filter. sender=%s", sender[:60])
-        return None
-
-    # 2. job_keywords gate — check on cleaned text
-    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
-    has_job_keyword = any(k in content for k in keywords)
-
-    if not has_job_keyword:
-        log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
-        return None
-
-    # ── Extract actual job title from body (not subject) ────────────────
-    job_title = _extract_job_title_from_email_body(body)
-    if not job_title:
-        # Fallback: use subject if we can't extract from body
-        job_title = subject
-    
-    msg_id = str(msg.get("id") or "") or subject.casefold()
-    return {
-        "title": job_title,  # ← Extracted from body, not subject
-        "organization": sender,
-        "url": _extract_first_url(subject, snippet, body) or "",
-        "guid": msg_id,
-        "summary": body[:500],
-        "location": "",
-        "employment_type": "",
-        "salary": "",
-        "experience": "",
-        "close_date": "",
-        "posted_date": date_str or local_now().isoformat(),
-        "source_feed": "email",
-        "source": "email",
+    promotional_senders = {
+        "noreply@glassdoor.com",
+        "jobs-noreply@linkedin.com",
+        "noreply@linkedin.com",
+        "noreply@indeed.com",
+        "noreply@workopolis.com",
+        "noreply@monster.com",
+        "noreply@jobbank.gc.ca",
     }
+    sender_l = sender.casefold()
+    return any(ps in sender_l for ps in promotional_senders)
+
+
+def _extract_promotional_email_jobs(body: str, sender: str, subject: str, config: dict[str, Any]) -> list[dict]:
+    """Extract multiple job listings from promotional email HTML.
+    
+    Glassdoor/LinkedIn/Indeed emails contain 6+ job cards in HTML format.
+    Uses regex patterns (no BeautifulSoup) to extract:
+      - Job title (job title keywords)
+      - Company name (text before ★ rating)
+      - Location (recognized city names)
+      - Salary ($XXK - $XXK patterns)
+      - Job ID from URL
+    
+    Returns list of job posting dicts (one per extracted job), or [] if no jobs found.
+    """
+    if not body or len(body) < 100:
+        return []
+    
+    jobs: list[dict] = []
+    
+    # Extract all job board URLs with job IDs
+    job_url_pattern = r"https?://(?:www\.)?(?:glassdoor\.[a-z]{2,}|linkedin\.com|indeed\.[a-z]{2,}|jobbank\.gc\.ca|workopolis\.com|monster\.[a-z]{2,})/[^\"'\s<>]*"
+    job_urls = re.findall(job_url_pattern, body, re.IGNORECASE)
+    
+    # Extract job IDs from URLs (Glassdoor uses jobListingId)
+    job_ids = re.findall(r"jobListingId[=&\?](\d+)", body, re.IGNORECASE)
+    
+    # No jobs found if no URLs or IDs
+    if not (job_urls or job_ids):
+        return []
+    
+    # Extract job titles using multiple patterns
+    # Pattern 1: Job titles with common prefixes and suffixes
+    title_pattern_1 = r"\b((?:Sr\.?|Senior|Lead|Principal|Staff|Junior|Mid[- ]?Level)\s+[A-Z][a-z\s&/\-]*?(?:Engineer|Architect|Developer|Manager|Analyst|Specialist|Consultant|Director))"
+    titles_1 = re.findall(title_pattern_1, body, re.IGNORECASE)
+    
+    # Pattern 2: Multi-word titles in title case
+    title_pattern_2 = r"^([A-Z][A-Za-z\s&/\-]{10,80}(?:Engineer|Architect|Developer|Manager|Analyst|Specialist))$"
+    titles_2 = re.findall(title_pattern_2, body, re.MULTILINE | re.IGNORECASE)
+    
+    titles = list(dict.fromkeys(titles_1 + titles_2))  # Dedupe while preserving order
+    
+    # Extract companies (text before ★ rating)
+    company_pattern = r"([A-Z][A-Za-z0-9\s&.,\-']{2,}?)\s*\|\s*\d+\.\d+\s*★"
+    companies = re.findall(company_pattern, body)
+    
+    # Extract locations (recognized city/region names)
+    location_keywords = {
+        "North Vancouver": "North Vancouver",
+        "Vancouver": "Vancouver",
+        "Toronto": "Toronto",
+        "Langley": "Langley",
+        "Montreal": "Montreal",
+        "Ottawa": "Ottawa",
+        "Calgary": "Calgary",
+        "Edmonton": "Edmonton",
+        "Winnipeg": "Winnipeg",
+        "Quebec City": "Quebec City",
+        "Halifax": "Halifax",
+        "Canada": "Canada",
+        "Remote": "Remote",
+        "Hybrid": "Hybrid",
+    }
+    
+    locations = []
+    for keyword in location_keywords:
+        if keyword in body:
+            locations.append(location_keywords[keyword])
+    locations = list(dict.fromkeys(locations))  # Dedupe
+    
+    if not locations:
+        locations = ["Remote"]
+    
+    # Extract salaries ($XXK - $XXK format)
+    salary_pattern = r"(\$[\d,]+[KMkm]?\s*-\s*\$[\d,]+[KMkm]?)"
+    salaries = re.findall(salary_pattern, body)
+    
+    log.debug("[job_hunt] promotional email: titles=%d, companies=%d, locations=%d, salaries=%d",
+              len(titles), len(companies), len(locations), len(salaries))
+    
+    # Build jobs from extracted data
+    seen: set[tuple] = set()
+    
+    for idx in range(max(len(titles), len(job_ids)) if (titles or job_ids) else 0):
+        if idx >= max(len(job_ids), 1):
+            break
+        
+        title = titles[idx].strip() if idx < len(titles) else f"Job Listing {idx+1}"
+        if not title or title.lower() in {"apply now", "view job", "learn more"}:
+            continue
+        
+        company = companies[idx].strip() if idx < len(companies) else sender
+        if company.lower() in {"company", "employer", "unknown"}:
+            company = sender
+        
+        location = locations[idx % len(locations)] if locations else "Remote"
+        salary = salaries[idx % len(salaries)] if salaries else ""
+        job_id = job_ids[idx] if idx < len(job_ids) else f"promo_{idx}"
+        url = job_urls[idx] if idx < len(job_urls) else ""
+        
+        # Skip duplicates
+        key = (title, company, salary, location)
+        if key in seen:
+            continue
+        seen.add(key)
+        
+        job = {
+            "title": title,
+            "organization": company,
+            "location": location,
+            "salary": salary,
+            "url": url,
+            "guid": f"glassdoor_{job_id}" if "glassdoor" in sender.lower() else f"promo_{job_id}",
+            "summary": body[:500],
+            "employment_type": "",
+            "experience": "",
+            "close_date": "",
+            "posted_date": local_now().isoformat(),
+            "source_feed": "email",
+            "source": "email",
+            "_is_promotional": True,
+        }
+        jobs.append(job)
+        log.debug("[job_hunt] extracted: '%s' @ %s (%s)", title[:50], company[:40], location)
+    
+    log.info("[job_hunt] extracted %d jobs from promotional email", len(jobs))
+    return jobs
 
 
 def _extract_first_url(*texts: str) -> str:
@@ -1019,27 +1090,133 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
     # ── Post-filter gate: domain + job_keywords, only for messages that
     #    already passed subject+date. Each is cached (matched true/false). ──
     for msg_idx, msg in enumerate(filtered_messages):
-        posting = _email_message_to_posting(msg, today, max_days, config)
+        subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
+        sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
+        
+        # Check if this is a promotional email with multiple jobs
+        is_promo = _is_promotional_email(sender, subject)
+        
+        if is_promo:
+            # Extract all jobs from promotional email
+            snippet_raw = str(msg.get("snippet") or "").strip()
+            snippet = _strip_html(snippet_raw, config=config)
+            body = (
+                _strip_html(str(msg.get("body") or ""), config=config) or
+                _strip_html(str(msg.get("text") or ""), config=config) or
+                _strip_html(str(msg.get("html") or ""), config=config) or
+                snippet
+            )
+            
+            promo_jobs = _extract_promotional_email_jobs(body, sender, subject, config)
+            log.info("[job_hunt] promotional email: extracted %d jobs from subject='%s'", len(promo_jobs), subject[:60])
+            
+            # Process each extracted job
+            for promo_job in promo_jobs:
+                link_key, guid_key = _dedupe_key(promo_job.get("url", ""), promo_job.get("guid", ""))
+                if link_key in seen_ids or guid_key in seen_ids:
+                    log.debug("[job_hunt] skipping duplicate promotional job: %s", link_key or guid_key)
+                    continue
+                if _job_known_state(ledger, link_key, guid_key) is not None:
+                    continue
+                seen_ids.update({link_key, guid_key})
+                kept.append(promo_job)
+        else:
+            # Regular single-job email
+            posting = _email_message_to_posting(msg, today, max_days, config)
 
-        # Write individual email message cache (one JSONL per message)
-        _job_write_email_msg_cache(date_str, msg_idx, msg, posting)
+            # Write individual email message cache (one JSONL per message)
+            _job_write_email_msg_cache(date_str, msg_idx, msg, posting)
 
-        if not posting:
-            continue
+            if not posting:
+                continue
 
-        link_key, guid_key = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
-        if link_key in seen_ids or guid_key in seen_ids:
-            continue
-        if _job_known_state(ledger, link_key, guid_key) is not None:
-            continue
-        # Email alerts (LinkedIn/Glassdoor/Indeed) are already pre-filtered job alerts,
-        # subject+date gated above. job_keywords check already applied inside
-        # _email_message_to_posting.
-        seen_ids.update({link_key, guid_key})
-        kept.append(posting)
+            link_key, guid_key = _dedupe_key(posting.get("url", ""), posting.get("guid", ""))
+            if link_key in seen_ids or guid_key in seen_ids:
+                continue
+            if _job_known_state(ledger, link_key, guid_key) is not None:
+                continue
+            # Email alerts (LinkedIn/Glassdoor/Indeed) are already pre-filtered job alerts,
+            # subject+date gated above. job_keywords check already applied inside
+            # _email_message_to_posting.
+            seen_ids.update({link_key, guid_key})
+            kept.append(posting)
 
     log.info("[job_hunt] fetch_today_jobs_from_email: kept=%d postings after filtering", len(kept))
     return kept, raw_count
+
+
+def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict[str, Any]) -> dict | None:
+    """Convert one MCP Proton message dict into a posting.
+
+    Assumes the caller already passed subject + date pre-filtering (see
+    fetch_today_jobs_from_email, which filters and caches before calling
+    this). Only checks left here:
+      1. Sender domain (email_source_domains)
+      2. job_keywords against cleaned subject+sender+body
+    
+    For email job alerts, the subject is usually generic ("Job Alert", "New Job Recommendation")
+    so we extract the actual job title from the email body instead.
+    """
+    subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
+    if not subject:
+        return None
+
+    date_str = str(msg.get("date") or "")
+    sender = str(msg.get("from") or msg.get("from_address") or msg.get("sender") or "").strip()
+    sender_l = sender.casefold()
+
+    # Convert HTML snippet/body to clean text using _strip_html
+    snippet_raw = str(msg.get("snippet") or "").strip()
+    snippet = _strip_html(snippet_raw, config=config)
+
+    # Try all body fields, converting HTML to text as we go
+    body = (
+        _strip_html(str(msg.get("body") or ""), config=config) or
+        _strip_html(str(msg.get("text") or ""), config=config) or
+        _strip_html(str(msg.get("html") or ""), config=config) or
+        snippet
+    )
+
+    content = f"{subject} {sender} {body}".casefold()
+
+    # 1. Domain gate — only accept from known job alert domains (anti-spam)
+    job_domains = [d.casefold() for d in _config_list(config, "email_source_domains", "JOB_HUNT_EMAIL_SOURCE_DOMAINS", ["linkedin", "glassdoor", "indeed"])]
+    from_job_domain = any(d in sender_l for d in job_domains)
+
+    if not from_job_domain:
+        log.debug("[job_hunt] email rejected: domain filter. sender=%s", sender[:60])
+        return None
+
+    # 2. job_keywords gate — check on cleaned text
+    keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
+    has_job_keyword = any(k in content for k in keywords)
+
+    if not has_job_keyword:
+        log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
+        return None
+
+    # ── Extract actual job title from body (not subject) ────────────────
+    job_title = _extract_job_title_from_email_body(body)
+    if not job_title:
+        # Fallback: use subject if we can't extract from body
+        job_title = subject
+    
+    msg_id = str(msg.get("id") or "") or subject.casefold()
+    return {
+        "title": job_title,  # ← Extracted from body, not subject
+        "organization": sender,
+        "url": _extract_first_url(subject, snippet, body) or "",
+        "guid": msg_id,
+        "summary": body[:500],
+        "location": "",
+        "employment_type": "",
+        "salary": "",
+        "experience": "",
+        "close_date": "",
+        "posted_date": date_str or local_now().isoformat(),
+        "source_feed": "email",
+        "source": "email",
+    }
 
 
 @tool(TOOLS["search_jobs"])
