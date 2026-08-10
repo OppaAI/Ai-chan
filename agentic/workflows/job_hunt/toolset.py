@@ -762,40 +762,82 @@ def _extract_job_title_from_email_body(body: str) -> str:
     """Extract job title from email body text.
     
     Job alert emails (LinkedIn, Glassdoor, Indeed) typically format the job
-    as "Job Title at Company Name" in the body. This extracts the title.
+    as "Job Title at Company Name" or similar in the body. This extracts it.
     
-    Falls back to first ~50 chars of body if no clear pattern found.
+    Strategy:
+    1. Split body into lines
+    2. Find first "substantial" line (30+ chars, not pure boilerplate)
+    3. Clean up and return
+    
+    Pure boilerplate lines to skip (< 30 chars, generic content):
+      - "See all of your recently viewed jobs"
+      - "Apply Now"
+      - "Learn More"
+      - "View Job"
+    
+    But DO include lines like:
+      - "Insurance Corporation of British Columbia: Apply Now" (contains job info + apply)
+      - "Senior Software Engineer - Company XYZ" (has job title)
     """
     if not body or len(body) < 10:
         return ""
     
-    # Common patterns in job alert emails:
-    # 1. "Job Title at Company" or "Title - Company"
-    # 2. First sentence before period
-    # 3. Line with "Position:" or "Job:" prefix
+    # Pure boilerplate phrases that appear on their own or are very short
+    pure_boilerplate = {
+        "apply now",
+        "learn more",
+        "view job",
+        "job alert",
+        "new job",
+        "recommended job",
+        "see all",
+        "recently viewed",
+        "saved jobs",
+        "noreply@",
+        "no-reply@",
+    }
     
     lines = body.split("\n")
     for line in lines:
         line = line.strip()
-        if not line or len(line) < 5:
+        if not line or len(line) < 15:
+            # Too short, skip
             continue
         
-        # Skip common non-job lines
-        if any(skip in line.lower() for skip in ["job alert", "new job", "recommended job", 
-                                                    "view job", "apply now", "learn more",
-                                                    "see all", "recently viewed"]):
+        line_lower = line.lower()
+        
+        # Only skip if:
+        # 1. Line is SHORT (< 30 chars) AND contains pure boilerplate
+        # 2. Line is ONLY boilerplate phrases
+        if len(line) < 30:
+            if any(skip in line_lower for skip in pure_boilerplate):
+                continue
+        
+        # Check if entire line is just one of the boilerplate phrases
+        if line_lower in pure_boilerplate or any(line_lower == skip for skip in pure_boilerplate):
             continue
         
-        # Found a good candidate - clean it up
-        # Remove common job alert prefixes
-        title = re.sub(r"^(position|job|role|title|opening):\s*", "", line, flags=re.IGNORECASE)
-        title = title.split("(")[0].strip()  # Remove parenthetical
+        # Good candidate found!
+        # Clean up: remove email addresses, trim
+        title = re.sub(r"[a-z0-9._%+-]+@[a-z0-9.-]+", "", line, flags=re.IGNORECASE).strip()
         
-        if len(title) > 10 and len(title) < 200:
-            return title[:150]
+        # Remove common email prefixes
+        title = re.sub(r"^(from|sender|to|subject):\s*", "", title, flags=re.IGNORECASE)
+        
+        # Remove trailing metadata in parens or after pipe
+        title = re.split(r"\s*[\|\(]", title)[0].strip()
+        
+        if len(title) >= 15 and len(title) < 250:
+            return title[:200]
     
-    # Fallback: first 100 chars of body
-    return body[:100].split("\n")[0].strip()
+    # Fallback: first non-empty line of body
+    for line in lines:
+        line = line.strip()
+        if line and len(line) > 10:
+            return line[:150]
+    
+    # Last resort: first 100 chars
+    return body[:100].strip()
 
 
 def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict[str, Any]) -> dict | None:
