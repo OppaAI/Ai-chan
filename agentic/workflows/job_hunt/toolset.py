@@ -168,22 +168,33 @@ def _job_config() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _config_list(config: dict[str, Any], key: str, env_key: str, default: list[str] | None = None) -> list[str]:
-    """Read a list from config, env, or default. No hardcoded defaults."""
+# ── Config value resolution ─────────────────────────────────────────────
+# All three readers below (_config_list/_config_int/_config_bool) share the
+# same "env override wins, else raw config value, else default" resolution
+# order. _config_raw centralizes that so each reader only has to handle its
+# own type coercion.
+
+def _config_raw(config: dict[str, Any], key: str, env_key: str) -> Any:
+    """Env override (as str) if set, else the raw config value (any type), else None."""
     env = os.getenv(env_key, "").strip()
     if env:
-        return [item.strip() for item in env.split(",") if item.strip()]
-    value = config.get(key)
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str) and value.strip():
-        return [item.strip() for item in value.split(",") if item.strip()]
+        return env
+    return config.get(key)
+
+
+def _config_list(config: dict[str, Any], key: str, env_key: str, default: list[str] | None = None) -> list[str]:
+    """Read a list from config, env, or default. No hardcoded defaults."""
+    raw = _config_raw(config, key, env_key)
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    if isinstance(raw, str) and raw.strip():
+        return [item.strip() for item in raw.split(",") if item.strip()]
     return default or []
 
 
 def _config_int(config: dict[str, Any], key: str, env_key: str, default: int | None = None) -> int:
     """Read an int from config, env, or default."""
-    raw = os.getenv(env_key, "").strip() or config.get(key)
+    raw = _config_raw(config, key, env_key)
     try:
         val = int(raw) if raw else None
         return max(1, val) if val is not None else (default or 1)
@@ -193,15 +204,36 @@ def _config_int(config: dict[str, Any], key: str, env_key: str, default: int | N
 
 def _config_bool(config: dict[str, Any], key: str, env_key: str, default: bool = True) -> bool:
     """Read a bool from config, env, or default."""
-    env = os.getenv(env_key, "").strip()
-    if env:
-        return env.lower() in {"1", "true", "yes", "on"}
-    val = config.get(key)
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.lower() in {"1", "true", "yes", "on"}
+    raw = _config_raw(config, key, env_key)
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.lower() in {"1", "true", "yes", "on"}
     return default
+
+
+def _safe_json_loads(s: str) -> dict[str, Any]:
+    """Parse a JSON object string, returning {} on any failure or empty input."""
+    if not s:
+        return {}
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+
+
+def _has_any_keyword(text: str, keywords: list[str]) -> bool:
+    """True if any (already-casefolded) keyword appears in text. Empty list passes everything."""
+    if not keywords:
+        return True
+    return any(kw in text.casefold() for kw in keywords)
+
+
+def _passes_domain_filter(sender: str, domains: list[str]) -> bool:
+    """True if sender matches any configured domain substring. Empty list passes everything."""
+    if not domains:
+        return True
+    return any(d in sender.casefold() for d in domains)
 
 
 def _cache_is_fresh(meta: dict[str, Any] | None, config: dict[str, Any]) -> bool:
@@ -222,6 +254,7 @@ def _cache_is_fresh(meta: dict[str, Any] | None, config: dict[str, Any]) -> bool
 
 
 def _parse_rss_datetime(value: str) -> datetime | None:
+    """Parse an RFC-2822 or ISO-8601 timestamp (used for both RSS pubDate and email Date headers)."""
     if not value:
         return None
     try:
@@ -231,6 +264,8 @@ def _parse_rss_datetime(value: str) -> datetime | None:
             dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             return None
+    if dt is None:
+        return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=local_now().tzinfo)
     return dt.astimezone(local_now().tzinfo)
@@ -357,6 +392,16 @@ def _draft_dedup_keys(draft_dirs) -> set[str]:
     return keys
 
 
+def _html_links_to_markdown(text: str) -> str:
+    """Rewrite <a href="url">label</a> into markdown [label](url) links."""
+    def _a_to_md(m: re.Match) -> str:
+        url = m.group(1).strip()
+        label = _HTML_TAG_RE.sub("", m.group(2)).strip() or url
+        label = _WS_RE.sub(" ", label)
+        return f"[{label}]({url})"
+    return _A_HREF_RE.sub(_a_to_md, text)
+
+
 def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] | None = None) -> str:
     """Best-effort markdown/plain text from HTML.
 
@@ -387,12 +432,7 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
             tag_density * 100,
         )
         # Preserve links as markdown before stripping remaining tags
-        def _a_to_md(m: re.Match) -> str:
-            url = m.group(1).strip()
-            label = _HTML_TAG_RE.sub("", m.group(2)).strip() or url
-            label = _WS_RE.sub(" ", label)
-            return f"[{label}]({url})"
-        text = _A_HREF_RE.sub(_a_to_md, text)
+        text = _html_links_to_markdown(text)
         plain = _HTML_TAG_RE.sub(" ", text)
         plain = html.unescape(plain)
         plain = _WS_RE.sub(" ", plain).strip()
@@ -408,12 +448,7 @@ def _strip_html(text: str, max_chars: int | None = None, config: dict[str, Any] 
         plain = result.text_content if hasattr(result, "text_content") else str(result)
     except Exception:
         # Fallback: convert <a> then regex strip
-        def _a_to_md(m: re.Match) -> str:
-            url = m.group(1).strip()
-            label = _HTML_TAG_RE.sub("", m.group(2)).strip() or url
-            label = _WS_RE.sub(" ", label)
-            return f"[{label}]({url})"
-        text = _A_HREF_RE.sub(_a_to_md, text)
+        text = _html_links_to_markdown(text)
         plain = _HTML_TAG_RE.sub(" ", text)
         plain = html.unescape(plain)
         plain = _WS_RE.sub(" ", plain).strip()
@@ -443,7 +478,8 @@ def _fetch_job_page_text(url: str, timeout: float = 10.0, max_chars: int | None 
     except Exception as e:
         log.debug("job_hunt: page fetch failed for %s: %s", url, e)
         return ""
-    body = re.sub(r"<(script|style|head|noscript|iframe|svg|template)[^>]*>.*?</\1\s*>", " ", body, flags=re.IGNORECASE | re.DOTALL)
+    # _strip_html already strips script/style/head/noscript/iframe/svg/template
+    # (and meta/link) blocks, so no need to pre-strip here.
     return _strip_html(body, max_chars=max_chars, config=config)
 
 
@@ -704,7 +740,7 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
 
             if filter_date and (not posted or posted.date() < today - timedelta(days=max_days - 1)):
                 continue
-            if keywords and not any(kw in f"{title} {summary}".casefold() for kw in keywords):
+            if not _has_any_keyword(f"{title} {summary}", keywords):
                 continue
 
             link_key, guid_key = _dedupe_key(link, guid)
@@ -1054,23 +1090,17 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
         subject = _WS_RE.sub(" ", str(msg.get("subject") or "")).strip()
         subject_l = subject.casefold()
 
-        if subject_keywords and not any(kw in subject_l for kw in subject_keywords):
+        if not _has_any_keyword(subject_l, subject_keywords):
             log.debug("[job_hunt] email pre-filtered: subject doesn't look like a job alert. subject=%s", subject[:60])
             skipped_subject += 1
             continue
 
         msg_date_str = str(msg.get("date") or "")
         if msg_date_str:
-            try:
-                dt = email.utils.parsedate_to_datetime(msg_date_str) or datetime.fromisoformat(msg_date_str)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=local_now().tzinfo)
-                dt = dt.astimezone(local_now().tzinfo)
-                if dt.date() < cutoff_date:
-                    skipped_date += 1
-                    continue
-            except (TypeError, ValueError):
-                pass
+            dt = _parse_rss_datetime(msg_date_str)
+            if dt is not None and dt.date() < cutoff_date:
+                skipped_date += 1
+                continue
 
         filtered_messages.append(msg)
 
@@ -1096,7 +1126,7 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
         msg_date = str(msg.get("date") or "")
 
         # Domain gate
-        if job_domains and not any(d in sender_l for d in job_domains):
+        if not _passes_domain_filter(sender_l, job_domains):
             log.debug("[job_hunt] email rejected: domain filter. sender=%s", sender[:60])
             _job_write_email_msg_cache(date_str, msg_idx, msg, None)
             continue
@@ -1112,8 +1142,8 @@ def fetch_today_jobs_from_email(config: dict[str, Any] | None = None, email_idx:
         if not cleaned:
             cleaned = _strip_html(str(msg.get("snippet") or ""), config=config)
 
-        content_l = f"{subject} {sender} {cleaned}".casefold()
-        if keywords and not any(k in content_l for k in keywords):
+        content_l = f"{subject} {sender} {cleaned}"
+        if not _has_any_keyword(content_l, keywords):
             log.debug("[job_hunt] email rejected: no job keywords. subject=%s", subject[:60])
             _job_write_email_msg_cache(date_str, msg_idx, msg, None)
             continue
@@ -1178,12 +1208,11 @@ def _email_message_to_posting(msg: dict, today: Any, max_days: int, config: dict
             ["linkedin", "glassdoor", "indeed"],
         )
     ]
-    if job_domains and not any(d in sender_l for d in job_domains):
+    if not _passes_domain_filter(sender_l, job_domains):
         return None
 
     keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
-    content = f"{subject} {sender} {cleaned}".casefold()
-    if keywords and not any(k in content for k in keywords):
+    if not _has_any_keyword(f"{subject} {sender} {cleaned}", keywords):
         return None
 
     jobs = _extract_jobs_from_cleaned_email(
@@ -1405,11 +1434,9 @@ def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, A
             log.warning("[job_hunt] failed to read email cache %s: %s", email_file.name, e)
 
     def has_keywords(job: dict) -> bool:
-        if not keywords:
-            return True
         title = str(job.get("title", "")).casefold()
         summary = str(job.get("summary", "") or job.get("cleaned_summary", "")).casefold()
-        return any(kw in f"{title} {summary}" for kw in keywords)
+        return _has_any_keyword(f"{title} {summary}", keywords)
 
     filtered_rss = [j for j in rss_jobs if has_keywords(j)]
     filtered_email = [j for j in email_jobs if has_keywords(j)]
@@ -1509,11 +1536,10 @@ def _fetch_one_rss_feed(
     keywords = [kw.casefold() for kw in _config_list(config, "job_keywords", "JOB_KEYWORDS")]
 
     def _filter_by_keyword_then_cap(items: list[dict]) -> list[dict]:
-        if keywords:
-            items = [
-                p for p in items
-                if any(kw in f"{p.get('title', '')} {p.get('summary', '')}".casefold() for kw in keywords)
-            ]
+        items = [
+            p for p in items
+            if _has_any_keyword(f"{p.get('title', '')} {p.get('summary', '')}", keywords)
+        ]
         return items[:rss_cap]
 
     if can_reuse and _cache_is_fresh_simple(date_str, config):
@@ -1665,10 +1691,7 @@ def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     )
     include_email = include_email and enable_email_source
 
-    try:
-        plan = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
-    except (json.JSONDecodeError, TypeError):
-        plan = {}
+    plan = _safe_json_loads(plan_json) if isinstance(plan_json, str) else (plan_json or {})
 
     max_results = int(plan.get("max_results") or _config_int(config, "max_results", "JOB_HUNT_MAX_RESULTS", 30))
     date_str = local_now().strftime("%Y-%m-%d")
@@ -1784,11 +1807,8 @@ def draft_single_job(
     if state is None:
         return json.dumps({"success": False, "reason": "no_state"})
 
-    try:
-        job_data = json.loads(job_json)
-        job = job_data.get("job") if isinstance(job_data, dict) else None
-    except (json.JSONDecodeError, TypeError):
-        job = None
+    job_data = _safe_json_loads(job_json)
+    job = job_data.get("job") if isinstance(job_data, dict) else None
 
     if not job:
         return json.dumps({"success": False, "reason": "no_job_in_input"})
@@ -1911,17 +1931,9 @@ def check_jobs_remaining(state=None) -> str:
 
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     """Generate an RSS Lane D audit report."""
-    def safe_loads(s: str) -> dict:
-        if not s:
-            return {}
-        try:
-            return json.loads(s)
-        except (json.JSONDecodeError, TypeError):
-            return {}
-
-    plan_data = safe_loads(plan)
-    search_data = safe_loads(search)
-    save_data = safe_loads(save)
+    plan_data = _safe_json_loads(plan)
+    search_data = _safe_json_loads(search)
+    save_data = _safe_json_loads(save)
 
     log.info("[job_hunt] report_job_run: feeds=%d, found=%d",
              len(plan_data.get("sources", [])),
