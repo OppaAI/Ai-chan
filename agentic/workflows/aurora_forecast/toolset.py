@@ -1,27 +1,17 @@
 """
-agentic/workflows/aurora_watch/toolset.py
+agentic/workflows/aurora_forecast/toolset.py
 
-Hourly aurora-viewing forecast for Vancouver, BC.
+Hourly aurora-viewing forecast (default: Vancouver, BC).
 
-Combines:
-  - NOAA SWPC OVATION Aurora model (30-90 min forecast, ~1 deg grid)
-  - NOAA SWPC Planetary Kp index (geomagnetic storm context)
-  - Open-Meteo cloud cover + day/night (NOAA's own forecast API is US-only,
-    so it can't cover Vancouver -- Open-Meteo is free/no-key and global)
+Sources:
+  - NOAA SWPC OVATION Aurora model
+  - NOAA SWPC Planetary Kp index
+  - Open-Meteo cloud cover + day/night
 
-Design notes for wiring into Aiko:
-  - Mirrors the shape of job_hunt/toolset.py: async fns, a dataclass per
-    data source, a config JSON, a single `tool_*` entrypoint for the
-    agentic/MCP registry.
-  - Swap the `tool_check_aurora` signature/decorator for whatever your
-    capability.py / graph_engine.py registration pattern expects -- this
-    file intentionally has zero framework-specific imports so you can drop
-    it in and wire it up in one place.
-  - Suggested schedule: hourly cron via your existing scheduler.py, same
-    pattern as the A1 weekly auto-post lane. OVATION itself refreshes every
-    ~5 min, but hourly is plenty for a "should I go outside" check --
-    tighten to every 15-30 min only during an active storm (see
-    `kp_index` in the result) if you want faster reaction time.
+Graph steps (see graph.py):
+  check_aurora → store_aurora_forecast → notify_aurora
+
+Storage/notify use agentic.workflows.common (shared with job_hunt patterns).
 """
 
 from __future__ import annotations
@@ -32,9 +22,13 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
+
+from agentic.workflows.common.config import load_workflow_config, resolve_config_value
+from agentic.workflows.common.notify import maybe_post_threads, notify_email
+from agentic.workflows.common.store import append_record, prune_records
 
 logger = logging.getLogger(__name__)
 
@@ -42,25 +36,22 @@ OVATION_URL = "https://services.swpc.noaa.gov/json/ovation_aurora_latest.json"
 KP_INDEX_URL = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json"
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
+WORKFLOW_ID = "aurora_forecast"
+_WORKFLOW_DIR = Path(__file__).resolve().parent
+
 DEFAULT_CONFIG = {
     "location_name": "Vancouver, BC",
     "latitude": 49.2827,
     "longitude": -123.1207,
-    "poll_interval_hours": 1,
-    # OVATION probability at 49N is near 0 almost all the time -- this is
-    # NOT "will there be an aurora anywhere", it's "will Vancouver
-    # specifically see one". Kp 6+ storms can push this into double digits.
     "min_aurora_probability_pct": 15,
     "max_cloud_cover_pct": 50,
-    "min_kp_for_alert": 6.0,
+    "min_kp_for_alert": 5.0,
+    "min_kp_for_threads": 5.0,
+    "retain_days": 3,
+    "email_on_check": True,
+    "email_only_when_interesting": True,
 }
 
-CONFIG_PATH = Path(__file__).parent / "aurora_watch.json"
-
-
-# --------------------------------------------------------------------------
-# Data classes
-# --------------------------------------------------------------------------
 
 @dataclass
 class AuroraReading:
@@ -86,32 +77,36 @@ class AuroraReport:
     kp_index: Optional[float]
     is_night: bool
     viewable: bool
+    level: str  # high | medium | low
     summary: str
+    explanation: str
     checked_at: str
 
 
-# --------------------------------------------------------------------------
-# Fetchers
-# --------------------------------------------------------------------------
+def _load_cfg(config_path: str = "") -> dict[str, Any]:
+    cfg = dict(DEFAULT_CONFIG)
+    cfg.update(load_workflow_config(_WORKFLOW_DIR))
+    if config_path:
+        p = Path(config_path)
+        if p.is_file():
+            try:
+                cfg.update(json.loads(p.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                pass
+    return cfg
+
 
 def _lon_to_0_360(lon: float) -> float:
-    """OVATION uses 0-360 longitude; convert from standard -180..180."""
     return lon % 360
 
 
-async def fetch_ovation_aurora(
-    lat: float, lon: float, client: httpx.AsyncClient
-) -> AuroraReading:
+async def fetch_ovation_aurora(lat: float, lon: float, client: httpx.AsyncClient) -> AuroraReading:
     resp = await client.get(OVATION_URL, timeout=15)
     resp.raise_for_status()
     data = resp.json()
-
     target_lon = _lon_to_0_360(lon)
-    coords = data["coordinates"]  # list of [lon(0-360), lat(-90..90), value]
-
-    # Grid is ~1 deg spacing -> nearest-neighbour is plenty accurate.
+    coords = data["coordinates"]
     best = min(coords, key=lambda c: (c[0] - target_lon) ** 2 + (c[1] - lat) ** 2)
-
     return AuroraReading(
         probability_pct=int(best[2]),
         grid_lat=best[1],
@@ -122,23 +117,19 @@ async def fetch_ovation_aurora(
 
 
 async def fetch_kp_index(client: httpx.AsyncClient) -> Optional[float]:
-    """Planetary Kp index -- gives storm-level context for the raw %."""
     try:
         resp = await client.get(KP_INDEX_URL, timeout=15)
         resp.raise_for_status()
-        rows = resp.json()  # rows[0] is a header row
+        rows = resp.json()
         if len(rows) < 2:
             return None
-        latest = rows[-1]
-        return float(latest[1])
+        return float(rows[-1][1])
     except Exception:
-        logger.exception("Kp index fetch failed; continuing without it")
+        logger.exception("Kp index fetch failed")
         return None
 
 
-async def fetch_cloud_forecast(
-    lat: float, lon: float, client: httpx.AsyncClient
-) -> CloudReading:
+async def fetch_cloud_forecast(lat: float, lon: float, client: httpx.AsyncClient) -> CloudReading:
     params = {
         "latitude": lat,
         "longitude": lon,
@@ -150,15 +141,11 @@ async def fetch_cloud_forecast(
     resp.raise_for_status()
     data = resp.json()
     hourly = data["hourly"]
-
-    # Pick the hourly slot closest to "now" rather than blindly index [0]
-    # (Open-Meteo returns the full day; [0] is midnight local, not "now").
     now = datetime.now().strftime("%Y-%m-%dT%H:00")
     try:
         idx = hourly["time"].index(now)
     except ValueError:
-        idx = 0  # fallback
-
+        idx = 0
     return CloudReading(
         cloud_cover_pct=int(hourly["cloudcover"][idx]),
         is_night=not bool(hourly["is_day"][idx]),
@@ -166,35 +153,67 @@ async def fetch_cloud_forecast(
     )
 
 
-# --------------------------------------------------------------------------
-# Report assembly
-# --------------------------------------------------------------------------
+def _score_level(aurora_pct: int, cloud_pct: int, kp: Optional[float], is_night: bool, cfg: dict) -> tuple[str, str]:
+    """Return (level, explanation)."""
+    reasons = []
+    if not is_night:
+        return "low", "Daylight — aurora not visible regardless of activity."
 
-def _build_summary(
-    aurora: AuroraReading, cloud: CloudReading, kp: Optional[float],
-    cfg: dict, viewable: bool,
-) -> str:
+    min_p = int(cfg.get("min_aurora_probability_pct", 15))
+    max_c = int(cfg.get("max_cloud_cover_pct", 50))
+    min_kp = float(cfg.get("min_kp_for_alert", 5.0))
+
+    if aurora_pct >= min_p:
+        reasons.append(f"OVATION probability {aurora_pct}% ≥ {min_p}%")
+    else:
+        reasons.append(f"OVATION probability {aurora_pct}% below {min_p}%")
+
+    if cloud_pct <= max_c:
+        reasons.append(f"cloud cover {cloud_pct}% ≤ {max_c}%")
+    else:
+        reasons.append(f"cloud cover {cloud_pct}% too high (max {max_c}%)")
+
+    if kp is not None:
+        reasons.append(f"Kp={kp:g} (alert threshold {min_kp:g})")
+        if kp >= min_kp + 1:
+            storm = "high"
+        elif kp >= min_kp:
+            storm = "medium"
+        else:
+            storm = "low"
+    else:
+        storm = "medium" if aurora_pct >= min_p else "low"
+        reasons.append("Kp unavailable")
+
+    viewable = aurora_pct >= min_p and cloud_pct <= max_c
+    if viewable and storm == "high":
+        level = "high"
+    elif viewable:
+        level = "medium"
+    else:
+        level = "low"
+
+    return level, "; ".join(reasons)
+
+
+def _build_summary(report_bits: dict[str, Any], cfg: dict, viewable: bool) -> str:
     lines = [
-        f"🌌 Aurora Watch — {cfg['location_name']}",
-        f"Aurora probability: {aurora.probability_pct}%",
-        f"Cloud cover: {cloud.cloud_cover_pct}%",
+        f"Aurora Watch — {cfg['location_name']}",
+        f"Level: {report_bits['level']}",
+        f"Aurora probability: {report_bits['aurora_probability_pct']}%",
+        f"Cloud cover: {report_bits['cloud_cover_pct']}%",
     ]
+    kp = report_bits.get("kp_index")
     if kp is not None:
         lines.append(f"Planetary Kp index: {kp:g}")
-    lines.append("Sky: " + ("Dark ✅" if cloud.is_night else "Daylight ❌ (nothing to see yet)"))
-    lines.append(
-        "Verdict: " + ("👀 Worth stepping outside tonight!" if viewable
-                        else "Not likely visible right now.")
-    )
+    lines.append("Sky: " + ("Dark" if report_bits["is_night"] else "Daylight"))
+    lines.append("Verdict: " + ("Worth a look outside." if viewable else "Not likely visible right now."))
+    lines.append(f"Why: {report_bits['explanation']}")
     return "\n".join(lines)
 
 
-async def run_aurora_check(config_path: Optional[str] = None) -> AuroraReport:
-    cfg = DEFAULT_CONFIG.copy()
-    p = Path(config_path) if config_path else CONFIG_PATH
-    if p.exists():
-        cfg.update(json.loads(p.read_text()))
-
+async def run_aurora_check(config_path: str = "") -> AuroraReport:
+    cfg = _load_cfg(config_path)
     async with httpx.AsyncClient() as client:
         aurora, cloud, kp = await asyncio.gather(
             fetch_ovation_aurora(cfg["latitude"], cfg["longitude"], client),
@@ -204,11 +223,21 @@ async def run_aurora_check(config_path: Optional[str] = None) -> AuroraReport:
 
     viewable = (
         cloud.is_night
-        and aurora.probability_pct >= cfg["min_aurora_probability_pct"]
-        and cloud.cloud_cover_pct <= cfg["max_cloud_cover_pct"]
+        and aurora.probability_pct >= int(cfg["min_aurora_probability_pct"])
+        and cloud.cloud_cover_pct <= int(cfg["max_cloud_cover_pct"])
     )
-
-    summary = _build_summary(aurora, cloud, kp, cfg, viewable)
+    level, explanation = _score_level(
+        aurora.probability_pct, cloud.cloud_cover_pct, kp, cloud.is_night, cfg,
+    )
+    bits = {
+        "level": level,
+        "aurora_probability_pct": aurora.probability_pct,
+        "cloud_cover_pct": cloud.cloud_cover_pct,
+        "kp_index": kp,
+        "is_night": cloud.is_night,
+        "explanation": explanation,
+    }
+    summary = _build_summary(bits, cfg, viewable)
     logger.info(summary.replace("\n", " | "))
 
     return AuroraReport(
@@ -218,31 +247,104 @@ async def run_aurora_check(config_path: Optional[str] = None) -> AuroraReport:
         kp_index=kp,
         is_night=cloud.is_night,
         viewable=viewable,
+        level=level,
         summary=summary,
+        explanation=explanation,
         checked_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
-# --------------------------------------------------------------------------
-# Agentic tool entrypoint
-# --------------------------------------------------------------------------
-# TODO: swap this for your actual registration pattern, e.g.:
-#   from agentic.capability import Capability
-#   AURORA_CHECK_CAPABILITY = Capability(name="check_aurora", handler=tool_check_aurora, ...)
-# or however job_hunt's toolset functions get exposed to the router/scheduler.
+def check_aurora(config_path: str = "", *, state=None) -> str:
+    """Graph step: fetch + score; returns JSON report."""
+    report = asyncio.run(run_aurora_check(config_path=config_path))
+    payload = asdict(report)
+    if state is not None and hasattr(state, "data"):
+        state.data["aurora_report"] = payload
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def store_aurora_forecast(report_json: str = "", *, state=None) -> str:
+    """Graph step: persist report and prune old rows."""
+    cfg = _load_cfg()
+    retain = int(resolve_config_value(cfg, "retain_days", default=3, as_type="int"))
+
+    report: dict[str, Any] = {}
+    if report_json:
+        try:
+            report = json.loads(report_json)
+        except (TypeError, json.JSONDecodeError):
+            report = {}
+    if not report and state is not None and hasattr(state, "data"):
+        report = dict(state.data.get("aurora_report") or {})
+
+    if not report:
+        return json.dumps({"ok": False, "error": "no_report"})
+
+    path = append_record(WORKFLOW_ID, report)
+    kept = prune_records(WORKFLOW_ID, days=retain)
+    return json.dumps({"ok": True, "path": str(path), "retained": kept, "retain_days": retain})
+
+
+def notify_aurora(report_json: str = "", *, state=None) -> str:
+    """Graph step: email summary; Threads when Kp >= threshold."""
+    cfg = _load_cfg()
+    report: dict[str, Any] = {}
+    if report_json:
+        try:
+            report = json.loads(report_json)
+        except (TypeError, json.JSONDecodeError):
+            report = {}
+    if not report and state is not None and hasattr(state, "data"):
+        report = dict(state.data.get("aurora_report") or {})
+
+    if not report:
+        return json.dumps({"ok": False, "error": "no_report"})
+
+    summary = str(report.get("summary") or "")
+    level = str(report.get("level") or "low")
+    kp = report.get("kp_index")
+    try:
+        kp_f = float(kp) if kp is not None else None
+    except (TypeError, ValueError):
+        kp_f = None
+
+    min_kp_threads = float(cfg.get("min_kp_for_threads", 5.0))
+    min_kp_alert = float(cfg.get("min_kp_for_alert", 5.0))
+    interesting = bool(report.get("viewable")) or (kp_f is not None and kp_f >= min_kp_alert) or level in {"high", "medium"}
+
+    email_result: dict[str, Any] = {"skipped": True}
+    email_on = bool(cfg.get("email_on_check", True))
+    only_interesting = bool(cfg.get("email_only_when_interesting", True))
+    if email_on and (interesting or not only_interesting):
+        email_result = notify_email(
+            subject=f"Aurora {level.upper()} — {report.get('location_name', '')}",
+            body=summary,
+        )
+
+    threads_enabled = kp_f is not None and kp_f >= min_kp_threads
+    threads_result = maybe_post_threads(
+        summary,
+        enabled=threads_enabled,
+        reason=f"kp={kp_f} threshold={min_kp_threads}" if kp_f is not None else "no_kp",
+    )
+
+    return json.dumps(
+        {
+            "ok": True,
+            "interesting": interesting,
+            "email": email_result,
+            "threads": threads_result,
+        },
+        ensure_ascii=False,
+    )
+
 
 async def tool_check_aurora(params: Optional[dict] = None) -> dict:
-    """Agentic tool entrypoint: check aurora + cloud forecast for Vancouver.
-
-    Returns a JSON-serializable dict so it can flow straight into whatever
-    downstream drafting/posting step you want (e.g. a Threads draft, same
-    idea as the job_hunt formatter, or just a WebUI notification).
-    """
-    report = await run_aurora_check(config_path=params.get("config_path") if params else None)
+    """Agentic/async entrypoint."""
+    report = await run_aurora_check(config_path=(params or {}).get("config_path") or "")
     return asdict(report)
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    result = asyncio.run(run_aurora_check())
-    print(result.summary)
+    print(asyncio.run(run_aurora_check()).summary)
