@@ -2,17 +2,27 @@
 
 Cross-studio frontend primitives. Mounted by every studio backend at **`/shared`**.
 
-## Layout (industry convention)
+## Layout
 
 | Path | Role |
 |------|------|
 | `css/tokens.css` | Design tokens (`:root` CSS variables) |
 | `css/base.css` | Shared chrome: reset, header, buttons, sidebar |
-| `graph-bootstrap.js` | D3 helpers (`GraphBoot`) used by graph studios |
+| `graph-bootstrap.js` | D3 helpers (`GraphBoot`) for graph studios |
 
-Folder name is **`shared/`** (not `_shared`). That matches Feature-Sliced Design, Nx scopes, and common React monorepo practice. The underscore form is mainly a Next.js *private folder* convention and is not needed here.
+## Page entry scripts (by function)
 
-## Usage in a studio page
+| Studio | Entry JS |
+|--------|----------|
+| DAG | `dag-graph.js` |
+| Spec | `spec-graph.js` |
+| LTM | `ltm-graph.js` |
+| STM | `stm-rack.js` (+ `valence.js`) |
+| KB | `kb-graph.js` |
+| MCP | `mcp-servers.js` |
+| Approval | `approval-drafts.js` |
+
+## Usage
 
 ```html
 <link rel="stylesheet" href="shared/css/tokens.css">
@@ -20,7 +30,7 @@ Folder name is **`shared/`** (not `_shared`). That matches Feature-Sliced Design
 <link rel="stylesheet" href="static/style.css">  <!-- page-only overrides -->
 
 <script src="shared/graph-bootstrap.js"></script>
-<script src="static/script.js"></script>
+<script src="static/<studio>-....js"></script>
 ```
 
 Keep page-specific rules (DAG edges, STM rack, LTM force nodes, Spec drawer) in each studio’s own `style.css`.
