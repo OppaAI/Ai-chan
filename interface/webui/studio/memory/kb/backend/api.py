@@ -9,7 +9,7 @@ from system.log import get_logger
 log = get_logger(__name__)
 app = FastAPI(title="Aiko Knowledge Graph Studio", version="1.0")
 _FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
-_SHARED = Path(__file__).resolve().parents[3] / "_shared"
+_SHARED = Path(__file__).resolve().parents[3] / "shared"
 @app.get("/api/health")
 def health():
     return {"ok": True, "studio": "knowledge-graph"}

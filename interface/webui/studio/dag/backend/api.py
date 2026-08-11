@@ -22,7 +22,7 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent.parent
 STUDIO_DIR = BASE_DIR
 FRONTEND_DIR = STUDIO_DIR / "frontend"
-SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
+SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 
 # Serve the frontend assets (style.css, script.js) so the SPA works when
 # mounted at /studio/dag or run standalone. Matches the approval studio's

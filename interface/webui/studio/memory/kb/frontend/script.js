@@ -184,7 +184,7 @@ function render() {
 
   const node = gRoot.append('g').selectAll('g').data(nodes).join('g')
     .style('cursor', 'pointer')
-    .call(GraphBoot.makeDrag(simulation))
+    .call(GraphBoot.makeDrag(() => simulation))
     .on('click', (ev, d) => { ev.stopPropagation(); showDetails(d); });
 
   node.append('circle')

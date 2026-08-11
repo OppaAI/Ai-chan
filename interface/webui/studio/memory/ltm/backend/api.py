@@ -21,7 +21,7 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
-SHARED_DIR = Path(__file__).resolve().parents[3] / "_shared"
+SHARED_DIR = Path(__file__).resolve().parents[3] / "shared"
 
 # Serve frontend assets (style.css, script.js) under /static, matching the
 # other studios (approval, dag, kb).

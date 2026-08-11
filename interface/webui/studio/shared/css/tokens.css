@@ -1,0 +1,23 @@
+/* Studio design tokens — shared across Spec / DAG / Memory / MCP / Approval */
+:root {
+  --bg: #0a0a0f;
+  --bg2: #0e0e17;
+  --border: #1e1428;
+  --pink: #c651a8;
+  --purple: #a888e8;
+  --mauve: #d8bcff;
+  --cyan: #51d4c8;
+  --gold: #e8c84a;
+  --dim: #4a3a6a;
+  --dimmer: #2a1a4a;
+  --text: #cdbfe6;
+  --danger: #e8516a;
+  --glass-bg: rgba(24, 16, 36, 0.5);
+  --glass-border: rgba(200, 168, 240, 0.16);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
+  --font-main: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: ui-serif, "Iowan Old Style", "Source Serif Pro", charter, georgia, serif;
+  --font-mono: ui-monospace, "SF Mono", menlo, consolas, monospace;
+  --radius: 4px;
+  --radius-lg: 8px;
+}

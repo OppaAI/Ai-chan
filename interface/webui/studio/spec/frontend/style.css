@@ -664,3 +664,8 @@
   color: var(--cyan, #51d4c8);
   text-transform: uppercase;
 }
+
+/* Utility: small text size for preformatted content */
+.text-xs {
+  font-size: 10px;
+}
