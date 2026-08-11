@@ -84,6 +84,8 @@ def validate_spec(raw: dict[str, Any]) -> WorkflowSpec:
     if not isinstance(sources, list):
         raise SpecError("sources must be a list")
 
+    if "filters" in raw and raw["filters"] is not None and not isinstance(raw["filters"], dict):
+        raise SpecError("filters must be an object")
     filters = raw.get("filters") if isinstance(raw.get("filters"), dict) else {}
 
     def _int(key: str, default: int) -> int:
@@ -125,7 +127,11 @@ def validate_spec(raw: dict[str, Any]) -> WorkflowSpec:
     if auto_pass is not None and not isinstance(auto_pass, dict):
         raise SpecError("auto_pass_if must be an object or null")
 
+    if "email" in raw and raw["email"] is not None and not isinstance(raw["email"], dict):
+        raise SpecError("email must be an object")
     email = raw.get("email") if isinstance(raw.get("email"), dict) else {}
+    if "social" in raw and raw["social"] is not None and not isinstance(raw["social"], list):
+        raise SpecError("social must be a list")
     social = raw.get("social") if isinstance(raw.get("social"), list) else []
 
     config = raw.get("config")
@@ -167,16 +173,6 @@ def load_spec(path: str | Path) -> WorkflowSpec:
     return validate_spec(data if isinstance(data, dict) else {})
 
 
-# Keys lifted from legacy config.json onto Spec fields (not only left in config bag).
-_SPEC_LIFT_KEYS = frozenset({
-    "sources", "filters", "max_items", "retain_days", "parallel",
-    "template", "llm_enriched", "per_item", "human_in_the_loop",
-    "auto_pass_if", "email", "social", "workflow_id",
-    "max_results",  # job_hunt alias for max_items
-    "dedup_days",   # job_hunt alias for retain_days
-})
-
-
 def coerce_config_to_spec(
     *,
     graph_id: str,
@@ -196,14 +192,10 @@ def coerce_config_to_spec(
     retain = cfg.get("retain_days", cfg.get("dedup_days", 3))
 
     sources = cfg.get("sources")
-    if not isinstance(sources, list) or not sources:
-        # Sensible defaults when config has no explicit sources list
-        if wid in {"job_hunt", "gen_job_post"} or graph_id == "gen_job_post":
-            sources = [{"type": "adapter", "id": "job_hunt", "name": "job_hunt"}]
-        elif wid in {"aurora_forecast", "aurora"} or "aurora" in graph_id:
-            sources = [{"type": "adapter", "id": "aurora", "name": "aurora"}]
-        else:
-            sources = []
+    if not isinstance(sources, list):
+        sources = []
+    # Domain builders (job_hunt / aurora graph.py) inject sources defaults
+    # before calling coerce; shared Layer 3 stays workflow-agnostic.
 
     raw: dict[str, Any] = {
         "spec_version": SPEC_VERSION,
@@ -249,7 +241,7 @@ def load_spec_for_workflow(
                 spec = WorkflowSpec(**{**spec.to_dict(), "goal": goal})
             return spec
         except SpecError as exc:
-            log.warning("invalid spec.json in %s (%s); falling back to config.json", workflow_dir, exc)
+            log.warning("invalid spec.json in %s (%s); falling back to config.json", workflow_dir, exp)
 
     cfg = load_workflow_config(workflow_dir)
     return coerce_config_to_spec(
