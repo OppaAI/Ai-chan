@@ -13,7 +13,7 @@ def _default_media_roots() -> list[Path]:
 
 def _approved_media_roots() -> list[Path]:
     raw = env("PIXELFED_MEDIA_ROOTS", "") or env("PIXELSET_MEDIA_ROOTS", "")
-    roots = [Path(part).expanduser().resolve() for part in raw.split(",") if part.strip()]
+    roots = [Path(part.strip()).expanduser().resolve() for part in raw.split(",") if part.strip()]
     return roots or [root.resolve() for root in _default_media_roots()]
 
 
@@ -75,7 +75,7 @@ def load_tools(mcp):
         except ImportError:
             return {"ok": False, "provider": "pixelfed", "error": "Mastodon.py not installed — pip install Mastodon.py"}
         try:
-            api = Mastodon(access_token=access_token, api_base_url=instance)
+            api = Mastodon(access_token=access_token, api_base_url=instance, ratelimit_method="throw", request_timeout=60)
             media = api.media_post(p, mime_type=None)
             post = api.status_post(caption, media_ids=[media.id])
             return {"ok": True, "provider": "pixelfed", "id": post.id, "url": getattr(post, "url", "")}
