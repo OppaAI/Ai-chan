@@ -21,11 +21,11 @@ Cross-studio frontend primitives. Mounted by every studio backend at **`/shared`
 ## Usage
 
 ```html
-<link rel="stylesheet" href="shared/css/tokens.css">
-<link rel="stylesheet" href="shared/css/base.css">
+<link rel="stylesheet" href="/shared/css/tokens.css">
+<link rel="stylesheet" href="/shared/css/base.css">
 <link rel="stylesheet" href="static/style.css">
 
-<script src="shared/graph-bootstrap.js"></script>
+<script src="/shared/graph-bootstrap.js"></script>
 <script src="static/script.js"></script>
 ```
 

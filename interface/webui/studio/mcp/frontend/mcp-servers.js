@@ -3,6 +3,7 @@
 
         let currentServer = null;
         let allServers = [];
+        let loadInFlight = false;
 
         function escapeHTML(str) {
             const d = document.createElement('div');
@@ -15,10 +16,20 @@
         }
 
         async function loadServers() {
+            if (loadInFlight) return;
+            loadInFlight = true;
             try {
                 const resp = await fetch(`${API_BASE}/servers`);
+                if (!resp.ok) {
+                    console.error(`Failed to load servers: HTTP ${resp.status} ${resp.statusText}`);
+                    document.getElementById('header-status').textContent = 'Failed to load';
+                    return;
+                }
                 const data = await resp.json();
-                allServers = data.servers || [];
+                allServers = (data.servers || []).map(server => ({
+                    ...server,
+                    tools: server.tools || []
+                }));
 
                 // Reconcile currentServer with refreshed data
                 if (currentServer) {
@@ -39,6 +50,8 @@
             } catch (err) {
                 console.error('Failed to load servers:', err);
                 document.getElementById('header-status').textContent = 'Failed to load';
+            } finally {
+                loadInFlight = false;
             }
         }
 
@@ -55,6 +68,7 @@
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'server-item' + (currentServer && currentServer.name === server.name ? ' active' : '');
+                button.setAttribute('data-server-name', server.name);
 
                 let statusClass = 'unknown';
                 if (server.status === 'running') statusClass = 'running';
@@ -63,7 +77,7 @@
                 button.innerHTML = `
                     <div class="server-name">
                         ${escapeHTML(server.name)}
-                        <span class="status-badge ${statusClass}">${server.status || 'unknown'}</span>
+                        <span class="status-badge ${statusClass}">${escapeHTML(server.status || 'unknown')}</span>
                     </div>
                     <div class="server-meta">
                         <span>Port${formatPort(server.port)}</span>
@@ -77,9 +91,7 @@
 
         function selectServer(server) {
             currentServer = server;
-            document.querySelectorAll('.server-item').forEach(el => {
-                el.classList.toggle('active', el.textContent.includes(server.name));
-            });
+            renderServerList();
 
             // Show detail panel
             document.getElementById('detail-empty').style.display = 'none';
@@ -112,7 +124,7 @@
                 <div class="detail-row">
                     <div class="detail-label">Status</div>
                     <div class="detail-value">
-                        <span class="status-badge ${statusClass}">${server.status || 'unknown'}</span>
+                        <span class="status-badge ${statusClass}">${escapeHTML(server.status || 'unknown')}</span>
                     </div>
                 </div>
                 <div class="detail-row">
