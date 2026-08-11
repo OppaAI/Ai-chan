@@ -91,6 +91,11 @@ body {
   border-radius: 4px;
   cursor: pointer;
   background: rgba(24, 16, 36, 0.4);
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
 }
 .list-item:hover { border-color: var(--dim); }
 .list-item.active {
@@ -199,3 +204,23 @@ body {
 .node-label { fill: var(--mauve); font-size: 12px; font-family: inherit; }
 .node-sub { fill: var(--meta); font-size: 10px; font-family: var(--font-mono); }
 .edge-line { fill: none; stroke: var(--dim); stroke-width: 1.5; }
+
+/* Responsive layout for narrow viewports */
+@media (max-width: 768px) {
+  body {
+    overflow: auto;
+    height: auto;
+  }
+  .studio-body {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .main {
+    grid-template-rows: auto auto;
+    min-height: 600px;
+  }
+}

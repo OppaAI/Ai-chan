@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +21,9 @@ log = logging.getLogger(__name__)
 app = FastAPI(title="Aiko Spec Studio")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["http://localhost:8010", "http://127.0.0.1:8010"],
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type"],
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -219,17 +220,32 @@ async def save_workflow_spec(workflow_id: str, request: Request):
     except SpecError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Align id / workflow_id with the package when missing
+    # Align id / workflow_id with the package (route always determines identity)
     meta = _WORKFLOW_META[workflow_id]
     data = spec.to_dict()
-    data.setdefault("id", meta["graph_id"])
-    data.setdefault("workflow_id", meta["workflow_id"])
+    data["id"] = meta["graph_id"]
+    data["workflow_id"] = meta["workflow_id"]
     if not data.get("name"):
         data["name"] = meta["name"]
 
     out = d / "spec.json"
     try:
-        out.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        # Atomic write: temp file in same directory, then replace
+        fd, tmp_path = tempfile.mkstemp(dir=d, prefix=".spec.json.", suffix=".tmp", text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, out)
+        except Exception:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"failed to write {out}: {exc}") from exc
     return {"ok": True, "path": str(out.relative_to(WORKFLOWS_ROOT.parent.parent)), "spec": data}
@@ -243,4 +259,6 @@ async def serve_studio():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8010)
+    # Default to loopback-only for security; override via SPEC_STUDIO_HOST if needed
+    host = os.getenv("SPEC_STUDIO_HOST", "127.0.0.1")
+    uvicorn.run(app, host=host, port=8010)

@@ -45,14 +45,18 @@
   function renderWorkflowList() {
     els.list.innerHTML = '';
     workflows.forEach(function (w) {
-      const div = document.createElement('div');
-      div.className = 'list-item' + (w.id === selectedId ? ' active' : '');
-      div.innerHTML =
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'list-item' + (w.id === selectedId ? ' active' : '');
+      if (w.id === selectedId) {
+        btn.setAttribute('aria-current', 'true');
+      }
+      btn.innerHTML =
         '<div class="title">' + escapeHtml(w.name || w.id) + '</div>' +
         '<div class="meta">' + escapeHtml(w.id) + ' · ' +
         escapeHtml(w.spec_source || 'no config') + '</div>';
-      div.addEventListener('click', function () { selectWorkflow(w.id); });
-      els.list.appendChild(div);
+      btn.addEventListener('click', function () { selectWorkflow(w.id); });
+      els.list.appendChild(btn);
     });
   }
 
@@ -83,17 +87,22 @@
   }
 
   async function selectWorkflow(id) {
+    const requestedId = id;
     selectedId = id;
     renderWorkflowList();
     setMessage('Loading Spec…');
     try {
-      const data = await api('/workflows/' + encodeURIComponent(id) + '/spec');
+      const data = await api('/workflows/' + encodeURIComponent(requestedId) + '/spec');
+      // Only apply response if this workflow is still selected
+      if (selectedId !== requestedId) return;
       els.editor.value = JSON.stringify(data.spec, null, 2);
       els.source.textContent = data.source || '—';
-      els.editorTitle.textContent = 'Spec · ' + id;
+      els.editorTitle.textContent = 'Spec · ' + requestedId;
       setMessage('Loaded from ' + (data.source || 'unknown'), 'ok');
       await preview();
     } catch (err) {
+      // Only show error if this workflow is still selected
+      if (selectedId !== requestedId) return;
       setMessage(String(err.message || err), 'err');
     }
   }
@@ -148,18 +157,23 @@
       setMessage('Select a workflow first', 'err');
       return;
     }
+    const saveId = selectedId;
     try {
       const spec = parseEditorSpec();
-      const data = await api('/workflows/' + encodeURIComponent(selectedId) + '/spec', {
+      const data = await api('/workflows/' + encodeURIComponent(saveId) + '/spec', {
         method: 'PUT',
         body: JSON.stringify({ spec: spec }),
       });
+      // Only apply response if the same workflow is still selected
+      if (selectedId !== saveId) return;
       els.editor.value = JSON.stringify(data.spec, null, 2);
       els.source.textContent = 'spec.json';
       setMessage('Saved ' + (data.path || 'spec.json'), 'ok');
       await loadWorkflows();
       renderWorkflowList();
     } catch (err) {
+      // Only show error if the same workflow is still selected
+      if (selectedId !== saveId) return;
       setMessage(String(err.message || err), 'err');
     }
   }
