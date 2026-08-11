@@ -24,6 +24,8 @@ from agentic.graph_engine import PlanGraph, PlanNode
 from agentic.registry import TOOLS, tool
 from agentic.workflows.common.graphs import get_graph as get_shared_graph
 from agentic.workflows.common.graphs import register_graph as _register_shared
+from agentic.workflows.common.spec import coerce_config_to_spec
+from agentic.workflows.common.spec_graph import build_plan_graph
 
 # Ensure shared Layer-2 nodes (@tool ingest_data / store_data / …) are registered
 # before this module's graphs are used. plan_from_master may import this file
@@ -112,83 +114,35 @@ def build_gen_job_post_graph(
     *,
     goal: str = "Fetch job listings, draft posts, save for human review",
 ) -> PlanGraph:
-    """Layer 2: five shared nodes; domain work lives in adapters + toolset."""
+    """Layer 3: Spec (or coerced config.json) → shared 5-node PlanGraph."""
     cfg = _load_config()
-    config_json = json.dumps(cfg, ensure_ascii=False)
-    sources = cfg.get("sources") or [{"type": "adapter", "id": "job_hunt", "name": "job_hunt"}]
-    retain = str(cfg.get("retain_days") or cfg.get("dedup_days") or 3)
-    max_items = str(cfg.get("max_results") or 30)
-    hitl = "true" if cfg.get("human_in_the_loop", True) else "false"
-    llm = "true" if cfg.get("llm_enriched", True) else "false"
-    email = cfg.get("email") if isinstance(cfg.get("email"), dict) else {"enabled": False}
-    social = cfg.get("social") if isinstance(cfg.get("social"), list) else []
+    # Defaults matching Layer 2 behavior when keys are absent
+    if "sources" not in cfg:
+        cfg = {
+            **cfg,
+            "sources": [{"type": "adapter", "id": "job_hunt", "name": "job_hunt"}],
+        }
+    if "human_in_the_loop" not in cfg:
+        cfg = {**cfg, "human_in_the_loop": True}
+    if "llm_enriched" not in cfg:
+        cfg = {**cfg, "llm_enriched": True}
+    if "email" not in cfg:
+        cfg = {**cfg, "email": {"enabled": False}}
+    if "social" not in cfg:
+        cfg = {**cfg, "social": []}
+    if "max_items" not in cfg and "max_results" in cfg:
+        cfg = {**cfg, "max_items": cfg["max_results"]}
+    elif "max_items" not in cfg and "max_results" not in cfg:
+        cfg = {**cfg, "max_items": 30}
 
-    nodes = [
-        PlanNode(
-            id="ingest",
-            tool="ingest_data",
-            args={
-                "sources_json": json.dumps(sources),
-                "filters_json": json.dumps(cfg.get("filters") or {}),
-                "parallel": "true",
-                "max_items": max_items,
-                "config_json": config_json,
-            },
-        ),
-        PlanNode(
-            id="store",
-            tool="store_data",
-            args={
-                "workflow_id": "job_hunt",
-                "items_json": "$result:ingest",
-                "mode": "append",
-                "retain_days": retain,
-                "config_json": config_json,
-            },
-            depends_on=("ingest",),
-        ),
-        PlanNode(
-            id="synth",
-            tool="synthesis_data",
-            args={
-                "items_json": "$result:ingest",
-                "template": "",
-                "llm_enriched": llm,
-                "per_item": "true",
-                "config_json": config_json,
-            },
-            depends_on=("store",),
-        ),
-        PlanNode(
-            id="verify",
-            tool="verify_results",
-            args={
-                "results_json": "$result:synth",
-                "human_in_the_loop": hitl,
-                "llm_verify": "false",
-                "auto_pass_json": "{}",
-                "config_json": config_json,
-            },
-            depends_on=("synth",),
-        ),
-        PlanNode(
-            id="output",
-            tool="output_user_results",
-            args={
-                "results_json": "$result:verify",
-                "email_json": json.dumps(email),
-                "social_json": json.dumps(social),
-                "config_json": config_json,
-            },
-            depends_on=("verify",),
-        ),
-    ]
-    return PlanGraph(
-        id="gen_job_post",
+    spec = coerce_config_to_spec(
+        graph_id="gen_job_post",
         name="Job hunt (shared nodes): ingest → store → synth → verify → output",
         goal=goal,
-        nodes=tuple(nodes),
+        config=cfg,
+        workflow_id="job_hunt",
     )
+    return build_plan_graph(spec, goal=goal)
 
 
 def build_gen_job_post_legacy_graph(
