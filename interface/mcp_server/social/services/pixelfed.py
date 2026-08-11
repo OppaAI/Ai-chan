@@ -1,13 +1,17 @@
 from pathlib import Path
 
 from social.services import env
+from system.log import get_logger
+
+log = get_logger(__name__)
 
 
 def _default_media_roots() -> list[Path]:
     try:
         from agentic.toolkit.social import photo_social_root
         return [photo_social_root()]
-    except Exception:
+    except (ImportError, AttributeError, OSError) as e:
+        log.warning("[pixelfed] default media root unavailable: %s", e)
         return []
 
 

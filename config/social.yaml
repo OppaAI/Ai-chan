@@ -35,6 +35,7 @@ PHOTO_SOCIAL_MAX_ITEMS: "3"  # Max items to process per scan.
 PHOTO_SOCIAL_MAX_CHARS: "260"  # Max characters for photo captions.
 PHOTO_SOCIAL_ROOT: ""  # Override path for photo social output. Defaults to <USER_SPACE_ROOT>/<user_id>/social/photos/.
 PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # Scan interval (6 hours).
+PIXELFED_MEDIA_ROOTS: ""  # Comma-separated approved image roots for post_pixelfed; empty uses the photo social root.
 
 # -- Video social (Lane C — YouTube) --
 VIDEO_SOCIAL_AUTODRAFT: "0"  # Auto-generate draft video descriptions.
@@ -55,14 +56,16 @@ AIKO_DEV_GITHUB_BRANCH: "main"  # GitHub branch for aiko-dev content.
 AIKO_DEV_HUGO_CONTENT_PATH: "content/posts"  # Hugo content directory path in aiko-dev repo.
 A1_FULL_PROVIDERS: "reddit"  # Providers that get the full dev post content.
 A1_TEASER_PROVIDERS: "x,bluesky,mastodon,discord,threads"  # Providers that get teaser links only.
-A1_REDDIT_SUBREDDIT: "OppaAI"  # Reddit subreddit for dev post syndication.
 
-# -- Social MCP Server --
-SOCIAL_MCP_DB_PATH: ""  # Database path for Social MCP Server state.
+# -- Lane D job-post draft --
+JOB_POST_SOCIAL_AUTODRAFT: "0"  # Auto-generate draft job post content.
+JOB_POST_SOCIAL_AUTOPOST: "0"  # Auto-post job drafts to providers.
+JOB_POST_SOCIAL_ROOT: ""  # Override path for job-post social output.
+JOB_POST_SOCIAL_MAX_CHARS: "500"  # Max characters for job post content.
+JOB_POST_SOCIAL_PROVIDERS: "threads"  # Providers for job-post drafts.
+TECH_JOB_KEYWORDS: "software,engineer,developer,devops,sre,ml,ai,data"  # Keywords used to filter tech jobs.
 
-# -- Messenger adapters --
-AIKO_MESSENGER_ADAPTERS: "discord,telegram"  # Comma-separated list of messenger adapters to enable.
-
-# -- Vision model (photo captioning) --
-VISION_MODEL: "minicpm-v"  # Vision model for photo captioning.
-VISION_BASE_URL: ""  # Base URL for vision model API; empty uses local/default.
+# -- Messenger adapter enable flags (two-way only) --
+# One-way posting platforms (X, Bluesky, Mastodon, Reddit, YouTube, Pixelfed, Medium)
+# are MCP tools, not conversational adapters.
+AIKO_MESSENGER_ADAPTERS: "telegram,discord"  # Comma-separated two-way adapters to start with the session.

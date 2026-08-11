@@ -45,3 +45,5 @@ def test_post_social_routes_known_services_only():
     result = mcp.post_social(services="x,bluesky,pixelfed", text="hello", image_path="img.png")
     assert result["ok"] is True
     assert [name for name, _ in calls] == ["x", "bluesky", "pixelfed"]
+    pixelfed_kwargs = dict(calls)["pixelfed"]
+    assert pixelfed_kwargs == {"image_path": "img.png", "caption": "hello"}
