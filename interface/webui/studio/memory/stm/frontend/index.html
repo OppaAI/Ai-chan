@@ -24,16 +24,17 @@
   <header class="top">
     <div class="brand">
       <a href="#" id="backBtn" class="back" title="Back" aria-label="Back">←</a>
-      <span class="dot"></span>
+      <span class="dot" id="brandDot"></span>
       <h1>STM</h1>
-      <span class="badge" id="modeBadge">demo</span>
+      <span class="badge" id="modeBadge">live</span>
     </div>
     <div class="meta" id="metaBar">—</div>
     <div class="actions">
-      <button class="btn primary" id="btnSeed">Seed demo</button>
-      <button class="btn" id="btnTouch">Touch / recall</button>
+      <button class="btn live-btn is-live" id="btnLive" title="Toggle live feed" aria-pressed="true">
+        <span class="live-indicator" id="liveIndicator" aria-hidden="true"></span>
+        <span class="live-label" id="liveLabel">Live</span>
+      </button>
       <button class="btn" id="btnRefresh">Refresh</button>
-      <button class="btn" id="btnPause" aria-pressed="false">Pause live</button>
       <button class="btn danger" id="btnReset">Reset</button>
     </div>
   </header>
@@ -87,6 +88,7 @@
         <a class="memory-studio-tab" href="/studio/memory/ltm/">LTM</a>
         <a class="memory-studio-tab" href="/studio/memory/kb/">KB</a>
       </nav>
+
       <h2>Fill turn</h2>
       <label for="inUser">User</label>
       <textarea id="inUser" rows="2" placeholder="user message…"></textarea>
@@ -96,6 +98,22 @@
 
       <h2 class="mt">Factors (selected)</h2>
       <div id="factorPanel" class="factor-panel muted">Click a node</div>
+
+      <div class="demo-panel">
+        <h2>Demo</h2>
+        <p class="demo-hint">Full cycle: seed → fill → recall → eviction. Default stopped; Live is the default source.</p>
+        <div class="demo-controls">
+          <button class="btn icon-btn" id="btnDemoPlay" title="Play demo" aria-label="Play demo">
+            <span class="icon-play" aria-hidden="true"></span>
+          </button>
+          <button class="btn icon-btn" id="btnDemoPause" title="Pause demo" aria-label="Pause demo" disabled>
+            <span class="icon-pause" aria-hidden="true"></span>
+          </button>
+          <button class="btn" id="btnSeed" title="Seed a demo rack">Seed</button>
+          <button class="btn" id="btnTouch" title="Touch / boost recall">Touch</button>
+        </div>
+        <div class="demo-status" id="demoStatus">Demo stopped</div>
+      </div>
     </aside>
   </div>
 
