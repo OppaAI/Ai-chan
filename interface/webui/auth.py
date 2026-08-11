@@ -80,6 +80,13 @@ try:
 except ImportError as e:
     log.warning(f"Could not mount MCP studio: {e}")
 
+# Spec Studio (Layer 4)
+try:
+    from interface.webui.studio.spec.backend.api import app as spec_studio_app
+    app.mount("/studio/spec", spec_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount Spec studio: {e}")
+
 # ── cookie signing ────────────────────────────────────────────────────────────
 # SECRET_KEY signs the session cookie so it can't be forged or edited client-side.
 # Generate one with: python -c "import secrets; print(secrets.token_hex(32))"
