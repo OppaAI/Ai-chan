@@ -8,9 +8,17 @@ def test_messenger_registry_excludes_one_way_platforms():
 
 
 def test_social_media_registry_has_pixelfed_only():
+    """Lane B defaults to Pixelfed; MCP handlers are patched at runtime."""
     social = importlib.import_module("agentic.toolkit.social")
-    assert set(social._MEDIA_PROVIDERS_REGISTRY) == {"pixelfed"}
     assert social.PHOTO_SOCIAL_PROVIDERS == ("pixelfed",)
+    # Registries start empty; agentic.mcp_client.social_bridge patches them
+    # so uploads go through post_social / post_youtube rather than direct APIs.
+    assert social._MEDIA_PROVIDERS_REGISTRY == {}
+    assert social._VIDEO_PROVIDERS_REGISTRY == {}
+    bridge = importlib.import_module("agentic.mcp_client.social_bridge")
+    bridge.patch_social_registries()
+    assert set(social._MEDIA_PROVIDERS_REGISTRY) == {"pixelfed"}
+    assert set(social._VIDEO_PROVIDERS_REGISTRY) == {"youtube"}
 
 
 def test_post_social_routes_known_services_only():
