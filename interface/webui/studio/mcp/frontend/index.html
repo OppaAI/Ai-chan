@@ -15,20 +15,37 @@
             <h1>Aiko MCP Studio</h1>
         </div>
         <div class="header-actions">
-            <span class="header-status" id="header-status">Loading…</span>
-            <button id="refresh-btn" class="btn" type="button">Refresh</button>
+            <span class="header-status" id="header-status">Loading servers…</span>
+            <button id="refresh-btn" class="btn">Refresh</button>
         </div>
     </header>
 
     <div class="studio-body">
         <aside class="sidebar">
-            <h2>Servers</h2>
+            <h2>MCP Servers</h2>
             <div id="servers-list"></div>
         </aside>
-        <main class="main-panel" id="main-panel">
-            <div class="empty-state" id="empty-state">Select an MCP server</div>
-            <div id="server-detail" style="display:none"></div>
-        </main>
+
+        <div class="content-area">
+            <div class="server-detail" id="server-detail">
+                <div class="empty-state" id="detail-empty">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <rect x="2" y="2" width="20" height="20" rx="2"></rect>
+                        <path d="M7 12l3 3 7-7"></path>
+                        <circle cx="12" cy="12" r="1"></circle>
+                    </svg>
+                    <p>Select an MCP server from the sidebar to view details</p>
+                </div>
+                <div id="detail-content" style="display: none;">
+                    <h3>Server Details</h3>
+                    <div class="detail-grid" id="detail-grid"></div>
+                    <div class="tools-section">
+                        <h4>Available Tools</h4>
+                        <div id="tools-list"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="shared/graph-bootstrap.js"></script>
@@ -36,8 +53,11 @@
   <script>
     document.getElementById('back-btn').addEventListener('click', function(e) {
       e.preventDefault();
-      if (window.history.length > 1) window.history.back();
-      else window.location.href = '/';
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = '/';
+      }
     });
   </script>
 </body>
