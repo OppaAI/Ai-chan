@@ -74,6 +74,7 @@ function retainOf(d) {
  * Contrast-stretch memory retain values across the visible node set, so
  * size/brightness differences are actually visible when scores cluster
  * (raw retain is often ~flat, e.g. 0.48 for half the nodes).
+ * Stronger curve + slight valence lift so cyan/gold nodes don't stay tiny/dim.
  */
 function stretchRetain(nodes) {
   for (const n of nodes) if (n._dispRetain != null) delete n._dispRetain;
@@ -82,11 +83,18 @@ function stretchRetain(nodes) {
   if (r.length < 3) return;
   let lo = Math.min.apply(null, r);
   let hi = Math.max.apply(null, r);
-  if (hi - lo < 0.05) { lo = Math.max(0, lo - 0.12); hi = Math.min(1, hi + 0.12); }
+  // Force a usable dynamic range even when scores are tightly clustered
+  if (hi - lo < 0.18) { lo = Math.max(0, lo - 0.22); hi = Math.min(1, hi + 0.22); }
   const span = (hi - lo) || 1;
   for (const n of mem) {
     const v = retainOf(n);
-    n._dispRetain = Math.max(0.1, Math.min(1, 0.12 + 0.88 * ((v - lo) / span)));
+    // Power curve expands mid/high retain; floor keeps low nodes visible
+    let stretched = 0.08 + 0.92 * Math.pow((v - lo) / span, 0.72);
+    // Mild valence lift so pos/neg still read larger/brighter than pure neutrals
+    const hue = valenceHue(n);
+    if (hue === 'pos' || hue === 'neg') stretched = Math.min(1, stretched + 0.07);
+    if (n.pinned) stretched = Math.max(stretched, 0.78);
+    n._dispRetain = Math.max(0.08, Math.min(1, stretched));
   }
 }
 
@@ -117,28 +125,42 @@ function hueColor(hue) {
   return '#8a9bb8';
 }
 
-/** Glass fill: valence hue; pinned → forced high retain for brightness */
+/** Glass fill opacity — steeper retain curve + valence boost for demo-like contrast */
 function nodeOpacity(d) {
   let r = retainOf(d);
-  let o = 0.18 + r * 0.82;
+  // Quadratic-ish so mid-retain is already bright; floor keeps dim nodes readable
+  let o = 0.22 + Math.pow(r, 0.85) * 0.78;
+  const hue = valenceHue(d);
+  if (hue === 'pos' || hue === 'neg') o = Math.min(1, o + 0.08);
+  if (d.pinned) o = Math.max(o, 0.88);
   if (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) {
-    o = Math.min(o, 0.35);
+    o = Math.min(o, 0.32);
   }
   return o;
 }
 
 function glowStrength(d) {
   let r = retainOf(d);
-  if (d.pinned) r = Math.max(r, 0.95);
-  if (d.status === 'superseded') return 0.5;
-  return 0.4 + r * 2.8; // stdDeviation-ish via filter scale
+  if (d.pinned) r = Math.max(r, 0.92);
+  if (d.status === 'superseded') return 0.45;
+  const hue = valenceHue(d);
+  // Emotional nodes get extra glow so cyan/gold stand out like the demo
+  const emo = (hue === 'pos' || hue === 'neg') ? 0.55 : 0;
+  return 0.55 + r * 3.4 + emo;
 }
 
 function nodeRadius(d) {
   let r = retainOf(d);
-  if (d.pinned) r = Math.max(r, 0.85);
-  if (d.type === 'entity') return 5 + 16 * Math.pow(r, 1.25);
-  return 5 + 24 * Math.pow(r, 1.35);
+  // Pinned still large but not so dominant that everything else looks uniform
+  if (d.pinned) r = Math.max(r, 0.72);
+  const hue = valenceHue(d);
+  // Slight size lift for emotional nodes (demo has varied cyan/gold sizes)
+  if ((hue === 'pos' || hue === 'neg') && d.type === 'memory') {
+    r = Math.min(1, r + 0.06);
+  }
+  if (d.type === 'entity') return 4.5 + 14 * Math.pow(r, 1.15);
+  // Wider radius range: small neutrals vs large pinned/emotional
+  return 4 + 28 * Math.pow(r, 1.22);
 }
 
 function edgeOpacity(e, nodeById) {
@@ -146,10 +168,13 @@ function edgeOpacity(e, nodeById) {
   const t = nodeById.get(typeof e.target === 'object' ? e.target.id : e.target);
   const rs = s ? retainOf(s) : 0.3;
   const rt = t ? retainOf(t) : 0.3;
-  // brighter when both ends strong; fades toward weaker end
   const mid = (rs + rt) / 2;
-  if (e.type === 'supersedes') return 0.35 + mid * 0.5;
-  return 0.08 + mid * 0.45;
+  // Brighter synapses overall so connections stay visible when nodes spread out
+  if (e.type === 'supersedes') return 0.42 + mid * 0.48;
+  if (e.type === 'mentions' || e.type === 'grounded_in' || e.type === 'practiced_in') {
+    return 0.14 + mid * 0.52;
+  }
+  return 0.10 + mid * 0.40;
 }
 
 function lineageText(d, graph) {
@@ -418,30 +443,57 @@ function render() {
       return t.length > 20 ? t.slice(0, 18) + '…' : t;
     });
 
-  const centerX = w * 0.55, centerY = h * 0.5;
-  nodes.forEach((n) => {
+  // Wider initial scatter so force layout starts open (demo-like spread)
+  // instead of a dense central seed that collapses into a blob.
+  const centerX = w * 0.5, centerY = h * 0.5;
+  const degById = new Map();
+  links.forEach(e => {
+    const s = typeof e.source === 'object' ? e.source.id : e.source;
+    const t = typeof e.target === 'object' ? e.target.id : e.target;
+    degById.set(s, (degById.get(s) || 0) + 1);
+    degById.set(t, (degById.get(t) || 0) + 1);
+  });
+  nodes.forEach((n, i) => {
     if (n.id === userEntityId) {
       n.x = centerX; n.y = centerY; n.fx = centerX; n.fy = centerY;
-    } else if (n.x == null) {
-      n.x = centerX + (Math.random() - 0.5) * w * 0.7;
-      n.y = centerY + (Math.random() - 0.5) * h * 0.7;
+      return;
     }
+    if (n.x != null && n.y != null) return;
+    // Ring + noise: isolates get larger radius so they don't all pile in the middle
+    const deg = degById.get(n.id) || 0;
+    const baseR = deg === 0 ? 0.38 : 0.22;
+    const ring = baseR + (i % 7) * 0.04;
+    const ang = (i * 2.399963) + Math.random() * 0.6; // golden-angle-ish
+    n.x = centerX + Math.cos(ang) * ring * w * 0.85 + (Math.random() - 0.5) * 40;
+    n.y = centerY + Math.sin(ang) * ring * h * 0.85 + (Math.random() - 0.5) * 40;
   });
 
   simulation = GraphBoot.makeSimulation(nodes, links, {
     w,
     h,
-    charge: -140,
+    // Stronger repulsion opens the cloud; longer links keep synapses readable
+    charge: -220,
     nodeRadius,
-    collisionPadding: 6,
-    linkDistance: d => d.type === 'mentions' ? 50 : (d.type === 'supersedes' ? 95 : 72),
-    linkStrength: 0.4,
+    collisionPadding: 10,
+    linkDistance: d => {
+      if (d.type === 'mentions') return 68;
+      if (d.type === 'supersedes') return 110;
+      if (d.type === 'grounded_in' || d.type === 'practiced_in') return 85;
+      return 80;
+    },
+    linkStrength: 0.32,
   })
+    .force('x', d3.forceX(centerX).strength(0.035))  // mild pull, not a hard center
+    .force('y', d3.forceY(centerY).strength(0.035))
+    .alphaDecay(0.022)
     .on('tick', () => {
       link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
       node.attr('transform', d => `translate(${d.x},${d.y})`);
     });
+
+  // Give the simulation a short burst so sparse graphs settle open instead of blobbing
+  simulation.alpha(0.9).restart();
 
   svg.on('click', () => { document.getElementById('details').style.display = 'none'; });
 }
