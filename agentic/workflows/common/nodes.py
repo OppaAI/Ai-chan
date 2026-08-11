@@ -1,10 +1,10 @@
-"""Register Layer-1 shared workflow nodes as graph tools.
+"""Register shared workflow nodes as graph tools (Layer 1+).
 
 Importing this module binds handlers into the registry using catalog
 metadata from config/tools.yaml (with string fallback).
 
-Also hosts small Layer-1 adapters (e.g. aurora) so domain checks can run
-through ingest_data without bloating execution.py.
+Adapters (aurora, job_hunt) expand domain sources into normalized items
+so graph.py stays orchestration-only.
 """
 
 from __future__ import annotations
@@ -75,7 +75,113 @@ def _expand_aurora_sources(sources_json: str, state=None) -> tuple[str, list[dic
     return json.dumps(remaining, ensure_ascii=False), pre_items
 
 
-def _merge_pre_items(result_json: str, pre_items: list[dict[str, Any]], state=None, max_items: int = 50) -> str:
+def _normalize_job_posting(posting: dict[str, Any], default_source: str = "job") -> dict[str, Any]:
+    """Map a job_hunt posting dict onto the shared item shape."""
+    item = dict(posting)
+    url = str(item.get("url") or item.get("link") or "").strip()
+    title = str(item.get("title") or item.get("subject") or "Job").strip()
+    summary = str(
+        item.get("cleaned_summary")
+        or item.get("summary")
+        or item.get("text")
+        or ""
+    ).strip()
+    sid = str(item.get("id") or item.get("guid") or url or title)[:200]
+    item.setdefault("id", sid)
+    item.setdefault("source", str(item.get("source") or default_source))
+    item.setdefault("type", "job")
+    item.setdefault("url", url)
+    item.setdefault("title", title)
+    item.setdefault("text", summary or title)
+    if summary and not item.get("summary"):
+        item["summary"] = summary
+    return item
+
+
+def _expand_job_hunt_sources(sources_json: str, state=None) -> tuple[str, list[dict[str, Any]]]:
+    """Resolve adapter:job_hunt (or rss/email markers) via job_hunt toolset.
+
+    Domain fetch / dedup / MD extraction stays in job_hunt.toolset; this only
+    normalizes postings into shared ingest items.
+    """
+    sources = _loads(sources_json, [])
+    if isinstance(sources, dict):
+        sources = sources.get("sources") or []
+    if not isinstance(sources, list):
+        sources = []
+
+    remaining: list[dict[str, Any]] = []
+    pre_items: list[dict[str, Any]] = []
+    want_job_adapter = False
+    want_rss = False
+    want_email = False
+
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        stype = str(src.get("type") or "").strip().lower()
+        name = str(src.get("name") or src.get("adapter") or src.get("id") or "").strip().lower()
+        if stype == "adapter" and name in {"job_hunt", "job", "jobs", "gen_job_post"}:
+            want_job_adapter = True
+            continue
+        if stype == "rss":
+            want_rss = True
+            continue
+        if stype == "email":
+            want_email = True
+            continue
+        remaining.append(src)
+
+    if not (want_job_adapter or want_rss or want_email):
+        return json.dumps(sources, ensure_ascii=False), []
+
+    try:
+        from agentic.workflows.job_hunt import toolset as jh
+
+        config = jh._job_config()
+        include_email = bool(config.get("include_email", True))
+        es = config.get("email_source") if isinstance(config.get("email_source"), dict) else {}
+        if es and es.get("enabled") is False:
+            include_email = False
+        if want_job_adapter:
+            want_rss = True
+            want_email = include_email
+        elif want_email and not include_email:
+            want_email = False
+
+        postings: list[dict[str, Any]] = []
+        if want_rss:
+            postings.extend(jh.fetch_today_jobs_from_rss(config=config) or [])
+        if want_email:
+            email_posts, _ = jh.fetch_today_jobs_from_email(config=config)
+            postings.extend(email_posts or [])
+
+        max_results = int(config.get("max_results") or 30)
+        postings = postings[:max_results]
+        for p in postings:
+            if isinstance(p, dict):
+                pre_items.append(_normalize_job_posting(p))
+
+        if state is not None and hasattr(state, "data") and isinstance(state.data, dict):
+            state.data["job_all_postings"] = list(postings)
+            state.data["job_total"] = len(postings)
+            state.data["job_current_index"] = 0
+    except Exception as exc:
+        remaining = list(sources)
+        pre_items = []
+        if state is not None and hasattr(state, "data") and isinstance(state.data, dict):
+            state.data["job_ingest_error"] = str(exc)[:300]
+
+    return json.dumps(remaining, ensure_ascii=False), pre_items
+
+
+def _merge_pre_items(
+    result_json: str,
+    pre_items: list[dict[str, Any]],
+    state=None,
+    max_items: int = 50,
+    tags: list[str] | None = None,
+) -> str:
     if not pre_items:
         return result_json
     data = _loads(result_json, {})
@@ -83,12 +189,15 @@ def _merge_pre_items(result_json: str, pre_items: list[dict[str, Any]], state=No
         data = {"ok": True, "items": [], "meta": {}}
     items = list(data.get("items") or [])
     items = pre_items + items
-    # Enforce max_items limit after prepending
     items = items[:max_items]
     data["items"] = items
     data["ok"] = True if items else data.get("ok", True)
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-    meta["pre_expanded"] = ["aurora"]
+    prev = list(meta.get("pre_expanded") or [])
+    for t in tags or ["adapter"]:
+        if t not in prev:
+            prev.append(t)
+    meta["pre_expanded"] = prev
     data["meta"] = meta
     if state is not None and hasattr(state, "data") and isinstance(state.data, dict):
         state.data["ingest_items"] = items
@@ -96,7 +205,7 @@ def _merge_pre_items(result_json: str, pre_items: list[dict[str, Any]], state=No
 
 
 def _promote_synth_fields(result_json: str, state=None) -> str:
-    """Copy level/kp/viewable onto each result for verify/output rules."""
+    """Copy useful fields onto each result for verify/output rules."""
     data = _loads(result_json, {})
     if not isinstance(data, dict):
         return result_json
@@ -112,6 +221,12 @@ def _promote_synth_fields(result_json: str, state=None) -> str:
         "aurora_probability_pct",
         "cloud_cover_pct",
         "is_night",
+        "title",
+        "url",
+        "organization",
+        "location",
+        "salary",
+        "employment_type",
     )
     out = []
     for r in results:
@@ -146,7 +261,15 @@ def ingest_data(
     *,
     state=None,
 ) -> str:
-    remaining_json, pre_items = _expand_aurora_sources(sources_json, state=state)
+    remaining_json, pre_aurora = _expand_aurora_sources(sources_json, state=state)
+    remaining_json, pre_jobs = _expand_job_hunt_sources(remaining_json, state=state)
+    pre_items = list(pre_aurora) + list(pre_jobs)
+    tags = []
+    if pre_aurora:
+        tags.append("aurora")
+    if pre_jobs:
+        tags.append("job_hunt")
+
     result = _ex.ingest_data(
         sources_json=remaining_json,
         filters_json=filters_json,
@@ -159,7 +282,20 @@ def ingest_data(
         limit = max(1, int(max_items or 50))
     except (TypeError, ValueError):
         limit = 50
-    return _merge_pre_items(result, pre_items, state=state, max_items=limit)
+    merged = _merge_pre_items(result, pre_items, state=state, max_items=limit, tags=tags)
+
+    data = _loads(merged, {})
+    items = data.get("items") if isinstance(data, dict) else None
+    if state is not None and hasattr(state, "data") and isinstance(state.data, dict) and items:
+        first = items[0] if items else {}
+        if isinstance(first, dict):
+            for key in ("kp_index", "level", "viewable", "location_name", "summary"):
+                if key in first:
+                    state.data[key] = first[key]
+        job_count = sum(1 for it in items if isinstance(it, dict) and it.get("type") == "job")
+        if job_count:
+            state.data["ingest_job_count"] = job_count
+    return merged
 
 
 @tool(
@@ -189,8 +325,8 @@ def store_data(
 
 
 @tool(
-    _spec("synthesis_data", "Layer-1 shared node: template fill from items"),
-    description="Layer-1 shared node: template fill from items.",
+    _spec("synthesis_data", "Layer-1 shared node: template fill / optional LLM"),
+    description="Layer-1 shared node: template fill / optional LLM.",
     graph=True,
     react=False,
     domain="workflow",

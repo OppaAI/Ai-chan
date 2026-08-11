@@ -108,7 +108,8 @@ def job_post_social_root() -> Path:
 def _latest_approved_job_post_draft() -> Path | None:
     """Return the most recently created human-approved job-post draft dir, or None.
 
-    Scans <job_post_social_root>/<date>/<category>/draft.json and
+    Scans <job_post_social_root>/<date>/<category>/<slug>/draft.json,
+    <job_post_social_root>/<date>/<category>/draft.json, and
     <job_post_social_root>/<date>/draft.json (when category is empty)
     for the dir whose draft.json has human_approved=True and the
     newest created_at. Used by post_job_post_social when the model
@@ -116,7 +117,7 @@ def _latest_approved_job_post_draft() -> Path | None:
     """
     root = job_post_social_root()
     best: tuple[float, Path] | None = None
-    for meta_path in list(root.glob("*/*/draft.json")) + list(root.glob("*/draft.json")):
+    for meta_path in list(root.glob("*/*/*/draft.json")) + list(root.glob("*/*/draft.json")) + list(root.glob("*/draft.json")):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):

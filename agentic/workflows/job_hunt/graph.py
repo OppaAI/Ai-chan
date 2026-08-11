@@ -1,21 +1,34 @@
-"""
-agentic/workflows/job_hunt/graph.py
+"""Job hunt Lane D — Layer 2 graph on shared workflow nodes.
 
-Graph module for job_hunt (Lane D) workflow.
-Registers graph tools and provides a single unified graph that works for both
-user prompts and scheduled runs.
+Primary graph id remains ``gen_job_post`` (schedule / callers).
 
-Importing this module auto-registers the graph with workflows.common.graphs
-(and a local alias for backward compatibility).
+Flow:
+  ingest_data (adapter:job_hunt → RSS + email via toolset)
+  → store_data
+  → synthesis_data (post_fields template + optional LLM)
+  → verify_results (HITL drafts)
+  → output_user_results (no auto Threads; human approves later)
+
+Domain tools (fetch_rss_and_email_into_state, draft_single_job, …) stay
+registered for adapters / ReAct / legacy.
 """
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import logging
+log = logging.getLogger(__name__)
+
 from agentic.graph_engine import PlanGraph, PlanNode
 from agentic.registry import TOOLS, tool
-from agentic.workflows.common.graphs import register_graph as _register_shared
 from agentic.workflows.common.graphs import get_graph as get_shared_graph
+from agentic.workflows.common.graphs import register_graph as _register_shared
 
+# Ensure shared Layer-2 nodes (@tool ingest_data / store_data / …) are registered
+# before this module's graphs are used. plan_from_master may import this file
+# directly without going through common.graphs._ensure_workflow_graphs_loaded().
+import agentic.workflows.common.nodes  # noqa: F401
 
 try:
     from agentic.workflows.job_hunt.toolset import (
@@ -28,7 +41,6 @@ try:
     )
     _IMPORTS_OK = True
 except Exception as exc:
-    import logging
     logging.getLogger(__name__).warning("job_hunt toolkit import failed: %s", exc)
     _IMPORTS_OK = False
 
@@ -46,17 +58,21 @@ except Exception as exc:
         return '{"error": "toolkit not available"}'
 
 
-@tool(TOOLS["fetch_rss_and_email_into_state"])
+def _spec(name: str):
+    return TOOLS[name] if name in TOOLS else name
+
+
+@tool(_spec("fetch_rss_and_email_into_state"))
 def fetch_rss_and_email_into_state(plan_json: str, *, state=None) -> str:
     return _fetch_rss_and_email_into_state(plan_json, state=state)
 
 
-@tool(TOOLS["get_next_job"])
+@tool(_spec("get_next_job"))
 def get_next_job(state=None, worker_id: str = "0") -> str:
     return _get_next_job(state=state, worker_id=worker_id)
 
 
-@tool(TOOLS["draft_single_job"])
+@tool(_spec("draft_single_job"))
 def draft_single_job(
     job_json: str,
     template: str = "",
@@ -68,30 +84,123 @@ def draft_single_job(
     return _draft_single_job(job_json, template, client=client, model=model, state=state)
 
 
-@tool(TOOLS["save_single_job_draft"])
+@tool(_spec("save_single_job_draft"))
 def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     return _save_single_job_draft(auto_post, state=state)
 
 
-@tool(TOOLS["check_jobs_remaining"])
+@tool(_spec("check_jobs_remaining"))
 def check_jobs_remaining(state=None) -> str:
     return _check_jobs_remaining(state=state)
 
 
-@tool(TOOLS["report_job_run"])
+@tool(_spec("report_job_run"))
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     return _report_job_run(plan, search, draft, save)
 
 
+def _load_config() -> dict:
+    path = Path(__file__).resolve().parent / "config.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("job_hunt: failed to load %s: %s", path, exc)
+        return {}
+
+
 def build_gen_job_post_graph(
-    goal: str = "Fetch, draft, and save job listings from configured RSS feeds",
+    *,
+    goal: str = "Fetch job listings, draft posts, save for human review",
 ) -> PlanGraph:
-    """Build the simplified gen_job_post graph."""
+    """Layer 2: five shared nodes; domain work lives in adapters + toolset."""
+    cfg = _load_config()
+    config_json = json.dumps(cfg, ensure_ascii=False)
+    sources = cfg.get("sources") or [{"type": "adapter", "id": "job_hunt", "name": "job_hunt"}]
+    retain = str(cfg.get("retain_days") or cfg.get("dedup_days") or 3)
+    max_items = str(cfg.get("max_results") or 30)
+    hitl = "true" if cfg.get("human_in_the_loop", True) else "false"
+    llm = "true" if cfg.get("llm_enriched", True) else "false"
+    email = cfg.get("email") if isinstance(cfg.get("email"), dict) else {"enabled": False}
+    social = cfg.get("social") if isinstance(cfg.get("social"), list) else []
+
+    nodes = [
+        PlanNode(
+            id="ingest",
+            tool="ingest_data",
+            args={
+                "sources_json": json.dumps(sources),
+                "filters_json": json.dumps(cfg.get("filters") or {}),
+                "parallel": "true",
+                "max_items": max_items,
+                "config_json": config_json,
+            },
+        ),
+        PlanNode(
+            id="store",
+            tool="store_data",
+            args={
+                "workflow_id": "job_hunt",
+                "items_json": "$result:ingest",
+                "mode": "append",
+                "retain_days": retain,
+                "config_json": config_json,
+            },
+            depends_on=("ingest",),
+        ),
+        PlanNode(
+            id="synth",
+            tool="synthesis_data",
+            args={
+                "items_json": "$result:ingest",
+                "template": "",
+                "llm_enriched": llm,
+                "per_item": "true",
+                "config_json": config_json,
+            },
+            depends_on=("store",),
+        ),
+        PlanNode(
+            id="verify",
+            tool="verify_results",
+            args={
+                "results_json": "$result:synth",
+                "human_in_the_loop": hitl,
+                "llm_verify": "false",
+                "auto_pass_json": "{}",
+                "config_json": config_json,
+            },
+            depends_on=("synth",),
+        ),
+        PlanNode(
+            id="output",
+            tool="output_user_results",
+            args={
+                "results_json": "$result:verify",
+                "email_json": json.dumps(email),
+                "social_json": json.dumps(social),
+                "config_json": config_json,
+            },
+            depends_on=("verify",),
+        ),
+    ]
+    return PlanGraph(
+        id="gen_job_post",
+        name="Job hunt (shared nodes): ingest → store → synth → verify → output",
+        goal=goal,
+        nodes=tuple(nodes),
+    )
+
+
+def build_gen_job_post_legacy_graph(
+    *,
+    goal: str = "Legacy loop: fetch → get_next → draft → save → report",
+) -> PlanGraph:
+    """Previous loop-based graph; kept for rollback / comparison."""
     nodes = [
         PlanNode(
             id="fetch_all",
             tool="fetch_rss_and_email_into_state",
-            args={"plan_json": '{"max_results": 30}'},
+            args={"plan_json": "{}"},
         ),
         PlanNode(
             id="loop_jobs",
@@ -121,16 +230,14 @@ def build_gen_job_post_graph(
             depends_on=("save",),
         ),
     ]
-
     return PlanGraph(
-        id="gen_job_post",
-        name="Fetch, draft, and save job listings from configured RSS feeds",
+        id="gen_job_post_legacy",
+        name="Legacy job hunt loop graph",
         goal=goal,
         nodes=tuple(nodes),
     )
 
 
-# Local alias kept for callers that still import job_hunt.graph.get_graph
 def get_graph(graph_id: str):
     return get_shared_graph(graph_id)
 
@@ -140,9 +247,11 @@ def register_graph(graph: PlanGraph) -> None:
 
 
 register_graph(build_gen_job_post_graph())
+register_graph(build_gen_job_post_legacy_graph())
 
 __all__ = [
     "build_gen_job_post_graph",
+    "build_gen_job_post_legacy_graph",
     "register_graph",
     "get_graph",
 ]

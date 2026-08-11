@@ -1101,45 +1101,66 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
     plan = ranked[0][1]
 
     # If the playbook references a registered graph (graph_id), use it directly
-    # instead of building from inline nodes. This allows graph modules to be
-    # the single source of truth for graph structure.
+    # instead of building from inline nodes. Prefer common.graphs (all workflows)
+    # then fall back to job_hunt.graph for older imports.
     graph_id = plan.get("graph_id") or plan.get("id")
     if graph_id:
-        try:
-            from agentic.workflows.job_hunt.graph import get_graph as _get_graph
-        except Exception as exc:
-            log.debug("graph_engine: failed to import graph module: %s", exc)
-            _get_graph = None
-        if _get_graph is not None:
-            registered_graph = _get_graph(graph_id)
-            if registered_graph is not None:
-                # Clone with the current goal and extras
-                registered_graph = PlanGraph(
-                    id=registered_graph.id,
-                    name=registered_graph.name,
-                    goal=user_input,
-                    nodes=registered_graph.nodes,
-                    source=registered_graph.source,
-                    reducers=registered_graph.reducers,
-                    _extras={**extras, "max_workers": plan.get("max_workers") or 2},
-                )
-                return registered_graph
+        registered_graph = None
+        for mod_name in (
+            "agentic.workflows.common.graphs",
+            "agentic.workflows.job_hunt.graph",
+        ):
+            try:
+                mod = __import__(mod_name, fromlist=["get_graph"])
+                registered_graph = mod.get_graph(graph_id)
+                if registered_graph is not None:
+                    break
+            except Exception as exc:
+                log.debug("graph_engine: get_graph via %s failed: %s", mod_name, exc)
+        if registered_graph is not None:
+            registered_graph = PlanGraph(
+                id=registered_graph.id,
+                name=registered_graph.name,
+                goal=user_input,
+                nodes=registered_graph.nodes,
+                source=registered_graph.source,
+                reducers=registered_graph.reducers,
+                _extras={**extras, "max_workers": plan.get("max_workers") or 2},
+            )
+            return registered_graph
 
-    # Tunable parallel workers: regenerate the gen_job_post worker chains from
-    # the playbook's max_workers setting (JSON / env) rather than trusting the
-    # possibly-stale node list baked into playbook.json.
+    # gen_job_post: if registry lookup failed, rebuild the Layer-2 shared-node
+    # graph (not the legacy parallel fetch/loop worker chain).
     if plan.get("id") == "gen_job_post":
-        env_mw = os.getenv("JOB_HUNT_MAX_WORKERS", "").strip()
-        mw = env_mw if env_mw else (plan.get("max_workers") or "2")
         try:
-            mw_int = max(1, int(mw))
-        except (TypeError, ValueError):
-            mw_int = 2
-        plan = {**plan, "max_workers": mw_int, "nodes": _gen_job_worker_nodes(
-            "fetch_rss_and_email_into_state", "check_jobs_remaining", "get_next_job",
-            "draft_single_job", "save_single_job_draft", "report_job_run", mw_int,
-        )}
-        extras = _placeholder_extras(user_input)
+            from agentic.workflows.job_hunt.graph import build_gen_job_post_graph
+            built = build_gen_job_post_graph(goal=user_input)
+            return PlanGraph(
+                id=built.id,
+                name=built.name,
+                goal=user_input,
+                nodes=built.nodes,
+                source=built.source,
+                reducers=built.reducers,
+                _extras={**extras, "max_workers": plan.get("max_workers") or 2},
+            )
+        except Exception as exc:
+            log.warning(
+                "graph_engine: gen_job_post shared graph unavailable (%s); "
+                "falling back to legacy worker nodes",
+                exc,
+            )
+            env_mw = os.getenv("JOB_HUNT_MAX_WORKERS", "").strip()
+            mw = env_mw if env_mw else (plan.get("max_workers") or "2")
+            try:
+                mw_int = max(1, int(mw))
+            except (TypeError, ValueError):
+                mw_int = 2
+            plan = {**plan, "max_workers": mw_int, "nodes": _gen_job_worker_nodes(
+                "fetch_rss_and_email_into_state", "check_jobs_remaining", "get_next_job",
+                "draft_single_job", "save_single_job_draft", "report_job_run", mw_int,
+            )}
+            extras = _placeholder_extras(user_input)
     nodes = []
     for raw in plan.get("nodes", []):
         if not isinstance(raw, dict) or not raw.get("id") or not raw.get("tool"):
@@ -1234,11 +1255,16 @@ def _tool_map() -> dict[str, Callable[..., Any]]:
 
 
 def _build_tool_map() -> dict[str, Callable[..., Any]]:
-    # Import graph modules to trigger @tool registration
-    try:
-        import agentic.workflows.job_hunt.graph  # noqa: F401
-    except Exception as exc:
-        log.debug("graph_engine: failed to import graph modules: %s", exc)
+    # Import graph modules to trigger @tool registration (shared nodes + lanes)
+    for _mod in (
+        "agentic.workflows.common.nodes",
+        "agentic.workflows.job_hunt.graph",
+        "agentic.workflows.aurora_forecast.graph",
+    ):
+        try:
+            __import__(_mod)
+        except Exception as exc:
+            log.debug("graph_engine: failed to import %s: %s", _mod, exc)
 
     # Import focused toolkit modules lazily so model-free graph planning can be
     # imported/tested without loading optional heavy research dependencies.

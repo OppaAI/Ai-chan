@@ -55,7 +55,7 @@ def _merge_config(config_json: str = "", state=None) -> dict[str, Any]:
     return cfg
 
 
-# ── Node 1: ingest_data ───────────────────────────────────────────────────────
+# ── Node 1: ingest_data ───────────────────────────────
 
 def ingest_data(
     sources_json: str = "[]",
@@ -126,7 +126,6 @@ def ingest_data(
             except Exception as e:
                 errors.append({"id": sid, "error": str(e)})
         elif stype in {"rss", "email", "adapter"}:
-            # Domain workflows still own full adapters; Layer 0 records intent.
             errors.append({
                 "id": sid,
                 "error": f"source_type_{stype}_requires_workflow_adapter",
@@ -135,7 +134,6 @@ def ingest_data(
         else:
             errors.append({"id": sid, "error": f"unknown_source_type:{stype}"})
 
-    # Optional simple filter: items must match all equality/contains rules if provided
     if filters and items:
         items = _apply_filters(items, filters)
 
@@ -158,7 +156,6 @@ def ingest_data(
 
 
 def _apply_filters(items: list[dict[str, Any]], filters: dict[str, Any]) -> list[dict[str, Any]]:
-    """Minimal filter: {"and": [{"field", "op", "value"}, ...]}."""
     rules = filters.get("and") if isinstance(filters.get("and"), list) else None
     if not rules:
         return items
@@ -198,8 +195,6 @@ def _apply_filters(items: list[dict[str, Any]], filters: dict[str, Any]) -> list
     return out
 
 
-# ── Node 2: store_data ────────────────────────────────────────────────────────
-
 def store_data(
     workflow_id: str = "",
     items_json: str = "",
@@ -209,10 +204,6 @@ def store_data(
     *,
     state=None,
 ) -> str:
-    """Persist items to the shared TTL store and/or state.
-
-    mode: append | replace_batch
-    """
     cfg = _merge_config(config_json, state)
     wid = (workflow_id or cfg.get("workflow_id") or "default").strip() or "default"
     try:
@@ -255,8 +246,6 @@ def store_data(
     })
 
 
-# ── Node 3: synthesis_data ────────────────────────────────────────────────────
-
 def synthesis_data(
     items_json: str = "",
     template: str = "",
@@ -268,11 +257,7 @@ def synthesis_data(
     model: str | None = None,
     state=None,
 ) -> str:
-    """Fill a template from items; optional LLM enrichment later.
-
-    Layer 0: deterministic template fill. When llm_enriched and client/model
-    are set, attaches a note for workflow-specific enrichers to extend.
-    """
+    """Fill a template from items; job_hunt uses post_fields when present."""
     cfg = _merge_config(config_json, state)
     items = _loads(items_json, None)
     if items is None and state is not None and hasattr(state, "data"):
@@ -288,22 +273,48 @@ def synthesis_data(
     tmpl = template or str(cfg.get("template") or "{summary}")
     do_per = str(per_item).lower() in {"1", "true", "yes", "on"}
     want_llm = str(llm_enriched).lower() in {"1", "true", "yes", "on"}
+    post_fields = cfg.get("post_fields")
+    is_job = isinstance(post_fields, list) and bool(post_fields)
 
     results: list[dict[str, Any]] = []
 
     def fill_one(item: dict[str, Any]) -> dict[str, Any]:
+        row = dict(item)
         text = tmpl
-        for key, val in item.items():
-            if isinstance(val, (str, int, float, bool)):
-                text = text.replace("{" + key + "}", str(val))
-        # common aliases
-        text = text.replace("{summary}", str(item.get("summary") or item.get("text") or ""))
-        text = text.replace("{title}", str(item.get("title") or ""))
-        out = {"text": text, "source": item.get("source") or item.get("id"), "item": item}
-        if want_llm and client and model:
-            out["llm_enriched"] = False
-            out["llm_note"] = "Layer0: pass to workflow enricher or extend synthesis_data"
-        return out
+        enriched_note = None
+        if is_job:
+            try:
+                from agentic.workflows.job_hunt import toolset as jh
+                posting = dict(row)
+                if want_llm and client is not None and model:
+                    keys = jh._field_keys_from_config(cfg)
+                    url = str(posting.get("url") or "").strip()
+                    if url:
+                        try:
+                            posting["page_content"] = jh._fetch_job_page_text(url, config=cfg)
+                        except Exception:
+                            pass
+                    posting = jh.enrich_posting_fields_with_llm(
+                        posting, keys, client=client, model=model, state=state
+                    )
+                    posting.pop("page_content", None)
+                    enriched_note = "llm"
+                text = jh.format_job_post(posting, config=cfg)
+                row = posting
+            except Exception as exc:
+                log.warning("synthesis job format failed: %s", exc)
+                for key, val in row.items():
+                    if isinstance(val, (str, int, float, bool)):
+                        text = text.replace("{" + key + "}", str(val))
+        else:
+            for key, val in row.items():
+                if isinstance(val, (str, int, float, bool)):
+                    text = text.replace("{" + key + "}", str(val))
+            text = text.replace("{summary}", str(row.get("summary") or row.get("text") or ""))
+            text = text.replace("{title}", str(row.get("title") or ""))
+            if want_llm and client and model:
+                enriched_note = "llm_requested_generic"
+        return {"text": text, "source": row.get("source") or row.get("id"), "item": row, "llm_enriched": enriched_note}
 
     if do_per:
         for it in items:
@@ -311,9 +322,7 @@ def synthesis_data(
                 results.append(fill_one(it))
     else:
         blob = {
-            "summary": "\n".join(
-                str(it.get("summary") or it.get("text") or it) for it in items if it
-            ),
+            "summary": "\n".join(str(it.get("summary") or it.get("text") or it) for it in items if it),
             "count": len(items),
             "items": items,
         }
@@ -325,8 +334,6 @@ def synthesis_data(
     return _dumps({"ok": True, "results": results, "count": len(results)})
 
 
-# ── Node 4: verify_results ────────────────────────────────────────────────────
-
 def verify_results(
     results_json: str = "",
     human_in_the_loop: str = "false",
@@ -336,11 +343,7 @@ def verify_results(
     *,
     state=None,
 ) -> str:
-    """Mark results verified or pending human review.
-
-    human_in_the_loop true → status pending_approval (do not auto-output).
-    auto_pass_json: {"field", "op", "value"} applied to each result/item.
-    """
+    """Mark results verified or pending human review; HITL saves job drafts."""
     cfg = _merge_config(config_json, state)
     results = _loads(results_json, None)
     if results is None and state is not None and hasattr(state, "data"):
@@ -358,13 +361,48 @@ def verify_results(
         rule = cfg["auto_pass_if"]
 
     verified = []
+    draft_paths: list[str] = []
     for r in results:
         if not isinstance(r, dict):
             r = {"text": str(r)}
         row = dict(r)
+        item = row.get("item") if isinstance(row.get("item"), dict) else row
         if hitl:
             row["status"] = "pending_approval"
             row["verified"] = False
+            if row.get("text") or item.get("title"):
+                try:
+                    import re as _re
+                    from agentic.workflows.job_hunt.toolset import save_single_job_draft
+                    if state is not None and hasattr(state, "data") and isinstance(state.data, dict):
+                        drafts = state.data.get("job_drafts_list")
+                        if not isinstance(drafts, list):
+                            drafts = []
+                        # Unique category per job so save_single_job_draft cannot
+                        # overwrite earlier drafts under the same date/post dir.
+                        slug_src = str(
+                            item.get("title") or item.get("id") or item.get("url") or "job"
+                        )
+                        category = (
+                            _re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48]
+                            or f"job_{len(drafts) + 1}"
+                        )
+                        drafts.append({
+                            "text": row.get("text") or "",
+                            "posting": item,
+                            "postings": [item],
+                            "human_approved": False,
+                            "category": category,
+                            "topic_tag": str(cfg.get("topic_tag") or ""),
+                            "source_name": str(item.get("source") or ""),
+                            "source_type": str(item.get("type") or "job"),
+                            "llm_enriched": bool(row.get("llm_enriched")),
+                        })
+                        state.data["job_drafts_list"] = drafts
+                        save_raw = save_single_job_draft(auto_post="false", state=state)
+                        draft_paths.append(str(save_raw)[:200])
+                except Exception as exc:
+                    log.debug("verify HITL draft save skipped: %s", exc)
         else:
             ok = True
             if rule:
@@ -372,7 +410,6 @@ def verify_results(
                 op = str(rule.get("op") or "eq").lower()
                 want = rule.get("value")
                 got = row.get(field)
-                item = row.get("item") if isinstance(row.get("item"), dict) else {}
                 if got is None:
                     got = item.get(field)
                 if op in {">=", "gte"}:
@@ -397,10 +434,9 @@ def verify_results(
         "results": verified,
         "passed": sum(1 for r in verified if r.get("verified")),
         "pending": sum(1 for r in verified if r.get("status") == "pending_approval"),
+        "draft_saves": draft_paths[:10],
     })
 
-
-# ── Node 5: output_user_results ───────────────────────────────────────────────
 
 def output_user_results(
     results_json: str = "",
@@ -410,12 +446,6 @@ def output_user_results(
     *,
     state=None,
 ) -> str:
-    """Deliver verified results via email and/or social tools.
-
-    email_json: {enabled, to, when: always|interesting}
-    social_json: [{platform, when: {field, op, value}}]
-    Skips items still pending_approval.
-    """
     cfg = _merge_config(config_json, state)
     results = _loads(results_json, None)
     if results is None and state is not None and hasattr(state, "data"):
@@ -448,24 +478,18 @@ def output_user_results(
             for r in deliverable
         )
         if when == "always" or interesting:
-            # Render email subject template with values from first deliverable result
             subject_tmpl = str(email_cfg.get("subject") or cfg.get("email_subject") or "Aiko workflow")
             subject = subject_tmpl
             if deliverable and "{" in subject_tmpl:
                 first_result = deliverable[0]
                 item = first_result.get("item") if isinstance(first_result.get("item"), dict) else {}
-                # Merge result and item fields for template rendering
                 all_fields = {**item, **first_result}
                 for key, val in all_fields.items():
                     if isinstance(val, (str, int, float, bool)):
                         subject = subject.replace("{" + key + "}", str(val))
             actions.append({
                 "channel": "email",
-                "result": notify_email(
-                    subject=subject,
-                    body=body,
-                    to=email_cfg.get("to"),
-                ),
+                "result": notify_email(subject=subject, body=body, to=email_cfg.get("to")),
             })
 
     for soc in social_cfg if isinstance(social_cfg, list) else []:
