@@ -374,3 +374,210 @@ textarea {
   background: rgba(168, 136, 232, 0.12);
   box-shadow: 0 0 8px rgba(168, 136, 232, 0.22);
 }
+
+/* ===== Live button (header) ===== */
+.live-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 86px;
+}
+.live-btn .live-label {
+  letter-spacing: .1em;
+}
+.live-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: border-radius .15s, background .15s, box-shadow .15s;
+}
+/* Live ON — blinking red recording dot */
+.live-btn.is-live .live-indicator.recording,
+.live-indicator.recording {
+  background: #e04040;
+  box-shadow: 0 0 8px rgba(224, 64, 64, 0.85);
+  animation: rec-blink 1.1s ease-in-out infinite;
+}
+@keyframes rec-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.live-btn.is-live {
+  color: var(--text);
+  border-color: #6b3038;
+}
+/* Live OFF — stop square, dimmed text matching button */
+.live-btn.is-stopped .live-indicator.stopped,
+.live-indicator.stopped {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--dim-text);
+  box-shadow: none;
+  animation: none;
+  opacity: 0.7;
+}
+.live-btn.is-stopped {
+  color: var(--dim-text);
+  border-color: var(--dim);
+  opacity: 0.85;
+}
+.live-btn.is-stopped:hover {
+  color: var(--purple);
+  border-color: var(--purple);
+  opacity: 1;
+}
+
+/* ===== Recorder-style play / pause icons ===== */
+.icon-btn {
+  width: 36px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+.icon-play,
+.icon-pause {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  position: relative;
+}
+/* Classic ▶ triangle */
+.icon-play {
+  border-style: solid;
+  border-width: 7px 0 7px 12px;
+  border-color: transparent transparent transparent currentColor;
+  margin-left: 2px;
+}
+/* Classic ⏸ two bars */
+.icon-pause {
+  width: 12px;
+  height: 14px;
+  border: none;
+}
+.icon-pause::before,
+.icon-pause::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 14px;
+  background: currentColor;
+  border-radius: 1px;
+}
+.icon-pause::before { left: 0; }
+.icon-pause::after { right: 0; left: auto; }
+
+/* ===== Demo panel (bottom of sidebar) ===== */
+.side {
+  display: flex;
+  flex-direction: column;
+}
+.demo-panel {
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.demo-panel h2 {
+  margin-top: 0;
+}
+.demo-hint {
+  font-size: 10px;
+  color: var(--dim-text);
+  line-height: 1.4;
+  margin: 0 0 10px;
+}
+.demo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.demo-status {
+  margin-top: 8px;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--dim-text);
+}
+
+/* ===== Clearer, slower merge pills ===== */
+.pill {
+  position: absolute;
+  z-index: 30;
+  min-width: 160px;
+  max-width: 240px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.3;
+  opacity: 0;
+  transform: scale(0.92);
+  transition: opacity .45s ease, transform .85s cubic-bezier(0.22, 1, 0.36, 1);
+  box-shadow: 0 4px 18px rgba(0,0,0,.35);
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pill.show {
+  opacity: 1;
+  transform: scale(1);
+}
+.pill .pill-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+.pill .pill-body {
+  color: var(--text);
+  word-break: break-word;
+}
+.pill.u {
+  background: #1a1230;
+  border: 1px solid var(--purple);
+  color: var(--purple);
+}
+.pill.a {
+  background: #121a28;
+  border: 1px solid var(--cyan);
+  color: var(--cyan);
+}
+.pill.merged {
+  background: linear-gradient(135deg, #1a1028, #281430);
+  border: 1px solid var(--pink);
+  color: var(--pink);
+  min-width: 140px;
+}
+
+/* Stronger score-driven glow is applied inline; keep weak state subtle */
+.mem.weak {
+  border-color: rgba(232,132,58,.4);
+}
+
+/* Score number stays the original pink gradient for ALL valences */
+.mem-score {
+  font-size: 1.15rem;
+  font-weight: 700;
+  background: linear-gradient(180deg, var(--purple), var(--pink)) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+}
+.mem.weak .mem-score {
+  /* still pink — only ring/glow convey weakness */
+  background: linear-gradient(180deg, var(--purple), var(--pink)) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+}
