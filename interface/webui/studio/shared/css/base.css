@@ -44,7 +44,7 @@ body {
 }
 .studio-header .header-status {
   font-size: 10px;
-  color: var(--dim);
+  color: var(--text);
   letter-spacing: 0.05em;
 }
 
@@ -52,7 +52,7 @@ body {
 .btn {
   background: var(--dimmer);
   border: 1px solid var(--dim);
-  color: var(--dim);
+  color: var(--text);
   font-family: var(--font-main);
   font-size: 11px;
   letter-spacing: 0.1em;

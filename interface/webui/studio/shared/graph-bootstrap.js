@@ -30,11 +30,14 @@
       });
   }
 
-  /** Dragging that keeps a running force simulation awake while pinned. */
+  /** Dragging that keeps a running force simulation awake while pinned.
+   *  Accepts either a simulation instance or a getter function () => simulation. */
   function makeDrag(sim) {
+    var getSim = typeof sim === 'function' ? sim : function () { return sim; };
     return d3.drag()
       .on('start', function (ev, d) {
-        if (!ev.active) sim.alphaTarget(0.3).restart();
+        var s = getSim();
+        if (!ev.active && s) s.alphaTarget(0.3).restart();
         d.fx = d.x;
         d.fy = d.y;
       })
@@ -43,7 +46,8 @@
         d.fy = ev.y;
       })
       .on('end', function (ev, d) {
-        if (!ev.active) sim.alphaTarget(0);
+        var s = getSim();
+        if (!ev.active && s) s.alphaTarget(0);
         d.fx = null;
         d.fy = null;
       });

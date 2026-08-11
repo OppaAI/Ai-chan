@@ -391,7 +391,7 @@ function render() {
   const node = g.append('g').selectAll('g').data(nodes).join('g')
     .style('cursor', 'pointer')
     .attr('opacity', d => d.status === 'superseded' ? 0.55 : 1)
-    .call(GraphBoot.makeDrag(simulation))
+    .call(GraphBoot.makeDrag(() => simulation))
     .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
 
   // outer glow disc (soft synapse halo)
