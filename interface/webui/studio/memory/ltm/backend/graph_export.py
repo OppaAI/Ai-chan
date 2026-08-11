@@ -8,6 +8,11 @@ Phase D: entity co-mention edges from entity_relations.
 Phase 10: retain tendency, rim scores, valence, I_e → size + scores on nodes.
 
 Read-only. Tolerates pre-Phase-A DBs (missing status/entities columns).
+
+CHANGES (hub-reduction):
+- Deduplicate memory→entity edges into single weighted edge per pair
+- Filter entity-relations by minimum importance threshold
+- Only add knowledge/experience entities when grounded in memories
 """
 from __future__ import annotations
 
@@ -45,6 +50,9 @@ _MAX_KNOWLEDGE = _env_int("MEMORY_STUDIO_MAX_KNOWLEDGE", 80, floor=0)
 _MAX_EXPERIENCE = _env_int("MEMORY_STUDIO_MAX_EXPERIENCE", 40, floor=0)
 _INCLUDE_KNOWLEDGE = os.getenv("MEMORY_STUDIO_INCLUDE_KNOWLEDGE", "1").lower() in {"1", "true", "yes", "on"}
 _INCLUDE_EXPERIENCE = os.getenv("MEMORY_STUDIO_INCLUDE_EXPERIENCE", "1").lower() in {"1", "true", "yes", "on"}
+
+# Hub reduction: filter out entity relations below this importance threshold
+_RELATION_IMPORTANCE_THRESHOLD = float(os.getenv("MEMORY_STUDIO_RELATION_THRESHOLD", "0.15"))
 
 
 def _entities_from_raw(raw: Any) -> list[str]:
@@ -268,11 +276,16 @@ def export_memory_graph(
     Node types:
       - memory: one per fact row (scores + size = retain tendency)
       - entity: hub nodes (size = I_e when available)
+      - knowledge: learned chunks (only when grounded in memories)
+      - experience: experiences (only when grounded in memories)
 
     Edge types:
       - supersedes: newer memory → older memory it replaced
-      - mentions: memory → entity
-      - co_mentions / related_to: entity → entity (entity_relations)
+      - mentions: memory → entity (deduplicated, weighted by mention count)
+      - about: knowledge/experience → entity
+      - grounded_in: memory → knowledge (only when same entity mentioned)
+      - practiced_in: memory → experience (only when same entity mentioned)
+      - co_mentions / related_to: entity → entity (filtered by importance)
     """
     uid = user_id or current_user_id()
     if include_knowledge is None:
@@ -390,6 +403,9 @@ def export_memory_graph(
         entity_ids: set[str] = set()
         mem_ids: set[str] = set()
 
+        # FIX #1: Accumulate mentions per (memory, entity) pair for deduplication
+        mentions_edges: dict[tuple[str, str], dict[str, Any]] = {}
+
         for row in rows:
             mid = str(row["id"])
             mem_ids.add(mid)
@@ -466,9 +482,12 @@ def export_memory_graph(
                     "type": "supersedes",
                 })
 
+            # FIX #1: Accumulate entity mention counts per (memory, entity) pair
             if include_entities:
                 for ent in ents:
                     eid = f"ent:{ent.casefold()}"
+                    edge_key = (mid, eid)
+                    
                     if eid not in entity_ids:
                         entity_ids.add(eid)
                         ie = float(entity_importance.get(ent.casefold(), 0.0))
@@ -497,13 +516,25 @@ def export_memory_graph(
                             },
                             "size": round(0.25 + 0.85 * ie, 4),
                         })
-                    edges.append({
-                        "id": f"men:{mid}->{eid}",
-                        "source": mid,
-                        "target": eid,
-                        "type": "mentions",
-                        "weight": 0.9,
-                    })
+                    
+                    # Accumulate mention counts instead of creating duplicate edges
+                    if edge_key not in mentions_edges:
+                        mentions_edges[edge_key] = {
+                            "id": f"men:{mid}->{eid}",
+                            "source": mid,
+                            "target": eid,
+                            "type": "mentions",
+                            "weight": 1.0,
+                            "mention_count": 0,
+                        }
+                    mentions_edges[edge_key]["mention_count"] += 1
+
+        # Convert accumulated mention edges with normalized weights
+        for edge in mentions_edges.values():
+            count = edge.pop("mention_count")
+            # Normalize weight: 1 mention = 0.3, 5+ mentions = 1.0
+            edge["weight"] = min(1.0, 0.3 + 0.7 * (count / 5.0))
+            edges.append(edge)
 
         edges = [
             e for e in edges
@@ -516,7 +547,8 @@ def export_memory_graph(
 
                 ensure_entity_relations_schema(conn)
                 for e in relations_as_graph_edges(
-                    conn, user_id=uid, limit=max(int(fetch_n) * 2, 500)
+                    conn, user_id=uid, limit=max(int(fetch_n) * 2, 500),
+                    entity_importance=entity_importance,
                 ):
                     for endpoint in (e["source"], e["target"]):
                         if endpoint not in entity_ids and endpoint not in mem_ids:
@@ -551,7 +583,6 @@ def export_memory_graph(
                     edges.append(e)
             except Exception as ex:
                 log.debug("graph_export: entity_relations skipped: %s", ex)
-
 
         # Phase 13b: knowledge + experience layers (entity overlap)
         if include_knowledge and _MAX_KNOWLEDGE > 0:
@@ -668,12 +699,27 @@ def relations_as_graph_edges(
     *,
     user_id: str,
     limit: int = 500,
+    entity_importance: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Emit edges compatible with LTM Graph Studio (entity node ids)."""
+    """Emit edges compatible with LTM Graph Studio (entity node ids).
+    
+    FIX #2: Filter out relations where both entities are below importance threshold.
+    """
+    if entity_importance is None:
+        entity_importance = {}
+    
     edges = []
     for rel in list_entity_relations(conn, user_id=user_id, limit=limit):
         a = rel["entity_a"]
         b = rel["entity_b"]
+        
+        # Filter out low-importance entity pairs
+        a_importance = entity_importance.get(a.casefold(), 0.0)
+        b_importance = entity_importance.get(b.casefold(), 0.0)
+        
+        if max(a_importance, b_importance) < _RELATION_IMPORTANCE_THRESHOLD:
+            continue
+        
         edges.append({
             "id": f"rel:{a.casefold()}::{b.casefold()}::{rel['relation']}",
             "source": f"ent:{a.casefold()}",
@@ -694,7 +740,12 @@ def _add_knowledge_layer(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> None:
-    """Add learned_chunks as knowledge nodes + about / grounded_in edges."""
+    """Add learned_chunks as knowledge nodes + about / grounded_in edges.
+    
+    FIX #3: Only create knowledge entity nodes when they're grounded in memories
+    (i.e., the memory and knowledge share an entity). This prevents knowledge
+    from becoming independent hubs.
+    """
     kb_conn = conn
     owns = False
     try:
@@ -747,6 +798,7 @@ def _add_knowledge_layer(
                 pass
         return
 
+    # Build map of memory → entities for grounding check
     mem_ents: dict[str, set[str]] = {}
     for e in edges:
         if e.get("type") == "mentions":
@@ -761,6 +813,18 @@ def _add_knowledge_layer(
             text = (row["text"] or "").strip()
             label = text if len(text) <= 72 else text[:69] + "…"
             ents = _entities_from_raw(row["entities"]) if has_ent else []
+            
+            # FIX #3: Only add knowledge node if it's grounded in at least one memory
+            has_grounding = False
+            for ent in ents:
+                ent_cf = ent.casefold()
+                if any(ent_cf in mes for mes in mem_ents.values()):
+                    has_grounding = True
+                    break
+            
+            if not has_grounding:
+                continue  # Skip ungrounded knowledge
+            
             nodes.append({
                 "id": kid,
                 "type": "knowledge",
@@ -781,6 +845,7 @@ def _add_knowledge_layer(
                 },
                 "size": 0.45,
             })
+            
             for ent in ents:
                 eid = f"ent:{ent.casefold()}"
                 if eid not in entity_ids:
@@ -812,6 +877,8 @@ def _add_knowledge_layer(
                     "type": "about",
                     "weight": 1.0,
                 })
+                
+                # Add grounding edges only for memories that share this entity
                 ent_cf = ent.casefold()
                 for mid, mes in mem_ents.items():
                     if ent_cf in mes:
@@ -843,7 +910,12 @@ def _add_experience_layer(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> None:
-    """Add experiences as nodes + about / practiced_in edges (separate DB)."""
+    """Add experiences as nodes + about / practiced_in edges (separate DB).
+    
+    FIX #3: Only create experience entity nodes when they're grounded in memories
+    (i.e., the memory and experience share an entity). This prevents experiences
+    from becoming independent hubs.
+    """
     exp_conn = None
     owns = False
     try:
@@ -887,6 +959,7 @@ def _add_experience_layer(
                 pass
         return
 
+    # Build map of memory → entities for grounding check
     mem_ents: dict[str, set[str]] = {}
     for e in edges:
         if e.get("type") == "mentions":
@@ -902,6 +975,18 @@ def _add_experience_layer(
             goal = (row["goal"] or text)[:72]
             label = goal + ("…" if len(goal) >= 72 else "")
             ents = _entities_from_raw(row["entities"]) if has_ent else []
+            
+            # FIX #3: Only add experience node if it's grounded in at least one memory
+            has_grounding = False
+            for ent in ents:
+                ent_cf = ent.casefold()
+                if any(ent_cf in mes for mes in mem_ents.values()):
+                    has_grounding = True
+                    break
+            
+            if not has_grounding:
+                continue  # Skip ungrounded experiences
+            
             nodes.append({
                 "id": xid,
                 "type": "experience",
@@ -923,6 +1008,7 @@ def _add_experience_layer(
                 },
                 "size": 0.42,
             })
+            
             for ent in ents:
                 eid = f"ent:{ent.casefold()}"
                 if eid not in entity_ids:
@@ -954,6 +1040,8 @@ def _add_experience_layer(
                     "type": "about",
                     "weight": 1.0,
                 })
+                
+                # Add grounding edges only for memories that share this entity
                 ent_cf = ent.casefold()
                 for mid, mes in mem_ents.items():
                     if ent_cf in mes:
