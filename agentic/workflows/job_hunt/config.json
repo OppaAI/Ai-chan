@@ -122,5 +122,20 @@
   "max_results": 30,
   "dedup_days": 3,
   "cache_fetch_minutes": 30,
-  "auto_post": false
+  "auto_post": false,
+  "workflow_id": "job_hunt",
+  "sources": [
+    {
+      "type": "adapter",
+      "id": "job_hunt",
+      "name": "job_hunt"
+    }
+  ],
+  "human_in_the_loop": true,
+  "llm_enriched": true,
+  "retain_days": 3,
+  "email": {
+    "enabled": false
+  },
+  "social": []
 }
