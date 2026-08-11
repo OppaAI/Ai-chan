@@ -37,6 +37,12 @@ Builds on Layer 2 (`LAYER2.md`).
 
 `config` holds domain fields (RSS feeds, `post_fields`, lat/lon, …). Shared fields may also appear at the top level; coercion lifts them from legacy configs automatically.
 
+### Field notes
+
+- **`max_items` / `retain_days`**: clamped to a minimum of **1** at validate time.
+- **`template`**: omitted → default `"{summary}"`. Explicit `""` stays empty (no default fill-in).
+- **`llm_verify`**: not on Spec v1; verify always uses `"false"` in Layer 3 (HITL / rules only).
+
 ## Pipeline
 
 Only `shared_5` in Layer 3:
@@ -51,3 +57,4 @@ ingest_data → store_data → synthesis_data → verify_results → output_user
 - Arbitrary custom node DAGs in Spec (only `shared_5`)
 - Auto-codegen of Python modules
 - Removing domain toolsets / adapters
+- Spec-driven `llm_verify` (always off in shared_5 compile)

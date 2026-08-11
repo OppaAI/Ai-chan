@@ -17,6 +17,8 @@ from agentic.workflows.common.execution import (
 )
 from agentic.workflows.common.graphs import get_graph, list_graphs, register_graph
 from agentic.workflows.common.spec import (
+    SPEC_VERSION,
+    SpecError,
     WorkflowSpec,
     coerce_config_to_spec,
     load_spec,
@@ -37,6 +39,8 @@ __all__ = [
     "resolve_config_value",
     "register_graph",
     "get_graph",
+    "SPEC_VERSION",
+    "SpecError",
     "WorkflowSpec",
     "validate_spec",
     "load_spec",
