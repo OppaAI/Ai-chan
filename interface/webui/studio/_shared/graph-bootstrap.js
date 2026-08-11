@@ -49,17 +49,18 @@
       });
   }
 
-  /** Standard node/link forceSimulation tuned for the studio graphs. */
+  /** Standard node/link forceSimulation tuned for the studio graphs.
+   *  Defaults favour open spread (demo-like) over tight centering. */
   function makeSimulation(nodes, links, opts) {
     var o = Object.assign(
       {
         w: 800,
         h: 600,
-        linkDistance: 72,
-        linkStrength: 0.4,
-        charge: -160,
+        linkDistance: 80,
+        linkStrength: 0.35,
+        charge: -200,
         nodeRadius: function () { return 18; },
-        collisionPadding: 4,
+        collisionPadding: 8,
       },
       opts || {}
     );
@@ -68,8 +69,10 @@
         .id(function (d) { return d.id; })
         .distance(o.linkDistance)
         .strength(o.linkStrength))
-      .force('charge', d3.forceManyBody().strength(o.charge))
-      .force('center', d3.forceCenter(o.w / 2, o.h / 2))
+      .force('charge', d3.forceManyBody()
+        .strength(o.charge)
+        .distanceMax(420))
+      .force('center', d3.forceCenter(o.w / 2, o.h / 2).strength(0.55))
       .force('collision', d3.forceCollide().radius(function (d) {
         return o.nodeRadius(d) + o.collisionPadding;
       }));
