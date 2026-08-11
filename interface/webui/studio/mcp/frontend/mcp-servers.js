@@ -15,6 +15,10 @@
             return port ? `:${port}` : '—';
         }
 
+        function statusClassOf(status) {
+            return status === 'running' || status === 'stopped' ? status : 'unknown';
+        }
+
         async function loadServers() {
             if (loadInFlight) return;
             loadInFlight = true;
@@ -31,7 +35,10 @@
                     tools: server.tools || []
                 }));
 
-                // Reconcile currentServer with refreshed data
+                // Render list first so active-state is applied on the new DOM nodes.
+                renderServerList();
+
+                // Reconcile currentServer with refreshed data after the list exists.
                 if (currentServer) {
                     const refreshed = allServers.find(s => s.name === currentServer.name);
                     if (refreshed) {
@@ -45,7 +52,6 @@
                     }
                 }
 
-                renderServerList();
                 document.getElementById('header-status').textContent = `${allServers.length} servers`;
             } catch (err) {
                 console.error('Failed to load servers:', err);
@@ -70,9 +76,7 @@
                 button.className = 'server-item' + (currentServer && currentServer.name === server.name ? ' active' : '');
                 button.setAttribute('data-server-name', server.name);
 
-                let statusClass = 'unknown';
-                if (server.status === 'running') statusClass = 'running';
-                else if (server.status === 'stopped') statusClass = 'stopped';
+                const statusClass = statusClassOf(server.status);
 
                 button.innerHTML = `
                     <div class="server-name">
@@ -97,10 +101,7 @@
             document.getElementById('detail-empty').style.display = 'none';
             document.getElementById('detail-content').style.display = 'block';
 
-            // Derive statusClass locally (was missing, causing a ReferenceError)
-            let statusClass = 'unknown';
-            if (server.status === 'running') statusClass = 'running';
-            else if (server.status === 'stopped') statusClass = 'stopped';
+            const statusClass = statusClassOf(server.status);
 
             // Populate detail grid
             const grid = document.getElementById('detail-grid');
