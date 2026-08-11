@@ -1,18 +1,25 @@
-/* Valence (parity with Neural LTM studio) */
+/* Valence (parity with Neural LTM studio)
+ * Border + rim hue follow valence; the numeric score stays the original pink.
+ */
 .mem.valence-pos { border-color: rgba(240, 193, 74, 0.55); }
 .mem.valence-neg { border-color: rgba(61, 224, 255, 0.55); }
 .mem.valence-neutral { border-color: rgba(138, 155, 184, 0.35); }
+
 .mem.valence-pos svg circle.ring { stroke: #f0c14a; }
 .mem.valence-neg svg circle.ring { stroke: #3de0ff; }
 .mem.valence-neutral svg circle.ring { stroke: #8a9bb8; }
-.mem.valence-pos .mem-score {
-  background: linear-gradient(180deg, #f0c14a, #d4a017);
-  -webkit-background-clip: text; background-clip: text;
+
+/* Score number: always original purple→pink, never yellow/cyan */
+.mem.valence-pos .mem-score,
+.mem.valence-neg .mem-score,
+.mem.valence-neutral .mem-score,
+.mem .mem-score {
+  background: linear-gradient(180deg, #a888e8, #c651a8) !important;
+  -webkit-background-clip: text !important;
+  background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
 }
-.mem.valence-neg .mem-score {
-  background: linear-gradient(180deg, #3de0ff, #1aa6c4);
-  -webkit-background-clip: text; background-clip: text;
-}
+
 .mem-valence {
   font-size: 8px; font-weight: 700; letter-spacing: .08em;
   margin-top: 1px; opacity: 0.85;
@@ -20,6 +27,7 @@
 .mem.valence-pos .mem-valence { color: #f0c14a; }
 .mem.valence-neg .mem-valence { color: #3de0ff; }
 .mem.valence-neutral .mem-valence { color: #8a9bb8; }
+
 .valence-legend {
   display: flex; gap: 10px; align-items: center;
   font-size: 10px; color: var(--dim-text); margin: 6px 12px 0;
