@@ -25,6 +25,11 @@ from agentic.registry import TOOLS, tool
 from agentic.workflows.common.graphs import get_graph as get_shared_graph
 from agentic.workflows.common.graphs import register_graph as _register_shared
 
+# Ensure shared Layer-2 nodes (@tool ingest_data / store_data / …) are registered
+# before this module's graphs are used. plan_from_master may import this file
+# directly without going through common.graphs._ensure_workflow_graphs_loaded().
+import agentic.workflows.common.nodes  # noqa: F401
+
 try:
     from agentic.workflows.job_hunt.toolset import (
         fetch_rss_and_email_into_state as _fetch_rss_and_email_into_state,
@@ -93,13 +98,14 @@ def check_jobs_remaining(state=None) -> str:
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     return _report_job_run(plan, search, draft, save)
 
- def _load_config() -> dict:
-     path = Path(__file__).resolve().parent / "config.json"
-     try:
-         return json.loads(path.read_text(encoding="utf-8"))
-     except (OSError, ValueError) as exc:
-         log.warning("job_hunt: failed to load %s: %s", path, exc)
-         return {}
+
+def _load_config() -> dict:
+    path = Path(__file__).resolve().parent / "config.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning("job_hunt: failed to load %s: %s", path, exc)
+        return {}
 
 
 def build_gen_job_post_graph(
