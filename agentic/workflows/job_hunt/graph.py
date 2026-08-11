@@ -15,9 +15,9 @@ registered for adapters / ReAct / legacy.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 import logging
+from pathlib import Path
+
 log = logging.getLogger(__name__)
 
 from agentic.graph_engine import PlanGraph, PlanNode
@@ -101,15 +101,6 @@ def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str 
     return _report_job_run(plan, search, draft, save)
 
 
-def _load_config() -> dict:
-    path = Path(__file__).resolve().parent / "config.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        log.warning("job_hunt: failed to load %s: %s", path, exc)
-        return {}
-
-
 def build_gen_job_post_graph(
     *,
     goal: str = "Fetch job listings, draft posts, save for human review",
@@ -119,6 +110,7 @@ def build_gen_job_post_graph(
     Prefer ``spec.json`` when present so Layer-3 Specs are honored. Defaults
     below apply only on the config.json fallback path.
     """
+    from agentic.workflows.common.config import load_workflow_config
     from agentic.workflows.common.spec import WorkflowSpec, load_spec
 
     workflow_dir = Path(__file__).resolve().parent
@@ -129,7 +121,7 @@ def build_gen_job_post_graph(
             spec = WorkflowSpec(**{**spec.to_dict(), "goal": goal})
         return build_plan_graph(spec, goal=goal)
 
-    cfg = _load_config()
+    cfg = load_workflow_config(workflow_dir)
     # Defaults matching Layer 2 behavior when keys are absent (config fallback only)
     if "sources" not in cfg:
         cfg = {

@@ -37,12 +37,12 @@ def build_plan_graph(spec: WorkflowSpec, *, goal: str | None = None) -> PlanGrap
     domain.setdefault("template", spec.template)
     domain.setdefault("llm_enriched", spec.llm_enriched)
     domain.setdefault("human_in_the_loop", spec.human_in_the_loop)
-    if spec.auto_pass_if is not None:
-        domain.setdefault("auto_pass_if", spec.auto_pass_if)
-    if spec.email:
-        domain.setdefault("email", spec.email)
-    if spec.social:
-        domain.setdefault("social", spec.social)
+    # Overwrite with validated spec values (not setdefault) for lifted fields
+    domain["per_item"] = spec.per_item
+    domain["parallel"] = spec.parallel
+    domain["auto_pass_if"] = spec.auto_pass_if
+    domain["email"] = spec.email
+    domain["social"] = spec.social
 
     config_json = json.dumps(domain, ensure_ascii=False)
     sources = spec.sources or domain.get("sources") or []

@@ -264,10 +264,10 @@ def load_spec_for_workflow(
 __all__ = [
     "SPEC_VERSION",
     "SUPPORTED_PIPELINES",
-    "WorkflowSpec",
     "SpecError",
-    "validate_spec",
-    "load_spec",
+    "WorkflowSpec",
     "coerce_config_to_spec",
+    "load_spec",
     "load_spec_for_workflow",
+    "validate_spec",
 ]
