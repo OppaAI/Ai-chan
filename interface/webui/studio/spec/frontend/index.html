@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiko Spec Studio</title>
+  <link rel="stylesheet" href="static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="shared/graph-bootstrap.js"></script>
+</head>
+<body>
+  <header class="studio-header">
+    <h1>Spec Studio</h1>
+    <div class="header-actions">
+      <span class="header-status" id="status">Layer 4 · Spec → shared_5 graph</span>
+      <button class="btn" id="btn-reload" type="button">Reload</button>
+      <button class="btn" id="btn-validate" type="button">Validate</button>
+      <button class="btn" id="btn-preview" type="button">Preview</button>
+      <button class="btn btn-primary" id="btn-save" type="button">Save spec.json</button>
+    </div>
+  </header>
+
+  <div class="studio-body">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <div class="section-title">Workflows</div>
+        <div id="workflow-list" class="list"></div>
+      </div>
+      <div class="sidebar-section">
+        <div class="section-title">Registered graphs</div>
+        <div id="graph-list" class="list dim-list"></div>
+      </div>
+      <div class="sidebar-section">
+        <div class="section-title">Messages</div>
+        <pre id="message" class="message">Select a workflow</pre>
+      </div>
+    </aside>
+
+    <main class="main">
+      <section class="editor-pane">
+        <div class="pane-header">
+          <span id="editor-title">Spec JSON</span>
+          <span id="spec-source" class="badge">—</span>
+        </div>
+        <textarea id="spec-editor" spellcheck="false" placeholder='{ "spec_version": "1", ... }'></textarea>
+      </section>
+      <section class="preview-pane">
+        <div class="pane-header">
+          <span>Compiled PlanGraph</span>
+          <span id="graph-meta" class="badge">preview</span>
+        </div>
+        <svg id="canvas"></svg>
+        <div id="node-detail" class="node-detail hidden"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="static/script.js"></script>
+</body>
+</html>
