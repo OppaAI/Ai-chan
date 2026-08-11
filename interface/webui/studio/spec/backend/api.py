@@ -1,6 +1,7 @@
-"""Spec Studio backend — list / validate / preview / save Workflow Specs.
+"""Spec Studio backend — Layer 5 unified Graph + Spec studio.
 
-Layer 4 UI for Spec JSON → shared PlanGraph (see agentic/workflows/LAYER4.md).
+- All playbooks (same as DAG Studio) via /api/playbooks
+- Spec load/validate/preview/save for Spec-backed workflows
 """
 from __future__ import annotations
 
@@ -34,7 +35,6 @@ WORKFLOWS_ROOT = Path(__file__).resolve().parents[5] / "agentic" / "workflows"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="spec-frontend")
 app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
-# Known Spec-backed lanes: workflow package dir name → default graph metadata
 _WORKFLOW_META: dict[str, dict[str, str]] = {
     "job_hunt": {
         "graph_id": "gen_job_post",
@@ -61,7 +61,6 @@ def _workflow_dir(workflow_key: str) -> Path:
 
 
 def _plan_graph_to_dict(graph) -> dict[str, Any]:
-    """Serialize PlanGraph for the frontend (nodes + derived edges)."""
     nodes = []
     edges = []
     for n in graph.nodes:
@@ -76,23 +75,11 @@ def _plan_graph_to_dict(graph) -> dict[str, Any]:
             }
         )
         for dep in n.depends_on or ():
-            edges.append(
-                {
-                    "id": f"{dep}->{n.id}",
-                    "source": dep,
-                    "target": n.id,
-                    "type": "depends_on",
-                }
-            )
+            edges.append({"id": f"{dep}->{n.id}", "source": dep, "target": n.id, "type": "depends_on"})
         loop_to = getattr(n, "loop_to", None)
         if loop_to:
             edges.append(
-                {
-                    "id": f"{n.id}-loop->{loop_to}",
-                    "source": n.id,
-                    "target": loop_to,
-                    "type": "loop_to",
-                }
+                {"id": f"{n.id}-loop->{loop_to}", "source": n.id, "target": loop_to, "type": "loop_to"}
             )
     return {
         "id": graph.id,
@@ -104,14 +91,86 @@ def _plan_graph_to_dict(graph) -> dict[str, Any]:
     }
 
 
+def playbook_to_graph(playbook: dict) -> dict:
+    if not isinstance(playbook.get("nodes"), list):
+        return playbook
+    nodes = playbook["nodes"]
+    node_map = {n.get("id"): n for n in nodes if n.get("id")}
+    edges = []
+    for n in nodes:
+        nid = n.get("id")
+        if not nid:
+            continue
+        src_node = node_map.get(nid, {})
+        tool_call = {"tool": src_node.get("tool"), "args": src_node.get("args")}
+        for dep in n.get("depends_on") or []:
+            edges.append(
+                {
+                    "source": dep,
+                    "target": nid,
+                    "type": "depends_on",
+                    "tool_call": tool_call,
+                    "skill": src_node.get("tool"),
+                }
+            )
+        if n.get("loop_to"):
+            edges.append(
+                {
+                    "source": nid,
+                    "target": n["loop_to"],
+                    "type": "loop_to",
+                    "tool_call": tool_call,
+                    "skill": src_node.get("tool"),
+                }
+            )
+        if n.get("fallback_to"):
+            edges.append(
+                {
+                    "source": nid,
+                    "target": n["fallback_to"],
+                    "type": "fallback_to",
+                    "tool_call": tool_call,
+                    "skill": src_node.get("tool"),
+                }
+            )
+    return {**playbook, "nodes": nodes, "edges": edges}
+
+
+def load_playbooks_refresh() -> list:
+    from agentic.graph_engine import load_playbooks
+
+    raw = load_playbooks()
+    return [playbook_to_graph(p) for p in raw]
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "spec-studio"}
+    return {"ok": True, "service": "spec-studio", "layer": 5}
+
+
+@app.get("/api/playbooks")
+def get_playbooks():
+    try:
+        return load_playbooks_refresh()
+    except Exception as exc:
+        log.warning("playbooks load failed: %s", exc)
+        return []
+
+
+@app.get("/api/playbooks/{playbook_id}")
+def get_playbook(playbook_id: str):
+    try:
+        books = load_playbooks_refresh()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    for playbook in books:
+        if playbook.get("id") == playbook_id:
+            return playbook
+    raise HTTPException(status_code=404, detail="Playbook not found")
 
 
 @app.get("/api/workflows")
 def list_workflows():
-    """List Spec-backed workflows and registered graph ids."""
     items = []
     for key, meta in _WORKFLOW_META.items():
         d = WORKFLOWS_ROOT / key
@@ -139,10 +198,9 @@ def list_workflows():
 
 @app.get("/api/workflows/{workflow_id}/spec")
 def get_workflow_spec(workflow_id: str):
-    """Return current Spec for a workflow (spec.json preferred, else coerced config)."""
     from agentic.workflows.common.spec import load_spec_for_workflow
 
-    meta = _WORKFLOW_META[workflow_id] if workflow_id in _WORKFLOW_META else None
+    meta = _WORKFLOW_META.get(workflow_id)
     if meta is None:
         raise HTTPException(status_code=404, detail=f"unknown workflow {workflow_id!r}")
     d = _workflow_dir(workflow_id)
@@ -162,7 +220,6 @@ def get_workflow_spec(workflow_id: str):
 
 @app.post("/api/validate")
 async def validate_spec_body(request: Request):
-    """Validate a Spec JSON body. Returns the normalized Spec or errors."""
     from agentic.workflows.common.spec import SpecError, validate_spec
 
     try:
@@ -171,7 +228,6 @@ async def validate_spec_body(request: Request):
         raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}") from exc
     if not isinstance(raw, dict):
         raise HTTPException(status_code=400, detail="body must be a JSON object")
-    # Allow clients to wrap as {"spec": {...}}
     payload = raw.get("spec") if isinstance(raw.get("spec"), dict) else raw
     try:
         spec = validate_spec(payload)
@@ -182,7 +238,6 @@ async def validate_spec_body(request: Request):
 
 @app.post("/api/preview")
 async def preview_graph(request: Request):
-    """Compile Spec → PlanGraph JSON for the canvas preview."""
     from agentic.workflows.common.spec import SpecError, validate_spec
     from agentic.workflows.common.spec_graph import build_plan_graph
 
@@ -204,7 +259,6 @@ async def preview_graph(request: Request):
 
 @app.put("/api/workflows/{workflow_id}/spec")
 async def save_workflow_spec(workflow_id: str, request: Request):
-    """Write validated Spec to workflows/<id>/spec.json."""
     from agentic.workflows.common.spec import SpecError, validate_spec
 
     if workflow_id not in _WORKFLOW_META:
@@ -220,7 +274,6 @@ async def save_workflow_spec(workflow_id: str, request: Request):
     except SpecError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Align id / workflow_id with the package (route always determines identity)
     meta = _WORKFLOW_META[workflow_id]
     data = spec.to_dict()
     data["id"] = meta["graph_id"]
@@ -230,7 +283,6 @@ async def save_workflow_spec(workflow_id: str, request: Request):
 
     out = d / "spec.json"
     try:
-        # Atomic write: temp file in same directory, then replace
         fd, tmp_path = tempfile.mkstemp(dir=d, prefix=".spec.json.", suffix=".tmp", text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -240,7 +292,6 @@ async def save_workflow_spec(workflow_id: str, request: Request):
                 os.fsync(f.fileno())
             os.replace(tmp_path, out)
         except Exception:
-            # Clean up temp file on failure
             try:
                 os.unlink(tmp_path)
             except OSError:
@@ -259,6 +310,5 @@ async def serve_studio():
 if __name__ == "__main__":
     import uvicorn
 
-    # Default to loopback-only for security; override via SPEC_STUDIO_HOST if needed
     host = os.getenv("SPEC_STUDIO_HOST", "127.0.0.1")
     uvicorn.run(app, host=host, port=8010)
