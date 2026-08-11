@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import logging
+log = logging.getLogger(__name__)
 
 from agentic.graph_engine import PlanGraph, PlanNode
 from agentic.registry import TOOLS, tool
@@ -34,7 +36,6 @@ try:
     )
     _IMPORTS_OK = True
 except Exception as exc:
-    import logging
     logging.getLogger(__name__).warning("job_hunt toolkit import failed: %s", exc)
     _IMPORTS_OK = False
 
@@ -92,13 +93,13 @@ def check_jobs_remaining(state=None) -> str:
 def report_job_run(plan: str = "", search: str = "", draft: str = "", save: str = "") -> str:
     return _report_job_run(plan, search, draft, save)
 
-
-def _load_config() -> dict:
-    path = Path(__file__).resolve().parent / "config.json"
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+ def _load_config() -> dict:
+     path = Path(__file__).resolve().parent / "config.json"
+     try:
+         return json.loads(path.read_text(encoding="utf-8"))
+     except (OSError, ValueError) as exc:
+         log.warning("job_hunt: failed to load %s: %s", path, exc)
+         return {}
 
 
 def build_gen_job_post_graph(
