@@ -75,7 +75,7 @@ def _expand_aurora_sources(sources_json: str, state=None) -> tuple[str, list[dic
     return json.dumps(remaining, ensure_ascii=False), pre_items
 
 
-def _merge_pre_items(result_json: str, pre_items: list[dict[str, Any]], state=None) -> str:
+def _merge_pre_items(result_json: str, pre_items: list[dict[str, Any]], state=None, max_items: int = 50) -> str:
     if not pre_items:
         return result_json
     data = _loads(result_json, {})
@@ -83,6 +83,8 @@ def _merge_pre_items(result_json: str, pre_items: list[dict[str, Any]], state=No
         data = {"ok": True, "items": [], "meta": {}}
     items = list(data.get("items") or [])
     items = pre_items + items
+    # Enforce max_items limit after prepending
+    items = items[:max_items]
     data["items"] = items
     data["ok"] = True if items else data.get("ok", True)
     meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
@@ -153,7 +155,11 @@ def ingest_data(
         config_json=config_json,
         state=state,
     )
-    return _merge_pre_items(result, pre_items, state=state)
+    try:
+        limit = max(1, int(max_items or 50))
+    except (TypeError, ValueError):
+        limit = 50
+    return _merge_pre_items(result, pre_items, state=state, max_items=limit)
 
 
 @tool(

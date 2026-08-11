@@ -448,10 +448,21 @@ def output_user_results(
             for r in deliverable
         )
         if when == "always" or interesting:
+            # Render email subject template with values from first deliverable result
+            subject_tmpl = str(email_cfg.get("subject") or cfg.get("email_subject") or "Aiko workflow")
+            subject = subject_tmpl
+            if deliverable and "{" in subject_tmpl:
+                first_result = deliverable[0]
+                item = first_result.get("item") if isinstance(first_result.get("item"), dict) else {}
+                # Merge result and item fields for template rendering
+                all_fields = {**item, **first_result}
+                for key, val in all_fields.items():
+                    if isinstance(val, (str, int, float, bool)):
+                        subject = subject.replace("{" + key + "}", str(val))
             actions.append({
                 "channel": "email",
                 "result": notify_email(
-                    subject=str(email_cfg.get("subject") or cfg.get("email_subject") or "Aiko workflow"),
+                    subject=subject,
                     body=body,
                     to=email_cfg.get("to"),
                 ),
