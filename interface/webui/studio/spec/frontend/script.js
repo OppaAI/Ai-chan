@@ -9,12 +9,25 @@ const SIDE = 60;
         let currentPlaybooks = [];
         let selectedPlaybook = null;
         let selectedNodeId = null;
-        let selectedEdgeId = null;
+        let selectedEdgeKey = null;
         let transform = d3.zoomIdentity;
         let currentZoom = null;
 
+        // Visual editor state
+        let dragEdgeState = null; // { sourceId, x1, y1 }
+
         // Detect base path for API calls via the shared studio bootstrap
         const API_BASE = GraphBoot.apiBase();
+
+        function uid() {
+            return 'node_' + Math.random().toString(36).slice(2, 9);
+        }
+
+        function escapeHTML(str) {
+            const d = document.createElement('div');
+            d.textContent = str || '';
+            return d.innerHTML;
+        }
 
         async function fetchPlaybooks() {
             try {
@@ -26,12 +39,13 @@ const SIDE = 60;
                     const refreshed = currentPlaybooks.find(pb => pb.id === selectedPlaybook.id);
                     if (refreshed) {
                         selectedPlaybook = refreshed;
-                        renderGraph(selectedPlaybook);
+                        ensureLayout(selectedPlaybook);
+                        renderGraph();
                     } else {
                         // Playbook no longer exists, clear selection
                         selectedPlaybook = null;
                         selectedNodeId = null;
-                        selectedEdgeId = null;
+                        selectedEdgeKey = null;
                         const svg = d3.select('#canvas');
                         svg.selectAll('*').remove();
                         hideDetails();
@@ -69,20 +83,27 @@ const SIDE = 60;
             });
         }
 
-        function escapeHTML(str) {
-            const d = document.createElement('div');
-            d.textContent = str || '';
-            return d.innerHTML;
-        }
-
         function selectPlaybook(playbook) {
             selectedPlaybook = playbook;
             selectedNodeId = null;
-            selectedEdgeId = null;
+            selectedEdgeKey = null;
+            ensureLayout(playbook);
             renderPlaybooksList();
-            renderGraph(playbook);
+            renderGraph();
             hideDetails();
+            updateToolbar();
             if (typeof loadSpecForPlaybook === 'function') loadSpecForPlaybook(playbook);
+        }
+
+        function ensureLayout(playbook) {
+            if (!playbook || !playbook.nodes) return;
+            const needsLayout = playbook.nodes.some(n => !n._layout);
+            if (needsLayout) {
+                const positions = computeLayout(playbook.nodes, playbook.edges);
+                playbook.nodes.forEach(n => {
+                    if (!n._layout) n._layout = positions[n.id] || { x: 300, y: 300 };
+                });
+            }
         }
 
         function edgeTypeColor(edge) {
@@ -159,7 +180,13 @@ const SIDE = 60;
             return pos;
         }
 
-        function renderGraph(playbook) {
+        function makeEdgeKey(e) {
+            const s = typeof e.source === 'string' ? e.source : e.source?.id;
+            const t = typeof e.target === 'string' ? e.target : e.target?.id;
+            return `${s}|${t}|${e.type || 'depends_on'}`;
+        }
+
+        function renderGraph() {
             const svg = d3.select('#canvas');
             svg.selectAll('*').remove();
             const container = document.getElementById('canvas-area');
@@ -167,7 +194,7 @@ const SIDE = 60;
             const height = container.clientHeight || 800;
             svg.attr('viewBox', `0 0 ${width} ${height}`);
 
-            if (!playbook.nodes?.length) {
+            if (!selectedPlaybook || !selectedPlaybook.nodes?.length) {
                 svg.append('text')
                     .attr('x', width / 2).attr('y', height / 2)
                     .attr('text-anchor', 'middle')
@@ -178,11 +205,8 @@ const SIDE = 60;
                 return;
             }
 
-            const nodes = playbook.nodes;
-            const edges = playbook.edges || [];
-
-            const positions = computeLayout(nodes, edges);
-            nodes.forEach(n => { n._layout = positions[n.id] || { x: 200, y: 200 }; });
+            const nodes = selectedPlaybook.nodes;
+            const edges = selectedPlaybook.edges || [];
 
             // Hide the canvas temporarily to prevent visual jump/flicker
             svg.style('opacity', '0');
@@ -231,9 +255,7 @@ const SIDE = 60;
                 .attr('width', 6000).attr('height', 6000)
                 .attr('fill', 'url(#grid)');
 
-            // Draw edges
-            const edgeGroup = g.append('g').attr('class', 'edges');
-            const arrowMarkers = {};
+            // Arrow markers
             ['depends', 'loop', 'fallback'].forEach(type => {
                 const color = type === 'loop' ? 'var(--pink)' : type === 'fallback' ? '#e8843a' : 'var(--dim)';
                 defs.append('marker')
@@ -247,9 +269,12 @@ const SIDE = 60;
                     .attr('fill', color);
             });
 
-            // Edge hover tooltip container
             const tooltip = document.getElementById('tooltip');
+            const edgeGroup = g.append('g').attr('class', 'edges');
+            const nodeGroup = g.append('g').attr('class', 'nodes');
+            const dragGroup = g.append('g').attr('class', 'drag-layer');
 
+            // ── Draw edges ─────────────────────────────────────────────────
             edges.forEach(edge => {
                 const srcId = typeof edge.source === 'string' ? edge.source : edge.source?.id;
                 const tgtId = typeof edge.target === 'string' ? edge.target : edge.target?.id;
@@ -275,8 +300,11 @@ const SIDE = 60;
                     marker = 'url(#arrow-loop)';
                 }
 
-                const midX = (x1 + x2) / 2;
-                const midY = (y1 + y2) / 2;
+                const eKey = makeEdgeKey(edge);
+                if (selectedEdgeKey === eKey) {
+                    edgeClass += ' edge-selected';
+                }
+
                 const dx = x2 - x1;
                 const dy = y2 - y1;
                 const dist = Math.sqrt(dx * dx + dy * dy);
@@ -284,40 +312,70 @@ const SIDE = 60;
 
                 const pathD = `M ${x1} ${y1} C ${x1 + curvature} ${y1}, ${x2 - curvature} ${y2}, ${x2} ${y2}`;
 
-                const path = edgeGroup.append('path')
+                edgeGroup.append('path')
                     .attr('d', pathD)
                     .attr('class', edgeClass)
                     .attr('marker-end', marker)
-                    .attr('data-source', srcId)
-                    .attr('data-target', tgtId)
-                    .attr('data-edge-type', edgeType)
+                    .attr('data-key', eKey)
                     .style('cursor', 'pointer')
                     .on('click', (event) => {
                         event.stopPropagation();
-                        selectedEdgeId = `${srcId}->${tgtId}`;
-                        showEdgeDetails(edge, src, tgt);
+                        selectEdge(edge);
                     })
-                     .on('mouseenter', (event) => {
-                         tooltip.textContent = `${srcId} → ${tgtId}${edgeType === 'loop_to' ? ' [loop]' : edgeType === 'fallback_to' ? ' [fallback]' : ''}`;
-                         tooltip.style.left = (event.offsetX + 12) + 'px';
-                         tooltip.style.top = (event.offsetY - 20) + 'px';
-                         tooltip.classList.add('visible');
-                         d3.select(event.target).classed('edge-highlight', true);
-                     })
-                     .on('mouseleave', () => {
-                         tooltip.classList.remove('visible');
-                         d3.select(event.target).classed('edge-highlight', false);
-                     });
+                    .on('mouseenter', (event) => {
+                        tooltip.textContent = `${srcId} → ${tgtId}${edgeType === 'loop_to' ? ' [loop]' : edgeType === 'fallback_to' ? ' [fallback]' : ''}`;
+                        tooltip.style.left = (event.pageX + 12) + 'px';
+                        tooltip.style.top = (event.pageY - 20) + 'px';
+                        tooltip.classList.add('visible');
+                        d3.select(event.target).classed('edge-highlight', true);
+                    })
+                    .on('mouseleave', () => {
+                        tooltip.classList.remove('visible');
+                        d3.select(event.target).classed('edge-highlight', false);
+                    });
             });
 
-            // Draw nodes
-            const nodeGroup = g.append('g').attr('class', 'nodes');
+            // ── Draw nodes ─────────────────────────────────────────────────
+            const nodeDrag = d3.drag()
+                .on('start', function(event, d) {
+                    d3.select(this).select('.node-card').classed('dragging', true);
+                })
+                .on('drag', function(event, d) {
+                    d._layout.x = event.x;
+                    d._layout.y = event.y;
+                    d3.select(this).attr('transform', `translate(${d._layout.x}, ${d._layout.y})`);
+                    // Update connected edge paths in-place for smooth dragging
+                    const edgesArr = selectedPlaybook.edges || [];
+                    edgesArr.forEach(e => {
+                        const s = typeof e.source === 'string' ? e.source : e.source?.id;
+                        const t = typeof e.target === 'string' ? e.target : e.target?.id;
+                        if (s !== d.id && t !== d.id) return;
+                        const srcNode = nodes.find(n => n.id === s);
+                        const tgtNode = nodes.find(n => n.id === t);
+                        if (!srcNode || !tgtNode) return;
+                        const sx = srcNode._layout.x + NODE_W;
+                        const sy = srcNode._layout.y + NODE_H / 2;
+                        const tx = tgtNode._layout.x;
+                        const ty = tgtNode._layout.y + NODE_H / 2;
+                        const dx = tx - sx, dy = ty - sy;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        const curvature = Math.min(dist * 0.15, 40);
+                        const newD = `M ${sx} ${sy} C ${sx + curvature} ${sy}, ${tx - curvature} ${ty}, ${tx} ${ty}`;
+                        const eKey = makeEdgeKey(e);
+                        edgeGroup.select(`path[data-key="${eKey}"]`).attr('d', newD);
+                    });
+                })
+                .on('end', function() {
+                    d3.select(this).select('.node-card').classed('dragging', false);
+                    renderGraph(); // clean re-render
+                });
 
             nodes.forEach(node => {
                 const pos = node._layout;
                 const ng = nodeGroup.append('g')
+                    .datum(node)
                     .attr('transform', `translate(${pos.x}, ${pos.y})`)
-                    .style('cursor', 'pointer');
+                    .call(nodeDrag);
 
                 // Shadow
                 ng.append('rect')
@@ -333,10 +391,7 @@ const SIDE = 60;
                     .attr('rx', 8).attr('ry', 8)
                     .on('click', (event) => {
                         event.stopPropagation();
-                        selectedNodeId = node.id;
-                        selectedEdgeId = null;
-                        renderGraph(playbook);
-                        showNodeDetails(node);
+                        selectNode(node);
                     })
                     .on('mouseenter', (event) => {
                         const toolName = node.tool ? node.tool.split('.').pop() : node.id;
@@ -357,10 +412,14 @@ const SIDE = 60;
                     .attr('fill', 'rgba(168,136,232,0.08)')
                     .style('pointer-events', 'none');
 
-                const isEntry = !(node.depends_on && node.depends_on.length > 0);
-                const hasOutgoing = selectedPlaybook?.edges?.some(
-                    e => (typeof e.source === 'string' ? e.source : e.source?.id) === node.id
-                );
+                const isEntry = !edges.some(e => {
+                    const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+                    return tid === node.id;
+                });
+                const hasOutgoing = edges.some(e => {
+                    const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+                    return sid === node.id;
+                });
                 const isTerminal = !hasOutgoing;
 
                 // Entry badge (top-left)
@@ -428,10 +487,15 @@ const SIDE = 60;
                     .attr('cx', 0).attr('cy', NODE_H / 2)
                     .attr('r', PORT_R);
                 ng.append('circle')
+                    .attr('class', 'port-hit')
                     .attr('cx', 0).attr('cy', NODE_H / 2)
                     .attr('r', PORT_HIT_R)
                     .attr('fill', 'transparent')
-                    .style('cursor', 'crosshair');
+                    .style('cursor', 'crosshair')
+                    .on('mouseup', (event) => {
+                        event.stopPropagation();
+                        finishDragEdge(node.id, 'input');
+                    });
 
                 // Ports — output (right)
                 ng.append('circle')
@@ -439,11 +503,23 @@ const SIDE = 60;
                     .attr('cx', NODE_W).attr('cy', NODE_H / 2)
                     .attr('r', PORT_R);
                 ng.append('circle')
+                    .attr('class', 'port-hit')
                     .attr('cx', NODE_W).attr('cy', NODE_H / 2)
                     .attr('r', PORT_HIT_R)
                     .attr('fill', 'transparent')
-                    .style('cursor', 'crosshair');
+                    .style('cursor', 'crosshair')
+                    .on('mousedown', (event) => {
+                        event.stopPropagation();
+                        startDragEdge(node.id, event);
+                    });
             });
+
+            // Temp drag line
+            if (dragEdgeState) {
+                dragGroup.append('path')
+                    .attr('class', 'edge-drag-line')
+                    .attr('d', dragEdgeState.d);
+            }
 
             document.getElementById('graph-info').textContent =
                 `${nodes.length} nodes, ${edges.length} edges`;
@@ -454,6 +530,37 @@ const SIDE = 60;
 
             // Restore canvas opacity now that it is centered correctly
             svg.style('opacity', '1');
+        }
+
+        // ── Selection & Details ─────────────────────────────────────────────
+        function selectNode(node) {
+            selectedNodeId = node.id;
+            selectedEdgeKey = null;
+            renderGraph();
+            showNodeDetails(node);
+            updateToolbar();
+        }
+
+        function selectEdge(edge) {
+            selectedEdgeKey = makeEdgeKey(edge);
+            selectedNodeId = null;
+            renderGraph();
+            showEdgeDetails(edge);
+            updateToolbar();
+        }
+
+        function clearSelection() {
+            selectedNodeId = null;
+            selectedEdgeKey = null;
+            hideDetails();
+            updateToolbar();
+            renderGraph();
+        }
+
+        function updateToolbar() {
+            const tb = document.getElementById('floating-toolbar');
+            if (!tb) return;
+            tb.style.display = (selectedNodeId || selectedEdgeKey) ? 'flex' : 'none';
         }
 
         function showNodeDetails(node) {
@@ -475,27 +582,32 @@ const SIDE = 60;
             content.innerHTML = `
                 <div class="details-panel-header">
                     <h3>Node Details</h3>
-                    <button class="details-close" onclick="document.getElementById('details-panel').style.display='none'">×</button>
+                    <button class="details-close" onclick="clearSelection()">×</button>
                 </div>
-                <div class="detail-row"><div class="detail-label">Tool</div><div class="detail-value"><code>${escapeHTML(node.tool || '—')}</code></div></div>
-                <div class="detail-row"><div class="detail-label">ID</div><div class="detail-value"><code>${escapeHTML(node.id)}</code></div></div>
-                ${node.args ? `<div class="detail-row"><div class="detail-label">Args</div><div class="detail-value"><pre class="text-xs" style="max-height:100px;overflow:auto;background:rgba(255,255,255,0.03);padding:4px;border-radius:3px">${escapeHTML(JSON.stringify(node.args, null, 2))}</pre></div></div>` : ''}
-                ${node.run_if ? `<div class="detail-row"><div class="detail-label">Run If</div><div class="detail-value"><pre class="text-xs" style="max-height:80px;overflow:auto;background:rgba(255,255,255,0.03);padding:4px;border-radius:3px">${escapeHTML(JSON.stringify(node.run_if, null, 2))}</pre></div></div>` : ''}
-                ${node.loop_to ? `<div class="detail-row"><div class="detail-label">Loop To</div><div class="detail-value" style="color:var(--pink)">${escapeHTML(node.loop_to)}</div></div>` : ''}
-                ${node.fallback_to ? `<div class="detail-row"><div class="detail-label">Fallback To</div><div class="detail-value" style="color:#e8843a">${escapeHTML(node.fallback_to)}</div></div>` : ''}
-                ${node.max_visits ? `<div class="detail-row"><div class="detail-label">Max Visits</div><div class="detail-value">${node.max_visits}</div></div>` : ''}
-                <div class="detail-row"><div class="detail-label">Inputs (${deps.length})</div><div class="detail-value">${deps.map(d => {
-                    const sid = typeof d.source === 'string' ? d.source : d.source?.id;
-                    return `<code>${escapeHTML(sid)}</code>`;
-                }).join(', ') || '—'}</div></div>
-                <div class="detail-row"><div class="detail-label">Outputs (${dependents.length})</div><div class="detail-value">${dependents.map(d => {
-                    const tid = typeof d.target === 'string' ? d.target : d.target?.id;
-                    return `<code>${escapeHTML(tid)}</code>`;
-                }).join(', ') || '—'}</div></div>
+                <div class="detail-row"><div class="detail-label">Node ID</div><input class="detail-input" id="edit-node-id" value="${escapeHTML(node.id)}"></div>
+                <div class="detail-row"><div class="detail-label">Tool</div><input class="detail-input" id="edit-node-tool" value="${escapeHTML(node.tool || '')}"></div>
+                <div class="detail-row"><div class="detail-label">Args (JSON)</div><textarea class="detail-textarea" id="edit-node-args">${escapeHTML(JSON.stringify(node.args || {}, null, 2))}</textarea></div>
+                <div class="detail-row"><div class="detail-label">Loop To</div><input class="detail-input" id="edit-node-loop" value="${escapeHTML(node.loop_to || '')}" placeholder="target node id or leave blank"></div>
+                <div class="detail-row"><div class="detail-label">Fallback To</div><input class="detail-input" id="edit-node-fallback" value="${escapeHTML(node.fallback_to || '')}" placeholder="target node id or leave blank"></div>
+                <div class="detail-row"><div class="detail-label">Max Visits</div><input class="detail-input" id="edit-node-maxvisits" type="number" value="${node.max_visits || ''}" placeholder="∞"></div>
+                <div style="display:flex; gap:6px; margin-top:12px;">
+                    <button class="btn btn-primary" onclick="saveNodeChanges('${escapeHTML(node.id)}')">Save</button>
+                    <button class="btn btn-danger" onclick="deleteSelected()">Delete Node</button>
+                </div>
+                <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border);">
+                    <div class="detail-row"><div class="detail-label">Inputs (${deps.length})</div><div class="detail-value">${deps.map(d => {
+                        const sid = typeof d.source === 'string' ? d.source : d.source?.id;
+                        return `<code>${escapeHTML(sid)}</code>`;
+                    }).join(', ') || '—'}</div></div>
+                    <div class="detail-row"><div class="detail-label">Outputs (${dependents.length})</div><div class="detail-value">${dependents.map(d => {
+                        const tid = typeof d.target === 'string' ? d.target : d.target?.id;
+                        return `<code>${escapeHTML(tid)}</code>`;
+                    }).join(', ') || '—'}</div></div>
+                </div>
             `;
         }
 
-        function showEdgeDetails(edge, src, tgt) {
+        function showEdgeDetails(edge) {
             const panel = document.getElementById('details-panel');
             const content = document.getElementById('details-content');
             panel.style.display = 'block';
@@ -506,25 +618,216 @@ const SIDE = 60;
             content.innerHTML = `
                 <div class="details-panel-header">
                     <h3>Edge Details</h3>
-                    <button class="details-close" onclick="document.getElementById('details-panel').style.display='none'">×</button>
+                    <button class="details-close" onclick="clearSelection()">×</button>
                 </div>
-                <div class="detail-row"><div class="detail-label">Type</div><div class="detail-value" style="color:${typeColor}">${type}</div></div>
-                <div class="detail-row"><div class="detail-label">From</div><div class="detail-value"><code>${escapeHTML(src?.id || '?')}</code></div></div>
-                <div class="detail-row"><div class="detail-label">To</div><div class="detail-value"><code>${escapeHTML(tgt?.id || '?')}</code></div></div>
+                <div class="detail-row"><div class="detail-label">Type</div>
+                    <select class="detail-select" id="edit-edge-type">
+                        <option value="depends_on" ${type === 'depends_on' ? 'selected' : ''}>depends_on</option>
+                        <option value="loop_to" ${type === 'loop_to' ? 'selected' : ''}>loop_to</option>
+                        <option value="fallback_to" ${type === 'fallback_to' ? 'selected' : ''}>fallback_to</option>
+                    </select>
+                </div>
+                <div class="detail-row"><div class="detail-label">From</div><div class="detail-value"><code>${escapeHTML(edge.source)}</code></div></div>
+                <div class="detail-row"><div class="detail-label">To</div><div class="detail-value"><code>${escapeHTML(edge.target)}</code></div></div>
                 ${edge.tool_call ? `<div class="detail-row"><div class="detail-label">Tool Call</div><div class="detail-value"><pre class="text-xs" style="max-height:80px;overflow:auto;background:rgba(255,255,255,0.03);padding:4px;border-radius:3px">${escapeHTML(JSON.stringify(edge.tool_call, null, 2))}</pre></div></div>` : ''}
                 ${edge.skill ? `<div class="detail-row"><div class="detail-label">Skill</div><div class="detail-value"><code>${escapeHTML(edge.skill)}</code></div></div>` : ''}
+                <div style="display:flex; gap:6px; margin-top:12px;">
+                    <button class="btn btn-primary" onclick="saveEdgeChanges('${escapeHTML(edge.source)}','${escapeHTML(edge.target)}')">Save</button>
+                    <button class="btn btn-danger" onclick="deleteSelected()">Delete Edge</button>
+                </div>
             `;
         }
 
         function hideDetails() {
             document.getElementById('details-panel').style.display = 'none';
-            selectedNodeId = null;
-            selectedEdgeId = null;
         }
 
-        document.getElementById('canvas').addEventListener('click', () => {
+        // ── Edit Actions ──────────────────────────────────────────────────────
+        function saveNodeChanges(oldId) {
+            const node = selectedPlaybook.nodes.find(n => n.id === oldId);
+            if (!node) return;
+            const newId = document.getElementById('edit-node-id').value.trim();
+            const newTool = document.getElementById('edit-node-tool').value.trim();
+            const newArgs = document.getElementById('edit-node-args').value;
+            const newLoop = document.getElementById('edit-node-loop').value.trim();
+            const newFallback = document.getElementById('edit-node-fallback').value.trim();
+            const newMax = document.getElementById('edit-node-maxvisits').value;
+
+            if (newId && newId !== oldId) {
+                if (selectedPlaybook.nodes.some(n => n.id === newId)) {
+                    alert('Node ID already exists'); return;
+                }
+                selectedPlaybook.edges.forEach(e => {
+                    if (e.source === oldId) e.source = newId;
+                    if (e.target === oldId) e.target = newId;
+                });
+                node.id = newId;
+            }
+            if (newTool) node.tool = newTool;
+            try { node.args = JSON.parse(newArgs); } catch { alert('Invalid JSON in Args'); return; }
+            if (newLoop) node.loop_to = newLoop; else delete node.loop_to;
+            if (newFallback) node.fallback_to = newFallback; else delete node.fallback_to;
+            if (newMax) node.max_visits = parseInt(newMax); else delete node.max_visits;
+
+            selectedNodeId = node.id;
+            renderGraph();
+            showNodeDetails(node);
+        }
+
+        function saveEdgeChanges(src, tgt) {
+            const edge = selectedPlaybook.edges.find(e => e.source === src && e.target === tgt);
+            if (!edge) return;
+            const newType = document.getElementById('edit-edge-type').value;
+            edge.type = newType;
+            selectedEdgeKey = makeEdgeKey(edge);
+            renderGraph();
+            showEdgeDetails(edge);
+        }
+
+        function deleteSelected() {
+            if (selectedNodeId) {
+                selectedPlaybook.nodes = selectedPlaybook.nodes.filter(n => n.id !== selectedNodeId);
+                selectedPlaybook.edges = selectedPlaybook.edges.filter(e => {
+                    const s = typeof e.source === 'string' ? e.source : e.source?.id;
+                    const t = typeof e.target === 'string' ? e.target : e.target?.id;
+                    return s !== selectedNodeId && t !== selectedNodeId;
+                });
+                selectedNodeId = null;
+            } else if (selectedEdgeKey) {
+                const parts = selectedEdgeKey.split('|');
+                const s = parts[0], t = parts[1], ty = parts[2];
+                selectedPlaybook.edges = selectedPlaybook.edges.filter(e => {
+                    const es = typeof e.source === 'string' ? e.source : e.source?.id;
+                    const et = typeof e.target === 'string' ? e.target : e.target?.id;
+                    return !(es === s && et === t && (e.type || 'depends_on') === ty);
+                });
+                selectedEdgeKey = null;
+            }
             hideDetails();
-            if (selectedPlaybook) renderGraph(selectedPlaybook);
+            updateToolbar();
+            renderGraph();
+        }
+
+        // ── Port-to-Port Edge Creation ───────────────────────────────────────
+        function startDragEdge(sourceId, event) {
+            event.preventDefault();
+            const srcNode = selectedPlaybook.nodes.find(n => n.id === sourceId);
+            if (!srcNode) return;
+            const x1 = srcNode._layout.x + NODE_W;
+            const y1 = srcNode._layout.y + NODE_H / 2;
+            dragEdgeState = { sourceId, x1, y1 };
+
+            const svg = document.getElementById('canvas');
+            function onMove(ev) {
+                if (!dragEdgeState) return;
+                // Get SVG coordinates accounting for current zoom transform
+                const pt = d3.pointer(ev, svg.querySelector('g'));
+                dragEdgeState.d = `M ${dragEdgeState.x1} ${dragEdgeState.y1} L ${pt[0]} ${pt[1]}`;
+                const line = d3.select('#drag-line');
+                if (line.empty()) {
+                    renderGraph();
+                } else {
+                    line.attr('d', dragEdgeState.d);
+                }
+            }
+            function onUp() {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                if (dragEdgeState) {
+                    dragEdgeState = null;
+                    renderGraph();
+                }
+            }
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+            renderGraph();
+        }
+
+        function finishDragEdge(targetId, portSide) {
+            if (!dragEdgeState || portSide !== 'input') {
+                dragEdgeState = null;
+                renderGraph();
+                return;
+            }
+            const sourceId = dragEdgeState.sourceId;
+            dragEdgeState = null;
+            if (sourceId === targetId) {
+                renderGraph();
+                return;
+            }
+            const exists = selectedPlaybook.edges.some(e => {
+                const s = typeof e.source === 'string' ? e.source : e.source?.id;
+                const t = typeof e.target === 'string' ? e.target : e.target?.id;
+                return s === sourceId && t === targetId;
+            });
+            if (exists) {
+                renderGraph();
+                return;
+            }
+            selectedPlaybook.edges.push({ source: sourceId, target: targetId, type: 'depends_on' });
+            renderGraph();
+        }
+
+        // ── Add Node from Palette ────────────────────────────────────────────
+        document.querySelectorAll('.palette-item').forEach(item => {
+            item.addEventListener('click', () => {
+                if (!selectedPlaybook) { alert('Select a playbook first'); return; }
+                const tool = item.dataset.tool;
+                const id = uid();
+                const center = getViewportCenter();
+                const newNode = {
+                    id, tool: tool === 'custom' ? 'tools.custom' : tool,
+                    args: {},
+                    _layout: { x: center.x - NODE_W / 2, y: center.y - NODE_H / 2 }
+                };
+                selectedPlaybook.nodes.push(newNode);
+                selectNode(newNode);
+            });
+        });
+
+        function getViewportCenter() {
+            const svg = document.getElementById('canvas');
+            const pt = svg.createSVGPoint();
+            const rect = svg.getBoundingClientRect();
+            pt.x = rect.width / 2;
+            pt.y = rect.height / 2;
+            const ctm = svg.getScreenCTM();
+            if (!ctm) return { x: 400, y: 300 };
+            const svgP = pt.matrixTransform(ctm.inverse());
+            const t = transform;
+            return { x: (svgP.x - t.x) / t.k, y: (svgP.y - t.y) / t.k };
+        }
+
+        // ── Auto Layout ──────────────────────────────────────────────────────
+        document.getElementById('btn-auto-layout').addEventListener('click', () => {
+            if (!selectedPlaybook) return;
+            selectedPlaybook.nodes.forEach(n => delete n._layout);
+            ensureLayout(selectedPlaybook);
+            renderGraph();
+        });
+
+        // ── Toolbar Actions ────────────────────────────────────────────────────
+        document.getElementById('btn-delete').addEventListener('click', deleteSelected);
+        document.getElementById('btn-disconnect').addEventListener('click', () => {
+            if (!selectedNodeId) return;
+            selectedPlaybook.edges = selectedPlaybook.edges.filter(e => {
+                const s = typeof e.source === 'string' ? e.source : e.source?.id;
+                const t = typeof e.target === 'string' ? e.target : e.target?.id;
+                return s !== selectedNodeId && t !== selectedNodeId;
+            });
+            renderGraph();
+        });
+
+        // ── Keyboard Shortcuts ───────────────────────────────────────────────
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+                deleteSelected();
+            }
+        });
+
+        document.getElementById('canvas').addEventListener('click', (e) => {
+            if (e.target.tagName === 'svg') clearSelection();
         });
 
         document.getElementById('refresh-btn').addEventListener('click', fetchPlaybooks);
@@ -532,7 +835,10 @@ const SIDE = 60;
             if (!selectedPlaybook) return;
             const pb = currentPlaybooks.find(p => p.id === selectedPlaybook.id);
             if (!pb) return;
-            const data = JSON.stringify(pb, null, 2);
+            // Strip internal _layout before export
+            const exportPb = JSON.parse(JSON.stringify(pb));
+            exportPb.nodes.forEach(n => delete n._layout);
+            const data = JSON.stringify(exportPb, null, 2);
             const blob = new Blob([data], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -570,7 +876,7 @@ const SIDE = 60;
         setInterval(fetchPlaybooks, 30000);
 
 
-        // ── Layer 5 Spec panel ────────────────────────────────────────────────
+        // ── Layer 5 Spec panel ───────────────────────────────────────────────
         const SPEC_PLAYBOOK_TO_WORKFLOW = {
             gen_job_post: 'job_hunt',
             aurora_forecast: 'aurora_forecast',
@@ -658,7 +964,8 @@ const SIDE = 60;
                 const data = await resp.json();
                 if (!resp.ok) throw new Error((data && (data.detail || data.error)) || resp.statusText);
                 selectedPlaybook = data.graph;
-                renderGraph(data.graph);
+                ensureLayout(selectedPlaybook);
+                renderGraph();
                 setSpecMessage('Preview OK · ' + ((data.graph.nodes || []).length) + ' nodes', 'ok');
             } catch (err) {
                 setSpecMessage(String(err.message || err), 'err');
