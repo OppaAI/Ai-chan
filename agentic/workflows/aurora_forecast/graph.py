@@ -18,7 +18,6 @@ from agentic.graph_engine import PlanGraph, PlanNode
 from agentic.registry import TOOLS, tool
 from agentic.workflows.common.config import load_workflow_config
 from agentic.workflows.common.graphs import register_graph
-from agentic.workflows.common.spec import load_spec_for_workflow
 from agentic.workflows.common.spec_graph import build_plan_graph
 
 # Ensure shared Layer-1 nodes are registered.
@@ -54,9 +53,22 @@ def check_aurora(config_path: str = "", *, state=None) -> str:
 def build_aurora_forecast_graph(
     goal: str = "Check aurora visibility, store forecast, and notify when warranted",
 ) -> PlanGraph:
-    """Layer 3: Spec (or coerced config.json) → shared 5-node PlanGraph."""
+    """Layer 3: Spec (or coerced config.json) → shared 5-node PlanGraph.
+
+    Prefer ``spec.json`` when present so Layer-3 Specs are honored. Defaults
+    below apply only on the config.json fallback path.
+    """
+    from agentic.workflows.common.spec import WorkflowSpec, coerce_config_to_spec, load_spec
+
+    spec_path = _WORKFLOW_DIR / "spec.json"
+    if spec_path.is_file():
+        spec = load_spec(spec_path)
+        if goal and goal != spec.goal:
+            spec = WorkflowSpec(**{**spec.to_dict(), "goal": goal})
+        return build_plan_graph(spec, goal=goal)
+
     cfg = load_workflow_config(_WORKFLOW_DIR)
-    # Preserve prior default when config omits max_items
+    # Defaults only when coercing legacy config.json
     if "max_items" not in cfg and "max_results" not in cfg:
         cfg = {**cfg, "max_items": 5}
     if "email" not in cfg:
@@ -71,10 +83,6 @@ def build_aurora_forecast_graph(
                 {"platform": "threads", "when": {"field": "kp_index", "op": ">=", "value": 5.0}}
             ],
         }
-    # Write temp defaults via coerce path: load_spec_for_workflow reads disk config,
-    # so apply overrides through coerce_config_to_spec directly.
-    from agentic.workflows.common.spec import coerce_config_to_spec
-
     spec = coerce_config_to_spec(
         graph_id="aurora_forecast",
         name="Aurora forecast (shared nodes)",

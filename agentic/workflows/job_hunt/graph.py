@@ -114,9 +114,23 @@ def build_gen_job_post_graph(
     *,
     goal: str = "Fetch job listings, draft posts, save for human review",
 ) -> PlanGraph:
-    """Layer 3: Spec (or coerced config.json) → shared 5-node PlanGraph."""
+    """Layer 3: Spec (or coerced config.json) → shared 5-node PlanGraph.
+
+    Prefer ``spec.json`` when present so Layer-3 Specs are honored. Defaults
+    below apply only on the config.json fallback path.
+    """
+    from agentic.workflows.common.spec import WorkflowSpec, load_spec
+
+    workflow_dir = Path(__file__).resolve().parent
+    spec_path = workflow_dir / "spec.json"
+    if spec_path.is_file():
+        spec = load_spec(spec_path)
+        if goal and goal != spec.goal:
+            spec = WorkflowSpec(**{**spec.to_dict(), "goal": goal})
+        return build_plan_graph(spec, goal=goal)
+
     cfg = _load_config()
-    # Defaults matching Layer 2 behavior when keys are absent
+    # Defaults matching Layer 2 behavior when keys are absent (config fallback only)
     if "sources" not in cfg:
         cfg = {
             **cfg,
