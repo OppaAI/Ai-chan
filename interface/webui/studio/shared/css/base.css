@@ -1,0 +1,125 @@
+/* Studio base chrome — header, buttons, sidebar. Page CSS overrides as needed. */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  font-family: var(--font-serif);
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Header */
+.studio-header {
+  background: linear-gradient(180deg, var(--bg2) 0%, rgba(14, 14, 23, 0.95) 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.studio-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--purple);
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.studio-header h1::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+  box-shadow: 0 0 8px rgba(168, 136, 232, 0.6);
+}
+.studio-header .header-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.studio-header .header-status {
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.05em;
+}
+
+/* Buttons */
+.btn {
+  background: var(--dimmer);
+  border: 1px solid var(--dim);
+  color: var(--dim);
+  font-family: var(--font-main);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  padding: 5px 14px;
+  cursor: pointer;
+  border-radius: 3px;
+  text-transform: uppercase;
+  transition: all 0.2s;
+}
+.btn:hover {
+  border-color: var(--purple);
+  color: var(--purple);
+  box-shadow: 0 0 8px rgba(168, 136, 232, 0.3);
+}
+.btn-primary {
+  background: var(--purple);
+  border-color: var(--purple);
+  color: var(--bg);
+}
+.btn-primary:hover {
+  background: #b89cf0;
+  box-shadow: 0 0 12px rgba(168, 136, 232, 0.5);
+}
+.btn-danger {
+  background: rgba(232, 81, 106, 0.15);
+  border-color: rgba(232, 81, 106, 0.4);
+  color: var(--danger);
+}
+.btn-danger:hover {
+  background: rgba(232, 81, 106, 0.25);
+  box-shadow: 0 0 8px rgba(232, 81, 106, 0.3);
+}
+
+/* Sidebar */
+.sidebar {
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dim) transparent;
+}
+.sidebar::-webkit-scrollbar { width: 4px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
+.sidebar h2 {
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: var(--pink);
+  text-transform: uppercase;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar h2::before {
+  content: '';
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--pink);
+  box-shadow: 0 0 4px rgba(198, 81, 168, 0.5);
+}
+
+/* Layout shell */
+.studio-body {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: calc(100vh - 49px);
+}
