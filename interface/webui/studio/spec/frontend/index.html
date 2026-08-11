@@ -6,6 +6,7 @@
     <title>Spec Studio</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="static/style.css">
+<base target="_blank">
 </head>
 <body>
     <header class="studio-header">
@@ -15,6 +16,7 @@
         </div>
         <div class="header-actions">
             <span class="header-status" id="header-status"></span>
+            <button id="btn-auto-layout" class="btn" type="button" title="Snap nodes to grid layout">Auto Layout</button>
             <button id="spec-toggle-btn" class="btn" type="button" title="Toggle Spec editor">Spec</button>
             <button id="export-btn" class="btn btn-primary" type="button">Export</button>
             <button id="refresh-btn" class="btn" type="button">Refresh</button>
@@ -25,6 +27,28 @@
         <aside class="sidebar">
             <h2>Playbooks</h2>
             <div id="playbooks-list"></div>
+
+            <div class="node-palette">
+                <h3>Add Node</h3>
+                <div class="palette-item" data-tool="tools.llm.generate" data-name="LLM Generate">
+                    <span class="palette-dot" style="background:var(--purple)"></span> LLM Generate
+                </div>
+                <div class="palette-item" data-tool="tools.web_search" data-name="Web Search">
+                    <span class="palette-dot" style="background:var(--cyan)"></span> Web Search
+                </div>
+                <div class="palette-item" data-tool="tools.human.review" data-name="Human Review">
+                    <span class="palette-dot" style="background:var(--pink)"></span> Human Review
+                </div>
+                <div class="palette-item" data-tool="tools.storage.upload" data-name="Upload">
+                    <span class="palette-dot" style="background:#e8c84a"></span> Upload
+                </div>
+                <div class="palette-item" data-tool="tools.data.join" data-name="Data Join">
+                    <span class="palette-dot" style="background:#84d4e8"></span> Data Join
+                </div>
+                <div class="palette-item" data-tool="custom" data-name="Custom Node">
+                    <span class="palette-dot" style="background:var(--dim)"></span> Custom Node
+                </div>
+            </div>
         </aside>
 
         <div class="canvas-area" id="canvas-area">
@@ -40,11 +64,16 @@
                 <button class="zoom-btn" id="zoom-out" title="Zoom out">−</button>
                 <button class="zoom-btn" id="zoom-fit" title="Fit to view">⊡</button>
             </div>
+            <div class="floating-toolbar" id="floating-toolbar" style="display:none;">
+                <button class="btn btn-danger" id="btn-delete" title="Delete selected (Del)">Delete</button>
+                <button class="btn" id="btn-disconnect" title="Remove all edges from selected node">Disconnect</button>
+            </div>
             <div class="details-panel" id="details-panel" style="display:none">
                 <h3>Node Details</h3>
                 <div id="details-content"></div>
             </div>
             <div class="tooltip" id="tooltip"></div>
+            <div class="keyboard-hint" id="keyboard-hint">Click node to select · Drag to move · Drag port→port to connect · Del to remove</div>
         </div>
     </div>
 
