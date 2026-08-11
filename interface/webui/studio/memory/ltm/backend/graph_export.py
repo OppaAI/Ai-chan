@@ -450,9 +450,11 @@ def export_memory_graph(
                 entities=ents,
                 entity_importance=entity_importance,
             )
-            # Wider spread: weak ≈ 0.2, strong ≈ 1.3
+            # Wider dynamic range for Studio: weak ≈ 0.18, strong ≈ 1.45
+            # so frontend radius/opacity curves have room to differentiate
+            # emotional vs neutral nodes (demo-like variety).
             r = float(scores["retain"])
-            size = round(0.20 + 1.10 * (r ** 1.25), 4)
+            size = round(0.18 + 1.27 * (r ** 1.18), 4)
 
             nodes.append({
                 "id": mid,
