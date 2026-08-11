@@ -69,6 +69,11 @@ def build_aurora_forecast_graph(
 
     cfg = load_workflow_config(_WORKFLOW_DIR)
     # Defaults only when coercing legacy config.json
+    if "sources" not in cfg or not isinstance(cfg.get("sources"), list) or not cfg.get("sources"):
+        cfg = {
+            **cfg,
+            "sources": [{"type": "adapter", "id": "aurora", "name": "aurora"}],
+        }
     if "max_items" not in cfg and "max_results" not in cfg:
         cfg = {**cfg, "max_items": 5}
     if "email" not in cfg:
