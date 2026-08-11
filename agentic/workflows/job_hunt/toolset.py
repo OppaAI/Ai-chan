@@ -1836,10 +1836,14 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     posting = draft.get("posting") or {}
     slug_src = str(posting.get("title") or posting.get("id") or posting.get("source") or "")
     if slug_src:
-        slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or "draft"
+        base_slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:40] or "draft"
     else:
         # Fall back to index-based unique identifier
-        slug = f"draft_{len(drafts_list)}"
+        base_slug = f"draft_{len(drafts_list)}"
+
+    # Add timestamp suffix to ensure uniqueness across multiple saves in same run
+    unique_suffix = f"{int(time.time() * 1000) % 1000000:06d}"
+    slug = f"{base_slug}_{unique_suffix}"
 
     draft_dir = job_post_social_root() / date_str / cat / slug
     draft_dir.mkdir(parents=True, exist_ok=True)
