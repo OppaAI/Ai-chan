@@ -52,7 +52,7 @@ def load_tools(mcp):
     
     @mcp.tool(
         name="post_social",
-        description="Post one payload to selected social services: x, threads, bluesky, mastodon, youtube, reddit, pixelset, discord, medium.",
+        description="Post one payload to selected social services: x, threads, bluesky, mastodon, youtube, reddit, pixelfed, discord, medium.",
     )
     def post_social(
         services: str,
@@ -111,7 +111,7 @@ def load_tools(mcp):
                             title=title or text[:90],
                             description=description or text,
                         )
-                    elif service == "pixelset":
+                    elif service == "pixelfed":
                         result = tool_obj.fn(image_path=image_path or "", caption=text)
                     elif service == "discord":
                         result = tool_obj.fn(text=text, image_path=image_path, channel_id=channel)
