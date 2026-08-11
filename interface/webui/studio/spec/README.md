@@ -1,25 +1,21 @@
-# Spec Studio (Layer 4)
+# Spec Studio (Layer 5)
 
-Edit / validate / preview Workflow Specs and see the compiled shared_5 PlanGraph.
+Unified **Graph + Spec** studio at `/studio/spec`.
+
+- Same look as DAG Studio: playbook list, full DAG canvas, zoom, node details
+- All playbooks from `graph_engine`
+- Spec drawer for Spec-backed workflows (job_hunt / aurora)
 
 ## Run (standalone)
 
 ```bash
-# Loopback-only (default, recommended for local dev)
 python -m uvicorn interface.webui.studio.spec.backend.api:app --host 127.0.0.1 --port 8010
-
-# For remote access (requires authentication boundary, e.g., reverse proxy with auth)
-SPEC_STUDIO_HOST=0.0.0.0 python interface/webui/studio/spec/entrypoint.sh
 ```
 
-Open http://localhost:8010
+## Run (WebUI)
 
-**Security note:** The standalone server has no built-in authentication. For remote access, deploy behind an authenticated reverse proxy or VPN.
+Mounted at `/studio/spec` (toolbar graph button).
 
-## Run (mounted under WebUI)
+## Docs
 
-Mounted at `/studio/spec` from `interface/webui/auth.py` when the main WebUI is up.
-
-## API
-
-See `agentic/workflows/LAYER4.md`.
+See `agentic/workflows/LAYER5.md`.
