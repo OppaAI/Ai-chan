@@ -8,6 +8,9 @@ Edges: about (chunk → entity), same_doc (chunks sharing doc_id).
 
 Size/brightness driven by importance score (access + recency + degree).
 No personal memory or experience nodes.
+
+CHANGES (hub-reduction):
+- Deduplicate chunk→entity edges into single weighted edge per pair
 """
 from __future__ import annotations
 
@@ -341,18 +344,32 @@ def export_knowledge_graph(
         })
     entity_ids = {n["id"] for n in nodes if n["type"] == "entity"}
 
-    # about edges: chunk → entity
+    # FIX: Deduplicate chunk→entity edges by accumulating mention counts
+    about_edges: dict[tuple[str, str], dict[str, Any]] = {}
+    
     for n in chunk_nodes:
         for e in n.get("entities") or []:
             eid = f"ent:{e.casefold()}"
             if eid not in entity_ids:
                 continue
-            edges.append({
-                "source": n["id"],
-                "target": eid,
-                "type": "about",
-                "weight": 1.0,
-            })
+            edge_key = (n["id"], eid)
+            
+            if edge_key not in about_edges:
+                about_edges[edge_key] = {
+                    "source": n["id"],
+                    "target": eid,
+                    "type": "about",
+                    "weight": 1.0,
+                    "mention_count": 0,
+                }
+            about_edges[edge_key]["mention_count"] += 1
+    
+    # Convert accumulated edges with normalized weights
+    # Weight curve: 1 mention = 0.4, 2-3 = 0.6-0.8, 4+ = 1.0
+    for edge in about_edges.values():
+        count = edge.pop("mention_count")
+        edge["weight"] = min(1.0, 0.4 + 0.6 * (count / 4.0))
+        edges.append(edge)
 
     # same_doc edges (light): consecutive chunks in a doc among kept set
     for _doc, cids in doc_chunks.items():
