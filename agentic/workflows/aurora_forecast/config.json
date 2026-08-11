@@ -1,4 +1,5 @@
 {
+  "workflow_id": "aurora_forecast",
   "location_name": "Vancouver, BC",
   "latitude": 49.2827,
   "longitude": -123.1207,
@@ -7,6 +8,22 @@
   "min_kp_for_alert": 5.0,
   "min_kp_for_threads": 5.0,
   "retain_days": 3,
+  "sources": [
+    {"type": "adapter", "id": "aurora", "name": "aurora"}
+  ],
+  "template": "{summary}",
+  "human_in_the_loop": false,
+  "email": {
+    "enabled": true,
+    "when": "interesting",
+    "subject": "Aurora watch — {location_name}"
+  },
+  "social": [
+    {
+      "platform": "threads",
+      "when": {"field": "kp_index", "op": ">=", "value": 5.0}
+    }
+  ],
   "email_on_check": true,
   "email_only_when_interesting": true
 }

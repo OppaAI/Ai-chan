@@ -36,8 +36,9 @@ def list_graphs() -> list[str]:
 
 
 def _ensure_workflow_graphs_loaded() -> None:
-    """Import workflow graph modules so they self-register."""
+    """Import shared nodes + workflow graph modules so they self-register."""
     modules = (
+        "agentic.workflows.common.nodes",
         "agentic.workflows.job_hunt.graph",
         "agentic.workflows.aurora_forecast.graph",
     )

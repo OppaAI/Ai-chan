@@ -1,9 +1,9 @@
 """Shared primitives for agentic workflows (job_hunt, aurora_forecast, …).
 
-Layer 0 stack:
-  Spec → Graph → Nodes (execution.py) → Toolsets (registry/MCP)
+Stack:
+  Spec → Graph → Nodes (execution + nodes.py registration) → Toolsets
 
-Helpers: config, store, notify, graph registry.
+Layer 1 registers the five shared nodes as graph tools.
 """
 
 from agentic.workflows.common.config import load_workflow_config, resolve_config_value
