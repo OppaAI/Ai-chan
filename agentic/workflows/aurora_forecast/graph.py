@@ -18,6 +18,7 @@ from agentic.graph_engine import PlanGraph, PlanNode
 from agentic.registry import TOOLS, tool
 from agentic.workflows.common.config import load_workflow_config
 from agentic.workflows.common.graphs import register_graph
+from agentic.workflows.common.spec_graph import build_plan_graph
 
 # Ensure shared Layer-1 nodes are registered.
 import agentic.workflows.common.nodes  # noqa: F401
@@ -49,93 +50,52 @@ def check_aurora(config_path: str = "", *, state=None) -> str:
     return _check_aurora(config_path, state=state)
 
 
-def _cfg_json() -> str:
-    cfg = load_workflow_config(_WORKFLOW_DIR)
-    return json.dumps(cfg, ensure_ascii=False)
-
-
 def build_aurora_forecast_graph(
     goal: str = "Check aurora visibility, store forecast, and notify when warranted",
 ) -> PlanGraph:
-    cfg = load_workflow_config(_WORKFLOW_DIR)
-    sources = cfg.get("sources") or [{"type": "adapter", "id": "aurora", "name": "aurora"}]
-    template = str(cfg.get("template") or "{summary}")
-    retain = str(cfg.get("retain_days") or 3)
-    email = cfg.get("email") if isinstance(cfg.get("email"), dict) else {
-        "enabled": True,
-        "when": "interesting",
-    }
-    social = cfg.get("social") if isinstance(cfg.get("social"), list) else [
-        {"platform": "threads", "when": {"field": "kp_index", "op": ">=", "value": 5.0}}
-    ]
-    config_json = json.dumps(cfg, ensure_ascii=False)
+    """Layer 3: Spec (or coerced config.json) → shared 5-node PlanGraph.
 
-    nodes = [
-        PlanNode(
-            id="ingest",
-            tool="ingest_data",
-            args={
-                "sources_json": json.dumps(sources),
-                "filters_json": "{}",
-                "parallel": "true",
-                "max_items": "5",
-                "config_json": config_json,
-            },
-        ),
-        PlanNode(
-            id="store",
-            tool="store_data",
-            args={
-                "workflow_id": "aurora_forecast",
-                "items_json": "$result:ingest",
-                "mode": "append",
-                "retain_days": retain,
-                "config_json": config_json,
-            },
-            depends_on=("ingest",),
-        ),
-        PlanNode(
-            id="synth",
-            tool="synthesis_data",
-            args={
-                "items_json": "$result:ingest",
-                "template": template,
-                "llm_enriched": "false",
-                "per_item": "true",
-                "config_json": config_json,
-            },
-            depends_on=("store",),
-        ),
-        PlanNode(
-            id="verify",
-            tool="verify_results",
-            args={
-                "results_json": "$result:synth",
-                "human_in_the_loop": "false",
-                "llm_verify": "false",
-                "auto_pass_json": "{}",
-                "config_json": config_json,
-            },
-            depends_on=("synth",),
-        ),
-        PlanNode(
-            id="output",
-            tool="output_user_results",
-            args={
-                "results_json": "$result:verify",
-                "email_json": json.dumps(email),
-                "social_json": json.dumps(social),
-                "config_json": config_json,
-            },
-            depends_on=("verify",),
-        ),
-    ]
-    return PlanGraph(
-        id="aurora_forecast",
+    Prefer ``spec.json`` when present so Layer-3 Specs are honored. Defaults
+    below apply only on the config.json fallback path.
+    """
+    from agentic.workflows.common.spec import WorkflowSpec, coerce_config_to_spec, load_spec
+
+    spec_path = _WORKFLOW_DIR / "spec.json"
+    if spec_path.is_file():
+        spec = load_spec(spec_path)
+        if goal and goal != spec.goal:
+            spec = WorkflowSpec(**{**spec.to_dict(), "goal": goal})
+        return build_plan_graph(spec, goal=goal)
+
+    cfg = load_workflow_config(_WORKFLOW_DIR)
+    # Defaults only when coercing legacy config.json
+    if "sources" not in cfg or not isinstance(cfg.get("sources"), list) or not cfg.get("sources"):
+        cfg = {
+            **cfg,
+            "sources": [{"type": "adapter", "id": "aurora", "name": "aurora"}],
+        }
+    if "max_items" not in cfg and "max_results" not in cfg:
+        cfg = {**cfg, "max_items": 5}
+    if "email" not in cfg:
+        cfg = {
+            **cfg,
+            "email": {"enabled": True, "when": "interesting"},
+        }
+    if "social" not in cfg:
+        cfg = {
+            **cfg,
+            "social": [
+                {"platform": "threads", "when": {"field": "kp_index", "op": ">=", "value": 5.0}}
+            ],
+        }
+    spec = coerce_config_to_spec(
+        graph_id="aurora_forecast",
         name="Aurora forecast (shared nodes)",
         goal=goal,
-        nodes=tuple(nodes),
+        config=cfg,
+        workflow_id="aurora_forecast",
     )
+    return build_plan_graph(spec, goal=goal)
 
 
 register_graph(build_aurora_forecast_graph())
