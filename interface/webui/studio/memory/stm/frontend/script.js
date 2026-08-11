@@ -1,5 +1,6 @@
 /* STM Studio — circular WM animation (memory-graph theme).
  * Size + glow track score (like retain). Live state from /api/*.
+ * Demo is opt-in (default stopped); Live is the default source.
  */
 const API_ROOT = GraphBoot.apiBase();
 const FACTOR_ORDER = [
@@ -11,9 +12,13 @@ const CIRC = 2 * Math.PI * 44; // r≈44 in viewBox 0..100
 let isAnimating = false;
 let dockRects = [];
 let lastState = null;
-let livePaused = false;
+let liveOn = true;           // Live is the default
 let livePollTimer = null;
 let lastTurnSeen = null;
+
+let demoRunning = false;     // Demo default stopped
+let demoAbort = false;
+let demoPromise = null;
 
 function $(id) { return document.getElementById(id); }
 
@@ -38,13 +43,18 @@ function esc(s) {
 
 function scoreOf(s) { return Number(s.score) || 0; }
 
-/** Map score → visual scale (0.72 … 1.18) and glow opacity */
+/** Map score → visual scale / glow / brightness.
+ *  Wider range so important memories glow brightly and low-score
+ *  candidates about to be evicted look clearly dimmer. */
 function visualFromScore(score) {
   const t = Math.max(0, Math.min(1, score));
+  // Power curve: low scores stay small/dim, high scores expand
+  const p = Math.pow(t, 0.85);
   return {
-    scale: 0.72 + t * 0.46,
-    glow: 0.06 + t * 0.28,
-    brightness: 0.85 + t * 0.25,
+    scale: 0.62 + p * 0.62,          // ~0.62 … 1.24
+    glow: 0.04 + p * 0.55,           // much wider glow range
+    glowPx: 8 + p * 36,              // radius of halo
+    brightness: 0.72 + p * 0.42,     // 0.72 … 1.14
   };
 }
 
@@ -94,13 +104,16 @@ function buildRack(miller) {
 
 function updateChrome(state) {
   const m = state.miller || {};
-  $("modeBadge").textContent = state.mode || "demo";
+  const mode = state.mode || (liveOn ? "live" : "demo");
+  $("modeBadge").textContent = mode;
   $("metaBar").textContent =
     `slots ${state.size ?? 0} · tokens ${state.total_tokens ?? 0}` +
     ` · miller ${m.min ?? "?"}/${m.center ?? "?"}/${m.max ?? "?"}` +
     ` · turn #${state.turn_counter ?? 0}`;
 
-  const budget = state.token_budget > 0 ? state.token_budget : Math.max(2000, (state.total_tokens || 0) * 1.5 || 2000);
+  const budget = state.token_budget > 0
+    ? state.token_budget
+    : Math.max(2000, (state.total_tokens || 0) * 1.5 || 2000);
   const pct = Math.min(100, ((state.total_tokens || 0) / budget) * 100);
   $("budgetFill").style.width = pct + "%";
   $("budgetText").textContent =
@@ -129,20 +142,30 @@ function updateChrome(state) {
   }
 }
 
+function applyScoreVisual(el, score) {
+  const vis = visualFromScore(score);
+  el.classList.toggle("weak", score < 0.35);
+  el.style.filter = `brightness(${vis.brightness})`;
+  // Glow intensity + radius both scale with score (important = bright, decaying = dim)
+  el.style.boxShadow = `0 0 ${vis.glowPx}px rgba(168,136,232,${vis.glow})`;
+  el.dataset.scale = String(vis.scale);
+  const dash = Math.max(0, Math.min(1, score)) * CIRC;
+  const ring = el.querySelector("circle.ring");
+  if (ring) ring.setAttribute("stroke-dasharray", `${dash} ${CIRC - dash}`);
+  return vis;
+}
+
 function createMemEl(slot, id) {
   const score = scoreOf(slot);
-  const vis = visualFromScore(score);
   const d = document.createElement("div");
   d.className = "mem" + (score < 0.35 ? " weak" : "");
   d.dataset.id = id;
-  d.style.filter = `brightness(${vis.brightness})`;
-  d.style.boxShadow = `0 0 ${18 + score * 22}px rgba(168,136,232,${vis.glow})`;
-  const dash = Math.max(0, Math.min(1, score)) * CIRC;
+  applyScoreVisual(d, score);
   d.innerHTML = `
     <svg viewBox="0 0 100 100">
       <circle class="track" cx="50" cy="50" r="44"/>
       <circle class="ring" cx="50" cy="50" r="44"
-        stroke-dasharray="${dash} ${CIRC - dash}"/>
+        stroke-dasharray="${Math.max(0, Math.min(1, score)) * CIRC} ${CIRC}"/>
     </svg>
     <div class="mem-inner">
       <div class="mem-rank">#${slot._rank ?? "?"}</div>
@@ -157,13 +180,7 @@ function createMemEl(slot, id) {
 
 function updateMemEl(el, slot, rank) {
   const score = scoreOf(slot);
-  const vis = visualFromScore(score);
-  el.classList.toggle("weak", score < 0.35);
-  el.style.filter = `brightness(${vis.brightness})`;
-  el.style.boxShadow = `0 0 ${18 + score * 22}px rgba(168,136,232,${vis.glow})`;
-  const dash = Math.max(0, Math.min(1, score)) * CIRC;
-  const ring = el.querySelector("circle.ring");
-  if (ring) ring.setAttribute("stroke-dasharray", `${dash} ${CIRC - dash}`);
+  applyScoreVisual(el, score);
   const se = el.querySelector(".mem-score");
   if (se) se.textContent = score.toFixed(2);
   const re = el.querySelector(".mem-rank");
@@ -172,7 +189,6 @@ function updateMemEl(el, slot, rank) {
   if (te) te.textContent = `${slot.tokens ?? 0}t · r×${slot.recall_count ?? 0}`;
   const tx = el.querySelector(".mem-text");
   if (tx) tx.textContent = (slot.user || "").slice(0, 28);
-  el.dataset.scale = String(vis.scale);
   el.onclick = () => showFactors(slot);
 }
 
@@ -221,6 +237,7 @@ function layoutNodes(slots, animate) {
   });
 }
 
+/** Slow, readable join: user + assistant drift together, fuse, then drop into STM. */
 async function playMergeIntro(user, assistant, turnLabel) {
   const stage = $("stage");
   const sr = stage.getBoundingClientRect();
@@ -229,47 +246,59 @@ async function playMergeIntro(user, assistant, turnLabel) {
 
   const pU = document.createElement("div");
   pU.className = "pill u";
-  pU.textContent = "U: " + (user || "").slice(0, 36);
-  pU.style.left = mx + 24 + "px";
-  pU.style.top = my + mh / 2 - 14 + "px";
+  pU.innerHTML = `<span class="pill-tag">USER</span><span class="pill-body">${esc((user || "").slice(0, 40))}</span>`;
+  pU.style.left = mx + 18 + "px";
+  pU.style.top = my + mh / 2 - 22 + "px";
   stage.appendChild(pU);
 
   const pA = document.createElement("div");
   pA.className = "pill a";
-  pA.textContent = "A: " + (assistant || "").slice(0, 36);
-  pA.style.left = mx + mw - 240 + "px";
-  pA.style.top = my + mh / 2 - 14 + "px";
+  pA.innerHTML = `<span class="pill-tag">ASST</span><span class="pill-body">${esc((assistant || "").slice(0, 40))}</span>`;
+  pA.style.left = mx + mw - 250 + "px";
+  pA.style.top = my + mh / 2 - 22 + "px";
   stage.appendChild(pA);
 
-  await sleep(40);
+  await sleep(80);
   pU.classList.add("show");
-  await sleep(360);
+  await sleep(520);          // linger so the pair is readable
   pA.classList.add("show");
-  await sleep(320);
+  await sleep(480);
 
-  const cx = mx + mw / 2 - 40;
-  pU.style.transform = `translate(${cx - (mx + 24)}px, 0) scale(0.9)`;
-  pA.style.transform = `translate(${cx - (mx + mw - 240)}px, 0) scale(0.9)`;
-  await sleep(320);
+  // Drift toward center — slower so the join is obvious
+  const cx = mx + mw / 2 - 70;
+  pU.style.transition = "transform 0.85s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.4s ease";
+  pA.style.transition = "transform 0.85s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.4s ease";
+  pU.style.transform = `translate(${cx - (mx + 18)}px, 0) scale(0.92)`;
+  pA.style.transform = `translate(${cx - (mx + mw - 250)}px, 0) scale(0.92)`;
+  await sleep(900);
 
   $("mergeArrow").classList.add("show");
+  await sleep(220);
+
+  // Soft dissolve into interaction chip
   pU.style.opacity = "0";
   pA.style.opacity = "0";
 
   const merged = document.createElement("div");
   merged.className = "pill merged show";
-  merged.textContent = turnLabel || "Interaction";
+  merged.innerHTML = `<span class="pill-tag">INTERACTION</span><span class="pill-body">${esc(turnLabel || "Turn")}</span>`;
   merged.style.left = cx + 10 + "px";
-  merged.style.top = my + mh / 2 - 14 + "px";
+  merged.style.top = my + mh / 2 - 22 + "px";
   stage.appendChild(merged);
+  await sleep(700);          // hold the fused interaction
+
+  // Sink toward the rack
+  merged.style.transition = "transform 0.7s ease, opacity 0.5s ease";
+  merged.style.transform = "translateY(36px) scale(0.85)";
   await sleep(380);
+  merged.style.opacity = "0";
 
   const spawn = { x: cx + 10, y: my + mh / 2 - 14 };
   pU.remove();
   pA.remove();
-  merged.style.opacity = "0";
-  setTimeout(() => merged.remove(), 300);
+  setTimeout(() => merged.remove(), 320);
   $("mergeArrow").classList.remove("show");
+  await sleep(120);
   return spawn;
 }
 
@@ -307,9 +336,10 @@ async function applyState(data, { animateNew = false, filled = null } = {}) {
 
   document.querySelectorAll(".mem").forEach((el) => {
     if (!nextIds.has(el.dataset.id)) {
-      el.style.transition = "opacity .35s, transform .45s";
+      el.style.transition = "opacity .35s, transform .45s, filter .3s, box-shadow .3s";
       el.style.opacity = "0";
       el.style.transform += " scale(0.4)";
+      el.style.filter = "brightness(0.5)";
       setTimeout(() => el.remove(), 400);
     }
   });
@@ -345,6 +375,130 @@ async function applyState(data, { animateNew = false, filled = null } = {}) {
   layoutNodes(slots, true);
 }
 
+/* ---------- Live control (default ON) ---------- */
+
+function setLiveUI(on) {
+  liveOn = on;
+  const btn = $("btnLive");
+  const ind = $("liveIndicator");
+  const label = $("liveLabel");
+  if (!btn) return;
+  btn.classList.toggle("is-live", on);
+  btn.classList.toggle("is-stopped", !on);
+  btn.setAttribute("aria-pressed", String(on));
+  if (on) {
+    ind.className = "live-indicator recording";
+    label.textContent = "Live";
+  } else {
+    ind.className = "live-indicator stopped";
+    label.textContent = "Live";
+  }
+  if ($("modeBadge") && !demoRunning) {
+    $("modeBadge").textContent = on ? "live" : "idle";
+  }
+}
+
+function toggleLive() {
+  if (liveOn) {
+    // Stop live → red dot becomes stop square, text dims
+    setLiveUI(false);
+  } else {
+    // Resume live (and stop demo if running)
+    if (demoRunning) stopDemo();
+    setLiveUI(true);
+    pollLive();
+  }
+}
+
+/* ---------- Demo (default stopped) ---------- */
+
+function setDemoUI(running) {
+  demoRunning = running;
+  const play = $("btnDemoPlay");
+  const pause = $("btnDemoPause");
+  const status = $("demoStatus");
+  if (play) play.disabled = running;
+  if (pause) pause.disabled = !running;
+  if (status) status.textContent = running ? "Demo running…" : "Demo stopped";
+  if ($("modeBadge")) $("modeBadge").textContent = running ? "demo" : (liveOn ? "live" : "idle");
+}
+
+function stopDemo() {
+  demoAbort = true;
+  demoRunning = false;
+  setDemoUI(false);
+}
+
+async function runFullDemo() {
+  if (demoRunning || isAnimating) return;
+  // Demo takes over: pause live so the scripted sequence is visible
+  setLiveUI(false);
+  demoAbort = false;
+  setDemoUI(true);
+
+  const script = [
+    { kind: "seed" },
+    { kind: "wait", ms: 900 },
+    { kind: "fill", user: "Remember my favorite color is violet.", assistant: "Got it — violet is locked in." },
+    { kind: "wait", ms: 1400 },
+    { kind: "fill", user: "I prefer short answers.", assistant: "Understood. I'll keep replies tight." },
+    { kind: "wait", ms: 1400 },
+    { kind: "fill", user: "Don't bring up work after 9pm.", assistant: "Noted. Quiet hours after 9." },
+    { kind: "wait", ms: 1200 },
+    { kind: "touch" },
+    { kind: "wait", ms: 1000 },
+    { kind: "fill", user: "What's my favorite color?", assistant: "Violet — you told me earlier." },
+    { kind: "wait", ms: 1400 },
+    { kind: "fill", user: "Random fact: I like rain sounds.", assistant: "Rain sounds noted." },
+    { kind: "wait", ms: 1200 },
+    { kind: "fill", user: "Another filler to pressure the Miller window.", assistant: "Slot pressure rising." },
+    { kind: "wait", ms: 1200 },
+    { kind: "fill", user: "Yet more context so eviction can fire.", assistant: "Working memory is near capacity." },
+    { kind: "wait", ms: 1200 },
+    { kind: "fill", user: "One more — expect a weak item to recede.", assistant: "Eviction likely." },
+    { kind: "wait", ms: 1600 },
+    { kind: "touch" },
+    { kind: "wait", ms: 800 },
+  ];
+
+  try {
+    for (const step of script) {
+      if (demoAbort) break;
+      if (step.kind === "wait") {
+        await sleep(step.ms);
+      } else if (step.kind === "seed") {
+        await seed({ fromDemo: true });
+      } else if (step.kind === "fill") {
+        // Drive the same animation path as a real fill
+        isAnimating = true;
+        try {
+          const data = await api("/fill", {
+            method: "POST",
+            body: JSON.stringify({ user: step.user, assistant: step.assistant }),
+          });
+          if (data.ok) {
+            await applyState(data, {
+              animateNew: true,
+              filled: { user: step.user, assistant: step.assistant },
+            });
+          }
+        } finally {
+          isAnimating = false;
+        }
+      } else if (step.kind === "touch") {
+        await touch({ fromDemo: true });
+      }
+    }
+  } catch (e) {
+    console.error("Demo error", e);
+  } finally {
+    setDemoUI(false);
+    demoAbort = false;
+  }
+}
+
+/* ---------- API actions ---------- */
+
 async function refresh() {
   if (isAnimating) return;
   isAnimating = true;
@@ -357,8 +511,8 @@ async function refresh() {
   }
 }
 
-async function seed() {
-  if (isAnimating) return;
+async function seed(opts = {}) {
+  if (isAnimating && !opts.fromDemo) return;
   isAnimating = true;
   try {
     document.querySelectorAll(".mem").forEach((m) => m.remove());
@@ -371,6 +525,7 @@ async function seed() {
     renderEvictions(data.evictions || []);
     await sleep(40);
     for (let i = 0; i < slots.length; i++) {
+      if (demoAbort) break;
       const s = slots[i];
       const id = slotKey(s, i);
       s._rank = i + 1;
@@ -381,7 +536,7 @@ async function seed() {
         el.style.top = dockRects[i].y + "px";
       }
       requestAnimationFrame(() => el.classList.add("entered"));
-      await sleep(90);
+      await sleep(110);
     }
     layoutNodes(slots, true);
   } finally {
@@ -389,8 +544,8 @@ async function seed() {
   }
 }
 
-async function touch() {
-  if (isAnimating) return;
+async function touch(opts = {}) {
+  if (isAnimating && !opts.fromDemo) return;
   isAnimating = true;
   try {
     const data = await api("/touch", { method: "POST", body: "{}" });
@@ -416,6 +571,7 @@ async function touch() {
 
 async function reset() {
   if (isAnimating) return;
+  stopDemo();
   isAnimating = true;
   try {
     const data = await api("/reset", { method: "POST", body: "{}" });
@@ -452,17 +608,21 @@ async function fill() {
   }
 }
 
+/* ---------- Wire UI ---------- */
+
 $("btnRefresh").onclick = () => refresh().catch(console.error);
-$("btnPause").onclick = () => {
-  livePaused = !livePaused;
-  $("btnPause").textContent = livePaused ? "Play live" : "Pause live";
-  $("btnPause").setAttribute("aria-pressed", String(livePaused));
-  if (!livePaused) pollLive();
-};
+$("btnLive").onclick = () => toggleLive();
 $("btnSeed").onclick = () => seed().catch(console.error);
 $("btnTouch").onclick = () => touch().catch(console.error);
 $("btnReset").onclick = () => reset().catch(console.error);
 $("btnFill").onclick = () => fill().catch(console.error);
+
+$("btnDemoPlay").onclick = () => {
+  if (demoRunning) return;
+  runFullDemo().catch(console.error);
+};
+$("btnDemoPause").onclick = () => stopDemo();
+
 $("backBtn").onclick = (e) => {
   e.preventDefault();
   if (history.length > 1) history.back();
@@ -480,7 +640,7 @@ window.addEventListener("resize", () => {
 });
 
 async function pollLive() {
-  if (livePaused || isAnimating) return;
+  if (!liveOn || isAnimating || demoRunning) return;
   try {
     const data = await api("/state?mode=auto");
     const state = data.state || data;
@@ -488,15 +648,28 @@ async function pollLive() {
     const live = state.mode === "live";
     if (!live) return;
     if (live && lastTurnSeen !== null && turn > lastTurnSeen) {
-      const slot = (state.slots || []).reduce((a, s) => !a || Number(s.created_turn ?? -1) > Number(a.created_turn ?? -1) ? s : a, null);
+      const slot = (state.slots || []).reduce(
+        (a, s) =>
+          !a || Number(s.created_turn ?? -1) > Number(a.created_turn ?? -1) ? s : a,
+        null
+      );
       lastTurnSeen = turn;
-      await applyState(data, { animateNew: true, filled: slot ? { user: slot.user || "", assistant: slot.assistant || "" } : null });
+      await applyState(data, {
+        animateNew: true,
+        filled: slot ? { user: slot.user || "", assistant: slot.assistant || "" } : null,
+      });
     } else {
       await applyState(data, { animateNew: false });
       if (lastTurnSeen === null || (live && turn > lastTurnSeen)) lastTurnSeen = turn;
     }
-  } catch (e) { console.debug("STM live poll failed", e); }
+  } catch (e) {
+    console.debug("STM live poll failed", e);
+  }
 }
+
+// Default: Live ON, Demo stopped
+setLiveUI(true);
+setDemoUI(false);
 
 refresh().catch((e) => {
   $("metaBar").textContent = "API offline — start STM studio backend";
