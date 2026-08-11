@@ -20,7 +20,7 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
-SHARED_DIR = Path(__file__).resolve().parents[2] / "_shared"
+SHARED_DIR = Path(__file__).resolve().parents[2] / "shared"
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="mcp-frontend")
 
