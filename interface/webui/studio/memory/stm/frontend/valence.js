@@ -50,7 +50,9 @@
     el.classList.remove("valence-pos", "valence-neg", "valence-neutral");
     el.classList.add("valence-" + vHue);
     el.dataset.valence = valenceOf(slot);
-    el.style.boxShadow = `0 0 ${18 + score * 22}px ${valenceGlow(vHue, vis.glow)}`;
+    // Valence tints the halo; intensity still tracks score (important = bright)
+    const px = vis.glowPx != null ? vis.glowPx : 8 + Math.pow(score, 0.85) * 36;
+    el.style.boxShadow = `0 0 ${px}px ${valenceGlow(vHue, vis.glow)}`;
     if (!el.querySelector(".mem-valence")) {
       const badge = document.createElement("div");
       badge.className = "mem-valence";
@@ -71,7 +73,8 @@
     el.classList.remove("valence-pos", "valence-neg", "valence-neutral");
     el.classList.add("valence-" + vHue);
     el.dataset.valence = valenceOf(slot);
-    el.style.boxShadow = `0 0 ${18 + score * 22}px ${valenceGlow(vHue, vis.glow)}`;
+    const px = vis.glowPx != null ? vis.glowPx : 8 + Math.pow(score, 0.85) * 36;
+    el.style.boxShadow = `0 0 ${px}px ${valenceGlow(vHue, vis.glow)}`;
     let badge = el.querySelector(".mem-valence");
     if (!badge) {
       badge = document.createElement("div");
