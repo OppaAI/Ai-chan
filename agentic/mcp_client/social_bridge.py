@@ -24,11 +24,11 @@ def _call_mcp(tool: str, **kwargs: Any) -> dict[str, Any]:
         return {"ok": False, "error": str(e), "tool": tool}
 
 
-def _adapter_post_pixelset(selections: list[dict[str, Any]]) -> dict[str, Any]:
+def _adapter_post_pixelfed(selections: list[dict[str, Any]]) -> dict[str, Any]:
     if not selections:
-        return {"ok": False, "provider": "pixelset", "error": "no selections"}
+        return {"ok": False, "provider": "pixelfed", "error": "no selections"}
     sel = selections[0]
-    return _call_mcp("post_social", services="pixelset", text=sel.get("caption", ""), image_path=sel.get("media_path", ""))
+    return _call_mcp("post_social", services="pixelfed", text=sel.get("caption", ""), image_path=sel.get("media_path", ""))
 
 
 def _adapter_post_youtube(sel: dict[str, Any]) -> dict[str, Any]:
@@ -41,7 +41,7 @@ def _adapter_post_youtube(sel: dict[str, Any]) -> dict[str, Any]:
 
 
 MCP_ADAPTERS = {
-    "pixelset": _adapter_post_pixelset,
+    "pixelfed": _adapter_post_pixelfed,
     "youtube": _adapter_post_youtube,
 }
 
@@ -50,6 +50,6 @@ def patch_social_registries() -> None:
     """Patch remaining draft registries that intentionally dispatch through MCP."""
     import agentic.toolkit.social as social
 
-    social._MEDIA_PROVIDERS_REGISTRY["pixelset"] = _adapter_post_pixelset
+    social._MEDIA_PROVIDERS_REGISTRY["pixelfed"] = _adapter_post_pixelfed
     social._VIDEO_PROVIDERS_REGISTRY["youtube"] = _adapter_post_youtube
     log.info("[mcp] Patched media/video social registries to route through MCP")
