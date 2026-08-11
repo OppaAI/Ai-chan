@@ -48,6 +48,7 @@ from system.bioclock import get_timezone
 from system.log import get_logger
 from cognition.memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
+from agentic.mcp_client.bridge import bootstrap_mcp
 from cognition.consolidate.reflect import _load_soul
 
 from agentic.toolkit.common import workspace_root
@@ -1464,6 +1465,11 @@ def _cmd() -> int:
             draft_dir = Path(args.post).resolve()
             if args.approve:
                 _mark_approved(draft_dir)
+            # Bootstrap MCP client to populate social registries before posting
+            try:
+                bootstrap_mcp()
+            except Exception as e:
+                log.warning("[social CLI] MCP bootstrap failed (will error later if providers unavailable): %s", e)
             print(json.dumps(post_draft(draft_dir, providers=providers), ensure_ascii=False, indent=2))
             return 0
         weekly_p.print_help()
@@ -1483,6 +1489,17 @@ def _cmd() -> int:
             draft_dir = Path(args.post).resolve()
             if args.approve:
                 _mark_approved(draft_dir)
+            # Bootstrap MCP client to populate social registries before posting
+            try:
+                bootstrap_mcp()
+            except Exception as e:
+                log.warning("[social CLI] MCP bootstrap failed (will error later if providers unavailable): %s", e)
+            # Enforce human-approval gate before posting
+            try:
+                _require_approved(draft_dir)
+            except SocialApprovalError as e:
+                print(json.dumps({"error": str(e)}, ensure_ascii=False, indent=2))
+                return 1
             meta_path = draft_dir / "draft.json"
             kind = "video"
             if meta_path.exists():
