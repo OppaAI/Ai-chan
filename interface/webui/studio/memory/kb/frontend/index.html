@@ -16,19 +16,77 @@
          style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:#1a1028;border:1px solid var(--dim);border-radius:50%;color:var(--purple);text-decoration:none;font-weight:bold;">←</a>
       <h1>Knowledge Graph</h1>
     </div>
-    <div class="hdr-right">
-      <span id="meta"></span>
-      <button id="btn-refresh" type="button">Refresh</button>
-    </div>
+    <span class="sub">learned chunks · entities only · size = importance</span>
   </header>
   <div class="wrap">
-    <aside class="side">
-      <label>Search</label>
-      <input id="q" type="search" placeholder="Query knowledge…" />
-      <div id="hits"></div>
+    <aside class="sidebar">
+      <nav class="memory-studio-tabs" aria-label="Memory studio sections">
+        <a class="memory-studio-tab" href="/studio/memory/stm/">STM</a>
+        <a class="memory-studio-tab" href="/studio/memory/ltm/">LTM</a>
+        <a class="memory-studio-tab active" href="/studio/memory/kb/" aria-current="page">KB</a>
+      </nav>
+      <fieldset style="border:none;padding:0;margin:0">
+        <legend style="font-size:11px;color:var(--muted);font-weight:600;margin-bottom:8px">Graph options</legend>
+        
+        <label>Limit
+          <input type="number" id="limit" value="200" min="20" max="500" />
+        </label>
+        
+        <label style="display:flex;align-items:center;gap:6px;margin:8px 0">
+          <input type="checkbox" id="include-history" />
+          <span>Include archived</span>
+        </label>
+        
+        <label style="display:flex;align-items:center;gap:6px;margin:8px 0">
+          <input type="checkbox" id="include-entities" checked />
+          <span>Show entities</span>
+        </label>
+      </fieldset>
+
+      <fieldset style="border:none;padding:0;margin:12px 0 0">
+        <legend style="font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px">Date range</legend>
+        
+        <label>From
+          <input type="date" id="date-from" />
+        </label>
+        
+        <label>To
+          <input type="date" id="date-to" />
+        </label>
+      </fieldset>
+
+      <button class="btn" id="reload" style="margin-top:12px">Load graph</button>
+      <button class="btn" id="refilter" style="margin-top:6px">Re-filter</button>
+
+      <fieldset style="border:none;padding:0;margin:12px 0 0">
+        <legend style="font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px">Filter displayed</legend>
+        
+        <label>Min importance
+          <input type="number" id="min-imp" value="0" min="0" max="1" step="0.05" />
+        </label>
+        
+        <label>Entity contains
+          <input type="text" id="filter-entity" placeholder="e.g. ros2" />
+        </label>
+      </fieldset>
+
+      <div class="legend">
+        <div><span class="swatch" style="background:#4ade80"></span>Knowledge chunk</div>
+        <div><span class="swatch" style="background:#a78bfa"></span>Entity hub</div>
+        <div style="margin-top:8px;font-size:10px;color:var(--muted)">
+          Larger + brighter = higher<br/>importance (access · recency · entities)
+        </div>
+      </div>
+
+      <div class="details" id="details"></div>
     </aside>
-    <div class="main">
-      <svg id="g"></svg>
+    <div id="canvas">
+      <svg id="svg"></svg>
+      <div class="zoom-ctl">
+        <button type="button" id="z-in" aria-label="Zoom in" title="Zoom in">+</button>
+        <button type="button" id="z-out" aria-label="Zoom out" title="Zoom out">−</button>
+        <button type="button" id="z-fit" aria-label="Reset zoom" title="Reset zoom">⊡</button>
+      </div>
     </div>
   </div>
   <script src="shared/graph-bootstrap.js"></script>
@@ -36,8 +94,11 @@
   <script>
     document.getElementById('back-btn').addEventListener('click', function(e) {
       e.preventDefault();
-      if (window.history.length > 1) window.history.back();
-      else window.location.href = '/';
+      if (window.history.length > 1) {
+        window.history.back();
+      } else {
+        window.location.href = '/';
+      }
     });
   </script>
 </body>
