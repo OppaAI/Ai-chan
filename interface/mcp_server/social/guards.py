@@ -18,7 +18,7 @@ RATE_LIMITS: dict[str, dict[str, int]] = {
     "post_reddit": {"per_hour": 30, "per_day": 50},
     "post_bluesky": {"per_hour": 100, "per_day": 500},
     "post_mastodon": {"per_hour": 30, "per_day": 100},
-    "post_pixelset": {"per_hour": 30, "per_day": 100},
+    "post_pixelfed": {"per_hour": 30, "per_day": 100},
     "post_discord": {"per_hour": 30, "per_day": 200},
     "post_social": {"per_hour": 30, "per_day": 100},
     "read_protonmail": {"per_hour": 30, "per_day": 100},
