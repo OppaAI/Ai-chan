@@ -37,16 +37,16 @@ def build_plan_graph(spec: WorkflowSpec, *, goal: str | None = None) -> PlanGrap
     domain.setdefault("template", spec.template)
     domain.setdefault("llm_enriched", spec.llm_enriched)
     domain.setdefault("human_in_the_loop", spec.human_in_the_loop)
-    # Overwrite with validated spec values (not setdefault) for lifted fields
-    domain["per_item"] = spec.per_item
-    domain["parallel"] = spec.parallel
-    domain["auto_pass_if"] = spec.auto_pass_if
-    domain["email"] = spec.email
-    domain["social"] = spec.social
+    if spec.auto_pass_if is not None:
+        domain.setdefault("auto_pass_if", spec.auto_pass_if)
+    if spec.email:
+        domain.setdefault("email", spec.email)
+    if spec.social:
+        domain.setdefault("social", spec.social)
 
     config_json = json.dumps(domain, ensure_ascii=False)
-    sources = spec.sources or domain.get("sources") or []
-    filters = spec.filters or {}
+    sources = list(spec.sources)
+    filters = dict(spec.filters)
     retain = str(spec.retain_days)
     max_items = str(spec.max_items)
     parallel = "true" if spec.parallel else "false"
@@ -55,8 +55,8 @@ def build_plan_graph(spec: WorkflowSpec, *, goal: str | None = None) -> PlanGrap
     per_item = "true" if spec.per_item else "false"
     hitl = "true" if spec.human_in_the_loop else "false"
     auto_pass = json.dumps(spec.auto_pass_if or {}, ensure_ascii=False)
-    email = spec.email or domain.get("email") or {}
-    social = spec.social if spec.social else (domain.get("social") or [])
+    email = dict(spec.email)
+    social = list(spec.social)
     workflow_id = spec.workflow_id or spec.id
 
     nodes = [
