@@ -12,7 +12,7 @@ Builds on Layer 1 (`LAYER1.md`).
 
 ## Graph shape
 
-```
+```text
 ingest_data → store_data → synthesis_data → verify_results → output_user_results
 ```
 

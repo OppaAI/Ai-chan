@@ -1831,7 +1831,17 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
 
     date_str = local_now().strftime("%Y-%m-%d")
     cat = draft.get("category", "post")
-    draft_dir = job_post_social_root() / date_str / cat
+
+    # Generate unique slug from posting data to avoid overwrites
+    posting = draft.get("posting") or {}
+    slug_src = str(posting.get("title") or posting.get("id") or posting.get("source") or "")
+    if slug_src:
+        slug = re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48] or "draft"
+    else:
+        # Fall back to index-based unique identifier
+        slug = f"draft_{len(drafts_list)}"
+
+    draft_dir = job_post_social_root() / date_str / cat / slug
     draft_dir.mkdir(parents=True, exist_ok=True)
 
     text = draft.get("text", "").strip()
