@@ -16,7 +16,7 @@ def _default_media_roots() -> list[Path]:
 
 
 def _approved_media_roots() -> list[Path]:
-    raw = env("PIXELFED_MEDIA_ROOTS", "") or env("PIXELSET_MEDIA_ROOTS", "")
+    raw = env("PIXELFED_MEDIA_ROOTS", "")
     roots = [Path(part.strip()).expanduser().resolve() for part in raw.split(",") if part.strip()]
     return roots or [root.resolve() for root in _default_media_roots()]
 
@@ -39,7 +39,6 @@ def _pixelfed_instance() -> str:
     return (
         env("PIXELFED_INSTANCE", "")
         or env("PIXELFED_INSTANCE_URL", "")
-        or env("PIXELSET_INSTANCE", "")
     ).rstrip("/")
 
 
@@ -47,7 +46,6 @@ def _pixelfed_token() -> str:
     return (
         env("PIXELFED_ACCESS_TOKEN", "")
         or env("PIXELFED_PAT", "")
-        or env("PIXELSET_ACCESS_TOKEN", "")
     )
 
 
