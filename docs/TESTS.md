@@ -392,7 +392,7 @@ Run before any phase suite.
 
 ## Phase 2.1 — Social
 
-*Draft-first social publishing: weekly Patreon dev-post syndication, curated photo showcase (Pixelset via MCP), nightly RSS-only tech-jobs-available-today draft, and video queue (YouTube). All posting requires human approval regardless of trigger path.*
+*Draft-first social publishing: weekly Patreon dev-post syndication, curated photo showcase (Pixelfed via MCP), nightly RSS-only tech-jobs-available-today draft, and video queue (YouTube). All posting requires human approval regardless of trigger path.*
 
 ### 2.1.1 Approval gate integrity (P0 — test this first)
 
@@ -427,9 +427,9 @@ Run before any phase suite.
 - [ ] An empty inbox returns `skipped: empty_inbox` without creating a draft directory.
 - [ ] Zero worthwhile candidates returns `skipped: nothing_selected` without creating a draft directory.
 - [ ] `review.md` correctly links each selected media file's local copy (not the original inbox path).
-- [ ] Pixelset posting posts only the first selection when multiple are present; confirm this is documented behavior, not a silent bug, in the review bundle.
-- [ ] Pixelset photo posting goes through MCP `post_social(services="pixelset")`.
-- [ ] Pixelset/MCP posting correctly passes the approved caption and media path to `post_social`.
+- [ ] Pixelfed posting posts only the first selection when multiple are present; confirm this is documented behavior, not a silent bug, in the review bundle.
+- [ ] Pixelfed photo posting goes through MCP `post_social(services="pixelfed")`.
+- [ ] Pixelfed/MCP posting correctly passes the approved caption and media path to `post_social`.
 
 
 ### 2.1.5 Lane D — tech jobs available today

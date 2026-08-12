@@ -15,7 +15,7 @@ log = get_logger(__name__)
 # handle. They remain reachable internally via the *_social registry adapters
 # (see social_bridge.patch_social_registries), just not as free LLM tools.
 _HIDDEN_MCP_POST_TOOLS = frozenset({
-    "post_youtube", "post_pixelset",
+    "post_youtube", "post_pixelfed",
 })
 
 

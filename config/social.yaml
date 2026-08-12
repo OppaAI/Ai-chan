@@ -26,15 +26,16 @@ THREADS_TOPIC_TAG: "AI Threads"  # Default topic tag for Threads posts.
 THREADS_PUBLISH_DELAY_SECONDS: "5"  # Delay between publish requests to avoid rate limits.
 IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB image upload calls time out.
 
-# -- Photo social (Lane B — Pixelset) --
+# -- Photo social (Lane B — Pixelfed) --
 PHOTO_SOCIAL_AUTODRAFT: "0"  # Auto-generate draft photo captions.
 PHOTO_SOCIAL_AUTOPOST: "0"  # Auto-post photos to providers.
-PHOTO_SOCIAL_PROVIDERS: "pixelset"  # Photo social provider(s) to post to.
+PHOTO_SOCIAL_PROVIDERS: "pixelfed"  # Photo social provider(s) to post to.
 PHOTO_SOCIAL_INBOX: "photos/inbox"  # Directory to scan for new photos.
 PHOTO_SOCIAL_MAX_ITEMS: "3"  # Max items to process per scan.
 PHOTO_SOCIAL_MAX_CHARS: "260"  # Max characters for photo captions.
 PHOTO_SOCIAL_ROOT: ""  # Override path for photo social output. Defaults to <USER_SPACE_ROOT>/<user_id>/social/photos/.
 PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS: "21600"  # Scan interval (6 hours).
+PIXELFED_MEDIA_ROOTS: ""  # Comma-separated approved image roots for post_pixelfed; empty uses the photo social root.
 
 # -- Video social (Lane C — YouTube) --
 VIDEO_SOCIAL_AUTODRAFT: "0"  # Auto-generate draft video descriptions.

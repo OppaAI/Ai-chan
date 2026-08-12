@@ -11,7 +11,7 @@ Aiko's social publishing workflows, combined into one module. Four lanes:
 
   Lane B — Curated photo showcase:
     scan/caption/select real photos locally, save a review bundle, then post
-    approved photos through MCP to Pixelset instances.
+    approved photos through MCP to Pixelfed instances.
 
   Lane C — YouTube video queue:
     unchanged described-video queue; approved posts go through MCP YouTube.
@@ -48,6 +48,7 @@ from system.bioclock import get_timezone
 from system.log import get_logger
 from cognition.memory.memorize import AikoMemorize
 from system.userspace import user_workspace_root
+from agentic.mcp_client.bridge import bootstrap_mcp
 from cognition.consolidate.reflect import _load_soul
 
 from agentic.toolkit.common import workspace_root
@@ -518,14 +519,14 @@ def retry_weekly_social_if_needed(memorize: AikoMemorize) -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Lane B — Curated photo showcase (Pixelset only)
+# Lane B — Curated photo showcase (Pixelfed only)
 # ══════════════════════════════════════════════════════════════════════════
 
 PHOTO_SOCIAL_AUTODRAFT = os.getenv("PHOTO_SOCIAL_AUTODRAFT", "0").lower() in {"1", "true", "yes", "on"}
 PHOTO_SOCIAL_AUTOPOST = os.getenv("PHOTO_SOCIAL_AUTOPOST", "0").lower() in {"1", "true", "yes", "on"}
 PHOTO_SOCIAL_PROVIDERS = tuple(
     p.strip().lower()
-    for p in os.getenv("PHOTO_SOCIAL_PROVIDERS", "pixelset").split(",")
+    for p in os.getenv("PHOTO_SOCIAL_PROVIDERS", "pixelfed").split(",")
     if p.strip()
 )
 PHOTO_SOCIAL_INBOX = os.getenv("PHOTO_SOCIAL_INBOX", "photos/inbox")
@@ -777,8 +778,8 @@ def _read_media_draft(draft_dir: Path) -> tuple[list[dict[str, Any]], dict[str, 
     return meta.get("selections", []), meta
 
 
-# ── Pixelset via MCP ─────────────────────────────────────────────────────────
-# Uploads are delegated to the MCP server (`post_social` with services="pixelset"),
+# ── Pixelfed via MCP ─────────────────────────────────────────────────────────
+# Uploads are delegated to the MCP server (`post_social` with services="pixelfed"),
 # which owns OAuth token refresh/state, rate limiting, idempotency, and audit
 # logging. The registry below starts empty and is populated at runtime by
 # `agentic.mcp_client.social_bridge.patch_social_registries()`.
@@ -1433,7 +1434,7 @@ def _cmd() -> int:
     weekly_p.add_argument("--providers", default="", help="comma-separated full-post providers overriding A1_FULL_PROVIDERS")
     weekly_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
 
-    media_p = sub.add_parser("media", help="curated photo showcase (Pixelset) + video queue (YouTube)")
+    media_p = sub.add_parser("media", help="curated photo showcase (Pixelfed) + video queue (YouTube)")
     media_p.add_argument("--draft", action="store_true", help="scan photo inbox and create an LLM-curated photo draft bundle")
     media_p.add_argument("--force", action="store_true", help="create a new photo draft even if one exists this run")
     media_p.add_argument("--inbox", default="", help="override the photo inbox folder")
@@ -1441,7 +1442,7 @@ def _cmd() -> int:
     media_p.add_argument("--draft-video-all", action="store_true", help="drain the video inbox, one draft per described video")
     media_p.add_argument("--video-inbox", default="", help="override the video inbox folder")
     media_p.add_argument("--post", metavar="DRAFT_DIR", help="post an approved draft directory (photo or video, auto-detected)")
-    media_p.add_argument("--providers", default="", help="comma-separated providers overriding the draft kind's default provider list (pixelset / youtube)")
+    media_p.add_argument("--providers", default="", help="comma-separated providers overriding the draft kind's default provider list (pixelfed / youtube)")
     media_p.add_argument("--approve", action="store_true", help="mark the draft passed to --post as human_approved before posting")
 
     args = parser.parse_args()
@@ -1464,6 +1465,11 @@ def _cmd() -> int:
             draft_dir = Path(args.post).resolve()
             if args.approve:
                 _mark_approved(draft_dir)
+            # Bootstrap MCP client to populate social registries before posting
+            try:
+                bootstrap_mcp()
+            except Exception as e:
+                log.warning("[social CLI] MCP bootstrap failed (will error later if providers unavailable): %s", e)
             print(json.dumps(post_draft(draft_dir, providers=providers), ensure_ascii=False, indent=2))
             return 0
         weekly_p.print_help()
@@ -1483,6 +1489,17 @@ def _cmd() -> int:
             draft_dir = Path(args.post).resolve()
             if args.approve:
                 _mark_approved(draft_dir)
+            # Bootstrap MCP client to populate social registries before posting
+            try:
+                bootstrap_mcp()
+            except Exception as e:
+                log.warning("[social CLI] MCP bootstrap failed (will error later if providers unavailable): %s", e)
+            # Enforce human-approval gate before posting
+            try:
+                _require_approved(draft_dir)
+            except SocialApprovalError as e:
+                print(json.dumps({"error": str(e)}, ensure_ascii=False, indent=2))
+                return 1
             meta_path = draft_dir / "draft.json"
             kind = "video"
             if meta_path.exists():

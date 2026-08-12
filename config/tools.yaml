@@ -184,7 +184,7 @@
     {
       "handler": "agentic.toolkit.social:draft_photo_social",
       "name": "draft_photo_social",
-      "description": "Scan the photo inbox, caption and curate candidates, and create a Pixelset photo draft bundle for human review. Does NOT post anything.",
+      "description": "Scan the photo inbox, caption and curate candidates, and create a Pixelfed photo draft bundle for human review. Does NOT post anything.",
       "props": {
         "inbox": {
           "type": "string",
@@ -441,7 +441,7 @@
     {
       "handler": "agentic.toolkit.social:post_photo_social",
       "name": "post_photo_social",
-      "description": "Post an ALREADY HUMAN-APPROVED photo draft to Pixelset. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now. If draft_dir is omitted, posts the most recently approved photo draft.",
+      "description": "Post an ALREADY HUMAN-APPROVED photo draft to Pixelfed. Will refuse (ok=false) unless a person has approved this exact draft outside this conversation, and refuses to post the same draft twice. Only call when the user explicitly asks to publish/post the draft now. If draft_dir is omitted, posts the most recently approved photo draft.",
       "props": {
         "draft_dir": {
           "type": "string",
@@ -452,7 +452,7 @@
           "items": {
             "type": "string",
             "enum": [
-              "pixelset"
+              "pixelfed"
             ]
           }
         }

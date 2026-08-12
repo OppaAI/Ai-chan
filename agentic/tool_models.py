@@ -100,7 +100,7 @@ class DraftVideoSocialArgs(BaseModel):
 
 
 class PostPhotoSocialArgs(PostSocialDraftArgs):
-    providers: tuple[Literal["pixelset"], ...] | None = None
+    providers: tuple[Literal["pixelfed"], ...] | None = None
 
 
 class PostVideoSocialArgs(PostSocialDraftArgs):
