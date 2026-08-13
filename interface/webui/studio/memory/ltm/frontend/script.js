@@ -164,17 +164,21 @@ function nodeRadius(d) {
 }
 
 function edgeOpacity(e, nodeById) {
-  const s = nodeById.get(typeof e.source === 'object' ? e.source.id : e.source);
-  const t = nodeById.get(typeof e.target === 'object' ? e.target.id : e.target);
-  const rs = s ? retainOf(s) : 0.3;
-  const rt = t ? retainOf(t) : 0.3;
-  const mid = (rs + rt) / 2;
-  // Brighter synapses overall so connections stay visible when nodes spread out
-  if (e.type === 'supersedes') return 0.42 + mid * 0.48;
+  const sid = typeof e.source === 'object' ? e.source.id : e.source;
+  const tid = typeof e.target === 'object' ? e.target.id : e.target;
+  const s = nodeById.get(sid);
+  const t = nodeById.get(tid);
+  const rs = s ? retainOf(s) : 0.25;
+  const rt = t ? retainOf(t) : 0.25;
+  // Geometric-ish mean + power expands contrast when retains cluster
+  const mid = Math.pow(Math.max(0.05, rs * rt), 0.45);
+  const w = Math.max(0, Math.min(1, Number(e.weight) || 0.4));
+  const wBoost = 0.35 + 0.65 * w; // weak weight stays dim
+  if (e.type === 'supersedes') return Math.min(0.95, (0.25 + mid * 0.7) * wBoost);
   if (e.type === 'mentions' || e.type === 'grounded_in' || e.type === 'practiced_in') {
-    return 0.14 + mid * 0.52;
+    return Math.min(0.9, (0.06 + mid * 0.75) * wBoost);
   }
-  return 0.10 + mid * 0.40;
+  return Math.min(0.7, (0.04 + mid * 0.55) * wBoost);
 }
 
 function lineageText(d, graph) {
@@ -384,7 +388,11 @@ function render() {
 
   const link = g.append('g').selectAll('line').data(links).join('line')
     .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : '#3de0ff')
-    .attr('stroke-width', d => d.type === 'supersedes' ? 1.4 : (0.6 + (d.weight ? Math.min(2, Number(d.weight)) * 0.3 : 0.8)))
+    .attr('stroke-width', d => {
+      if (d.type === 'supersedes') return 1.6;
+      const w = Math.max(0, Math.min(1, Number(d.weight) || 0.4));
+      return 0.5 + w * 2.2;
+    })
     .attr('stroke-opacity', d => edgeOpacity(d, nodeById))
     .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null);
 
@@ -459,9 +467,9 @@ function render() {
       return;
     }
     if (n.x != null && n.y != null) return;
-    // Ring + noise: isolates get larger radius so they don't all pile in the middle
+    // Isolates start farther out so the mild center force cannot collapse them
     const deg = degById.get(n.id) || 0;
-    const baseR = deg === 0 ? 0.38 : 0.22;
+    const baseR = deg === 0 ? 0.55 : 0.20;
     const ring = baseR + (i % 7) * 0.04;
     const ang = (i * 2.399963) + Math.random() * 0.6; // golden-angle-ish
     n.x = centerX + Math.cos(ang) * ring * w * 0.85 + (Math.random() - 0.5) * 40;
@@ -471,21 +479,34 @@ function render() {
   simulation = GraphBoot.makeSimulation(nodes, links, {
     w,
     h,
-    // Stronger repulsion opens the cloud; longer links keep synapses readable
-    charge: -220,
+    // Isolates repel harder so they stay in an outer ring; connected nodes cluster by links
+    charge: d => ((degById.get(d.id) || 0) === 0 ? -320 : -200),
+    centerStrength: 0.08,
     nodeRadius,
-    collisionPadding: 10,
+    collisionPadding: 12,
     linkDistance: d => {
-      if (d.type === 'mentions') return 68;
-      if (d.type === 'supersedes') return 110;
-      if (d.type === 'grounded_in' || d.type === 'practiced_in') return 85;
-      return 80;
+      if (d.type === 'mentions') return 90;
+      if (d.type === 'supersedes') return 120;
+      if (d.type === 'grounded_in' || d.type === 'practiced_in') return 95;
+      return 85;
     },
-    linkStrength: 0.32,
+    linkStrength: d => {
+      if (d.type === 'mentions') return 0.45;
+      if (d.type === 'supersedes') return 0.25;
+      return 0.30;
+    },
   })
-    .force('x', d3.forceX(centerX).strength(0.035))  // mild pull, not a hard center
-    .force('y', d3.forceY(centerY).strength(0.035))
-    .alphaDecay(0.022)
+    .force('x', d3.forceX(centerX).strength(d => {
+      const deg = degById.get(d.id) || 0;
+      if (d.id === userEntityId) return 0.2;
+      return deg === 0 ? 0.004 : 0.02;
+    }))
+    .force('y', d3.forceY(centerY).strength(d => {
+      const deg = degById.get(d.id) || 0;
+      if (d.id === userEntityId) return 0.2;
+      return deg === 0 ? 0.004 : 0.02;
+    }))
+    .alphaDecay(0.018)
     .on('tick', () => {
       link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
@@ -493,7 +514,7 @@ function render() {
     });
 
   // Give the simulation a short burst so sparse graphs settle open instead of blobbing
-  simulation.alpha(0.9).restart();
+  simulation.alpha(1).restart();
 
   svg.on('click', () => { document.getElementById('details').style.display = 'none'; });
 }
