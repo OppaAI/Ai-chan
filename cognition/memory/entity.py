@@ -312,7 +312,7 @@ _DOMAIN_ENTITY_TERMS: tuple[str, ...] = tuple(
     t.strip().lower()
     for t in os.getenv(
         "ENTITY_DOMAIN_TERMS",
-        "aiko,aiko-chan,grace,aurora,eric,jetson,jetson orin,orin nano,"
+        "aiko-chan,grace,aurora,eric,jetson,jetson orin,orin nano,"
         "ros2,ros,nav2,slam,lidar,oak-d,vrm,mcp,harrier,miotts,sensevoice,"
         "sherpa-onnx,eres2net,silero,qdrant,mem0,sqlite-vec,"
         "cnc,wmc,emc,mcc,msb,gce,tms,tic,toc,hrs,hrm,agi,"
