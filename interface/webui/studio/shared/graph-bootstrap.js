@@ -68,15 +68,17 @@
       },
       opts || {}
     );
+    var centerStrength = (o.centerStrength != null) ? o.centerStrength : 0.12;
+    var chargeForce = d3.forceManyBody().distanceMax(420);
+    // charge may be a number or a per-node function
+    chargeForce.strength(o.charge);
     return d3.forceSimulation(nodes)
       .force('link', d3.forceLink(links)
         .id(function (d) { return d.id; })
         .distance(o.linkDistance)
         .strength(o.linkStrength))
-      .force('charge', d3.forceManyBody()
-        .strength(o.charge)
-        .distanceMax(420))
-      .force('center', d3.forceCenter(o.w / 2, o.h / 2).strength(0.55))
+      .force('charge', chargeForce)
+      .force('center', d3.forceCenter(o.w / 2, o.h / 2).strength(centerStrength))
       .force('collision', d3.forceCollide().radius(function (d) {
         return o.nodeRadius(d) + o.collisionPadding;
       }));
