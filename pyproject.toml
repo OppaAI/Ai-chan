@@ -55,7 +55,6 @@ slack = ["slack-sdk>=3.27.0"]
 matrix = ["matrix-nio>=0.25.0"]
 bluesky = ["atproto>=0.0.34"]
 mastodon = ["Mastodon.py>=1.8.0"]
-reddit = ["praw>=7.7.0"]
 youtube = []  # uses raw requests (requests already a core dep)
 msal = ["msal>=1.30.0"]
 adapters = [

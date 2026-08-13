@@ -112,7 +112,7 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 
 | Feature | Status |
 |---|---|
-| Social account connectors — X, Threads, Pixelfed, YouTube, Reddit, Bluesky, Mastodon | ✅ Done |
+| Social account connectors — X, Threads, Pixelfed, YouTube, Bluesky, Mastodon | ✅ Done |
 | Draft-first posting workflow — Aiko prepares posts, owner approves before publish | ✅ Done |
 | Platform-specific safety rules baked into drafting prompts (no private details, no engagement bait, per-platform length limits) | ✅ Done |
 | Workspace photo picker for Pixelfed (vision-captioned, LLM-selected, public-safe filter, MCP posted) | ✅ Done |
@@ -136,7 +136,6 @@ Aiko-chan is built in phases. Each phase is a self-contained capability layer th
 | Bluesky | ✅ Active | One-way Lane A1 teaser fanout only; no two-way adapter |
 | Mastodon | ✅ Active | One-way Lane A1 teaser fanout only; no two-way adapter |
 | Pixelfed | ✅ Active | Lane B photo target via MCP |
-| Reddit | ✅ Active | Full Lane A1 repost to r/OppaAI via MCP |
 | Flickr | ❌ Not prioritized | Mostly archival/photo-community use; not a strong discovery channel for Aiko |
 
 ---
@@ -318,9 +317,9 @@ The `dream()` consolidation system runs across all phases and improves continuou
 ## Aiko social lanes (updated)
 
 - Two-way messenger adapters are native background services for WebUI/CLI sessions via `AIKO_MESSENGER_ADAPTERS`; only Telegram, Discord, Matrix, and Slack are supported for conversational ingress/egress.
-- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to Reddit r/OppaAI and the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. YouTube remains video-upload only, not YouTube Community teaser posting. Lane A2 manual posting remains out of Aiko.
+- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. YouTube remains video-upload only, not YouTube Community teaser posting. Lane A2 manual posting remains out of Aiko.
 - Lane B is the curated photo pipeline for Pixelfed posting through the social MCP server.
 - Lane C YouTube video posting continues to use the existing MCP posting pipeline.
 - Lane D creates one Threads teaser-list draft per night at 23:00 for tech jobs available today, using only the configured CivicJobs.ca Lower Mainland RSS and Job Bank Canada filtered RSS feeds, filtered by TECH_JOB_KEYWORDS.
-- Bluesky, Mastodon, Reddit, and YouTube are one-way posting tools only, not two-way adapters.
+- Bluesky, Mastodon, and YouTube are one-way posting tools only, not two-way adapters.
 - Nightly reflection remains native GitHub/Hugo publishing rather than MCP.
