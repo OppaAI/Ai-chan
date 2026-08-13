@@ -81,7 +81,15 @@ class TelegramAdapter(AdapterBase):
             self._app.add_handler(CommandHandler("start", handle_text))
 
             self._thread = threading.Thread(
-                target=self._app.run_polling, kwargs={"drop_pending_updates": True},
+                target=self._app.run_polling,
+                kwargs={
+                    "drop_pending_updates": True,
+                    # run_polling installs SIGINT/SIGTERM handlers by default,
+                    # but add_signal_handler() only works in the main thread.
+                    # We run polling in a background thread, so disable stop
+                    # signals — the adapter's own stop() handles shutdown.
+                    "stop_signals": None,
+                },
                 daemon=True,
             )
             self._thread.start()
