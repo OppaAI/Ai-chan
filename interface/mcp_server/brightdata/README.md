@@ -9,12 +9,13 @@ Isolated stdio MCP server so Aiko can call **Scraper Studio** collectors and **S
 Self-healing is **not** local selector repair inside Aiko. Bright Data runs an AI refactor on *their* infrastructure:
 
 1. Site layout changes → your collector returns empty / null fields.
-2. You (or the agent) call **`bd_self_heal`** with a plain-language prompt  
+2. You (or the agent) call **`bd_self_heal`** with a plain-language prompt
    (e.g. `"price is undefined; it is now in span.price-now"`).
 3. API: `POST /dca/collectors/{c_*}/refactor_template` → poll progress.
 4. Job pauses at **`pending_answer` / awaiting approval** (HITL by default).
 5. **`bd_self_heal_approve`** commits the diff (`resume_automation_job`).
-6. Same **`c_*` collector id** keeps working; re-run **`bd_run_collect`**.
+6. Poll **`bd_self_heal_progress`** until `phase=completed` (required before collect).
+7. Same **`c_*` collector id** keeps working; re-run **`bd_run_collect`**.
 
 CLI equivalent: `bdata scraper heal <id> "..."` then `bdata scraper approve`.
 
@@ -61,4 +62,5 @@ python -m interface.mcp_server.brightdata.server
 1. `bd_run_collect` with URLs → structured rows for deep research / `learn_report`.
 2. If rows empty or fields null → `bd_self_heal` with a fix prompt + sample URL.
 3. Review → `bd_self_heal_approve`.
-4. `bd_run_collect` again with the **same** collector id.
+4. Poll `bd_self_heal_progress` until `phase=completed`.
+5. `bd_run_collect` again with the **same** collector id.

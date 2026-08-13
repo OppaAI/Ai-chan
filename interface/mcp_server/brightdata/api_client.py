@@ -25,6 +25,24 @@ import requests
 BASE = os.getenv("BRIGHT_DATA_API_BASE", "https://api.brightdata.com").rstrip("/")
 
 
+def _validate_collector_id(cid: str) -> str:
+    """Validate and return a safe collector ID.
+
+    Requires c_ prefix and rejects path/query/fragment separators to prevent URL injection.
+    """
+    cid = cid.strip()
+    if not cid:
+        raise ValueError("collector_id required (or set BRIGHT_DATA_COLLECTOR_ID)")
+    if not cid.startswith("c_"):
+        raise ValueError("collector_id must start with 'c_' prefix")
+    # Reject path separators, query strings, fragments, and encoded variants
+    dangerous_chars = ['/', '?', '#', '%2F', '%2f', '%3F', '%3f', '%23']
+    for char in dangerous_chars:
+        if char in cid:
+            raise ValueError(f"collector_id contains invalid character(s): {char}")
+    return cid
+
+
 def _token() -> str:
     return (
         os.getenv("BRIGHT_DATA_API_TOKEN", "").strip()
@@ -152,14 +170,12 @@ def trigger_self_heal(
     timeout: float = 60.0,
 ) -> dict[str, Any]:
     """Start Self-Healing refactor (plain-language fix, same collector id)."""
-    cid = (collector_id or default_collector_id()).strip()
-    if not cid:
-        raise ValueError("collector_id required")
+    cid = _validate_collector_id(collector_id or default_collector_id())
     prompt = (prompt or "").strip()
     if not prompt:
         raise ValueError("prompt required (max 1000 chars)")
     if len(prompt) > 1000:
-        prompt = prompt[:1000]
+        raise ValueError(f"prompt exceeds maximum length of 1000 characters (got {len(prompt)})")
 
     url = f"{BASE}/dca/collectors/{cid}/refactor_template"
     body: dict[str, Any] = {"prompt": prompt}
@@ -181,9 +197,7 @@ def self_heal_progress(
     timeout: float = 60.0,
 ) -> dict[str, Any]:
     """Poll Self-Healing job progress until ready / pending_answer / error."""
-    cid = (collector_id or default_collector_id()).strip()
-    if not cid:
-        raise ValueError("collector_id required")
+    cid = _validate_collector_id(collector_id or default_collector_id())
     url = f"{BASE}/dca/collectors/{cid}/refactor_template/progress"
     resp = requests.get(url, headers=_headers(), timeout=timeout)
     if not (200 <= resp.status_code < 300):
@@ -200,9 +214,7 @@ def resume_self_heal(
     timeout: float = 60.0,
 ) -> dict[str, Any]:
     """Approve or reject a pending Self-Healing diff."""
-    cid = (collector_id or default_collector_id()).strip()
-    if not cid:
-        raise ValueError("collector_id required")
+    cid = _validate_collector_id(collector_id or default_collector_id())
     url = f"{BASE}/dca/collectors/{cid}/resume_automation_job"
     body = {"message": bool(approve), "auto_save": bool(auto_save) and bool(approve)}
     resp = requests.post(url, headers=_headers(), json=body, timeout=timeout)
@@ -237,13 +249,38 @@ def run_self_heal(
         if status in {"pending_answer", "awaiting_approval", "waiting_for_approval"}:
             if auto_approve:
                 resume = resume_self_heal(collector_id, approve=True, auto_save=True)
+                # Continue polling until completion after auto-approval
+                while time.monotonic() < deadline:
+                    last = self_heal_progress(collector_id)
+                    status = str(last.get("status") or last.get("state") or "").lower()
+                    if status in {"done", "completed", "success", "ready", "finished"}:
+                        return {
+                            "ok": True,
+                            "phase": "completed",
+                            "collector_id": collector_id or default_collector_id(),
+                            "trigger": started,
+                            "progress": last,
+                            "resume": resume,
+                        }
+                    if status in {"error", "failed", "canceled", "cancelled"}:
+                        return {
+                            "ok": False,
+                            "phase": "failed",
+                            "collector_id": collector_id or default_collector_id(),
+                            "trigger": started,
+                            "progress": last,
+                            "resume": resume,
+                        }
+                    time.sleep(max(2.0, poll_seconds))
+                # Timeout after approval
                 return {
-                    "ok": True,
-                    "phase": "approved",
+                    "ok": False,
+                    "phase": "timeout",
                     "collector_id": collector_id or default_collector_id(),
                     "trigger": started,
                     "progress": last,
                     "resume": resume,
+                    "error": "timed out waiting for self-heal completion after approval",
                 }
             return {
                 "ok": True,

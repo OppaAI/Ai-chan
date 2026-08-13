@@ -120,9 +120,10 @@ def bd_self_heal(
     prompt: e.g. "price returns null after redesign — capture span.price-now"
     sample_url: optional URL to anchor the heal (passed as custom_input).
     auto_approve: if false (default), stops at awaiting_approval for HITL.
-      If true, auto-approves and auto-saves (unattended).
+      If true, auto-approves, auto-saves, and waits for completion (unattended).
 
-    After approval, re-run bd_run_collect with the same collector_id.
+    Returns phase=completed when self-healing is done. After completion,
+    re-run bd_run_collect with the same collector_id.
     """
     try:
         custom = None
@@ -159,6 +160,8 @@ def bd_self_heal_approve(
     """Approve or reject a pending Self-Healing diff (HITL gate).
 
     Call after bd_self_heal returns phase=awaiting_approval.
+    After approval, poll bd_self_heal_progress until phase=completed
+    before calling bd_run_collect.
     """
     try:
         data = bd.resume_self_heal(
