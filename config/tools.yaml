@@ -1022,7 +1022,7 @@
     {
       "handler": "agentic.toolkit.social:post_to_social",
       "name": "post_to_social",
-      "description": "Post text and optional image to one or more social platforms. services is a comma-separated list e.g. 'bluesky,mastodon'. Supported platforms: x, threads, bluesky, mastodon, reddit, discord. Does NOT require human approval.",
+      "description": "Post text and optional image to one or more social platforms. services is a comma-separated list e.g. 'bluesky,mastodon'. Supported platforms: x, threads, bluesky, mastodon, discord. Does NOT require human approval.",
       "props": {
         "text": {
           "type": "string",

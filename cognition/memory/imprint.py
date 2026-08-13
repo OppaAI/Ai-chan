@@ -25,6 +25,31 @@ _HEDGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Frozen relative-time / date-check facts that leak into stored memories
+# ("Oppa today is Monday, August 10, 2026", "Aiko checks the date of July 3
+# (day after tomorrow)", "[2026-08-11] OppaAI asks Aiko to verify the date
+# of July 3"). When recalled these masquerade as the current date and
+# contaminate Aiko's sense of "now" — the <current_datetime> block is the
+# only authoritative clock. memorize.format_for_context drops such memories
+# from context; util/scrub_stale_memory_dates.py deletes them from the DB.
+_TEMPORAL_CONTAMINATION_RE = re.compile(
+    r"(?:\b(?:today|tomorrow|yesterday|tonight|right now|currently|as of now|"
+    r"next day|day after tomorrow|last (?:week|month|night))\s+"
+    r"(?:is|was|will be|refers? to|means?|equals?)\b"
+    r"|\b(?:as today|as of today|referred? to [^.\n]{0,40} as today)\b)",
+    re.IGNORECASE,
+)
+_DATE_CHECK_RE = re.compile(
+    r"\b(?:verif(?:y|ied|ying)|check(?:es|ed|s)?|confirm(?:ed|s)?|ask(?:ed|s)?|request(?:ed|s)?)\b"
+    r"[^.\n]{0,60}\b(?:the\s+)?(?:date|day of)\b",
+    re.IGNORECASE,
+)
+
+def _is_stale_temporal_fact(text: str) -> bool:
+    """True when a stored memory is a frozen date/time fact whose wording
+    would masquerade as the current date if injected into context."""
+    return bool(_TEMPORAL_CONTAMINATION_RE.search(text) or _DATE_CHECK_RE.search(text))
+
 def _force_subject_name(text: str, subject: str, user_name: str) -> str:
     t = (text or "").strip()
     if not t:
@@ -65,6 +90,8 @@ Rules:
 - Prefer memorable facts about {user_name}. Also keep Aiko's own explicit statements about herself (identity, limits, preferences, plans) — written as "Aiko ...", third person.
 - Write facts as short, direct, self-contained statements in third person.
 - No uncertain language: never use might, probably, seems, maybe, perhaps, appears.
+- NEVER store relative-time facts: no "today", "tomorrow", "yesterday", "day after tomorrow", "next day", "last week", "this week", "currently", "now". These go stale the moment they are stored and confuse later conversations. If a fact genuinely depends on a date, state the concrete calendar date instead.
+- NEVER extract facts from a date/time-checking exchange ("what is today's date", "verify the date of X", "what day is the day after tomorrow", "check the date"). These are ephemeral lookups, not memorable facts. If the only substance of the turn is a date lookup, return: []
 - If nothing is worth remembering, return: []
 
 Return ONLY a JSON array of objects. No markdown. No explanation.
@@ -89,20 +116,23 @@ Good examples:
 [{{"fact": "{user_name}'s birthday is June 3", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} is building a robot called GRACE", "subject": "user", "valence_score": 1}}, {{"fact": "{user_name} joined the Hugging Face Hackathon", "subject": "user", "valence_score": 1}}, {{"fact": "{user_name} lost his wallet", "subject": "user", "valence_score": -2}}, {{"fact": "{user_name} has a deadline on Friday", "subject": "user", "valence_score": -1}}, {{"fact": "{user_name} dislikes mushrooms", "subject": "user", "valence_score": -1}}, {{"fact": "Aiko is off limits to others", "subject": "assistant", "valence_score": 0}}, {{"fact": "Aiko dislikes being treated as human-like", "subject": "assistant", "valence_score": -1}}, {{"fact": "Aiko should follow {user_name}'s rules", "subject": "assistant", "valence_score": 0}}]
 
 Bad examples (do not produce these):
-[{{"fact": "{user_name} might like cats", "subject": "user", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "subject": "user", "valence_score": 0}}, {{"fact": "Aiko should remember this", "subject": "assistant", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} dislikes being human-like", "subject": "user", "valence_score": -1}}, {{"fact": "{user_name} needs to follow {user_name}'s rules", "subject": "user", "valence_score": 0}}]
+[{{"fact": "{user_name} might like cats", "subject": "user", "valence_score": 0}}, {{"fact": "It seems {user_name} is tired", "subject": "user", "valence_score": 0}}, {{"fact": "Aiko should remember this", "subject": "assistant", "valence_score": 0}}, {{"fact": "{user_name} says he is off limits to others", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} dislikes being human-like", "subject": "user", "valence_score": -1}}, {{"fact": "{user_name} needs to follow {user_name}'s rules", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name} today is Monday, August 10, 2026", "subject": "user", "valence_score": 0}}, {{"fact": "{user_name}'s next day is July 1, 2026", "subject": "user", "valence_score": 0}}, {{"fact": "Aiko checks the date of July 3 (day after tomorrow)", "subject": "assistant", "valence_score": 0}}]
 
 Conversation:
 {conversation}"""
 
 
 __all__ = [
+    "_DATE_CHECK_RE",
     "_EXTRACT_MAX_TOKENS",
     "_EXTRACT_MIN_CHARS",
     "_EXTRACT_PROMPT",
     "_EXTRACT_TIMEOUT",
     "_HEDGE_RE",
     "_HEDGE_SIGNALS",
+    "_TEMPORAL_CONTAMINATION_RE",
     "_force_subject_name",
+    "_is_stale_temporal_fact",
     "_valence_from_llm",
 ]
 

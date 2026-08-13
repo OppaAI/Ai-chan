@@ -28,6 +28,11 @@ import sqlite_vec
 from openai import OpenAI
 
 from cognition.memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
+# Frozen relative-time / date-check facts (see imprint.py) are dropped from
+# recalled context in format_for_context — they would otherwise masquerade
+# as the current date and contaminate Aiko's sense of "now". The
+# <current_datetime> block is the only authoritative clock.
+from cognition.memory.imprint import _is_stale_temporal_fact
 from cognition.memory.narrative import query_wants_emotion, format_supersession_narrative
 from system.log import get_logger
 from cognition.memory.vecstore import HarrierEmbedder
@@ -2384,12 +2389,24 @@ class AikoMemorize:
         lines = [
             "<memory_context>",
             "Facts about the person you are speaking with — not a separate person. Use silently. Never quote or reference this block directly.",
+            "IMPORTANT: dates and 'today'/'yesterday' inside these memories refer to when the event happened, never to the current date. The only authoritative 'now' is the <current_datetime> block. Never treat a date, month, or time inside a memory as today's date.",
             "",
         ]
+        kept = False
         for m in memories:
             text       = m.get("memory") or m.get("text")
             if not text:
                 continue
+            # Frozen relative-time / date-check facts masquerade as the
+            # current date (e.g. "Oppa today is Monday, August 10, 2026",
+            # "Aiko checks the date of July 3"). Drop them from context —
+            # stale ephemeral junk, and the main source of Aiko's "what
+            # month is it?" confusion. They stay in the DB (recoverable)
+            # until util/scrub_stale_memory_dates.py removes them.
+            if _is_stale_temporal_fact(text):
+                log.debug("memory recall dropped stale temporal fact: %r", text[:120])
+                continue
+            kept = True
             if len(text) > MEMORY_CONTEXT_FACT_CHARS:
                 text = text[:MEMORY_CONTEXT_FACT_CHARS].rstrip() + "..."
             created_at = m.get("created_at")
@@ -2416,6 +2433,9 @@ class AikoMemorize:
                     lines.append(f"  - {text}")
             else:
                 lines.append(f"  - {text}")
+
+        if not kept:
+            return None
 
         lines.append("</memory_context>")
         block = "\n".join(lines)

@@ -259,7 +259,7 @@ Aiko-chan/
 | 1 | Soul — CLI, Ollama, mem0 + Qdrant, SearXNG | ✅ Done |
 | 1.5 | Stream — streaming pipeline, persona, first UI, test TTS models | ✅ Done |
 | 2 | Voice — SenseVoice ASR, Silero VAD, MioTTS, hands-free talk | ✅ Done |
-| 2.1 | Social — X, Threads, IG, Discord, Reddit, social media | 🔲 Planned |
+| 2.1 | Social — X, Threads, IG, Discord, social media | 🔲 Planned |
 | 2.2 | Message — Email, Telegram, Discord, Slack, messaging services | 🔲 Planned |
 | 2.5 | Agent — tool registry, skill workflows, scheduled local tasks | ⏳ Active |
 | 3 | Face — VRM avatar, three-vrm, expressions, lip-sync | 🔲 Planned |
@@ -330,9 +330,9 @@ If you find this project useful, consider buying me a coffee ☕
 ## Aiko social lanes (updated)
 
 - Two-way messenger adapters are native background services for WebUI/CLI sessions via `AIKO_MESSENGER_ADAPTERS`; only Telegram, Discord, Matrix, and Slack are supported for conversational ingress/egress.
-- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to Reddit r/OppaAI and the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. YouTube remains video-upload only, not YouTube Community teaser posting. Lane A2 manual posting remains out of Aiko.
+- Lane A1 syndicates the weekly Patreon Aiko development post on Saturdays at 18:00: full reposts go to the Hugo-backed GitHub Pages dev blog; short teasers go to X, Bluesky, Mastodon, Discord `#aiko_dev`, and Threads when image hosting is available. YouTube remains video-upload only, not YouTube Community teaser posting. Lane A2 manual posting remains out of Aiko.
 - Lane B is the curated photo pipeline for Pixelfed posting through the social MCP server.
 - Lane C YouTube video posting continues to use the existing MCP posting pipeline.
 - Lane D creates one Threads teaser-list draft per night at 23:00 for tech jobs available today, using only the configured CivicJobs.ca Lower Mainland RSS and Job Bank Canada filtered RSS feeds, filtered by TECH_JOB_KEYWORDS.
-- Bluesky, Mastodon, Reddit, and YouTube are one-way posting tools only, not two-way adapters.
+- Bluesky, Mastodon, and YouTube are one-way posting tools only, not two-way adapters.
 - Nightly reflection remains native GitHub/Hugo publishing rather than MCP.

@@ -52,14 +52,13 @@ def load_tools(mcp):
     
     @mcp.tool(
         name="post_social",
-        description="Post one payload to selected social services: x, threads, bluesky, mastodon, youtube, reddit, pixelfed, discord, medium.",
+        description="Post one payload to selected social services: x, threads, bluesky, mastodon, youtube, pixelfed, discord, medium.",
     )
     def post_social(
         services: str,
         text: str = "",
         image_path: Optional[str] = None,
         title: str = "",
-        subreddit: str = "OppaAI",
         video_path: Optional[str] = None,
         description: str = "",
         channel: str = "",
@@ -98,13 +97,6 @@ def load_tools(mcp):
                         result = tool_obj.fn(text=text, image_path=image_path)
                     elif service == "mastodon":
                         result = tool_obj.fn(text=text, image_path=image_path)
-                    elif service == "reddit":
-                        result = tool_obj.fn(
-                            title=title or text[:280] or "Aiko dev update",
-                            text=text,
-                            image_path=image_path,
-                            subreddit=subreddit,
-                        )
                     elif service == "youtube":
                         result = tool_obj.fn(
                             video_path=video_path or image_path or "",

@@ -5,7 +5,7 @@ Aiko's social publishing workflows, combined into one module. Four lanes:
 
   Lane A1 — Weekly Patreon dev-post syndication (scheduled):
     fetch the newest Patreon creator post, save a review bundle, repost the
-    full body to Reddit and a native Hugo/GitHub Pages dev blog, then send a
+    full body to a native Hugo/GitHub Pages dev blog, then send a
     280-character teaser fanout through the social MCP post_social wrapper.
     Lane A2 remains manual and is intentionally not implemented here.
 
@@ -273,10 +273,9 @@ _LLM_CLIENT = OpenAI(base_url=LLM_BASE_URL, api_key="not-needed")
 
 
 # Lane A1 — Patreon dev-post syndication
-A1_FULL_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_FULL_PROVIDERS", "reddit").split(",") if p.strip())
+A1_FULL_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_FULL_PROVIDERS", "").split(",") if p.strip())
 A1_TEASER_PROVIDERS = tuple(p.strip().lower() for p in os.getenv("A1_TEASER_PROVIDERS", "x,bluesky,mastodon,discord,threads").split(",") if p.strip())
 A1_TEASER_MAX_CHARS = _int_env("A1_TEASER_MAX_CHARS", 280)
-A1_REDDIT_SUBREDDIT = os.getenv("A1_REDDIT_SUBREDDIT", "OppaAI")
 A1_HUGO_REPO = os.getenv("AIKO_DEV_GITHUB_REPO", os.getenv("GITHUB_REPO", ""))
 A1_HUGO_BRANCH = os.getenv("AIKO_DEV_GITHUB_BRANCH", os.getenv("GITHUB_BRANCH", "main"))
 A1_HUGO_CONTENT_PATH = os.getenv("AIKO_DEV_HUGO_CONTENT_PATH", "content/posts")
@@ -463,7 +462,7 @@ def post_draft(draft_dir: str | Path, providers: tuple[str, ...] | None = None) 
     results = [_push_a1_hugo_post(slug, hugo)]
     full_services = ",".join(providers or A1_FULL_PROVIDERS)
     if full_services:
-        results.append(_call_social_mcp("post_social", services=full_services, text=full_body, title=meta.get("patreon_post", {}).get("title", "Aiko dev update"), subreddit=A1_REDDIT_SUBREDDIT))
+        results.append(_call_social_mcp("post_social", services=full_services, text=full_body, title=meta.get("patreon_post", {}).get("title", "Aiko dev update")))
     teaser_services = ",".join(A1_TEASER_PROVIDERS)
     if teaser_services:
         results.append(_call_social_mcp("post_social", services=teaser_services, text=teaser, image_path=str(image_path) if image_path else None, title=meta.get("patreon_post", {}).get("title", "Aiko dev update")))
@@ -1346,7 +1345,7 @@ def post_to_social(text: str, services: str, image_path: str | None = None) -> d
     """Post text and optional image to one or more social platforms.
     
     services is a comma-separated list of platform names, e.g. 'bluesky,mastodon'.
-    Supported: x, threads, bluesky, mastodon, reddit, discord.
+    Supported: x, threads, bluesky, mastodon, discord.
     Does NOT require human approval — use for direct posting requests.
     """
     return _call_social_mcp("post_social", services=services, text=text, image_path=image_path)

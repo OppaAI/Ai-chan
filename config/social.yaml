@@ -54,9 +54,8 @@ PATREON_LATEST_POST_URL: ""  # URL to fetch latest Patreon post for syndication.
 AIKO_DEV_GITHUB_REPO: "OppaAI/aiko-dev"  # GitHub repository for aiko-dev content.
 AIKO_DEV_GITHUB_BRANCH: "main"  # GitHub branch for aiko-dev content.
 AIKO_DEV_HUGO_CONTENT_PATH: "content/posts"  # Hugo content directory path in aiko-dev repo.
-A1_FULL_PROVIDERS: "reddit"  # Providers that get the full dev post content.
+A1_FULL_PROVIDERS: ""  # Providers that get the full dev post content.
 A1_TEASER_PROVIDERS: "x,bluesky,mastodon,discord,threads"  # Providers that get teaser links only.
-A1_REDDIT_SUBREDDIT: "OppaAI"  # Reddit subreddit for dev post syndication.
 
 # -- Social MCP Server --
 SOCIAL_MCP_DB_PATH: ""  # Database path for Social MCP Server state.

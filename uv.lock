@@ -82,9 +82,6 @@ matrix = [
 msal = [
     { name = "msal" },
 ]
-reddit = [
-    { name = "praw" },
-]
 slack = [
     { name = "slack-sdk" },
 ]
@@ -123,7 +120,6 @@ requires-dist = [
     { name = "onnxruntime-gpu", marker = "platform_machine == 'x86_64'", specifier = "==1.27.0" },
     { name = "openai", specifier = ">=2.43.0" },
     { name = "packaging", specifier = ">=26.2" },
-    { name = "praw", marker = "extra == 'reddit'", specifier = ">=7.7.0" },
     { name = "protobuf", specifier = ">=6.33.6" },
     { name = "protonmail-api-client", specifier = ">=2.4.3" },
     { name = "psutil", specifier = ">=7.2.2" },
@@ -151,7 +147,7 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.50.2" },
     { name = "websockets", specifier = ">=15.0,<16.0" },
 ]
-provides-extras = ["discord", "telegram", "twitter", "slack", "matrix", "bluesky", "mastodon", "reddit", "youtube", "msal", "adapters"]
+provides-extras = ["discord", "telegram", "twitter", "slack", "matrix", "bluesky", "mastodon", "youtube", "msal", "adapters"]
 
 [[package]]
 name = "aiofile"
@@ -1746,33 +1742,6 @@ wheels = [
 ]
 
 [[package]]
-name = "praw"
-version = "8.0.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "defusedxml" },
-    { name = "prawcore" },
-    { name = "update-checker" },
-    { name = "websocket-client" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/46/07/bee3bab8634965354402d28aaabae7932097dfa5d9895afbeebeac24de69/praw-8.0.2.tar.gz", hash = "sha256:29bfe995f7f24017dd8eee36153085ad27de1740f13c7dcdb08df42a24a0dae2", size = 23798066, upload-time = "2026-06-24T00:06:31.429Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/7e/0831abb5ef9db1db8981f2c230c5a71ecc81732a7924ec79b076f5eea693/praw-8.0.2-py3-none-any.whl", hash = "sha256:22a988bef07e2d840ab062ae25f760c5bfc6367b9ecaab69f71e7ff511d75564", size = 199203, upload-time = "2026-06-24T00:06:29.73Z" },
-]
-
-[[package]]
-name = "prawcore"
-version = "4.0.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "requests" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/08/06/d6eaaaa5ec11ebc56b176e16233c4dbd7ae5a51a9d82649cad8aa2ba3b43/prawcore-4.0.0.tar.gz", hash = "sha256:c7e4d6e1b71e2b9c88680aee467e3e07d22df4c91bb01488ce2a3ab43d76b076", size = 1208273, upload-time = "2026-06-13T02:00:32.083Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/97/e52a0a62a14b17ce382d68d00a838887deab52eddac8d9e87f4e6274efcd/prawcore-4.0.0-py3-none-any.whl", hash = "sha256:53f91bcd4cb25a26ca58f3ba7c5bf83d9d93a74025aae2c926bc6b0d5fd11df7", size = 19294, upload-time = "2026-06-13T02:00:30.519Z" },
-]
-
-[[package]]
 name = "propcache"
 version = "0.5.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2692,15 +2661,6 @@ wheels = [
 ]
 
 [[package]]
-name = "update-checker"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/92/0d/cdf2a0bc53f2b0b85a9cc7a81d0c5fa666dc140d26a1797ddf8ce4a24d0d/update_checker-1.0.0.tar.gz", hash = "sha256:bfcac66414572a82a98ea8c8633bf1ce5d102750e3b93469b89b30aa845cd1d7", size = 9600, upload-time = "2026-06-08T07:08:20.799Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/f5/a264987b052d61c172d23eec92935480535fd32e45357bd6557fa2c687d5/update_checker-1.0.0-py3-none-any.whl", hash = "sha256:5837640948ff21820ba3ea881fb4bed5abefb39037895c6447f5e712236d60c6", size = 10618, upload-time = "2026-06-08T07:08:19.782Z" },
-]
-
-[[package]]
 name = "urllib3"
 version = "2.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2769,15 +2729,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/fa/08/d9e2e0f9e8e6791d33aefc694ad7eefa7f901f63caff84a81ded38692f9c/watchfiles-1.2.0-cp312-cp312-win32.whl", hash = "sha256:7a2cffd17d27d2ecbb310c2b1d8174f222a5495b1a721894afa88ec11e25b898", size = 275480, upload-time = "2026-05-18T04:30:31.307Z" },
     { url = "https://files.pythonhosted.org/packages/1c/e6/9d42569c0102645cc8cea5d8c7d8a1e9d4ada2cb7f05f75e554b8aa2202a/watchfiles-1.2.0-cp312-cp312-win_amd64.whl", hash = "sha256:f155b3a1b2a5fc89cdc70d47ee5d54e3b75e88efa34982028a35daef9ba00379", size = 288718, upload-time = "2026-05-18T04:32:10.745Z" },
     { url = "https://files.pythonhosted.org/packages/0a/26/88e0dc6ee3898169d7fa22bb6a69cabf2502d2ee25cb8c876d1262d204f8/watchfiles-1.2.0-cp312-cp312-win_arm64.whl", hash = "sha256:8fa585ede612ee9f9e91b18bebf9ba11b9ae29a4e3a0d0cf6fca3e382133f0d5", size = 281026, upload-time = "2026-05-18T04:30:22.23Z" },
-]
-
-[[package]]
-name = "websocket-client"
-version = "1.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2c/41/aa4bf9664e4cda14c3b39865b12251e8e7d239f4cd0e3cc1b6c2ccde25c1/websocket_client-1.9.0.tar.gz", hash = "sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98", size = 70576, upload-time = "2025-10-07T21:16:36.495Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/34/db/b10e48aa8fff7407e67470363eac595018441cf32d5e1001567a7aeba5d2/websocket_client-1.9.0-py3-none-any.whl", hash = "sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef", size = 82616, upload-time = "2025-10-07T21:16:34.951Z" },
 ]
 
 [[package]]
