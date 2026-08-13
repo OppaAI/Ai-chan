@@ -143,10 +143,27 @@ def bd_self_heal(
 
 @mcp.tool()
 def bd_self_heal_progress(collector_id: str = "") -> str:
-    """Poll Self-Healing job status for a collector."""
+    """Poll Self-Healing job status for a collector.
+
+    Use after bd_self_heal_approve (or during an in-flight heal) until progress
+    status is a terminal value (done/completed/failed). Do not treat approve
+    alone as completion.
+    """
     try:
         data = bd.self_heal_progress(collector_id)
-        return _ok({"ok": True, "progress": data})
+        status = str(
+            (data or {}).get("status") or (data or {}).get("state") or ""
+        ).lower() if isinstance(data, dict) else ""
+        terminal_ok = status in {"done", "completed", "success", "ready", "finished"}
+        terminal_bad = status in {"error", "failed", "canceled", "cancelled"}
+        return _ok({
+            "ok": True,
+            "progress": data,
+            "status": status or None,
+            "completed": terminal_ok,
+            "failed": terminal_bad,
+            "terminal": terminal_ok or terminal_bad,
+        })
     except Exception as e:
         return _err(e)
 
@@ -160,16 +177,33 @@ def bd_self_heal_approve(
     """Approve or reject a pending Self-Healing diff (HITL gate).
 
     Call after bd_self_heal returns phase=awaiting_approval.
-    After approval, poll bd_self_heal_progress until phase=completed
-    before calling bd_run_collect.
+
+    This only *submits* the decision. It does NOT mean the heal job is finished.
+    Next steps:
+      1. Poll bd_self_heal_progress until completed=true (or failed=true)
+      2. Then call bd_run_collect with the same collector_id
     """
     try:
+        cid = (collector_id or bd.default_collector_id()).strip()
         data = bd.resume_self_heal(
             collector_id,
             approve=bool(approve),
             auto_save=bool(auto_save),
         )
-        return _ok({"ok": True, "resume": data})
+        return _ok({
+            "ok": True,
+            "phase": "decision_submitted",
+            "decision_submitted": True,
+            "approval_submitted": bool(approve),
+            "completed": False,
+            "collector_id": cid or None,
+            "resume": data,
+            "next_action": (
+                "Poll bd_self_heal_progress until completed=true before bd_run_collect"
+                if approve
+                else "Diff rejected; no further collect expected for this heal"
+            ),
+        })
     except Exception as e:
         return _err(e)
 
