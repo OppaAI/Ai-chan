@@ -301,6 +301,61 @@ _CALLED_RE = re.compile(
     re.IGNORECASE,
 )
 
+# ── domain-aware entity terms ──────────────────────────────────────────────
+# Catches lowercase/casual mentions of your own stack that the generic
+# Proper-Case / ALLCAPS regexes above would otherwise miss (e.g. "aiko",
+# "ros2 pipeline", "the jetson"). Configurable via ENTITY_DOMAIN_TERMS so new
+# projects/hardware can be added without touching code. Matched terms are
+# stored using the ORIGINAL casing found in text (canonicalization, if
+# desired, happens via ENTITY_ALIAS_JSON below).
+_DOMAIN_ENTITY_TERMS: tuple[str, ...] = tuple(
+    t.strip().lower()
+    for t in os.getenv(
+        "ENTITY_DOMAIN_TERMS",
+        "aiko,aiko-chan,grace,aurora,eric,jetson,jetson orin,orin nano,"
+        "ros2,ros,nav2,slam,lidar,oak-d,vrm,mcp,harrier,miotts,sensevoice,"
+        "sherpa-onnx,eres2net,silero,qdrant,mem0,sqlite-vec,"
+        "cnc,wmc,emc,mcc,msb,gce,tms,tic,toc,hrs,hrm,agi,"
+        "oppaai,threads,patreon,huggingface,hugging face,cosmos",
+    ).split(",")
+    if t.strip()
+)
+_DOMAIN_ENTITY_RE = (
+    re.compile(
+        r"\b(" + "|".join(re.escape(t) for t in sorted(_DOMAIN_ENTITY_TERMS, key=len, reverse=True)) + r")\b",
+        re.IGNORECASE,
+    )
+    if _DOMAIN_ENTITY_TERMS
+    else None
+)
+
+# ── entity alias resolution ────────────────────────────────────────────────
+# Optional canonicalization so that name variants collapse to one graph node
+# instead of splitting co-mention weight across lookalike entities (e.g. if
+# you decide "AuRoRA" mentions should count toward the "Grace" node). Off by
+# default (empty map) — nothing is merged unless you opt in via env var:
+#   ENTITY_ALIAS_JSON='{"aurora": "Grace", "agi": "Grace"}'
+try:
+    _ENTITY_ALIASES_RAW: dict[str, str] = json.loads(os.getenv("ENTITY_ALIAS_JSON", "{}"))
+except (TypeError, ValueError, json.JSONDecodeError):
+    _ENTITY_ALIASES_RAW = {}
+_ENTITY_ALIASES: dict[str, str] = {
+    str(k).casefold(): str(v) for k, v in _ENTITY_ALIASES_RAW.items() if str(k).strip() and str(v).strip()
+}
+
+
+def resolve_entity_alias(entity: str) -> str:
+    """Canonicalize an entity string via the configurable alias map.
+
+    No-op unless ENTITY_ALIAS_JSON is set. Applied once inside
+    extract_entities() so every caller (write path, backfill, consolidation)
+    benefits automatically without needing to know about aliasing.
+    """
+    if not entity:
+        return entity
+    return _ENTITY_ALIASES.get(entity.casefold(), entity)
+
+
 _STOP_ENTITIES = frozenset({
     "the", "a", "an", "and", "or", "but", "for", "with", "from", "into",
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
@@ -308,6 +363,9 @@ _STOP_ENTITIES = frozenset({
     "september", "october", "november", "december",
     "today", "yesterday", "tomorrow", "user", "assistant", "aiko",
     "he", "she", "they", "his", "her", "their", "this", "that",
+    # generic ROS2 / dev-noise nouns — too common to be useful graph nodes
+    "node", "topic", "service", "message", "callback", "function", "class",
+    "file", "line", "log", "logs", "commit", "branch", "repo", "script",
 })
 
 # Kind heuristics (keyword → kind). First match wins.
@@ -335,6 +393,13 @@ def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
     """Extract entity-like tokens from a memory fact string.
 
     Deterministic and cheap. Prefer precision over recall — empty is fine.
+
+    Order of passes (first-seen wins for dedup, casefolded):
+      1. Domain terms (your own stack — catches lowercase/casual mentions)
+      2. Quoted spans
+      3. "called/named/project X" spans
+      4. Proper-Case spans (sentence-initial no longer excluded)
+      5. ALLCAPS tokens (project codes, acronyms)
     """
     if not (text or "").strip():
         return []
@@ -346,21 +411,22 @@ def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
         ent = _clean_entity(raw)
         if not ent:
             return
+        ent = resolve_entity_alias(ent)
         key = ent.casefold()
         if key in seen:
             return
         seen.add(key)
         found.append(ent)
 
+    if _DOMAIN_ENTITY_RE is not None:
+        for m in _DOMAIN_ENTITY_RE.finditer(text):
+            _add(m.group(1))
     for m in _QUOTED_RE.finditer(text):
         _add(m.group(1))
     for m in _CALLED_RE.finditer(text):
         _add(m.group(1))
     for m in _PROPER_SPAN_RE.finditer(text):
         span = m.group(1)
-        # Sentence-initial single word is usually grammar capitalization, not an entity.
-        if m.start() == 0 and " " not in span:
-            continue
         _add(span)
     for m in _ALLCAPS_RE.finditer(text):
         _add(m.group(1))
@@ -703,6 +769,8 @@ def upsert_co_mentions(
     # here (so we'd correctly dedup THIS memory's pairs) but still create
     # two distinct rows across different memories that used different
     # casing for the same entity, splitting one node's edges into two.
+    # Alias resolution (ENTITY_ALIAS_JSON) has already run inside
+    # extract_entities(), so entities arriving here are already canonical.
     ents = []
     seen: set[str] = set()
     for e in entities:
@@ -822,13 +890,59 @@ def backfill_entities(
     return updated
 
 
+def audit_entity_extraction(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    sample_n: int = 50,
+) -> dict[str, Any]:
+    """Diagnostic: how well is extraction covering recent memories?
+
+    Run this after deploying extraction changes, or periodically, to check
+    graph density. Not called anywhere automatically — invoke manually or
+    from a maintenance script.
+    """
+    rows = conn.execute(
+        "SELECT id, memory, entities FROM memories WHERE user_id = ? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (user_id, sample_n),
+    ).fetchall()
+
+    stats = {
+        "sample_size": 0,
+        "zero_entity": 0,
+        "single_entity": 0,
+        "multi_entity": 0,
+        "pairs_created": 0,
+    }
+    for row in rows:
+        stats["sample_size"] += 1
+        ents = entities_from_json(row["entities"])
+        if not ents:
+            # Column may not be backfilled yet — extract live for the audit.
+            ents = extract_entities(row["memory"] or "")
+        if len(ents) == 0:
+            stats["zero_entity"] += 1
+        elif len(ents) == 1:
+            stats["single_entity"] += 1
+        else:
+            stats["multi_entity"] += 1
+            stats["pairs_created"] += len(list(combinations(ents, 2)))
+
+    log.info("entity extraction audit user=%s stats=%s", user_id, stats)
+    return stats
+
+
 __all__ = [
     "_ALLCAPS_RE",
     "_AROUSAL_HIGH_RE",
     "_AROUSAL_LOW_RE",
     "_AROUSAL_MID_RE",
     "_CALLED_RE",
+    "_DOMAIN_ENTITY_RE",
+    "_DOMAIN_ENTITY_TERMS",
     "_EMOTION_QUERY_RE",
+    "_ENTITY_ALIASES",
     "_ENTITY_RELATIONS_DDL",
     "_KIND_RULES",
     "_PROPER_SPAN_RE",
@@ -848,6 +962,7 @@ __all__ = [
     "SALIENCE_POLICY_RE",
     "apply_neg_hard_filter",
     "arousal_rank_bonus",
+    "audit_entity_extraction",
     "backfill_entities",
     "classify_kind",
     "classify_write_op",
@@ -862,6 +977,7 @@ __all__ = [
     "infer_valence_tag",
     "normalize_memory_text",
     "rebuild_entity_relations",
+    "resolve_entity_alias",
     "tag_from_score",
     "upsert_co_mentions",
     "_arousal_enabled",
@@ -884,4 +1000,3 @@ __all__ = [
     "spread_activation",
     "walk_supersession_chain",
 ]
-
