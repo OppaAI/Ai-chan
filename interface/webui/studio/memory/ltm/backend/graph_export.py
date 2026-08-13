@@ -620,10 +620,23 @@ def export_memory_graph(
         )
         nodes = mem_nodes + ent_nodes + kb_nodes + exp_nodes
         edges = [e for e in edges if e.get("source") in keep_ids and e.get("target") in keep_ids]
-        edges.sort(
-            key=lambda e: (0 if e.get("type") == "supersedes" else 1, -float(e.get("weight") or 0)),
+        # Prefer structural edges (supersedes + mentions) so knowledge/experience
+        # layers cannot starve memory↔entity links under MEMORY_STUDIO_MAX_EDGES.
+        _STRUCTURAL = {"supersedes", "mentions"}
+        structural = [e for e in edges if e.get("type") in _STRUCTURAL]
+        other = [e for e in edges if e.get("type") not in _STRUCTURAL]
+        structural.sort(
+            key=lambda e: (
+                0 if e.get("type") == "supersedes" else 1,
+                -float(e.get("weight") or 0),
+            )
         )
-        edges = edges[:_MAX_EDGES]
+        other.sort(key=lambda e: -float(e.get("weight") or 0))
+        budget = _MAX_EDGES
+        edges = structural[:budget]
+        remain = max(0, budget - len(edges))
+        if remain:
+            edges = edges + other[:remain]
         
         return {
             "nodes": nodes,
