@@ -931,13 +931,16 @@ class AikoThink:
             system = (
                 f"{system}\n\n"
                 "<search_failed>\n"
-                "Web search was attempted for this question but returned no usable "
-                "results. You have no current information on this topic — not from "
-                "search, and your training data may be stale on anything time-sensitive "
-                "(scores, news, prices, current events, recent releases). Do not guess "
-                "or invent scores, names, dates, or other current-event details. Say "
-                "plainly that you couldn't retrieve current information on this. It is "
-                "fine and expected to say you don't know.\n"
+                "CRITICAL: Web search returned no results for this question. "
+                "You have NO current information on this topic — not from search, "
+                "and your training data is stale on anything time-sensitive. "
+                "DO NOT under any circumstances guess, infer, or include any "
+                "weather information, scores, names, dates, or other current-event "
+                "details in your response. Your response MUST consist of exactly "
+                "one sentence: 'I couldn't retrieve current information on this "
+                "topic.' Do not add any reasoning, analysis, or additional text. "
+                "Anything beyond this exact sentence will be considered a failure "
+                "of the search fallback.\n"
                 "</search_failed>"
             )
 
