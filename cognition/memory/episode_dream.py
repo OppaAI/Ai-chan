@@ -209,7 +209,18 @@ def distill_episodes(
                 len(facts),
                 (facts[:2] if facts else []),
             )
-            distilled_ids.extend(c["id"] for c in batch)
+            # dry-run: never mark; only count batches that would produce facts
+            if facts:
+                distilled_ids.extend(c["id"] for c in batch)
+            continue
+
+        # Only mark distilled when the LLM returned durable facts.
+        # Empty extract → leave distilled_at NULL so the episodes can retry next dream.
+        if not facts:
+            log.debug(
+                "EMC-4 empty extract; not marking episodes=%s",
+                [c["id"] for c in batch],
+            )
             continue
 
         for fact in facts:

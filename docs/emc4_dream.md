@@ -5,7 +5,8 @@ During `AikoMemorize.dream()`, undistrilled episodic rows are:
 1. Selected (salience / recall_count / recency)
 2. Batched into an LLM prompt for durable facts only
 3. Written via `add_raw` (same dedup/supersede as normal writes)
-4. Marked `distilled_at` so they are not re-processed
+4. Marked `distilled_at` **only when the LLM returned a non-empty fact list**
+   (empty extract leaves rows eligible for a later dream pass)
 
 Human analogy: sleep consolidates episodic traces into semantic knowledge.
 WM→EM is EMC-2; this is EM→SM.
