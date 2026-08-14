@@ -122,6 +122,13 @@ def ensure_episode_schema(conn: sqlite3.Connection) -> list[str]:
         actions.append("emc_schema_ensured")
     except sqlite3.Error as e:
         log.warning("ensure_episode_schema: %s", e)
+    # EMC-2: install turn-ingest hooks (idempotent, best-effort)
+    try:
+        from cognition.memory.emc2_wire import apply_emc2_hooks
+        apply_emc2_hooks()
+        actions.append("emc2_hooks")
+    except Exception as e:
+        log.debug("emc2 hooks: %s", e)
     return actions
 
 
@@ -238,8 +245,6 @@ class EpisodicStore:
             vector=True,
         )
 
-    # ── write path ────────────────────────────────────────────────────────────
-
     def bind(
         self,
         *,
@@ -300,12 +305,7 @@ class EpisodicStore:
         entities: list[str] | None = None,
         auto_flush: bool = True,
     ) -> int:
-        """
-        EMC-2: accept one conversation turn pair into the episodic buffer.
-
-        Filters trivial turns. Does not invent metadata — pass None to leave NULL.
-        Returns staging_id, or -1 if skipped / disabled.
-        """
+        """EMC-2: accept one conversation turn pair into the episodic buffer."""
         if not EMC_ENABLED or not EMC_EVICT_ENABLED:
             return -1
         if _is_trivial_turn(user_text, assistant_text):
@@ -337,12 +337,6 @@ class EpisodicStore:
         return staging_id
 
     def maybe_flush(self) -> int:
-        """
-        Flush staging → storage when:
-          - staging count >= EMC_FLUSH_ON_STAGING, or
-          - turns since last flush >= EMC_FLUSH_EVERY_TURNS (if > 0)
-        Returns number flushed.
-        """
         if not EMC_ENABLED:
             return 0
         staging = self.staging_count()
@@ -357,7 +351,6 @@ class EpisodicStore:
         return n
 
     def flush_all(self) -> int:
-        """Flush entire staging buffer (session end / shutdown)."""
         total = 0
         while True:
             n = self.flush_staging(limit=EMC_FLUSH_BATCH)
@@ -369,7 +362,6 @@ class EpisodicStore:
         return total
 
     def flush_staging(self, limit: int | None = None) -> int:
-        """Move up to `limit` staged rows into emc_storage (+ optional embed)."""
         if not EMC_ENABLED:
             return 0
         batch = limit if limit is not None else EMC_FLUSH_BATCH
@@ -452,8 +444,6 @@ class EpisodicStore:
                 log.debug("EMC embed on flush skipped: %s", e)
 
         return storage_id
-
-    # ── read helpers ──────────────────────────────────────────────────────────
 
     def staging_count(self, user_id: str | None = None) -> int:
         uid = user_id or self._user_id
