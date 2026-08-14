@@ -1,10 +1,11 @@
 """
-EMC-2 runtime wire-up.
+EMC-2/3 runtime wire-up.
 
-Provides AikoMemorize.queue_episode + lazy EpisodicStore when not yet
-native on the class. Think-side ingest is native in AikoThink._store_async
-(calls queue_episode after queue_write) — this module does NOT wrap
-_store_async, so each turn is staged once.
+EMC-2: AikoMemorize.queue_episode + lazy EpisodicStore + flush on switch_user.
+EMC-3: wrap format_for_context to append episodic recall (joint budget).
+
+Think-side ingest is native in AikoThink._store_async (queue_episode once).
+This module does NOT wrap _store_async.
 
 Called from ensure_episode_schema (memory boot path).
 """
@@ -18,16 +19,18 @@ _WIRED = False
 
 
 def apply_emc2_hooks() -> None:
-    """Idempotent: ensure AikoMemorize has queue_episode / episode store."""
+    """Idempotent: memorize queue_episode + format_for_context EM append."""
     global _WIRED
     if _WIRED:
         return
     try:
+        from cognition.memory.episode_recall import attach_recall_to_store
+        attach_recall_to_store()
         _patch_memorize()
         _WIRED = True
-        log.info("EMC-2 hooks applied (queue_episode on AikoMemorize)")
+        log.info("EMC hooks applied (queue_episode + episodic recall format)")
     except Exception as e:
-        log.warning("EMC-2 hooks failed: %s", e)
+        log.warning("EMC hooks failed: %s", e)
 
 
 def _patch_memorize() -> None:
@@ -89,3 +92,87 @@ def _patch_memorize() -> None:
 
         AikoMemorize.switch_user = switch_user  # type: ignore[method-assign]
         AikoMemorize._emc2_switch_patched = True  # type: ignore[attr-defined]
+
+    # EMC-3: episodic recall on format_for_context (once)
+    if not getattr(AikoMemorize, "_emc3_format_patched", False):
+        _orig_fmt = AikoMemorize.format_for_context
+
+        def format_for_context(
+            self,
+            memories,
+            *,
+            query: str = "",
+            related=None,
+            user_id=None,
+            embedder=None,
+        ):
+            sm_block = _orig_fmt(
+                self,
+                memories,
+                query=query,
+                related=related,
+                user_id=user_id,
+                embedder=embedder,
+            )
+            try:
+                em_block = self._format_episodes_for_context(query or "")
+            except Exception as e:
+                log.debug("EMC format_episodes skipped: %s", e)
+                em_block = None
+
+            if not em_block:
+                return sm_block
+            if not sm_block:
+                return em_block
+
+            try:
+                from cognition.memory.episode_recall import EMC_JOINT_BUDGET
+                from cognition.memory.schema import MEMORY_CONTEXT_TOTAL_CHARS
+            except Exception:
+                return f"{sm_block}\n\n{em_block}"
+
+            if not EMC_JOINT_BUDGET:
+                return f"{sm_block}\n\n{em_block}"
+
+            shared = int(MEMORY_CONTEXT_TOTAL_CHARS)
+            if len(em_block) > shared:
+                from cognition.memory.episode_recall import EMC_RECALL_LIMIT
+                store = self._get_episode_store()
+                if store is not None:
+                    hits = store.search(query or "", limit=EMC_RECALL_LIMIT, user_id=self.get_user_id())
+                    em_block = store.format_for_context(hits, max_chars=shared) or em_block
+            em_len = len(em_block)
+            sm_budget = shared - em_len - 2
+            if len(sm_block) > sm_budget:
+                sm_closing = "\n</memory_context>"
+                cut = sm_budget - len(sm_closing) if "</memory_context>" in sm_block else sm_budget
+                sm_trim = sm_block[:cut]
+                if "</memory_context>" in sm_block and "</memory_context>" not in sm_trim:
+                    sm_trim = sm_trim.rstrip() + sm_closing
+                sm_block = sm_trim
+            return f"{sm_block}\n\n{em_block}"
+
+        def _format_episodes_for_context(self, query: str) -> str | None:
+            from cognition.memory.episode import EMC_ENABLED
+            from cognition.memory.episode_recall import (
+                EMC_RECALL_ENABLED,
+                EMC_RECALL_LIMIT,
+            )
+            if not EMC_ENABLED or not EMC_RECALL_ENABLED or EMC_RECALL_LIMIT <= 0:
+                return None
+            if not (query or "").strip():
+                return None
+            store = self._get_episode_store()
+            if store is None:
+                return None
+            hits = store.search(query, limit=EMC_RECALL_LIMIT, user_id=self.get_user_id())
+            if not hits:
+                return None
+            return store.format_for_context(hits)
+
+        AikoMemorize.format_for_context = format_for_context  # type: ignore[method-assign]
+        AikoMemorize._format_episodes_for_context = _format_episodes_for_context  # type: ignore[method-assign]
+        AikoMemorize._emc3_format_patched = True  # type: ignore[attr-defined]
+
+
+apply_emc3_hooks = apply_emc2_hooks
