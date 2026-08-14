@@ -277,7 +277,7 @@ MEMORY_NEG_HARD_FILTER: "1"           # Exclude strong-neg from unsolicited cont
 MEMORY_NEG_HARD_THRESHOLD: "-1"       # valence_score <= this counts as sticky-neg.
 MEMORY_LINEAGE_MAX_DEPTH: "32"        # Max supersession chain nodes returned by lineage API.
 
-# -- Episodic Memory Cortex (EMC) — Phase EMC-1 + EMC-2 --
+# -- Episodic Memory Cortex (EMC) — Phase EMC-1 … EMC-4 --
 # True episodic store (first-person, time-stamped episodes).
 # Lives in the same per-user memory.db as facts/knowledge (Option A).
 # Missing human-EM fields stay NULL — never invent values.
@@ -292,11 +292,19 @@ EMC_EVICT_MIN_CHARS: "40"     # Skip turns shorter than this (combined)
 EMC_FLUSH_EVERY_TURNS: "8"    # Flush after this many ingested turns (0 = size-only)
 EMC_FLUSH_ON_STAGING: "24"    # Flush when staging count reaches this
 
-EMC_RECALL_ENABLED: "1"
-EMC_RECALL_LIMIT: "2"
-EMC_KNN_LIMIT: "12"
-EMC_FTS_LIMIT: "12"
-EMC_RRF_K: "60"
-EMC_CONTEXT_CHARS: "600"
-EMC_CONTEXT_EPISODE_CHARS: "280"
-EMC_JOINT_BUDGET: "1"
+# EMC-3: episodic recall + joint EM+SM context budget
+EMC_RECALL_ENABLED: "1"       # Inject <episodic_context> into format_for_context
+EMC_RECALL_LIMIT: "2"         # Max episodes injected per turn
+EMC_KNN_LIMIT: "12"           # Vector candidates before RRF
+EMC_FTS_LIMIT: "12"           # Lexical candidates before RRF
+EMC_RRF_K: "60"               # Reciprocal Rank Fusion constant
+EMC_CONTEXT_CHARS: "600"      # Soft char budget for the whole episodic block
+EMC_CONTEXT_EPISODE_CHARS: "280"  # Max chars per episode snippet
+EMC_JOINT_BUDGET: "1"         # Shrink SM so EM+SM stay under MEMORY_CONTEXT_TOTAL_CHARS
+
+# EMC-4: dream distillation EM → SM
+EMC_DREAM_ENABLED: "1"        # Run episodic→fact distillation inside dream()
+EMC_DREAM_LIMIT: "12"         # Max undistrilled episodes considered per dream
+EMC_DREAM_BATCH: "4"          # Episodes per LLM extract call
+EMC_DREAM_MIN_CHARS: "60"     # Skip short traces
+EMC_DREAM_MAX_TOKENS: "256"   # Token budget for the distill LLM call

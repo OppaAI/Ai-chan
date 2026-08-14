@@ -1,8 +1,9 @@
 """
-EMC-2/3 runtime wire-up.
+EMC-2/3/4 runtime wire-up.
 
 EMC-2: AikoMemorize.queue_episode + lazy EpisodicStore + flush on switch_user.
 EMC-3: wrap format_for_context to append episodic recall (joint budget).
+EMC-4: wrap dream() to distill episodes → semantic facts.
 
 Think-side ingest is native in AikoThink._store_async (queue_episode once).
 This module does NOT wrap _store_async.
@@ -19,16 +20,18 @@ _WIRED = False
 
 
 def apply_emc2_hooks() -> None:
-    """Idempotent: memorize queue_episode + format_for_context EM append."""
+    """Idempotent: queue_episode + recall format + dream distill."""
     global _WIRED
     if _WIRED:
         return
     try:
         from cognition.memory.episode_recall import attach_recall_to_store
         attach_recall_to_store()
+        from cognition.memory.episode_dream import attach_dream_hook
+        attach_dream_hook()
         _patch_memorize()
         _WIRED = True
-        log.info("EMC hooks applied (queue_episode + episodic recall format)")
+        log.info("EMC hooks applied (queue_episode + recall + dream distill)")
     except Exception as e:
         log.warning("EMC hooks failed: %s", e)
 
@@ -37,12 +40,11 @@ def _patch_memorize() -> None:
     from cognition.memory.memorize import AikoMemorize
 
     if getattr(AikoMemorize, "_emc2_native", False):
-        return  # already native in class body
+        return
 
     if not hasattr(AikoMemorize, "queue_episode"):
 
         def queue_episode(self, user_input: str, response_text: str) -> None:
-            """EMC-2: stage one turn into episodic memory (best-effort)."""
             try:
                 store = self._get_episode_store()
                 if store is None:
@@ -76,7 +78,6 @@ def _patch_memorize() -> None:
 
         AikoMemorize._get_episode_store = _get_episode_store  # type: ignore[method-assign]
 
-    # Flush on switch_user (only wrap once)
     if not getattr(AikoMemorize, "_emc2_switch_patched", False):
         _orig_switch = AikoMemorize.switch_user
 
@@ -93,7 +94,6 @@ def _patch_memorize() -> None:
         AikoMemorize.switch_user = switch_user  # type: ignore[method-assign]
         AikoMemorize._emc2_switch_patched = True  # type: ignore[attr-defined]
 
-    # EMC-3: episodic recall on format_for_context (once)
     if not getattr(AikoMemorize, "_emc3_format_patched", False):
         _orig_fmt = AikoMemorize.format_for_context
 
@@ -107,12 +107,8 @@ def _patch_memorize() -> None:
             embedder=None,
         ):
             sm_block = _orig_fmt(
-                self,
-                memories,
-                query=query,
-                related=related,
-                user_id=user_id,
-                embedder=embedder,
+                self, memories, query=query, related=related,
+                user_id=user_id, embedder=embedder,
             )
             try:
                 em_block = self._format_episodes_for_context(query or "")
@@ -176,3 +172,4 @@ def _patch_memorize() -> None:
 
 
 apply_emc3_hooks = apply_emc2_hooks
+apply_emc4_hooks = apply_emc2_hooks
