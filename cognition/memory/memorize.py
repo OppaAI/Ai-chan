@@ -97,6 +97,7 @@ from .schema import (
     _sqlite_knn_search,
     _sqlite_pinned_ids,
     _sqlite_set_payload,
+    ensure_episode_schema,
     ensure_l2_scene_schema,
     ensure_phase_a_schema,
     existing_columns,
