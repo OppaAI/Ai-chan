@@ -316,10 +316,19 @@ class EpisodicStore:
         if not trace.strip():
             return -1
 
+        # Normalize user_id to prevent staging under a different user than self._user_id
+        normalized_user_id = self._user_id
+        if user_id is not None and user_id != self._user_id:
+            log.warning(
+                "EMC ingest_turn: user_id mismatch (provided=%s, instance=%s). "
+                "Using instance user_id to prevent orphaned staging rows.",
+                user_id, self._user_id
+            )
+
         staging_id = self.bind(
             timestamp=timestamp or _utc_now_iso(),
             trace=trace,
-            user_id=user_id,
+            user_id=normalized_user_id,
             valence_tag=valence_tag,
             arousal_score=arousal_score,
             salience_score=salience_score,
