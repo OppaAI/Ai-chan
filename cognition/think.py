@@ -1389,16 +1389,24 @@ class AikoThink:
         than inlining self._get_memorize().queue_write(...) at every call site)
         because agentic.agentic's run_agentic_chat also calls
         owner._store_async(...) directly at the end of the agent loop.
+
+        EMC-2: also stage the turn into episodic memory (best-effort, never
+        blocks the turn and never invents metadata).
         """
         def _is_any_active():
             with self._active_users_lock:
                 return bool(self._active_user_ids)
-        self._get_memorize().queue_write(
+        mem = self._get_memorize()
+        mem.queue_write(
             user_input,
             response_text,
             is_active_turn=_is_any_active,
             idle_since=lambda: self._last_chat_time,
         )
+        try:
+            mem.queue_episode(user_input, response_text)
+        except Exception:
+            pass
 
 
 _STREAM_SENTENCE_END = set(".?!。？！")

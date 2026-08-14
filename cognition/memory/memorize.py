@@ -97,6 +97,7 @@ from .schema import (
     _sqlite_knn_search,
     _sqlite_pinned_ids,
     _sqlite_set_payload,
+    ensure_episode_schema,
     ensure_l2_scene_schema,
     ensure_phase_a_schema,
     existing_columns,
@@ -255,6 +256,7 @@ class _MemoryBackend:
             ensure_phase_a_schema(self._conn)
             ensure_l2_scene_schema(self._conn)
             ensure_entity_relations_schema(self._conn)
+            ensure_episode_schema(self._conn)
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
@@ -2985,6 +2987,7 @@ __all__ = [
     "entities_to_json",
     "entity_overlap_score",
     "ensure_entity_relations_schema",
+    "ensure_episode_schema",
     "ensure_l2_scene_schema",
     "ensure_phase_a_schema",
     "existing_columns",

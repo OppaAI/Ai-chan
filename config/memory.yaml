@@ -277,11 +277,17 @@ MEMORY_NEG_HARD_FILTER: "1"           # Exclude strong-neg from unsolicited cont
 MEMORY_NEG_HARD_THRESHOLD: "-1"       # valence_score <= this counts as sticky-neg.
 MEMORY_LINEAGE_MAX_DEPTH: "32"        # Max supersession chain nodes returned by lineage API.
 
-# -- Episodic Memory Cortex (EMC) — Phase EMC-1 --
+# -- Episodic Memory Cortex (EMC) — Phase EMC-1 + EMC-2 --
 # True episodic store (first-person, time-stamped episodes).
 # Lives in the same per-user memory.db as facts/knowledge (Option A).
 # Missing human-EM fields stay NULL — never invent values.
 EMC_ENABLED: "1"              # Master switch for the episodic store
 EMC_EMBED_ON_FLUSH: "1"       # Embed when flushing staging → storage (0 = defer)
 EMC_FLUSH_BATCH: "32"         # Max rows moved from staging to storage per flush
-EMC_STAGING_MAX: "200"        # Soft upper bound for staging table (future drain policy)
+EMC_STAGING_MAX: "200"        # Soft upper bound for staging table
+
+# EMC-2: turn eviction into episodic buffer
+EMC_EVICT_ENABLED: "1"        # Ingest conversation turns into EMC staging
+EMC_EVICT_MIN_CHARS: "40"     # Skip turns shorter than this (combined)
+EMC_FLUSH_EVERY_TURNS: "8"    # Flush after this many ingested turns (0 = size-only)
+EMC_FLUSH_ON_STAGING: "24"    # Flush when staging count reaches this
