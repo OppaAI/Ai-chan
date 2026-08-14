@@ -63,6 +63,7 @@ function retainOf(d) {
   const sc = d.scores || {};
   if (sc.retain != null) return Math.max(0, Math.min(1, Number(sc.retain)));
   if (d.size != null) {
+    // backend size ≈ 0.20 + 1.10 * retain^1.25 → approximate invert
     const s = Math.max(0.20, Number(d.size));
     const t = Math.max(0, Math.min(1, (s - 0.20) / 1.10));
     return Math.pow(t, 1 / 1.25);
@@ -70,6 +71,12 @@ function retainOf(d) {
   return d.type === 'entity' ? 0.4 : 0.35;
 }
 
+/**
+ * Contrast-stretch memory retain values across the visible node set, so
+ * size/brightness differences are actually visible when scores cluster
+ * (raw retain is often ~flat, e.g. 0.48 for half the nodes).
+ * Stronger curve + slight valence lift so cyan/gold nodes don't stay tiny/dim.
+ */
 function stretchRetain(nodes) {
   for (const n of nodes) if (n._dispRetain != null) delete n._dispRetain;
   const mem = (nodes || []).filter(n => n.type === 'memory');
@@ -77,11 +84,14 @@ function stretchRetain(nodes) {
   if (r.length < 3) return;
   let lo = Math.min.apply(null, r);
   let hi = Math.max.apply(null, r);
+  // Force a usable dynamic range even when scores are tightly clustered
   if (hi - lo < 0.18) { lo = Math.max(0, lo - 0.22); hi = Math.min(1, hi + 0.22); }
   const span = (hi - lo) || 1;
   for (const n of mem) {
     const v = retainOf(n);
+    // Power curve expands mid/high retain; floor keeps low nodes visible
     let stretched = 0.08 + 0.92 * Math.pow((v - lo) / span, 0.72);
+    // Mild valence lift so pos/neg still read larger/brighter than pure neutrals
     const hue = valenceHue(n);
     if (hue === 'pos' || hue === 'neg') stretched = Math.min(1, stretched + 0.07);
     if (n.pinned) stretched = Math.max(stretched, 0.78);
@@ -118,8 +128,10 @@ function hueColor(hue) {
   return '#8a9bb8';
 }
 
+/** Glass fill opacity — steeper retain curve + valence boost for demo-like contrast */
 function nodeOpacity(d) {
   let r = retainOf(d);
+  // Quadratic-ish so mid-retain is already bright; floor keeps dim nodes readable
   let o = 0.22 + Math.pow(r, 0.85) * 0.78;
   const hue = valenceHue(d);
   if (hue === 'pos' || hue === 'neg') o = Math.min(1, o + 0.08);
@@ -135,18 +147,22 @@ function glowStrength(d) {
   if (d.pinned) r = Math.max(r, 0.92);
   if (d.status === 'superseded') return 0.45;
   const hue = valenceHue(d);
+  // Emotional nodes get extra glow so cyan/gold stand out like the demo
   const emo = (hue === 'pos' || hue === 'neg') ? 0.55 : 0;
   return 0.55 + r * 3.4 + emo;
 }
 
 function nodeRadius(d) {
   let r = retainOf(d);
+  // Pinned still large but not so dominant that everything else looks uniform
   if (d.pinned) r = Math.max(r, 0.72);
   const hue = valenceHue(d);
+  // Slight size lift for emotional nodes (demo has varied cyan/gold sizes)
   if ((hue === 'pos' || hue === 'neg') && d.type === 'memory') {
     r = Math.min(1, r + 0.06);
   }
   if (d.type === 'entity') return 4.5 + 14 * Math.pow(r, 1.15);
+  // Wider radius range: small neutrals vs large pinned/emotional
   return 4 + 28 * Math.pow(r, 1.22);
 }
 
@@ -157,9 +173,10 @@ function edgeOpacity(e, nodeById) {
   const t = nodeById.get(tid);
   const rs = s ? retainOf(s) : 0.25;
   const rt = t ? retainOf(t) : 0.25;
+  // Geometric-ish mean + power expands contrast when retains cluster
   const mid = Math.pow(Math.max(0.05, rs * rt), 0.45);
   const w = Math.max(0, Math.min(1, Number(e.weight) || 0.4));
-  const wBoost = 0.35 + 0.65 * w;
+  const wBoost = 0.35 + 0.65 * w; // weak weight stays dim
   if (e.type === 'supersedes') return Math.min(0.95, (0.25 + mid * 0.7) * wBoost);
   if (e.type === 'mentions' || e.type === 'grounded_in' || e.type === 'practiced_in') {
     return Math.min(0.9, (0.06 + mid * 0.75) * wBoost);
@@ -173,6 +190,7 @@ function lineageText(d, graph) {
   const nodes = Object.fromEntries((graph.nodes || []).map(n => [n.id, n]));
   const idOf = (x) => (x && typeof x === 'object' ? x.id : x);
   const textOf = (n) => String((n && (n.text || n.label)) || '').slice(0, 100);
+  // export: source=newer → target=older
   const olderId = idOf(edges.find(e => idOf(e.source) === d.id)?.target);
   const newerId = idOf(edges.find(e => idOf(e.target) === d.id)?.source);
   const bits = [];
@@ -227,6 +245,7 @@ function showDetails(d) {
     `<div class="detail-label">${k}</div><div class="detail-value">${escapeHtml(String(v))}</div>`
   ).join('') + '<h3 style="margin-top:14px">Factor scores</h3>' + scoreRows;
 
+  // Phase 16 — lineage (uses global `graph` from loadGraph)
   const lin = lineageText(d, graph);
   if (lin) {
     html += '<h3 style="margin-top:14px">Lineage</h3>'
@@ -278,6 +297,7 @@ function render() {
   const h = area.clientHeight || 700;
   svg.attr('viewBox', `0 0 ${w} ${h}`);
 
+  // subtle neural field (sparse dots, not galaxy stars)
   const field = svg.append('g').attr('class', 'field');
   for (let i = 0; i < 80; i++) {
     field.append('circle')
@@ -311,11 +331,15 @@ function render() {
   });
   const keep = new Set(nodes.map(n => n.id));
   const nodeTypeOf = new Map((graph.nodes || []).map(n => [n.id, n.type]));
+  // Add knowledge / experience nodes when their layers are on
   for (const n of (graph.nodes || [])) {
     if (n.type === 'knowledge' && showKb) keep.add(n.id);
     if (n.type === 'experience' && showExp) keep.add(n.id);
     if (n.type === 'episode' && showEp) keep.add(n.id);
   }
+  // Pull in entity hubs connected to any kept node via any edge type
+  // (mentions, about, related_to, grounded_in, practiced_in, co_mentions).
+  // Bounded to entity nodes so filtered-out memories can't leak back in.
   let grew = true;
   while (grew) {
     grew = false;
@@ -355,6 +379,7 @@ function render() {
 
   const defs = svg.append('defs');
 
+  // per-node glass gradients + glow filters
   nodes.forEach((d, i) => {
     const hue = valenceHue(d);
     const col = hueColor(hue);
@@ -395,12 +420,14 @@ function render() {
     .call(GraphBoot.makeDrag(() => simulation))
     .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
 
+  // outer glow disc (soft synapse halo)
   node.append('circle')
     .attr('r', d => nodeRadius(d) + 3)
     .attr('fill', d => d._hueCol)
     .attr('opacity', d => 0.08 + retainOf(d) * 0.18)
     .attr('filter', d => `url(#${d._glowId})`);
 
+  // glass body
   node.append('circle')
     .attr('r', nodeRadius)
     .attr('fill', d => `url(#${d._glassId})`)
@@ -411,6 +438,7 @@ function render() {
               (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
             );
 
+  // quiet rim arcs (factor scores) — outside body, low opacity
   node.each(function(d) {
     const sc = d.scores || {};
     const r = nodeRadius(d) + 4;
@@ -441,6 +469,8 @@ function render() {
       return t.length > 20 ? t.slice(0, 18) + '…' : t;
     });
 
+  // Wider initial scatter so force layout starts open (demo-like spread)
+  // instead of a dense central seed that collapses into a blob.
   const centerX = w * 0.5, centerY = h * 0.5;
   const degById = new Map();
   links.forEach(e => {
@@ -455,10 +485,11 @@ function render() {
       return;
     }
     if (n.x != null && n.y != null) return;
+    // Isolates start farther out so the mild center force cannot collapse them
     const deg = degById.get(n.id) || 0;
     const baseR = deg === 0 ? 0.55 : 0.20;
     const ring = baseR + (i % 7) * 0.04;
-    const ang = (i * 2.399963) + Math.random() * 0.6;
+    const ang = (i * 2.399963) + Math.random() * 0.6; // golden-angle-ish
     n.x = centerX + Math.cos(ang) * ring * w * 0.85 + (Math.random() - 0.5) * 40;
     n.y = centerY + Math.sin(ang) * ring * h * 0.85 + (Math.random() - 0.5) * 40;
   });
@@ -466,6 +497,7 @@ function render() {
   simulation = GraphBoot.makeSimulation(nodes, links, {
     w,
     h,
+    // Isolates repel harder so they stay in an outer ring; connected nodes cluster by links
     charge: d => ((degById.get(d.id) || 0) === 0 ? -320 : -200),
     centerStrength: 0.08,
     nodeRadius,
@@ -499,6 +531,7 @@ function render() {
       node.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 
+  // Give the simulation a short burst so sparse graphs settle open instead of blobbing
   simulation.alpha(1).restart();
 
   svg.on('click', () => { document.getElementById('details').style.display = 'none'; });
