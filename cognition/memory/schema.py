@@ -166,6 +166,7 @@ STATUS_SUPERSEDED = "superseded"
 
 KIND_FACT = "fact"
 KIND_SCENE = "scene"
+KIND_EPISODE = "episode"  # reserved; true EMC lives in emc_* tables (episode.py)
 SOURCE_CHAT = "chat"
 SOURCE_PIN = "pin"
 SOURCE_LEGACY = "legacy"
@@ -266,6 +267,16 @@ def ensure_l2_scene_schema(conn: sqlite3.Connection) -> list[str]:
     if added:
         log.info("memory L2 scene schema: added column %s", added)
     return added
+
+
+def ensure_episode_schema(conn: sqlite3.Connection) -> list[str]:
+    """Idempotent creation of EMC (episodic) tables.
+
+    Delegates to cognition.memory.episode so the DDL lives in one place.
+    Safe to call on every boot; no-op if tables already exist.
+    """
+    from cognition.memory.episode import ensure_episode_schema as _ensure
+    return _ensure(conn)
 
 
 def _active_sql(active_only: bool, alias: str = "m") -> str:
@@ -582,6 +593,7 @@ __all__ = [
     "GRAPH_LIMIT",
     "KIND_FACT",
     "KIND_SCENE",
+    "KIND_EPISODE",
     "KNN_LIMIT",
     "L0_CONVERSATION_LOG_ENABLED",
     "MEMORY_CONTEXT_FACT_CHARS",
@@ -648,10 +660,10 @@ __all__ = [
     "_sqlite_knn_search",
     "_sqlite_pinned_ids",
     "_sqlite_set_payload",
+    "ensure_episode_schema",
     "ensure_l2_scene_schema",
     "ensure_phase_a_schema",
     "existing_columns",
     "parse_json_array",
     "vacuum_memory_db",
 ]
-
