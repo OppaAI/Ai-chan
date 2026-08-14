@@ -291,3 +291,12 @@ EMC_EVICT_ENABLED: "1"        # Ingest conversation turns into EMC staging
 EMC_EVICT_MIN_CHARS: "40"     # Skip turns shorter than this (combined)
 EMC_FLUSH_EVERY_TURNS: "8"    # Flush after this many ingested turns (0 = size-only)
 EMC_FLUSH_ON_STAGING: "24"    # Flush when staging count reaches this
+
+EMC_RECALL_ENABLED: "1"
+EMC_RECALL_LIMIT: "2"
+EMC_KNN_LIMIT: "12"
+EMC_FTS_LIMIT: "12"
+EMC_RRF_K: "60"
+EMC_CONTEXT_CHARS: "600"
+EMC_CONTEXT_EPISODE_CHARS: "280"
+EMC_JOINT_BUDGET: "1"
