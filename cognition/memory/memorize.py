@@ -256,6 +256,7 @@ class _MemoryBackend:
             ensure_phase_a_schema(self._conn)
             ensure_l2_scene_schema(self._conn)
             ensure_entity_relations_schema(self._conn)
+            ensure_episode_schema(self._conn)
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(self._db_path, _DDL, user_id=self._user_id, vector=True)
