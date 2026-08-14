@@ -189,6 +189,32 @@ def web_fetch(
     return result
 
 
+
+def web_search_sources(query: str, max_results: int = SEARXNG_MAX_RESULTS,
+                       categories: str = "") -> list[dict]:
+    """Return compact source chips for the UI (title, url, domain).
+
+    Empty list on failure or no hits — never raises.
+    """
+    if not query or not query.strip():
+        return []
+    results, error = web_search(query, max_results, pageno=1, categories=categories)
+    if error or not results:
+        return []
+    out = []
+    for r in results:
+        url = (r.get("url") or "").strip()
+        title = (r.get("title") or "").strip() or url
+        domain = ""
+        try:
+            domain = urlparse(url).netloc.lower().removeprefix("www.")
+        except Exception:
+            domain = ""
+        if url:
+            out.append({"title": title, "url": url, "domain": domain})
+    return out
+
+
 def web_search_context(query: str, max_results: int = SEARXNG_MAX_RESULTS,
                        categories: str = "") -> str | None:
     """Search the web and return numbered snippets as chat context.

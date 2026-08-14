@@ -629,6 +629,8 @@ class TaskState:
             "attempts": result.attempts,
             "error_type": result.error_type,
             "args": result.args,
+            "content": result.content if result.ok else None,
+            "observation": result.content if result.ok else None,
         })
         if result.ok:
             self.evidence.append(f"{result.tool}: {result.content[:500]}")
@@ -1281,6 +1283,44 @@ def _stream_agent_message(owner, messages, tools, token_callback):
     return msg, usage
 
 
+
+def _collect_file_artifacts(state: "TaskState") -> list[dict]:
+    """Harvest workspace file paths from tool args/content for UI file chips."""
+    files: list[dict] = []
+    seen: set[str] = set()
+    path_keys = ("relative_path", "path", "output_path", "file_path", "filepath", "dest", "destination")
+    for step in getattr(state, "steps", []) or []:
+        args = step.get("args") or {}
+        if not isinstance(args, dict):
+            args = {}
+        for key in path_keys:
+            val = args.get(key)
+            if isinstance(val, str) and val.strip():
+                p = val.strip()
+                if p not in seen:
+                    seen.add(p)
+                    files.append({"label": p.rsplit("/", 1)[-1], "path": p})
+        content = step.get("content") or step.get("observation") or ""
+        if isinstance(content, str):
+            import re as _re
+            for m in _re.finditer(r"(?:saved|wrote|written to|output)\s*[:=]?\s*([\w./\\-]+\.[A-Za-z0-9]{1,8})", content, _re.I):
+                p = m.group(1).strip()
+                if p not in seen:
+                    seen.add(p)
+                    files.append({"label": p.rsplit("/", 1)[-1], "path": p})
+    return files
+
+
+def _emit_file_artifacts(token_callback, state: "TaskState") -> None:
+    if not token_callback:
+        return
+    files = _collect_file_artifacts(state)
+    if not files:
+        return
+    import json as _json
+    token_callback("__FILES__:" + _json.dumps(files, ensure_ascii=False) + "\n")
+
+
 def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, cap_vec: np.ndarray | None = None, output_model: Any | None = None) -> str:
     """Run task mode using the owning AikoThink instance for model/memory/output.
 
@@ -1423,6 +1463,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "completion_tokens": None,
                     "total_tokens": None,
                 }
+                _emit_file_artifacts(token_callback, graph_state)
                 owner._emit(graph_result.final_answer, token_callback=token_callback)
                 with owner._history_lock:
                     owner._history.append({"role": "user", "content": user_input})
@@ -1464,6 +1505,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "completion_tokens": None,
                     "total_tokens": None,
                 }
+                _emit_file_artifacts(token_callback, graph_state)
                 owner._emit(final_text, token_callback=token_callback)
                 with owner._history_lock:
                     owner._history.append({"role": "user", "content": user_input})
@@ -1693,7 +1735,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
             if name != "final_answer":
                 seen_calls.add(call_key)
             if token_callback:
-                token_callback(f"__TOOL__:{name}({args})\n")
+                token_callback(f"__STATUS__:tool:{name}\n")
 
             if name == "final_answer":
                 final_answer_data = (call.id, args)
@@ -1802,6 +1844,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
         user_input, state.steps, final_text,
         verified_ok=exp_verified_ok, score=exp_score, user_id=trace_ctx.user_id,
     )
+    _emit_file_artifacts(token_callback, state)
     owner._emit(final_text, token_callback=token_callback)
 
     with owner._history_lock:

@@ -442,9 +442,56 @@ class AikoWeb:
             name = token[len("__TOOL__:"):].split("(", 1)[0].strip()
             self._broadcast({"type": "tool", "status": f"using {name}"})
             return
+        if token.startswith("__STATUS__:"):
+            status = token[len("__STATUS__:"):].strip().split("\n", 1)[0].strip()
+            labels = {
+                "searching": "searching…",
+                "retry": "line’s quiet — trying again…",
+                "offline": "no live results — using what I know…",
+                "ok": "got sources…",
+            }
+            if status.startswith("tool:"):
+                label = f"using {status[5:].strip()}"
+            else:
+                label = labels.get(status, status)
+            self._broadcast({"type": "tool", "status": label})
+            return
         if token.startswith("__SEARCHING__:"):
             query = token[len("__SEARCHING__:"):].strip()
             self._broadcast({"type": "tool", "status": f"searching: {query}"})
+            return
+        if token.startswith("__RETRYING__"):
+            self._broadcast({"type": "tool", "status": "line’s quiet — trying again…"})
+            return
+        if token.startswith("__SOURCES__:"):
+            raw = token[len("__SOURCES__:"):].strip()
+            try:
+                import json as _json
+                items = _json.loads(raw)
+            except Exception:
+                items = []
+            self._broadcast({"type": "sources", "items": items})
+            return
+        if token.startswith("__FILES__:"):
+            raw = token[len("__FILES__:"):].strip()
+            try:
+                import json as _json
+                items = _json.loads(raw)
+            except Exception:
+                items = []
+            self._broadcast({"type": "files", "items": items})
+            return
+        if token.startswith("__META__:"):
+            # emotion|action — optional UI hook; never show in bubble
+            meta = token[len("__META__:"):].strip()
+            parts = meta.split("|", 1)
+            emotion = (parts[0] or "neutral").strip()
+            action = (parts[1] if len(parts) > 1 else "none").strip()
+            self._broadcast({"type": "meta", "emotion": emotion, "action": action})
+            return
+        # Never paint raw JSON tool observations or bracketed system notices
+        stripped = token.strip()
+        if stripped.startswith("[No web results"):
             return
 
         with self._lock:

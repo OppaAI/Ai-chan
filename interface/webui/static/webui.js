@@ -116,6 +116,97 @@ function switchToChat() {
 // ── chat rendering ────────────────────────────────────────────────────────
 let streamDiv = null;
 let streamRawText = '';
+let sourcesRow = null;
+let filesRow = null;
+
+function ensureAuxRow(kind) {
+  let row = kind === 'sources' ? sourcesRow : filesRow;
+  if (row && row.parentNode) return row;
+  row = document.createElement('div');
+  row.className = kind === 'sources' ? 'sources-row' : 'files-row';
+  chatPanel.insertBefore(row, toolStatus);
+  if (kind === 'sources') sourcesRow = row;
+  else filesRow = row;
+  return row;
+}
+
+function clearAuxRows() {
+  if (sourcesRow) { sourcesRow.remove(); sourcesRow = null; }
+  if (filesRow) { filesRow.remove(); filesRow = null; }
+}
+
+function faviconUrl(domain) {
+  if (!domain) return '';
+  return 'https://www.google.com/s2/favicons?domain=' + encodeURIComponent(domain) + '&sz=32';
+}
+
+function renderSources(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  const row = ensureAuxRow('sources');
+  row.innerHTML = '';
+  const label = document.createElement('span');
+  label.className = 'sources-label';
+  label.textContent = 'sources';
+  row.appendChild(label);
+  for (const it of items.slice(0, 8)) {
+    const a = document.createElement('a');
+    a.className = 'source-chip';
+    let href = it.url || '#';
+    try {
+      const u = new URL(href);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        href = '#';
+      }
+    } catch {
+      href = '#';
+    }
+    a.href = href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.title = it.title || it.url || '';
+    const img = document.createElement('img');
+    img.className = 'source-favicon';
+    img.alt = '';
+    img.src = faviconUrl(it.domain || '');
+    img.referrerPolicy = 'no-referrer';
+    const name = document.createElement('span');
+    name.textContent = it.domain || (it.title || 'link').slice(0, 24);
+    a.appendChild(img);
+    a.appendChild(name);
+    row.appendChild(a);
+  }
+  scrollBottom();
+}
+
+function renderFiles(items) {
+  if (!Array.isArray(items) || !items.length) return;
+  const row = ensureAuxRow('files');
+  row.innerHTML = '';
+  const label = document.createElement('span');
+  label.className = 'files-label';
+  label.textContent = 'files';
+  row.appendChild(label);
+  for (const it of items) {
+    const chip = document.createElement('button');
+    chip.className = 'file-chip';
+    const path = it.path || '';
+    const name = it.label || path || 'file';
+    chip.title = path || name;
+    chip.textContent = name;
+    chip.disabled = !path;
+    chip.addEventListener('click', function () {
+      if (navigator.clipboard && path) {
+        navigator.clipboard.writeText(path).then(function () {
+          chip.classList.add('copied');
+          setTimeout(function () { chip.classList.remove('copied'); }, 900);
+        }).catch(function () {});
+      }
+    });
+    row.appendChild(chip);
+  }
+  scrollBottom();
+}
+
 
 const EMOJI_EXPRESSIONS = {
   '😊': 'happy', '😄': 'happy', '😁': 'happy', '😆': 'happy', '🥰': 'happy', '😍': 'happy', '🙂': 'happy', '😋': 'happy', '🌸': 'happy', '✨': 'happy', '❤️': 'happy', '💖': 'happy',
@@ -524,6 +615,8 @@ function stopMic() {
 function submitInput() {
   const text = input.value.trim();
   if (!text || !wsReady()) return;
+  clearAuxRows();
+  flushStream();
   ws.send(JSON.stringify({ type: 'user_input', text }));
   input.value = '';
 }
@@ -605,6 +698,13 @@ function connectWS() {
       case 'phase': if (msg.value === 'chat') switchToChat(); break;
       case 'chat': addMessage(msg.sender, msg.text); break;
       case 'token': appendToken(msg.text); break;
+      case 'sources': renderSources(msg.items || []); break;
+      case 'files': renderFiles(msg.items || []); break;
+      case 'meta':
+        if (msg.emotion && window.aikoSetExpression) {
+          window.aikoSetExpression(msg.emotion === 'neutral' ? 'neutral' : msg.emotion, 0.9);
+        }
+        break;
       case 'commit': flushStream(); break;
       case 'tool': toolStatus.textContent = msg.status ? `  ⚙  ${msg.status}` : ''; break;
       case 'vitals': applyVitals(msg); break;

@@ -44,6 +44,7 @@ import time
 import unicodedata
 
 from agentic.tools    import web_search_context
+import json as _json
 from agentic.agentic  import run_agentic_chat
 from agentic.wiki import wiki_knowledge_context_for
 from cognition.knowledge import knowledge_context_for
@@ -901,23 +902,61 @@ class AikoThink:
         # No LLM-based query condensation: it adds latency, depends on a
         # small router model that often produces worse queries than the
         # original text, and /web already proves the raw path works.
+        display_name = current_display_name()
         if token_callback:
+            token_callback(f"__STATUS__:searching\n")
             token_callback(f"__SEARCHING__:{user_input}\n")
-        
-        context = web_search_context(user_input, max_results=int(os.getenv("SEARXNG_MAX_RESULTS", 3)))
+
+        max_results = int(os.getenv("SEARXNG_MAX_RESULTS", 3))
+        from agentic.toolkit.websearch import web_search as _web_search
+        from urllib.parse import urlparse as _urlparse
+
+        def _format_hits(query: str, results: list) -> tuple[str, list]:
+            if not results:
+                return "", []
+            lines = [f"[Web search results for: {query}]"]
+            sources: list[dict] = []
+            for i, result in enumerate(results, 1):
+                title = (result.get("title") or "").strip()
+                url = (result.get("url") or "").strip()
+                content = (result.get("content") or "").strip()
+                lines.append(f"{i}. {title}\n   {url}\n   {content}")
+                domain = ""
+                try:
+                    domain = _urlparse(url).netloc.lower().removeprefix("www.")
+                except Exception:
+                    domain = ""
+                if url:
+                    sources.append({"title": title or url, "url": url, "domain": domain})
+            context = "\n\n".join(lines) + f"\n\nUser asked: {query}"
+            return context, sources
+
+        results, search_err = _web_search(user_input, max_results)
+        if search_err:
+            log.warning("[webchat] search error: %s", search_err)
+        context, sources = _format_hits(user_input, results or [])
 
         if not context:
             log.info("[webchat] First search returned nothing, retrying once...")
             if token_callback:
+                token_callback("__STATUS__:retry\n")
                 token_callback("__RETRYING__\n")
             try:
-                context = web_search_context(user_input, max_results=1)
+                results, search_err = _web_search(user_input, 1)
+                if search_err:
+                    log.warning("[webchat] retry error: %s", search_err)
+                context, sources = _format_hits(user_input, results or [])
             except Exception as e:
                 log.warning("[webchat] Retry failed: %s", e)
-                context = None
-        
+                context, sources = "", []
+
+        if sources and token_callback:
+            token_callback("__SOURCES__:" + json.dumps(sources, ensure_ascii=False) + "\n")
+
         # Inject web context if available
         if context:
+            if token_callback:
+                token_callback("__STATUS__:ok\n")
             system = (
                 f"{system}\n\n"
                 f"<search_results query='{user_input}'>\n"
@@ -927,20 +966,18 @@ class AikoThink:
             )
         else:
             if token_callback:
-                token_callback("[No web results available; using local knowledge]\n")
+                token_callback("__STATUS__:offline\n")
             system = (
                 f"{system}\n\n"
                 "<search_failed>\n"
-                "CRITICAL: Web search returned no results for this question. "
-                "You have NO current information on this topic — not from search, "
-                "and your training data is stale on anything time-sensitive. "
-                "DO NOT under any circumstances guess, infer, or include any "
-                "weather information, scores, names, dates, or other current-event "
-                "details in your response. Your response MUST consist of exactly "
-                "one sentence: 'I couldn't retrieve current information on this "
-                "topic.' Do not add any reasoning, analysis, or additional text. "
-                "Anything beyond this exact sentence will be considered a failure "
-                "of the search fallback.\n"
+                f"Web search returned no usable results. You are speaking with {display_name}.\n"
+                "Respond as Aiko in one or two short natural sentences:\n"
+                "- Briefly acknowledge you could not reach live internet information (vary wording; "
+                "no fixed script, no system tokens, no phrases like 'using local knowledge').\n"
+                "- Do NOT invent time-sensitive facts (weather, scores, headlines, prices).\n"
+                "- If memory or knowledge context genuinely helps a non-live question, offer that "
+                "briefly; otherwise say you do not have current information.\n"
+                "- Stay in character. No meta commentary about tools or pipelines.\n"
                 "</search_failed>"
             )
 
