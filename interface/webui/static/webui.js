@@ -151,7 +151,16 @@ function renderSources(items) {
   for (const it of items.slice(0, 8)) {
     const a = document.createElement('a');
     a.className = 'source-chip';
-    a.href = it.url || '#';
+    let href = it.url || '#';
+    try {
+      const u = new URL(href);
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+        href = '#';
+      }
+    } catch {
+      href = '#';
+    }
+    a.href = href;
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     a.title = it.title || it.url || '';
@@ -178,18 +187,20 @@ function renderFiles(items) {
   label.textContent = 'files';
   row.appendChild(label);
   for (const it of items) {
-    const chip = document.createElement('span');
+    const chip = document.createElement('button');
     chip.className = 'file-chip';
     const path = it.path || '';
     const name = it.label || path || 'file';
     chip.title = path || name;
     chip.textContent = name;
+    chip.disabled = !path;
     chip.addEventListener('click', function () {
       if (navigator.clipboard && path) {
-        navigator.clipboard.writeText(path).catch(function () {});
+        navigator.clipboard.writeText(path).then(function () {
+          chip.classList.add('copied');
+          setTimeout(function () { chip.classList.remove('copied'); }, 900);
+        }).catch(function () {});
       }
-      chip.classList.add('copied');
-      setTimeout(function () { chip.classList.remove('copied'); }, 900);
     });
     row.appendChild(chip);
   }

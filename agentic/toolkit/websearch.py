@@ -207,7 +207,7 @@ def web_search_sources(query: str, max_results: int = SEARXNG_MAX_RESULTS,
         title = (r.get("title") or "").strip() or url
         domain = ""
         try:
-            domain = urlparse(url).netloc.lower().lstrip("www.")
+            domain = urlparse(url).netloc.lower().removeprefix("www.")
         except Exception:
             domain = ""
         if url:

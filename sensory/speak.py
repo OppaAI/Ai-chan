@@ -220,7 +220,6 @@ _EMOTION_LINE_RE = re.compile(r"(?im)^\s*EMOTION\s*:\s*([A-Za-z_][A-Za-z0-9_\-]*
 _ACTION_LINE_RE = re.compile(r"(?im)^\s*ACTION\s*:\s*(.+?)\s*$")
 _ALLOWED_EMOTIONS = {
     "neutral", "happy", "shy", "sad", "annoyed", "surprised", "thinking",
-    "angry", "fearful", "calm", "playful",
 }
 
 

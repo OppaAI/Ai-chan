@@ -923,7 +923,7 @@ class AikoThink:
                 lines.append(f"{i}. {title}\n   {url}\n   {content}")
                 domain = ""
                 try:
-                    domain = _urlparse(url).netloc.lower().lstrip("www.")
+                    domain = _urlparse(url).netloc.lower().removeprefix("www.")
                 except Exception:
                     domain = ""
                 if url:

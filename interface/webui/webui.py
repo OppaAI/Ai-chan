@@ -491,7 +491,7 @@ class AikoWeb:
             return
         # Never paint raw JSON tool observations or bracketed system notices
         stripped = token.strip()
-        if stripped.startswith("[No web results") or stripped.startswith("{"):
+        if stripped.startswith("[No web results"):
             return
 
         with self._lock:

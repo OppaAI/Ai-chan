@@ -629,6 +629,8 @@ class TaskState:
             "attempts": result.attempts,
             "error_type": result.error_type,
             "args": result.args,
+            "content": result.content if result.ok else None,
+            "observation": result.content if result.ok else None,
         })
         if result.ok:
             self.evidence.append(f"{result.tool}: {result.content[:500]}")
@@ -1503,7 +1505,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "completion_tokens": None,
                     "total_tokens": None,
                 }
-                _emit_file_artifacts(token_callback, state)
+                _emit_file_artifacts(token_callback, graph_state)
                 owner._emit(final_text, token_callback=token_callback)
                 with owner._history_lock:
                     owner._history.append({"role": "user", "content": user_input})
@@ -1524,7 +1526,6 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 "and AGENT_EXECUTOR_MODE=graph disables the ReAct fallback. "
                 "Run practice.py or switch to AGENT_EXECUTOR_MODE=hybrid to learn it once."
             )
-            _emit_file_artifacts(token_callback, state)
             owner._emit(final_text, token_callback=token_callback)
             owner.last_usage = {
                 "prompt_messages": [{"role": "user", "content": user_input}],
