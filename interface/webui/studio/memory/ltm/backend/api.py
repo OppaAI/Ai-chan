@@ -1,4 +1,4 @@
-"""LTM Graph Studio — FastAPI backend (local visualization only)."""
+"""LTM Graph Studio backend — visualize personal memory nodes & links."""
 from __future__ import annotations
 
 import threading
@@ -68,33 +68,3 @@ def get_graph(
 @app.get("/api/health")
 async def health():
     return {"ok": True, "service": "ltm-graph-studio"}
-
-
-@app.get("/api/search")
-def search_memories(
-    q: str = Query(..., min_length=1, description="Search query"),
-    user_id: str | None = Query(None),
-    limit: int = Query(12, ge=1, le=50),
-    include_history: bool = Query(False, description="Include superseded memories"),
-):
-    """Search personal memory + knowledge (studio helper)."""
-    from system.userspace import current_user_id
-
-    uid = (user_id or "").strip() or current_user_id()
-    try:
-        from interface.webui.studio.memory.ltm.backend.search_memory import search_memory_and_knowledge
-
-        hits = search_memory_and_knowledge(
-            q,
-            user_id=uid,
-            limit=limit,
-            include_history=include_history,
-        )
-        return {
-            "query": q,
-            "user_id": uid,
-            "hits": hits,
-            "include_history": include_history,
-        }
-    except Exception as e:
-        return {"query": q, "user_id": uid, "hits": [], "error": str(e)}
