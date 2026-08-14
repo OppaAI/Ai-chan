@@ -151,9 +151,30 @@ def _split_oversized_text(text: str, max_chars: int) -> list[str]:
     return parts
 
 
+# Numbered lists should still be spoken ("one", "two") but MioTTS often
+# garbles "1." / "2)" into repeats or letter-soup. Normalize to "N, ".
+_LIST_MARKER_RE = re.compile(
+    r"(?m)^\s*(?:(\d{1,2})[.)]\s+|[-*•]\s+)"
+)
+_INLINE_ENUM_RE = re.compile(
+    r"(?:(?<=\s)|(?<=^)|(?<=[.!?]))(\d{1,2})[.)]\s+"
+)
+
+
+def _normalize_list_markers(text: str) -> str:
+    """Keep ordinal numbers speakable; drop only bare bullet symbols."""
+    def _num(m: re.Match) -> str:
+        n = m.group(1)
+        return f"{n}, " if n else ""
+    text = _LIST_MARKER_RE.sub(_num, text)
+    text = _INLINE_ENUM_RE.sub(_num, text)
+    return text
+
+
 def sanitize_for_tts(text: str) -> str:
     """Keep only text and common punctuation the MioTTS phonemizer handles."""
     text = text.lstrip()
+    text = _normalize_list_markers(text)
     for pattern, replacement in _RE_REPLACEMENTS:
         text = pattern.sub(replacement, text)
 
@@ -194,19 +215,67 @@ _EMOJI_HEADER_RE = re.compile(
 _ACTION_ASTERISK_RE = re.compile(r"\*[^*]+\*")
 _THOUGHT_PAREN_RE = re.compile(r"\([^)]+\)")
 _FEELING_BRACKET_RE = re.compile(r"\[[^\]]+\]")
+_STRUCTURED_SEP_RE = re.compile(r"\n\s*---\s*\n")
+_EMOTION_LINE_RE = re.compile(r"(?im)^\s*EMOTION\s*:\s*([A-Za-z_][A-Za-z0-9_\-]*)\s*$")
+_ACTION_LINE_RE = re.compile(r"(?im)^\s*ACTION\s*:\s*(.+?)\s*$")
+_ALLOWED_EMOTIONS = {
+    "neutral", "happy", "shy", "sad", "annoyed", "surprised", "thinking",
+    "angry", "fearful", "calm", "playful",
+}
+
+
+def parse_aiko_response(text: str) -> dict:
+    """Split a model reply into emotion / action / dialogue channels."""
+    raw = text or ""
+    emotion = "neutral"
+    action = "none"
+    body = raw.strip()
+
+    if _STRUCTURED_SEP_RE.search(raw):
+        header, body = _STRUCTURED_SEP_RE.split(raw, maxsplit=1)
+        m = _EMOTION_LINE_RE.search(header)
+        if m:
+            cand = m.group(1).strip().lower()
+            emotion = cand if cand in _ALLOWED_EMOTIONS else "neutral"
+        m = _ACTION_LINE_RE.search(header)
+        if m:
+            action = (m.group(1) or "none").strip() or "none"
+    else:
+        lines = body.splitlines()
+        kept = []
+        for line in lines:
+            em = _EMOTION_LINE_RE.match(line)
+            ac = _ACTION_LINE_RE.match(line)
+            if em:
+                cand = em.group(1).strip().lower()
+                emotion = cand if cand in _ALLOWED_EMOTIONS else emotion
+                continue
+            if ac:
+                action = (ac.group(1) or "none").strip() or "none"
+                continue
+            kept.append(line)
+        body = "\n".join(kept).strip()
+
+    body = _EMOJI_HEADER_RE.sub("", body)
+    body = _ACTION_ASTERISK_RE.sub("", body)
+    body = _THOUGHT_PAREN_RE.sub("", body)
+    body = _FEELING_BRACKET_RE.sub("", body)
+    body = re.sub(r"\*+", " ", body)
+    dialogue = re.sub(r"\s{2,}", " ", body).strip()
+    return {
+        "emotion": emotion,
+        "action": action,
+        "dialogue": dialogue,
+        "raw": raw,
+    }
 
 
 def extract_dialogue_for_tts(text: str) -> str:
-    """Extract pure dialogue for TTS, removing initial emoji headers (e.g. '😊:')
-    and non-verbal cues (*actions*, (thoughts), [feelings])."""
+    """Extract pure dialogue for TTS from structured or legacy mixed replies."""
     if not text:
         return ""
-    text = _EMOJI_HEADER_RE.sub("", text)
-    text = _ACTION_ASTERISK_RE.sub("", text)
-    text = _THOUGHT_PAREN_RE.sub("", text)
-    text = _FEELING_BRACKET_RE.sub("", text)
-    return sanitize_for_tts(text)
-
+    parsed = parse_aiko_response(text)
+    return sanitize_for_tts(parsed["dialogue"])
 
 
 # ── speak ─────────────────────────────────────────────────────────────────────
@@ -682,7 +751,7 @@ class AikoSpeak:
 
     def speak(self, text: str) -> bool:
         """Synthesize a complete string, non-blocking. Caller prints to console."""
-        clean = sanitize_for_tts(text)
+        clean = extract_dialogue_for_tts(text)
         if not clean:
             return False
         self.stop()
@@ -701,7 +770,7 @@ class AikoSpeak:
         speak(). on_word receives each word pre-padded with a leading space
         except the first, e.g. "Hello", " I'm", " Aiko".
         """
-        clean = sanitize_for_tts(text)
+        clean = extract_dialogue_for_tts(text)
         if not clean:
             return False
         self.stop()
@@ -720,7 +789,7 @@ class AikoSpeak:
 
     def play_async(self) -> None:
         """Synthesize and play all buffered tokens, then clear the buffer."""
-        text = sanitize_for_tts("".join(self._token_buf))
+        text = extract_dialogue_for_tts("".join(self._token_buf))
         self._token_buf.clear()
         if not text:
             return
@@ -735,7 +804,7 @@ class AikoSpeak:
         tokens = []
         for token in token_iterator:
             tokens.append(token)
-        text = sanitize_for_tts("".join(tokens))
+        text = extract_dialogue_for_tts("".join(tokens))
         if not text:
             return
         self.stop()
