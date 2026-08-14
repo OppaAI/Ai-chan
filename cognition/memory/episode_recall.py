@@ -54,6 +54,7 @@ def search(
     if not q:
         return []
 
+    vector = None
     try:
         if query_vector is not None:
             vector = list(query_vector)
@@ -65,30 +66,30 @@ def search(
                 vector = list(emb.embed([q]))[0]
     except Exception as e:
         log.debug("EMC search embed failed: %s", e)
-        return []
 
     fts_query = _sanitize_fts_query(q)
 
     with self._lock:
         rank_knn: dict[int, int] = {}
         rank_fts: dict[int, int] = {}
-        try:
-            vec_blob = sqlite_vec.serialize_float32(vector)
-            knn_rows = self._conn.execute(
-                """
-                SELECT v.rowid AS id, vec_distance_cosine(v.embedding, ?) AS dist
-                FROM emc_vec v
-                JOIN emc_storage s ON s.id = v.rowid
-                WHERE s.user_id = ?
-                  AND (s.superseded_by IS NULL)
-                ORDER BY dist ASC
-                LIMIT ?
-                """,
-                (vec_blob, uid, EMC_KNN_LIMIT),
-            ).fetchall()
-            rank_knn = {int(r[0]): i + 1 for i, r in enumerate(knn_rows)}
-        except Exception as e:
-            log.debug("EMC KNN failed: %s", e)
+        if vector is not None:
+            try:
+                vec_blob = sqlite_vec.serialize_float32(vector)
+                knn_rows = self._conn.execute(
+                    """
+                    SELECT v.rowid AS id, vec_distance_cosine(v.embedding, ?) AS dist
+                    FROM emc_vec v
+                    JOIN emc_storage s ON s.id = v.rowid
+                    WHERE s.user_id = ?
+                      AND (s.superseded_by IS NULL)
+                    ORDER BY dist ASC
+                    LIMIT ?
+                    """,
+                    (vec_blob, uid, EMC_KNN_LIMIT),
+                ).fetchall()
+                rank_knn = {int(r[0]): i + 1 for i, r in enumerate(knn_rows)}
+            except Exception as e:
+                log.debug("EMC KNN failed: %s", e)
 
         if fts_query:
             try:
@@ -218,8 +219,9 @@ def format_for_context(self, episodes: list[dict], *, max_chars: int | None = No
         return None
     lines.append("</episodic_context>")
     block = "\n".join(lines)
+    closing_tag = "\n</episodic_context>"
     if len(block) > budget:
-        block = block[:budget].rstrip() + "\n</episodic_context>"
+        block = block[:budget - len(closing_tag)].rstrip() + closing_tag
     return block
 
 

@@ -134,14 +134,21 @@ def _patch_memorize() -> None:
             if not EMC_JOINT_BUDGET:
                 return f"{sm_block}\n\n{em_block}"
 
-            shared = max(200, int(MEMORY_CONTEXT_TOTAL_CHARS))
+            shared = int(MEMORY_CONTEXT_TOTAL_CHARS)
+            if len(em_block) > shared:
+                from cognition.memory.episode_recall import EMC_RECALL_LIMIT
+                store = self._get_episode_store()
+                if store is not None:
+                    hits = store.search(query or "", limit=EMC_RECALL_LIMIT, user_id=self.get_user_id())
+                    em_block = store.format_for_context(hits, max_chars=shared) or em_block
             em_len = len(em_block)
-            sm_budget = max(120, shared - em_len - 2)
+            sm_budget = shared - em_len - 2
             if len(sm_block) > sm_budget:
-                cut = sm_budget
+                sm_closing = "\n</memory_context>"
+                cut = sm_budget - len(sm_closing) if "</memory_context>" in sm_block else sm_budget
                 sm_trim = sm_block[:cut]
                 if "</memory_context>" in sm_block and "</memory_context>" not in sm_trim:
-                    sm_trim = sm_trim.rstrip() + "\n</memory_context>"
+                    sm_trim = sm_trim.rstrip() + sm_closing
                 sm_block = sm_trim
             return f"{sm_block}\n\n{em_block}"
 
