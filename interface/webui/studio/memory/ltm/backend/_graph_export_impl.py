@@ -1,1 +1,0 @@
-CONTENT_FROM_/tmp/full_impl.py_PLEASE_READ
