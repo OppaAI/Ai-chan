@@ -35,6 +35,7 @@ def _add_episode_layer(
     entity_ids: set[str],
     date_from: str | None = None,
     date_to: str | None = None,
+    include_entities: bool = True,
 ) -> None:
     """Add emc_storage rows as episode nodes + about edges to entities.
 
@@ -164,39 +165,40 @@ def _add_episode_layer(
             "size": 0.35 + 0.4 * sal_f,
         })
 
-        for ent in ents:
-            ent_id = f"ent:{ent.casefold()}"
-            if ent_id not in entity_ids:
-                entity_ids.add(ent_id)
-                nodes.append({
-                    "id": ent_id,
-                    "type": "entity",
-                    "label": ent,
-                    "text": ent,
-                    "status": "active",
-                    "kind": "entity",
-                    "source": "",
-                    "pinned": False,
-                    "access_count": 0,
-                    "created_at": None,
-                    "entities": [],
-                    "supersedes_id": None,
-                    "valence_tag": "neutral",
-                    "scores": {
-                        "retain": 0.3,
-                        "importance": 0.3,
-                        "salience": 0.0,
-                        "spacing": 0.0,
-                        "connectivity": 0.3,
-                        "valence": 0.25,
-                        "access": 0.0,
-                    },
-                    "size": 0.35,
+        if include_entities:
+            for ent in ents:
+                ent_id = f"ent:{ent.casefold()}"
+                if ent_id not in entity_ids:
+                    entity_ids.add(ent_id)
+                    nodes.append({
+                        "id": ent_id,
+                        "type": "entity",
+                        "label": ent,
+                        "text": ent,
+                        "status": "active",
+                        "kind": "entity",
+                        "source": "",
+                        "pinned": False,
+                        "access_count": 0,
+                        "created_at": None,
+                        "entities": [],
+                        "supersedes_id": None,
+                        "valence_tag": "neutral",
+                        "scores": {
+                            "retain": 0.3,
+                            "importance": 0.3,
+                            "salience": 0.0,
+                            "spacing": 0.0,
+                            "connectivity": 0.3,
+                            "valence": 0.25,
+                            "access": 0.0,
+                        },
+                        "size": 0.35,
+                    })
+                edges.append({
+                    "id": f"about:{eid}->{ent_id}",
+                    "source": eid,
+                    "target": ent_id,
+                    "type": "about",
+                    "weight": 1.0,
                 })
-            edges.append({
-                "id": f"about:{eid}->{ent_id}",
-                "source": eid,
-                "target": ent_id,
-                "type": "about",
-                "weight": 1.0,
-            })

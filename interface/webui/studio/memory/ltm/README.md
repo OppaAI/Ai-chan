@@ -49,6 +49,8 @@ Query params for `/api/graph`:
 
 | type | Color | Source |
 |------|--------|--------|
+| `memory` | valence-based (pos/neg/neutral) | `memories` |
+| `entity` | purple `#b794f6` | entity hubs from `memories.entities` |
 | `knowledge` | green `#4ade80` | `learned_chunks` |
 | `experience` | orange `#fb923c` | `experiences` |
 | `episode` | fuchsia `#e879f9` | `emc_storage` (EMC) |

@@ -610,7 +610,7 @@ def export_memory_graph(
                     _add_episode_layer,
                 )
                 if MAX_EPISODES > 0:
-                    _add_episode_layer(conn, uid, nodes, edges, entity_ids, date_from=from_dt, date_to=to_dt)
+                    _add_episode_layer(conn, uid, nodes, edges, entity_ids, date_from=from_dt, date_to=to_dt, include_entities=include_entities)
             except Exception as ex:
                 log.debug("graph_export: episode layer skipped: %s", ex)
 
