@@ -174,7 +174,7 @@ def distill_episodes(
     uid = user_id or memorize.get_user_id()
     store = None
     try:
-        store = memorize._get_episode_store()
+        store = memorize._get_episode_store(uid)
     except Exception as e:
         log.debug("EMC-4 no episode store: %s", e)
         return result
@@ -183,8 +183,8 @@ def distill_episodes(
 
     try:
         store.flush_all()
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("EMC-4 flush_all failed: %s", e)
 
     candidates = _candidate_episodes(store, uid, top)
     result["candidates"] = len(candidates)
@@ -223,6 +223,7 @@ def distill_episodes(
             )
             continue
 
+        batch_success = True
         for fact in facts:
             try:
                 mid = memorize.add_raw(fact, user_id=uid, pinned=False)
@@ -230,10 +231,13 @@ def distill_episodes(
                     facts_written += 1
             except Exception as e:
                 log.debug("EMC-4 add_raw failed: %s", e)
+                batch_success = False
 
-        ids = [c["id"] for c in batch]
-        _mark_distilled(store, ids)
-        distilled_ids.extend(ids)
+        # Only mark distilled if all facts were written successfully
+        if batch_success:
+            ids = [c["id"] for c in batch]
+            _mark_distilled(store, ids)
+            distilled_ids.extend(ids)
 
     result["distilled_episodes"] = len(distilled_ids)
     result["facts_written"] = facts_written
