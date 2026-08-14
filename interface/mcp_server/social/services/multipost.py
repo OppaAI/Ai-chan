@@ -52,7 +52,7 @@ def load_tools(mcp):
     
     @mcp.tool(
         name="post_social",
-        description="Post one payload to selected social services: x, threads, bluesky, mastodon, youtube, pixelfed, discord, medium.",
+        description="Post one payload to selected social services: x, threads, bluesky, mastodon, youtube, pixelfed, discord.",
     )
     def post_social(
         services: str,
@@ -63,9 +63,6 @@ def load_tools(mcp):
         description: str = "",
         channel: str = "",
         topic_tag: Optional[str] = None,
-        medium_tags: Optional[list[str]] = None,
-        medium_publish_status: str = "public",
-        medium_canonical_url: str = "",
     ) -> dict:
         """
         Post to multiple social platforms in one call.
@@ -107,14 +104,6 @@ def load_tools(mcp):
                         result = tool_obj.fn(image_path=image_path or "", caption=text)
                     elif service == "discord":
                         result = tool_obj.fn(text=text, image_path=image_path, channel_id=channel)
-                    elif service == "medium":
-                        result = tool_obj.fn(
-                            title=title or text[:100],
-                            content=text,
-                            tags=medium_tags,
-                            publish_status=medium_publish_status,
-                            canonical_url=medium_canonical_url,
-                        )
                     else:
                         result = {"ok": False, "provider": service, "error": "unsupported service"}
                 except Exception as e:

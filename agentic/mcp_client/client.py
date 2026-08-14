@@ -108,7 +108,7 @@ class MCPClient:
         repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         # Pass Aiko's full env explicitly: the SDK's stdio transport only
         # inherits a safe subset otherwise, which would drop the social
-        # API tokens the server needs (MEDIUM_*, AISA_API_KEY, ...).
+        # API tokens the server needs (AISA_API_KEY, THREADS_*, ...).
         params = StdioServerParameters(
             command=sys.executable,
             args=["-m", "interface.mcp_server.social.server"],
