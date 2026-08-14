@@ -24,6 +24,8 @@ def apply_emc2_hooks() -> None:
     if _WIRED:
         return
     try:
+        from cognition.memory.episode_recall import attach_recall_to_store
+        attach_recall_to_store()
         _patch_memorize()
         _WIRED = True
         log.info("EMC hooks applied (queue_episode + episodic recall format)")
@@ -123,9 +125,8 @@ def _patch_memorize() -> None:
             if not sm_block:
                 return em_block
 
-            # Joint budget: shrink SM so EM+SM fit MEMORY_CONTEXT_TOTAL_CHARS
             try:
-                from cognition.memory.episode import EMC_JOINT_BUDGET, EMC_CONTEXT_CHARS
+                from cognition.memory.episode_recall import EMC_JOINT_BUDGET
                 from cognition.memory.schema import MEMORY_CONTEXT_TOTAL_CHARS
             except Exception:
                 return f"{sm_block}\n\n{em_block}"
@@ -145,8 +146,8 @@ def _patch_memorize() -> None:
             return f"{sm_block}\n\n{em_block}"
 
         def _format_episodes_for_context(self, query: str) -> str | None:
-            from cognition.memory.episode import (
-                EMC_ENABLED,
+            from cognition.memory.episode import EMC_ENABLED
+            from cognition.memory.episode_recall import (
                 EMC_RECALL_ENABLED,
                 EMC_RECALL_LIMIT,
             )
@@ -167,5 +168,4 @@ def _patch_memorize() -> None:
         AikoMemorize._emc3_format_patched = True  # type: ignore[attr-defined]
 
 
-# Back-compat alias
 apply_emc3_hooks = apply_emc2_hooks
