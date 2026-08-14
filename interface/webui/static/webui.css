@@ -466,14 +466,16 @@ body {
   padding: 4px 8px;
   margin: 4px 0 6px 0;
   font-style: italic;
-  font-size: 11.5px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.55;
 }
 
 .msg-dialogue {
   display: inline-block;
   color: var(--aiko);
   width: 100%;
+  font-size: 13.5px;
+  line-height: 1.55;
 }
 
 .msg-non-verbal p,
@@ -494,12 +496,12 @@ body {
   background: rgba(255, 255, 255, 0.1);
   padding: 1px 4px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .msg-sys {
   color: var(--sys);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .msg-prefix {
@@ -1102,3 +1104,70 @@ body {
   cursor: not-allowed;
   opacity: .6;
 }
+
+/* Source favicon chips + file links */
+.sources-row,
+.files-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 4px 0;
+  padding: 0 2px;
+}
+.sources-label,
+.files-label {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-right: 2px;
+}
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 160px;
+  padding: 3px 8px 3px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--aiko, #d8bcff);
+  text-decoration: none;
+  font-size: 11.5px;
+  line-height: 1.2;
+  overflow: hidden;
+}
+.source-chip:hover {
+  background: rgba(216, 188, 255, 0.14);
+  border-color: rgba(216, 188, 255, 0.35);
+}
+.source-favicon {
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: rgba(0, 0, 0, 0.25);
+}
+.source-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: rgba(61, 224, 255, 0.08);
+  border: 1px solid rgba(61, 224, 255, 0.25);
+  color: #9eecff;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-chip:hover { background: rgba(61, 224, 255, 0.16); }
+.file-chip.copied { border-color: #7dffa0; color: #b6ffcb; }
