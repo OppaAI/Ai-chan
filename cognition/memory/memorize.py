@@ -2987,6 +2987,7 @@ __all__ = [
     "entities_to_json",
     "entity_overlap_score",
     "ensure_entity_relations_schema",
+    "ensure_episode_schema",
     "ensure_l2_scene_schema",
     "ensure_phase_a_schema",
     "existing_columns",
