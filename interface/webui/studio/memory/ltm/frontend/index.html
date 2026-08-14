@@ -39,10 +39,12 @@
       <label><input type="checkbox" id="include-entities" checked /> Entity hubs</label>
       <label><input type="checkbox" id="include-knowledge" checked /> Knowledge</label>
       <label><input type="checkbox" id="include-experience" checked /> Experience</label>
+      <label><input type="checkbox" id="include-episodes" checked /> Episodes (EM)</label>
       <label><input type="checkbox" id="layer-memory" checked /> Show memory</label>
       <label><input type="checkbox" id="layer-entity" checked /> Show entities</label>
       <label><input type="checkbox" id="layer-knowledge" checked /> Show knowledge</label>
       <label><input type="checkbox" id="layer-experience" checked /> Show experience</label>
+      <label><input type="checkbox" id="layer-episode" checked /> Show episodes</label>
       <label>Status
         <select id="filter-status">
           <option value="all">all</option>
@@ -50,66 +52,28 @@
           <option value="superseded">superseded</option>
         </select>
       </label>
-      <label>Valence
-        <select id="filter-valence">
-          <option value="all">all</option>
-          <option value="pos">pos</option>
-          <option value="neg">neg</option>
-          <option value="neutral">neutral</option>
-        </select>
-      </label>
-      <label>Min retain <input type="number" id="filter-min-retain" value="0" min="0" max="1" step="0.05" /></label>
-      <label>Entity contains <input type="text" id="filter-entity" placeholder="e.g. ros2" /></label>
-      <button class="btn btn-primary" id="apply" style="width:100%;margin-top:10px">Apply</button>
-      <button class="btn" id="apply-filters" style="width:100%;margin-top:6px">Re-filter (no reload)</button>
-      <h2>Stats</h2>
+      <label>Entity contains <input type="text" id="filter-entity" placeholder="optional" /></label>
+      <button class="btn" id="apply" style="width:100%;margin-top:8px">Apply</button>
+      <button class="btn" id="apply-filters" style="width:100%;margin-top:4px">Re-render layers</button>
       <div class="stat" id="stats">—</div>
       <h2>Legend</h2>
-      <div class="stat"><b>Size + glow</b> = retain (stay ↔ forget)</div>
-      <div class="stat"><b>Rim</b> = sal · space · conn · val · access (quiet)</div>
-      <div class="stat" style="margin-top:8px"><i style="background:var(--neg);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--neg)"></i> neg (cyan)</div>
-      <div class="stat"><i style="background:var(--pos);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pos)"></i> pos (gold)</div>
-      <div class="stat"><i style="background:var(--neutral);width:10px;height:10px;border-radius:50%;display:inline-block"></i> neutral</div>
-      <div class="stat"><i style="background:var(--entity);width:10px;height:10px;border-radius:50%;display:inline-block"></i> entity</div>
-      <div class="stat"><i style="background:var(--pink);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pink)"></i> imprint (survived consolidation)</div>
-      <div class="stat">Pinned = brightest of valence hue</div>
-      <div class="stat"><i style="background:var(--orange);width:14px;height:3px;display:inline-block"></i> supersedes</div>
+      <div class="stat" style="line-height:1.5">
+        memory · entity · knowledge · experience · <span style="color:#e879f9">episode</span><br/>
+        size ≈ retain / salience<br/>
+        rim arcs: salience · spacing · connectivity · valence · access
+      </div>
     </aside>
-    <div class="canvas-area" id="canvas-area">
+    <main class="canvas-wrap">
       <svg id="canvas"></svg>
-      <div class="details" id="details"></div>
-      <div class="legend">
-        <span><i style="background:var(--orange);border-radius:0;height:3px;width:14px"></i>supersedes</span>
-        <span><i style="background:#3de0ff55"></i>synapse</span>
-        <span><i style="background:#4ade80"></i>knowledge</span>
-        <span><i style="background:#d68792"></i>experience</span>
-        <span><i style="background:#c651a8"></i>imprint</span>
-        <span><i style="background:#f0c14a"></i>pos</span>
-        <span><i style="background:#3de0ff"></i>neg</span>
-        <span>brighter / larger → tends to stay</span>
+      <div class="zoom-controls">
+        <button class="btn" id="zoom-in">+</button>
+        <button class="btn" id="zoom-out">−</button>
+        <button class="btn" id="zoom-fit">fit</button>
       </div>
-      <div class="legend-row muted" style="font-size:10px;margin-top:8px">
-        Dashed / dim = superseded · solid = active tip
-      </div>
-      <div class="zoom">
-        <button id="zoom-in">+</button>
-        <button id="zoom-out">−</button>
-        <button id="zoom-fit">⊡</button>
-      </div>
-    </div>
+      <div id="details" class="details" style="display:none"></div>
+    </main>
   </div>
-  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
-  <script src="shared/graph-bootstrap.js"></script>
+  <script src="/shared/graph-bootstrap.js"></script>
   <script src="static/script.js"></script>
-  <script>
-    document.getElementById('back-btn').addEventListener('click', function(e) {
-      e.preventDefault();
-      if (window.history.length > 1) {
-        window.history.back();
-      } else {
-        window.location.href = '/';
-      }
-    });
-  </script>
 </body>
 </html>
