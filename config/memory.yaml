@@ -310,3 +310,9 @@ EMC_DREAM_LIMIT: "12"         # Max undistrilled episodes considered per dream
 EMC_DREAM_BATCH: "4"          # Episodes per LLM extract call
 EMC_DREAM_MIN_CHARS: "60"     # Skip short traces
 EMC_DREAM_MAX_TOKENS: "256"   # Token budget for the distill LLM call
+
+# EMC-6: coherent episode formation on flush (group related staging rows)
+EMC_GROUP_ENABLED: "1"        # 0 = 1:1 flush as EMC-1/2
+EMC_GROUP_MAX_GAP_SEC: "900"  # max seconds between consecutive staging rows in a group
+EMC_GROUP_MAX_TURNS: "6"      # max staging rows merged into one episode
+EMC_GROUP_MAX_CHARS: "2000"   # max merged trace characters
