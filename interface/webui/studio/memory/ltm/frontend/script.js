@@ -29,10 +29,9 @@ function qs() {
   p.set('include_entities', document.getElementById('include-entities').checked);
   p.set('include_knowledge', document.getElementById('include-knowledge').checked);
   p.set('include_experience', document.getElementById('include-experience').checked);
-  // Only send include_episodes when it differs from server default (true)
   const episodesCheckbox = document.getElementById('include-episodes');
-  if (episodesCheckbox && !episodesCheckbox.checked) {
-    p.set('include_episodes', false);
+  if (episodesCheckbox) {
+    p.set('include_episodes', episodesCheckbox.checked);
   }
   const df = document.getElementById('date-from').value;
   const dt = document.getElementById('date-to').value;
