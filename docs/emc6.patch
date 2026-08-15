@@ -1,0 +1,101 @@
+diff --git a/cognition/memory/episode.py b/cognition/memory/episode.py
+index 5ba1633..a3231c5 100644
+--- a/cognition/memory/episode.py
++++ b/cognition/memory/episode.py
+@@ -13,6 +13,7 @@ Design rules:
+ 
+ EMC-1: storage + bind/flush API
+ EMC-2: turn ingest + buffer drain (eviction path)
++EMC-6: coherent episode formation — group related staging rows on flush
+ 
+ Public surface:
+     from cognition.memory.episode import EpisodicStore, ensure_episode_schema
+@@ -32,6 +33,11 @@ from system.log import get_logger
+ from system.userspace import current_user_id
+ from cognition.memory.vecstore import HarrierEmbedder, initialize_store_db
+ from cognition.memory.env import env_bool, env_int, env_float
++from cognition.memory.episode_group import (
++    EMC_GROUP_ENABLED,
++    group_staging_rows as _group_staging_rows,
++    merge_staging_group as _merge_staging_group,
++)
+ 
+ log = get_logger(__name__)
+ 
+@@ -219,6 +225,10 @@ class EpisodicStore:
+         ingest_turn(user, assistant)  →  bind (if non-trivial)
+         maybe_flush()  →  flush when staging high or every N turns
+         flush_all() / close() on session end
++
++    EMC-6 (on flush_staging when EMC_GROUP_ENABLED):
++        consecutive staging rows that share session_id and fall within
++        the time gap are merged into one emc_storage episode.
+     """
+ 
+     def __init__(
+@@ -371,6 +381,12 @@ class EpisodicStore:
+         return total
+ 
+     def flush_staging(self, limit: int | None = None) -> int:
++        """Move staging rows → emc_storage.
++
++        EMC-6: when ``EMC_GROUP_ENABLED``, consecutive related rows are merged
++        into one coherent episode (same session, within time gap, bounded by
++        max turns/chars). Otherwise 1:1 as in EMC-1/2.
++        """
+         if not EMC_ENABLED:
+             return 0
+         batch = limit if limit is not None else EMC_FLUSH_BATCH
+@@ -393,18 +409,41 @@ class EpisodicStore:
+             if not rows:
+                 return 0
+ 
+             flushed = 0
+-            for row in rows:
+-                staging_id = row[0]
++            groups = (
++                _group_staging_rows(rows)
++                if EMC_GROUP_ENABLED
++                else [[r] for r in rows]
++            )
++
++            for group in groups:
++                staging_ids = [int(r[0]) for r in group]
+                 try:
+-                    storage_id = self._inscribe(row)
+-                    self._conn.execute("DELETE FROM emc_staging WHERE id = ?", (staging_id,))
+-                    flushed += 1
+-                    log.debug("EMC flush staging=%s → storage=%s", staging_id, storage_id)
++                    merged = _merge_staging_group(group)
++                    storage_id = self._inscribe(merged)
++                    self._conn.executemany(
++                        "DELETE FROM emc_staging WHERE id = ?",
++                        [(sid,) for sid in staging_ids],
++                    )
++                    flushed += len(staging_ids)
++                    if len(staging_ids) > 1:
++                        log.info(
++                            "EMC-6 grouped staging=%s → storage=%s turns=%d",
++                            staging_ids, storage_id, len(staging_ids),
++                        )
++                    else:
++                        log.debug(
++                            "EMC flush staging=%s → storage=%s",
++                            staging_ids[0], storage_id,
++                        )
+                 except Exception as e:
+-                    log.warning("EMC flush failed staging_id=%s: %s", staging_id, e)
++                    log.warning(
++                        "EMC flush failed staging_ids=%s: %s", staging_ids, e
++                    )
+ 
+             self._conn.commit()
+             return flushed
+@@ -465,6 +504,7 @@ class EpisodicStore:
+         return {
+             "enabled": EMC_ENABLED,
+             "evict_enabled": EMC_EVICT_ENABLED,
++            "group_enabled": EMC_GROUP_ENABLED,
+             "user_id": self._user_id,
+             "staging": self.staging_count(),
+             "storage": self.storage_count(),
