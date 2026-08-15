@@ -57,7 +57,7 @@ def _patch_memorize() -> None:
 
     if not hasattr(AikoMemorize, "_get_episode_store"):
 
-        def _get_episode_store(self):
+        def _get_episode_store(self, user_id=None):
             if getattr(self, "_episode_store", None) is not None:
                 return self._episode_store
             try:
@@ -65,7 +65,7 @@ def _patch_memorize() -> None:
                 if not EMC_ENABLED:
                     return None
                 from cognition.memory.schema import _memory_db_path_for_user
-                uid = self.get_user_id()
+                uid = user_id or self.get_user_id()
                 self._episode_store = EpisodicStore(
                     _memory_db_path_for_user(uid),
                     user_id=uid,
