@@ -158,6 +158,8 @@ MEMORY_STUDIO_INCLUDE_KNOWLEDGE: "1"  # Export learned_chunks as knowledge nodes
 MEMORY_STUDIO_INCLUDE_EXPERIENCE: "1"  # Export experiences as experience nodes.
 MEMORY_STUDIO_MAX_KNOWLEDGE: "80"  # Cap knowledge nodes in graph payload.
 MEMORY_STUDIO_MAX_EXPERIENCE: "40"  # Cap experience nodes in graph payload.
+MEMORY_STUDIO_INCLUDE_EPISODES: "1"  # Export emc_storage as episode nodes
+MEMORY_STUDIO_MAX_EPISODES: "80"     # Cap episode nodes in graph payload
 
 # -- Decay and dream merge --
 FORGET_HALF_LIFE_DAYS: "21"  # Days until memory retention score halves.
