@@ -24,6 +24,7 @@
       <nav class="memory-studio-tabs" aria-label="Memory studio sections">
         <a class="memory-studio-tab" href="/studio/memory/stm/">STM</a>
         <a class="memory-studio-tab active" href="/studio/memory/ltm/" aria-current="page">LTM</a>
+        <a class="memory-studio-tab" href="/studio/memory/itm/">ITM</a>
         <a class="memory-studio-tab" href="/studio/memory/kb/">KB</a>
       </nav>
       <h2>Search</h2>
@@ -39,10 +40,12 @@
       <label><input type="checkbox" id="include-entities" checked /> Entity hubs</label>
       <label><input type="checkbox" id="include-knowledge" checked /> Knowledge</label>
       <label><input type="checkbox" id="include-experience" checked /> Experience</label>
+      <label><input type="checkbox" id="include-episodes" checked /> Episodes</label>
       <label><input type="checkbox" id="layer-memory" checked /> Show memory</label>
       <label><input type="checkbox" id="layer-entity" checked /> Show entities</label>
       <label><input type="checkbox" id="layer-knowledge" checked /> Show knowledge</label>
       <label><input type="checkbox" id="layer-experience" checked /> Show experience</label>
+      <label><input type="checkbox" id="layer-episodes" checked /> Show episodes</label>
       <label>Status
         <select id="filter-status">
           <option value="all">all</option>
@@ -71,6 +74,7 @@
       <div class="stat"><i style="background:var(--pos);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pos)"></i> pos (gold)</div>
       <div class="stat"><i style="background:var(--neutral);width:10px;height:10px;border-radius:50%;display:inline-block"></i> neutral</div>
       <div class="stat"><i style="background:var(--entity);width:10px;height:10px;border-radius:50%;display:inline-block"></i> entity</div>
+      <div class="stat"><i style="background:var(--episode);width:10px;height:10px;border-radius:50%;display:inline-block"></i> episode</div>
       <div class="stat"><i style="background:var(--pink);width:10px;height:10px;border-radius:50%;display:inline-block;box-shadow:0 0 6px var(--pink)"></i> imprint (survived consolidation)</div>
       <div class="stat">Pinned = brightest of valence hue</div>
       <div class="stat"><i style="background:var(--orange);width:14px;height:3px;display:inline-block"></i> supersedes</div>
@@ -83,6 +87,7 @@
         <span><i style="background:#3de0ff55"></i>synapse</span>
         <span><i style="background:#4ade80"></i>knowledge</span>
         <span><i style="background:#d68792"></i>experience</span>
+        <span><i style="background:#51d4c8"></i>episode</span>
         <span><i style="background:#c651a8"></i>imprint</span>
         <span><i style="background:#f0c14a"></i>pos</span>
         <span><i style="background:#3de0ff"></i>neg</span>

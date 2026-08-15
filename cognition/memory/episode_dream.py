@@ -41,13 +41,21 @@ JSON array:
 
 
 def ensure_distilled_column(conn) -> None:
-    """Add distilled_at to emc_storage if missing (idempotent)."""
+    """Add distilled_at + distilled_into to emc_storage if missing (idempotent).
+
+    distilled_into is a JSON array of semantic-memory ids the episode
+    consolidated into (EM→SM link used by the LTM/ITM studios).
+    """
     try:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(emc_storage)").fetchall()}
         if "distilled_at" not in cols:
             conn.execute("ALTER TABLE emc_storage ADD COLUMN distilled_at TEXT")
             conn.commit()
             log.info("EMC-4: added emc_storage.distilled_at")
+        if "distilled_into" not in cols:
+            conn.execute("ALTER TABLE emc_storage ADD COLUMN distilled_into TEXT")
+            conn.commit()
+            log.info("EMC-4: added emc_storage.distilled_into")
     except Exception as e:
         log.debug("EMC-4 distilled_at migration: %s", e)
 
@@ -112,16 +120,17 @@ def _candidate_episodes(store, user_id: str, limit: int) -> list[dict]:
     ]
 
 
-def _mark_distilled(store, ids: list[int]) -> None:
+def _mark_distilled(store, ids: list[int], *, distilled_into: list[str] | None = None) -> None:
     if not ids:
         return
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
+    into_json = json.dumps(list(distilled_into or []), ensure_ascii=False)
     with store._lock:
         for eid in ids:
             store._conn.execute(
-                "UPDATE emc_storage SET distilled_at = ? WHERE id = ?",
-                (now, eid),
+                "UPDATE emc_storage SET distilled_at = ?, distilled_into = ? WHERE id = ?",
+                (now, into_json, eid),
             )
         store._conn.commit()
 
@@ -224,11 +233,13 @@ def distill_episodes(
             continue
 
         batch_success = True
+        batch_mem_ids: list[str] = []
         for fact in facts:
             try:
                 mid = memorize.add_raw(fact, user_id=uid, pinned=False)
                 if mid:
                     facts_written += 1
+                    batch_mem_ids.append(str(mid))
             except Exception as e:
                 log.debug("EMC-4 add_raw failed: %s", e)
                 batch_success = False
@@ -236,7 +247,7 @@ def distill_episodes(
         # Only mark distilled if all facts were written successfully
         if batch_success:
             ids = [c["id"] for c in batch]
-            _mark_distilled(store, ids)
+            _mark_distilled(store, ids, distilled_into=batch_mem_ids)
             distilled_ids.extend(ids)
 
     result["distilled_episodes"] = len(distilled_ids)

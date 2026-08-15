@@ -48,8 +48,10 @@ _MAX_ENTITIES = _env_int("MEMORY_STUDIO_MAX_ENTITIES", 120, floor=0)
 _MAX_EDGES = _env_int("MEMORY_STUDIO_MAX_EDGES", 200, floor=0)
 _MAX_KNOWLEDGE = _env_int("MEMORY_STUDIO_MAX_KNOWLEDGE", 80, floor=0)
 _MAX_EXPERIENCE = _env_int("MEMORY_STUDIO_MAX_EXPERIENCE", 40, floor=0)
+_MAX_EPISODES = _env_int("MEMORY_STUDIO_MAX_EPISODES", 60, floor=0)
 _INCLUDE_KNOWLEDGE = os.getenv("MEMORY_STUDIO_INCLUDE_KNOWLEDGE", "1").lower() in {"1", "true", "yes", "on"}
 _INCLUDE_EXPERIENCE = os.getenv("MEMORY_STUDIO_INCLUDE_EXPERIENCE", "1").lower() in {"1", "true", "yes", "on"}
+_INCLUDE_EPISODES = os.getenv("MEMORY_STUDIO_INCLUDE_EPISODES", "1").lower() in {"1", "true", "yes", "on"}
 
 # Hub reduction: filter out entity relations below this importance threshold
 _RELATION_IMPORTANCE_THRESHOLD = float(os.getenv("MEMORY_STUDIO_RELATION_THRESHOLD", "0.15"))
@@ -267,6 +269,7 @@ def export_memory_graph(
     include_entities: bool = True,
     include_knowledge: bool | None = None,
     include_experience: bool | None = None,
+    include_episodes: bool | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     conn: sqlite3.Connection | None = None,
@@ -292,6 +295,8 @@ def export_memory_graph(
         include_knowledge = _INCLUDE_KNOWLEDGE
     if include_experience is None:
         include_experience = _INCLUDE_EXPERIENCE
+    if include_episodes is None:
+        include_episodes = _INCLUDE_EPISODES
     owns_conn = conn is None
     if conn is None:
         from cognition.memory.vecstore import initialize_store_db
@@ -597,11 +602,17 @@ def export_memory_graph(
                 _add_experience_layer(conn, uid, nodes, edges, entity_ids, mem_ids, date_from=from_dt, date_to=to_dt)
             except Exception as ex:
                 log.debug("graph_export: experience layer skipped: %s", ex)
+        if include_episodes and _MAX_EPISODES > 0:
+            try:
+                _add_episode_layer(conn, uid, nodes, edges, entity_ids, mem_ids, entity_importance, date_from=from_dt, date_to=to_dt)
+            except Exception as ex:
+                log.debug("graph_export: episode layer skipped: %s", ex)
 
         mem_nodes = [n for n in nodes if n.get("type") == "memory"]
         ent_nodes = [n for n in nodes if n.get("type") == "entity"]
         kb_nodes = [n for n in nodes if n.get("type") == "knowledge"]
         exp_nodes = [n for n in nodes if n.get("type") == "experience"]
+        ep_nodes = [n for n in nodes if n.get("type") == "episode"]
         mem_nodes.sort(
             key=lambda n: float((n.get("scores") or {}).get("retain") or n.get("size") or 0),
             reverse=True,
@@ -610,15 +621,20 @@ def export_memory_graph(
         mem_nodes = mem_nodes[:effective_limit]
         ent_nodes.sort(key=lambda n: float(n.get("size") or 0), reverse=True)
         ent_nodes = ent_nodes[:_MAX_ENTITIES]
+        kb_nodes.sort(key=lambda n: float((n.get("scores") or {}).get("retain") or 0), reverse=True)
         kb_nodes = kb_nodes[:_MAX_KNOWLEDGE]
+        exp_nodes.sort(key=lambda n: float((n.get("scores") or {}).get("retain") or 0), reverse=True)
         exp_nodes = exp_nodes[:_MAX_EXPERIENCE]
+        ep_nodes.sort(key=lambda n: float((n.get("scores") or {}).get("retain") or 0), reverse=True)
+        ep_nodes = ep_nodes[:_MAX_EPISODES]
         keep_ids = (
             {n["id"] for n in mem_nodes}
             | {n["id"] for n in ent_nodes}
             | {n["id"] for n in kb_nodes}
             | {n["id"] for n in exp_nodes}
+            | {n["id"] for n in ep_nodes}
         )
-        nodes = mem_nodes + ent_nodes + kb_nodes + exp_nodes
+        nodes = mem_nodes + ent_nodes + kb_nodes + exp_nodes + ep_nodes
         edges = [e for e in edges if e.get("source") in keep_ids and e.get("target") in keep_ids]
         # Prefer structural edges (supersedes + mentions) so knowledge/experience
         # layers cannot starve memory↔entity links under MEMORY_STUDIO_MAX_EDGES.
@@ -645,9 +661,11 @@ def export_memory_graph(
                 "user_id": uid,
                 "memory_count": len(mem_nodes),
                 "entity_count": len(ent_nodes),
+                "episode_count": len(ep_nodes),
                 "edge_count": len(edges),
                 "include_history": include_history,
                 "include_entities": include_entities,
+                "include_episodes": include_episodes,
                 "limit": limit,
                 "theme": "galaxy",
                 "max_memories": _MAX_MEMORIES,
@@ -655,6 +673,7 @@ def export_memory_graph(
                 "max_edges": _MAX_EDGES,
                 "max_knowledge": _MAX_KNOWLEDGE,
                 "max_experience": _MAX_EXPERIENCE,
+                "max_episodes": _MAX_EPISODES,
                 "include_knowledge": include_knowledge,
                 "include_experience": include_experience,
                 "date_from": from_dt,
@@ -680,6 +699,7 @@ def _legend() -> dict[str, Any]:
             "neutral": "#8a9bb8",
             "pos": "#f0c14a",
             "entity": "#b794f6",
+            "episode": "#51d4c8",
             "imprint": "#c651a8",
             "pinned": "#51d4c8",
             "superseded": "#4a3a6a",
@@ -1076,3 +1096,189 @@ def _add_experience_layer(
                 exp_conn.close()
             except Exception:
                 pass
+
+
+def _add_episode_layer(
+    conn: sqlite3.Connection,
+    uid: str,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    entity_ids: set[str],
+    mem_ids: set[str],
+    entity_importance: dict[str, float] | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> None:
+    """Add episodic memory (emc_storage) as episode nodes.
+
+    Episodes are linked to the semantic facts they distilled into via the
+    distilled_into JSON column (EM→SM edges), and to shared entity hubs via
+    mentions edges. Episodes with a distilled_into link are kept even when
+    the distilled fact was trimmed out of the memory window, so the
+    consolidation story stays visible.
+    """
+    if entity_importance is None:
+        entity_importance = {}
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(emc_storage)").fetchall()}
+    except Exception:
+        cols = set()
+    if not cols or "id" not in cols:
+        return
+
+    has_ent = "entities" in cols
+    has_recall = "recall_count" in cols
+    has_salience = "salience_score" in cols
+    has_valence = "valence_tag" in cols
+    has_arousal = "arousal_score" in cols
+    has_distilled = "distilled_at" in cols
+    has_distilled_into = "distilled_into" in cols
+
+    select_cols = ["id", "timestamp", "date", "trace"]
+    if has_ent:
+        select_cols.append("entities")
+    if has_recall:
+        select_cols.append("recall_count")
+    if has_salience:
+        select_cols.append("salience_score")
+    if has_valence:
+        select_cols.append("valence_tag")
+    if has_arousal:
+        select_cols.append("arousal_score")
+    if has_distilled:
+        select_cols.append("distilled_at")
+    if has_distilled_into:
+        select_cols.append("distilled_into")
+
+    sql = f"SELECT {', '.join(select_cols)} FROM emc_storage WHERE user_id = ?"
+    params: list[Any] = [uid]
+    if date_from:
+        sql += " AND timestamp >= ?"
+        params.append(date_from)
+    if date_to:
+        sql += " AND timestamp <= ?"
+        params.append(date_to)
+    sql += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(max(int(_MAX_EPISODES) * 3, int(_MAX_EPISODES)))
+
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    except Exception as ex:
+        log.debug("episode layer query failed: %s", ex)
+        return
+
+    seen_ep: set[str] = set()
+    distilled_edges: set[tuple[str, str]] = set()
+    for row in rows:
+        eid = f"ep:{row['id']}"
+        trace = (row["trace"] or "").strip()
+        if not trace:
+            continue
+        if eid in seen_ep:
+            continue
+        seen_ep.add(eid)
+
+        label = trace if len(trace) <= 60 else trace[:57] + "…"
+        ents = _entities_from_raw(row["entities"]) if has_ent else []
+        recall_count = int(row["recall_count"] or 0) if has_recall else 0
+        salience = float(row["salience_score"] or 0.0) if has_salience else 0.0
+        valence_tag = str(row["valence_tag"]) if has_valence and row["valence_tag"] is not None else "neutral"
+        arousal = float(row["arousal_score"] or 0.0) if has_arousal else 0.0
+        distilled_at = str(row["distilled_at"] or "") if has_distilled else ""
+        distilled = bool(distilled_at)
+        distilled_into: list[str] = []
+        if has_distilled_into and row["distilled_into"]:
+            try:
+                distilled_into = [str(x) for x in json.loads(row["distilled_into"]) if str(x).strip()]
+            except (TypeError, json.JSONDecodeError):
+                distilled_into = []
+
+        retain = max(0.05, min(1.0, 0.10 + 0.30 * salience + 0.12 * arousal
+                               + 0.22 * (1.0 if distilled else 0.0)
+                               + 0.18 * min(1.0, recall_count / 8.0)))
+        scores = {
+            "retain": round(retain, 4),
+            "salience": round(max(0.0, min(1.0, salience)), 4),
+            "spacing": round(min(1.0, recall_count / 8.0), 4),
+            "connectivity": round(min(1.0, len(ents) / 5.0), 4),
+            "valence": round(max(0.0, min(1.0, arousal)), 4),
+            "access": round(min(1.0, recall_count / 16.0), 4),
+        }
+
+        nodes.append({
+            "id": eid,
+            "type": "episode",
+            "label": label,
+            "text": trace,
+            "status": "active",
+            "kind": "episode",
+            "source": "emc_storage",
+            "pinned": False,
+            "access_count": recall_count,
+            "created_at": row["timestamp"] or row["date"],
+            "entities": ents,
+            "supersedes_id": None,
+            "valence_tag": valence_tag,
+            "distilled": distilled,
+            "distilled_at": distilled_at,
+            "distilled_into": distilled_into,
+            "recall_count": recall_count,
+            "scores": scores,
+            "size": round(0.18 + 1.27 * (retain ** 1.18), 4),
+        })
+
+        # EM→SM edges: episode → distilled fact
+        if distilled_into:
+            for mid in distilled_into:
+                key = (eid, mid)
+                if key in distilled_edges:
+                    continue
+                distilled_edges.add(key)
+                edges.append({
+                    "id": f"distilled:{eid}->{mid}",
+                    "source": eid,
+                    "target": mid,
+                    "type": "distilled_into",
+                    "weight": 1.0,
+                })
+
+        # mentions edges to shared entity hubs
+        if has_ent:
+            for ent in ents:
+                ent_cf = ent.casefold()
+                eid_ent = f"ent:{ent_cf}"
+                if eid_ent not in entity_ids:
+                    entity_ids.add(eid_ent)
+                    ie = float(entity_importance.get(ent_cf, 0.0))
+                    nodes.append({
+                        "id": eid_ent,
+                        "type": "entity",
+                        "label": ent,
+                        "text": ent,
+                        "status": "active",
+                        "kind": "entity",
+                        "source": "",
+                        "pinned": False,
+                        "access_count": 0,
+                        "created_at": None,
+                        "entities": [],
+                        "supersedes_id": None,
+                        "valence_tag": "neutral",
+                        "scores": {
+                            "retain": round(ie, 4),
+                            "importance": round(ie, 4),
+                            "salience": 0.0,
+                            "spacing": 0.0,
+                            "connectivity": round(ie, 4),
+                            "valence": 0.25,
+                            "access": 0.0,
+                        },
+                        "size": round(0.25 + 0.85 * ie, 4),
+                    })
+                edges.append({
+                    "id": f"men-ep:{eid}->{eid_ent}",
+                    "source": eid,
+                    "target": eid_ent,
+                    "type": "mentions",
+                    "weight": 0.6,
+                })

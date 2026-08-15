@@ -29,6 +29,7 @@ function qs() {
   p.set('include_entities', document.getElementById('include-entities').checked);
   p.set('include_knowledge', document.getElementById('include-knowledge').checked);
   p.set('include_experience', document.getElementById('include-experience').checked);
+  p.set('include_episodes', document.getElementById('include-episodes').checked);
   const df = document.getElementById('date-from').value;
   const dt = document.getElementById('date-to').value;
   if (df) p.set('date_from', df);
@@ -44,7 +45,7 @@ async function loadGraph() {
     stretchRetain(graph.nodes);
     const m = graph.meta || {};
     document.getElementById('stats').innerHTML =
-      `neurons: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>knowledge: ${(graph.nodes||[]).filter(n=>n.type==='knowledge').length}<br/>experience: ${(graph.nodes||[]).filter(n=>n.type==='experience').length}<br/>synapses: ${m.edge_count ?? 0}`;
+      `neurons: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>knowledge: ${(graph.nodes||[]).filter(n=>n.type==='knowledge').length}<br/>experience: ${(graph.nodes||[]).filter(n=>n.type==='experience').length}<br/>episodes: ${m.episode_count ?? 0}<br/>synapses: ${m.edge_count ?? 0}`;
     document.getElementById('status').textContent =
       `${(graph.nodes||[]).length} nodes · ${(graph.edges||[]).length} edges`;
     await getCurrentUser();
@@ -102,6 +103,7 @@ function valenceHue(d) {
   if (d.type === 'entity') return 'entity';
   if (d.type === 'knowledge') return 'knowledge';
   if (d.type === 'experience') return 'experience';
+  if (d.type === 'episode') return 'episode';
   if (d.imprint) return 'imprint';
   let v = (d.valence_tag || 'neutral').toLowerCase();
   const vs = d.valence_score;
@@ -119,6 +121,7 @@ function hueColor(hue) {
   if (hue === 'entity') return '#b794f6';
   if (hue === 'knowledge') return '#4ade80';
   if (hue === 'experience') return '#fb923c';
+  if (hue === 'episode') return '#51d4c8';
   if (hue === 'imprint') return '#c651a8';
   if (hue === 'neg') return '#3de0ff';
   if (hue === 'pos') return '#f0c14a';
@@ -175,7 +178,7 @@ function edgeOpacity(e, nodeById) {
   const w = Math.max(0, Math.min(1, Number(e.weight) || 0.4));
   const wBoost = 0.35 + 0.65 * w; // weak weight stays dim
   if (e.type === 'supersedes') return Math.min(0.95, (0.25 + mid * 0.7) * wBoost);
-  if (e.type === 'mentions' || e.type === 'grounded_in' || e.type === 'practiced_in') {
+  if (e.type === 'mentions' || e.type === 'grounded_in' || e.type === 'practiced_in' || e.type === 'distilled_into') {
     return Math.min(0.9, (0.06 + mid * 0.75) * wBoost);
   }
   return Math.min(0.7, (0.04 + mid * 0.55) * wBoost);
@@ -229,6 +232,18 @@ function showDetails(d) {
   let html = '<h3>Neuron</h3>' + rows.map(([k,v]) =>
     `<div class="detail-label">${k}</div><div class="detail-value">${escapeHtml(String(v))}</div>`
   ).join('') + '<h3 style="margin-top:14px">Factor scores</h3>' + scoreRows;
+
+  if (d.type === 'episode') {
+    const extra = [
+      ['recall_count', d.recall_count != null ? d.recall_count : '—'],
+      ['distilled', d.distilled ? 'yes' : 'no'],
+      ['distilled_at', d.distilled_at || '—'],
+      ['distilled_into', (d.distilled_into || []).join(', ') || '—'],
+    ];
+    html += '<h3 style="margin-top:14px">Episodic</h3>' + extra.map(([k,v]) =>
+      `<div class="detail-label">${k}</div><div class="detail-value">${escapeHtml(String(v))}</div>`
+    ).join('');
+  }
 
   // Phase 16 — lineage (uses global `graph` from loadGraph)
   const lin = lineageText(d, graph);
@@ -301,6 +316,7 @@ function render() {
   const showEnt = document.getElementById('layer-entity')?.checked !== false;
   const showKb = document.getElementById('layer-knowledge')?.checked !== false;
   const showExp = document.getElementById('layer-experience')?.checked !== false;
+  const showEp = document.getElementById('layer-episodes')?.checked !== false;
 
   let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
     if (d.type === 'entity') return false;
@@ -319,6 +335,7 @@ function render() {
   for (const n of (graph.nodes || [])) {
     if (n.type === 'knowledge' && showKb) keep.add(n.id);
     if (n.type === 'experience' && showExp) keep.add(n.id);
+    if (n.type === 'episode' && showEp) keep.add(n.id);
   }
   // Pull in entity hubs connected to any kept node via any edge type
   // (mentions, about, related_to, grounded_in, practiced_in, co_mentions).
@@ -342,6 +359,7 @@ function render() {
     }
     if (n.type === 'knowledge') return showKb;
     if (n.type === 'experience') return showExp;
+    if (n.type === 'episode') return showEp;
     return true;
   });
   const keep2 = new Set(nodes.map(n => n.id));
@@ -387,9 +405,10 @@ function render() {
     .append('path').attr('d','M 0 1 L 10 5 L 0 9 Z').attr('fill', 'var(--orange)').attr('opacity', 0.8);
 
   const link = g.append('g').selectAll('line').data(links).join('line')
-    .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : '#3de0ff')
+    .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : (d.type === 'distilled_into' ? '#51d4c8' : '#3de0ff'))
     .attr('stroke-width', d => {
       if (d.type === 'supersedes') return 1.6;
+      if (d.type === 'distilled_into') return 1.3;
       const w = Math.max(0, Math.min(1, Number(d.weight) || 0.4));
       return 0.5 + w * 2.2;
     })
@@ -488,11 +507,13 @@ function render() {
       if (d.type === 'mentions') return 90;
       if (d.type === 'supersedes') return 120;
       if (d.type === 'grounded_in' || d.type === 'practiced_in') return 95;
+      if (d.type === 'distilled_into') return 110;
       return 85;
     },
     linkStrength: d => {
       if (d.type === 'mentions') return 0.45;
       if (d.type === 'supersedes') return 0.25;
+      if (d.type === 'distilled_into') return 0.25;
       return 0.30;
     },
   })

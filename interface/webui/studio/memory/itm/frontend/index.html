@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aiko ITM · Episodic Memory</title>
+  <link rel="stylesheet" href="static/style.css" />
+</head>
+<body>
+  <header>
+    <div style="display: flex; align-items: center; gap: 14px;">
+      <a href="#" id="back-btn" title="Back"
+         style="display:flex;align-items:center;justify-content:center;width:32px;height:32px;background:#1a1028;border:1px solid var(--dim);border-radius:50%;color:var(--purple);text-decoration:none;font-weight:bold;">←</a>
+      <h1>ITM · Episodic Memory</h1>
+      <span id="status" style="font-size:11px;color:var(--dim)"></span>
+    </div>
+    <div class="actions">
+      <button class="btn" id="refresh">Refresh</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <nav class="memory-studio-tabs" aria-label="Memory studio sections">
+        <a class="memory-studio-tab" href="/studio/memory/stm/">STM</a>
+        <a class="memory-studio-tab" href="/studio/memory/ltm/">LTM</a>
+        <a class="memory-studio-tab active" href="/studio/memory/itm/" aria-current="page">ITM</a>
+        <a class="memory-studio-tab" href="/studio/memory/kb/">KB</a>
+      </nav>
+
+      <h2>Pipeline</h2>
+      <div class="pipe" id="pipe">
+        <div class="pipe-step">
+          <div class="pipe-title">Staging</div>
+          <div class="pipe-count" id="pipe-staging">—</div>
+          <div class="pipe-desc">evicted turns, awaiting flush</div>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step">
+          <div class="pipe-title">Storage</div>
+          <div class="pipe-count" id="pipe-storage">—</div>
+          <div class="pipe-desc">flushed episodes</div>
+        </div>
+        <div class="pipe-arrow">→</div>
+        <div class="pipe-step">
+          <div class="pipe-title">Distilled</div>
+          <div class="pipe-count" id="pipe-distilled">—</div>
+          <div class="pipe-desc">consolidated into facts</div>
+        </div>
+      </div>
+      <div class="stat" id="pipe-total">—</div>
+
+      <h2>Filters</h2>
+      <label>User id <input type="text" id="user-id" placeholder="(current)" /></label>
+      <label>Stage
+        <select id="stage">
+          <option value="all">all</option>
+          <option value="storage">storage (not distilled)</option>
+          <option value="distilled">distilled</option>
+        </select>
+      </label>
+      <label>From <input type="date" id="date-from" /></label>
+      <label>To <input type="date" id="date-to" /></label>
+      <label>Contains <input type="text" id="q" placeholder="substring of trace…" /></label>
+      <button class="btn btn-primary" id="apply" style="width:100%;margin-top:10px">Apply</button>
+      <button class="btn" id="show-staging" style="width:100%;margin-top:6px">Show staging buffer</button>
+
+      <h2>Legend</h2>
+      <div class="stat"><i style="background:var(--episode);width:10px;height:10px;border-radius:50%;display:inline-block"></i> episode (flushed)</div>
+      <div class="stat"><i style="background:var(--gold);width:10px;height:10px;border-radius:50%;display:inline-block"></i> distilled (EM→SM)</div>
+      <div class="stat"><i style="background:var(--dimmer);width:10px;height:10px;border-radius:50%;display:inline-block;border:1px solid var(--dim)"></i> staging (buffered)</div>
+    </aside>
+
+    <main class="timeline" id="timeline">
+      <div class="empty" id="empty">No episodes yet — talk to Aiko and turns will appear here as episodic memory.</div>
+    </main>
+  </div>
+
+  <script src="static/script.js"></script>
+  <script>
+    document.getElementById('back-btn').addEventListener('click', function(e) {
+      e.preventDefault();
+      if (window.history.length > 1) window.history.back();
+      else window.location.href = '/';
+    });
+  </script>
+</body>
+</html>

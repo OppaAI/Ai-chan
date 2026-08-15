@@ -39,6 +39,13 @@ try:
 except ImportError as e:
     log.warning(f"Could not mount STM studio: {e}")
 
+# ITM Studio (episodic memory pipeline)
+try:
+    from interface.webui.studio.memory.itm.backend.api import app as itm_studio_app
+    app.mount("/studio/memory/itm", itm_studio_app)
+except ImportError as e:
+    log.warning(f"Could not mount ITM studio: {e}")
+
 
 
 @app.get("/studio/grasp", include_in_schema=False)
