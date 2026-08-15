@@ -66,10 +66,10 @@ function retainOf(d) {
   const sc = d.scores || {};
   if (sc.retain != null) return Math.max(0, Math.min(1, Number(sc.retain)));
   if (d.size != null) {
-    // backend size ≈ 0.20 + 1.10 * retain^1.25 → approximate invert
-    const s = Math.max(0.20, Number(d.size));
-    const t = Math.max(0, Math.min(1, (s - 0.20) / 1.10));
-    return Math.pow(t, 1 / 1.25);
+    // backend size ≈ 0.18 + 1.27 * retain^1.18 → approximate invert
+    const s = Math.max(0.18, Number(d.size));
+    const t = Math.max(0, Math.min(1, (s - 0.18) / 1.27));
+    return Math.pow(t, 1 / 1.18);
   }
   return d.type === 'entity' ? 0.4 : 0.35;
 }
@@ -323,6 +323,11 @@ function render() {
 
   let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
     if (d.type === 'entity') return false;
+    // Exclude layer types that are toggled off so their about-hubs are not pulled in
+    if (d.type === 'memory' && !showMem) return false;
+    if (d.type === 'knowledge' && !showKb) return false;
+    if (d.type === 'experience' && !showExp) return false;
+    if (d.type === 'episode' && !showEp) return false;
     if (st !== 'all' && (d.status || 'active') !== st) return false;
     if (val !== 'all' && (d.valence_tag || 'neutral') !== val) return false;
     if (retainOf(d) < minR) return false;
@@ -334,7 +339,8 @@ function render() {
   });
   const keep = new Set(nodes.map(n => n.id));
   const nodeTypeOf = new Map((graph.nodes || []).map(n => [n.id, n.type]));
-  // Add knowledge / experience nodes when their layers are on
+  // Add knowledge / experience / episode nodes when their layers are on
+  // (redundant with filter above when show*=true; keeps explicit layer intent clear)
   for (const n of (graph.nodes || [])) {
     if (n.type === 'knowledge' && showKb) keep.add(n.id);
     if (n.type === 'experience' && showExp) keep.add(n.id);
