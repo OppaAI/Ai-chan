@@ -1,6 +1,6 @@
 # Aiko LTM Graph Studio
 
-Visualize personal memory as a **neural graph** — facts, supersession chains, entity hubs, knowledge, experience, and retain scores.
+Visualize personal memory as a **neural graph** — facts, supersession chains, entity hubs, knowledge, experience, episodes, and retain scores.
 
 ## Run
 
@@ -35,92 +35,22 @@ Query params for `/api/graph`:
 - `include_entities` — entity hub nodes + `mentions` edges (default true)
 - `include_knowledge` — learned knowledge nodes (default true; Phase 13)
 - `include_experience` — experience nodes (default true; Phase 13)
+- `include_episodes` — episodic memory (EMC) nodes (default true; EMC-5)
 
-## Phase 12
-
-**Server caps** (env vars read by `graph_export.py`; set via deploy / `.env` — `config/memory.yaml` is the documented source when your config loader exports them to the environment):
+## Server caps
 
 - `MEMORY_STUDIO_MAX_MEMORIES` (default 400)
 - `MEMORY_STUDIO_MAX_ENTITIES` (default 120)
 - `MEMORY_STUDIO_MAX_EDGES` (default 200)
+- `MEMORY_STUDIO_MAX_EPISODES` (default 80)
+- `MEMORY_STUDIO_INCLUDE_EPISODES` (default true)
 
-Note: over-fetches ~3× `limit` (newest-first), then keeps the top `limit` by retain among that window (not a full-DB retain rank).
-
-## Phase 13 — Cross-store layers
-
-Related knowledge and experience appear as extra node types, linked by shared entities.
-
-## Phase 16 — Human-feel recall
-
-- **State tags** — optional `state_json` on write (e.g. `local_hour`)
-- **Neg recall-avoid** — mild rank penalty for neg unpinned facts unless query is emotional/reflective
-- **Supersession narrative** — context block `Previously held` / `Current` from chains
-- **Studio** — superseded nodes dimmed; details show lineage via `supersedes` edges
-
-### New node types
+### Node types
 
 | type | Color | Source |
 |------|--------|--------|
+| `memory` | valence-based (pos/neg/neutral) | `memories` |
+| `entity` | purple `#b794f6` | entity hubs from `memories.entities` |
 | `knowledge` | green `#4ade80` | `learned_chunks` |
 | `experience` | orange `#fb923c` | `experiences` |
-
-### New edge types
-
-| type | Meaning |
-|------|---------|
-| `about` | knowledge/experience → entity |
-| `grounded_in` | memory → knowledge (shared entity) |
-| `practiced_in` | memory → experience (shared entity) |
-
-### API
-```http
-GET /api/graph?include_knowledge=true&include_experience=true
-```
-
-### UI layers
-
-Sidebar:
-
-- **Include knowledge / experience** — control what the export loads (reload)
-- **Show memory / entities / knowledge / experience** — client filter without reload
-
-### Env (optional)
-
-- `MEMORY_STUDIO_INCLUDE_KNOWLEDGE` (default `1`)
-- `MEMORY_STUDIO_INCLUDE_EXPERIENCE` (default `1`)
-- `MEMORY_STUDIO_MAX_KNOWLEDGE` (default `80`)
-- `MEMORY_STUDIO_MAX_EXPERIENCE` (default `40`)
-- `MEMORY_STATE_TAGS_ENABLED`
-- `MEMORY_NEG_RECALL_AVOID` / `_WEIGHT` / `_EXCEPT`
-- `MEMORY_SUPERSESSION_NARRATIVE` / `_MAX`
-
-**Client filters** (sidebar; re-filter without reload):
-
-- Status: all / active / superseded
-- Valence: all / pos / neg / neutral
-- Min retain (0–1)
-- Entity contains (substring)
-
-## Graph model
-
-**Nodes**
-
-- `type=memory` — fact rows; **`size`** = retain tendency; **`scores`** rim arcs
-- `type=entity` — shared entity hubs; **`size`** ≈ $I_e$ when available
-- `type=knowledge` — learned chunks (green)
-- `type=experience` — past agent runs (orange)
-
-**Edges**
-
-- `supersedes` — newer fact → older fact it replaced
-- `mentions` — memory → entity
-- `related_to` / co-mention — entity → entity
-
-- `about` — knowledge/experience → entity
-- `grounded_in` — memory → knowledge
-- `practiced_in` — memory → experience
-
-## Notes
-
-- Read-only — does not write memories
-- Scoring helpers live inside `graph_export.py`
+| `episode` | fuchsia `#e879f9` | `emc_storage` (EMC) |

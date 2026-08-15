@@ -29,6 +29,10 @@ function qs() {
   p.set('include_entities', document.getElementById('include-entities').checked);
   p.set('include_knowledge', document.getElementById('include-knowledge').checked);
   p.set('include_experience', document.getElementById('include-experience').checked);
+  const episodesCheckbox = document.getElementById('include-episodes');
+  if (episodesCheckbox) {
+    p.set('include_episodes', episodesCheckbox.checked);
+  }
   const df = document.getElementById('date-from').value;
   const dt = document.getElementById('date-to').value;
   if (df) p.set('date_from', df);
@@ -44,7 +48,7 @@ async function loadGraph() {
     stretchRetain(graph.nodes);
     const m = graph.meta || {};
     document.getElementById('stats').innerHTML =
-      `neurons: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>knowledge: ${(graph.nodes||[]).filter(n=>n.type==='knowledge').length}<br/>experience: ${(graph.nodes||[]).filter(n=>n.type==='experience').length}<br/>synapses: ${m.edge_count ?? 0}`;
+      `neurons: ${m.memory_count ?? 0}<br/>entities: ${m.entity_count ?? 0}<br/>knowledge: ${(graph.nodes||[]).filter(n=>n.type==='knowledge').length}<br/>experience: ${(graph.nodes||[]).filter(n=>n.type==='experience').length}<br/>episodes: ${(graph.nodes||[]).filter(n=>n.type==='episode').length}<br/>synapses: ${m.edge_count ?? 0}`;
     document.getElementById('status').textContent =
       `${(graph.nodes||[]).length} nodes · ${(graph.edges||[]).length} edges`;
     await getCurrentUser();
@@ -62,10 +66,10 @@ function retainOf(d) {
   const sc = d.scores || {};
   if (sc.retain != null) return Math.max(0, Math.min(1, Number(sc.retain)));
   if (d.size != null) {
-    // backend size ≈ 0.20 + 1.10 * retain^1.25 → approximate invert
-    const s = Math.max(0.20, Number(d.size));
-    const t = Math.max(0, Math.min(1, (s - 0.20) / 1.10));
-    return Math.pow(t, 1 / 1.25);
+    // backend size ≈ 0.18 + 1.27 * retain^1.18 → approximate invert
+    const s = Math.max(0.18, Number(d.size));
+    const t = Math.max(0, Math.min(1, (s - 0.18) / 1.27));
+    return Math.pow(t, 1 / 1.18);
   }
   return d.type === 'entity' ? 0.4 : 0.35;
 }
@@ -102,6 +106,7 @@ function valenceHue(d) {
   if (d.type === 'entity') return 'entity';
   if (d.type === 'knowledge') return 'knowledge';
   if (d.type === 'experience') return 'experience';
+  if (d.type === 'episode') return 'episode';
   if (d.imprint) return 'imprint';
   let v = (d.valence_tag || 'neutral').toLowerCase();
   const vs = d.valence_score;
@@ -119,6 +124,7 @@ function hueColor(hue) {
   if (hue === 'entity') return '#b794f6';
   if (hue === 'knowledge') return '#4ade80';
   if (hue === 'experience') return '#fb923c';
+  if (hue === 'episode') return '#e879f9';
   if (hue === 'imprint') return '#c651a8';
   if (hue === 'neg') return '#3de0ff';
   if (hue === 'pos') return '#f0c14a';
@@ -226,6 +232,18 @@ function showDetails(d) {
     ['supersedes', d.supersedes_id || '—'],
     ['text', d.text || d.label || ''],
   ];
+  if (d.type === 'episode') {
+    rows.splice(6, 0,
+      ['when', d.created_at || d.date || '—'],
+      ['date', d.date || '—'],
+      ['salience', d.salience_score != null ? d.salience_score : '—'],
+      ['arousal', d.arousal_score != null ? d.arousal_score : '—'],
+      ['recalls', d.access_count ?? 0],
+      ['distilled', d.distilled_at || '—'],
+      ['source', d.source || '—'],
+      ['session', d.session_id || '—'],
+    );
+  }
   let html = '<h3>Neuron</h3>' + rows.map(([k,v]) =>
     `<div class="detail-label">${k}</div><div class="detail-value">${escapeHtml(String(v))}</div>`
   ).join('') + '<h3 style="margin-top:14px">Factor scores</h3>' + scoreRows;
@@ -301,9 +319,15 @@ function render() {
   const showEnt = document.getElementById('layer-entity')?.checked !== false;
   const showKb = document.getElementById('layer-knowledge')?.checked !== false;
   const showExp = document.getElementById('layer-experience')?.checked !== false;
+  const showEp = document.getElementById('layer-episode')?.checked !== false;
 
   let nodes = (graph.nodes || []).map(n => ({ ...n })).filter(d => {
     if (d.type === 'entity') return false;
+    // Exclude layer types that are toggled off so their about-hubs are not pulled in
+    if (d.type === 'memory' && !showMem) return false;
+    if (d.type === 'knowledge' && !showKb) return false;
+    if (d.type === 'experience' && !showExp) return false;
+    if (d.type === 'episode' && !showEp) return false;
     if (st !== 'all' && (d.status || 'active') !== st) return false;
     if (val !== 'all' && (d.valence_tag || 'neutral') !== val) return false;
     if (retainOf(d) < minR) return false;
@@ -315,10 +339,12 @@ function render() {
   });
   const keep = new Set(nodes.map(n => n.id));
   const nodeTypeOf = new Map((graph.nodes || []).map(n => [n.id, n.type]));
-  // Add knowledge / experience nodes when their layers are on
+  // Add knowledge / experience / episode nodes when their layers are on
+  // (redundant with filter above when show*=true; keeps explicit layer intent clear)
   for (const n of (graph.nodes || [])) {
     if (n.type === 'knowledge' && showKb) keep.add(n.id);
     if (n.type === 'experience' && showExp) keep.add(n.id);
+    if (n.type === 'episode' && showEp) keep.add(n.id);
   }
   // Pull in entity hubs connected to any kept node via any edge type
   // (mentions, about, related_to, grounded_in, practiced_in, co_mentions).
@@ -342,6 +368,7 @@ function render() {
     }
     if (n.type === 'knowledge') return showKb;
     if (n.type === 'experience') return showExp;
+    if (n.type === 'episode') return showEp;
     return true;
   });
   const keep2 = new Set(nodes.map(n => n.id));

@@ -267,6 +267,7 @@ def export_memory_graph(
     include_entities: bool = True,
     include_knowledge: bool | None = None,
     include_experience: bool | None = None,
+    include_episodes: bool | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     conn: sqlite3.Connection | None = None,
@@ -278,11 +279,12 @@ def export_memory_graph(
       - entity: hub nodes (size = I_e when available)
       - knowledge: learned chunks (only when grounded in memories)
       - experience: experiences (only when grounded in memories)
+      - episode: episodic memory cortex rows (EMC)
 
     Edge types:
       - supersedes: newer memory → older memory it replaced
       - mentions: memory → entity (deduplicated, weighted by mention count)
-      - about: knowledge/experience → entity
+      - about: knowledge/experience/episode → entity
       - grounded_in: memory → knowledge (only when same entity mentioned)
       - practiced_in: memory → experience (only when same entity mentioned)
       - co_mentions / related_to: entity → entity (filtered by importance)
@@ -292,6 +294,9 @@ def export_memory_graph(
         include_knowledge = _INCLUDE_KNOWLEDGE
     if include_experience is None:
         include_experience = _INCLUDE_EXPERIENCE
+    if include_episodes is None:
+        from interface.webui.studio.memory.ltm.backend.episode_graph import INCLUDE_EPISODES
+        include_episodes = INCLUDE_EPISODES
     owns_conn = conn is None
     if conn is None:
         from cognition.memory.vecstore import initialize_store_db
@@ -598,10 +603,22 @@ def export_memory_graph(
             except Exception as ex:
                 log.debug("graph_export: experience layer skipped: %s", ex)
 
+        if include_episodes:
+            try:
+                from interface.webui.studio.memory.ltm.backend.episode_graph import (
+                    MAX_EPISODES,
+                    _add_episode_layer,
+                )
+                if MAX_EPISODES > 0:
+                    _add_episode_layer(conn, uid, nodes, edges, entity_ids, date_from=from_dt, date_to=to_dt, include_entities=include_entities)
+            except Exception as ex:
+                log.debug("graph_export: episode layer skipped: %s", ex)
+
         mem_nodes = [n for n in nodes if n.get("type") == "memory"]
         ent_nodes = [n for n in nodes if n.get("type") == "entity"]
         kb_nodes = [n for n in nodes if n.get("type") == "knowledge"]
         exp_nodes = [n for n in nodes if n.get("type") == "experience"]
+        ep_nodes = [n for n in nodes if n.get("type") == "episode"]
         mem_nodes.sort(
             key=lambda n: float((n.get("scores") or {}).get("retain") or n.get("size") or 0),
             reverse=True,
@@ -612,13 +629,23 @@ def export_memory_graph(
         ent_nodes = ent_nodes[:_MAX_ENTITIES]
         kb_nodes = kb_nodes[:_MAX_KNOWLEDGE]
         exp_nodes = exp_nodes[:_MAX_EXPERIENCE]
+        try:
+            from interface.webui.studio.memory.ltm.backend.episode_graph import MAX_EPISODES as _ME
+        except Exception:
+            _ME = 80
+        ep_nodes.sort(
+            key=lambda n: float((n.get("scores") or {}).get("salience") or n.get("size") or 0),
+            reverse=True,
+        )
+        ep_nodes = ep_nodes[:_ME]
         keep_ids = (
             {n["id"] for n in mem_nodes}
             | {n["id"] for n in ent_nodes}
             | {n["id"] for n in kb_nodes}
             | {n["id"] for n in exp_nodes}
+            | {n["id"] for n in ep_nodes}
         )
-        nodes = mem_nodes + ent_nodes + kb_nodes + exp_nodes
+        nodes = mem_nodes + ent_nodes + kb_nodes + exp_nodes + ep_nodes
         edges = [e for e in edges if e.get("source") in keep_ids and e.get("target") in keep_ids]
         # Prefer structural edges (supersedes + mentions) so knowledge/experience
         # layers cannot starve memory↔entity links under MEMORY_STUDIO_MAX_EDGES.
@@ -655,8 +682,10 @@ def export_memory_graph(
                 "max_edges": _MAX_EDGES,
                 "max_knowledge": _MAX_KNOWLEDGE,
                 "max_experience": _MAX_EXPERIENCE,
+                "episode_count": len(ep_nodes),
                 "include_knowledge": include_knowledge,
                 "include_experience": include_experience,
+                "include_episodes": include_episodes,
                 "date_from": from_dt,
                 "date_to": to_dt,
                 "phase16_lineage": bool(has_supersedes),
@@ -683,6 +712,9 @@ def _legend() -> dict[str, Any]:
             "imprint": "#c651a8",
             "pinned": "#51d4c8",
             "superseded": "#4a3a6a",
+            "knowledge": "#4ade80",
+            "experience": "#fb923c",
+            "episode": "#e879f9",
         },
     }
 
