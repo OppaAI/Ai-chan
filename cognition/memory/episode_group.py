@@ -48,11 +48,14 @@ def group_staging_rows(rows: list) -> list[list]:
         cur = groups[-1]
         prev = cur[-1]
         same_session = (prev[10] or None) == (row[10] or None)
-        gap_ok = True
         t_prev = parse_ts(prev[2])
         t_cur = parse_ts(row[2])
-        if t_prev is not None and t_cur is not None and EMC_GROUP_MAX_GAP_SEC > 0:
+        if EMC_GROUP_MAX_GAP_SEC == 0:
+            gap_ok = True
+        elif t_prev is not None and t_cur is not None:
             gap_ok = abs(t_cur - t_prev) <= float(EMC_GROUP_MAX_GAP_SEC)
+        else:
+            gap_ok = False
         turns_ok = len(cur) < EMC_GROUP_MAX_TURNS
         existing = sum(len(str(r[4] or "")) for r in cur)
         added = len(str(row[4] or ""))
