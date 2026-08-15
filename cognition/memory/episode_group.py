@@ -23,11 +23,14 @@ def parse_ts(value: Any) -> float | None:
     try:
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
+        # Truncate fractional seconds to 6 digits without breaking the offset
         if "." in s:
-            head, tail = s.split(".", 1)
-            digits = "".join(c for c in tail if c.isdigit())
-            tz = "".join(c for c in tail if not c.isdigit())
-            s = head + "." + digits[:6] + tz
+            head, rest = s.split(".", 1)
+            i = 0
+            while i < len(rest) and rest[i].isdigit():
+                i += 1
+            digits, suffix = rest[:i], rest[i:]
+            s = head + "." + digits[:6] + suffix
         return datetime.fromisoformat(s).timestamp()
     except Exception:
         return None
