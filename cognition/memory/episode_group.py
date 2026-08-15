@@ -34,6 +34,13 @@ def parse_ts(value: Any) -> float | None:
 
 
 def group_staging_rows(rows: list) -> list[list]:
+    """Partition ordered staging rows into coherent episode groups.
+
+    Row tuple layout (from flush_staging SELECT):
+      0 id, 1 user_id, 2 timestamp, 3 date, 4 trace,
+      5 valence_tag, 6 arousal_score, 7 salience_score,
+      8 entities, 9 source, 10 session_id
+    """
     if not rows:
         return []
     groups: list[list] = [[rows[0]]]
@@ -58,6 +65,7 @@ def group_staging_rows(rows: list) -> list[list]:
 
 
 def merge_staging_group(group: list) -> tuple:
+    """Collapse a group into one row-shaped tuple for _inscribe."""
     if len(group) == 1:
         return group[0]
     first = group[0]
