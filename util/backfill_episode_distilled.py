@@ -56,6 +56,13 @@ def backfill(db_path: str, user_id: str | None, dry_run: bool) -> dict:
         "errors": 0,
     }
     try:
+        # The distilled_at/distilled_into columns are only added by
+        # ensure_distilled_column during a dream() run. Add them here so the
+        # script works on DBs that never ran EMC-4, and so --apply actually
+        # writes the link.
+        from cognition.memory.episode_dream import ensure_distilled_column
+        ensure_distilled_column(conn)
+
         cols = {r[1] for r in conn.execute("PRAGMA table_info(emc_storage)").fetchall()}
         if "distilled_into" not in cols or "distilled_at" not in cols:
             result["errors"] = 1
@@ -163,6 +170,7 @@ def _resolve_db_paths(user: str | None) -> list[tuple[Path, str | None]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--apply", action="store_true", help="write links (default: dry-run)")
+    ap.add_argument("--dry-run", dest="dry_run_flag", action="store_true", help="explicit dry-run (default)")
     ap.add_argument("--db", help="specific memory DB path")
     ap.add_argument("--user", help="only process this user (else scan all users)")
     args = ap.parse_args()
