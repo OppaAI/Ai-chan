@@ -15,11 +15,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import os
 
-# ── tunable parameters ────────────────────────────────────────────────────────
-HALF_LIFE_DAYS    = float(os.getenv("FORGET_HALF_LIFE_DAYS",    "21.0"))
-CLEANUP_THRESHOLD = float(os.getenv("FORGET_CLEANUP_THRESHOLD", "0.02"))
-ACCESS_COUNT_CAP  = int(  os.getenv("FORGET_ACCESS_COUNT_CAP",  "255"))
-GRACE_PERIOD_DAYS = int(  os.getenv("FORGET_GRACE_PERIOD_DAYS", "35"))
+# ── mood-dependent forgetting ──────────────────────────────────────────────
+FORGET_MOOD_MATCH_ENABLED = os.getenv("FORGET_MOOD_MATCH_ENABLED", "1").lower() in {"1", "true", "yes", "on"}
+FORGET_MOOD_MATCH_SLOWDOWN = float(os.getenv("FORGET_MOOD_MATCH_SLOWDOWN", "1.3"))
+FORGET_MOOD_MISMATCH_ACCELERATION = float(os.getenv("FORGET_MOOD_MISMATCH_ACCELERATION", "1.3"))
+# When query valence matches memory valence (both non-zero): H_eff × slowdown → decay slower.
+# When query valence mismatches memory valence: H_eff ÷ acceleration → decay faster.
+# When query valence is neutral/zero: no mood modulation (original behavior).
 
 # Phase 5: emotion imprint — lengthens effective half-life for high-intensity valence.
 EMOTION_GAMMA = float(os.getenv("FORGET_EMOTION_GAMMA", "0.5"))
@@ -57,14 +59,18 @@ def compute_weighted_score(
     last_accessed_iso: str,
     valence_tag: str | None = None,
     valence_score: int | float | None = None,
+    query_valence: int | None = None,
 ) -> float:
     """Compute exponential decay score for a memory entry.
 
     Score = min(access_count, cap) × 0.5^(days / H_eff)
 
-    H_eff = HALF_LIFE_DAYS × (1 + γ × intensity).
-    High emotional intensity (esp. |score|=2 / neg) decays slower.
-    FORGET_EMOTION_GAMMA=0 disables emotion modification.
+    H_eff = HALF_LIFE_DAYS × (1 + γ × intensity) × mood_factor
+
+    Mood factor:
+      • query_valence matches memory valence (both non-zero) → × slowdown → decay slower
+      • query_valence mismatches memory valence → ÷ acceleration → decay faster
+      • query_valence is None or zero → no mood modulation (original behavior)
     """
     if not access_count or not last_accessed_iso or last_accessed_iso == "never":
         return 0.0
@@ -78,6 +84,20 @@ def compute_weighted_score(
         days = max(0.0, (now - last_dt).total_seconds() / 86400.0)
         intensity = _valence_intensity(valence_tag, valence_score)
         h_eff = HALF_LIFE_DAYS * (1.0 + max(0.0, EMOTION_GAMMA) * intensity)
+
+        # Phase 21: mood-dependent forgetting.
+        if FORGET_MOOD_MATCH_ENABLED and query_valence is not None and query_valence != 0:
+            mem_intensity = _valence_intensity(valence_tag, valence_score)
+            # Determine mood factor based on valence sign match/mismatch.
+            mem_sign = 1 if valence_score is not None and valence_score > 0 else (-1 if valence_score is not None and valence_score < 0 else 0)
+            q_sign = 1 if query_valence > 0 else (-1 if query_valence < 0 else 0)
+            if mem_sign != 0 and q_sign != 0 and mem_sign == q_sign:
+                # Valence match: slow decay → increase H_eff
+                h_eff *= FORGET_MOOD_MATCH_SLOWDOWN
+            elif mem_sign != 0 and q_sign != 0 and mem_sign != q_sign:
+                # Valence mismatch: accelerate decay → decrease H_eff
+                h_eff /= FORGET_MOOD_MISMATCH_ACCELERATION
+
         h_eff = max(h_eff, 1e-6)
         return float(min(access_count, ACCESS_COUNT_CAP)) * (0.5 ** (days / h_eff))
     except Exception:
@@ -107,6 +127,7 @@ def should_cleanup(
     created_at_iso: str,
     valence_tag: str | None = None,
     valence_score: int | float | None = None,
+    query_valence: int | None = None,
 ) -> bool:
     """Return True if a memory is a deletion candidate."""
     if is_grace_protected(created_at_iso):
@@ -117,6 +138,7 @@ def should_cleanup(
             last_accessed_iso,
             valence_tag=valence_tag,
             valence_score=valence_score,
+            query_valence=query_valence,
         )
         < CLEANUP_THRESHOLD
     )

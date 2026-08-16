@@ -55,6 +55,8 @@ EMC_STAGING_MAX = max(10, env_int("EMC_STAGING_MAX", 200))
 EMC_EVICT_ENABLED = env_bool("EMC_EVICT_ENABLED", "1")
 EMC_EVICT_MIN_CHARS = max(1, env_int("EMC_EVICT_MIN_CHARS", 40))
 EMC_FLUSH_EVERY_TURNS = max(0, env_int("EMC_FLUSH_EVERY_TURNS", 8))
+MEMORY_WM_CAPACITY = max(1, env_int("MEMORY_WM_CAPACITY", "7"))
+MEMORY_WM_CAPACITY = max(1, env_int("MEMORY_WM_CAPACITY", "7"))
 EMC_FLUSH_ON_STAGING = max(1, env_int("EMC_FLUSH_ON_STAGING", 24))
 
 EMBED_DIMS = int(os.getenv("EMBED_DIMS", "640"))
@@ -384,6 +386,10 @@ class EpisodicStore:
         should = staging >= EMC_FLUSH_ON_STAGING
         if EMC_FLUSH_EVERY_TURNS > 0 and self._turns_since_flush >= EMC_FLUSH_EVERY_TURNS:
             should = should or staging > 0
+        # WM capacity: if staging exceeds the working memory cap, force flush
+        # to evict the oldest rows and make room for new information.
+        if staging > MEMORY_WM_CAPACITY:
+            should = True
         if not should:
             return 0
         n = self.flush_staging()
@@ -426,30 +432,59 @@ class EpisodicStore:
         except Exception:
             pass
 
-    def flush_staging(self, limit: int | None = None) -> int:
+def flush_staging(self, limit: int | None = None, max_rows: int | None = None) -> int:
         """Move staging rows → emc_storage.
 
         EMC-6: when ``EMC_GROUP_ENABLED``, consecutive related rows are merged
         into one coherent episode (same session, within time gap, bounded by
         max turns/chars). Otherwise 1:1 as in EMC-1/2.
+
+        ``max_rows`` — Phase 21: working memory capacity limit. If provided,
+        only the newest ``max_rows`` staging rows are flushed to emc_storage;
+        the oldest rows are deleted to make room.
         """
         if not EMC_ENABLED:
             return 0
         batch = limit if limit is not None else EMC_FLUSH_BATCH
 
         with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT id, user_id, timestamp, date, trace,
-                       valence_tag, arousal_score, salience_score,
-                       entities, source, session_id
-                FROM emc_staging
-                WHERE user_id = ?
-                ORDER BY id ASC
-                LIMIT ?
-                """,
-                (self._user_id, batch),
-            ).fetchall()
+            if max_rows is not None:
+                # Determine which rows to consider for flushing
+                all_rows = self._conn.execute(
+                    """
+                    SELECT id, user_id, timestamp, date, trace,
+                           valence_tag, arousal_score, salience_score,
+                           entities, source, session_id
+                    FROM emc_staging
+                    WHERE user_id = ?
+                    ORDER BY id ASC
+                    """,
+                    (self._user_id,),
+                ).fetchall()
+                if len(all_rows) <= max_rows:
+                    rows = all_rows
+                else:
+                    # Keep the newest max_rows (highest ids), delete the rest
+                    rows = all_rows[-max_rows:]
+                    # Delete the oldest rows without inscribing them
+                    old_ids = [str(r[0]) for r in all_rows[:-max_rows]]
+                    self._conn.executemany(
+                        "DELETE FROM emc_staging WHERE id = ?",
+                        [(sid,) for sid in old_ids],
+                    )
+            else:
+                rows = self._conn.execute(
+                    """
+                    SELECT id, user_id, timestamp, date, trace,
+                           valence_tag, arousal_score, salience_score,
+                           entities, source, session_id
+                    FROM emc_staging
+                    WHERE user_id = ?
+                    ORDER BY id ASC
+                    LIMIT ?,
+                    """,
+                    (self._user_id, batch),
+                ).fetchall()
 
             if not rows:
                 return 0

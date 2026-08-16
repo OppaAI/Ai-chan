@@ -133,6 +133,15 @@ MEMORY_RECALL_TIMEOUT  = float(os.getenv("MEMORY_RECALL_TIMEOUT", 5.0))
 MEMORY_RECENCY_RERANK_ENABLED = _env_bool("MEMORY_RECENCY_RERANK_ENABLED", "1")
 MEMORY_RECENCY_RERANK_THRESHOLD = float(os.getenv("MEMORY_RECENCY_RERANK_THRESHOLD", "0.012"))
 
+# Phase 21: context-match recall (encoding specificity). At recall we infer the
+# query's valence/arousal with the same cheap heuristics used at write time,
+# and give a small additive boost to memories whose stored valence sign matches
+# the query's valence sign (mood-congruent recall), plus a smaller arousal
+# intensity match. This is the "biggest missing cognitive mechanism" — humans
+# recall best when retrieval context matches encoding context.
+MEMORY_RECALL_CONTEXT_MATCH_ENABLED = _env_bool("MEMORY_RECALL_CONTEXT_MATCH_ENABLED", "1")
+MEMORY_RECALL_CONTEXT_MATCH_WEIGHT = float(os.getenv("MEMORY_RECALL_CONTEXT_MATCH_WEIGHT", "0.003"))
+
 # Async write queue — idle-grace window before an enqueued write is allowed
 # to run (avoids contending with the shared LLM mid-turn), and a hard cap so
 # a write is never held back indefinitely if the caller's turn state gets
@@ -172,9 +181,16 @@ STATUS_SUPERSEDED = "superseded"
 KIND_FACT = "fact"
 KIND_SCENE = "scene"
 KIND_EPISODE = "episode"  # reserved; true EMC lives in emc_* tables (episode.py)
+# Phase 21: schema abstraction — a kind='schema' memory is a generalized
+# gist distilled by dream() from a cluster of memories sharing an entity with
+# a consistent emotional valence (human analogy: recurring episodes coalesce
+# into a schema). It is searchable like any fact; its `schema_sources` JSON
+# column records the member memory ids it was abstracted from.
+KIND_SCHEMA = "schema"
 SOURCE_CHAT = "chat"
 SOURCE_PIN = "pin"
 SOURCE_LEGACY = "legacy"
+SOURCE_DREAM = "dream"
 
 _WS_RE = re.compile(r"\s+")
 
@@ -271,6 +287,32 @@ def ensure_l2_scene_schema(conn: sqlite3.Connection) -> list[str]:
         log.debug("memory L2 scene index: %s", e)
     if added:
         log.info("memory L2 scene schema: added column %s", added)
+    return added
+
+
+def ensure_l3_schema_schema(conn: sqlite3.Connection) -> list[str]:
+    """Idempotent ALTER TABLE for the Phase 21 schema_sources column.
+
+    A kind='schema' memory stores the JSON list of source memory ids it was
+    abstracted from in this column (traceability + idempotency so dream()
+    does not re-abstract the same cluster every night).
+    """
+    ensure_phase_a_schema(conn)
+    added: list[str] = []
+    cols = existing_columns(conn)
+    if "schema_sources" not in cols:
+        try:
+            conn.execute("ALTER TABLE memories ADD COLUMN schema_sources TEXT")
+            added.append("schema_sources")
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e).casefold():
+                raise
+    if added:
+        try:
+            conn.commit()
+        except sqlite3.Error:
+            pass
+        log.info("memory L3 schema schema: added column %s", added)
     return added
 
 
@@ -610,6 +652,7 @@ __all__ = [
     "KIND_FACT",
     "KIND_SCENE",
     "KIND_EPISODE",
+    "KIND_SCHEMA",
     "KNN_LIMIT",
     "L0_CONVERSATION_LOG_ENABLED",
     "MEMORY_CONTEXT_FACT_CHARS",
@@ -626,6 +669,8 @@ __all__ = [
     "MEMORY_RANK_PINNED_WEIGHT",
     "MEMORY_RANK_RECENCY_HALF_LIFE_DAYS",
     "MEMORY_RANK_RECENCY_WEIGHT",
+    "MEMORY_RECALL_CONTEXT_MATCH_ENABLED",
+    "MEMORY_RECALL_CONTEXT_MATCH_WEIGHT",
     "MEMORY_RECALL_SCORE_THRESHOLD",
     "MEMORY_RECALL_TIMEOUT",
     "MEMORY_RECENCY_RERANK_ENABLED",
@@ -653,6 +698,7 @@ __all__ = [
     "SCENE_CONTEXT_LIMIT",
     "SCENE_MEMBER_LIMIT",
     "SOURCE_CHAT",
+    "SOURCE_DREAM",
     "SOURCE_LEGACY",
     "SOURCE_PIN",
     "STATUS_ACTIVE",
@@ -680,6 +726,7 @@ __all__ = [
     "_sqlite_set_payload",
     "ensure_episode_schema",
     "ensure_l2_scene_schema",
+    "ensure_l3_schema_schema",
     "ensure_phase_a_schema",
     "existing_columns",
     "parse_json_array",

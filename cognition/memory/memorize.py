@@ -47,6 +47,8 @@ from .schema import (
     GRAPH_LIMIT,
     KIND_FACT,
     KIND_SCENE,
+    KIND_EPISODE,
+    KIND_SCHEMA,
     KNN_LIMIT,
     MEMORY_CONTEXT_FACT_CHARS,
     MEMORY_CONTEXT_TOTAL_CHARS,
@@ -61,6 +63,8 @@ from .schema import (
     MEMORY_RANK_PINNED_WEIGHT,
     MEMORY_RANK_RECENCY_HALF_LIFE_DAYS,
     MEMORY_RANK_RECENCY_WEIGHT,
+    MEMORY_RECALL_CONTEXT_MATCH_ENABLED,
+    MEMORY_RECALL_CONTEXT_MATCH_WEIGHT,
     MEMORY_RECALL_SCORE_THRESHOLD,
     MEMORY_RECENCY_RERANK_ENABLED,
     MEMORY_RECENCY_RERANK_THRESHOLD,
@@ -84,6 +88,7 @@ from .schema import (
     SCENE_CONTEXT_LIMIT,
     SCENE_MEMBER_LIMIT,
     SOURCE_CHAT,
+    SOURCE_DREAM,
     SOURCE_PIN,
     STATUS_ACTIVE,
     STATUS_SUPERSEDED,
@@ -99,6 +104,7 @@ from .schema import (
     _sqlite_set_payload,
     ensure_episode_schema,
     ensure_l2_scene_schema,
+    ensure_l3_schema_schema,
     ensure_phase_a_schema,
     existing_columns,
     parse_json_array,
@@ -153,6 +159,11 @@ from .search import (
 from .lifecycle import (
     DREAM_BOOST_AMOUNT,
     DREAM_MERGE_THRESHOLD,
+    DREAM_SCHEMA_ENABLED,
+    DREAM_SCHEMA_MAX_CLUSTERS,
+    DREAM_SCHEMA_MIN_MEMBERS,
+    DREAM_SCHEMA_VALENCE_MAJORITY,
+    MEMORY_WM_CAPACITY,
     WRITE_DEDUP_THRESHOLD,
     _SALIENCE_RE,
 )
@@ -261,6 +272,7 @@ class _MemoryBackend:
         with self._db_lock:
             ensure_phase_a_schema(self._conn)
             ensure_l2_scene_schema(self._conn)
+            ensure_l3_schema_schema(self._conn)
             ensure_entity_relations_schema(self._conn)
             ensure_episode_schema(self._conn)
 
@@ -482,6 +494,7 @@ class _MemoryBackend:
         valence_tag: str | None = None,
         llm_score: int | None = None,
         salience_hit: int | None = None,
+        schema_sources: list[str] | None = None,
     ) -> None:
         """Insert one memory row (Phase A + L2 columns when present) + its
         vector, and best-effort co-mention edges for the entity graph.
@@ -495,6 +508,10 @@ class _MemoryBackend:
         memories_vec row is written. backfill_missing_vectors() re-embeds
         these rows once the embedder recovers. An un-embedded row is simply
         invisible to KNN until then — never lost.
+
+        ``schema_sources`` — Phase 21: for kind='schema' rows, the JSON list
+        of source memory ids this gist was abstracted from (traceability +
+        idempotency). Written only when the column exists.
         """
         cols = existing_columns(self._conn)
         kind_val = kind or classify_kind(text, default=KIND_FACT)
@@ -537,6 +554,9 @@ class _MemoryBackend:
         if "salience_hit" in cols:
             ext_cols.append("salience_hit")
             ext_vals.append(s_hit)
+        if "schema_sources" in cols and schema_sources is not None:
+            ext_cols.append("schema_sources")
+            ext_vals.append(json.dumps(list(schema_sources), ensure_ascii=False))
         if MEMORY_STATE_TAGS_ENABLED and "state_json" in cols:
             try:
                 import json
@@ -1227,6 +1247,7 @@ class _MemoryBackend:
         rank_fts: dict,
         rank_graph: dict | None = None,
         entity_importance_map: dict | None = None,
+        query_context: tuple[int, int] | None = None,
     ) -> tuple[list[str], dict, dict]:
         """
         Dedup + score one candidate pool (from either the quick or wide pass).
@@ -1238,14 +1259,20 @@ class _MemoryBackend:
         3. Score every surviving id: RRF fusion (KNN + FTS + graph) plus
            recency/access/pinned bonuses.
 
+        query_context — (query_valence, query_arousal) inferred from the query
+        text. When provided, a small encoding-specificity boost is added to
+        memories whose stored valence matches the query valence sign (mood-
+        congruent recall; see MEMORY_RECALL_CONTEXT_MATCH_*).
+
         Returns (ids sorted best-first by score, {id: score}, {id: row}).
         Recency-among-relevant reranking is applied afterward by the
         caller (search()), not here — this method only produces the base
         score-ordered list (RRF + recency + access + pinned + graph weight +
-        entity importance).
+        entity importance + context match).
         """
         rank_graph = rank_graph or {}
         entity_importance_map = entity_importance_map or {}
+        q_valence, q_arousal = query_context or (0, 0)
 
         all_ids = set(rank_knn) | set(rank_fts) | set(rank_graph)
         if not all_ids:
@@ -1336,6 +1363,29 @@ class _MemoryBackend:
                     score += arousal_rank_bonus(row["arousal_score"] if row.get("arousal_score") is not None else None)
                 except Exception:
                     pass
+
+                # Phase 21: encoding-specificity / context-match recall.
+                # Mood-congruent boost when the query valence sign matches the
+                # stored valence sign (both non-neutral), plus a smaller
+                # arousal-intensity match.
+                if (
+                    MEMORY_RECALL_CONTEXT_MATCH_ENABLED
+                    and MEMORY_RECALL_CONTEXT_MATCH_WEIGHT > 0
+                    and (q_valence or q_arousal)
+                ):
+                    try:
+                        mem_valence = row.get("valence_score")
+                        mem_valence = int(mem_valence) if mem_valence is not None else None
+                        if q_valence and mem_valence is not None and mem_valence != 0:
+                            if (q_valence > 0) == (mem_valence > 0):
+                                score += MEMORY_RECALL_CONTEXT_MATCH_WEIGHT
+                        mem_arousal = row.get("arousal_score")
+                        mem_arousal = int(mem_arousal) if mem_arousal is not None else None
+                        if q_arousal and mem_arousal is not None and mem_arousal != 0:
+                            if (abs(q_arousal) >= 1) == (abs(mem_arousal) >= 1):
+                                score += MEMORY_RECALL_CONTEXT_MATCH_WEIGHT * 0.5
+                    except Exception:
+                        pass
 
                 # Phase 3: entity importance boost
                 if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0 and entity_importance_map:
@@ -1473,6 +1523,18 @@ class _MemoryBackend:
         query_entities = extract_entities(query, max_entities=5)
         active_only = not include_history
 
+        # Phase 21: encoding-specificity context. Cheap heuristic valence/
+        # arousal of the query itself, matched against stored memory tags.
+        query_context: tuple[int, int] | None = None
+        if MEMORY_RECALL_CONTEXT_MATCH_ENABLED and MEMORY_RECALL_CONTEXT_MATCH_WEIGHT > 0:
+            try:
+                q_val = int(infer_valence_score(query))
+                q_aro = int(infer_arousal_score(query))
+                if q_val or q_aro:
+                    query_context = (q_val, q_aro)
+            except Exception:
+                query_context = None
+
         entity_importance_map = {}
         if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0:
             entity_importance_map = self._get_entity_importance_map(user_id) or {}
@@ -1487,7 +1549,7 @@ class _MemoryBackend:
             quick_graph_rows = self._graph_pass(query_entities, user_id, QUICK_GRAPH_LIMIT, active_only=active_only)
             rank_graph_q = {row["id"]: i + 1 for i, row in enumerate(quick_graph_rows)}
 
-            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q, entity_importance_map=entity_importance_map)
+            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q, entity_importance_map=entity_importance_map, query_context=query_context)
 
             confident = (
                 len(scored_ids) >= limit
@@ -1504,7 +1566,7 @@ class _MemoryBackend:
                 rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
                 wide_graph_rows = self._graph_pass(query_entities, user_id, GRAPH_LIMIT, active_only=active_only)
                 rank_graph_w = {row["id"]: i + 1 for i, row in enumerate(wide_graph_rows)}
-                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w, entity_importance_map=entity_importance_map)
+                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w, entity_importance_map=entity_importance_map, query_context=query_context)
 
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
         top_ids = ordered_ids[:limit]
@@ -2657,12 +2719,14 @@ class AikoMemorize:
         Stages (in order):
           1. Boost  — salient memories get +DREAM_BOOST_AMOUNT access_count.
           2. Merge  — near-duplicate pairs (cosine >= threshold) are collapsed.
-          3. Prune  — standard decay cleanup runs last.
+          3. Schema — recurring entity+valence clusters are abstracted into a
+             single generalized kind='schema' gist memory (Phase 21).
+          4. Prune  — standard decay cleanup runs last.
 
         all_mems is fetched once and passed through to cleanup() so the
         prune stage doesn't re-scan the table from scratch.
 
-        Returns dict: {boosted, merged, pruned, duration_s}
+        Returns dict: {boosted, merged, schemas, pruned, duration_s}
         """
         user_id = self._resolve_user_id(user_id)
         t_start = time.perf_counter()
@@ -2700,11 +2764,12 @@ class AikoMemorize:
 
         if not mem_ids:
             log.info("No memories found — nothing to do.")
-            return {"boosted": 0, "merged": 0, "pruned": 0, "duration_s": 0.0}
+            return {"boosted": 0, "merged": 0, "schemas": 0, "pruned": 0, "duration_s": 0.0}
 
         with self._mem._db_lock:
             pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
         merged = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
+        schemas = self._dream_schema(user_id=user_id, dry_run=dry_run)
         # FIX: dream() previously called cleanup() with no _all_mems, so the
         # "already-fetched memory list is passed through here to avoid a
         # redundant get_all() scan" claim in cleanup()'s docstring was dead —
@@ -2718,10 +2783,10 @@ class AikoMemorize:
         duration = round(time.perf_counter() - t_start, 2)
         log.info(
             f"{'(dry-run) ' if dry_run else ''}"
-            f"Done — boosted={boosted}, merged={merged}, pruned={pruned}, "
+            f"Done — boosted={boosted}, merged={merged}, schemas={schemas}, pruned={pruned}, "
             f"duration={duration}s"
         )
-        return {"boosted": boosted, "merged": merged, "pruned": pruned, "duration_s": duration}
+        return {"boosted": boosted, "merged": merged, "schemas": schemas, "pruned": pruned, "duration_s": duration}
 
     def _dream_boost(
         self,
@@ -2865,6 +2930,179 @@ class AikoMemorize:
         if merged:
             log.info(f"{'(dry-run) ' if dry_run else ''}Merged {merged} duplicate memories.")
         return merged
+
+    def _dream_schema(self, user_id: str | None = None, dry_run: bool = False) -> int:
+        """Phase 21: schema abstraction in the dream pass.
+
+        Cluster active memories that share entities, and for each entity with
+        enough members (>= DREAM_SCHEMA_MIN_MEMBERS) and a consistent valence
+        sign (>= DREAM_SCHEMA_VALENCE_MAJORITY fraction), synthesize ONE
+        generalized "schema" memory (kind='schema') that captures the recurring
+        theme. The schema memory's `schema_sources` column records the source
+        memory ids it was abstracted from, enabling idempotency — subsequent
+        dream runs skip clusters already abstracted.
+
+        Returns the count of schema memories written (0 in dry_run).
+        """
+        user_id = self._resolve_user_id(user_id)
+        if not DREAM_SCHEMA_ENABLED:
+            return 0
+
+        # Ensure the schema_sources column exists
+        try:
+            ensure_l3_schema_schema(self._conn)
+        except Exception as e:
+            log.debug("schema_sources migration: %s", e)
+
+        # Idempotency: load existing schema fact entities and their source
+        # ids, so we don't re-abstract the same clusters every night.
+        schema_covered_entities: set[str] = set()
+        schema_sources_union: set[str] = set()
+        try:
+            existing = self._conn.execute(
+                "SELECT entities, schema_sources FROM memories "
+                "WHERE user_id = ? AND kind = ? AND (status = 'active' OR status IS NULL)",
+                (user_id, KIND_SCHEMA),
+            ).fetchall()
+            for r in existing:
+                for e in entities_from_json(r[0] or "[]"):
+                    schema_covered_entities.add(e)
+                try:
+                    srcs = json.loads(r[1] or "[]")
+                    schema_sources_union.update(srcs)
+                except Exception:
+                    pass
+        except Exception as e:
+            log.debug("load existing schema facts: %s", e)
+
+        # Fetch active memories with entities and valence_score
+        # (iter_all does NOT include entities, so we query directly)
+        with self._db_lock:
+            rows = self._conn.execute(
+                """
+                SELECT id, entities, valence_score, pinned
+                FROM memories
+                WHERE user_id = ? AND (status = 'active' OR status IS NULL)
+                """,
+                (user_id,),
+            ).fetchall()
+
+        # Build entity -> list of (mem_id, valence_score) clusters
+        clusters: dict[str, list[tuple[str, int | None]]] = {}
+        for row in rows:
+            mid = str(row[0])
+            pinned = bool(row[3])
+            if pinned:
+                continue  # don't abstract pinned memories
+            ents = entities_from_json(row[1] or "")
+            if not ents:
+                # fall back to on-the-fly extraction from memory text
+                try:
+                    ents = extract_entities(row[2] or "", max_entities=5)
+                    if not ents:
+                        continue
+                except Exception:
+                    continue
+            vs = row[2]  # valence_score, may be None
+            for e in ents:
+                e = str(e).strip()
+                if not e:
+                    continue
+                clusters.setdefault(e, []).append((mid, vs))
+
+        # Sort clusters by size descending, cap at MAX_CLUSTERS
+        sorted_clusters = sorted(clusters.items(), key=lambda kv: -len(kv[1]))
+        if len(sorted_clusters) > DREAM_SCHEMA_MAX_CLUSTERS:
+            sorted_clusters = sorted_clusters[:DREAM_SCHEMA_MAX_CLUSTERS]
+
+        written = 0
+        for entity, members in sorted_clusters:
+            if len(members) < DREAM_SCHEMA_MIN_MEMBERS:
+                continue
+
+            # Idempotency: skip if this entity already has a schema that
+            # covers many of the same members (schema_sources overlap).
+            skip = False
+            for sc_e in schema_covered_entities:
+                if sc_e == entity:
+                    # a schema for this entity already exists → don't re-abstract
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            # Compute dominant valence sign among members with stored scores
+            valences = [v for _, v in members if v is not None]
+            if not valences:
+                continue  # no valence data — nothing to abstract on
+
+            pos = sum(1 for v in valences if v > 0)
+            neg = sum(1 for v in valences if v < 0)
+            total_with_val = len(valences)
+            dominant = None
+            if pos > neg and pos / total_with_val >= DREAM_SCHEMA_VALENCE_MAJORITY:
+                dominant = 2  # positive
+            elif neg > pos and neg / total_with_val >= DREAM_SCHEMA_VALENCE_MAJORITY:
+                dominant = -2  # negative
+            else:
+                dominant = 0  # neutral / mixed
+
+            n = len(members)
+            # Synthesize gist text via template (deterministic, offline-safe)
+            name = current_display_name() or "User"
+            if dominant == 2:  # positive
+                gist = f"{name} often has positive experiences involving {entity}."
+            elif dominant == -2:  # negative
+                gist = f"{name} often has negative/difficult experiences involving {entity}."
+            else:  # neutral / mixed
+                gist = f"{entity} is a recurring topic for {name} ({n} related memories)."
+
+            # For better gist, include the count of related memories
+            # (we can refine later — template stays grounded)
+            if dominant in (2, -2):
+                gist = f"{entity} is a recurring {'positive' if dominant == 2 else 'negative'} theme for {name} ({n} memories)."
+
+            if dry_run:
+                written += 1
+                continue
+
+            # Embed the gist (best-effort; None if embedder down)
+            try:
+                vector = self._embed(gist)
+            except Exception as e:
+                log.debug("embed schema gist: %s", e)
+                vector = None
+
+            # Determine schema_tag/valence based on dominant
+            from cognition.memory.entity import tag_from_score
+            vs_tag = tag_from_score(dominant) if dominant is not None else "neutral"
+
+            # Insert schema memory
+            # Collect member ids for traceability / future idempotency
+            member_ids = [mid for mid, _ in members]
+            # Use _insert_row with kind=KIND_SCHEMA, source=SOURCE_DREAM,
+            # entities=[entity], and schema_sources=member_ids JSON
+            now = datetime.now(timezone.utc).isoformat()
+            mem_id = str(uuid.uuid4())
+            self._insert_row(
+                mem_id=mem_id,
+                user_id=user_id,
+                text=gist,
+                now=now,
+                vector=vector,
+                pinned=0,
+                source=SOURCE_DREAM,
+                kind=KIND_SCHEMA,
+                entities=[entity],
+                valence_tag=vs_tag,
+                llm_score=dominant if dominant is not None else None,
+                salience_hit=1,
+                schema_sources=member_ids,
+            )
+            self._conn.commit()
+            written += 1
+
+        return written
 
     def _resolve_duplicate(
         self,
