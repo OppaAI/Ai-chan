@@ -428,6 +428,13 @@ class AikoThink:
         """
         display_name, user_block = _load_user_context()
         base = self._persona.replace("USER_ID_HERE", display_name) + user_block
+        try:
+            from cognition.memory.edge_state import for_identity
+            state = for_identity(current_user_id()).context(user_input)
+            if state:
+                base += "\n\n" + state
+        except Exception:
+            pass
         return base + _conditional_persona_blocks(user_input)
   
     # ── public api ────────────────────────────────────────────────────────────
@@ -1402,6 +1409,12 @@ class AikoThink:
         EMC-2: also stage the turn into episodic memory (best-effort, never
         blocks the turn and never invents metadata).
         """
+        try:
+            from cognition.memory.edge_state import for_identity
+            for_identity(current_user_id()).record(user_input, response_text)
+        except Exception:
+            pass
+
         def _is_any_active():
             with self._active_users_lock:
                 return bool(self._active_user_ids)

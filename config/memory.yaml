@@ -66,6 +66,12 @@ DEEP_STUDY_SYNTHESIS_MAX_TOKENS: "900"  # Token budget for the final distillatio
 # Tune local sqlite memory, embedding model behavior, memory decay, and monthly consolidation here.
 
 # -- Storage and embedding endpoint --
+EDGE_COGNITION_ENABLED: "1"  # Bounded process-local focus/open-loop state; no I/O or model call.
+EDGE_COGNITION_MAX_TURNS: "7"  # Human-like working set, hard bounded per user.
+EDGE_COGNITION_MAX_CHARS: "1200"  # Prompt budget for the fast cognitive state.
+EDGE_COGNITION_MAX_OPEN_LOOPS: "3"  # Pending questions/tasks carried forward.
+EDGE_COGNITION_MAX_IDENTITIES: "16"  # Hard RAM bound across concurrent users.
+
 SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory/memory.db.
 EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by cognition/memory/vecstore.py.
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
