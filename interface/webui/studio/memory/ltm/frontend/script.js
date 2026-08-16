@@ -395,6 +395,20 @@ function render() {
   zoomBehavior = GraphBoot.makeZoom({ scaleExtent: [0.2, 4], target: g });
   svg.call(zoomBehavior);
 
+  // Subtle neural grid background
+  const grid = g.append('g').attr('class', 'neural-grid');
+  const gridStep = 60;
+  for (let x = 0; x <= w; x += gridStep) {
+    grid.append('line')
+      .attr('x1', x).attr('y1', 0).attr('x2', x).attr('y2', h)
+      .attr('stroke', '#3de0ff12').attr('stroke-width', 0.5);
+  }
+  for (let y = 0; y <= h; y += gridStep) {
+    grid.append('line')
+      .attr('x1', 0).attr('y1', y).attr('x2', w).attr('y2', y)
+      .attr('stroke', '#3de0ff12').attr('stroke-width', 0.5);
+  }
+
   const defs = svg.append('defs');
 
   // per-node glass gradients + glow filters
@@ -425,12 +439,13 @@ function render() {
   const link = g.append('g').selectAll('line').data(links).join('line')
     .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : (d.type === 'distilled_into' ? '#51d4c8' : '#3de0ff'))
     .attr('stroke-width', d => {
-      if (d.type === 'supersedes') return 1.6;
-      if (d.type === 'distilled_into') return 1.3;
+      if (d.type === 'supersedes') return 1.8;
+      if (d.type === 'distilled_into') return 1.5;
       const w = Math.max(0, Math.min(1, Number(d.weight) || 0.4));
-      return 0.5 + w * 2.2;
+      return 0.8 + w * 2.5;
     })
     .attr('stroke-opacity', d => edgeOpacity(d, nodeById))
+    .attr('stroke-linecap', 'round')
     .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null);
 
   const node = g.append('g').selectAll('g').data(nodes).join('g')
@@ -439,12 +454,13 @@ function render() {
     .call(GraphBoot.makeDrag(() => simulation))
     .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
 
-  // outer glow disc (soft synapse halo)
+  // outer glow disc (soft synapse halo) with subtle pulse
   node.append('circle')
     .attr('r', d => nodeRadius(d) + 3)
     .attr('fill', d => d._hueCol)
     .attr('opacity', d => 0.08 + retainOf(d) * 0.18)
-    .attr('filter', d => `url(#${d._glowId})`);
+    .attr('filter', d => `url(#${d._glowId})`)
+    .attr('class', 'pulse-glow');
 
   // glass body
   node.append('circle')
@@ -488,8 +504,7 @@ function render() {
       return t.length > 20 ? t.slice(0, 18) + '…' : t;
     });
 
-  // Wider initial scatter so force layout starts open (demo-like spread)
-  // instead of a dense central seed that collapses into a blob.
+  // Neural net initial spread: layered rings by degree, minimal center pull
   const centerX = w * 0.5, centerY = h * 0.5;
   const degById = new Map();
   links.forEach(e => {
@@ -504,48 +519,50 @@ function render() {
       return;
     }
     if (n.x != null && n.y != null) return;
-    // Isolates start farther out so the mild center force cannot collapse them
     const deg = degById.get(n.id) || 0;
-    const baseR = deg === 0 ? 0.55 : 0.20;
-    const ring = baseR + (i % 7) * 0.04;
-    const ang = (i * 2.399963) + Math.random() * 0.6; // golden-angle-ish
-    n.x = centerX + Math.cos(ang) * ring * w * 0.85 + (Math.random() - 0.5) * 40;
-    n.y = centerY + Math.sin(ang) * ring * h * 0.85 + (Math.random() - 0.5) * 40;
+    // High-degree nodes near center (hubs), isolates in outer rings
+    const ringIdx = deg >= 5 ? 0 : deg >= 2 ? 1 : 2;
+    const baseR = [0.15, 0.45, 0.75][ringIdx];
+    const jitter = (Math.random() - 0.5) * 0.12;
+    const ang = (i * 2.399963) + jitter;
+    const scale = w * 0.42;
+    n.x = centerX + Math.cos(ang) * baseR * scale;
+    n.y = centerY + Math.sin(ang) * baseR * scale;
   });
 
   simulation = GraphBoot.makeSimulation(nodes, links, {
     w,
     h,
-    // Isolates repel harder so they stay in an outer ring; connected nodes cluster by links
-    charge: d => ((degById.get(d.id) || 0) === 0 ? -320 : -200),
-    centerStrength: 0.08,
+    // Stronger repulsion + longer links = neural net spread
+    charge: d => ((degById.get(d.id) || 0) === 0 ? -500 : -350),
+    centerStrength: 0.01,
     nodeRadius,
-    collisionPadding: 12,
+    collisionPadding: 16,
     linkDistance: d => {
-      if (d.type === 'mentions') return 90;
-      if (d.type === 'supersedes') return 120;
-      if (d.type === 'grounded_in' || d.type === 'practiced_in') return 95;
-      if (d.type === 'distilled_into') return 110;
-      return 85;
+      if (d.type === 'mentions') return 140;
+      if (d.type === 'supersedes') return 180;
+      if (d.type === 'grounded_in' || d.type === 'practiced_in') return 150;
+      if (d.type === 'distilled_into') return 160;
+      return 120;
     },
     linkStrength: d => {
-      if (d.type === 'mentions') return 0.45;
-      if (d.type === 'supersedes') return 0.25;
-      if (d.type === 'distilled_into') return 0.25;
-      return 0.30;
+      if (d.type === 'mentions') return 0.35;
+      if (d.type === 'supersedes') return 0.20;
+      if (d.type === 'distilled_into') return 0.20;
+      return 0.25;
     },
   })
     .force('x', d3.forceX(centerX).strength(d => {
       const deg = degById.get(d.id) || 0;
-      if (d.id === userEntityId) return 0.2;
-      return deg === 0 ? 0.004 : 0.02;
+      if (d.id === userEntityId) return 0.15;
+      return deg === 0 ? 0.001 : 0.008;
     }))
     .force('y', d3.forceY(centerY).strength(d => {
       const deg = degById.get(d.id) || 0;
-      if (d.id === userEntityId) return 0.2;
-      return deg === 0 ? 0.004 : 0.02;
+      if (d.id === userEntityId) return 0.15;
+      return deg === 0 ? 0.001 : 0.008;
     }))
-    .alphaDecay(0.018)
+    .alphaDecay(0.012)
     .on('tick', () => {
       link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);

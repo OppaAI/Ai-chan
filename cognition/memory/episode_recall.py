@@ -211,16 +211,16 @@ def _touch_episodes(self, ids: list[int]) -> None:
         return
     now = _utc_now_iso()
     try:
-        for eid in ids:
-            self._conn.execute(
-                """
-                UPDATE emc_storage
-                SET recall_count = recall_count + 1,
-                    last_recalled_at = ?
-                WHERE id = ?
-                """,
-                (now, eid),
-            )
+        placeholders = ",".join("?" * len(ids))
+        self._conn.execute(
+            f"""
+            UPDATE emc_storage
+            SET recall_count = recall_count + 1,
+                last_recalled_at = ?
+            WHERE id IN ({placeholders})
+            """,
+            [now] + ids,
+        )
         self._conn.commit()
     except Exception as e:
         log.debug("EMC touch failed: %s", e)

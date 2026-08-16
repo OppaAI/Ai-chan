@@ -1241,6 +1241,17 @@ class _MemoryBackend:
                     break
         return activation, extra
 
+    def _fetch_full_rows(self, ids: set[str]) -> dict[str, Any]:
+        """Fetch full memory rows for the given IDs. Caller must hold lock."""
+        if not ids:
+            return {}
+        placeholders = ",".join("?" * len(ids))
+        rows = self._conn.execute(
+            f"SELECT * FROM memories WHERE id IN ({placeholders})",
+            list(ids),
+        ).fetchall()
+        return {row["id"]: row for row in rows}
+
     def _rank_and_score(
         self,
         rank_knn: dict,
@@ -1248,12 +1259,15 @@ class _MemoryBackend:
         rank_graph: dict | None = None,
         entity_importance_map: dict | None = None,
         query_context: tuple[int, int] | None = None,
+        row_by_id: dict | None = None,
     ) -> tuple[list[str], dict, dict]:
         """
         Dedup + score one candidate pool (from either the quick or wide pass).
-        Caller must hold self._db_lock.
+        
+        If row_by_id is provided, it must contain full rows for all candidate IDs.
+        Otherwise, caller must hold self._db_lock and rows will be fetched internally.
 
-        1. Fetch full rows for the union of KNN/FTS/graph candidate ids.
+        1. (Optional) Fetch full rows for the union of KNN/FTS/graph candidate ids.
         2. Collapse exact-text duplicates, keeping the most recently created
            row per duplicate cluster.
         3. Score every surviving id: RRF fusion (KNN + FTS + graph) plus
@@ -1278,12 +1292,13 @@ class _MemoryBackend:
         if not all_ids:
             return [], {}, {}
 
-        placeholders = ",".join("?" * len(all_ids))
-        rows = self._conn.execute(
-            f"SELECT * FROM memories WHERE id IN ({placeholders})",
-            list(all_ids),
-        ).fetchall()
-        row_by_id = {row["id"]: row for row in rows}
+        if row_by_id is None:
+            placeholders = ",".join("?" * len(all_ids))
+            rows = self._conn.execute(
+                f"SELECT * FROM memories WHERE id IN ({placeholders})",
+                list(all_ids),
+            ).fetchall()
+            row_by_id = {row["id"]: row for row in rows}
 
         # ── recall-time dedup: collapse exact-text duplicates, keep newest ──
         # Handles the case dream() structurally can't: pinned duplicate rows
@@ -1539,6 +1554,7 @@ class _MemoryBackend:
         if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0:
             entity_importance_map = self._get_entity_importance_map(user_id) or {}
 
+        # ── Quick pass: fetch candidate IDs only (short lock scope) ──
         with self._db_lock:
             quick_knn_rows = _sqlite_knn_search(
                 self._conn, vector, user_id, QUICK_KNN_LIMIT, active_only=active_only
@@ -1549,15 +1565,27 @@ class _MemoryBackend:
             quick_graph_rows = self._graph_pass(query_entities, user_id, QUICK_GRAPH_LIMIT, active_only=active_only)
             rank_graph_q = {row["id"]: i + 1 for i, row in enumerate(quick_graph_rows)}
 
-            scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_q, rank_fts_q, rank_graph_q, entity_importance_map=entity_importance_map, query_context=query_context)
+        # Fetch full rows for quick pass candidates (separate lock scope)
+        quick_all_ids = set(rank_knn_q) | set(rank_fts_q) | set(rank_graph_q)
+        with self._db_lock:
+            quick_row_by_id = self._fetch_full_rows(quick_all_ids)
 
-            confident = (
-                len(scored_ids) >= limit
-                and scores.get(scored_ids[limit - 1], 0.0) >= MEMORY_RECALL_SCORE_THRESHOLD
-            )
+        # Score quick pass (no lock needed)
+        scored_ids, scores, row_by_id = self._rank_and_score(
+            rank_knn_q, rank_fts_q, rank_graph_q,
+            entity_importance_map=entity_importance_map,
+            query_context=query_context,
+            row_by_id=quick_row_by_id,
+        )
 
-            # ── widen only if the quick pass was under-filled or under-confident ──
-            if not confident:
+        confident = (
+            len(scored_ids) >= limit
+            and scores.get(scored_ids[limit - 1], 0.0) >= MEMORY_RECALL_SCORE_THRESHOLD
+        )
+
+        # ── Widen only if the quick pass was under-filled or under-confident ──
+        if not confident:
+            with self._db_lock:
                 wide_knn_rows = _sqlite_knn_search(
                     self._conn, vector, user_id, KNN_LIMIT, active_only=active_only
                 )
@@ -1566,7 +1594,17 @@ class _MemoryBackend:
                 rank_fts_w = {row["id"]: i + 1 for i, row in enumerate(wide_fts_rows)}
                 wide_graph_rows = self._graph_pass(query_entities, user_id, GRAPH_LIMIT, active_only=active_only)
                 rank_graph_w = {row["id"]: i + 1 for i, row in enumerate(wide_graph_rows)}
-                scored_ids, scores, row_by_id = self._rank_and_score(rank_knn_w, rank_fts_w, rank_graph_w, entity_importance_map=entity_importance_map, query_context=query_context)
+
+            wide_all_ids = set(rank_knn_w) | set(rank_fts_w) | set(rank_graph_w)
+            with self._db_lock:
+                wide_row_by_id = self._fetch_full_rows(wide_all_ids)
+
+            scored_ids, scores, row_by_id = self._rank_and_score(
+                rank_knn_w, rank_fts_w, rank_graph_w,
+                entity_importance_map=entity_importance_map,
+                query_context=query_context,
+                row_by_id=wide_row_by_id,
+            )
 
         ordered_ids = self._apply_recency_rerank(scored_ids, scores, row_by_id)
         top_ids = ordered_ids[:limit]
@@ -1587,17 +1625,17 @@ class _MemoryBackend:
                     activation, extra_ids = self._spreading_extra_ids(
                         user_id, results, exclude_ids=exclude, query=query,
                     )
-                    for mid in extra_ids:
-                        row = self._conn.execute(
-                            "SELECT * FROM memories WHERE id = ? AND user_id = ?",
-                            (mid, user_id),
-                        ).fetchone()
-                        if row is None:
-                            continue
-                        d = dict(row)
-                        d["_recall_score"] = 0.0
-                        d["_from_spreading"] = True
-                        results.append(d)
+                    if extra_ids:
+                        placeholders = ",".join("?" * len(extra_ids))
+                        rows = self._conn.execute(
+                            f"SELECT * FROM memories WHERE id IN ({placeholders}) AND user_id = ?",
+                            list(extra_ids) + [user_id],
+                        ).fetchall()
+                        for row in rows:
+                            d = dict(row)
+                            d["_recall_score"] = 0.0
+                            d["_from_spreading"] = True
+                            results.append(d)
             except Exception as exc:
                 log.debug("spreading activation skipped: %s", exc)
 
