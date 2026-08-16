@@ -50,6 +50,198 @@ MEMORY_SPREADING_MAX_DEPTH = max(1, int(os.getenv("MEMORY_SPREADING_MAX_DEPTH", 
 MEMORY_SPREADING_DECAY = float(os.getenv("MEMORY_SPREADING_DECAY", "0.6"))
 MEMORY_SPREADING_MIN_STRENGTH = float(os.getenv("MEMORY_SPREADING_MIN_STRENGTH", "0.15"))
 
+# ── Phase 21: neural network overlay ──────────────────────────────────────
+# Optional neural-net-style activation propagation over the entity co-mention
+# graph.  Nodes have valence/arousal features; edges have directed weights
+# that grow via Hebbian learning ("cells that fire together wire together").
+NEURAL_NET_ENABLED = os.getenv("NEURAL_NET_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+NEURAL_DECAY = float(os.getenv("NEURAL_DECAY", "0.95"))      # edge weight decay per timestep
+NEURAL_THRESHOLD = float(os.getenv("NEURAL_THRESHOLD", "0.5"))  # activation spill threshold
+NEURAL_LEAK = float(os.getenv("NEURAL_LEAK", "0.1"))         # node activation leak per timestep
+NEURAL_SPREAD_DEPTH = max(1, int(os.getenv("NEURAL_SPREAD_DEPTH", "3")))  # BFS depth
+# Repairs common user/assistant name swaps in extracted facts.  No LLM /
+# external services required; pure regex / template post-filter.
+
+DEFAULT_ASSISTANT_NAME = "Aiko"
+DEFAULT_USER_NAME = "Oppa"
+
+
+def _user_re(name: str) -> str:
+    return re.escape(name.strip())
+
+
+def fix_fact_identity(
+    text: str,
+    *,
+    user_name: str | None = None,
+    assistant_name: str | None = None,
+) -> str:
+    """
+    Apply cheap repairs for common Oppa/Aiko swaps.
+    Does not invent new facts; returns text unchanged if no rule matches.
+    """
+    t = (text or "").strip()
+    if not t:
+        return t
+
+    u = (user_name or DEFAULT_USER_NAME).strip() or DEFAULT_USER_NAME
+    a = (assistant_name or DEFAULT_ASSISTANT_NAME).strip() or DEFAULT_ASSISTANT_NAME
+    if u.casefold() == a.casefold():
+        return t
+
+    ue = _user_re(u)
+
+    # 1) "{User} dislikes/hates being human-like" → Aiko (persona self-talk)
+    t2 = re.sub(
+        rf"^({ue})\s+(dislikes|doesn't like|does not like|hates|dislike)\s+"
+        rf"(to be |being )?(portrayed as )?human[- ]?like\b",
+        lambda m: f"{a} {m.group(2)} being human-like",
+        t,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if t2 != t:
+        t = t2
+
+    # 2) "{User} needs/must/should follow {User}'s rules" → Aiko follows user's rules
+    t2 = re.sub(
+        rf"^{ue}\s+(needs to|must|should|has to)\s+follow\s+{ue}'s\s+rules\b",
+        lambda m: f"{a} should follow {u}'s rules",
+        t,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if t2 != t:
+        t = t2
+
+    # 3) "{User} must/should obey {User}'s instructions" (same idea)
+    t2 = re.sub(
+        rf"^{ue}\s+(needs to|must|should|has to)\s+(obey|follow)\s+{ue}'s\s+"
+        rf"(instructions|commands|orders)\b",
+        lambda m: f"{a} should follow {u}'s {m.group(3)}",
+        t,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if t2 != t:
+        t = t2
+
+    # 4) "{User} is an AI / assistant / language model" → Aiko
+    t2 = re.sub(
+        rf"^{ue}\s+(is|as)\s+(an?\s+)?(AI|assistant|language model|LLM)\b",
+        lambda m: f"{a} is {m.group(2) or ''}{m.group(3)}",
+        t,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    if t2 != t:
+        t = t2
+
+    return t.strip()
+
+
+def should_skip_misattributed_fact(
+    text: str,
+    *,
+    user_name: str | None = None,
+    assistant_name: str | None = None,
+) -> bool:
+    """
+    True if fact still looks like assistant-persona pinned on the user
+    after fix_fact_identity — safer to skip than store wrong.
+    """
+    t = (text or "").strip()
+    if not t:
+        return True
+    u = (user_name or DEFAULT_USER_NAME).strip() or DEFAULT_USER_NAME
+    ue = _user_re(u)
+    # User-name subject + strong assistant-only cues
+    if re.match(
+        rf"^{ue}.*\b(human[- ]?like|as an AI|language model|my persona)\b",
+        t,
+        re.IGNORECASE,
+    ):
+        return True
+    return False
+
+
+def sanitize_extracted_facts(
+    facts: Iterable[str],
+    *,
+    user_name: str | None = None,
+    assistant_name: str | None = None,
+) -> list[str]:
+    """Fix identity then drop remaining misattributed persona facts."""
+    out: list[str] = []
+    u = user_name or DEFAULT_USER_NAME
+    a = assistant_name or DEFAULT_ASSISTANT_NAME
+    for raw in facts:
+        if not isinstance(raw, str):
+            continue
+        fixed = fix_fact_identity(raw, user_name=u, assistant_name=a)
+        if should_skip_misattributed_fact(fixed, user_name=u, assistant_name=a):
+            continue
+        if fixed:
+            out.append(fixed)
+    return out
+
+
+def sanitize_fact_score_pairs(
+    pairs: Iterable[tuple[str, int | None]],
+    *,
+    user_name: str | None = None,
+    assistant_name: str | None = None,
+) -> list[tuple[str, int | None]]:
+    """Same as sanitize_extracted_facts for (text, valence_score) pairs."""
+    out: list[tuple[str, int | None]] = []
+    u = user_name or DEFAULT_USER_NAME
+    a = assistant_name or DEFAULT_ASSISTANT_NAME
+    for item in pairs:
+        if not item:
+            continue
+        raw, score = item[0], item[1] if len(item) > 1 else None
+        if not isinstance(raw, str):
+            continue
+        fixed = fix_fact_identity(raw, user_name=u, assistant_name=a)
+        if should_skip_misattributed_fact(fixed, user_name=u, assistant_name=a):
+            continue
+        if fixed:
+            out.append((fixed, score))
+    return out
+
+
+# --- Prompt fragment (paste into extract system prompt) ---
+
+IDENTITY_PROMPT_RULES = """
+IDENTITY (critical — never get this wrong):
+- The USER is named {user_name}. The ASSISTANT is {assistant_name}.
+- "I/me/my" in a USER message → fact subject is {user_name}.
+- "I/me/my" in an ASSISTANT message → fact subject is {assistant_name}.
+- Do NOT write {assistant_name}'s preferences, personality, or self-rules as {user_name}'s.
+- Do NOT write {user_name}'s preferences as {assistant_name}'s.
+- Assistant talking about being human-like, persona, or "my rules" → subject is {assistant_name}.
+- User commands/rules for the assistant → "{assistant_name} should follow {user_name}'s rules"
+  NOT "{user_name} needs to follow {user_name}'s rules".
+
+Examples:
+Good: "{assistant_name} dislikes being portrayed as human-like."
+Bad:  "{user_name} dislikes being portrayed as human-like." (when the assistant said it about herself)
+Good: "{assistant_name} should follow {user_name}'s rules."
+Bad:  "{user_name} needs to follow {user_name}'s rules."
+Good: "{user_name} prefers dark mode."
+Bad:  "{assistant_name} prefers dark mode." (when the user said it)
+""".strip()
+
+
+def format_identity_prompt_rules(
+    *,
+    user_name: str | None = None,
+    assistant_name: str | None = None,
+) -> str:
+    u = (user_name or DEFAULT_USER_NAME).strip() or DEFAULT_USER_NAME
+    a = (assistant_name or DEFAULT_ASSISTANT_NAME).strip() or DEFAULT_ASSISTANT_NAME
+    return IDENTITY_PROMPT_RULES.format(user_name=u, assistant_name=a)
+
 
 def spread_activation(
     seed_entities: list[str],
@@ -68,27 +260,6 @@ def spread_activation(
     if not MEMORY_SPREADING_ENABLED or not seed_entities:
         return {}
     max_depth = max_depth if max_depth is not None else MEMORY_SPREADING_MAX_DEPTH
-    decay = decay if decay is not None else MEMORY_SPREADING_DECAY
-    min_strength = min_strength if min_strength is not None else MEMORY_SPREADING_MIN_STRENGTH
-    decay = max(0.0, min(1.0, float(decay)))
-
-    # adjacency
-    adj: dict[str, list[tuple[str, float]]] = {}
-    for a, b, w in edges:
-        a, b = a.casefold(), b.casefold()
-        if not a or not b or a == b:
-            continue
-        ww = max(0.0, float(w or 0.0))
-        adj.setdefault(a, []).append((b, ww))
-        adj.setdefault(b, []).append((a, ww))
-
-    strength: dict[str, float] = {}
-    for e in seed_entities:
-        k = e.casefold()
-        if k:
-            strength[k] = max(strength.get(k, 0.0), 1.0)
-
-    frontier = set(strength)
     for _ in range(max_depth):
         nxt: set[str] = set()
         for node in frontier:
@@ -1003,4 +1174,160 @@ __all__ = [
     "should_expand_supersession_chain",
     "spread_activation",
     "walk_supersession_chain",
+    "neural_activate",
+    "neural_step",
+    "neural_importance",
+    "NEURAL_NET_ENABLED",
+    "NEURAL_DECAY",
+    "NEURAL_THRESHOLD",
+    "NEURAL_LEAK",
+    "NEURAL_SPREAD_DEPTH",
 ]
+import json as _json
+
+
+def neural_activate(
+    memorize_or_backend: Any,
+) -> dict[str, float]:
+    """One timestep of neural network activation propagation over the entity graph.
+
+    Returns a dict of entity -> activation strength after one step.
+    """
+    from cognition.memory.memorize import AikoMemorize
+
+    mem = None
+    if hasattr(memorize_or_backend, "_conn"):
+        mem = memorize_or_backend
+    elif hasattr(memorize_or_backend, "_mem"):
+        mem = memorize_or_backend._mem
+    if mem is None:
+        log.debug("neural net: no memorize backend found")
+        return {}
+
+    user_id = getattr(mem, "_user_id", None) or getattr(memorize_or_backend, "_user_id", None)
+    if not user_id:
+        log.debug("neural net: no user_id found")
+        return {}
+
+    # ── load node features (valence/arousal) ──
+    node_valence: dict[str, float] = {}
+    node_arousal: dict[str, float] = {}
+    node_count: dict[str, int] = {}
+
+    try:
+        rows = mem._conn.execute(
+            """
+            SELECT entity_a AS ent, valence_score, arousal_score
+            FROM entity_relations
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+        for row in rows:
+            ent = str(row[0] or "").casefold()
+            vs = row[1]
+            ar = row[2]
+            if vs is not None:
+                node_valence[ent] = node_valence.get(ent, 0.0) + float(vs)
+                node_count[ent] = node_count.get(ent, 0) + 1
+            if ar is not None:
+                node_arousal[ent] = node_arousal.get(ent, 0.0) + float(ar)
+                node_count[ent] = node_count.get(ent, 0) + 1
+        for ent in node_valence:
+            node_valence[ent] = node_valence[ent] / node_count[ent] if node_count[ent] > 0 else 0.0
+        for ent in node_arousal:
+            node_arousal[ent] = node_arousal[ent] / node_count[ent] if node_count[ent] > 0 else 0.0
+    except Exception as e:
+        log.debug("neural net: valence/arousal load failed: %s", e)
+
+    # ── load directed edges with weights ──
+    edge_weight: dict[tuple[str, str], float] = {}
+    try:
+        rows = mem._conn.execute(
+            """
+            SELECT entity_a, entity_b, weight FROM entity_relations
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+        for row in rows:
+            a = str(row[0] or "").casefold()
+            b = str(row[1] or "").casefold()
+            w = float(row[1] or 0.0)
+            if not a or not b or a == b:
+                continue
+            edge_weight[(a, b)] = edge_weight.get((a, b), 0.0) + w
+            edge_weight[(b, a)] = edge_weight.get((b, a), 0.0) + w
+    except Exception as e:
+        log.debug("neural net: edge load failed: %s", e)
+
+    # ── one timestep of activation propagation ──
+    activation: dict[str, float] = {}
+    for ent in set(list(node_valence.keys()) + list(node_arousal.keys())):
+        v = node_valence.get(ent, 0.0)
+        a = node_arousal.get(ent, 0.0)
+        activation[ent] = abs(v) + 0.1 * abs(a) if (abs(v) > 0 or abs(a) > 0) else 0.0
+
+    for _ in range(NEURAL_SPREAD_DEPTH):
+        new_activation: dict[str, float] = {}
+        for ent, act in activation.items():
+            act = act * (1.0 - NEURAL_LEAK)
+            if act < NEURAL_THRESHOLD:
+                continue
+            for (src, dst), w in edge_weight.items():
+                if src != ent:
+                    continue
+                neighbor_act = act * w * NEURAL_DECAY
+                new_activation[dst] = new_activation.get(dst, 0.0) + neighbor_act
+
+        activation = {ent: act for ent, act in activation.items() if act >= NEURAL_THRESHOLD}
+
+    importance: dict[str, float] = {}
+    for ent, act in activation.items():
+        v = node_valence.get(ent, 0.0)
+        importance[ent] = act + 0.5 * abs(v)
+
+    top = sorted(importance.items(), key=lambda kv: kv[1], reverse=True)[:10]
+    log.info("neural net: top entities: %s", top)
+
+    # Hebbian weight update
+    if NEURAL_NET_ENABLED:
+        try:
+            now = __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ).isoformat()
+            for ent, act in activation.items():
+                edges_to_bump = mem._conn.execute(
+                    """
+                    SELECT entity_a, entity_b, weight FROM entity_relations
+                    WHERE user_id = ? AND (entity_a = ? OR entity_b = ?)
+                    """,
+                    (user_id, ent, ent),
+                ).fetchall()
+                for row in edges_to_bump:
+                    a = str(row[0] or "").casefold()
+                    b = str(row[1] or "").casefold()
+                    idx = (a, b) if a != b else (a, a)
+                    current = edge_weight.get(idx, 0.0)
+                    boost = 0.01 * act * abs(node_valence.get(ent, 0.0))
+                    new_w = current + boost
+                    mem._conn.execute(
+                        "UPDATE entity_relations SET weight = ?, updated_at = ? WHERE user_id = ? AND entity_a = ? AND entity_b = ?",
+                        (new_w, now, user_id, a, b),
+                    )
+        except Exception as e:
+            log.debug("neural net: weight update failed: %s", e)
+
+    return importance
+
+
+def neural_step(
+    memorize_or_backend: Any,
+) -> dict[str, float]:
+    """Run one full neural network step and return entity importances.
+
+    Convenience wrapper around neural_activate that also persists weight
+    updates (Hebbian learning) when NEURAL_NET_ENABLED is true.
+    """
+    imp = neural_activate(memorize_or_backend)
+    return imp
