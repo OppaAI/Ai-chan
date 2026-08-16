@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import sqlite3
 import struct
 import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -107,7 +110,7 @@ CREATE INDEX IF NOT EXISTS idx_emc_staging_user
     ON emc_staging(user_id, id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS emc_vec USING vec0(
-    embedding float[{EMBED_DIMS}]
+    embedding float[{EMBED_DIMS}] distance_metric=cosine
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS emc_fts USING fts5(
@@ -128,6 +131,14 @@ def ensure_episode_schema(conn: sqlite3.Connection) -> list[str]:
         actions.append("emc_schema_ensured")
     except sqlite3.Error as e:
         log.warning("ensure_episode_schema: %s", e)
+    # vec0 defaults to L2; rebuild emc_vec with cosine metric if it predates
+    # distance_metric=cosine so MATCH ranking matches the cosine semantics of
+    # every KNN caller.
+    try:
+        from cognition.memory.vecstore import ensure_vec0_cosine_metric
+        ensure_vec0_cosine_metric(conn)
+    except Exception as e:
+        log.debug("emc_vec metric migration: %s", e)
     # EMC-2: install turn-ingest hooks (idempotent, best-effort)
     try:
         from cognition.memory.emc2_wire import apply_emc2_hooks
@@ -243,6 +254,17 @@ class EpisodicStore:
         self._embedder = embedder or HarrierEmbedder()
         self._lock = threading.RLock()
         self._conn = self._connect()
+        # EMC recall result cache (see episode_recall.search). Keyed by
+        # (user_id, query, limit); bounded + TTL so episodic recall doesn't
+        # re-run KNN+FTS (and the per-id touch loop) on every turn.
+        self._recall_cache: OrderedDict[tuple[str, str, int], tuple[float, list[dict]]] = OrderedDict()
+        self._recall_cache_lock = threading.RLock()
+        # EMC embed-off-thread: embedding each episode on the conversation
+        # thread stalls turns (1+ HTTP round-trips per flush). Instead the
+        # embed runs on a dedicated worker thread; _inscribe only queues the
+        # (storage_id, trace) pair after the storage row + FTS insert commit.
+        self._embed_queue: "queue.Queue[tuple[int, str] | None]" = queue.Queue()
+        self._embed_worker: threading.Thread | None = None
         self._turns_since_flush = 0
         with self._lock:
             ensure_episode_schema(self._conn)
@@ -378,7 +400,31 @@ class EpisodicStore:
                 break
         with self._lock:
             self._turns_since_flush = 0
+        if total and EMC_EMBED_ON_FLUSH:
+            # Draining is best-effort: wait up to a few seconds for the
+            # off-thread embed worker to finish so episodes are KNN-searchable
+            # before the session ends (close()/switch_user()).
+            self.drain_embeds(timeout=5.0)
         return total
+
+    def drain_embeds(self, timeout: float | None = None) -> None:
+        """Block until queued episode embeds finish, or `timeout` elapses.
+        No-op if embedding is disabled or nothing is queued."""
+        if not EMC_EMBED_ON_FLUSH or self._embed_worker is None:
+            return
+        try:
+            if timeout is None:
+                self._embed_queue.join()
+                return
+            deadline = time.monotonic() + max(0.0, timeout)
+            with self._embed_queue.all_tasks_done:
+                while self._embed_queue.unfinished_tasks:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return
+                    self._embed_queue.all_tasks_done.wait(remaining)
+        except Exception:
+            pass
 
     def flush_staging(self, limit: int | None = None) -> int:
         """Move staging rows → emc_storage.
@@ -441,6 +487,10 @@ class EpisodicStore:
                     )
 
             self._conn.commit()
+            if flushed:
+                # New episodes make cached recall results stale.
+                with self._recall_cache_lock:
+                    self._recall_cache.clear()
             return flushed
 
     def _inscribe(self, row: sqlite3.Row | tuple) -> int:
@@ -475,21 +525,52 @@ class EpisodicStore:
             log.debug("EMC FTS insert: %s", e)
 
         if EMC_EMBED_ON_FLUSH:
-            try:
-                vec = list(self._embedder.embed([trace]))[0]
-                blob = _pack_vector(vec)
-                self._conn.execute(
-                    "UPDATE emc_storage SET encoding = ? WHERE id = ?",
-                    (blob, storage_id),
-                )
-                self._conn.execute(
-                    "INSERT INTO emc_vec(rowid, embedding) VALUES (?, ?)",
-                    (storage_id, blob),
-                )
-            except Exception as e:
-                log.debug("EMC embed on flush skipped: %s", e)
+            # Off-thread: don't stall the conversation on an HTTP embed. The
+            # row + FTS insert are already committed by flush_staging's
+            # caller; the worker takes the lock only to write the vector.
+            self._enqueue_embed(storage_id, trace)
 
         return storage_id
+
+    def _enqueue_embed(self, storage_id: int, trace: str) -> None:
+        """Queue a (storage_id, trace) embed for the background worker."""
+        if self._embed_worker is None or not self._embed_worker.is_alive():
+            self._embed_worker = threading.Thread(
+                target=self._embed_worker_loop,
+                name="emc-embed-worker",
+                daemon=True,
+            )
+            self._embed_worker.start()
+        self._embed_queue.put((storage_id, trace))
+
+    def _embed_worker_loop(self) -> None:
+        """Embed queued episodes off the conversation thread. Best-effort: a
+        failed embed leaves the episode FTS-searchable but KNN-invisible; the
+        next successful embed retries nothing automatically, matching the
+        pre-existing best-effort semantics of the synchronous path."""
+        while True:
+            item = self._embed_queue.get()
+            try:
+                if item is None:
+                    self._embed_queue.task_done()
+                    return
+                storage_id, trace = item
+                vec = list(self._embedder.embed([trace]))[0]
+                blob = _pack_vector(vec)
+                with self._lock:
+                    self._conn.execute(
+                        "UPDATE emc_storage SET encoding = ? WHERE id = ?",
+                        (blob, storage_id),
+                    )
+                    self._conn.execute(
+                        "INSERT INTO emc_vec(rowid, embedding) VALUES (?, ?)",
+                        (storage_id, blob),
+                    )
+                    self._conn.commit()
+            except Exception as e:
+                log.debug("EMC background embed skipped: %s", e)
+            finally:
+                self._embed_queue.task_done()
 
     def staging_count(self, user_id: str | None = None) -> int:
         uid = user_id or self._user_id

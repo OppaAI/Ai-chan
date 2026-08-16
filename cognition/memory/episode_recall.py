@@ -7,13 +7,16 @@ apply_emc2_hooks() calls attach_recall_to_store().
 from __future__ import annotations
 
 import json
+import time
+from collections import OrderedDict
 from typing import Any
 
 import sqlite_vec
 
 from system.log import get_logger
 from cognition.memory.search import _sanitize_fts_query
-from cognition.memory.env import env_bool, env_int
+from cognition.memory.env import env_bool, env_int, env_float
+from cognition.memory.vecstore import KNN_MATCH_K_MIN, KNN_MATCH_OVERSCAN
 
 log = get_logger(__name__)
 
@@ -26,6 +29,13 @@ EMC_RRF_K = max(1, env_int("EMC_RRF_K", 60))
 EMC_CONTEXT_CHARS = max(100, env_int("EMC_CONTEXT_CHARS", 600))
 EMC_CONTEXT_EPISODE_CHARS = max(40, env_int("EMC_CONTEXT_EPISODE_CHARS", 280))
 EMC_JOINT_BUDGET = env_bool("EMC_JOINT_BUDGET", "1")
+# Episodic recall result cache. Without this, format_for_context runs a full
+# EMC KNN+FTS+R RF pass (plus a per-id touch loop) on every non-greeting turn,
+# even when the semantic memory search already served from its own cache. A
+# short TTL makes repeat turns near-free; hits still touch recall_count so
+# recency/importance stay fresh.
+EMC_RECALL_CACHE_SIZE = max(1, env_int("EMC_RECALL_CACHE_SIZE", 128))
+EMC_RECALL_CACHE_TTL = max(1.0, env_float("EMC_RECALL_CACHE_TTL", 20.0))
 
 
 def _utc_now_iso() -> str:
@@ -54,6 +64,24 @@ def search(
     if not q:
         return []
 
+    # ── recall result cache ───────────────────────────────────────────────────
+    # Short-TTL per (user, query, limit) cache so every non-greeting turn
+    # doesn't re-run KNN+FTS+RRF against emc_vec/emc_fts.
+    cache_key = (uid, " ".join(q.casefold().split()), int(top_k))
+    now = time.monotonic()
+    with self._recall_cache_lock:
+        cached = self._recall_cache.get(cache_key)
+        if cached and now - cached[0] <= EMC_RECALL_CACHE_TTL:
+            self._recall_cache.move_to_end(cache_key)
+            hits = [dict(r) for r in cached[1]]
+            try:
+                _touch_episodes(self, [r["id"] for r in hits])
+            except Exception:
+                pass
+            return hits
+        if cached:
+            self._recall_cache.pop(cache_key, None)
+
     vector = None
     try:
         if query_vector is not None:
@@ -75,17 +103,20 @@ def search(
         if vector is not None:
             try:
                 vec_blob = sqlite_vec.serialize_float32(vector)
+                k = max(int(EMC_KNN_LIMIT) * KNN_MATCH_OVERSCAN, KNN_MATCH_K_MIN)
                 knn_rows = self._conn.execute(
                     """
-                    SELECT v.rowid AS id, vec_distance_cosine(v.embedding, ?) AS dist
+                    SELECT v.rowid AS id, v.distance AS dist
                     FROM emc_vec v
                     JOIN emc_storage s ON s.id = v.rowid
-                    WHERE s.user_id = ?
+                    WHERE v.embedding MATCH ?
+                      AND v.k = ?
+                      AND s.user_id = ?
                       AND (s.superseded_by IS NULL)
-                    ORDER BY dist ASC
+                    ORDER BY v.distance ASC
                     LIMIT ?
                     """,
-                    (vec_blob, uid, EMC_KNN_LIMIT),
+                    (vec_blob, k, uid, EMC_KNN_LIMIT),
                 ).fetchall()
                 rank_knn = {int(r[0]): i + 1 for i, r in enumerate(knn_rows)}
             except Exception as e:
@@ -168,6 +199,10 @@ def search(
             })
 
         _touch_episodes(self, [r["id"] for r in results])
+        with self._recall_cache_lock:
+            self._recall_cache[cache_key] = (now, [dict(r) for r in results])
+            while len(self._recall_cache) > EMC_RECALL_CACHE_SIZE:
+                self._recall_cache.popitem(last=False)
         return results
 
 

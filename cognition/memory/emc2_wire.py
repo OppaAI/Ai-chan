@@ -105,13 +105,14 @@ def _patch_memorize() -> None:
             related=None,
             user_id=None,
             embedder=None,
+            query_vector=None,
         ):
             sm_block = _orig_fmt(
                 self, memories, query=query, related=related,
-                user_id=user_id, embedder=embedder,
+                user_id=user_id, embedder=embedder, query_vector=query_vector,
             )
             try:
-                em_block = self._format_episodes_for_context(query or "")
+                em_block = self._format_episodes_for_context(query or "", query_vector)
             except Exception as e:
                 log.debug("EMC format_episodes skipped: %s", e)
                 em_block = None
@@ -135,7 +136,7 @@ def _patch_memorize() -> None:
                 from cognition.memory.episode_recall import EMC_RECALL_LIMIT
                 store = self._get_episode_store()
                 if store is not None:
-                    hits = store.search(query or "", limit=EMC_RECALL_LIMIT, user_id=self.get_user_id())
+                    hits = store.search(query or "", limit=EMC_RECALL_LIMIT, user_id=self.get_user_id(), query_vector=query_vector)
                     em_block = store.format_for_context(hits, max_chars=shared) or em_block
             em_len = len(em_block)
             sm_budget = shared - em_len - 2
@@ -148,7 +149,7 @@ def _patch_memorize() -> None:
                 sm_block = sm_trim
             return f"{sm_block}\n\n{em_block}"
 
-        def _format_episodes_for_context(self, query: str) -> str | None:
+        def _format_episodes_for_context(self, query: str, query_vector=None) -> str | None:
             from cognition.memory.episode import EMC_ENABLED
             from cognition.memory.episode_recall import (
                 EMC_RECALL_ENABLED,
@@ -161,7 +162,7 @@ def _patch_memorize() -> None:
             store = self._get_episode_store()
             if store is None:
                 return None
-            hits = store.search(query, limit=EMC_RECALL_LIMIT, user_id=self.get_user_id())
+            hits = store.search(query, limit=EMC_RECALL_LIMIT, user_id=self.get_user_id(), query_vector=query_vector)
             if not hits:
                 return None
             return store.format_for_context(hits)

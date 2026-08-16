@@ -27,6 +27,9 @@ import requests
 
 from system.secure import connect_sqlite
 from system.userspace import current_user_id, user_state_path
+from system.log import get_logger
+
+log = get_logger(__name__)
 
 
 
@@ -43,6 +46,11 @@ _QUERY_INSTRUCT   = os.getenv(
     "EMBED_QUERY_INSTRUCT",
     "Retrieve relevant memories that answer the query",
 )
+
+# vec0 MATCH KNN oversampling — see user_scoped_vec_knn. Defaults mirror the
+# memory-domain constants in cognition.memory.schema.
+KNN_MATCH_OVERSCAN = int(os.getenv("KNN_MATCH_OVERSCAN", "16"))
+KNN_MATCH_K_MIN = int(os.getenv("KNN_MATCH_K_MIN", "32"))
 
 
 class HarrierEmbedder:
@@ -241,7 +249,75 @@ def initialize_sqlite_vec_db(path: str | os.PathLike[str], ddl: str, *, user_id:
     conn = connect_sqlite_vec(path, user_id=user_id)
     conn.executescript(ddl)
     conn.commit()
+    ensure_vec0_cosine_metric(conn)
     return conn
+
+
+_VEC0_TABLE_RE = re.compile(
+    r"CREATE\s+VIRTUAL\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\s+USING\s+vec0\s*\((.*)\)\s*;?\s*$",
+    re.S | re.I,
+)
+
+
+def ensure_vec0_cosine_metric(conn: sqlite3.Connection) -> list[str]:
+    """Rebuild any vec0 table that was created without `distance_metric=cosine`.
+
+    vec0's default metric is L2, but every KNN caller in this codebase
+    interprets the returned `distance` as cosine (1 - similarity) and applies
+    cosine-based thresholds (dedup, recall, dream merge). Running MATCH against
+    an L2-metric table would silently rank by L2 and return L2 distances, so
+    existing stores must be migrated once. sqlite-vec 0.1.9 cannot ALTER a
+    vec0 table's metric, so we rebuild in place: copy rows out, drop, recreate
+    with the metric, reinsert. Returns the list of migrated table names.
+    """
+    migrated: list[str] = []
+    try:
+        rows = conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    except sqlite3.Error as e:
+        log.debug("vec0 metric scan skipped: %s", e)
+        return migrated
+    for name, ddl_sql in rows:
+        ddl_sql = ddl_sql or ""
+        if "USING vec0" not in ddl_sql or "distance_metric=cosine" in ddl_sql:
+            continue
+        m = _VEC0_TABLE_RE.search(ddl_sql)
+        if not m:
+            continue
+        cols_text = m.group(2).rstrip()
+        new_ddl = f"CREATE VIRTUAL TABLE IF NOT EXISTS {name} USING vec0({cols_text} distance_metric=cosine);"
+        try:
+            cols = conn.execute(f"PRAGMA table_info({name})").fetchall()
+            id_col = next((c[1] for c in cols if c[1] == "id"), None)
+            embed_col = next((c[1] for c in cols if c[1] == "embedding"), None)
+            if not embed_col:
+                continue
+            if id_col:
+                id_rows = conn.execute(f"SELECT {id_col} FROM {name}").fetchall()
+            else:
+                id_rows = conn.execute(f"SELECT rowid FROM {name}").fetchall()
+            embed_rows = conn.execute(f"SELECT {embed_col} FROM {name}").fetchall()
+            rows_out = [(r[0], e[0]) for r, e in zip(id_rows, embed_rows)]
+            conn.execute(f"DROP TABLE {name}")
+            conn.executescript(new_ddl)
+            for rowid, embedding in rows_out:
+                if id_col:
+                    conn.execute(
+                        f"INSERT INTO {name}({id_col}, embedding) VALUES (?, ?)",
+                        (rowid, embedding),
+                    )
+                else:
+                    conn.execute(
+                        f"INSERT INTO {name}(rowid, embedding) VALUES (?, ?)",
+                        (rowid, embedding),
+                    )
+            conn.commit()
+            migrated.append(name)
+            log.info("vec0 %s: migrated to distance_metric=cosine (%d rows)", name, len(rows_out))
+        except sqlite3.Error as e:
+            log.warning("vec0 %s metric migration skipped: %s", name, e)
+    return migrated
 
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_./:-]+")
@@ -370,6 +446,10 @@ def user_scoped_vec_knn(
 ) -> list[sqlite3.Row]:
     """Run the common sqlite-vec KNN pattern scoped through an owner table.
 
+    Uses the vec0 MATCH index (tables are created with distance_metric=cosine,
+    so `distance` == 1 - cosine_similarity). k is oversampled because the
+    owner-scope filter applies after the vec0 scan picks the k nearest rows.
+
     threshold, if given, is a minimum cosine similarity (0..1) — rows whose
     distance exceeds (1 - threshold) are excluded, so a lone unrelated
     candidate can't win purely by being the only thing in the table.
@@ -381,32 +461,37 @@ def user_scoped_vec_knn(
     vec_id_column = _ident(vec_id_column)
     user_column = _ident(user_column)
     blob = sqlite_vec_blob(vector)
+    k = max(int(limit) * KNN_MATCH_OVERSCAN, KNN_MATCH_K_MIN)
 
     if threshold is not None:
         dist_ceil = 1.0 - threshold
         return conn.execute(
             f"""
-            SELECT v.{vec_id_column} AS id, vec_distance_cosine(v.embedding, ?) AS dist
+            SELECT v.{vec_id_column} AS id, v.distance AS dist
             FROM {vec_table} v
             JOIN {owner_table} {owner_alias} ON {owner_alias}.{owner_id_column} = v.{vec_id_column}
-            WHERE {owner_alias}.{user_column} = ?
-              AND vec_distance_cosine(v.embedding, ?) <= ?
-            ORDER BY dist ASC
+            WHERE v.embedding MATCH ?
+              AND v.k = ?
+              AND {owner_alias}.{user_column} = ?
+              AND v.distance <= ?
+            ORDER BY v.distance ASC
             LIMIT ?
             """,
-            (blob, user_id, blob, dist_ceil, limit),
+            (blob, k, user_id, dist_ceil, limit),
         ).fetchall()
 
     return conn.execute(
         f"""
-        SELECT v.{vec_id_column} AS id, vec_distance_cosine(v.embedding, ?) AS dist
+        SELECT v.{vec_id_column} AS id, v.distance AS dist
         FROM {vec_table} v
         JOIN {owner_table} {owner_alias} ON {owner_alias}.{owner_id_column} = v.{vec_id_column}
-        WHERE {owner_alias}.{user_column} = ?
-        ORDER BY dist ASC
+        WHERE v.embedding MATCH ?
+          AND v.k = ?
+          AND {owner_alias}.{user_column} = ?
+        ORDER BY v.distance ASC
         LIMIT ?
         """,
-        (blob, user_id, limit),
+        (blob, k, user_id, limit),
     ).fetchall()
 
 

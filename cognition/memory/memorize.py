@@ -2515,6 +2515,7 @@ class AikoMemorize:
         related: dict | None = None,
         user_id: str | None = None,
         embedder=None,
+        query_vector=None,
     ) -> str | None:
         """
         Format retrieved memories into a compact string for injection

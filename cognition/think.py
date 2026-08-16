@@ -462,7 +462,7 @@ class AikoThink:
             log.debug("[route] approval resume pre-check skipped: %s", exc)
 
         try:
-            intent = self._route_intent(user_input)
+            intent, route_vec = self._route_intent(user_input)
             log.info("[route] intent=%s", intent)
 
             if intent == "greeting":
@@ -474,8 +474,13 @@ class AikoThink:
                     store_turn=False,
                 )
 
-            embedder = self._get_memorize()._mem._embedder
-            query_vec = embedder.embed_query(user_input)
+            # Reuse the embedding computed during intent routing as the memory
+            # query vector instead of embedding the same text a second time
+            # with _QUERY_INSTRUCT. This drops one HTTP embed call per turn.
+            query_vec = route_vec
+            if query_vec is None:
+                embedder = self._get_memorize()._mem._embedder
+                query_vec = embedder.embed_query(user_input)
             mem_kb_future = CONTEXT_POOL.submit(
                 self._fetch_memory_and_knowledge, user_input, query_vec
             )
@@ -483,8 +488,8 @@ class AikoThink:
             if intent == "agentic":
                 return self.agentic_chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
             if intent == "webchat":
-                return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future)
-            return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future)
+                return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
+            return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future, query_vec=query_vec)
         finally:
             with self._active_users_lock:
                 self._active_user_ids.discard(user_id)
@@ -578,7 +583,7 @@ class AikoThink:
         with self._proactive_lock:
             self._proactive_resting = resting
 
-    def _route_intent(self, user_input: str) -> str:
+    def _route_intent(self, user_input: str) -> tuple[str, np.ndarray | None]:
         """Quaternary routing: single embedding, four-way decision with a
         high-confidence margin so a close call doesn't get committed to
         agentic (or webchat) just because it happened to be checked first.
@@ -588,18 +593,22 @@ class AikoThink:
         only owns the routing policy (thresholds, gap, LLM tie-break).
         ROUTE_MODE picks the classification method; AGENTIC_MODE_ON gates
         whether "agentic" can ever be the result, independent of method.
+
+        Returns (intent, query_vec). The embedding computed for routing is
+        returned so route() can reuse it for memory recall instead of paying
+        for a second embed of the same text (see route()).
         """
     
         if not _ROUTE_ENABLED:
-            return "localchat"
+            return "localchat", None
         if _ROUTE_MODE == "llm_only":
-            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), None
     
         instruct = _ROUTE_INSTRUCT_QUATERNARY
         memorize = self._get_memorize()
         if memorize is None:
             log.warning("[think] Memory unavailable — intent routing via LLM only")
-            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+            return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), None
         embedder = memorize._mem._embedder
         query_vec = embedder.embed_query(user_input, instruct=instruct)
         labels, example_vecs = self._semantic_example_vectors(_ROUTE_QUATERNARY_EXAMPLES, instruct)
@@ -629,12 +638,12 @@ class AikoThink:
         )
 
         if best_label == "greeting" and greeting_score >= greeting_threshold and (gap >= _SEMANTIC_ROUTE_MIN_GAP or _is_greeting_only(user_input)):
-            return "greeting"
+            return "greeting", query_vec
     
         if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
-            return "agentic"
+            return "agentic", query_vec
         if best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
-            return "webchat"
+            return "webchat", query_vec
     
         # Above threshold but too close to call cleanly.
         ambiguous = (
@@ -643,26 +652,26 @@ class AikoThink:
         )
         if ambiguous:
             if _is_greeting_only(user_input):
-                return "greeting"
+                return "greeting", query_vec
             if _ROUTE_MODE == "semantic_only":
                 # Deterministic mode: no LLM call on ambiguity.
                 log.debug("[route] semantic_only: ambiguous gap, defaulting localchat")
-                return "localchat"
+                return "localchat", query_vec
             if _ROUTE_MODE == "llm":
-                return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON)
+                return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), query_vec
             # "semantic" mode's original binary tie-break. If agentic is
             # off, there's nothing left for this binary check to decide
             # (it only ever distinguishes agentic vs chat), so skip the
             # LLM call entirely rather than spend it on a moot question.
             if not _AGENTIC_MODE_ON:
-                return "localchat"
+                return "localchat", query_vec
             llm_label = self._classify_agent_intent(user_input)
-            return "agentic" if llm_label == "agentic" else "localchat"
+            return ("agentic" if llm_label == "agentic" else "localchat"), query_vec
 
         if _is_greeting_only(user_input):
-            return "greeting"
+            return "greeting", query_vec
     
-        return "localchat"
+        return "localchat", query_vec
 
     def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], object]:
         """Return cached route-example vectors.
@@ -875,7 +884,7 @@ class AikoThink:
                 if not self._active_user_ids:
                     self._last_chat_time = time.time()
               
-    def webchat(self, user_input: str, token_callback=None, mem_kb_future=None) -> str:
+    def webchat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Web-aware chat: web_search + optional webfetch fallback."""
         speak = self._get_speak()
         if speak and speak.is_playing():
@@ -885,7 +894,7 @@ class AikoThink:
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
         memory_block = self._get_memorize().format_for_context(
-          memories, query=user_input
+          memories, query=user_input, query_vector=query_vec
         )
         persona_block = self._get_memorize().persona_context()
 
@@ -1047,7 +1056,7 @@ class AikoThink:
 
     # ── proactive idle check-in loop ──────────────────────────────────────────
 
-    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None, *, skip_memory: bool = False, store_turn: bool = True) -> str:
+    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None, *, skip_memory: bool = False, store_turn: bool = True, query_vec: np.ndarray | None = None) -> str:
         """Standard chat: persona plus optional memory/KB context."""
         speak = self._get_speak()
         if speak and speak.is_playing():
@@ -1064,7 +1073,7 @@ class AikoThink:
             memorize = self._get_memorize()
             memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
             memory_block = memorize.format_for_context(
-              memories, query=user_input
+              memories, query=user_input, query_vector=query_vec
             ) if memorize is not None else ""
             persona_block = memorize.persona_context() if memorize is not None else ""
         

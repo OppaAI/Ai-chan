@@ -66,6 +66,11 @@ GRAPH_LIMIT = 20          # candidates fetched before RRF re-rank (wide pass)
 QUICK_KNN_LIMIT = int(os.getenv("QUICK_KNN_LIMIT", "6"))   # narrow first-pass candidate count
 QUICK_FTS_LIMIT = int(os.getenv("QUICK_FTS_LIMIT", "6"))   # narrow first-pass candidate count
 QUICK_GRAPH_LIMIT = int(os.getenv("QUICK_GRAPH_LIMIT", "6"))  # narrow first-pass candidate count
+# vec0 MATCH KNN oversampling: the user_id/status JOIN filters rows AFTER the
+# vec0 scan picks the k nearest, so request a healthy multiple of the caller's
+# limit and let the outer ORDER BY + LIMIT trim back down.
+KNN_MATCH_OVERSCAN = int(os.getenv("KNN_MATCH_OVERSCAN", "16"))
+KNN_MATCH_K_MIN = int(os.getenv("KNN_MATCH_K_MIN", "32"))
 MEMORY_RECALL_SCORE_THRESHOLD = float(os.getenv("MEMORY_RECALL_SCORE_THRESHOLD", "0.015"))
 MEMORY_RANK_RECENCY_WEIGHT = float(os.getenv("MEMORY_RANK_RECENCY_WEIGHT", "0.004"))
 MEMORY_RANK_RECENCY_HALF_LIFE_DAYS = float(os.getenv("MEMORY_RANK_RECENCY_HALF_LIFE_DAYS", "30"))
@@ -319,7 +324,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec USING vec0(
     id TEXT PRIMARY KEY,
-    embedding FLOAT[{dims}]
+    embedding FLOAT[{dims}] distance_metric=cosine
 );
 
 CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
@@ -426,38 +431,49 @@ def _sqlite_knn_search(
     active_only: bool = True,
 ) -> list[sqlite3.Row]:
     """
-    KNN cosine search against memories_vec, filtered by user_id.
-    When threshold is supplied, only rows with dist <= (1 - threshold) are returned.
-    When active_only, superseded memories (status = 'superseded') are excluded.
+    KNN cosine search against memories_vec, filtered by user_id, via the vec0
+    MATCH index instead of a full-table scan. Tables are created with
+    distance_metric=cosine (migrated on connect by ensure_vec0_cosine_metric),
+    so `distance` is exactly 1 - cosine_similarity and the thresholds below
+    match the historical vec_distance_cosine semantics.
+
+    k is oversampled well past `limit` because the user_id/status filter is
+    applied by the JOIN after the vec0 scan picks the k nearest rows overall;
+    the outer ORDER BY + LIMIT restores the caller's requested candidate count.
     """
     vec_blob = sqlite_vec.serialize_float32(vector)
     status_sql = _active_sql(active_only)
+    k = max(int(limit) * KNN_MATCH_OVERSCAN, KNN_MATCH_K_MIN)
     if threshold is not None:
         dist_ceil = 1.0 - threshold
         return conn.execute(
             """
-            SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
+            SELECT v.id, v.distance AS dist
             FROM memories_vec v
             JOIN memories m ON m.id = v.id
-            WHERE m.user_id = ?
-              AND vec_distance_cosine(v.embedding, ?) <= ?
+            WHERE v.embedding MATCH ?
+              AND v.k = ?
+              AND m.user_id = ?
+              AND v.distance <= ?
               {status_sql}
-            ORDER BY dist ASC
+            ORDER BY v.distance ASC
             LIMIT ?
             """.format(status_sql=status_sql),
-            (vec_blob, user_id, vec_blob, dist_ceil, limit),
+            (vec_blob, k, user_id, dist_ceil, limit),
         ).fetchall()
     return conn.execute(
         """
-        SELECT v.id, vec_distance_cosine(v.embedding, ?) AS dist
+        SELECT v.id, v.distance AS dist
         FROM memories_vec v
         JOIN memories m ON m.id = v.id
-        WHERE m.user_id = ?
+        WHERE v.embedding MATCH ?
+          AND v.k = ?
+          AND m.user_id = ?
           {status_sql}
-        ORDER BY dist ASC
+        ORDER BY v.distance ASC
         LIMIT ?
         """.format(status_sql=status_sql),
-        (vec_blob, user_id, limit),
+        (vec_blob, k, user_id, limit),
     ).fetchall()
 
 
@@ -630,6 +646,8 @@ __all__ = [
     "QUICK_FTS_LIMIT",
     "QUICK_GRAPH_LIMIT",
     "QUICK_KNN_LIMIT",
+    "KNN_MATCH_K_MIN",
+    "KNN_MATCH_OVERSCAN",
     "RRF_K",
     "SCENE_CONTEXT_CHARS",
     "SCENE_CONTEXT_LIMIT",

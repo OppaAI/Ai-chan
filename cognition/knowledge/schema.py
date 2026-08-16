@@ -85,7 +85,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_fts USING fts5(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS learned_chunks_vec USING vec0(
     id TEXT PRIMARY KEY,
-    embedding FLOAT[{dims}]
+    embedding FLOAT[{dims}] distance_metric=cosine
 );
 
 -- Archive table for cold storage of rarely-accessed chunks

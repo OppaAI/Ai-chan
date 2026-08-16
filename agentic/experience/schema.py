@@ -108,7 +108,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS experiences_fts USING fts5(
 
 CREATE VIRTUAL TABLE IF NOT EXISTS experiences_vec USING vec0(
     id TEXT PRIMARY KEY,
-    embedding FLOAT[{dims}]
+    embedding FLOAT[{dims}] distance_metric=cosine
 );
 
 -- Engram relations: explicit links between experiences (continuation, contradiction, refines, synthesizes)

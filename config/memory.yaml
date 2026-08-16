@@ -192,6 +192,10 @@ QUICK_KNN_LIMIT: "6"  # Narrow KNN candidate count tried before falling back to 
 QUICK_FTS_LIMIT: "6"  # Narrow FTS5 candidate count tried before falling back to full search.
 MEMORY_RECALL_SCORE_THRESHOLD: "0.015"  # Min final-rank score required at position `limit` for the quick pass to be accepted; below this, search widens to KNN_LIMIT/FTS_LIMIT.
 
+# -- vec0 MATCH KNN oversampling --
+KNN_MATCH_OVERSCAN: "16"  # Multiply the caller's k by this before the vec0 scan, since user/status filters apply after the scan.
+KNN_MATCH_K_MIN: "32"     # Absolute floor for the oversampled k.
+
 # -- Pinned recency-among-relevant rerank --
 MEMORY_RECENCY_RERANK_ENABLED: "1"  # Toggle recency-among-relevant reranking; boolean options (1/0, true/false, yes/no, on/off).
 MEMORY_RECENCY_RERANK_THRESHOLD: "0.012"  # Min final score for a candidate to be considered "relevant enough" to be reordered by recency instead of by raw score.
@@ -305,6 +309,8 @@ EMC_RRF_K: "60"               # Reciprocal Rank Fusion constant
 EMC_CONTEXT_CHARS: "600"      # Soft char budget for the whole episodic block
 EMC_CONTEXT_EPISODE_CHARS: "280"  # Max chars per episode snippet
 EMC_JOINT_BUDGET: "1"         # Shrink SM so EM+SM stay under MEMORY_CONTEXT_TOTAL_CHARS
+EMC_RECALL_CACHE_SIZE: "128"  # Max entries in the episodic recall result cache
+EMC_RECALL_CACHE_TTL: "20"    # Seconds a recall result stays cached before refresh
 
 # EMC-4: dream distillation EM → SM
 EMC_DREAM_ENABLED: "1"        # Run episodic→fact distillation inside dream()

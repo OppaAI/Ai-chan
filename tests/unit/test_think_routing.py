@@ -60,7 +60,9 @@ def test_route_intent_can_return_greeting_from_semantic_scores(monkeypatch):
     monkeypatch.setattr(think, "_semantic_example_vectors", lambda examples, instruct: (["greeting"], np.array([[1.0, 0.0]], dtype=np.float32)))
     monkeypatch.setattr(think_module.reason, "label_scores_topk", lambda *a, **kw: {"greeting": 0.95, "localchat": 0.10})
 
-    assert think._route_intent("hello there") == "greeting"
+    intent, query_vec = think._route_intent("hello there")
+    assert intent == "greeting"
+    assert query_vec is not None
     assert embedder.calls == [("hello there", think_module._ROUTE_INSTRUCT_QUATERNARY)]
 
 
@@ -68,7 +70,7 @@ def test_greeting_route_skips_memory_recall_and_writeback(monkeypatch):
     think = _bare_think()
     calls = {}
 
-    monkeypatch.setattr(think, "_route_intent", lambda user_input: "greeting")
+    monkeypatch.setattr(think, "_route_intent", lambda user_input: ("greeting", None))
     monkeypatch.setattr(think, "_fetch_memory_and_knowledge", lambda *a, **kw: calls.setdefault("fetch", True))
 
     def fake_chat(user_input, **kwargs):
@@ -87,7 +89,7 @@ def test_non_greeting_route_starts_memory_after_intent(monkeypatch):
     think = _bare_think()
     events: list[str] = []
 
-    monkeypatch.setattr(think, "_route_intent", lambda user_input: events.append("intent") or "localchat")
+    monkeypatch.setattr(think, "_route_intent", lambda user_input: events.append("intent") or ("localchat", None))
 
     class ImmediatePool:
         def submit(self, fn, *args):
