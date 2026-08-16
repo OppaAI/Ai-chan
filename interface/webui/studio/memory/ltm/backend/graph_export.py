@@ -683,7 +683,17 @@ def export_memory_graph(
         )
         other.sort(key=lambda e: -float(e.get("weight") or 0))
 
-        budget = _MAX_EDGES
+        # FIX #3: MEMORY_STUDIO_MAX_EDGES was a flat constant (default 200)
+        # regardless of how many nodes survived — so any graph with more than
+        # ~150-200 connected nodes was guaranteed to have isolated dots no
+        # matter how fair the allocation below is. Scale the working budget
+        # with the actual node count (roughly 2 edges/node keeps the view
+        # readable while giving nearly everyone at least one connection),
+        # but never go *below* the explicit env value so an operator who
+        # deliberately set MEMORY_STUDIO_MAX_EDGES higher than this heuristic
+        # still gets what they asked for. Hard ceiling avoids a runaway SVG
+        # on very large graphs.
+        budget = max(_MAX_EDGES, min(3000, len(nodes) * 2))
         guaranteed: list[dict[str, Any]] = []
         covered: set[str] = set()
         remaining_structural: list[dict[str, Any]] = []
@@ -720,7 +730,7 @@ def export_memory_graph(
                 "theme": "galaxy",
                 "max_memories": _MAX_MEMORIES,
                 "max_entities": _MAX_ENTITIES,
-                "max_edges": _MAX_EDGES,
+                "max_edges": budget,
                 "max_knowledge": _MAX_KNOWLEDGE,
                 "max_experience": _MAX_EXPERIENCE,
                 "max_episodes": _MAX_EPISODES,

@@ -389,6 +389,24 @@ function render() {
     .filter(e => keep2.has(e.source) && keep2.has(e.target));
   const nodeById = new Map(nodes.map(n => [n.id, n]));
 
+  // FIX #4: D3 seeds nodes lacking x/y in a spiral centered at (0,0) — the
+  // canvas's top-left corner — not at (w/2, h/2). The old strong center
+  // force (0.12) used to drag that whole spiral back into frame; now that
+  // it's weak (0.02, kept low on purpose so clusters can branch instead of
+  // collapsing into a disc), there isn't enough pull left to travel that
+  // distance before the simulation cools down, so everything just sits near
+  // the left/top edge where it started. Seed explicitly at the true center
+  // instead of relying on force to relocate it.
+  nodes.forEach((d, i) => {
+    if (d.x == null || d.y == null) {
+      const angle = i * 2.399963229728653; // golden angle spiral
+      const radius = 6 * Math.sqrt(i);
+      d.x = w / 2 + radius * Math.cos(angle);
+      d.y = h / 2 + radius * Math.sin(angle);
+    }
+  });
+
+
   if (!nodes.length) {
     svg.append('text').attr('x', w/2).attr('y', h/2).attr('text-anchor','middle')
       .attr('fill','var(--dim)').text('No memories yet');
@@ -524,13 +542,18 @@ function render() {
     h,
     // Lighter charge + softer center pull than before (was -180 / default
     // 0.12) so the graph branches into organic clusters instead of packing
-    // into a uniform disc. The 'cluster' force groups same-type nodes
-    // (memory / entity / knowledge / experience / episode) into loose lobes
-    // that link topology can still pull toward each other.
+    // into a uniform disc.
+    // clusterStrength is OFF: grouping by node type (memory / entity /
+    // knowledge / experience / episode) was pulling every knowledge node
+    // toward one shared centroid, every experience node toward another,
+    // etc. — that's what produced neat color-coded columns/zones instead of
+    // an organic mix. Position should come from actual connectivity (the
+    // link force below) alone, so differently-typed nodes that share edges
+    // thread together through the same region, matching a real neural net's
+    // interleaved look rather than segregated clusters.
     charge: -110,
-    centerStrength: 0.02,
-    clusterStrength: 0.05,
-    clusterKey: d => d.type,
+    centerStrength: 0.035,
+    clusterStrength: 0,
     nodeRadius,
     linkDistance: d => {
       if (d.type === 'supersedes') return 90;
