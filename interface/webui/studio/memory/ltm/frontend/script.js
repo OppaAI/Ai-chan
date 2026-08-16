@@ -302,6 +302,10 @@ async function runSearch() {
 }
 
 function render() {
+  if (simulation) {
+    simulation.stop();
+    simulation = null;
+  }
   const svg = d3.select('#canvas');
   svg.selectAll('*').remove();
   const area = document.getElementById('canvas-area');
@@ -395,7 +399,7 @@ function render() {
   zoomBehavior = GraphBoot.makeZoom({ scaleExtent: [0.2, 4], target: g });
   svg.call(zoomBehavior);
 
-  // Subtle neural grid background
+  // Neural-net backdrop: intentional lanes, not a center-seeking cluster.
   const grid = g.append('g').attr('class', 'neural-grid');
   const gridStep = 60;
   for (let x = 0; x <= w; x += gridStep) {
@@ -408,6 +412,22 @@ function render() {
       .attr('x1', 0).attr('y1', y).attr('x2', w).attr('y2', y)
       .attr('stroke', '#3de0ff12').attr('stroke-width', 0.5);
   }
+
+  const layerGuides = [
+    { x: w * 0.16, label: "INPUT · ENTITIES" },
+    { x: w * 0.50, label: "MEMORY · NEURONS" },
+    { x: w * 0.84, label: "OUTPUT · CONSOLIDATED" },
+  ];
+  const guide = g.append('g').attr('class', 'neural-layers').attr('pointer-events', 'none');
+  layerGuides.forEach(layer => {
+    guide.append('line')
+      .attr('x1', layer.x).attr('y1', 28).attr('x2', layer.x).attr('y2', h - 28)
+      .attr('stroke', '#3de0ff22').attr('stroke-width', 1).attr('stroke-dasharray', '2 10');
+    guide.append('text')
+      .attr('x', layer.x).attr('y', 18).attr('text-anchor', 'middle')
+      .attr('fill', '#8a9bb8').attr('font-size', 9).attr('letter-spacing', '1.5px')
+      .attr('opacity', 0.55).text(layer.label);
+  });
 
   const defs = svg.append('defs');
 
@@ -504,65 +524,48 @@ function render() {
       return t.length > 20 ? t.slice(0, 18) + '…' : t;
     });
 
-  // Neural net initial spread: layered rings by degree, minimal center pull
-  const centerX = w * 0.5, centerY = h * 0.5;
-  const degById = new Map();
-  links.forEach(e => {
-    const s = typeof e.source === 'object' ? e.source.id : e.source;
-    const t = typeof e.target === 'object' ? e.target.id : e.target;
-    degById.set(s, (degById.get(s) || 0) + 1);
-    degById.set(t, (degById.get(t) || 0) + 1);
-  });
-  nodes.forEach((n, i) => {
-    if (n.id === userEntityId) {
-      n.x = centerX; n.y = centerY; n.fx = centerX; n.fy = centerY;
-      return;
-    }
-    if (n.x != null && n.y != null) return;
-    const deg = degById.get(n.id) || 0;
-    // High-degree nodes near center (hubs), isolates in outer rings
-    const ringIdx = deg >= 5 ? 0 : deg >= 2 ? 1 : 2;
-    const baseR = [0.15, 0.45, 0.75][ringIdx];
-    const jitter = (Math.random() - 0.5) * 0.12;
-    const ang = (i * 2.399963) + jitter;
-    const scale = w * 0.42;
-    n.x = centerX + Math.cos(ang) * baseR * scale;
-    n.y = centerY + Math.sin(ang) * baseR * scale;
+  // Neural-net layout: entities feed memories, which feed consolidated
+  // knowledge/experience/episode nodes. The lanes keep the graph readable.
+  const layerOf = d => d.type === "entity" ? 0 :
+    (d.type === "knowledge" || d.type === "experience" || d.type === "episode") ? 2 : 1;
+  const layerX = [w * 0.16, w * 0.50, w * 0.84];
+  const nodesByLayer = [[], [], []];
+  nodes.forEach(n => nodesByLayer[layerOf(n)].push(n));
+  nodesByLayer.forEach((lane, layer) => {
+    lane.sort((a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id)));
+    const usableH = Math.max(40, h - 88);
+    const step = usableH / Math.max(1, lane.length);
+    lane.forEach((n, i) => {
+      n._layer = layer;
+      n._laneY = 44 + step * (i + 0.5);
+      n.x = layerX[layer];
+      n.y = n._laneY;
+    });
   });
 
   simulation = GraphBoot.makeSimulation(nodes, links, {
     w,
     h,
-    // Stronger repulsion + longer links = neural net spread
-    charge: d => ((degById.get(d.id) || 0) === 0 ? -500 : -350),
-    centerStrength: 0.01,
+    // Keep synapses readable without erasing the lanes.
+    charge: -95,
+    centerStrength: 0,
     nodeRadius,
-    collisionPadding: 16,
+    collisionPadding: 12,
     linkDistance: d => {
-      if (d.type === 'mentions') return 140;
-      if (d.type === 'supersedes') return 180;
-      if (d.type === 'grounded_in' || d.type === 'practiced_in') return 150;
-      if (d.type === 'distilled_into') return 160;
-      return 120;
+      if (d.type === 'supersedes') return 130;
+      if (d.type === 'distilled_into') return 150;
+      return 105;
     },
     linkStrength: d => {
       if (d.type === 'mentions') return 0.35;
-      if (d.type === 'supersedes') return 0.20;
-      if (d.type === 'distilled_into') return 0.20;
-      return 0.25;
+      if (d.type === 'supersedes') return 0.12;
+      if (d.type === 'distilled_into') return 0.18;
+      return 0.22;
     },
   })
-    .force('x', d3.forceX(centerX).strength(d => {
-      const deg = degById.get(d.id) || 0;
-      if (d.id === userEntityId) return 0.15;
-      return deg === 0 ? 0.001 : 0.008;
-    }))
-    .force('y', d3.forceY(centerY).strength(d => {
-      const deg = degById.get(d.id) || 0;
-      if (d.id === userEntityId) return 0.15;
-      return deg === 0 ? 0.001 : 0.008;
-    }))
-    .alphaDecay(0.012)
+    .force('x', d3.forceX(d => layerX[d._layer]).strength(0.42))
+    .force('y', d3.forceY(d => d._laneY).strength(0.16))
+    .alphaDecay(0.035)
     .on('tick', () => {
       link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
           .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
