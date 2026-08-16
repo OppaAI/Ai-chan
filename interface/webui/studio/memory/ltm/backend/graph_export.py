@@ -270,6 +270,7 @@ def export_memory_graph(
     include_knowledge: bool | None = None,
     include_experience: bool | None = None,
     include_episodes: bool | None = None,
+    include_episodes: bool | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
     conn: sqlite3.Connection | None = None,
@@ -281,11 +282,12 @@ def export_memory_graph(
       - entity: hub nodes (size = I_e when available)
       - knowledge: learned chunks (only when grounded in memories)
       - experience: experiences (only when grounded in memories)
+      - episode: episodic memory cortex rows (EMC)
 
     Edge types:
       - supersedes: newer memory → older memory it replaced
       - mentions: memory → entity (deduplicated, weighted by mention count)
-      - about: knowledge/experience → entity
+      - about: knowledge/experience/episode → entity
       - grounded_in: memory → knowledge (only when same entity mentioned)
       - practiced_in: memory → experience (only when same entity mentioned)
       - co_mentions / related_to: entity → entity (filtered by importance)
@@ -602,11 +604,6 @@ def export_memory_graph(
                 _add_experience_layer(conn, uid, nodes, edges, entity_ids, mem_ids, date_from=from_dt, date_to=to_dt)
             except Exception as ex:
                 log.debug("graph_export: experience layer skipped: %s", ex)
-        if include_episodes and _MAX_EPISODES > 0:
-            try:
-                _add_episode_layer(conn, uid, nodes, edges, entity_ids, mem_ids, entity_importance, date_from=from_dt, date_to=to_dt)
-            except Exception as ex:
-                log.debug("graph_export: episode layer skipped: %s", ex)
 
         mem_nodes = [n for n in nodes if n.get("type") == "memory"]
         ent_nodes = [n for n in nodes if n.get("type") == "entity"]
@@ -676,6 +673,7 @@ def export_memory_graph(
                 "max_episodes": _MAX_EPISODES,
                 "include_knowledge": include_knowledge,
                 "include_experience": include_experience,
+                "include_episodes": include_episodes,
                 "date_from": from_dt,
                 "date_to": to_dt,
                 "phase16_lineage": bool(has_supersedes),
@@ -703,6 +701,9 @@ def _legend() -> dict[str, Any]:
             "imprint": "#c651a8",
             "pinned": "#51d4c8",
             "superseded": "#4a3a6a",
+            "knowledge": "#4ade80",
+            "experience": "#fb923c",
+            "episode": "#e879f9",
         },
     }
 
