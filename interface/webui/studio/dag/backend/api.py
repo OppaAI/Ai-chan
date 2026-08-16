@@ -58,8 +58,41 @@ def playbook_to_graph(playbook: dict) -> dict:
 def load_playbooks_refresh() -> list:
     """Reload playbooks from graph_engine (fresh each call)."""
     from agentic.graph_engine import load_playbooks
+    from agentic.workflows.common.graphs import get_graph
     raw = load_playbooks()
-    return [playbook_to_graph(p) for p in raw]
+    result = []
+    for p in raw:
+        g = playbook_to_graph(p)
+        # If playbook references a graph_id, resolve it from the registry
+        graph_id = g.get("graph_id")
+        if graph_id and not g.get("nodes"):
+            graph = get_graph(graph_id)
+            if graph:
+                # Convert PlanGraph to playbook format with nodes/edges
+                nodes = []
+                edges = []
+                for n in graph.nodes:
+                    nodes.append({
+                        "id": n.id,
+                        "tool": n.tool,
+                        "args": dict(n.args or {}),
+                        "depends_on": list(n.depends_on or ()),
+                        "loop_to": getattr(n, "loop_to", None),
+                        "max_visits": getattr(n, "max_visits", None),
+                        "fallback_to": getattr(n, "fallback_to", None),
+                        "run_if": getattr(n, "run_if", None),
+                    })
+                    for dep in n.depends_on or ():
+                        edges.append({"source": dep, "target": n.id, "type": "depends_on"})
+                    loop_to = getattr(n, "loop_to", None)
+                    if loop_to:
+                        edges.append({"source": n.id, "target": loop_to, "type": "loop_to"})
+                    fallback_to = getattr(n, "fallback_to", None)
+                    if fallback_to:
+                        edges.append({"source": n.id, "target": fallback_to, "type": "fallback_to"})
+                g = {**g, "nodes": nodes, "edges": edges}
+        result.append(g)
+    return result
 
 
 # Load playbooks on startup (will be refreshed on each API call)

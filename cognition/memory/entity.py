@@ -538,6 +538,8 @@ _STOP_ENTITIES = frozenset({
     "september", "october", "november", "december",
     "today", "yesterday", "tomorrow", "user", "assistant", "aiko",
     "he", "she", "they", "his", "her", "their", "this", "that",
+    # user identity — appears in nearly every memory, creates super-node hub
+    "oppa", "oppaai",
     # generic ROS2 / dev-noise nouns — too common to be useful graph nodes
     "node", "topic", "service", "message", "callback", "function", "class",
     "file", "line", "log", "logs", "commit", "branch", "repo", "script",

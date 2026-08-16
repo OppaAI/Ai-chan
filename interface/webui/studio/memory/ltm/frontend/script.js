@@ -396,38 +396,8 @@ function render() {
   }
 
   const g = svg.append('g');
-  zoomBehavior = GraphBoot.makeZoom({ scaleExtent: [0.2, 4], target: g });
+  zoomBehavior = GraphBoot.makeZoom({ scaleExtent: [0.15, 4], target: g });
   svg.call(zoomBehavior);
-
-  // Neural-net backdrop: intentional lanes, not a center-seeking cluster.
-  const grid = g.append('g').attr('class', 'neural-grid');
-  const gridStep = 60;
-  for (let x = 0; x <= w; x += gridStep) {
-    grid.append('line')
-      .attr('x1', x).attr('y1', 0).attr('x2', x).attr('y2', h)
-      .attr('stroke', '#3de0ff12').attr('stroke-width', 0.5);
-  }
-  for (let y = 0; y <= h; y += gridStep) {
-    grid.append('line')
-      .attr('x1', 0).attr('y1', y).attr('x2', w).attr('y2', y)
-      .attr('stroke', '#3de0ff12').attr('stroke-width', 0.5);
-  }
-
-  const layerGuides = [
-    { x: w * 0.16, label: "INPUT · ENTITIES" },
-    { x: w * 0.50, label: "MEMORY · NEURONS" },
-    { x: w * 0.84, label: "OUTPUT · CONSOLIDATED" },
-  ];
-  const guide = g.append('g').attr('class', 'neural-layers').attr('pointer-events', 'none');
-  layerGuides.forEach(layer => {
-    guide.append('line')
-      .attr('x1', layer.x).attr('y1', 28).attr('x2', layer.x).attr('y2', h - 28)
-      .attr('stroke', '#3de0ff22').attr('stroke-width', 1).attr('stroke-dasharray', '2 10');
-    guide.append('text')
-      .attr('x', layer.x).attr('y', 18).attr('text-anchor', 'middle')
-      .attr('fill', '#8a9bb8').attr('font-size', 9).attr('letter-spacing', '1.5px')
-      .attr('opacity', 0.55).text(layer.label);
-  });
 
   const defs = svg.append('defs');
 
@@ -456,7 +426,32 @@ function render() {
     .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6).attr('orient','auto')
     .append('path').attr('d','M 0 1 L 10 5 L 0 9 Z').attr('fill', 'var(--orange)').attr('opacity', 0.8);
 
-  const link = g.append('g').selectAll('line').data(links).join('line')
+  // Curved (quadratic bezier) edges instead of straight lines — gives the
+  // organic "neural" look instead of a flat wheel-spoke pattern. The curve
+  // bows away from the straight line by an amount proportional to edge
+  // length, alternating side by a stable hash of the edge id so parallel
+  // edges between nearby node pairs don't all bow the same direction and
+  // overlap into a single thick line.
+  function edgeSign(d) {
+    const s = String(d.id || '');
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+    return (h & 1) ? 1 : -1;
+  }
+  function linkPath(d) {
+    const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
+    const dx = tx - sx, dy = ty - sy;
+    const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+    // Bow amount: gentle for short/dense links, a bit more for long ones,
+    // capped so distant nodes don't get wildly arced.
+    const bow = Math.min(dist * 0.18, 40) * edgeSign(d);
+    const mx = (sx + tx) / 2 - (dy / dist) * bow;
+    const my = (sy + ty) / 2 + (dx / dist) * bow;
+    return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
+  }
+
+  const link = g.append('g').selectAll('path').data(links).join('path')
+    .attr('fill', 'none')
     .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : (d.type === 'distilled_into' ? '#51d4c8' : '#3de0ff'))
     .attr('stroke-width', d => {
       if (d.type === 'supersedes') return 1.8;
@@ -524,51 +519,33 @@ function render() {
       return t.length > 20 ? t.slice(0, 18) + '…' : t;
     });
 
-  // Neural-net layout: entities feed memories, which feed consolidated
-  // knowledge/experience/episode nodes. The lanes keep the graph readable.
-  const layerOf = d => d.type === "entity" ? 0 :
-    (d.type === "knowledge" || d.type === "experience" || d.type === "episode") ? 2 : 1;
-  const layerX = [w * 0.16, w * 0.50, w * 0.84];
-  const nodesByLayer = [[], [], []];
-  nodes.forEach(n => nodesByLayer[layerOf(n)].push(n));
-  nodesByLayer.forEach((lane, layer) => {
-    lane.sort((a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id)));
-    const usableH = Math.max(40, h - 88);
-    const step = usableH / Math.max(1, lane.length);
-    lane.forEach((n, i) => {
-      n._layer = layer;
-      n._laneY = 44 + step * (i + 0.5);
-      n.x = layerX[layer];
-      n.y = n._laneY;
-    });
-  });
-
   simulation = GraphBoot.makeSimulation(nodes, links, {
     w,
     h,
-    // Keep synapses readable without erasing the lanes.
-    charge: -95,
-    centerStrength: 0,
+    // Lighter charge + softer center pull than before (was -180 / default
+    // 0.12) so the graph branches into organic clusters instead of packing
+    // into a uniform disc. The 'cluster' force groups same-type nodes
+    // (memory / entity / knowledge / experience / episode) into loose lobes
+    // that link topology can still pull toward each other.
+    charge: -110,
+    centerStrength: 0.02,
+    clusterStrength: 0.05,
+    clusterKey: d => d.type,
     nodeRadius,
-    collisionPadding: 12,
     linkDistance: d => {
-      if (d.type === 'supersedes') return 130;
-      if (d.type === 'distilled_into') return 150;
-      return 105;
+      if (d.type === 'supersedes') return 90;
+      if (d.type === 'distilled_into') return 100;
+      return 65;
     },
     linkStrength: d => {
-      if (d.type === 'mentions') return 0.35;
-      if (d.type === 'supersedes') return 0.12;
-      if (d.type === 'distilled_into') return 0.18;
-      return 0.22;
+      if (d.type === 'mentions') return 0.45;
+      if (d.type === 'supersedes') return 0.15;
+      if (d.type === 'distilled_into') return 0.2;
+      return 0.35;
     },
   })
-    .force('x', d3.forceX(d => layerX[d._layer]).strength(0.42))
-    .force('y', d3.forceY(d => d._laneY).strength(0.16))
-    .alphaDecay(0.035)
     .on('tick', () => {
-      link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      link.attr('d', linkPath);
       node.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 

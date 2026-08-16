@@ -620,8 +620,37 @@ def export_memory_graph(
         )
         # Prefer high retain among the over-fetched window
         mem_nodes = mem_nodes[:effective_limit]
-        ent_nodes.sort(key=lambda n: float(n.get("size") or 0), reverse=True)
-        ent_nodes = ent_nodes[:_MAX_ENTITIES]
+
+        # FIX #2: cap entity nodes by size, but always keep any entity that a
+        # surviving memory/knowledge/experience/episode node still points to.
+        # Sorting entities down to _MAX_ENTITIES *before* checking who still
+        # references them silently orphaned edges: a memory's `mentions`
+        # edge would fail the keep_ids test below and vanish, leaving the
+        # memory node in the graph with no visible connections even though
+        # its own `entities` field was never empty.
+        survivor_ids = (
+            {n["id"] for n in mem_nodes}
+            | {n["id"] for n in kb_nodes}
+            | {n["id"] for n in exp_nodes}
+            | {n["id"] for n in ep_nodes}
+        )
+        required_entity_ids = {
+            e["target"] for e in edges
+            if e.get("type") in ("mentions", "about") and e.get("source") in survivor_ids
+        }
+        ent_nodes.sort(
+            key=lambda n: (
+                0 if n["id"] in required_entity_ids else 1,
+                -float(n.get("size") or 0),
+            )
+        )
+        kept_required = [n for n in ent_nodes if n["id"] in required_entity_ids]
+        kept_extra = [n for n in ent_nodes if n["id"] not in required_entity_ids]
+        # Required entities are never cut for space; only pad up to
+        # _MAX_ENTITIES with the highest-importance leftovers.
+        extra_budget = max(0, _MAX_ENTITIES - len(kept_required))
+        ent_nodes = kept_required + kept_extra[:extra_budget]
+
         kb_nodes.sort(key=lambda n: float((n.get("scores") or {}).get("retain") or 0), reverse=True)
         kb_nodes = kb_nodes[:_MAX_KNOWLEDGE]
         exp_nodes.sort(key=lambda n: float((n.get("scores") or {}).get("retain") or 0), reverse=True)
@@ -637,8 +666,12 @@ def export_memory_graph(
         )
         nodes = mem_nodes + ent_nodes + kb_nodes + exp_nodes + ep_nodes
         edges = [e for e in edges if e.get("source") in keep_ids and e.get("target") in keep_ids]
-        # Prefer structural edges (supersedes + mentions) so knowledge/experience
-        # layers cannot starve memory↔entity links under MEMORY_STUDIO_MAX_EDGES.
+
+        # FIX #2 (edge budget): guarantee every surviving node keeps at least
+        # one edge before the remaining budget is spent on higher-weight
+        # extras. Previously the flat weight-sort could zero out every edge
+        # for a low-mention-count node once MEMORY_STUDIO_MAX_EDGES (200) was
+        # hit, rendering it as a disconnected dot despite having real links.
         _STRUCTURAL = {"supersedes", "mentions"}
         structural = [e for e in edges if e.get("type") in _STRUCTURAL]
         other = [e for e in edges if e.get("type") not in _STRUCTURAL]
@@ -649,9 +682,25 @@ def export_memory_graph(
             )
         )
         other.sort(key=lambda e: -float(e.get("weight") or 0))
+
         budget = _MAX_EDGES
-        edges = structural[:budget]
+        guaranteed: list[dict[str, Any]] = []
+        covered: set[str] = set()
+        remaining_structural: list[dict[str, Any]] = []
+        for e in structural:
+            src, tgt = e.get("source"), e.get("target")
+            if (src not in covered or tgt not in covered) and len(guaranteed) < budget:
+                guaranteed.append(e)
+                covered.add(src)
+                covered.add(tgt)
+            else:
+                remaining_structural.append(e)
+
+        edges = guaranteed
         remain = max(0, budget - len(edges))
+        if remain:
+            edges = edges + remaining_structural[:remain]
+            remain = max(0, budget - len(edges))
         if remain:
             edges = edges + other[:remain]
         
