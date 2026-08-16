@@ -107,6 +107,7 @@ from .schema import (
 
 from .entity import (
     MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT,
+    ENTITY_IMPORTANCE_CACHE_TTL,
     MEMORY_SPREADING_ENABLED,
     SALIENCE_POLICY_RE,
     _arousal_enabled,
@@ -248,6 +249,11 @@ class _MemoryBackend:
         # the attribute not existing yet.
         self._high_freq_entities: set[str] = set()
         self._high_freq_computed_at: float = 0.0
+        # Per-user entity-importance cache. compute_entity_importance_map()
+        # full-scans all memories + entity_relations on every cache-miss
+        # recall; a short TTL makes it near-free without going stale.
+        self._entity_importance_cache: dict[str, tuple[float, dict[str, float]]] = {}
+        self._entity_importance_cache_lock = threading.Lock()
         # FIX 1: migrate Phase A schema immediately, not lazily inside
         # add()/add_raw(). Otherwise a read-only path (search() on a fresh
         # boot or a DB that hasn't been written to yet) hits `_active_sql()`
@@ -466,7 +472,7 @@ class _MemoryBackend:
         user_id: str,
         text: str,
         now: str,
-        vector: list[float],
+        vector: list[float] | None,
         pinned: int = 0,
         source: str = SOURCE_CHAT,
         supersedes_id: str | None = None,
@@ -483,6 +489,12 @@ class _MemoryBackend:
         Extended columns are appended to the INSERT dynamically based on which
         additive columns actually exist on the table, so the same call works
         against a fresh DB, a Phase-A-only DB, and a fully-migrated L2 DB.
+
+        ``vector`` may be None (embedding server unavailable): the row is
+        still persisted (FTS5 keeps it searchable lexically) but no
+        memories_vec row is written. backfill_missing_vectors() re-embeds
+        these rows once the embedder recovers. An un-embedded row is simply
+        invisible to KNN until then — never lost.
         """
         cols = existing_columns(self._conn)
         kind_val = kind or classify_kind(text, default=KIND_FACT)
@@ -543,10 +555,11 @@ class _MemoryBackend:
             f"INSERT INTO memories ({', '.join(all_cols)}) VALUES ({placeholders})",
             base_vals + ext_vals,
         )
-        self._conn.execute(
-            "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
-            (mem_id, sqlite_vec.serialize_float32(vector)),
-        )
+        if vector is not None:
+            self._conn.execute(
+                "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
+                (mem_id, sqlite_vec.serialize_float32(vector)),
+            )
 
         # Phase D: live co-mention edges (best-effort; never fail the write)
         try:
@@ -622,19 +635,25 @@ class _MemoryBackend:
         try:
             vectors = self._embed_batch(facts)
         except Exception as e:
-            log.warning("Batch embedding failed, aborting write: %s", e)
-            return []
+            log.warning("Batch embedding failed; persisting %d facts without vectors: %s", len(pairs), e)
+            vectors = [None] * len(pairs)
         if len(vectors) != len(pairs):
             log.warning(
-                "Batch embedding count mismatch: %d facts, %d vectors; aborting write",
+                "Batch embedding count mismatch: %d facts, %d vectors; persisting without vectors",
                 len(pairs), len(vectors),
             )
-            return []
+            vectors = [None] * len(pairs)
 
         with self._db_lock:
             try:
                 for (fact, llm_sc), vector in zip(pairs, vectors):
-                    op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, fact)
+                    if vector is not None:
+                        op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, fact)
+                    else:
+                        # No embedding → can't dedup/supersede; persist as-is.
+                        # A later backfill makes it searchable; dream() merge
+                        # collapses any near-duplicate this could create.
+                        op, supersedes_id = "add", None
                     if op == "noop":
                         log.debug("Skipping near-duplicate fact: %r", fact)
                         continue
@@ -680,6 +699,13 @@ class _MemoryBackend:
                 log.warning("Failed to upsert fact batch: %s", e)
                 self._conn.rollback()
                 return []
+        # The embedder is healthy right now (we embedded successfully above),
+        # so opportunistically repair rows persisted during a previous outage.
+        if ids and all(v is not None for v in vectors):
+            try:
+                self._maybe_backfill_missing_vectors(user_id)
+            except Exception as e:
+                log.debug("post-write vector backfill skipped: %s", e)
         return ids
 
     def add_raw(self, memory: str, user_id: str, *, pinned: bool = False) -> str | None:
@@ -700,11 +726,15 @@ class _MemoryBackend:
         try:
             vector = self._embed(text)
         except Exception as e:
-            log.warning("Failed to embed raw memory: %s", e)
-            return None
+            log.warning("Failed to embed raw memory; persisting without vector: %s", e)
+            vector = None
+        mem_id: str | None = None
         with self._db_lock:
             try:
-                op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, text)
+                if vector is not None:
+                    op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, text)
+                else:
+                    op, supersedes_id = "add", None
                 if op == "noop":
                     log.debug("Skipping near-duplicate raw memory: %r", text[:80])
                     return None
@@ -728,11 +758,86 @@ class _MemoryBackend:
                     supersedes_id=supersedes_id,
                 )
                 self._conn.commit()
-                return mem_id
             except Exception as e:
                 log.warning("Failed to insert raw memory: %s", e)
                 self._conn.rollback()
                 return None
+        # Backfill outside the lock so a recovery embed never blocks recall.
+        if mem_id is not None and vector is not None:
+            try:
+                self._maybe_backfill_missing_vectors(user_id)
+            except Exception as e:
+                log.debug("post-write vector backfill skipped: %s", e)
+        return mem_id
+
+    # ── vector backfill ────────────────────────────────────────────────────────
+    # Rows persisted while the embedder was down have no memories_vec entry
+    # (see _insert_row's optional vector). These are FTS-searchable but
+    # invisible to KNN until re-embedded. backfill_missing_vectors() repairs
+    # them in bounded batches, triggered after the next write that succeeds
+    # with a live embedder (so we never hammer a down server).
+
+    def _missing_vector_rows(self, user_id: str, limit: int) -> list[sqlite3.Row]:
+        with self._db_lock:
+            return self._conn.execute(
+                """
+                SELECT m.id, m.memory
+                FROM memories m
+                LEFT JOIN memories_vec v ON v.id = m.id
+                WHERE m.user_id = ?
+                  AND (m.status = 'active' OR m.status IS NULL)
+                  AND v.id IS NULL
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+
+    def backfill_missing_vectors(self, user_id: str, limit: int | None = None) -> int:
+        """Re-embed memories rows that have no memories_vec row (persisted
+        during an embedder outage). Returns count backfilled. Best-effort;
+        a still-down embedder returns 0."""
+        batch = int(os.getenv("MEMORY_VECTOR_BACKFILL_LIMIT", "200")) if limit is None else max(1, int(limit))
+        try:
+            rows = self._missing_vector_rows(user_id, batch)
+            if not rows:
+                return 0
+            texts = [r["memory"] for r in rows]
+            vectors = self._embed_batch(texts)
+            with self._db_lock:
+                for row, vec in zip(rows, vectors):
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO memories_vec(id, embedding) VALUES (?, ?)",
+                        (row["id"], sqlite_vec.serialize_float32(vec)),
+                    )
+                self._conn.commit()
+            log.info("Backfilled vectors for %d memories (user=%s)", len(rows), user_id)
+            return len(rows)
+        except Exception as e:
+            log.debug("vector backfill skipped: %s", e)
+            return 0
+
+    def _maybe_backfill_missing_vectors(self, user_id: str) -> int:
+        """Cheap gate + backfill. Called only after a write that embedded
+        successfully, so it never retries a down embedder per-write."""
+        try:
+            with self._db_lock:
+                row = self._conn.execute(
+                    """
+                    SELECT COUNT(*) AS n
+                    FROM memories m
+                    LEFT JOIN memories_vec v ON v.id = m.id
+                    WHERE m.user_id = ?
+                      AND (m.status = 'active' OR m.status IS NULL)
+                      AND v.id IS NULL
+                    """,
+                    (user_id,),
+                ).fetchone()
+            if not row or int(row["n"]) == 0:
+                return 0
+            return self.backfill_missing_vectors(user_id)
+        except Exception as e:
+            log.debug("vector backfill gate skipped: %s", e)
+            return 0
 
     # ── read ──────────────────────────────────────────────────────────────────
 
@@ -1280,6 +1385,36 @@ class _MemoryBackend:
         rest = [mid for mid in scored_ids if mid not in relevant_set]
         return relevant_sorted + rest
 
+    # ── entity-importance cache ──────────────────────────────────────────────
+    # compute_entity_importance_map() full-scans all active memories plus
+    # entity_relations (entity.py) — a couple of table scans on every cache-miss
+    # recall just to feed a 0.008-weight boost. A short per-user TTL makes it
+    # near-free. Any write invalidates the touched user's entry immediately.
+
+    def _get_entity_importance_map(self, user_id: str) -> dict[str, float]:
+        now = time.monotonic()
+        with self._entity_importance_cache_lock:
+            cached = self._entity_importance_cache.get(user_id)
+            if cached is not None and now - cached[0] <= ENTITY_IMPORTANCE_CACHE_TTL:
+                return cached[1]
+        try:
+            from cognition.memory.entity import compute_entity_importance_map
+            val = compute_entity_importance_map(self, user_id) or {}
+        except Exception as exc:
+            log.debug("entity importance map skipped: %s", exc)
+            val = {}
+        with self._entity_importance_cache_lock:
+            self._entity_importance_cache[user_id] = (now, val)
+            if len(self._entity_importance_cache) > 64:
+                # drop the oldest entry under the lock (simple eviction)
+                oldest = min(self._entity_importance_cache, key=lambda k: self._entity_importance_cache[k][0])
+                self._entity_importance_cache.pop(oldest, None)
+        return val
+
+    def _invalidate_entity_importance(self, user_id: str) -> None:
+        with self._entity_importance_cache_lock:
+            self._entity_importance_cache.pop(user_id, None)
+
     def search(self, query: str, user_id: str, limit: int = 5, vector: list[float] | None = None, include_history: bool = False) -> list[dict]:
         """
         KNN + FTS5 + entity-graph -> RRF fusion search, with a tiered
@@ -1328,12 +1463,7 @@ class _MemoryBackend:
 
         entity_importance_map = {}
         if MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT > 0:
-            try:
-                from cognition.memory.entity import compute_entity_importance_map
-                entity_importance_map = compute_entity_importance_map(self, user_id) or {}
-            except Exception as exc:
-                log.debug("entity importance map skipped: %s", exc)
-                entity_importance_map = {}
+            entity_importance_map = self._get_entity_importance_map(user_id) or {}
 
         with self._db_lock:
             quick_knn_rows = _sqlite_knn_search(
@@ -1802,6 +1932,7 @@ class AikoMemorize:
             elapsed = time.perf_counter() - t
             if ids:
                 self._maybe_clear_search_cache()
+                self._mem._invalidate_entity_importance(user_id)
                 log.info(f"Saved {len(ids)} memories in {elapsed:.2f}s")
             else:
                 log.debug(f"No facts extracted ({elapsed:.2f}s) — nothing saved.")
@@ -2912,7 +3043,18 @@ class AikoMemorize:
         mem_id = self._mem.add_raw(memory, user_id=user_id, pinned=pinned)
         if mem_id:
             self._maybe_clear_search_cache()
+            self._mem._invalidate_entity_importance(user_id)
         return mem_id
+
+    def backfill_missing_vectors(self, user_id: str | None = None, *, limit: int | None = None) -> int:
+        """Re-embed any memories rows persisted without a vector (embedder
+        outage). Returns count repaired. Useful as a manual repair or from a
+        scheduled job; write-path calls trigger it automatically too."""
+        user_id = self._resolve_user_id(user_id)
+        n = self._mem.backfill_missing_vectors(user_id, limit=limit)
+        if n:
+            self._clear_search_cache()
+        return n
 
     def get_since(self, since: datetime, user_id: str | None = None) -> list[dict]:
         """Return memories created on or after `since`, newest first."""

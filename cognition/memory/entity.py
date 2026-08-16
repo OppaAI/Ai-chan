@@ -29,6 +29,10 @@ log = get_logger(__name__)
 ENTITY_IMPORTANCE_ALPHA = float(os.getenv("ENTITY_IMPORTANCE_ALPHA", "0.4"))
 ENTITY_IMPORTANCE_BETA = float(os.getenv("ENTITY_IMPORTANCE_BETA", "0.05"))
 MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT = float(os.getenv("MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT", "0.008"))
+# TTL for the per-user entity-importance map cache. compute_entity_importance_map()
+# full-scans all memories + entity_relations, so recall caches it briefly rather
+# than recomputing on every cache-miss search. Writes invalidate it immediately.
+ENTITY_IMPORTANCE_CACHE_TTL = float(os.getenv("ENTITY_IMPORTANCE_CACHE_TTL", "60.0"))
 MEMORY_SUPERSESSION_CHAIN_EXPAND = os.getenv("MEMORY_SUPERSESSION_CHAIN_EXPAND", "1").lower() in {"1", "true", "yes", "on"}
 MEMORY_SUPERSESSION_CHAIN_KINDS = {
     k.strip().lower()

@@ -86,6 +86,7 @@ MEMORY_MIN_SCORE: "0.0"  # Minimum recall score (same scale as MEMORY_RECALL_SCO
 WRITE_DEDUP_THRESHOLD: "0.95"  # Similarity threshold above which a new memory write is skipped as duplicate OR supersedes different text; range 0.0-1.0. Phase A: same norm text → noop; high cosine but different text → supersede (old status=superseded). No extra LLM.
 MEMORY_WRITE_IDLE_GRACE: "3.0"  # Seconds of idle chat before background memory writes proceed.
 MEMORY_WRITE_MAX_WAIT: "45.0"  # Max seconds memory writer waits before forcing the write.
+MEMORY_VECTOR_BACKFILL_LIMIT: "200"  # Max memories re-embedded per backfill pass when the embedder recovers from an outage.
 
 # -- Phase A metadata (auto-migrated; no rebuild) --
 # Columns: status, supersedes_id, kind, source, entities.
@@ -102,6 +103,7 @@ MEMORY_ENTITY_BOOST: "0.003"  # Soft score boost when query text mentions a tagg
 # I_e = (1-α)·centrality + α·recency; used in monthly R and mild recall boost.
 ENTITY_IMPORTANCE_ALPHA: "0.4"  # Blend weight for recency vs structural centrality (0=centrality only).
 ENTITY_IMPORTANCE_BETA: "0.05"  # Per-day recency decay for entity last-touch.
+ENTITY_IMPORTANCE_CACHE_TTL: "60.0"  # Seconds a user's entity-importance map is cached before recompute (it full-scans memories + entity_relations; writes invalidate it immediately).
 MEMORY_RANK_ENTITY_IMPORTANCE_WEIGHT: "0.008"  # Flat recall score boost × max I_e on a memory; 0 disables.
 MEMORY_SUPERSESSION_CHAIN_EXPAND: "1"  # Expand supersedes_id lineage on reflective / identity-plan hits.
 MEMORY_SUPERSESSION_CHAIN_KINDS: "identity,preference,plan"  # Kinds that always expand chain when hit.
