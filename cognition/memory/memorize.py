@@ -803,40 +803,43 @@ class _MemoryBackend:
                 return 0
             texts = [r["memory"] for r in rows]
             vectors = self._embed_batch(texts)
+            backfilled = 0
             with self._db_lock:
                 for row, vec in zip(rows, vectors):
+                    # sqlite-vec 0.1.9 has no INSERT OR REPLACE/IGNORE on vec0
+                    # tables, so guard against a concurrent write inserting a
+                    # vector for this id between our SELECT and INSERT. Skip —
+                    # never fail the whole batch.
+                    present = self._conn.execute(
+                        "SELECT 1 FROM memories_vec WHERE id = ?", (row["id"],)
+                    ).fetchone()
+                    if present:
+                        continue
                     self._conn.execute(
-                        "INSERT OR REPLACE INTO memories_vec(id, embedding) VALUES (?, ?)",
+                        "INSERT INTO memories_vec(id, embedding) VALUES (?, ?)",
                         (row["id"], sqlite_vec.serialize_float32(vec)),
                     )
+                    backfilled += 1
                 self._conn.commit()
-            log.info("Backfilled vectors for %d memories (user=%s)", len(rows), user_id)
-            return len(rows)
+            log.info("Backfilled vectors for %d memories (user=%s)", backfilled, user_id)
+            return backfilled
         except Exception as e:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
             log.debug("vector backfill skipped: %s", e)
             return 0
 
     def _maybe_backfill_missing_vectors(self, user_id: str) -> int:
-        """Cheap gate + backfill. Called only after a write that embedded
-        successfully, so it never retries a down embedder per-write."""
+        """Backfill rows persisted without a vector. Called only after a write
+        that embedded successfully, so it never retries a down embedder per
+        write. backfill_missing_vectors() cheaply no-ops when nothing is
+        missing, so no separate gate query is needed."""
         try:
-            with self._db_lock:
-                row = self._conn.execute(
-                    """
-                    SELECT COUNT(*) AS n
-                    FROM memories m
-                    LEFT JOIN memories_vec v ON v.id = m.id
-                    WHERE m.user_id = ?
-                      AND (m.status = 'active' OR m.status IS NULL)
-                      AND v.id IS NULL
-                    """,
-                    (user_id,),
-                ).fetchone()
-            if not row or int(row["n"]) == 0:
-                return 0
             return self.backfill_missing_vectors(user_id)
         except Exception as e:
-            log.debug("vector backfill gate skipped: %s", e)
+            log.debug("vector backfill skipped: %s", e)
             return 0
 
     # ── read ──────────────────────────────────────────────────────────────────
@@ -871,12 +874,18 @@ class _MemoryBackend:
         try:
             vector = self._embed(summary)
         except Exception as e:
-            log.warning("Failed to embed scene summary: %s", e)
-            return None
+            # Same resilience as add()/add_raw(): persist without a vector so
+            # the scene (and its member relinks) survive the outage. It stays
+            # FTS-searchable and is re-embedded by vector backfill on recovery.
+            log.warning("Failed to embed scene summary; persisting without vector: %s", e)
+            vector = None
         nows = created_at or datetime.now(timezone.utc).isoformat()
+        self._invalidate_entity_importance(user_id)
         with self._db_lock:
             try:
-                op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, summary)
+                op, supersedes_id = (None, None)
+                if vector is not None:
+                    op, supersedes_id = self._maybe_supersede_neighbor(user_id, vector, summary)
                 if op == "supersede" and supersedes_id:
                     if "status" in existing_columns(self._conn):
                         self._conn.execute(
@@ -1401,8 +1410,11 @@ class _MemoryBackend:
             from cognition.memory.entity import compute_entity_importance_map
             val = compute_entity_importance_map(self, user_id) or {}
         except Exception as exc:
+            # Transient failure: do NOT cache an empty map for the full TTL —
+            # that would silently kill the (small) importance boost for the
+            # whole window. Return empty now; the next recall retries.
             log.debug("entity importance map skipped: %s", exc)
-            val = {}
+            return {}
         with self._entity_importance_cache_lock:
             self._entity_importance_cache[user_id] = (now, val)
             if len(self._entity_importance_cache) > 64:
@@ -1710,11 +1722,17 @@ class _MemoryBackend:
         joining to memory ids that no longer exist, silently degrading
         results over time instead of erroring.
         """
+        user_id = None
         with self._db_lock:
+            user_id = self._conn.execute(
+                "SELECT user_id FROM memories WHERE id = ?", (memory_id,)
+            ).fetchone()
             self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
             self._conn.execute("DELETE FROM memories_vec WHERE id = ?", (memory_id,))
             self._conn.execute("DELETE FROM entity_relations WHERE memory_id = ?", (memory_id,))
             self._conn.commit()
+        if user_id:
+            self._invalidate_entity_importance(user_id["user_id"])
 
     def delete_all(self, user_id: str) -> None:
         with self._db_lock:
@@ -1725,6 +1743,7 @@ class _MemoryBackend:
             self._conn.execute("DELETE FROM memories WHERE user_id = ?", (user_id,))
             self._conn.execute("DELETE FROM entity_relations WHERE user_id = ?", (user_id,))
             self._conn.commit()
+        self._invalidate_entity_importance(user_id)
 
 
 class AikoMemorize:
@@ -1950,6 +1969,7 @@ class AikoMemorize:
         try:
             user_id = self._resolve_user_id(user_id)
             ids = self._mem.add(messages, user_id=user_id, display_name=display_name)
+            self._mem._invalidate_entity_importance(user_id)
 
             if not ids:
                 # add() returns [] almost exclusively because every extracted
