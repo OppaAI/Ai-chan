@@ -432,7 +432,7 @@ class EpisodicStore:
         except Exception:
             pass
 
-def flush_staging(self, limit: int | None = None, max_rows: int | None = None) -> int:
+    def flush_staging(self, limit: int | None = None, max_rows: int | None = None) -> int:
         """Move staging rows → emc_storage.
 
         EMC-6: when ``EMC_GROUP_ENABLED``, consecutive related rows are merged
