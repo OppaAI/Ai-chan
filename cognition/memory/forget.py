@@ -23,6 +23,20 @@ FORGET_MOOD_MISMATCH_ACCELERATION = float(os.getenv("FORGET_MOOD_MISMATCH_ACCELE
 # When query valence mismatches memory valence: H_eff ÷ acceleration → decay faster.
 # When query valence is neutral/zero: no mood modulation (original behavior).
 
+# ── tunable parameters ────────────────────────────────────────────────────────
+HALF_LIFE_DAYS    = float(os.getenv("FORGET_HALF_LIFE_DAYS",    "21.0"))
+CLEANUP_THRESHOLD = float(os.getenv("FORGET_CLEANUP_THRESHOLD", "0.02"))
+ACCESS_COUNT_CAP  = int(  os.getenv("FORGET_ACCESS_COUNT_CAP",  "255"))
+GRACE_PERIOD_DAYS = int(  os.getenv("FORGET_GRACE_PERIOD_DAYS", "35"))
+
+# Phase 5: emotion imprint — lengthens effective half-life for high-intensity valence.
+EMOTION_GAMMA = float(os.getenv("FORGET_EMOTION_GAMMA", "0.5"))
+_INTENSITY = {
+    "neg": float(os.getenv("FORGET_INTENSITY_NEG", "1.0")),
+    "pos": float(os.getenv("FORGET_INTENSITY_POS", "0.4")),
+    "neutral": float(os.getenv("FORGET_INTENSITY_NEUTRAL", "0.0")),
+}
+
 # Phase 5: emotion imprint — lengthens effective half-life for high-intensity valence.
 EMOTION_GAMMA = float(os.getenv("FORGET_EMOTION_GAMMA", "0.5"))
 _INTENSITY = {
