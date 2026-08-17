@@ -42,7 +42,7 @@ def group_staging_rows(rows: list) -> list[list]:
     Row tuple layout (from flush_staging SELECT):
       0 id, 1 user_id, 2 timestamp, 3 date, 4 trace,
       5 valence_tag, 6 arousal_score, 7 salience_score,
-      8 entities, 9 source, 10 session_id
+      8 entities, 9 source, 10 session_id, 11 cognitive_json)
     """
     if not rows:
         return []
@@ -116,8 +116,13 @@ def merge_staging_group(group: list) -> tuple:
         if r[10] is not None and str(r[10]).strip():
             session_id = r[10]
             break
+    cognitive_json = None
+    for r in reversed(group):
+        if len(r) > 11 and r[11] is not None and str(r[11]).strip():
+            cognitive_json = r[11]
+            break
     return (
         first[0], first[1], first[2], first[3], trace,
         valence_tag, arousal_score, salience_score,
-        entities, source, session_id,
+        entities, source, session_id, cognitive_json,
     )

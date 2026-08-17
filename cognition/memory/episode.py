@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS emc_storage (
     entities         TEXT,
     source           TEXT,
     session_id       TEXT,
+    cognitive_json   TEXT,
     last_recalled_at TEXT,
     recall_count     INTEGER NOT NULL DEFAULT 0,
     superseded_by    INTEGER,
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS emc_staging (
     entities         TEXT,
     source           TEXT,
     session_id       TEXT,
+    cognitive_json   TEXT,
     created_at       TEXT    DEFAULT (datetime('now'))
 );
 
@@ -271,6 +273,14 @@ class EpisodicStore:
         self._turns_since_flush = 0
         with self._lock:
             ensure_episode_schema(self._conn)
+        for table in ("emc_storage", "emc_staging"):
+            try:
+                columns = {str(r[1]) for r in self._conn.execute(f"PRAGMA table_info({table})").fetchall()}
+                if "cognitive_json" not in columns:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN cognitive_json TEXT")
+                    self._conn.commit()
+            except sqlite3.Error as e:
+                log.debug("EMC metadata migration %s: %s", table, e)
 
     def _connect(self) -> sqlite3.Connection:
         return initialize_store_db(
@@ -292,6 +302,7 @@ class EpisodicStore:
         entities: list[str] | None = None,
         source: str | None = None,
         session_id: str | None = None,
+        cognitive_state: dict | None = None,
     ) -> int:
         """Stage one episode. Returns staging_id. Missing fields stay NULL."""
         if not EMC_ENABLED:
@@ -304,6 +315,7 @@ class EpisodicStore:
 
         date = _date_from_ts(ts)
         ent_json = _entities_json(entities)
+        cognitive_json = json.dumps(cognitive_state, ensure_ascii=False, separators=(",", ":")) if cognitive_state else None
 
         with self._lock:
             cur = self._conn.execute(
@@ -311,13 +323,13 @@ class EpisodicStore:
                 INSERT INTO emc_staging (
                     user_id, timestamp, date, trace,
                     valence_tag, arousal_score, salience_score,
-                    entities, source, session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    entities, source, session_id, cognitive_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     uid, ts, date, content,
                     valence_tag, arousal_score, salience_score,
-                    ent_json, source, session_id,
+                    ent_json, source, session_id, cognitive_json,
                 ),
             )
             self._conn.commit()
@@ -339,6 +351,7 @@ class EpisodicStore:
         salience_score: float | None = None,
         entities: list[str] | None = None,
         auto_flush: bool = True,
+        cognitive_state: dict | None = None,
     ) -> int:
         """EMC-2: accept one conversation turn pair into the episodic buffer."""
         if not EMC_ENABLED or not EMC_EVICT_ENABLED:
@@ -370,6 +383,7 @@ class EpisodicStore:
             entities=entities,
             source=source,
             session_id=session_id,
+            cognitive_state=cognitive_state,
         )
 
         with self._lock:
@@ -455,7 +469,7 @@ class EpisodicStore:
                     """
                     SELECT id, user_id, timestamp, date, trace,
                            valence_tag, arousal_score, salience_score,
-                           entities, source, session_id
+                           entities, source, session_id, cognitive_json
                     FROM emc_staging
                     WHERE user_id = ?
                     ORDER BY id ASC
@@ -478,11 +492,11 @@ class EpisodicStore:
                     """
                     SELECT id, user_id, timestamp, date, trace,
                            valence_tag, arousal_score, salience_score,
-                           entities, source, session_id
+                           entities, source, session_id, cognitive_json
                     FROM emc_staging
                     WHERE user_id = ?
                     ORDER BY id ASC
-                    LIMIT ?,
+                    LIMIT ?
                     """,
                     (self._user_id, batch),
                 ).fetchall()
@@ -533,7 +547,7 @@ class EpisodicStore:
         (
             _sid, user_id, timestamp, date, trace,
             valence_tag, arousal_score, salience_score,
-            entities, source, session_id,
+            entities, source, session_id, cognitive_json,
         ) = row
 
         cur = self._conn.execute(
@@ -541,13 +555,13 @@ class EpisodicStore:
             INSERT INTO emc_storage (
                 user_id, timestamp, date, trace, encoding,
                 valence_tag, arousal_score, salience_score,
-                entities, source, session_id
-            ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)
+                entities, source, session_id, cognitive_json
+            ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id, timestamp, date, trace,
                 valence_tag, arousal_score, salience_score,
-                entities, source, session_id,
+                entities, source, session_id, cognitive_json,
             ),
         )
         storage_id = int(cur.lastrowid)

@@ -1409,9 +1409,11 @@ class AikoThink:
         EMC-2: also stage the turn into episodic memory (best-effort, never
         blocks the turn and never invents metadata).
         """
+        cognitive_state = None
         try:
             from cognition.memory.edge_state import for_identity
             for_identity(current_user_id()).record(user_input, response_text)
+            cognitive_state = for_identity(current_user_id()).snapshot()
         except Exception:
             pass
 
@@ -1426,7 +1428,7 @@ class AikoThink:
             idle_since=lambda: self._last_chat_time,
         )
         try:
-            mem.queue_episode(user_input, response_text)
+            mem.queue_episode(user_input, response_text, cognitive_state=cognitive_state)
         except Exception:
             pass
 

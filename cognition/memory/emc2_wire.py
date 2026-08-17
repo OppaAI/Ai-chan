@@ -44,12 +44,12 @@ def _patch_memorize() -> None:
 
     if not hasattr(AikoMemorize, "queue_episode"):
 
-        def queue_episode(self, user_input: str, response_text: str) -> None:
+        def queue_episode(self, user_input: str, response_text: str, cognitive_state: dict | None = None) -> None:
             try:
                 store = self._get_episode_store()
                 if store is None:
                     return
-                store.ingest_turn(user_input, response_text, user_id=self.get_user_id())
+                store.ingest_turn(user_input, response_text, user_id=self.get_user_id(), cognitive_state=cognitive_state)
             except Exception as e:
                 log.debug("queue_episode skipped: %s", e)
 

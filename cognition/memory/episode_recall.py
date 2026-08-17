@@ -162,7 +162,7 @@ def search(
         rows = self._conn.execute(
             f"""
             SELECT id, timestamp, date, trace, valence_tag, arousal_score,
-                   salience_score, entities, source, session_id, recall_count
+                   salience_score, entities, source, session_id, recall_count, cognitive_json
             FROM emc_storage
             WHERE id IN ({placeholders})
             """,
@@ -194,6 +194,7 @@ def search(
                 "source": row[8],
                 "session_id": row[9],
                 "recall_count": int(row[10] or 0),
+                "cognitive_state": json.loads(row[11]) if row[11] else None,
                 "_recall_score": scores.get(eid, 0.0),
                 "_emc": True,
             })
