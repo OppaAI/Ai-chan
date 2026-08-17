@@ -131,7 +131,12 @@ const GESTURES = [
   'touchCollar',     // new: touches collar/neck area
   'brushShoulder',   // new: brushes something off shoulder
   'stretchArm',      // new: stretches one arm out and back
+  'leanIn',          // speaking: leans toward the listener
+  'openPalm',        // speaking: small explanatory hand gesture
+  'speakingNod',     // speaking: conversational nod
 ];
+
+const SPEAKING_GESTURES = ['leanIn', 'openPalm', 'speakingNod', 'curiousTilt', 'wristFlick'];
 
 const GESTURE_DURATION = {
   lookAround: 3.8,
@@ -154,6 +159,9 @@ const GESTURE_DURATION = {
   touchCollar: 2.8,
   brushShoulder: 2.4,
   stretchArm: 3.5,
+  leanIn: 2.8,
+  openPalm: 2.4,
+  speakingNod: 2.1,
 };
 
 function easeInOutSine(v) {
@@ -167,7 +175,8 @@ function holdCurve(progress, inPortion = 0.28, outPortion = 0.30) {
 }
 
 function pickGesture() {
-  const gesture = GESTURES[Math.floor(Math.random() * GESTURES.length)];
+  const pool = speakingRecently() ? SPEAKING_GESTURES : GESTURES;
+  const gesture = pool[Math.floor(Math.random() * pool.length)];
   const side = Math.random() < 0.5 ? -1 : 1;
   gestureState = gesture;
   gestureT = 0;
@@ -190,19 +199,33 @@ let thinkingPoseActive = false;
 let thinkingPose = 'chinThink';
 let thinkingPoseT = 0;
 let thinkingPoseCycle = 0;
+let thinkingBlend = 0;
+let thinkingPoseBlend = 1;
 const THINKING_POSES = ['chinThink', 'handNearMouth', 'armsFoldThink', 'lookUpThink'];
 
 function pickThinkingPose() {
-  thinkingPose = THINKING_POSES[Math.floor(Math.random() * THINKING_POSES.length)];
+  const previous = thinkingPose;
+  do {
+    thinkingPose = THINKING_POSES[Math.floor(Math.random() * THINKING_POSES.length)];
+  } while (THINKING_POSES.length > 1 && thinkingPose === previous);
   thinkingPoseT = 0;
   thinkingPoseCycle = 3.2 + Math.random() * 2.2;
+  thinkingPoseBlend = 0;
 }
 
 function applyThinkingPose(dt) {
-  if (!vrm?.humanoid || !thinkingPoseActive) return false;
+  if (!vrm?.humanoid) return false;
+
+  const blendRate = 1 / 0.42;
+  thinkingBlend += ((thinkingPoseActive ? 1 : 0) - thinkingBlend) * Math.min(1, blendRate * dt);
+  if (!thinkingPoseActive && thinkingBlend < 0.002) {
+    thinkingBlend = 0;
+    return false;
+  }
 
   thinkingPoseT += dt;
   if (thinkingPoseT > thinkingPoseCycle) pickThinkingPose();
+  thinkingPoseBlend += (1 - thinkingPoseBlend) * Math.min(1, dt / 0.42);
 
   const h = vrm.humanoid;
   const get = n => h.getRawBoneNode(n);
@@ -218,8 +241,8 @@ function applyThinkingPose(dt) {
   const rH = get('rightHand');
   const io = idleOffset;
   const blend = (base, pose, amount) => base + pose * amount;
-  const settle = Math.min(1, thinkingPoseT / 0.35);
-  const held = easeInOutSine(settle);
+  const settle = Math.min(1, thinkingPoseT / 0.42);
+  const held = easeInOutSine(settle) * easeInOutSine(thinkingPoseBlend) * thinkingBlend;
   const pulse = Math.sin(t * 2.1) * 0.5 + 0.5;
   const micro = Math.sin(t * 5.0) * 0.018;
 
@@ -429,11 +452,16 @@ function applyGestures(dt) {
   if (!vrm?.humanoid) return;
 
   if (gestureState === 'none') {
-    if (speakingRecently()) return;
+    if (speakingRecently()) gestureCooldown = Math.min(gestureCooldown, 1.0);
     gestureCooldown -= dt;
     if (gestureCooldown <= 0) {
-      pickGesture();
-      gestureCooldown = 4.5 + Math.random() * 7.0;
+      if (speakingRecently()) {
+        pickGesture();
+        gestureCooldown = 2.8 + Math.random() * 2.4;
+      } else {
+        pickGesture();
+        gestureCooldown = 4.5 + Math.random() * 7.0;
+      }
     }
     return;
   }
@@ -840,6 +868,44 @@ function applyGestures(dt) {
           if (lH) { lH.rotation.z = blend(REST.leftHand.z + io.lH.z, brush * 0.30, 1); }
         }
         if (head) head.rotation.y = blend(io.head.y, -side * brush * 0.10, 1);
+      }
+      break;
+
+    case 'leanIn':
+      {
+        const lean = Math.sin(progress * Math.PI) * 0.055;
+        if (spine) spine.rotation.x = blend(io.spine.x, -lean, 1);
+        if (chest) chest.rotation.x = blend(io.chest.x, -lean * 0.72, 1);
+        if (head) {
+          head.rotation.x = blend(io.head.x, lean * 0.42, 1);
+          head.rotation.y = blend(io.head.y, side * lean * 0.55, 1);
+        }
+        if (neck) neck.rotation.x = blend(io.neck.x, lean * 0.25, 1);
+      }
+      break;
+
+    case 'openPalm':
+      {
+        const talk = Math.sin(progress * Math.PI * 2) * intensity;
+        if (side < 0) {
+          if (lUA) { lUA.rotation.x = blend(REST.leftUpperArm.x + io.lUA.x, -talk * 0.30, 1); lUA.rotation.z = blend(REST.leftUpperArm.z + io.lUA.z, -talk * 0.42, 1); }
+          if (lLA) lLA.rotation.x = blend(REST.leftLowerArm.x + io.lLA.x, -talk * 0.48, 1);
+          if (lH) { lH.rotation.x = blend(REST.leftHand.x + io.lH.x, talk * 0.18, 1); lH.rotation.y = blend(REST.leftHand.y + io.lH.y, talk * 0.30, 1); }
+        } else {
+          if (rUA) { rUA.rotation.x = blend(REST.rightUpperArm.x + io.rUA.x, -talk * 0.30, 1); rUA.rotation.z = blend(REST.rightUpperArm.z + io.rUA.z, talk * 0.42, 1); }
+          if (rLA) rLA.rotation.x = blend(REST.rightLowerArm.x + io.rLA.x, -talk * 0.48, 1);
+          if (rH) { rH.rotation.x = blend(REST.rightHand.x + io.rH.x, talk * 0.18, 1); rH.rotation.y = blend(REST.rightHand.y + io.rH.y, -talk * 0.30, 1); }
+        }
+        applyFingerCurl(side, Math.abs(talk) * 0.7);
+      }
+      break;
+
+    case 'speakingNod':
+      {
+        const nod = Math.sin(progress * Math.PI * 2.4) * intensity * 0.075;
+        if (head) { head.rotation.x = blend(io.head.x, nod, 1); head.rotation.y = blend(io.head.y, side * intensity * 0.035, 1); }
+        if (neck) neck.rotation.x = blend(io.neck.x, nod * 0.42, 1);
+        if (spine) spine.rotation.x = blend(io.spine.x, nod * 0.16, 1);
       }
       break;
 
