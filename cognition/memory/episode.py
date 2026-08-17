@@ -250,10 +250,11 @@ class EpisodicStore:
         *,
         user_id: str | None = None,
         embedder: HarrierEmbedder | None = None,
+        embed_cache: str | None = None,
     ) -> None:
         self._user_id = user_id or current_user_id()
         self._db_path = db_path
-        self._embedder = embedder or HarrierEmbedder()
+        self._embedder = embedder or HarrierEmbedder(cache_path=embed_cache)
         self._lock = threading.RLock()
         self._conn = self._connect()
         # EMC recall result cache (see episode_recall.search). Keyed by

@@ -7,6 +7,7 @@ co-mention graph (formerly memory/entities.py + backend blocks).
 """
 from __future__ import annotations
 
+import functools
 import math
 import os
 import re
@@ -526,6 +527,7 @@ _ENTITY_ALIASES: dict[str, str] = {
 }
 
 
+@functools.lru_cache(maxsize=1024)
 def resolve_entity_alias(entity: str) -> str:
     """Canonicalize an entity string via the configurable alias map.
 
@@ -573,7 +575,8 @@ def _clean_entity(raw: str) -> str | None:
     return s
 
 
-def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
+@functools.lru_cache(maxsize=512)
+def extract_entities(text: str, *, max_entities: int = 12) -> tuple[str, ...]:
     """Extract entity-like tokens from a memory fact string.
 
     Deterministic and cheap. Prefer precision over recall — empty is fine.
@@ -586,7 +589,7 @@ def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
       5. ALLCAPS tokens (project codes, acronyms)
     """
     if not (text or "").strip():
-        return []
+        return ()
 
     found: list[str] = []
     seen: set[str] = set()
@@ -615,7 +618,7 @@ def extract_entities(text: str, *, max_entities: int = 12) -> list[str]:
     for m in _ALLCAPS_RE.finditer(text):
         _add(m.group(1))
 
-    return found[:max_entities]
+    return tuple(found[:max_entities])
 
 
 def classify_kind(text: str, default: str = "fact") -> str:
@@ -909,6 +912,12 @@ CREATE TABLE IF NOT EXISTS entity_relations (
 CREATE INDEX IF NOT EXISTS idx_entity_rel_user ON entity_relations(user_id);
 CREATE INDEX IF NOT EXISTS idx_entity_rel_a ON entity_relations(user_id, entity_a);
 CREATE INDEX IF NOT EXISTS idx_entity_rel_b ON entity_relations(user_id, entity_b);
+-- Composite indexes for common query patterns:
+-- 1. Full user scan (graph_pass, neural_activate): WHERE user_id = ?
+-- 2. Neural weight update: WHERE user_id = ? AND (entity_a = ? OR entity_b = ?)
+-- 3. Memory cleanup: DELETE WHERE memory_id = ?
+CREATE INDEX IF NOT EXISTS idx_entity_rel_user_ab ON entity_relations(user_id, entity_a, entity_b);
+CREATE INDEX IF NOT EXISTS idx_entity_rel_memory_id ON entity_relations(memory_id);
 -- delete() runs "DELETE FROM entity_relations WHERE memory_id = ?" on every
 -- single memory deletion (cleanup's decay sweep, dream()'s merge-loser
 -- deletes) — without this index that's a full table scan every time.

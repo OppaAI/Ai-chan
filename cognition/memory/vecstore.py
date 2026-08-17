@@ -66,6 +66,8 @@ class HarrierEmbedder:
     calls with the same texts (e.g. the same user query embedded by routing,
     memory search, and knowledge search in a single turn) skip the HTTP
     round-trip.
+
+    Optional persistent disk cache (EMBED_CACHE_PATH) survives restarts.
     """
 
     _CACHE_MAX: int = 256
@@ -78,6 +80,7 @@ class HarrierEmbedder:
         dims: int       = _EMBED_DIMS,
         batch_size: int = _BATCH_SIZE,
         timeout: float  = _EMBED_TIMEOUT,
+        cache_path: str | None = None,
     ) -> None:
         self.base_url   = base_url.rstrip("/")
         self.model      = model
@@ -87,6 +90,13 @@ class HarrierEmbedder:
         self._session   = requests.Session()
         self._cache: OrderedDict[tuple[str, ...], tuple[float, np.ndarray]] = OrderedDict()
         self._cache_lock = threading.Lock()
+
+        # Persistent disk cache for embeddings across restarts
+        self._disk_cache_path = Path(cache_path) if cache_path else None
+        self._disk_cache: dict[tuple[str, ...], np.ndarray] = {}
+        self._disk_cache_lock = threading.Lock()
+        if self._disk_cache_path:
+            self._load_disk_cache()
 
         adapter = requests.adapters.HTTPAdapter(
             pool_connections=10,
@@ -103,6 +113,41 @@ class HarrierEmbedder:
         self._session.mount("http://", adapter)
         self._session.mount("https://", adapter)
 
+    def _load_disk_cache(self) -> None:
+        """Load embeddings from disk cache (JSON Lines format)."""
+        if not self._disk_cache_path or not self._disk_cache_path.exists():
+            return
+        try:
+            import json
+            self._disk_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._disk_cache_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        key = tuple(entry["texts"])
+                        vec = np.asarray(entry["vector"], dtype=np.float32)
+                        self._disk_cache[key] = vec
+                    except Exception:
+                        continue
+            log.info(f"Loaded {len(self._disk_cache)} embeddings from disk cache: {self._disk_cache_path}")
+        except Exception as e:
+            log.warning(f"Failed to load disk embedding cache: {e}")
+
+    def _save_to_disk_cache(self, key: tuple[str, ...], vec: np.ndarray) -> None:
+        """Append embedding to disk cache (JSON Lines)."""
+        if not self._disk_cache_path:
+            return
+        try:
+            import json
+            entry = {"texts": list(key), "vector": vec.tolist()}
+            with open(self._disk_cache_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            log.debug(f"Failed to write disk embedding cache: {e}")
+
     def _embed_texts(self, texts: list[str]) -> np.ndarray:
         """
         Embed a list of raw texts via llama-server's /embedding endpoint.
@@ -110,16 +155,30 @@ class HarrierEmbedder:
 
         Results are cached in a small TTL-based LRU cache keyed by the tuple
         of input texts, so duplicate calls within _CACHE_TTL seconds skip the
-        HTTP round-trip.
+        HTTP round-trip. Also checks persistent disk cache.
         """
         key = tuple(texts)
         now = time.monotonic()
+
+        # Check memory cache first
         with self._cache_lock:
             cached = self._cache.get(key)
             if cached is not None and now - cached[0] <= self._CACHE_TTL:
                 self._cache.move_to_end(key)
                 return cached[1]
 
+        # Check disk cache
+        with self._disk_cache_lock:
+            disk_cached = self._disk_cache.get(key)
+            if disk_cached is not None:
+                # Promote to memory cache
+                with self._cache_lock:
+                    self._cache[key] = (now, disk_cached)
+                    while len(self._cache) > self._CACHE_MAX:
+                        self._cache.popitem(last=False)
+                return disk_cached
+
+        # HTTP call to embedding server
         resp = self._session.post(
             f"{self.base_url}/embedding",
             json={"model": self.model, "content": texts},
@@ -141,10 +200,15 @@ class HarrierEmbedder:
         norms = np.where(norms == 0, 1.0, norms)
         result = arr / norms
 
+        # Store in both caches
         with self._cache_lock:
             self._cache[key] = (now, result)
             while len(self._cache) > self._CACHE_MAX:
                 self._cache.popitem(last=False)
+
+        with self._disk_cache_lock:
+            self._disk_cache[key] = result
+            self._save_to_disk_cache(key, result)
 
         return result
 

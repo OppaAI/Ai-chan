@@ -77,9 +77,9 @@ EMBED_BASE_URL: "http://127.0.0.1:8080"  # Embedding server base URL used by cog
 EMBED_MODEL: "harrier"  # Embedding model id/alias; must match server/custom embedder.
 EMBED_DIMS: "640"  # Vector dimensions; must match embedding model and sqlite-vec schema.
 EMBED_QUERY_INSTRUCT: "Retrieve relevant memories that answer the query"  # Instruction prefix used for query embeddings; memories/documents stay unprefixed.
-EMBED_BATCH_SIZE: "64"  # Embedding batch size for migration/rebuild scripts; lower if memory pressure is high.
+EMBED_BATCH_SIZE: "16"  # Embedding batch size for migration/rebuild scripts; lower if memory pressure is high. Reduced from 64 for Jetson 8GB.
 EMBED_TIMEOUT_S: "30"  # Seconds before embedding HTTP calls time out.
-EMBED_CACHE_PATH: ""  # Optional local embedding/model cache path; blank uses library defaults.
+EMBED_CACHE_PATH: "~/.aiko/embedding_cache"  # Disk cache for embeddings across restarts.
 FASTEMBED_CACHE_PATH: ""  # Legacy FastEmbed cache fallback; blank if unused.
 
 # -- Memory extraction and recall --
@@ -191,7 +191,7 @@ MEMORY_RANK_ACCESS_WEIGHT: "0.002"  # Small retrieval boost for frequently recal
 MEMORY_RANK_PINNED_WEIGHT: "0.01"  # Small retrieval boost for pinned memories.
 MEMORY_CONTEXT_FACT_CHARS: "220"  # Max characters per individual memory fact injected into context.
 MEMORY_CONTEXT_TOTAL_CHARS: "1200"  # Total character budget for all memory facts injected per turn.
-MEMORY_LIFECYCLE_BATCH_SIZE: "500"  # Memories processed per batch during cleanup/decay lifecycle runs.
+MEMORY_LIFECYCLE_BATCH_SIZE: "200"  # Memories processed per batch during cleanup/decay lifecycle runs. Reduced from 500 for lower memory pressure.
 
 # -- Tiered recall (quick/wide) --
 QUICK_KNN_LIMIT: "6"  # Narrow KNN candidate count tried before falling back to full search.
@@ -199,8 +199,8 @@ QUICK_FTS_LIMIT: "6"  # Narrow FTS5 candidate count tried before falling back to
 MEMORY_RECALL_SCORE_THRESHOLD: "0.015"  # Min final-rank score required at position `limit` for the quick pass to be accepted; below this, search widens to KNN_LIMIT/FTS_LIMIT.
 
 # -- vec0 MATCH KNN oversampling --
-KNN_MATCH_OVERSCAN: "16"  # Multiply the caller's k by this before the vec0 scan, since user/status filters apply after the scan.
-KNN_MATCH_K_MIN: "32"     # Absolute floor for the oversampled k.
+KNN_MATCH_OVERSCAN: "8"  # Multiply the caller's k by this before the vec0 scan, since user/status filters apply after the scan. Reduced from 16 for faster KNN on Jetson.
+KNN_MATCH_K_MIN: "16"     # Absolute floor for the oversampled k. Reduced from 32.
 
 # -- Pinned recency-among-relevant rerank --
 MEMORY_RECENCY_RERANK_ENABLED: "1"  # Toggle recency-among-relevant reranking; boolean options (1/0, true/false, yes/no, on/off).
@@ -330,3 +330,12 @@ EMC_GROUP_ENABLED: "1"        # 0 = 1:1 flush as EMC-1/2
 EMC_GROUP_MAX_GAP_SEC: "900"  # max seconds between consecutive staging rows in a group
 EMC_GROUP_MAX_TURNS: "6"      # max staging rows merged into one episode
 EMC_GROUP_MAX_CHARS: "2000"   # max merged trace characters
+
+# -- Performance optimization flags (Phase 20+) --
+# Set to 0 to disable expensive features for lower latency/RAM on Jetson
+NEURAL_NET_ENABLED: "0"              # Neural activation propagation over entity graph (heavy)
+MEMORY_SPREADING_ENABLED: "0"        # Spreading activation from seed entities (extra DB scans)
+MEMORY_CROSS_STORE_ENABLED: "0"      # Cross-store knowledge/experience attachment (extra searches)
+MEMORY_STATE_TAGS_ENABLED: "0"       # Local-hour state tags on every write (extra column)
+MEMORY_NEG_RECALL_AVOID: "0"         # Negative memory avoidance filter (extra scoring)
+MEMORY_RECALL_CONTEXT_MATCH_ENABLED: "0"  # Query valence/arousal matching (extra inference)

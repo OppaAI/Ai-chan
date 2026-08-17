@@ -246,7 +246,7 @@ class _MemoryBackend:
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
-        self._embedder = HarrierEmbedder()
+        self._embedder = HarrierEmbedder(cache_path=embed_cache)
         # Tri-state: None = not yet probed, True/False = known after the
         # first _extract_facts call. Lets us stop paying for a failed
         # response_format attempt every single turn once we know the
@@ -1207,38 +1207,38 @@ class _MemoryBackend:
         ranked_ents = sorted(activation.keys(), key=lambda e: -activation[e])
         extra: list[str] = []
         seen = set(exclude_ids)
-        for ent in ranked_ents:
+        if not ranked_ents:
+            return activation, extra
+
+        # Batch fetch: single query for all entities instead of N+1
+        # Build LIKE conditions for each entity
+        ent_conditions = " OR ".join(["entities LIKE ?"] * len(ranked_ents))
+        params = [user_id] + [f"%{ent}%" for ent in ranked_ents]
+        rows = self._conn.execute(
+            f"""
+            SELECT id, entities FROM memories
+            WHERE user_id = ?
+              AND (status = 'active' OR status IS NULL)
+              AND ({ent_conditions})
+            ORDER BY last_accessed_at DESC
+            LIMIT ?
+            """,
+            params + [MEMORY_SPREADING_MAX_EXTRA * 3],  # fetch extra to account for filtering
+        ).fetchall()
+
+        for r in rows:
             if len(extra) >= MEMORY_SPREADING_MAX_EXTRA:
                 break
-            try:
-                rows = self._conn.execute(
-                    """
-                    SELECT id FROM memories
-                    WHERE user_id = ?
-                      AND (status = 'active' OR status IS NULL)
-                      AND entities LIKE ?
-                    ORDER BY last_accessed_at DESC
-                    LIMIT 5
-                    """,
-                    (user_id, f"%{ent}%"),
-                ).fetchall()
-            except Exception:
+            mid = str(r["id"])
+            if mid in seen:
                 continue
-            for r in rows:
-                mid = str(r["id"])
-                if mid in seen:
-                    continue
-                # tighter check: entity really in JSON list
-                full = self._conn.execute(
-                    "SELECT entities FROM memories WHERE id = ?", (mid,)
-                ).fetchone()
-                ents = entities_from_json_safe(full["entities"] if full else "[]")
-                if ent not in {e.casefold() for e in ents}:
-                    continue
-                seen.add(mid)
-                extra.append(mid)
-                if len(extra) >= MEMORY_SPREADING_MAX_EXTRA:
-                    break
+            # tighter check: entity really in JSON list
+            ents = entities_from_json_safe(r["entities"])
+            # Check if any of our ranked entities is in this memory's entities
+            if not any(ent.casefold() in {e.casefold() for e in ents} for ent in ranked_ents):
+                continue
+            seen.add(mid)
+            extra.append(mid)
         return activation, extra
 
     def _fetch_full_rows(self, ids: set[str]) -> dict[str, Any]:
@@ -1246,8 +1246,10 @@ class _MemoryBackend:
         if not ids:
             return {}
         placeholders = ",".join("?" * len(ids))
+        # Select only columns needed for ranking to reduce I/O and memory
+        cols = "id, memory, created_at, pinned, access_count, last_accessed_at, valence_tag, valence_score, salience_hit, entities, status, kind, supersedes_id"
         rows = self._conn.execute(
-            f"SELECT * FROM memories WHERE id IN ({placeholders})",
+            f"SELECT {cols} FROM memories WHERE id IN ({placeholders})",
             list(ids),
         ).fetchall()
         return {row["id"]: row for row in rows}
@@ -1294,8 +1296,10 @@ class _MemoryBackend:
 
         if row_by_id is None:
             placeholders = ",".join("?" * len(all_ids))
+            # Select only columns needed for ranking to reduce I/O and memory
+            cols = "id, memory, created_at, pinned, access_count, last_accessed_at, valence_tag, valence_score, salience_hit, entities, status, kind, supersedes_id"
             rows = self._conn.execute(
-                f"SELECT * FROM memories WHERE id IN ({placeholders})",
+                f"SELECT {cols} FROM memories WHERE id IN ({placeholders})",
                 list(all_ids),
             ).fetchall()
             row_by_id = {row["id"]: row for row in rows}

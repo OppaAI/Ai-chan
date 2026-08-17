@@ -43,9 +43,11 @@ def _get_store(user_id: str | None = None):
             if _store is None:
                 from cognition.memory.episode import EpisodicStore
                 from cognition.memory.schema import _memory_db_path_for_user
+                import os
 
                 uid = user_id or "guest"
-                _store = EpisodicStore(_memory_db_path_for_user(uid), user_id=uid)
+                embed_cache = os.getenv("EMBED_CACHE_PATH") or None
+                _store = EpisodicStore(_memory_db_path_for_user(uid), user_id=uid, embed_cache=embed_cache)
     return _store
 
 
