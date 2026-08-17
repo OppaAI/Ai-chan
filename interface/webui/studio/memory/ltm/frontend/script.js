@@ -421,18 +421,30 @@ function render() {
 
   const defs = svg.append('defs');
 
-  // per-node glass gradients + glow filters
+  // per-node glass gradients + glow filters (enhanced for 3D glossy glass effect)
   nodes.forEach((d, i) => {
     const hue = valenceHue(d);
     const col = hueColor(hue);
     const op = nodeOpacity(d);
     const gid = `glass-${i}`;
+    
+    // Multi-stop radial gradient for 3D glossy sphere (like molecule models)
     const grad = defs.append('radialGradient')
       .attr('id', gid)
-      .attr('cx', '35%').attr('cy', '30%').attr('r', '70%');
-    grad.append('stop').attr('offset', '0%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.35 * op);
-    grad.append('stop').attr('offset', '45%').attr('stop-color', col).attr('stop-opacity', 0.55 * op);
-    grad.append('stop').attr('offset', '100%').attr('stop-color', col).attr('stop-opacity', 0.15 * op);
+      .attr('cx', '32%').attr('cy', '28%').attr('r', '65%')
+      .attr('fy', '35%');
+    
+    // Bright specular highlight at top
+    grad.append('stop').attr('offset', '0%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.42 * op);
+    // Mid-tone transition
+    grad.append('stop').attr('offset', '28%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.12 * op);
+    // Main color body
+    grad.append('stop').attr('offset', '45%').attr('stop-color', col).attr('stop-opacity', 0.65 * op);
+    // Shadow deepening toward bottom
+    grad.append('stop').attr('offset', '75%').attr('stop-color', col).attr('stop-opacity', 0.48 * op);
+    // Dark rim for depth
+    grad.append('stop').attr('offset', '100%').attr('stop-color', '#000000').attr('stop-opacity', 0.18 * op);
+    
     d._glassId = gid;
     d._hueCol = col;
     d._op = op;
@@ -446,7 +458,13 @@ function render() {
     .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6).attr('orient','auto')
     .append('path').attr('d','M 0 1 L 10 5 L 0 9 Z').attr('fill', 'var(--orange)').attr('opacity', 0.8);
 
-  const link = g.append('g').selectAll('line').data(links).join('line')
+  // Catmull-Rom curve generator for smooth organic edges
+  const lineGenerator = d3.line()
+    .curve(d3.curveCatmullRom.alpha(0.5))
+    .x(d => d.x)
+    .y(d => d.y);
+
+  const link = g.append('g').selectAll('path').data(links).join('path')
     .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : (d.type === 'distilled_into' ? '#51d4c8' : '#3de0ff'))
     .attr('stroke-width', d => {
       if (d.type === 'supersedes') return 1.8;
@@ -456,7 +474,16 @@ function render() {
     })
     .attr('stroke-opacity', d => edgeOpacity(d, nodeById))
     .attr('stroke-linecap', 'round')
-    .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null);
+    .attr('fill', 'none')
+    .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null)
+    .attr('d', d => {
+      // Generate smooth Catmull-Rom path with control points at nodes
+      const points = [
+        { x: d.source.x, y: d.source.y },
+        { x: d.target.x, y: d.target.y }
+      ];
+      return lineGenerator(points);
+    });
 
   const node = g.append('g').selectAll('g').data(nodes).join('g')
     .attr('class', 'node-group')
@@ -465,9 +492,7 @@ function render() {
     .call(GraphBoot.makeDrag(() => simulation))
     .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
 
-  // outer glow disc (soft synapse halo) with subtle pulse — brightness/glow
-  // formula unchanged from original; only the radius offset differs slightly
-  // by size class since nodeRadius itself is now smaller for quiet nodes.
+  // outer glow disc (soft synapse halo) with subtle pulse
   node.append('circle')
     .attr('r', d => nodeRadius(d) + 3)
     .attr('fill', d => d._hueCol)
@@ -475,7 +500,7 @@ function render() {
     .attr('filter', d => `url(#${d._glowId})`)
     .attr('class', 'pulse-glow');
 
-  // glass body — stroke width/opacity unchanged from original
+  // glass body with glossy gradient
   node.append('circle')
     .attr('r', nodeRadius)
     .attr('fill', d => `url(#${d._glassId})`)
@@ -486,8 +511,7 @@ function render() {
               (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
             );
 
-  // quiet rim arcs (factor scores) — outside body, low opacity. Shown for
-  // every node again, same as the original (not gated to hot nodes).
+  // quiet rim arcs (factor scores)
   node.each(function(d) {
     const sc = d.scores || {};
     const r = nodeRadius(d) + 4;
@@ -518,24 +542,16 @@ function render() {
       return t.length > 20 ? t.slice(0, 18) + '…' : t;
     });
 
+  // Per-node charge: entities weak repulsion (tight), memory strong repulsion (spread)
+  function chargeStrength(d) {
+    if (d.type === 'entity') return -180;  // Entities pull in tight
+    return -550;  // Memory nodes push apart strongly
+  }
+
   simulation = GraphBoot.makeSimulation(nodes, links, {
     w,
     h,
-    // Lighter charge + softer center pull than before (was -180 / default
-    // 0.12) so the graph branches into organic clusters instead of packing
-    // into a uniform disc.
-    // clusterStrength is OFF: grouping by node type (memory / entity /
-    // knowledge / experience / episode) was pulling every knowledge node
-    // toward one shared centroid, every experience node toward another,
-    // etc. — that's what produced neat color-coded columns/zones instead of
-    // an organic mix. Position should come from actual connectivity (the
-    // link force below) alone, so differently-typed nodes that share edges
-    // thread together through the same region, matching a real neural net's
-    // interleaved look rather than segregated clusters.
-    // Loosened further for legibility: stronger repulsion (-420) and longer
-    // link distances push connected clusters apart from each other and from
-    // stray nodes, instead of everything settling into a tight hairball.
-    charge: -420,
+    charge: chargeStrength,  // Now a per-node function
     centerStrength: 0.02,
     clusterStrength: 0,
     nodeRadius,
@@ -552,8 +568,13 @@ function render() {
     },
   })
     .on('tick', () => {
-      link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+      link.attr('d', d => {
+        const points = [
+          { x: d.source.x, y: d.source.y },
+          { x: d.target.x, y: d.target.y }
+        ];
+        return lineGenerator(points);
+      });
       node.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 

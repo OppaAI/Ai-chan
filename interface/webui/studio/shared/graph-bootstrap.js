@@ -85,11 +85,11 @@
       opts || {}
     );
     var centerStrength = (o.centerStrength != null) ? o.centerStrength : 0.02;
-    // distanceMax raised (520 → 1400): with charge now pushed to -420 for
-    // more spacing, repulsion needs to keep acting out to a wider radius or
-    // distant nodes stop feeling any push once they clear the old 900px
-    // cutoff and just drift wherever link/center forces leave them.
-    var chargeForce = d3.forceManyBody().distanceMax(1400);
+    // distanceMax raised further (1400 → 1800): with memory nodes now at -550
+    // and entity nodes at -180, the repulsion range needs to extend far enough
+    // for memory nodes to feel each other's push across the canvas, while entities
+    // stay close to their mention sources.
+    var chargeForce = d3.forceManyBody().distanceMax(1800);
     // charge may be a number or a per-node function
     chargeForce.strength(o.charge);
 
