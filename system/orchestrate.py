@@ -1222,6 +1222,19 @@ def run_session(ui, args) -> None:
                 )
                 user_input = result[0] if isinstance(result, tuple) else result
                 voice_info = result[1] if isinstance(result, tuple) and len(result) > 1 and isinstance(result[1], dict) else None
+                if voice_info:
+                    try:
+                        from cognition.memory.edge_state import for_identity
+                        started = voice_info.get("listen_started_at")
+                        stopped = voice_info.get("recording_stopped_at")
+                        asr_done = voice_info.get("asr_done_at")
+                        for_identity(current_user_id()).record_perception(
+                            "voice",
+                            duration_s=(stopped - started) if started is not None and stopped is not None else None,
+                            latency_s=(asr_done - stopped) if asr_done is not None and stopped is not None else None,
+                        )
+                    except Exception:
+                        pass
             else:
                 result = ui.get_input()
                 user_input = result[0] if isinstance(result, tuple) else result

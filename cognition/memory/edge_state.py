@@ -73,6 +73,7 @@ class EdgeCognitiveState:
         self._attention = ""
         self._lessons: deque[str] = deque(maxlen=5)
         self._tool_outcomes: deque[dict] = deque(maxlen=6)
+        self._perceptions: deque[dict] = deque(maxlen=4)
         self._lock = threading.RLock()
 
     def record(self, user: str, assistant: str) -> None:
@@ -103,7 +104,7 @@ class EdgeCognitiveState:
 
     def clear(self) -> None:
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
 
     @staticmethod
@@ -153,7 +154,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes)}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions)}
 
     def consume_lessons(self) -> list[str]:
         """Return current outcome lessons for successful background consolidation."""
@@ -182,6 +183,11 @@ class EdgeCognitiveState:
         if jobs:
             lines.append("Upcoming scheduled work: " + " | ".join(jobs[:5]))
         outcomes = self.snapshot().get("tool_outcomes", [])
+        perceptions = self.snapshot().get("perceptions", [])
+        if perceptions:
+            latest = perceptions[0]
+            duration = latest.get("duration_s")
+            lines.append("Recent perception: " + str(latest.get("source", "unknown")) + (f" utterance={duration}s" if duration is not None else ""))
         if outcomes:
             rendered = []
             for outcome in outcomes[:4]:
