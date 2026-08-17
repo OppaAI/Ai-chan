@@ -85,11 +85,11 @@
       opts || {}
     );
     var centerStrength = (o.centerStrength != null) ? o.centerStrength : 0.02;
-    // distanceMax raised (520 → 900): repulsion needs to keep acting on
-    // isolated/lightly-connected nodes out to a wider radius so they can
-    // actually drift into a loose outer halo instead of stalling partway
-    // out once they leave the dense core's local repulsion range.
-    var chargeForce = d3.forceManyBody().distanceMax(900);
+    // distanceMax raised (520 → 1400): with charge now pushed to -420 for
+    // more spacing, repulsion needs to keep acting out to a wider radius or
+    // distant nodes stop feeling any push once they clear the old 900px
+    // cutoff and just drift wherever link/center forces leave them.
+    var chargeForce = d3.forceManyBody().distanceMax(1400);
     // charge may be a number or a per-node function
     chargeForce.strength(o.charge);
 

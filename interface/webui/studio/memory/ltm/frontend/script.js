@@ -446,32 +446,7 @@ function render() {
     .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6).attr('orient','auto')
     .append('path').attr('d','M 0 1 L 10 5 L 0 9 Z').attr('fill', 'var(--orange)').attr('opacity', 0.8);
 
-  // Curved (quadratic bezier) edges instead of straight lines — gives the
-  // organic "neural" look instead of a flat wheel-spoke pattern. The curve
-  // bows away from the straight line by an amount proportional to edge
-  // length, alternating side by a stable hash of the edge id so parallel
-  // edges between nearby node pairs don't all bow the same direction and
-  // overlap into a single thick line.
-  function edgeSign(d) {
-    const s = String(d.id || '');
-    let h = 0;
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-    return (h & 1) ? 1 : -1;
-  }
-  function linkPath(d) {
-    const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
-    const dx = tx - sx, dy = ty - sy;
-    const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-    // Bow amount: gentle for short/dense links, a bit more for long ones,
-    // capped so distant nodes don't get wildly arced.
-    const bow = Math.min(dist * 0.18, 40) * edgeSign(d);
-    const mx = (sx + tx) / 2 - (dy / dist) * bow;
-    const my = (sy + ty) / 2 + (dx / dist) * bow;
-    return `M${sx},${sy} Q${mx},${my} ${tx},${ty}`;
-  }
-
-  const link = g.append('g').selectAll('path').data(links).join('path')
-    .attr('fill', 'none')
+  const link = g.append('g').selectAll('line').data(links).join('line')
     .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : (d.type === 'distilled_into' ? '#51d4c8' : '#3de0ff'))
     .attr('stroke-width', d => {
       if (d.type === 'supersedes') return 1.8;
@@ -557,30 +532,28 @@ function render() {
     // link force below) alone, so differently-typed nodes that share edges
     // thread together through the same region, matching a real neural net's
     // interleaved look rather than segregated clusters.
-    // KB-graph look: strong repulsion (-260) pushes lightly/unconnected
-    // nodes out into a loose halo, while short linkDistance + high
-    // linkStrength on real edges snaps the connected core in tight against
-    // that repulsion — that contrast (tight core vs. sprawling stragglers)
-    // is what makes the KB studio's graph read as a dense hairball with
-    // scattered outliers instead of an evenly-spread field.
-    charge: -260,
-    centerStrength: 0.03,
+    // Loosened further for legibility: stronger repulsion (-420) and longer
+    // link distances push connected clusters apart from each other and from
+    // stray nodes, instead of everything settling into a tight hairball.
+    charge: -420,
+    centerStrength: 0.02,
     clusterStrength: 0,
     nodeRadius,
     linkDistance: d => {
-      if (d.type === 'supersedes') return 60;
-      if (d.type === 'distilled_into') return 70;
-      return 42;
+      if (d.type === 'supersedes') return 100;
+      if (d.type === 'distilled_into') return 110;
+      return 85;
     },
     linkStrength: d => {
-      if (d.type === 'mentions') return 0.65;
-      if (d.type === 'supersedes') return 0.25;
-      if (d.type === 'distilled_into') return 0.3;
-      return 0.55;
+      if (d.type === 'mentions') return 0.5;
+      if (d.type === 'supersedes') return 0.2;
+      if (d.type === 'distilled_into') return 0.25;
+      return 0.4;
     },
   })
     .on('tick', () => {
-      link.attr('d', linkPath);
+      link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
       node.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 
