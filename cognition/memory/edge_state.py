@@ -34,6 +34,7 @@ _UNCERTAIN_RE = re.compile(r"\b(i don\x27t know|not sure|unclear|maybe|might|pro
 _ENERGY_LOW_RE = re.compile(r"\b(tired|exhausted|sleepy|drained|burned out|can\x27t focus|cannot focus)\b", re.I)
 _OUTCOME_FAIL_RE = re.compile(r"\b(wrong|incorrect|didn.t work|didn.t help|failed|try again|not what i meant|that.s not right)\b", re.I)
 _OUTCOME_OK_RE = re.compile(r"\b(worked|works|fixed|solved|perfect|exactly|that helped|thank you|thanks)\b", re.I)
+_NEGATION_RE = re.compile(r"\b(?:not|no longer|never|dont|don.t|cannot|can.t|isn.t|aren.t|wasn.t|weren.t|changed my mind|instead)\b", re.I)
 _ENERGY_HIGH_RE = re.compile(r"\b(excited|energized|motivated|let\x27s go|can\x27t wait)\b", re.I)
 _STOP = {"the", "and", "that", "this", "with", "you", "are", "for", "have", "from", "about"}
 
@@ -80,6 +81,7 @@ class EdgeCognitiveState:
         self._perceptions: deque[dict] = deque(maxlen=4)
         self._activity: str = ""
         self._response_reviews: deque[dict] = deque(maxlen=4)
+        self._contradictions: deque[str] = deque(maxlen=4)
         self._lock = threading.RLock()
 
     def record(self, user: str, assistant: str) -> None:
@@ -90,6 +92,7 @@ class EdgeCognitiveState:
         if not user and not assistant:
             return
         with self._lock:
+            self._detect_contradictions(user)
             if self._events and _OUTCOME_FAIL_RE.search(user):
                 self._lessons.appendleft("Avoid repeating the previous approach: " + self._events[-1].assistant[:180])
             elif self._events and _OUTCOME_OK_RE.search(user):
@@ -110,7 +113,7 @@ class EdgeCognitiveState:
 
     def clear(self) -> None:
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
 
     @staticmethod
@@ -151,6 +154,22 @@ class EdgeCognitiveState:
                 goal.progress = "completed"
 
 
+    def _detect_contradictions(self, user: str) -> None:
+        """Record a bounded conflict when a new statement reverses a recent one."""
+        current_tokens = _tokens(user)
+        if len(current_tokens) < 2:
+            return
+        current_negated = bool(_NEGATION_RE.search(user))
+        for event in reversed(self._events):
+            overlap = current_tokens & _tokens(event.user)
+            if len(overlap) < 2 or current_negated == bool(_NEGATION_RE.search(event.user)):
+                continue
+            summary = f"Current statement conflicts with an earlier statement: current={user[:150]} | earlier={event.user[:150]}"
+            if summary not in self._contradictions:
+                self._contradictions.appendleft(summary)
+            break
+
+
 
     @staticmethod
     def _bounded(text: str, limit: int) -> str:
@@ -160,7 +179,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews)}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions)}
 
     def consume_lessons(self) -> list[str]:
         """Return current outcome lessons for successful background consolidation."""
@@ -187,6 +206,7 @@ class EdgeCognitiveState:
                 self._open_loops = deque(data.get("open_loops", [])[:EDGE_COGNITION_MAX_OPEN_LOOPS], maxlen=EDGE_COGNITION_MAX_OPEN_LOOPS)
                 self._goals = deque((_Goal(text=str(text)) for text in data.get("goals", []) if text), maxlen=EDGE_COGNITION_MAX_GOALS)
                 self._lessons = deque(data.get("lessons", [])[:5], maxlen=5)
+                self._contradictions = deque(data.get("contradictions", [])[:4], maxlen=4)
                 self._activity = str(data.get("activity") or "")
                 self._affect = float(data.get("affect") or 0.0)
                 self._energy = float(data.get("energy") or 0.5)
@@ -203,7 +223,7 @@ class EdgeCognitiveState:
         try:
             from cognition.memory.vecstore import connect_sqlite_db
             with self._lock:
-                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
+                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "contradictions": list(self._contradictions), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
             conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
             conn.execute("CREATE TABLE IF NOT EXISTS cognitive_state (user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
             conn.execute("INSERT INTO cognitive_state(user_id, state_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP", (self._identity, json.dumps(data, ensure_ascii=False, separators=(",", ":"))))
@@ -226,6 +246,8 @@ class EdgeCognitiveState:
             flags.append("recent tool failure may be undisclosed")
         if "?" in query and len(text) < 24:
             flags.append("draft may not answer the user question")
+        if snap.get("contradictions"):
+            flags.append("recent user statements conflict; clarification may be needed")
         review = {"flags": flags, "confidence": "low" if len(flags) >= 2 else "moderate" if flags else "high", "response_chars": len(text)}
         with self._lock:
             self._response_reviews.appendleft(review)
@@ -309,6 +331,8 @@ class EdgeCognitiveState:
             lines.append("Active goals: " + " | ".join(snap["goals"][:5]))
         if snap["open_loops"]:
             lines.append("Open loops: " + " | ".join(snap["open_loops"][:4]))
+        if snap.get("contradictions"):
+            lines.append("Possible contradictions to clarify: " + " | ".join(snap["contradictions"][:2]))
         if snap["lessons"]:
             lines.append("Lessons from outcomes: " + " | ".join(snap["lessons"][:3]))
         energy = "low" if snap["energy"] < 0.35 else "high" if snap["energy"] > 0.65 else "steady"
@@ -330,6 +354,8 @@ class EdgeCognitiveState:
             flags.append("no retrieved personal evidence")
         if snap["uncertainty"] > 0.35:
             flags.append("user uncertainty cue is elevated")
+        if snap.get("contradictions"):
+            flags.append("recent statements may conflict; clarify before relying on them")
         if "superseded" in statuses:
             flags.append("some retrieved memory may be outdated")
         if temporal:
