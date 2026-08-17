@@ -433,6 +433,12 @@ class AikoThink:
             state = for_identity(current_user_id()).context(user_input)
             if state:
                 base += "\n\n" + state
+            grounded = for_identity(current_user_id()).grounded_context(
+                now=bioclock.local_now(),
+                idle_seconds=max(0.0, time.time() - self._last_chat_time),
+                resting=self.is_proactive_resting(),
+            )
+            base += "\n\n" + grounded
         except Exception:
             pass
         return base + _conditional_persona_blocks(user_input)

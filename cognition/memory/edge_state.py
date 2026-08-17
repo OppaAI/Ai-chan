@@ -161,6 +161,19 @@ class EdgeCognitiveState:
             self._lessons.clear()
             return lessons
 
+    def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False) -> str:
+        """Render bounded real-world signals already known to the host process."""
+        if now is None:
+            from datetime import datetime
+            now = datetime.now().astimezone()
+        hour = int(now.hour)
+        period = "night" if hour < 6 else "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+        activity = "active" if idle_seconds < 90 else "idle" if idle_seconds < 3600 else "resting"
+        if resting:
+            activity = "resting"
+        lines = ["<grounded_context>", f"Local time: {now.strftime("%A, %Y-%m-%d %H:%M")} ({period})", f"User activity: {activity}", f"Idle duration: {max(0, int(idle_seconds))} seconds", "Initiative guidance: " + ("keep quiet unless important" if activity == "active" else "a gentle follow-up may be appropriate"), "</grounded_context>"]
+        return "\n".join(lines)
+
     def situation_context(self, query: str = "", memories: list[dict] | None = None, knowledge: str = "") -> str:
         """Build a bounded situation model from already-retrieved context."""
         snap = self.snapshot()
