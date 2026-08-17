@@ -36,7 +36,7 @@ class TelegramAdapter(AdapterBase):
             log.debug("[telegram] user %s -> %s (default)", raw, raw)
             return raw
         mapped = self._user_id_map[raw]
-        log.info("[telegram] user %s -> %s (mapped)", raw, mapped)
+        log.debug("[telegram] user %s -> %s (mapped)", raw, mapped)
         return mapped
 
     def start(self) -> None:
@@ -46,8 +46,11 @@ class TelegramAdapter(AdapterBase):
         cfg = self._read_config()
         self._token = cfg.get("token", "")
         if not self._token:
-            log.error("[telegram] TELEGRAM_BOT_TOKEN not set in .env")
+            if not getattr(self, "_token_warned", False):
+                log.error("[telegram] TELEGRAM_BOT_TOKEN not set in .env")
+                self._token_warned = True
             return
+        self._token_warned = False
 
         self._app = Application.builder().token(self._token).build()
 
