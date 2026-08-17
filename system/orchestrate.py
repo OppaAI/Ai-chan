@@ -1231,8 +1231,9 @@ def run_session(ui, args) -> None:
                         asr_done = voice_info.get("asr_done_at")
                         for_identity(current_user_id()).record_perception(
                             "voice",
-                            duration_s=(stopped - started) if started is not None and stopped is not None else None,
+                            duration_s=voice_info.get("duration_s") or ((stopped - started) if started is not None and stopped is not None else None),
                             latency_s=(asr_done - stopped) if asr_done is not None and stopped is not None else None,
+                            prosody=voice_info.get("prosody"),
                         )
                     except Exception:
                         pass

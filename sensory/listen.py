@@ -467,6 +467,24 @@ def _strip_prefix_phrase(text: str, candidates: list[str], threshold: float) -> 
 
 # ── listen ────────────────────────────────────────────────────────────────────
 
+def _prosody_features(audio: np.ndarray, text: str, sample_rate: int = SAMPLE_RATE) -> dict:
+    """Extract transient aggregate speech cues; callers must discard audio."""
+    samples = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if samples.size == 0:
+        return {}
+    magnitude = np.abs(samples)
+    duration = samples.size / float(sample_rate)
+    voiced = magnitude >= 0.015
+    words = len((text or "").split())
+    return {
+        "rms": float(min(1.0, np.sqrt(np.mean(samples * samples)) * 8.0)),
+        "peak": float(min(1.0, np.max(magnitude))),
+        "voiced_fraction": float(np.mean(voiced)),
+        "pause_density": float(1.0 - np.mean(voiced)),
+        "words_per_second": float(min(20.0, words / duration)) if duration > 0 and words else 0.0,
+    }
+
+
 class AikoListen:
     """
     Microphone capture + SenseVoice ASR transcription (+ optional speaker
@@ -969,6 +987,8 @@ class AikoListen:
 
         if gated_text is None:
             return "", info
+        info["duration_s"] = round(len(audio) / float(SAMPLE_RATE), 3)
+        info["prosody"] = _prosody_features(audio, gated_text, SAMPLE_RATE)
         return gated_text, info
 
     def listen_async(self, on_result, status_callback=None) -> threading.Thread:

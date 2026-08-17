@@ -252,6 +252,22 @@ class EdgeCognitiveState:
         except Exception:
             return
 
+    def record_perception(self, source: str, duration_s: float | None = None, latency_s: float | None = None, prosody: dict | None = None) -> None:
+        """Store bounded aggregate perception cues; never retain raw audio."""
+        item = {"source": str(source or "unknown")[:24]}
+        if duration_s is not None:
+            item["duration_s"] = round(max(0.0, float(duration_s)), 3)
+        if latency_s is not None:
+            item["latency_s"] = round(max(0.0, float(latency_s)), 3)
+        if isinstance(prosody, dict):
+            for key in ("rms", "peak", "voiced_fraction", "pause_density", "words_per_second"):
+                value = prosody.get(key)
+                if isinstance(value, (int, float)):
+                    cap = 20.0 if key == "words_per_second" else 1.0
+                    item[key] = round(max(0.0, min(cap, float(value))), 3)
+        with self._lock:
+            self._perceptions.appendleft(item)
+
     def review_response(self, query: str, response: str) -> dict:
         """Audit a completed draft for bounded metacognitive warning signs."""
         q = (query or "").casefold()
@@ -298,6 +314,11 @@ class EdgeCognitiveState:
             latest = perceptions[0]
             duration = latest.get("duration_s")
             lines.append("Recent perception: " + str(latest.get("source", "unknown")) + (f" utterance={duration}s" if duration is not None else ""))
+            cues = []
+            if latest.get("words_per_second") is not None: cues.append(f"pace={latest["words_per_second"]}wps")
+            if latest.get("pause_density") is not None: cues.append(f"pauses={latest["pause_density"]}")
+            if latest.get("rms") is not None: cues.append(f"energy={latest["rms"]}")
+            if cues: lines.append("Voice cues: " + ", ".join(cues))
         if outcomes:
             rendered = []
             for outcome in outcomes[:4]:
