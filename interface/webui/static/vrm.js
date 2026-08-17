@@ -1281,16 +1281,41 @@ function applyMouthShape(weight = mouthOpen) {
   if (w > 0.03) lastVisemeAt = performance.now();
 }
 
+const VRM_EMOJI_EXPRESSIONS = {
+  '😊': 'happy', '😄': 'happy', '😁': 'happy', '😆': 'happy', '🥰': 'happy', '😍': 'happy', '🙂': 'happy', '😋': 'happy', '🌸': 'happy', '✨': 'happy', '❤️': 'happy', '💖': 'happy', '☺️': 'happy',
+  '😒': 'angry', '😡': 'angry', '😠': 'angry', '😤': 'angry', '🤬': 'angry', '💢': 'angry',
+  '😭': 'sorrow', '😢': 'sorrow', '🥺': 'sorrow', '☹️': 'sorrow', '🙁': 'sorrow', '😔': 'sorrow', '😞': 'sorrow', '💧': 'sorrow',
+  '😮': 'surprised', '😯': 'surprised', '😲': 'surprised', '😳': 'surprised', '🤯': 'surprised', '😱': 'surprised', '⁉️': 'surprised', '❓': 'surprised',
+  '😜': 'fun', '🤪': 'fun', '😏': 'fun', '😈': 'fun', '🙃': 'fun', '😉': 'fun',
+  '😐': 'neutral', '😑': 'neutral', '😶': 'neutral', '🤖': 'neutral', '😴': 'neutral', '🤔': 'neutral', '💭': 'neutral'
+};
+
+const VRM_EXPR_ALIASES = {
+  'sad': 'sorrow',
+  'relaxed': 'fun',
+  'joy': 'happy',
+  'annoyed': 'angry',
+  'shy': 'happy',
+  'thinking': 'neutral'
+};
+
 window.aikoSetExpression = (name, intensity = 1.0) => {
+  const mapped = VRM_EMOJI_EXPRESSIONS[name] || VRM_EXPR_ALIASES[name] || name;
   for (const k of Object.keys(exprTargets)) if (k !== 'blink') exprTargets[k] = 0;
-  if (name && name !== 'neutral') exprTargets[name] = intensity;
+  if (mapped && mapped !== 'neutral') {
+    exprTargets[mapped] = intensity;
+    if (mapped === 'sorrow') exprTargets['sad'] = intensity;
+    if (mapped === 'fun') exprTargets['relaxed'] = intensity;
+  }
 
   const el = document.getElementById('vrm-emotion');
-  el.textContent = name ? `${name} · ${Math.round(intensity * 100)}%` : '—';
-  el.className = (name && name !== 'neutral') ? 'active' : '';
+  if (el) {
+    el.textContent = name ? `${name} · ${Math.round(intensity * 100)}%` : '—';
+    el.className = (name && name !== 'neutral') ? 'active' : '';
+  }
 
   clearTimeout(exprResetTimer);
-  if (name && name !== 'neutral') {
+  if (mapped && mapped !== 'neutral') {
     exprResetTimer = setTimeout(() => window.aikoSetExpression('neutral'), EXPR_RESET_DELAY);
   }
 };

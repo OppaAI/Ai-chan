@@ -208,6 +208,18 @@ def sanitize_for_tts(text: str) -> str:
     return text.strip()
 
 
+_EMOJI_LEADING_RE = re.compile(
+    r"^\s*([\U0001F300-\U0001FAFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]|\:[a-zA-Z0-9_-]+\:)\s*:?\s*",
+    re.UNICODE
+)
+_EMOJI_TO_EMOTION = {
+    "😊": "happy", "😄": "happy", "😁": "happy", "😆": "happy", "🥰": "happy", "😍": "happy", "🙂": "happy", "😋": "happy", "🌸": "happy", "✨": "happy", "❤️": "happy", "💖": "happy", "☺️": "happy",
+    "😒": "angry", "😡": "angry", "😠": "angry", "😤": "angry", "🤬": "angry", "💢": "angry",
+    "😭": "sorrow", "😢": "sorrow", "🥺": "sorrow", "☹️": "sorrow", "🙁": "sorrow", "😔": "sorrow", "😞": "sorrow", "💧": "sorrow",
+    "😮": "surprised", "😯": "surprised", "😲": "surprised", "😳": "surprised", "🤯": "surprised", "😱": "surprised", "⁉️": "surprised", "❓": "surprised",
+    "😜": "fun", "🤪": "fun", "😏": "fun", "😈": "fun", "🙃": "fun", "😉": "fun",
+    "😐": "neutral", "😑": "neutral", "😶": "neutral", "🤖": "neutral", "😴": "neutral", "🤔": "thinking", "💭": "thinking",
+}
 _EMOJI_HEADER_RE = re.compile(
     r"^\s*(?:[\U0001F300-\U0001FAFF\u2600-\u27BF\u2300-\u23FF\u2B00-\u2BFF\uFE00-\uFE0F]|\:[a-zA-Z0-9_-]+\:)?\s*:\s*",
     re.UNICODE
@@ -225,36 +237,34 @@ _ALLOWED_EMOTIONS = {
 
 def parse_aiko_response(text: str) -> dict:
     """Split a model reply into emotion / action / dialogue channels."""
-    raw = text or ""
+    if isinstance(text, (list, tuple)):
+        raw = text[0] if text else ""
+    else:
+        raw = str(text or "")
     emotion = "neutral"
     action = "none"
     body = raw.strip()
 
-    if _STRUCTURED_SEP_RE.search(raw):
-        header, body = _STRUCTURED_SEP_RE.split(raw, maxsplit=1)
-        m = _EMOTION_LINE_RE.search(header)
-        if m:
-            cand = m.group(1).strip().lower()
-            emotion = cand if cand in _ALLOWED_EMOTIONS else "neutral"
-        m = _ACTION_LINE_RE.search(header)
-        if m:
-            action = (m.group(1) or "none").strip() or "none"
-    else:
-        lines = body.splitlines()
-        kept = []
-        for line in lines:
-            em = _EMOTION_LINE_RE.match(line)
-            ac = _ACTION_LINE_RE.match(line)
-            if em:
-                cand = em.group(1).strip().lower()
-                emotion = cand if cand in _ALLOWED_EMOTIONS else emotion
-                continue
-            if ac:
-                action = (ac.group(1) or "none").strip() or "none"
-                continue
-            kept.append(line)
-        body = "\n".join(kept).strip()
+    body = re.sub(r"(?m)^\s*---+\s*$", "", body)
 
+    em_match = _EMOTION_LINE_RE.search(body)
+    if em_match:
+        cand = em_match.group(1).strip().lower()
+        emotion = cand if cand in _ALLOWED_EMOTIONS else _EMOJI_TO_EMOTION.get(cand, cand)
+        body = _EMOTION_LINE_RE.sub("", body)
+    else:
+        emoji_match = _EMOJI_LEADING_RE.match(body)
+        if emoji_match:
+            symbol = emoji_match.group(1).strip()
+            emotion = _EMOJI_TO_EMOTION.get(symbol, symbol)
+            body = _EMOJI_LEADING_RE.sub("", body)
+
+    ac_match = _ACTION_LINE_RE.search(body)
+    if ac_match:
+        action = (ac_match.group(1) or "none").strip() or "none"
+        body = _ACTION_LINE_RE.sub("", body)
+
+    body = re.sub(r"(?m)^\s*---+\s*$", "", body)
     body = _EMOJI_HEADER_RE.sub("", body)
     body = _ACTION_ASTERISK_RE.sub("", body)
     body = _THOUGHT_PAREN_RE.sub("", body)

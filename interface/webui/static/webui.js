@@ -248,22 +248,31 @@ function parseAikoMessage(rawText) {
   let emoji = null;
   let action = null;
 
-  // Parse EMOTION: prefix (e.g., "EMOTION: 😊" or "EMOTION: happy")
-  const emotionMatch = text.match(/^\s*EMOTION:\s*([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[a-zA-Z_-]+)\s*/u);
-  if (emotionMatch) {
-    const emojiOrName = emotionMatch[1];
-    emoji = EMOJI_EXPRESSIONS[emojiOrName] ? emojiOrName : emojiOrName;
+  // Remove --- separators first
+  text = text.replace(/^---+\s*$/gm, '');
+
+  // 1. Parse EMOTION: prefix if present (legacy format) or leading emoji only (new format)
+  const legacyEmotionMatch = text.match(/^\s*EMOTION:\s*([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[a-zA-Z_-]+)\s*/u);
+  if (legacyEmotionMatch) {
+    emoji = legacyEmotionMatch[1];
     text = text.replace(/^\s*EMOTION:\s*[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[a-zA-Z_-]+\s*/u, '');
+  } else {
+    const directEmojiRegex = /^\s*([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF])\s*:?\s*/u;
+    const directEmojiMatch = text.match(directEmojiRegex);
+    if (directEmojiMatch) {
+      emoji = directEmojiMatch[1];
+      text = text.replace(directEmojiRegex, '');
+    }
   }
 
-  // Parse ACTION: prefix (e.g., "ACTION: waves hand")
-  const actionMatch = text.match(/^\s*ACTION:\s*([^\n]+)/i);
+  // 2. Parse ACTION: line (e.g., "ACTION: waves hand")
+  const actionMatch = text.match(/(?:^|\n|\s*)ACTION:\s*([^\n]+)/i);
   if (actionMatch) {
     action = actionMatch[1].trim();
-    text = text.replace(/^\s*ACTION:\s*[^\n]+\n?/i, '');
+    text = text.replace(/(?:^|\n|\s*)ACTION:\s*[^\n]+\n?/i, '\n');
   }
 
-  // Also check for emoji header (e.g., "😊: hello")
+  // 3. Check for emoji header format (e.g., "😊: hello") if emoji not set yet
   const emojiHeaderRegex = /^\s*(?:([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF])|:([a-zA-Z0-9_-]+):)?\s*:\s*/u;
   const match = text.match(emojiHeaderRegex);
   if (match && !emoji) {
@@ -288,8 +297,9 @@ function parseAikoMessage(rawText) {
     return '';
   });
 
-  // Remove --- separators
+  // Ensure all --- lines and multiple blank lines are removed
   text = text.replace(/^---+\s*$/gm, '');
+  text = text.replace(/\n{3,}/g, '\n\n').trim();
 
   const nonVerbalText = nonVerbalParts.join(' ').trim();
   const dialogueText = text.replace(/\s{2,}/g, ' ').trim();
@@ -312,10 +322,11 @@ function renderAikoContent(container, parsed, showCursor = false) {
     container.appendChild(nvDiv);
   }
 
-  if (parsed.action) {
+  if (parsed.action && parsed.action.toLowerCase() !== 'none') {
     const actionDiv = document.createElement('div');
     actionDiv.className = 'msg-action';
-    actionDiv.innerHTML = parseMarkdown(parsed.action);
+    const cleanAction = parsed.action.replace(/^ACTION:\s*/i, '').trim();
+    actionDiv.innerHTML = parseMarkdown(cleanAction);
     container.appendChild(actionDiv);
   }
 
@@ -342,7 +353,7 @@ function addMessage(sender, text) {
     div.className = 'msg msg-aiko';
     const parsed = parseAikoMessage(text);
     if (parsed.emoji && window.aikoSetExpression) {
-      const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || 'happy';
+      const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || parsed.emoji;
       window.aikoSetExpression(exprName, 1.0);
     }
     renderAikoContent(div, parsed, false);
@@ -364,7 +375,7 @@ function appendToken(text) {
   streamRawText += text;
   const parsed = parseAikoMessage(streamRawText);
   if (parsed.emoji && window.aikoSetExpression) {
-    const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || 'happy';
+    const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || parsed.emoji;
     window.aikoSetExpression(exprName, 1.0);
   }
   renderAikoContent(streamDiv, parsed, true);
