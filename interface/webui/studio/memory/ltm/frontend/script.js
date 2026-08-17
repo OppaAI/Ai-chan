@@ -431,23 +431,23 @@ function render() {
     // Multi-stop radial gradient for 3D glossy sphere (like molecule models)
     const grad = defs.append('radialGradient')
       .attr('id', gid)
-      .attr('cx', '32%').attr('cy', '28%').attr('r', '65%')
-      .attr('fy', '35%');
+      .attr('cx', '30%').attr('cy', '25%').attr('r', '60%')
+      .attr('fy', '40%');
     
-    // Bright specular highlight at top
-    grad.append('stop').attr('offset', '0%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.42 * op);
-    // Mid-tone transition
-    grad.append('stop').attr('offset', '28%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.12 * op);
+    // Subtle light transition (not harsh white)
+    grad.append('stop').attr('offset', '0%').attr('stop-color', col).attr('stop-opacity', 0.78 * op);
+    grad.append('stop').attr('offset', '12%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.18 * op);
     // Main color body
-    grad.append('stop').attr('offset', '45%').attr('stop-color', col).attr('stop-opacity', 0.65 * op);
+    grad.append('stop').attr('offset', '42%').attr('stop-color', col).attr('stop-opacity', 0.68 * op);
     // Shadow deepening toward bottom
-    grad.append('stop').attr('offset', '75%').attr('stop-color', col).attr('stop-opacity', 0.48 * op);
+    grad.append('stop').attr('offset', '70%').attr('stop-color', col).attr('stop-opacity', 0.42 * op);
     // Dark rim for depth
-    grad.append('stop').attr('offset', '100%').attr('stop-color', '#000000').attr('stop-opacity', 0.18 * op);
+    grad.append('stop').attr('offset', '100%').attr('stop-color', '#000000').attr('stop-opacity', 0.15 * op);
     
     d._glassId = gid;
     d._hueCol = col;
     d._op = op;
+    d._specularId = `spec-${i}`;
 
     const fid = `glow-${i}`;
     GraphBoot.addGlowFilter(defs, fid, glowStrength(d));
@@ -458,11 +458,24 @@ function render() {
     .attr('refX', 22).attr('refY', 5).attr('markerWidth', 6).attr('markerHeight', 6).attr('orient','auto')
     .append('path').attr('d','M 0 1 L 10 5 L 0 9 Z').attr('fill', 'var(--orange)').attr('opacity', 0.8);
 
-  // Catmull-Rom curve generator for smooth organic edges
-  const lineGenerator = d3.line()
-    .curve(d3.curveCatmullRom.alpha(0.5))
-    .x(d => d.x)
-    .y(d => d.y);
+  // Quadratic Bézier curve generator for smooth organic edges
+  function quadraticPath(d) {
+    const sx = d.source.x, sy = d.source.y;
+    const tx = d.target.x, ty = d.target.y;
+    const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+    
+    // Offset midpoint perpendicular to source→target, scaled by distance
+    const dx = tx - sx, dy = ty - sy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const offset = Math.min(dist * 0.15, 30); // curve bulge (15% of distance, max 30px)
+    
+    // Perpendicular vector
+    const px = -dy / dist, py = dx / dist;
+    const cx = mx + px * offset, cy = my + py * offset;
+    
+    // Quadratic Bézier: M source, Q control midpoint, target
+    return `M ${sx} ${sy} Q ${cx} ${cy} ${tx} ${ty}`;
+  }
 
   const link = g.append('g').selectAll('path').data(links).join('path')
     .attr('stroke', d => d.type === 'supersedes' ? 'var(--orange)' : (d.type === 'distilled_into' ? '#51d4c8' : '#3de0ff'))
@@ -476,14 +489,7 @@ function render() {
     .attr('stroke-linecap', 'round')
     .attr('fill', 'none')
     .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null)
-    .attr('d', d => {
-      // Generate smooth Catmull-Rom path with control points at nodes
-      const points = [
-        { x: d.source.x, y: d.source.y },
-        { x: d.target.x, y: d.target.y }
-      ];
-      return lineGenerator(points);
-    });
+    .attr('d', quadraticPath);
 
   const node = g.append('g').selectAll('g').data(nodes).join('g')
     .attr('class', 'node-group')
@@ -510,6 +516,15 @@ function render() {
     .attr('stroke-dasharray', d =>
               (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
             );
+
+  // Specular highlight circle (glossy shine) — small white ellipse at top-left
+  node.append('circle')
+    .attr('r', d => nodeRadius(d) * 0.28)
+    .attr('cx', d => -nodeRadius(d) * 0.3)
+    .attr('cy', d => -nodeRadius(d) * 0.35)
+    .attr('fill', '#ffffff')
+    .attr('opacity', d => 0.22 * nodeOpacity(d))
+    .attr('pointer-events', 'none');
 
   // quiet rim arcs (factor scores)
   node.each(function(d) {
@@ -568,13 +583,7 @@ function render() {
     },
   })
     .on('tick', () => {
-      link.attr('d', d => {
-        const points = [
-          { x: d.source.x, y: d.source.y },
-          { x: d.target.x, y: d.target.y }
-        ];
-        return lineGenerator(points);
-      });
+      link.attr('d', quadraticPath);
       node.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 
