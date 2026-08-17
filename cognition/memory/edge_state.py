@@ -9,6 +9,7 @@ state layer between the current turn and long-term memory.
 """
 from __future__ import annotations
 
+import json
 import re
 import threading
 from collections import OrderedDict, deque
@@ -145,6 +146,45 @@ class EdgeCognitiveState:
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
             return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"]}
+
+    def situation_context(self, query: str = "", memories: list[dict] | None = None, knowledge: str = "") -> str:
+        """Build a bounded situation model from already-retrieved context."""
+        snap = self.snapshot()
+        facts = []
+        entities = []
+        seen = set()
+        for row in (memories or [])[:5]:
+            text = str(row.get("memory") or row.get("text") or row.get("trace") or "").strip()
+            if text:
+                facts.append(text[:240])
+            raw = row.get("entities") or []
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except Exception:
+                    raw = []
+            for entity in raw if isinstance(raw, list) else []:
+                value = str(entity).strip()
+                key = value.casefold()
+                if value and key not in seen:
+                    seen.add(key)
+                    entities.append(value)
+        if not facts and not snap["goals"] and not snap["open_loops"]:
+            return ""
+        lines = ["<situation_model>", "Organized from available evidence; treat it as context, not certainty.", f"Current query: {query[:260]}"]
+        if entities:
+            lines.append("Relevant entities: " + ", ".join(entities[:12]))
+        if facts:
+            lines.append("Relevant remembered facts: " + " | ".join(facts[:4]))
+        if snap["goals"]:
+            lines.append("Active goals: " + " | ".join(snap["goals"][:5]))
+        if snap["open_loops"]:
+            lines.append("Open loops: " + " | ".join(snap["open_loops"][:4]))
+        energy = "low" if snap["energy"] < 0.35 else "high" if snap["energy"] > 0.65 else "steady"
+        uncertainty = "elevated" if snap["uncertainty"] > 0.35 else "ordinary"
+        lines.append(f"Internal cues: mood={snap["mood"]}, energy={energy}, uncertainty={uncertainty}")
+        lines.append("Evidence confidence: " + ("moderate" if facts else "low"))
+        return "\n".join(lines) + "\n</situation_model>"
 
     def context(self, query: str = "") -> str:
         if not EDGE_COGNITION_ENABLED:

@@ -1083,6 +1083,12 @@ class AikoThink:
               memories, query=user_input, query_vector=query_vec
             ) if memorize is not None else ""
             persona_block = memorize.persona_context() if memorize is not None else ""
+            situation_block = ""
+            try:
+                from cognition.memory.edge_state import for_identity
+                situation_block = for_identity(current_user_id()).situation_context(user_input, memories, knowledge_block)
+            except Exception:
+                pass
         
         system = self._current_system_prompt(user_input)
         system += "\n\n" + bioclock.current_datetime_block()
@@ -1091,6 +1097,8 @@ class AikoThink:
                 system = f"{system}\n\n{persona_block}"
             if memory_block:
                 system = f"{system}\n\n{memory_block}"
+            if situation_block:
+                system = f"{system}\n\n{situation_block}"
             else:
                 system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
             system = f"{system}\n\n{knowledge_block}"
