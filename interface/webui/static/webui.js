@@ -246,10 +246,27 @@ function parseMarkdown(text) {
 function parseAikoMessage(rawText) {
   let text = rawText || '';
   let emoji = null;
+  let action = null;
 
+  // Parse EMOTION: prefix (e.g., "EMOTION: 😊" or "EMOTION: happy")
+  const emotionMatch = text.match(/^\s*EMOTION:\s*([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[a-zA-Z_-]+)\s*/u);
+  if (emotionMatch) {
+    const emojiOrName = emotionMatch[1];
+    emoji = EMOJI_EXPRESSIONS[emojiOrName] ? emojiOrName : emojiOrName;
+    text = text.replace(/^\s*EMOTION:\s*[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF]|[a-zA-Z_-]+\s*/u, '');
+  }
+
+  // Parse ACTION: prefix (e.g., "ACTION: waves hand")
+  const actionMatch = text.match(/^\s*ACTION:\s*([^\n]+)/i);
+  if (actionMatch) {
+    action = actionMatch[1].trim();
+    text = text.replace(/^\s*ACTION:\s*[^\n]+\n?/i, '');
+  }
+
+  // Also check for emoji header (e.g., "😊: hello")
   const emojiHeaderRegex = /^\s*(?:([\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2300}-\u{23FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}]|[\uD83C-\uDBFF][\uDC00-\uDFFF])|:([a-zA-Z0-9_-]+):)?\s*:\s*/u;
   const match = text.match(emojiHeaderRegex);
-  if (match) {
+  if (match && !emoji) {
     emoji = match[1] || match[2] || null;
     text = text.replace(emojiHeaderRegex, '');
   }
@@ -271,10 +288,13 @@ function parseAikoMessage(rawText) {
     return '';
   });
 
+  // Remove --- separators
+  text = text.replace(/^---+\s*$/gm, '');
+
   const nonVerbalText = nonVerbalParts.join(' ').trim();
   const dialogueText = text.replace(/\s{2,}/g, ' ').trim();
 
-  return { emoji, nonVerbalText, dialogueText };
+  return { emoji, action, nonVerbalText, dialogueText };
 }
 
 function renderAikoContent(container, parsed, showCursor = false) {
@@ -290,6 +310,13 @@ function renderAikoContent(container, parsed, showCursor = false) {
     nvDiv.className = 'msg-non-verbal';
     nvDiv.innerHTML = parseMarkdown(parsed.nonVerbalText);
     container.appendChild(nvDiv);
+  }
+
+  if (parsed.action) {
+    const actionDiv = document.createElement('div');
+    actionDiv.className = 'msg-action';
+    actionDiv.innerHTML = parseMarkdown(parsed.action);
+    container.appendChild(actionDiv);
   }
 
   const dialSpan = document.createElement('span');
