@@ -931,6 +931,15 @@ class AikoThink:
           memories, query=user_input, query_vector=query_vec
         )
         persona_block = self._get_memorize().persona_context()
+        situation_block = ""
+        metacognitive_block = ""
+        try:
+            from cognition.memory.edge_state import for_identity
+            state = for_identity(current_user_id())
+            situation_block = state.situation_context(user_input, memories, knowledge_block)
+            metacognitive_block = state.metacognitive_context(user_input, memories)
+        except Exception:
+            pass
 
         # Build base system (persona + memory + knowledge)
         system = self._current_system_prompt()
@@ -939,6 +948,10 @@ class AikoThink:
             system = f"{system}\n\n{persona_block}"
         if memory_block:
             system = f"{system}\n\n{memory_block}"
+        if situation_block:
+            system = f"{system}\n\n{situation_block}"
+        if metacognitive_block:
+            system = f"{system}\n\n{metacognitive_block}"
         system = f"{system}\n\n{knowledge_block}"
         
         # Search directly with the raw user input — same approach as /web.
