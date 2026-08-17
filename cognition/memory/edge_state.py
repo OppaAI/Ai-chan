@@ -74,6 +74,7 @@ class EdgeCognitiveState:
         self._lessons: deque[str] = deque(maxlen=5)
         self._tool_outcomes: deque[dict] = deque(maxlen=6)
         self._perceptions: deque[dict] = deque(maxlen=4)
+        self._activity: str = ""
         self._lock = threading.RLock()
 
     def record(self, user: str, assistant: str) -> None:
@@ -104,7 +105,7 @@ class EdgeCognitiveState:
 
     def clear(self) -> None:
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
 
     @staticmethod
@@ -154,7 +155,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions)}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity}
 
     def consume_lessons(self) -> list[str]:
         """Return current outcome lessons for successful background consolidation."""
@@ -197,6 +198,8 @@ class EdgeCognitiveState:
             lines.append("Recent tool outcomes: " + " | ".join(rendered))
         if project_signals:
             lines.append("Relevant project changes: " + " | ".join(project_signals[:5]))
+        if self._activity:
+            lines.append("Coarse activity: " + self._activity)
         snap = self.snapshot()
         if snap["open_loops"]:
             lines.append("Follow-up candidates: " + " | ".join(snap["open_loops"][:3]))
