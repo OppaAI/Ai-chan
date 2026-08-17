@@ -911,7 +911,9 @@ class AikoThink:
                 user_input,
                 instruct="Which capability/tool domain applies to this task?",
             ) if embedder is not None else None
-            return run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, cap_vec=cap_vec)
+            response = run_agentic_chat(self, user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec, cap_vec=cap_vec)
+            self._review_response(user_input, response)
+            return response
         finally:
             with self._active_users_lock:
                 self._active_user_ids.discard(user_id)
@@ -1095,7 +1097,9 @@ class AikoThink:
                     f"Write only the message Aiko should say to {display_name} now."
                 ),
             }]
-            return self._stream_response(messages, system=system, token_callback=None)
+            response = self._stream_response(messages, system=system, token_callback=None)
+            self._review_response(prompt_hint, response)
+            return response
         finally:
             with self._active_users_lock:
                 self._active_user_ids.discard(_SENTINEL)
