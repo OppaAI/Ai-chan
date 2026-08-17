@@ -161,8 +161,8 @@ class EdgeCognitiveState:
             self._lessons.clear()
             return lessons
 
-    def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False) -> str:
-        """Render bounded real-world signals already known to the host process."""
+    def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None) -> str:
+        """Render bounded real-world signals, including known scheduled work."""
         if now is None:
             from datetime import datetime
             now = datetime.now().astimezone()
@@ -171,7 +171,17 @@ class EdgeCognitiveState:
         activity = "active" if idle_seconds < 90 else "idle" if idle_seconds < 3600 else "resting"
         if resting:
             activity = "resting"
-        lines = ["<grounded_context>", f"Local time: {now.strftime("%A, %Y-%m-%d %H:%M")} ({period})", f"User activity: {activity}", f"Idle duration: {max(0, int(idle_seconds))} seconds", "Initiative guidance: " + ("keep quiet unless important" if activity == "active" else "a gentle follow-up may be appropriate"), "</grounded_context>"]
+        jobs = []
+        for job in (scheduled_jobs or []):
+            title = str(job.get("title") or job.get("name") or "scheduled task").strip()
+            due = str(job.get("next_due") or "").strip()
+            if title:
+                jobs.append(f"{title} ({due})" if due else title)
+        lines = ["<grounded_context>", f"Local time: {now.strftime('%A, %Y-%m-%d %H:%M')} ({period})", f"User activity: {activity}", f"Idle duration: {max(0, int(idle_seconds))} seconds"]
+        if jobs:
+            lines.append("Upcoming scheduled work: " + " | ".join(jobs[:5]))
+        lines.append("Initiative guidance: " + ("keep quiet unless important" if activity == "active" else "a gentle follow-up may be appropriate"))
+        lines.append("</grounded_context>")
         return "\n".join(lines)
 
     def situation_context(self, query: str = "", memories: list[dict] | None = None, knowledge: str = "") -> str:

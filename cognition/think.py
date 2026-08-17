@@ -433,10 +433,16 @@ class AikoThink:
             state = for_identity(current_user_id()).context(user_input)
             if state:
                 base += "\n\n" + state
+            try:
+                from system.schedule import list_schedule_records
+                scheduled_jobs = list_schedule_records(user_id=current_user_id())
+            except Exception:
+                scheduled_jobs = []
             grounded = for_identity(current_user_id()).grounded_context(
                 now=bioclock.local_now(),
                 idle_seconds=max(0.0, time.time() - self._last_chat_time),
                 resting=self.is_proactive_resting(),
+                scheduled_jobs=scheduled_jobs,
             )
             base += "\n\n" + grounded
         except Exception:
