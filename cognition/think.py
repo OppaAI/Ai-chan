@@ -1064,6 +1064,7 @@ class AikoThink:
         
         # Stream response
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
+        self._review_response(user_input, raw_response)
         
         # Store in history
         with self._history_lock:
@@ -1190,6 +1191,7 @@ class AikoThink:
     
         # Stream response
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
+        self._review_response(user_input, raw_response)
         
         # Store
         with self._history_lock:
@@ -1448,6 +1450,14 @@ class AikoThink:
         while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
 
+    def _review_response(self, user_input: str, response_text: str) -> None:
+        try:
+            from cognition.memory.edge_state import for_identity
+            state = for_identity(current_user_id())
+            state.review_response(user_input, response_text)
+            state.persist()
+        except Exception:
+            pass
     def _store_async(self, user_input: str, response_text: str) -> None:
         """Queue a fire-and-forget memory write. The actual queue/worker
         thread now lives on AikoMemorize (cognition.memory.memorize); this just wires

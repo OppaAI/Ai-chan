@@ -79,6 +79,7 @@ class EdgeCognitiveState:
         self._tool_outcomes: deque[dict] = deque(maxlen=6)
         self._perceptions: deque[dict] = deque(maxlen=4)
         self._activity: str = ""
+        self._response_reviews: deque[dict] = deque(maxlen=4)
         self._lock = threading.RLock()
 
     def record(self, user: str, assistant: str) -> None:
@@ -109,7 +110,7 @@ class EdgeCognitiveState:
 
     def clear(self) -> None:
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
 
     @staticmethod
@@ -159,7 +160,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews)}
 
     def consume_lessons(self) -> list[str]:
         """Return current outcome lessons for successful background consolidation."""
@@ -211,6 +212,25 @@ class EdgeCognitiveState:
         except Exception:
             return
 
+    def review_response(self, query: str, response: str) -> dict:
+        """Audit a completed draft for bounded metacognitive warning signs."""
+        q = (query or "").casefold()
+        text = " ".join((response or "").split())
+        snap = self.snapshot()
+        flags = []
+        if any(word in q for word in ("latest", "today", "now", "current", "recent")) and not any(word in text.casefold() for word in ("as of", "i do not have", "unable to verify", "search")):
+            flags.append("current-information claim may need verification")
+        if any(word in text.casefold() for word in ("definitely", "certainly", "always", "never")) and snap["uncertainty"] > 0.35:
+            flags.append("draft sounds more certain than internal uncertainty")
+        if any(not outcome.get("ok") for outcome in snap.get("tool_outcomes", [])[:3]) and not any(word in text.casefold() for word in ("failed", "could not", "unable", "error", "not completed")):
+            flags.append("recent tool failure may be undisclosed")
+        if "?" in query and len(text) < 24:
+            flags.append("draft may not answer the user question")
+        review = {"flags": flags, "confidence": "low" if len(flags) >= 2 else "moderate" if flags else "high", "response_chars": len(text)}
+        with self._lock:
+            self._response_reviews.appendleft(review)
+        return review
+
     def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None, project_signals: list[str] | None = None) -> str:
         """Render bounded real-world signals, including known scheduled work."""
         if now is None:
@@ -250,6 +270,8 @@ class EdgeCognitiveState:
         snap = self.snapshot()
         if snap["open_loops"]:
             lines.append("Follow-up candidates: " + " | ".join(snap["open_loops"][:3]))
+        if snap.get("response_reviews") and snap["response_reviews"][0].get("flags"):
+            lines.append("Last response review: " + " | ".join(snap["response_reviews"][0]["flags"][:3]))
         lines.append("Initiative guidance: " + ("keep quiet unless important" if activity == "active" else "a gentle follow-up may be appropriate"))
         lines.append("</grounded_context>")
         return "\n".join(lines)
