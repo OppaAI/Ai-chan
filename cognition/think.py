@@ -438,11 +438,22 @@ class AikoThink:
                 scheduled_jobs = list_schedule_records(user_id=current_user_id())
             except Exception:
                 scheduled_jobs = []
+            project_signals = []
+            if _CODE_TRIGGER_RE.search(user_input) or _LOCAL_KNOWLEDGE_RE.search(user_input):
+                try:
+                    result = subprocess.run(
+                        ["git", "status", "--short", "--untracked-files=no"],
+                        cwd=Path.cwd(), capture_output=True, text=True, timeout=1, check=False,
+                    )
+                    project_signals = [line.strip() for line in result.stdout.splitlines() if line.strip()][:5]
+                except Exception:
+                    project_signals = []
             grounded = for_identity(current_user_id()).grounded_context(
                 now=bioclock.local_now(),
                 idle_seconds=max(0.0, time.time() - self._last_chat_time),
                 resting=self.is_proactive_resting(),
                 scheduled_jobs=scheduled_jobs,
+                project_signals=project_signals,
             )
             base += "\n\n" + grounded
         except Exception:

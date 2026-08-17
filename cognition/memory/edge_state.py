@@ -162,7 +162,7 @@ class EdgeCognitiveState:
             self._lessons.clear()
             return lessons
 
-    def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None) -> str:
+    def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None, project_signals: list[str] | None = None) -> str:
         """Render bounded real-world signals, including known scheduled work."""
         if now is None:
             from datetime import datetime
@@ -189,6 +189,11 @@ class EdgeCognitiveState:
                 detail = outcome.get("error_type") or outcome.get("detail") or "no detail"
                 rendered.append(f"{outcome.get('tool', 'tool')}={status} ({detail})")
             lines.append("Recent tool outcomes: " + " | ".join(rendered))
+        if project_signals:
+            lines.append("Relevant project changes: " + " | ".join(project_signals[:5]))
+        snap = self.snapshot()
+        if snap["open_loops"]:
+            lines.append("Follow-up candidates: " + " | ".join(snap["open_loops"][:3]))
         lines.append("Initiative guidance: " + ("keep quiet unless important" if activity == "active" else "a gentle follow-up may be appropriate"))
         lines.append("</grounded_context>")
         return "\n".join(lines)
