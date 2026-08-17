@@ -623,7 +623,13 @@ class TaskState:
     failures: list[ToolResult] = field(default_factory=list)
 
     def record(self, result: ToolResult) -> None:
-        self.steps.append({
+        try:
+            from cognition.memory.edge_state import for_identity
+            from system.userspace import current_user_id
+            for_identity(current_user_id()).record_tool_result(result.tool, result.ok, result.error_type, result.content)
+        except Exception:
+            pass
+        self.steps.append(){
             "tool": result.tool,
             "ok": result.ok,
             "attempts": result.attempts,
