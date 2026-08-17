@@ -70,6 +70,7 @@ EDGE_COGNITION_ENABLED: "1"  # Bounded process-local focus/open-loop state; no I
 EDGE_COGNITION_MAX_TURNS: "7"  # Human-like working set, hard bounded per user.
 EDGE_COGNITION_MAX_CHARS: "1200"  # Prompt budget for the fast cognitive state.
 EDGE_COGNITION_MAX_OPEN_LOOPS: "3"  # Pending questions/tasks carried forward.
+EDGE_COGNITION_MAX_GOALS: "5"  # Active intentions carried forward in the fast state.
 EDGE_COGNITION_MAX_IDENTITIES: "16"  # Hard RAM bound across concurrent users.
 
 SQLITE_MEMORY_PATH: ""  # Optional override; blank uses per-user ~/.aiko/<user_id>/memory/memory.db.
