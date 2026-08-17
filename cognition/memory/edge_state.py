@@ -187,7 +187,7 @@ class EdgeCognitiveState:
             for outcome in outcomes[:4]:
                 status = "ok" if outcome.get("ok") else "failed"
                 detail = outcome.get("error_type") or outcome.get("detail") or "no detail"
-                rendered.append(f"{outcome.get("tool", "tool")}={status} ({detail})")
+                rendered.append(f"{outcome.get('tool', 'tool')}={status} ({detail})")
             lines.append("Recent tool outcomes: " + " | ".join(rendered))
         lines.append("Initiative guidance: " + ("keep quiet unless important" if activity == "active" else "a gentle follow-up may be appropriate"))
         lines.append("</grounded_context>")

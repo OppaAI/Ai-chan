@@ -629,7 +629,7 @@ class TaskState:
             for_identity(current_user_id()).record_tool_result(result.tool, result.ok, result.error_type, result.content)
         except Exception:
             pass
-        self.steps.append(){
+        self.steps.append({
             "tool": result.tool,
             "ok": result.ok,
             "attempts": result.attempts,
