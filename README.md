@@ -34,7 +34,7 @@ ASR and TTS run through the local machine by default. WebUI microphone streaming
 
 > Click the following image to watch on YouTube ▶
 
-[![Watch the demo](https://img.youtube.com/vi/9ZkuYCL6vP0/maxresdefault.jpg)](https://youtu.be/SKvZQcFN6vo)
+[![Watch the demo](https://img.youtube.com/vi/9ZkuYCL6vP0/maxresdefault.jpg)](https://youtu.be/VGHBMMFskCQ)
 
 ---
 
