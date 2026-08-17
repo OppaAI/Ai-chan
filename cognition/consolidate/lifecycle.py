@@ -95,6 +95,23 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
     if promoted_rows:
         memory_day_rows = memory_day_rows + promoted_rows
 
+    cognitive_state = None
+    cognitive_lesson_rows = []
+    try:
+        from cognition.memory.edge_state import for_identity
+        cognitive_state = for_identity(user_id)
+        cognitive_lesson_rows = [
+            {"id": None, "memory": f"Interaction lesson: {lesson}", "pinned": 0,
+             "access_count": 0, "access_day_count": 0, "entities": "[]",
+             "status": "active", "_store": "cognitive",
+             "_text": f"Interaction lesson: {lesson}", "_cognitive_lesson": True}
+            for lesson in cognitive_state.snapshot().get("lessons", []) if lesson
+        ]
+        if cognitive_lesson_rows:
+            memory_day_rows = memory_day_rows + cognitive_lesson_rows
+    except Exception as exc:
+        log.debug("Cognitive lesson consolidation skipped: %s", exc)
+
     source_count = len(memory_day_rows) + len(journal_day_rows)
     if len(memory_day_rows) < CONSOLIDATION_MIN_MEMS:
         state["last_consolidated_month"] = month_key
@@ -139,6 +156,9 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
                 written_ids.append(mem_id)
         except Exception as e:
             log.warning("Failed to pin monthly fact %r: %s", fact, e)
+
+    if facts_written > 0 and cognitive_state is not None and cognitive_lesson_rows:
+        cognitive_state.consume_lessons()
 
     if facts_written == 0:
         return {"ran": False, "reason": "no_facts_written", "month": month_key, "count": source_count, **gate_stats}

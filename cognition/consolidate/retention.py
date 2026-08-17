@@ -294,7 +294,7 @@ def apply_retention_gate(
 
     for row in daily_rows:
         text = row.get("_text", "") or ""
-        if is_must_keep(text):
+        if row.get("_cognitive_lesson") or is_must_keep(text):
             must_keep_rows.append(row)
         else:
             candidate_rows.append(row)

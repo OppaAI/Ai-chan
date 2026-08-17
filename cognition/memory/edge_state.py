@@ -154,6 +154,13 @@ class EdgeCognitiveState:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
             return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons)}
 
+    def consume_lessons(self) -> list[str]:
+        """Return current outcome lessons for successful background consolidation."""
+        with self._lock:
+            lessons = list(self._lessons)
+            self._lessons.clear()
+            return lessons
+
     def situation_context(self, query: str = "", memories: list[dict] | None = None, knowledge: str = "") -> str:
         """Build a bounded situation model from already-retrieved context."""
         snap = self.snapshot()
