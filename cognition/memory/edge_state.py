@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import threading
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 
-from .env import env_flag, env_int
+from .env import env_bool, env_flag, env_int
 
 EDGE_COGNITION_ENABLED = env_flag("EDGE_COGNITION_ENABLED", "1")
+EDGE_COGNITION_PERSIST = env_bool("EDGE_COGNITION_PERSIST", "1")
 EDGE_COGNITION_MAX_TURNS = max(1, env_int("EDGE_COGNITION_MAX_TURNS", 7))
 EDGE_COGNITION_MAX_CHARS = max(240, env_int("EDGE_COGNITION_MAX_CHARS", 1200))
 EDGE_COGNITION_MAX_OPEN_LOOPS = max(1, env_int("EDGE_COGNITION_MAX_OPEN_LOOPS", 3))
@@ -63,7 +65,9 @@ def _affect(text: str) -> float:
 class EdgeCognitiveState:
     """Bounded per-identity state; all operations are lock-protected."""
 
-    def __init__(self) -> None:
+    def __init__(self, identity: str = "") -> None:
+        self._identity = identity or ""
+        self._persistent_loaded = False
         self._events: deque[_Event] = deque(maxlen=EDGE_COGNITION_MAX_TURNS)
         self._open_loops: deque[str] = deque(maxlen=EDGE_COGNITION_MAX_OPEN_LOOPS)
         self._affect = 0.0
@@ -163,6 +167,49 @@ class EdgeCognitiveState:
             lessons = list(self._lessons)
             self._lessons.clear()
             return lessons
+
+    def load_persistent(self) -> None:
+        if not EDGE_COGNITION_PERSIST or not self._identity or self._identity == "default":
+            return
+        if self._persistent_loaded:
+            return
+        try:
+            from cognition.memory.vecstore import connect_sqlite_db
+            conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
+            conn.execute("CREATE TABLE IF NOT EXISTS cognitive_state (user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+            row = conn.execute("SELECT state_json FROM cognitive_state WHERE user_id = ?", (self._identity,)).fetchone()
+            conn.close()
+            if not row:
+                return
+            data = json.loads(row[0])
+            with self._lock:
+                self._open_loops = deque(data.get("open_loops", [])[:EDGE_COGNITION_MAX_OPEN_LOOPS], maxlen=EDGE_COGNITION_MAX_OPEN_LOOPS)
+                self._goals = deque((_Goal(text=str(text)) for text in data.get("goals", []) if text), maxlen=EDGE_COGNITION_MAX_GOALS)
+                self._lessons = deque(data.get("lessons", [])[:5], maxlen=5)
+                self._activity = str(data.get("activity") or "")
+                self._affect = float(data.get("affect") or 0.0)
+                self._energy = float(data.get("energy") or 0.5)
+                self._uncertainty = float(data.get("uncertainty") or 0.0)
+                self._attention = str(data.get("attention") or "")
+        except Exception:
+            return
+        finally:
+            self._persistent_loaded = True
+
+    def persist(self) -> None:
+        if not EDGE_COGNITION_PERSIST or not self._identity or self._identity == "default":
+            return
+        try:
+            from cognition.memory.vecstore import connect_sqlite_db
+            with self._lock:
+                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
+            conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
+            conn.execute("CREATE TABLE IF NOT EXISTS cognitive_state (user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
+            conn.execute("INSERT INTO cognitive_state(user_id, state_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP", (self._identity, json.dumps(data, ensure_ascii=False, separators=(",", ":"))))
+            conn.commit()
+            conn.close()
+        except Exception:
+            return
 
     def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None, project_signals: list[str] | None = None) -> str:
         """Render bounded real-world signals, including known scheduled work."""
@@ -310,7 +357,9 @@ _states_lock = threading.Lock()
 def for_identity(identity: str) -> EdgeCognitiveState:
     with _states_lock:
         key = identity or "default"
-        state = _states.pop(key, None) or EdgeCognitiveState()
+        state = _states.pop(key, None) or EdgeCognitiveState(key)
+        if not state._persistent_loaded:
+            state.load_persistent()
         _states[key] = state
         while len(_states) > EDGE_COGNITION_MAX_IDENTITIES:
             _states.popitem(last=False)

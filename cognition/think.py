@@ -432,6 +432,8 @@ class AikoThink:
             from cognition.memory.edge_state import for_identity
             state_obj = for_identity(current_user_id())
             state_obj.record_activity(os.getenv("AIKO_ACTIVITY", ""))
+            state_obj.persist()
+            state_obj.persist()
             state = state_obj.context(user_input)
             if state:
                 base += "\n\n" + state

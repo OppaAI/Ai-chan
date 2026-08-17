@@ -626,7 +626,9 @@ class TaskState:
         try:
             from cognition.memory.edge_state import for_identity
             from system.userspace import current_user_id
-            for_identity(current_user_id()).record_tool_result(result.tool, result.ok, result.error_type, result.content)
+            state = for_identity(current_user_id())
+            state.record_tool_result(result.tool, result.ok, result.error_type, result.content)
+            state.persist()
         except Exception:
             pass
         self.steps.append({
