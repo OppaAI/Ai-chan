@@ -30,6 +30,8 @@ _GOAL_RE = re.compile(r"\b(?:i want to|i need to|we need to|let\x27s|lets|goal i
 _DONE_RE = re.compile(r"\b(done|finished|completed|fixed|solved|never mind|forget it)\b", re.I)
 _UNCERTAIN_RE = re.compile(r"\b(i don\x27t know|not sure|unclear|maybe|might|probably|could be|i think)\b", re.I)
 _ENERGY_LOW_RE = re.compile(r"\b(tired|exhausted|sleepy|drained|burned out|can\x27t focus|cannot focus)\b", re.I)
+_OUTCOME_FAIL_RE = re.compile(r"\b(wrong|incorrect|didn.t work|didn.t help|failed|try again|not what i meant|that.s not right)\b", re.I)
+_OUTCOME_OK_RE = re.compile(r"\b(worked|works|fixed|solved|perfect|exactly|that helped|thank you|thanks)\b", re.I)
 _ENERGY_HIGH_RE = re.compile(r"\b(excited|energized|motivated|let\x27s go|can\x27t wait)\b", re.I)
 _STOP = {"the", "and", "that", "this", "with", "you", "are", "for", "have", "from", "about"}
 
@@ -69,6 +71,7 @@ class EdgeCognitiveState:
         self._energy = 0.5
         self._uncertainty = 0.0
         self._attention = ""
+        self._lessons: deque[str] = deque(maxlen=5)
         self._lock = threading.RLock()
 
     def record(self, user: str, assistant: str) -> None:
@@ -79,6 +82,10 @@ class EdgeCognitiveState:
         if not user and not assistant:
             return
         with self._lock:
+            if self._events and _OUTCOME_FAIL_RE.search(user):
+                self._lessons.appendleft("Avoid repeating the previous approach: " + self._events[-1].assistant[:180])
+            elif self._events and _OUTCOME_OK_RE.search(user):
+                self._lessons.appendleft("The previous approach appeared useful: " + self._events[-1].assistant[:180])
             self._events.append(_Event(user, assistant, _tokens(user + " " + assistant)))
             combined = user + " " + assistant
             self._affect = max(-1.0, min(1.0, self._affect * 0.7 + _affect(combined) * 0.3))
@@ -95,7 +102,7 @@ class EdgeCognitiveState:
 
     def clear(self) -> None:
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
 
     @staticmethod
@@ -145,7 +152,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"]}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons)}
 
     def situation_context(self, query: str = "", memories: list[dict] | None = None, knowledge: str = "") -> str:
         """Build a bounded situation model from already-retrieved context."""
@@ -180,6 +187,8 @@ class EdgeCognitiveState:
             lines.append("Active goals: " + " | ".join(snap["goals"][:5]))
         if snap["open_loops"]:
             lines.append("Open loops: " + " | ".join(snap["open_loops"][:4]))
+        if snap["lessons"]:
+            lines.append("Lessons from outcomes: " + " | ".join(snap["lessons"][:3]))
         energy = "low" if snap["energy"] < 0.35 else "high" if snap["energy"] > 0.65 else "steady"
         uncertainty = "elevated" if snap["uncertainty"] > 0.35 else "ordinary"
         lines.append(f"Internal cues: mood={snap["mood"]}, energy={energy}, uncertainty={uncertainty}")
@@ -215,6 +224,7 @@ class EdgeCognitiveState:
         with self._lock:
             events, loops, affect = list(self._events), list(self._open_loops), self._affect
             goals = [g.text for g in self._goals if g.progress == "active"]
+            lessons = list(self._lessons)
             energy, uncertainty, attention = self._energy, self._uncertainty, self._attention
         if not events and not loops and not goals:
             return ""
@@ -229,6 +239,8 @@ class EdgeCognitiveState:
             lines.append("Open loops: " + " | ".join(loops))
         if goals:
             lines.append("Active goals: " + " | ".join(goals))
+        if lessons:
+            lines.append("Lessons from outcomes: " + " | ".join(lessons[:3]))
         mood = "positive" if affect > 0.2 else "negative" if affect < -0.2 else "neutral"
         energy_label = "low" if energy < 0.35 else "high" if energy > 0.65 else "steady"
         uncertainty_label = "elevated" if uncertainty > 0.35 else "ordinary"
