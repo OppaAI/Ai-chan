@@ -186,6 +186,28 @@ class EdgeCognitiveState:
         lines.append("Evidence confidence: " + ("moderate" if facts else "low"))
         return "\n".join(lines) + "\n</situation_model>"
 
+    def metacognitive_context(self, query: str = "", memories: list[dict] | None = None) -> str:
+        """Return a compact pre-response confidence and clarification check."""
+        snap = self.snapshot()
+        rows = memories or []
+        evidence = [str(r.get("memory") or r.get("text") or r.get("trace") or "").strip() for r in rows[:5]]
+        evidence = [item for item in evidence if item]
+        statuses = {str(r.get("status") or "").casefold() for r in rows}
+        temporal = any(word in (query or "").casefold() for word in ("latest", "today", "now", "current", "recent"))
+        flags = []
+        if not evidence:
+            flags.append("no retrieved personal evidence")
+        if snap["uncertainty"] > 0.35:
+            flags.append("user uncertainty cue is elevated")
+        if "superseded" in statuses:
+            flags.append("some retrieved memory may be outdated")
+        if temporal:
+            flags.append("query may require current external information")
+        confidence = "low" if len(flags) >= 2 or not evidence else "moderate"
+        action = "ask or verify before asserting" if flags else "answer, while separating memory from inference"
+        lines = ["<metacognitive_checkpoint>", f"Evidence available: {len(evidence)} memory item(s)", f"Confidence: {confidence}", "Checks: " + ("; ".join(flags) if flags else "no immediate warning"), "Response discipline: " + action, "</metacognitive_checkpoint>"]
+        return "\n".join(lines)
+
     def context(self, query: str = "") -> str:
         if not EDGE_COGNITION_ENABLED:
             return ""

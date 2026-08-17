@@ -1084,9 +1084,11 @@ class AikoThink:
             ) if memorize is not None else ""
             persona_block = memorize.persona_context() if memorize is not None else ""
             situation_block = ""
+            metacognitive_block = ""
             try:
                 from cognition.memory.edge_state import for_identity
                 situation_block = for_identity(current_user_id()).situation_context(user_input, memories, knowledge_block)
+                metacognitive_block = for_identity(current_user_id()).metacognitive_context(user_input, memories)
             except Exception:
                 pass
         
@@ -1099,7 +1101,9 @@ class AikoThink:
                 system = f"{system}\n\n{memory_block}"
             if situation_block:
                 system = f"{system}\n\n{situation_block}"
-            else:
+            if metacognitive_block:
+                system = f"{system}\n\n{metacognitive_block}"
+            if not memory_block:
                 system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
             system = f"{system}\n\n{knowledge_block}"
         
