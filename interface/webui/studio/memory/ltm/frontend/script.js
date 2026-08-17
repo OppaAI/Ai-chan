@@ -421,33 +421,37 @@ function render() {
 
   const defs = svg.append('defs');
 
-  // per-node glass gradients + glow filters (enhanced for 3D glossy glass effect)
+  // per-node glass gradients + glow filters (polished 3D glossy sphere)
   nodes.forEach((d, i) => {
     const hue = valenceHue(d);
     const col = hueColor(hue);
     const op = nodeOpacity(d);
     const gid = `glass-${i}`;
     
-    // Multi-stop radial gradient for 3D glossy sphere (like molecule models)
+    // Simple smooth radial gradient: lighter center → main color → slightly darker edges
+    // This creates the polished 3D sphere effect with natural curvature
     const grad = defs.append('radialGradient')
       .attr('id', gid)
-      .attr('cx', '30%').attr('cy', '25%').attr('r', '60%')
-      .attr('fy', '40%');
+      .attr('cx', '35%').attr('cy', '30%').attr('r', '70%');
     
-    // Subtle light transition (not harsh white)
-    grad.append('stop').attr('offset', '0%').attr('stop-color', col).attr('stop-opacity', 0.78 * op);
-    grad.append('stop').attr('offset', '12%').attr('stop-color', '#ffffff').attr('stop-opacity', 0.18 * op);
-    // Main color body
-    grad.append('stop').attr('offset', '42%').attr('stop-color', col).attr('stop-opacity', 0.68 * op);
-    // Shadow deepening toward bottom
-    grad.append('stop').attr('offset', '70%').attr('stop-color', col).attr('stop-opacity', 0.42 * op);
-    // Dark rim for depth
-    grad.append('stop').attr('offset', '100%').attr('stop-color', '#000000').attr('stop-opacity', 0.15 * op);
+    // Bright center (lighter version of hue)
+    grad.append('stop').attr('offset', '0%')
+      .attr('stop-color', d3.color(col).brighter(0.8).hex())
+      .attr('stop-opacity', 0.82 * op);
+    
+    // Mid: main color
+    grad.append('stop').attr('offset', '55%')
+      .attr('stop-color', col)
+      .attr('stop-opacity', 0.75 * op);
+    
+    // Edge: slightly darker for curvature
+    grad.append('stop').attr('offset', '100%')
+      .attr('stop-color', d3.color(col).darker(0.6).hex())
+      .attr('stop-opacity', 0.35 * op);
     
     d._glassId = gid;
     d._hueCol = col;
     d._op = op;
-    d._specularId = `spec-${i}`;
 
     const fid = `glow-${i}`;
     GraphBoot.addGlowFilter(defs, fid, glowStrength(d));
@@ -506,25 +510,27 @@ function render() {
     .attr('filter', d => `url(#${d._glowId})`)
     .attr('class', 'pulse-glow');
 
-  // glass body with glossy gradient
+  // glass body with glossy gradient and bright polished rim
   node.append('circle')
     .attr('r', nodeRadius)
     .attr('fill', d => `url(#${d._glassId})`)
     .attr('stroke', d => d.pinned ? '#ffffff' : d._hueCol)
-    .attr('stroke-width', d => d.pinned ? 1.8 : 0.9)
-    .attr('stroke-opacity', d => d.pinned ? 0.7 : 0.35 + retainOf(d) * 0.4)
+    .attr('stroke-width', d => d.pinned ? 2.2 : 1.2)
+    .attr('stroke-opacity', d => d.pinned ? 0.85 : 0.65 + retainOf(d) * 0.35)
     .attr('stroke-dasharray', d =>
               (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
             );
 
-  // Specular highlight circle (glossy shine) — small white ellipse at top-left
-  node.append('circle')
-    .attr('r', d => nodeRadius(d) * 0.28)
-    .attr('cx', d => -nodeRadius(d) * 0.3)
-    .attr('cy', d => -nodeRadius(d) * 0.35)
+  // Subtle specular highlight — just a small soft glow at top-left
+  node.append('ellipse')
+    .attr('rx', d => nodeRadius(d) * 0.22)
+    .attr('ry', d => nodeRadius(d) * 0.16)
+    .attr('cx', d => -nodeRadius(d) * 0.25)
+    .attr('cy', d => -nodeRadius(d) * 0.32)
     .attr('fill', '#ffffff')
-    .attr('opacity', d => 0.22 * nodeOpacity(d))
-    .attr('pointer-events', 'none');
+    .attr('opacity', d => 0.15 * nodeOpacity(d))
+    .attr('pointer-events', 'none')
+    .attr('filter', 'drop-shadow(0 0 1px rgba(255,255,255,0.3))');
 
   // quiet rim arcs (factor scores)
   node.each(function(d) {
