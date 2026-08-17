@@ -551,20 +551,26 @@ function render() {
     // link force below) alone, so differently-typed nodes that share edges
     // thread together through the same region, matching a real neural net's
     // interleaved look rather than segregated clusters.
-    charge: -110,
-    centerStrength: 0.035,
+    // KB-graph look: strong repulsion (-260) pushes lightly/unconnected
+    // nodes out into a loose halo, while short linkDistance + high
+    // linkStrength on real edges snaps the connected core in tight against
+    // that repulsion — that contrast (tight core vs. sprawling stragglers)
+    // is what makes the KB studio's graph read as a dense hairball with
+    // scattered outliers instead of an evenly-spread field.
+    charge: -260,
+    centerStrength: 0.03,
     clusterStrength: 0,
     nodeRadius,
     linkDistance: d => {
-      if (d.type === 'supersedes') return 90;
-      if (d.type === 'distilled_into') return 100;
-      return 65;
+      if (d.type === 'supersedes') return 60;
+      if (d.type === 'distilled_into') return 70;
+      return 42;
     },
     linkStrength: d => {
-      if (d.type === 'mentions') return 0.45;
-      if (d.type === 'supersedes') return 0.15;
-      if (d.type === 'distilled_into') return 0.2;
-      return 0.35;
+      if (d.type === 'mentions') return 0.65;
+      if (d.type === 'supersedes') return 0.25;
+      if (d.type === 'distilled_into') return 0.3;
+      return 0.55;
     },
   })
     .on('tick', () => {
