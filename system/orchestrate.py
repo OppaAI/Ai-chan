@@ -1225,6 +1225,7 @@ def run_session(ui, args) -> None:
                 if voice_info:
                     try:
                         from cognition.memory.edge_state import for_identity
+                        from system.userspace import current_user_id
                         started = voice_info.get("listen_started_at")
                         stopped = voice_info.get("recording_stopped_at")
                         asr_done = voice_info.get("asr_done_at")
