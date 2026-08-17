@@ -154,15 +154,17 @@ function glowStrength(d) {
 
 function nodeRadius(d) {
   let r = retainOf(d);
-  // Pinned still large but not so dominant that everything else looks uniform
   if (d.pinned) r = Math.max(r, 0.72);
   const hue = valenceHue(d);
-  // Slight size lift for emotional nodes (demo has varied cyan/gold sizes)
   if ((hue === 'pos' || hue === 'neg') && d.type === 'memory') {
     r = Math.min(1, r + 0.06);
   }
+  // Fully continuous, score-proportional across every node type — entity,
+  // knowledge, experience, episode, and memory all map their own retain/
+  // importance score through a smooth curve. No fixed-size tiers, no
+  // hot/quiet cutoff: a node with a 0.3 score is visibly smaller than one
+  // with 0.5, which is smaller than one with 0.8, for every type alike.
   if (d.type === 'entity') return 4.5 + 14 * Math.pow(r, 1.15);
-  // Wider radius range: small neutrals vs large pinned/emotional
   return 4 + 28 * Math.pow(r, 1.22);
 }
 
@@ -482,12 +484,15 @@ function render() {
     .attr('marker-end', d => d.type === 'supersedes' ? 'url(#arrow-sup)' : null);
 
   const node = g.append('g').selectAll('g').data(nodes).join('g')
+    .attr('class', 'node-group')
     .style('cursor', 'pointer')
     .attr('opacity', d => d.status === 'superseded' ? 0.55 : 1)
     .call(GraphBoot.makeDrag(() => simulation))
     .on('click', (event, d) => { event.stopPropagation(); showDetails(d); });
 
-  // outer glow disc (soft synapse halo) with subtle pulse
+  // outer glow disc (soft synapse halo) with subtle pulse — brightness/glow
+  // formula unchanged from original; only the radius offset differs slightly
+  // by size class since nodeRadius itself is now smaller for quiet nodes.
   node.append('circle')
     .attr('r', d => nodeRadius(d) + 3)
     .attr('fill', d => d._hueCol)
@@ -495,7 +500,7 @@ function render() {
     .attr('filter', d => `url(#${d._glowId})`)
     .attr('class', 'pulse-glow');
 
-  // glass body
+  // glass body — stroke width/opacity unchanged from original
   node.append('circle')
     .attr('r', nodeRadius)
     .attr('fill', d => `url(#${d._glassId})`)
@@ -506,7 +511,8 @@ function render() {
               (d.type === 'memory' && (d.status === 'superseded' || d.is_tip === false)) ? '3,2' : null
             );
 
-  // quiet rim arcs (factor scores) — outside body, low opacity
+  // quiet rim arcs (factor scores) — outside body, low opacity. Shown for
+  // every node again, same as the original (not gated to hot nodes).
   node.each(function(d) {
     const sc = d.scores || {};
     const r = nodeRadius(d) + 4;

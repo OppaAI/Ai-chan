@@ -91,7 +91,18 @@ header h1 {
   border: 1px solid rgba(200, 168, 240, 0.16); color: var(--dim);
   border-radius: 4px; cursor: pointer;
 }
-.node-label { fill: var(--text); font-size: 9px; pointer-events: none; opacity: 0.55; }
+.node-label {
+  fill: var(--text); font-size: 9px; pointer-events: none;
+  /* Reference style: only "hot" nodes and whatever the user is actively
+     looking at should carry visible text — a label on every single node is
+     what made the graph read as busy/cluttered instead of sparse. Default
+     hidden, revealed on hover of the parent node group. */
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+.node-group:hover .node-label {
+  opacity: 0.95;
+}
 
 /* Neural pulse animation for active nodes */
 @keyframes neuralPulse {

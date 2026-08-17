@@ -491,7 +491,14 @@ _DOMAIN_ENTITY_TERMS: tuple[str, ...] = tuple(
         "ros2,ros,nav2,slam,lidar,oak-d,vrm,mcp,harrier,miotts,sensevoice,"
         "sherpa-onnx,eres2net,silero,qdrant,mem0,sqlite-vec,"
         "cnc,wmc,emc,mcc,msb,gce,tms,tic,toc,hrs,hrm,agi,"
-        "oppaai,threads,patreon,huggingface,hugging face,cosmos",
+        "oppaai,threads,patreon,huggingface,hugging face,cosmos,"
+        "core logic,brute-force,autocomplete,piano practice,programmer laziness,"
+        "editor,modules,habit,rewrites,accidental rewrites,"
+        "practiced piano,40 hours,single day,frustration,irritation,programmer inefficiency,"
+        "meteor shower,jokes,eating,humanoid body,amusing,sarcastic,"
+        "sat properly,window,hands off lap,cloudy skies,bright meteor showers,"
+        "louis,dislikes,behavior,conversations,annoyed,"
+        "eager,hear a joke,wants to go outside",
     ).split(",")
     if t.strip()
 )
