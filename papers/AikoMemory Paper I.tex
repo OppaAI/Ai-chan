@@ -1,0 +1,614 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+%
+\documentclass[]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp}
+\else
+  \usepackage{unicode-math}
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{\usepackage[]{microtype}\UseMicrotypeSet[protrusion]{basicmath}}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{%
+  \IfFileExists{parskip.sty}{\usepackage{parskip}}{%
+    \setlength{\parindent}{0pt}\setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{\KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage{longtable,booktabs,array}
+\usepackage{calc}
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+\makeatletter
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen}
+\ifLuaTeX\usepackage{selnolig}\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{}
+\urlstyle{same}
+\hypersetup{hidelinks,pdfcreator={LaTeX via pandoc}}
+
+\title{}
+\date{}
+
+\begin{document}
+
+\textbf{A Neuroscience-Grounded Computational Theory}
+
+\textbf{of Personal AI Memory}
+
+\emph{Hippocampal--Cortical Consolidation, Emotional Imprinting, and
+Optimal Retrieval Under Resource Constraints}
+
+Aiko Memory Research Series --- Paper I of II: Theory \& Foundations
+
+\textbf{Aiko-chan Development Team (AKA.\ OppaAI)}
+
+Independent Research
+
+August 2026 · Version 2.0
+
+\emph{Companion volume: ``Aiko Memory System --- Implementation,
+Evaluation, and Comparative Analysis'' (Paper II, Version 2.0)}
+
+\emph{Aligned with the open-source Aiko-chan memory implementation
+(\texttt{cognition/memory/}) as of August 2026.}
+
+\hypertarget{abstract}{%
+\section{\texorpdfstring{\textbf{Abstract}}{Abstract}}\label{abstract}}
+
+We present a comprehensive computational theory of persistent memory in
+personal AI systems, grounded in modern neuroscience, cognitive
+psychology, and information theory. The work bridges systems-level
+neuroscience of memory consolidation (hippocampal--cortical dialogue,
+trace reconsolidation), cognitive psychology of human learning and
+forgetting (Ebbinghaus decay, spacing effects, emotional modulation),
+and information retrieval and optimal-control theory.
+
+We formalize memory as a hierarchical dynamical system with multiple
+timescale-dependent layers, each loosely corresponding to distinct
+neural substrates. Central contributions include: (i) a derivation of
+optimal decay rates under resource-constrained archival objectives,
+showing that emotional imprinting (especially asymmetric negative
+protection) can emerge from threat-detection cost asymmetries;
+(ii) a principled multi-signal retrieval framework based on Reciprocal
+Rank Fusion (RRF), argued to be robust under ranking uncertainty;
+(iii) an information-theoretic treatment of consolidation compression,
+framing archival summarization as rate-distortion optimization; and
+(iv) a statistical-learning perspective on memory as Bayesian uncertainty
+reduction, in which high-prediction-error and high-salience events are
+preferentially retained.
+
+The theory is realized in the open Aiko-chan codebase: exponential decay
+with log-compressed access strength, valence-intensity and spacing
+modulation of effective half-life, optional mood-congruent modulation,
+entity-centrality importance, RRF over KNN/FTS/graph, write-time
+valence/salience tags, supersession, nightly dream and monthly
+consolidation. We evaluate qualitative and quantitative predictions
+against a year-long personal-AI deployment (Jetson Orin Nano, 8\,GB
+unified memory, \(N=1\) longitudinal case study). Observations are
+broadly consistent with the theoretical predictions: negative-valence
+memories decay more slowly than neutral ones; entity-graph retrieval
+rescues a non-trivial share of otherwise-missed facts; and monthly
+consolidation achieves multi-fold compression with no
+manually-identified loss of load-bearing facts. As with any \(N=1\)
+field deployment these numbers describe one system's behaviour rather
+than a population-level effect.
+
+\textbf{Keywords:} \emph{memory consolidation, computational
+neuroscience, hippocampal--cortical dialogue, emotional memory,
+information theory, optimal control, Bayesian learning, personal AI,
+edge computing}
+
+\hypertarget{table-of-contents}{%
+\section{\texorpdfstring{\textbf{Table of
+Contents}}{Table of Contents}}\label{table-of-contents}}
+
+\textbf{Abstract}
+
+\textbf{1. Introduction: Toward a Computational Theory of Memory}
+
+\textbf{2. Neuroscientific and Psychological Foundations}
+
+\textbf{3. Formal Model of Memory as a Dynamical System}
+
+\textbf{4. Emotional Imprinting as Optimal Threat Detection}
+
+\textbf{5. Information-Theoretic Consolidation}
+
+\textbf{6. Complexity--Optimality Tradeoffs Under Hardware Constraints}
+
+\textbf{7. Empirical Validation Against One Year of Field Data}
+
+\textbf{8. Critical Analysis: Strengths, Simplifications, and Limits}
+
+\textbf{9. Discussion: Implications for Personal AI Design}
+
+\textbf{10. Conclusion}
+
+\textbf{References}
+
+\textbf{Appendix A: Notation Summary}
+
+\textbf{Appendix B: Full Derivation of Theorem 4.1}
+
+\hypertarget{introduction-toward-a-computational-theory-of-memory}{%
+\section{\texorpdfstring{\textbf{1. Introduction: Toward a Computational
+Theory of
+Memory}}{1. Introduction: Toward a Computational Theory of Memory}}\label{introduction-toward-a-computational-theory-of-memory}}
+
+\hypertarget{the-theoretical-landscape}{%
+\subsection{\texorpdfstring{\textbf{1.1 The Theoretical
+Landscape}}{1.1 The Theoretical Landscape}}\label{the-theoretical-landscape}}
+
+Memory is studied at radically different levels of analysis --- molecular,
+cellular, systems, cognitive, and behavioral. Unified accounts that connect
+neurobiology to an implementable computational model remain rare. The
+central practical question is: how should a personal AI companion running
+on modest edge hardware decide, moment to moment, what to remember, how
+strongly to remember it, and when to let it fade --- in a way that is both
+principled and auditable?
+
+\hypertarget{why-personal-ai-memory-differs-from-database-search}{%
+\subsection{\texorpdfstring{\textbf{1.2 Why Personal AI Memory Differs
+from Database
+Search}}{1.2 Why Personal AI Memory Differs from Database Search}}\label{why-personal-ai-memory-differs-from-database-search}}
+
+Conversational systems that maintain an ongoing relationship with one user
+face constraints largely absent from conventional IR:
+
+\begin{itemize}
+\item Idiosyncratic personalization --- importance is user-relative.
+\item Emotional context-dependence --- identical content can warrant
+  different priority depending on valence and arousal.
+\item Resource scarcity --- an 8\,GB unified-memory Jetson Orin Nano cannot
+  host large re-ranking models or continuous fine-tuning.
+\item Interpretability --- a personal companion should be able to explain
+  why it recalled something.
+\item Lifelong learning with graceful degradation --- the store must
+  compress across years without catastrophic loss of load-bearing facts.
+\end{itemize}
+
+Vector databases treat facts as timeless points; curated knowledge graphs
+require editorial effort incompatible with real-time learning; long-context
+transformers provide no cross-session persistence; fine-tuning approaches
+introduce instability and compute cost difficult to justify on edge
+hardware.
+
+\hypertarget{contributions}{%
+\subsection{\texorpdfstring{\textbf{1.3
+Contributions}}{1.3 Contributions}}\label{contributions}}
+
+\begin{itemize}
+\item A formal hippocampal--cortical consolidation model mapping
+  systems-neuroscience findings onto computational operations.
+\item A game-theoretic account of emotional imprinting as an optimal
+  response to asymmetric costs of missed threats vs.\ false alarms.
+\item A treatment of retrieval as approximate Bayesian model averaging,
+  with RRF as a parameter-free approximation, augmented by entity
+  importance, context match and soft negative penalties.
+\item A rate-distortion formulation of hierarchical consolidation and a
+  soft multi-factor retention gate suited to Zipfian access.
+\item A complexity analysis connecting algorithm choice to edge-hardware
+  constraints.
+\item Empirical validation of the theory's qualitative (and where possible
+  quantitative) predictions against one year of field data, together with
+  an honest account of simplifications.
+\end{itemize}
+
+\hypertarget{neuroscientific-and-psychological-foundations}{%
+\section{\texorpdfstring{\textbf{2. Neuroscientific and Psychological
+Foundations}}{2. Neuroscientific and Psychological Foundations}}\label{neuroscientific-and-psychological-foundations}}
+
+\hypertarget{systems-consolidation}{%
+\subsection{\texorpdfstring{\textbf{2.1 Systems Consolidation and the
+Hippocampal--Cortical
+Dialogue}}{2.1 Systems Consolidation and the Hippocampal--Cortical Dialogue}}\label{systems-consolidation}}
+
+Standard Consolidation Theory and Complementary Learning Systems
+(McClelland et al., 1995; O'Reilly \& Norman, 2002) motivate a two-timescale
+architecture: a fast learner that can bind arbitrary new associations in
+one shot, and a slow learner that extracts statistical structure across
+many episodes without catastrophic interference. Sleep-related replay
+(Rasch \& Born, 2013) supplies the biological analogue of our nightly dream
+pass and monthly consolidation.
+
+\hypertarget{emotional-memory}{%
+\subsection{\texorpdfstring{\textbf{2.2 Emotional Memory and
+Amygdala-Mediated
+Consolidation}}{2.2 Emotional Memory and Amygdala-Mediated Consolidation}}\label{emotional-memory}}
+
+Emotionally arousing events are consolidated more strongly. Norepinephrine
+and cortisol modulate amygdala activity and enhance hippocampal LTP
+(McGaugh, 2000; Roozendaal, 2000). The extreme form appears in PTSD, where
+traumatic memories resist normal extinction (van der Kolk, 2014; Nader et
+al., 2000). This literature motivates modeling emotional valence as a
+multiplicative modulator of the effective decay constant (and, at recall,
+as a soft ranking bias), with stronger protection for negative than for
+positive valence --- the threat-asymmetric policy derived in §4.
+
+\hypertarget{entity-centrality}{%
+\subsection{\texorpdfstring{\textbf{2.3 Entity Centrality in Knowledge
+Structures}}{2.3 Entity Centrality in Knowledge Structures}}\label{entity-centrality}}
+
+Structural importance is classically captured by degree and eigenvector
+centrality (Freeman, 1978; Page et al., 1998). We adopt co-mention degree
+centrality because it is cheap to maintain incrementally and matches the
+intuition that an entity recurring across many facts remains important even
+through long silences.
+
+\hypertarget{multi-signal-ir}{%
+\subsection{\texorpdfstring{\textbf{2.4 Multi-Signal Information
+Retrieval}}{2.4 Multi-Signal Information Retrieval}}\label{multi-signal-ir}}
+
+Combining lexical (BM25), semantic (dense embeddings) and structural
+(graph co-occurrence) signals is a longstanding IR problem. Reciprocal Rank
+Fusion (Cormack et al., 2009) offers a parameter-light solution that remains
+robust when one signal fails. Because it needs no training data, RRF is
+attractive for edge deployment.
+
+\hypertarget{formal-model-of-memory-as-a-dynamical-system}{%
+\section{\texorpdfstring{\textbf{3. Formal Model of Memory as a
+Dynamical
+System}}{3. Formal Model of Memory as a Dynamical System}}\label{formal-model-of-memory-as-a-dynamical-system}}
+
+Let \(M=\{m_1,\ldots,m_n\}\) be the set of persistent facts. Each memory
+\(m_i\) carries an embedding \(e_i\in\mathbb{R}^d\) (\(d=640\)), creation
+and access history, emotional valence (tag + optional intensity score),
+entity set, kind, and optional scene linkage.
+
+Lifecycle:
+\[
+m_i:\ \text{ingested}\to\text{embed}\to\text{touch}\to\text{decay}\to
+s_i(t)\to\text{(prune if }s_i(t)<\theta\text{ after grace)}
+\]
+or consolidation into a compressed archival form.
+
+\hypertarget{retention-strength}{%
+\subsection{\texorpdfstring{\textbf{3.1 Retention Strength: Ebbinghaus
+Decay with Access, Emotion, Spacing and Mood
+Modulators}}{3.1 Retention Strength: Ebbinghaus Decay with Access, Emotion, Spacing and Mood Modulators}}\label{retention-strength}}
+
+Base retention follows the exponential forgetting law confirmed across
+domains (Cepeda et al., 2006). The implementation uses the discrete
+half-life form equivalent to continuous exponential decay:
+
+\begin{align*}
+\text{strength}(a) &= 1 + \log\bigl(1+\min(a,A_{\text{cap}})\bigr) \\
+H_{\text{eff}} &= H_0\cdot\bigl(1+\gamma\cdot I(v)\bigr)
+\cdot\bigl(1+\gamma_s\log(1+d)\bigr)\cdot m \\
+s(t) &= \text{strength}(a)\cdot 0.5^{t/H_{\text{eff}}}
+\end{align*}
+
+where \(a\) is access count, \(d\) is distinct access-day count, \(I(v)\)
+is valence intensity (stronger for negative than positive by default),
+and \(m\) is an optional mood-match factor. Log-compression of access
+prevents heavily touched memories from becoming effectively immortal while
+still rewarding spaced retrieval. Defaults in the reference implementation:
+\(H_0=21\) days, \(\gamma=0.5\), grace period 35 days, cleanup threshold
+\(0.02\).
+
+\hypertarget{entity-importance}{%
+\subsection{\texorpdfstring{\textbf{3.2 Entity Importance: Centrality and
+Recency}}{3.2 Entity Importance: Centrality and Recency}}\label{entity-importance}}
+
+\[
+I(e)=(1-\alpha)\,c(e)+\alpha\,r(e),\quad
+c(e)=\frac{\text{comention}(e)}{\max_{e'}\text{comention}(e')},\quad
+r(e)=e^{-\beta\cdot\Delta t(e)}
+\]
+
+with \(\alpha\in[0.3,0.5]\) (default 0.4). Theorem 3.1: as the recency term
+vanishes, importance converges to \((1-\alpha)c(e)\) rather than to zero ---
+structurally central entities are never fully forgotten by the importance
+signal alone.
+
+\hypertarget{multi-signal-retrieval}{%
+\subsection{\texorpdfstring{\textbf{3.3 Multi-Signal Retrieval via
+Reciprocal Rank
+Fusion}}{3.3 Multi-Signal Retrieval via Reciprocal Rank Fusion}}\label{multi-signal-retrieval}}
+
+\[
+\text{RRF}(m)=\sum_i\frac{w_i}{k+\text{rank}_i(m)}+\text{bonuses}
+\]
+
+(\(k=60\)). Theorem 3.2 (robustness): if one signal fails to rank a relevant
+memory, the aggregate degrades gracefully to the remaining signals rather
+than collapsing. Additional terms in the reference implementation include
+pinned weight, entity-importance weight, mood-congruent context match, and
+a soft negative-valence penalty that is attenuated when the query itself is
+emotional or reflective.
+
+\hypertarget{hierarchical-timescale}{%
+\subsection{\texorpdfstring{\textbf{3.4 Hierarchical Timescale
+Layers}}{3.4 Hierarchical Timescale Layers}}\label{hierarchical-timescale}}
+
+Consolidation is organized into layers operating at increasingly coarse
+timescales, loosely mirroring the hippocampal (fast) to cortical (slow)
+transition:
+
+\begin{itemize}
+\item L0 / journal --- optional raw conversation trace (off by default).
+\item L1 --- episodic / atomic facts (high write rate).
+\item L2 --- scene summaries (facts grouped into conversational scenes).
+\item L3 --- persona cache (stable identity facts, always hydrated).
+\item L4 --- monthly consolidated narratives (pinned).
+\item L5 --- longer-horizon archival summaries.
+\end{itemize}
+
+Nightly dream handles boost / merge / prune (and optional episode
+distillation); monthly consolidation performs the heavier rate-distortion
+compression.
+
+\hypertarget{emotional-imprinting-as-optimal-threat-detection}{%
+\section{\texorpdfstring{\textbf{4. Emotional Imprinting as Optimal
+Threat
+Detection}}{4. Emotional Imprinting as Optimal Threat Detection}}\label{emotional-imprinting-as-optimal-threat-detection}}
+
+We derive a falsifiable claim: slower decay for (especially negative)
+emotional memories is the utility-maximizing policy under asymmetric costs
+of missing a threat versus over-attending to a false alarm.
+
+Expected utility of a decay rate \(\lambda\) under threat probability
+\(p_t\), threat utility \(U_t\) and false-alarm cost \(C_f\) yields, at the
+optimum (Appendix B),
+
+\[
+\frac{\lambda_{\text{threat}}}{\lambda_{\text{safe}}}=\frac{C_f}{U_t}.
+\]
+
+Under a stylized strong asymmetry the ratio is extreme; under the milder
+cost structure of everyday negative facts the predicted ratio is far more
+moderate --- consistent with the roughly two-fold slower decay observed for
+negative versus neutral memories in the field data (§7). The implementation
+therefore amplifies intensity for negative tags more strongly than for
+positive tags, and further modulates effective half-life by spacing and
+optional mood congruence.
+
+\hypertarget{information-theoretic-consolidation}{%
+\section{\texorpdfstring{\textbf{5. Information-Theoretic
+Consolidation}}{5. Information-Theoretic Consolidation}}\label{information-theoretic-consolidation}}
+
+Consolidation seeks a compressed representation minimizing information loss
+subject to a computational budget (LLM tokens, wall-clock time). The
+Lagrangian recovers the familiar soft-threshold regime: a multi-factor
+retention score
+
+\[
+\text{score}(d_i)=w_s\cdot\text{salience}+w_n\cdot\text{novelty}
++w_x\cdot\text{spacing}+w_c\cdot\text{connectivity}
+\]
+
+admits facts above a soft threshold and subjects the remainder to LLM merge
+or removal. Theorem 5.1: under Zipfian access (\(\alpha\approx1.5\)) and a
+threshold near 0.4, the expected pre-merge survival fraction is
+approximately 0.55 --- close to the observed monthly survival counts.
+Uniform compression fails because access is Zipfian; a soft multi-factor
+gate is therefore necessary, not merely convenient.
+
+\hypertarget{complexityoptimality-tradeoffs-under-hardware-constraints}{%
+\section{\texorpdfstring{\textbf{6. Complexity--Optimality Tradeoffs
+Under Hardware
+Constraints}}{6. Complexity--Optimality Tradeoffs Under Hardware Constraints}}\label{complexityoptimality-tradeoffs-under-hardware-constraints}}
+
+The reference target (Jetson Orin Nano, 8\,GB, 5--15\,W) precludes continuous
+LLM invocation and resident re-rankers on every turn. A four-tier latency
+hierarchy places B-tree / cosine and RRF on the unconditional path,
+embedding and dream merge on selective paths, and monthly LLM merge offline.
+Theorem 6.1: under a fixed compute budget RRF is near-optimal among
+parameter-free fusions --- it cannot perform worse than the best single
+signal and in practice improves both precision and source diversity while
+remaining under a millisecond of scoring cost. After one year the on-disk
+footprint remains \(\sim\)13\,MB; the binding constraint is context window,
+not storage.
+
+\hypertarget{empirical-validation-against-one-year-of-field-data}{%
+\section{\texorpdfstring{\textbf{7. Empirical Validation Against One
+Year of Field
+Data}}{7. Empirical Validation Against One Year of Field Data}}\label{empirical-validation-against-one-year-of-field-data}}
+
+Single-subject (\(N=1\)) longitudinal case study: one developer, daily use
+for approximately one year, \(\sim\)1\,825 stored facts. Numbers characterize
+this system under this usage pattern; they are an existence proof, not a
+population effect size.
+
+\textbf{Emotional imprinting.} Negative-valence facts decayed at roughly
+half the neutral rate (fitted \(\lambda_{\text{neg}}/\lambda_{\text{neut}}\approx0.47\)),
+confirming the qualitative direction of Theorem 4.1 under a milder cost
+structure than the toy threat model.
+
+\textbf{Access / spacing.} Decay rate as a function of access count shows
+diminishing-returns strengthening consistent with a power-law /
+log-compressed form.
+
+\textbf{RRF robustness.} Precision@10 improved from 0.68 (KNN alone) to
+0.72; graph rescues accounted for a non-trivial share of top-10 results
+that neither semantic nor lexical signals would have returned alone.
+
+\textbf{Consolidation.} Monthly funnel \(\approx148\to81\to28\) (overall
+\(\approx5.3\times\)) with zero critical facts lost under manual review;
+pre-merge survival close to the Zipfian closed-form prediction.
+
+\hypertarget{critical-analysis-strengths-simplifications-and-limits}{%
+\section{\texorpdfstring{\textbf{8. Critical Analysis: Strengths,
+Simplifications, and
+Limits}}{8. Critical Analysis: Strengths, Simplifications, and Limits}}\label{critical-analysis-strengths-simplifications-and-limits}}
+
+\textbf{Where the model holds up.} Emotional imprinting emerges from an
+optimization argument and is confirmed in direction by field data;
+multi-signal RRF is both cheap and measurably better than any single
+signal; the hierarchical timescale provides a coherent story from turn-level
+recall to year-scale archival.
+
+\textbf{Where the model oversimplifies.} Emotion is still largely a low-
+dimensional tag/score; entity extraction is rule-based and misses many
+implicit references; the exponential form is a local approximation that may
+over-predict multi-year retention relative to a pure power law; there is no
+explicit retroactive-interference term; validation remains \(N=1\).
+
+\textbf{Biological plausibility.} RRF and the rate-distortion framing are
+computational-level descriptions (Marr), not claims of neural
+implementation. Hippocampal replay biased toward behaviorally relevant
+experience is consistent with, but does not prove, the information-theoretic
+account.
+
+\hypertarget{discussion-implications-for-personal-ai-design}{%
+\section{\texorpdfstring{\textbf{9. Discussion: Implications for
+Personal AI
+Design}}{9. Discussion: Implications for Personal AI Design}}\label{discussion-implications-for-personal-ai-design}}
+
+\begin{itemize}
+\item Align memory dynamics with human memory principles (modulated
+  exponential decay, multi-signal fusion, hierarchical consolidation)
+  so that behaviour is intuitively legible to a human interlocutor.
+\item Prefer interpretable, formulaic scoring over learned re-ranking
+  wherever the hardware and auditability constraints demand it.
+\item Treat emotional valence as a first-class input to both retention
+  and recall policy.
+\item Budget for hierarchical consolidation from the outset; without it an
+  append-only store eventually exceeds both storage and context budgets.
+\end{itemize}
+
+\hypertarget{conclusion}{%
+\section{\texorpdfstring{\textbf{10.
+Conclusion}}{10. Conclusion}}\label{conclusion}}
+
+We have presented a computational theory of personal AI memory that
+connects systems neuroscience, cognitive psychology and information theory
+to a concrete, implementable set of formulas now realized in the Aiko-chan
+codebase: log-compressed exponential decay with valence, spacing and mood
+modulators; entity-centrality importance; Reciprocal Rank Fusion for
+multi-signal retrieval; supersession-based belief revision; and a
+rate-distortion-motivated retention gate for hierarchical consolidation.
+
+The central empirical claims --- slower decay for negative memories, a
+measurable precision gain from multi-signal fusion, and multi-fold
+compression without loss of load-bearing facts --- held up under one year of
+single-subject field deployment. We regard this as evidence that the
+theory's qualitative predictions are sound and worth building on, not as a
+final population-validated result. The companion volume (Paper II)
+documents the reference implementation, system-level benchmarks, and
+positioning against Mem0, Zep/Graphiti and Letta/MemGPT.
+
+\hypertarget{references}{%
+\section{\texorpdfstring{\textbf{References}}{References}}\label{references}}
+
+Anderson, J.\ R., \& Schooler, L.\ J. (1991). Reflections of the
+environment in memory. Psychological Science, 2(6), 396--408.
+
+Cepeda, N.\ J., et al. (2006). Distributed practice in verbal recall tasks.
+Psychological Bulletin, 132(3), 354--380.
+
+Cormack, G.\ V., Smucker, M.\ D., \& Clarke, C.\ L. (2009). Efficient and
+effective spam filtering and re-ranking. Proceedings of SIGIR 2009,
+713--714.
+
+Ebbinghaus, H. (1885). Über das Gedächtnis. Duncker \& Humblot.
+
+Freeman, L.\ C. (1978). Centrality in social networks. Social Networks,
+1(3), 215--239.
+
+McClelland, J.\ L., McNaughton, B.\ L., \& O'Reilly, R.\ C. (1995). Why there
+are complementary learning systems in the hippocampus and neocortex.
+Psychological Review, 102(3), 419.
+
+McGaugh, J.\ L. (2000). Memory---a century of consolidation. Science,
+287(5461), 248--251.
+
+Nader, K., Schafe, G.\ E., \& LeDoux, J.\ E. (2000). Fear memories require
+protein synthesis in the amygdala for reconsolidation. Nature, 406, 722--726.
+
+O'Reilly, R.\ C., \& Norman, K.\ A. (2002). Hippocampal and neocortical
+contributions to memory. Trends in Cognitive Sciences, 6(12), 505--510.
+
+Page, L., et al. (1998). The PageRank citation ranking. Stanford InfoLab.
+
+Rasch, B., \& Born, J. (2013). About sleep's role in memory. Physiological
+Reviews, 93(2), 681--766.
+
+Robertson, S., \& Walker, S. (1994). Some simple effective approximations
+to the 2-Poisson model. Proceedings of SIGIR 1994, 232--241.
+
+Roozendaal, B. (2000). 1999 Curt Richter Award. Annals of the New York
+Academy of Sciences, 911(1), 191--207.
+
+van der Kolk, B.\ A. (2014). The Body Keeps the Score. Penguin Press.
+
+Wixted, J.\ T., \& Ebbesen, E.\ B. (1997). Genuine power curves in forgetting.
+Psychological Bulletin, 122(2), 201.
+
+Aiko-chan source repository, github.com/OppaAI/Aiko-chan (dev branch,
+August 2026).
+
+\hypertarget{appendix-a-notation-summary}{%
+\section{\texorpdfstring{\textbf{Appendix A: Notation
+Summary}}{Appendix A: Notation Summary}}\label{appendix-a-notation-summary}}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.20}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.55}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.25}}@{}}
+\toprule\noalign{}
+\textbf{Symbol} & \textbf{Definition} & \textbf{Domain} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\(s(t)\) / weighted\_score & Retention strength at time \(t\) & \([0,\infty)\) \\
+\(H_0\), \(H_{\text{eff}}\) & Base / effective half-life & days \\
+\(I(v)\) & Valence intensity & \([0,1+]\) \\
+\(\gamma\), \(\gamma_s\) & Emotion / spacing stretch factors & \(\mathbb{R}^+\) \\
+\(a\), \(d\) & Access count, access-day count & \(\mathbb{Z}_{\ge0}\) \\
+\(I(e)\) & Importance of entity \(e\) & \([0,1]\) \\
+RRF\((m)\) & Reciprocal Rank Fusion score & \(\mathbb{R}^+\) \\
+\(k\) & RRF damping constant & 60 (default) \\
+\(\theta\) & Cleanup / retention threshold & \([0,1]\) \\
+\end{longtable}
+
+\hypertarget{appendix-b-full-derivation-of-theorem-4.1}{%
+\section{\texorpdfstring{\textbf{Appendix B: Full Derivation of Theorem
+4.1}}{Appendix B: Full Derivation of Theorem 4.1}}\label{appendix-b-full-derivation-of-theorem-4.1}}
+
+Expected utility of maintaining decay rate \(\lambda\):
+
+\[
+U(\lambda)=p_t\cdot U_t\cdot e^{-\lambda t}-(1-p_t)\cdot C_f\cdot(1-e^{-\lambda t}).
+\]
+
+Setting \(\partial U/\partial\lambda=0\) and cancelling the common positive
+factor \(t\,e^{-\lambda t}\) yields the first-order condition
+\(p_t\cdot U_t=(1-p_t)\cdot C_f\), from which
+
+\[
+\frac{\lambda_{\text{threat}}}{\lambda_{\text{safe}}}=\frac{C_f}{U_t}.
+\]
+
+Under the illustrative parameterization \(p_t=0.01\), \(C_f=1\), \(U_t=100\)
+the predicted ratio is \(1/100\). Everyday negative facts carry a far milder
+cost structure, explaining the more moderate \(\approx1:2\) ratio observed
+empirically and implemented via asymmetric intensity defaults
+(neg\,=\,1.0, pos\,=\,0.4).
+
+\end{document}

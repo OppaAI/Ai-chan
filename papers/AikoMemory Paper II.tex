@@ -1,0 +1,698 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+%
+\documentclass[]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp}
+\else
+  \usepackage{unicode-math}
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{\usepackage[]{microtype}\UseMicrotypeSet[protrusion]{basicmath}}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{%
+  \IfFileExists{parskip.sty}{\usepackage{parskip}}{%
+    \setlength{\parindent}{0pt}\setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{\KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{xcolor}
+\usepackage{longtable,booktabs,array}
+\usepackage{calc}
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+\makeatletter
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setcounter{secnumdepth}{-\maxdimen}
+\ifLuaTeX\usepackage{selnolig}\fi
+\IfFileExists{bookmark.sty}{\usepackage{bookmark}}{\usepackage{hyperref}}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{}
+\urlstyle{same}
+\hypersetup{hidelinks,pdfcreator={LaTeX via pandoc}}
+
+\title{}
+\date{}
+
+\begin{document}
+
+\textbf{Aiko Memory System}
+
+\textbf{Implementation, Evaluation, and Comparative Analysis}
+
+\emph{A formulaic, auditable memory architecture for edge-deployed
+conversational AI, benchmarked against Mem0, Zep/Graphiti, and
+Letta/MemGPT}
+
+Aiko Memory Research Series --- Paper II of II: Implementation \&
+Evaluation
+
+\textbf{Aiko-chan Development Team (AKA.\ OppaAI)}
+
+Independent Research
+
+August 2026 · Version 2.0
+
+\emph{Companion volume: ``A Neuroscience-Grounded Computational Theory
+of Personal AI Memory'' (Paper I, Version 2.0)}
+
+\emph{Source of truth: the open-source Aiko-chan repository
+(\texttt{cognition/memory/}) as of August 2026.}
+
+\hypertarget{abstract}{%
+\section{\texorpdfstring{\textbf{Abstract}}{Abstract}}\label{abstract}}
+
+This paper documents the reference engineering implementation of the
+memory theory developed in the companion volume (Paper I), and evaluates
+it against both internal benchmarks and the current (2026) landscape of
+agentic-memory frameworks --- Mem0, Zep/Graphiti, Letta (formerly
+MemGPT), and related systems.
+
+The system --- codenamed Aiko --- runs entirely on an 8\,GB-unified-memory
+Jetson Orin Nano and rejects learned re-ranking in favor of closed-form,
+auditable scoring. The live codebase implements:
+
+\begin{itemize}
+\item Ebbinghaus-style exponential decay with log-compressed access strength,
+  valence-intensity modulation of effective half-life, spaced-repetition
+  stretch from distinct access days, and optional mood-congruent
+  modulation;
+\item entity-centrality importance \(I_e=(1-\alpha)c(e)+\alpha r(e)\);
+\item Reciprocal Rank Fusion (RRF) across KNN, FTS5 and entity-graph
+  signals, plus pinned, recency, access, entity-importance, context-match
+  and negative-penalty terms;
+\item write-time valence/salience tagging and supersession-based belief
+  revision;
+\item a nightly dream pass (salience boost, near-duplicate merge, decay
+  prune) and monthly consolidation with an LLM merge of survivors;
+\item hierarchical layers including persona cache (identity facts) and
+  scene summaries.
+\end{itemize}
+
+We document the SQLite + sqlite-vec + FTS5 schema, the full
+ADD/RECALL/TOUCH/dream/consolidation pipeline, the testing and monitoring
+harness, and end-to-end latency and footprint measurements drawn from a
+year-long single-deployment field test.
+
+On that deployment the system sustained \(\sim\)16\,ms median per-turn
+retrieval latency, a \(\sim\)13\,MB total footprint after 1\,825 stored
+facts, 0.72 precision@10 (vs.\ 0.68 for pure vector search), and 5.3\(\times\)
+monthly archival compression with no manually-identified loss of
+salience-tagged facts. We compare these figures, where methodologically
+comparable, against publicly reported 2026 benchmark data for Mem0, Zep
+and Letta, and discuss the engineering trade-offs --- auditability and
+edge footprint versus leaderboard accuracy --- that motivate a formulaic
+design.
+
+\textbf{Keywords:} \emph{agentic memory, retrieval-augmented generation,
+edge AI, SQLite, Reciprocal Rank Fusion, Mem0, Zep, Graphiti, Letta,
+MemGPT, system evaluation}
+
+\hypertarget{table-of-contents}{%
+\section{\texorpdfstring{\textbf{Table of
+Contents}}{Table of Contents}}\label{table-of-contents}}
+
+\textbf{Abstract}
+
+\textbf{1. Introduction \& Design Principles}
+
+\textbf{2. System Architecture}
+
+\textbf{3. The Core Formulas (Reference Implementation)}
+
+\textbf{4. Data Schema}
+
+\textbf{5. Worked End-to-End Example}
+
+\textbf{6. Testing, Monitoring \& Tuning Harness}
+
+\textbf{7. Performance Evaluation}
+
+\textbf{8. Comparative Analysis vs.\ Established Agentic Memory Systems}
+
+\textbf{9. Key Engineering Decisions \& Trade-offs}
+
+\textbf{10. Limitations \& Future Work}
+
+\textbf{11. Conclusion}
+
+\textbf{References}
+
+\textbf{Appendix A: Configuration Reference}
+
+\hypertarget{introduction-design-principles}{%
+\section{\texorpdfstring{\textbf{1. Introduction \& Design
+Principles}}{1. Introduction \& Design Principles}}\label{introduction-design-principles}}
+
+Paper I argued, from neuroscience and information theory, that
+personal-AI memory should behave as a decaying, emotionally-modulated,
+hierarchically-consolidated dynamical system rather than a static vector
+index. This paper documents how that theory was turned into running code
+in the open Aiko-chan repository, and reports how the resulting system
+performs --- in absolute terms and relative to the current field.
+
+\hypertarget{why-formulas-instead-of-learned-ranking}{%
+\subsection{\texorpdfstring{\textbf{1.1 Why Formulas Instead of Learned
+Ranking}}{1.1 Why Formulas Instead of Learned Ranking}}\label{why-formulas-instead-of-learned-ranking}}
+
+The reference deployment target is a Jetson Orin Nano with 8\,GB of
+unified memory and a 5--15\,W power envelope. Every additional resident
+model competes with the primary conversational LLM for the same VRAM
+budget; a learned-to-rank re-ranker would additionally require a labeled
+training pipeline and periodic retraining. The system therefore uses
+closed-form scoring whose principal terms are:
+
+\begin{align*}
+\text{strength} &= 1 + \log(1+\min(a, A_{\text{cap}})) \\
+H_{\text{eff}} &= H_0 \cdot (1+\gamma\cdot I(v)) \cdot (1+\gamma_s\log(1+d)) \cdot m \\
+s &= \text{strength} \cdot 0.5^{t/H_{\text{eff}}} \\
+I(e) &= (1-\alpha)\,c(e) + \alpha\,r(e) \\
+\text{RRF}(m) &= \sum_i \frac{1}{k+\text{rank}_i(m)} + \text{bonuses}
+\end{align*}
+
+Each formula is auditable (a developer can see exactly why a memory ranked
+where it did), tunable by environment variables without retraining, and
+cheap (microsecond-scale evaluation on the Jetson).
+
+\hypertarget{design-constraints}{%
+\subsection{\texorpdfstring{\textbf{1.2 Design
+Constraints}}{1.2 Design Constraints}}\label{design-constraints}}
+
+\begin{itemize}
+\item Memory as lifecycle, not static storage --- facts age; high-intensity
+  (especially negative) facts age more slowly; spacing and mood further
+  modulate effective half-life.
+\item Semantic + lexical + entity-graph fusion --- a memory should be
+  findable via any one of three independent signals, fused by RRF.
+\item Per-user isolation --- every table is keyed by \texttt{user\_id};
+  optional SQLCipher encryption.
+\item Efficient consolidation --- a nightly dream pass plus a monthly
+  consolidation gate keep the store bounded.
+\item Minimal context-window cost --- a typical recall is formatted to well
+  under 1.2\,KB of injected context; a separate persona cache supplies
+  stable identity facts every turn without a full search.
+\end{itemize}
+
+\hypertarget{system-architecture}{%
+\section{\texorpdfstring{\textbf{2. System
+Architecture}}{2. System Architecture}}\label{system-architecture}}
+
+The live implementation lives under \texttt{cognition/memory/}. Hot-path
+operations --- ADD, RECALL, TOUCH --- run on every conversational turn.
+Offline maintenance comprises a nightly dream pass and a monthly
+consolidation job. Supporting modules include \texttt{forget.py}
+(decay), \texttt{entity.py} (importance, extraction, supersession,
+valence/salience inference), \texttt{vecstore.py} (shared sqlite-vec +
+RRF helpers), \texttt{schema.py} (DDL and tunables), episode/EMC
+distillation, and optional cross-store / spreading / neural-net overlays.
+
+\hypertarget{add-write-path}{%
+\subsection{\texorpdfstring{\textbf{2.1 ADD (Write
+Path)}}{2.1 ADD (Write Path)}}\label{add-write-path}}
+
+\begin{itemize}
+\item Extract candidate facts from the conversational turn (LLM-assisted
+  extraction with identity-repair post-filters).
+\item Embed each fact with the fixed 640-dimensional Harrier embedder
+  (no fine-tuning).
+\item Check near-duplicates via KNN against existing vectors (write-dedup
+  threshold, default \(\approx 0.95\)).
+\item Classify the write as add / no-op (exact duplicate) / supersede
+  (belief revision).
+\item Infer valence\_tag / valence\_score and salience\_hit with cheap
+  heuristics (and optional LLM valence override).
+\item Update the entity co-mention graph and enqueue the write
+  asynchronously so it never blocks the turn.
+\end{itemize}
+
+\hypertarget{recall-read-path}{%
+\subsection{\texorpdfstring{\textbf{2.2 RECALL (Read
+Path)}}{2.2 RECALL (Read Path)}}\label{recall-read-path}}
+
+\begin{itemize}
+\item Run a tiered quick/wide pass across three signals: KNN (semantic),
+  FTS5 (lexical, BM25-style), and entity graph (structural / spreading).
+\item Fuse the rank lists via Reciprocal Rank Fusion (\(k=60\)).
+\item Apply additive bonuses: pinned, recency, access, entity importance,
+  mood-congruent context match; apply a soft negative-valence penalty
+  unless the query itself is emotional/reflective.
+\item Optionally re-rank the high-scoring subset by recency-among-relevant.
+\item Touch each returned memory (increment \texttt{access\_count}, update
+  \texttt{last\_accessed\_at}, update \texttt{access\_day\_count} for spacing).
+\item Format the top results into a compact context block (bounded by
+  \texttt{MEMORY\_CONTEXT\_TOTAL\_CHARS}, default 1200). A separate
+  persona cache (kind=\texttt{identity}) is prepended every turn without
+  a full search.
+\end{itemize}
+
+\hypertarget{maintenance-dream-pass-and-monthly-consolidation}{%
+\subsection{\texorpdfstring{\textbf{2.3 Maintenance: Dream Pass and
+Monthly
+Consolidation}}{2.3 Maintenance: Dream Pass and Monthly Consolidation}}\label{maintenance-dream-pass-and-monthly-consolidation}}
+
+The nightly dream pass (i) boosts \texttt{access\_count} on memories whose
+composite salience score exceeds a threshold (stored \texttt{salience\_hit},
+emotional intensity, access strength, spacing, mild recency prior, and
+keyword policy), (ii) merges near-duplicate memories discovered via KNN
+(retaining the higher-access / pinned copy and marking the other
+superseded), and (iii) prunes memories whose decayed, access-weighted
+score falls below the cleanup threshold after the grace period. Optional
+EMC episode distillation converts undistrilled episodic traces into
+durable semantic facts.
+
+The monthly consolidation job applies a multi-factor retention gate
+(salience, novelty, spacing, connectivity / entity importance) to the past
+month's daily facts, LLM-merges the survivors into compact narrative
+summaries, pins the result, and optionally retires the original daily
+facts once merged.
+
+\hypertarget{the-core-formulas-reference-implementation}{%
+\section{\texorpdfstring{\textbf{3. The Core Formulas (Reference
+Implementation)}}{3. The Core Formulas (Reference Implementation)}}\label{the-core-formulas-reference-implementation}}
+
+\hypertarget{formula-1-ebbinghaus-decay-with-modulators}{%
+\subsection{\texorpdfstring{\textbf{3.1 Formula 1 --- Ebbinghaus Decay
+with Access, Emotion, Spacing and Mood
+Modulators}}{3.1 Formula 1 --- Ebbinghaus Decay with Access, Emotion, Spacing and Mood Modulators}}\label{formula-1-ebbinghaus-decay-with-modulators}}
+
+Implemented in \texttt{cognition/memory/forget.py}:
+
+\begin{verbatim}
+strength = 1 + log1p(min(access_count, ACCESS_COUNT_CAP))
+H_eff = HALF_LIFE_DAYS
+        * (1 + EMOTION_GAMMA * intensity(valence))
+        * (1 + SPACING_GAMMA * log1p(access_day_count))
+        * mood_factor
+weighted_score = strength * (0.5 ** (days_since_last_access / H_eff))
+\end{verbatim}
+
+Intensity prefers \texttt{valence\_score} \(\in[-2,+2]\) mapped to
+\(|\text{score}|/2\); falls back to tag intensities (default
+neg\,=\,1.0, pos\,=\,0.4, neutral\,=\,0). Mood factor lengthens half-life
+on valence match and shortens it on mismatch when a query valence is
+supplied. Defaults: \(H_0=21\) days, cleanup threshold \(0.02\), grace
+period 35 days, \(\gamma=0.5\).
+
+Grace-protected memories (younger than \texttt{GRACE\_PERIOD\_DAYS}) are
+never pruned.
+
+\hypertarget{formula-2-entity-importance}{%
+\subsection{\texorpdfstring{\textbf{3.2 Formula 2 --- Entity Importance
+(Centrality +
+Recency)}}{3.2 Formula 2 --- Entity Importance (Centrality + Recency)}}\label{formula-2-entity-importance}}
+
+Implemented in \texttt{cognition/memory/entity.py}:
+
+\[
+I(e) = (1-\alpha)\,c(e) + \alpha\,r(e),\quad
+c(e)=\frac{\text{comention}(e)}{\max_{e'} \text{comention}(e')},\quad
+r(e)=e^{-\beta\cdot\Delta t(e)}
+\]
+
+with defaults \(\alpha=0.4\), \(\beta\approx0.05\) per day. The map is
+cached briefly for recall and invalidated on writes. \(I_e\) participates
+in the monthly retention gate and supplies a mild additive term in
+recall ranking. Optional spreading activation and a neural-net overlay
+(Hebbian edge growth, off by default) can further propagate activation
+over the co-mention graph.
+
+\hypertarget{formula-3-reciprocal-rank-fusion}{%
+\subsection{\texorpdfstring{\textbf{3.3 Formula 3 --- Reciprocal Rank
+Fusion (Multi-Signal
+Fusion)}}{3.3 Formula 3 --- Reciprocal Rank Fusion (Multi-Signal Fusion)}}\label{formula-3-reciprocal-rank-fusion}}
+
+\[
+\text{RRF}(m)=\sum_{i\in\{\text{KNN,FTS,graph}\}}\frac{w_i}{k+\text{rank}_i(m)}
++\text{recency}+\text{access}+\text{pinned}+\text{entity imp.}
++\text{context match}-\text{neg penalty}
+\]
+
+with \(k=60\), graph weight default \(0.6\), and the remaining additive
+weights exposed as environment variables. RRF is computed after a tiered
+quick/wide candidate gather so that a memory that is only moderately
+ranked on every signal can still surface.
+
+\hypertarget{formula-4-emotional-imprinting-and-recall-modulation}{%
+\subsection{\texorpdfstring{\textbf{3.4 Formula 4 --- Emotional Imprinting
+and Recall
+Modulation}}{3.4 Formula 4 --- Emotional Imprinting and Recall Modulation}}\label{formula-4-emotional-imprinting-and-recall-modulation}}
+
+At write time, cheap lexical (and optional LLM) heuristics assign
+\texttt{valence\_tag} \(\in\{\text{neg},\text{pos},\text{neutral}\}\) and
+an integer \texttt{valence\_score} \(\in[-2,+2]\). These tags lengthen
+\(H_{\text{eff}}\) proportionally to intensity and, at recall, apply a
+soft proportional negative penalty unless the query itself carries
+matching emotional or reflective intent. Positive intensity is present
+but weaker than negative intensity by design (threat-asymmetric cost
+structure, Paper I §4).
+
+\hypertarget{formula-5-supersession}{%
+\subsection{\texorpdfstring{\textbf{3.5 Formula 5 --- Supersession
+(Belief
+Revision)}}{3.5 Formula 5 --- Supersession (Belief Revision)}}\label{formula-5-supersession}}
+
+Near-duplicate writes whose cosine similarity exceeds the dedup threshold
+but whose normalized text differs are classified \texttt{supersede}. The
+older row is marked \texttt{status='superseded'} (not deleted); the newer
+row records \texttt{supersedes\_id}. Superseded facts are excluded from
+ordinary recall but remain available for history / audit, including
+optional chain expansion for identity/preference/plan kinds.
+
+\hypertarget{formula-6-salience-and-consolidation}{%
+\subsection{\texorpdfstring{\textbf{3.6 Formula 6 --- Salience Scoring and
+Consolidation
+Gate}}{3.6 Formula 6 --- Salience Scoring and Consolidation Gate}}\label{formula-6-salience-and-consolidation}}
+
+Dream boost uses a composite \(0\ldots1\) salience score that combines
+stored \texttt{salience\_hit}, emotional intensity, log-compressed access,
+spacing days, mild recency, and a keyword-policy prior. Monthly
+consolidation retains facts above a soft multi-factor threshold
+(salience + novelty + spacing + connectivity) before LLM merge into pinned
+narrative summaries.
+
+\hypertarget{data-schema}{%
+\section{\texorpdfstring{\textbf{4. Data
+Schema}}{4. Data Schema}}\label{data-schema}}
+
+\hypertarget{memories-core-table}{%
+\subsection{\texorpdfstring{\textbf{4.1 memories (Core
+Table)}}{4.1 memories (Core Table)}}\label{memories-core-table}}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.28}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.18}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 4\tabcolsep) * \real{0.54}}@{}}
+\toprule\noalign{}
+\textbf{Column} & \textbf{Type} & \textbf{Notes} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+id & TEXT PK & UUID \\
+user\_id & TEXT & Isolation boundary \\
+memory & TEXT & Fact string \\
+created\_at & TEXT & UTC ISO timestamp \\
+access\_count & INTEGER & Touches, capped (default 255) \\
+last\_accessed\_at & TEXT & UTC ISO, or \texttt{never} \\
+pinned & INTEGER & 0/1; decay-proof when set \\
+status & TEXT & \texttt{active} / \texttt{superseded} (default active) \\
+supersedes\_id & TEXT & FK to superseded memory \\
+kind & TEXT & \texttt{fact} / \texttt{identity} / \texttt{scene} /
+\texttt{plan} / \texttt{event} / \texttt{schema} / \ldots \\
+entities & TEXT & JSON array of entity strings \\
+access\_day\_count & INTEGER & Distinct local days recalled (spacing) \\
+valence\_tag & TEXT & \texttt{neg}/\texttt{pos}/\texttt{neutral} \\
+valence\_score & INTEGER & \(-2\ldots+2\); NULL = legacy \\
+salience\_hit & INTEGER & 0/1 keyword/policy flag at write \\
+scene\_id & TEXT & L2 linkage to parent scene \\
+\end{longtable}
+
+\hypertarget{entity-relations-and-vectors}{%
+\subsection{\texorpdfstring{\textbf{4.2 entity\_relations and
+memories\_vec}}{4.2 entity\_relations and memories\_vec}}\label{entity-relations-and-vectors}}
+
+\texttt{entity\_relations} stores co-mention edges
+(\texttt{entity\_a}, \texttt{entity\_b}, \texttt{relation}, \texttt{weight},
+\texttt{memory\_id}, \texttt{updated\_at}), scoped by \texttt{user\_id}.
+\texttt{memories\_vec} stores L2-normalized 640-dimensional embeddings
+keyed by memory id (sqlite-vec).
+
+\hypertarget{worked-end-to-end-example}{%
+\section{\texorpdfstring{\textbf{5. Worked End-to-End
+Example}}{5. Worked End-to-End Example}}\label{worked-end-to-end-example}}
+
+The following walkthrough traces one fact from ingestion through
+consolidation, illustrating how the formulas interact in the current
+codebase.
+
+\textbf{Day 1, 10:00 --- ADD.} User: ``I'm starting a project called
+GRACE --- a robotics assistant. I'll aim to finish it by Friday.'' Three
+facts are extracted, identity-repaired, embedded, and written (no near
+duplicate; all classified add). Entity edges GRACE\(\leftrightarrow\)robotics,
+GRACE\(\leftrightarrow\)Friday, robotics\(\leftrightarrow\)Friday are recorded.
+Valence tags are neutral; salience\_hit may fire on deadline-related
+keywords.
+
+\textbf{Day 1, 17:00 --- RECALL.} Query ``How's GRACE coming along?''
+triggers quick/wide KNN, FTS and graph passes; RRF ranks the three
+GRACE-related facts at the top. Each is touched (access\_count \(0\to1\),
+last\_accessed\_at and access\_day\_count updated).
+
+\textbf{Day 8 --- Decay check + new mention.} After seven days without
+mention, strength \(\times 0.5^{7/H_{\text{eff}}}\) has declined, but grace
+protection and any salience/access boosts keep the facts ranked highly.
+A new fact (``Oppa completed GRACE ahead of the Friday deadline'') is
+added (similarity below supersession threshold \(\Rightarrow\) add).
+
+\textbf{Night of Day 8 --- Dream pass.} Composite salience elevates the
+GRACE cluster; access\_count is boosted. Near-duplicate merge (if any)
+retains the higher-access copy. Scores remain above the cleanup threshold,
+so nothing is pruned.
+
+\textbf{Month later --- Monthly consolidation.} The multi-factor gate
+keeps the high-connectivity, deadline-bearing facts; LLM merge produces a
+compact pinned monthly summary and the atomic daily rows may be retired.
+
+\hypertarget{testing-monitoring-tuning-harness}{%
+\section{\texorpdfstring{\textbf{6. Testing, Monitoring \& Tuning
+Harness}}{6. Testing, Monitoring \& Tuning Harness}}\label{testing-monitoring-tuning-harness}}
+
+Five production metrics gate health:
+
+\begin{itemize}
+\item \textbf{Retention rate} --- fraction of day-1-accessed memories still
+  retrievable after 30 days (targets \(\ge70\%\) for salience-tagged,
+  \(\ge50\%\) for routine).
+\item \textbf{No premature forgetting} --- zero cleanups of facts younger
+  than the grace period.
+\item \textbf{Entity importance rank stability} --- top-10 entities drop
+  at most two ranks over 30 days.
+\item \textbf{RRF coverage} --- graph-only rescues appear in a non-trivial
+  fraction of queries.
+\item \textbf{Consolidation fidelity} --- zero critical facts lost;
+  compression ratio in a healthy band.
+\end{itemize}
+
+Diagnostic playbook (symptoms \(\to\) likely cause \(\to\) fix) follows the
+same pattern as v1: lengthen half-life or raise cleanup threshold if decay
+is too aggressive; verify graph weight and entity extraction if the graph
+signal is unused; re-run maintenance and inspect dedup threshold on
+duplicate surfacing; raise consolidation soft threshold / max-month budget
+if over-deletion occurs.
+
+\hypertarget{performance-evaluation}{%
+\section{\texorpdfstring{\textbf{7. Performance
+Evaluation}}{7. Performance Evaluation}}\label{performance-evaluation}}
+
+All figures are drawn from the same year-long, single-deployment field
+test (Jetson Orin Nano, 8\,GB unified memory) documented in Paper I,
+plus system-level instrumentation. As an \(N=1\) field deployment these
+numbers characterize one system under one usage pattern.
+
+\hypertarget{latency-budget}{%
+\subsection{\texorpdfstring{\textbf{7.1 Latency
+Budget}}{7.1 Latency Budget}}\label{latency-budget}}
+
+Total per-turn context-injection latency --- persona cache (cached) +
+KNN + FTS + graph + RRF scoring + touch metadata + formatting --- sums to
+approximately 16\,ms median, comfortably inside a \(<100\)\,ms conversational
+budget. Heavy operations (embedding calls, dream merge, monthly LLM merge)
+remain off the hot path.
+
+\hypertarget{storage-footprint}{%
+\subsection{\texorpdfstring{\textbf{7.2 Storage
+Footprint}}{7.2 Storage Footprint}}\label{storage-footprint}}
+
+After \(\sim\)1\,825 facts the on-disk footprint of memories, 640-d
+vectors, entity graph, FTS5 index and ancillary tables is approximately
+13\,MB --- well under 1\,\% of the Jetson's 8\,GB envelope. The practical
+constraint remains the LLM context window, not disk.
+
+\hypertarget{retrieval-quality}{%
+\subsection{\texorpdfstring{\textbf{7.3 Retrieval
+Quality}}{7.3 Retrieval Quality}}\label{retrieval-quality}}
+
+On a 100-query human-judged sample, RRF fusion improved precision@10 from
+0.68 (pure KNN) to 0.72 and recall@10 from 0.61 to 0.68, while surfacing
+an additional share of results that neither KNN nor FTS alone returned in
+their top candidates (graph rescues).
+
+\hypertarget{consolidation-efficiency}{%
+\subsection{\texorpdfstring{\textbf{7.4 Consolidation
+Efficiency}}{7.4 Consolidation Efficiency}}\label{consolidation-efficiency}}
+
+Monthly compression (pre-LLM-merge survival \(\approx54.7\%\), post-merge
+overall \(\approx5.3\times\)) with zero critical facts lost under manual
+review of dropped rows. Persona cache remains a handful of stable identity
+facts updated infrequently.
+
+\hypertarget{comparative-analysis-vs.-established-agentic-memory-systems}{%
+\section{\texorpdfstring{\textbf{8. Comparative Analysis vs.\ Established
+Agentic Memory
+Systems}}{8. Comparative Analysis vs.\ Established Agentic Memory Systems}}\label{comparative-analysis-vs.-established-agentic-memory-systems}}
+
+By mid-2026 the agentic-memory space has consolidated around a handful of
+widely adopted frameworks. Cross-system numbers should be read cautiously:
+different projects report different harnesses, and third-party round-ups
+are not a single controlled study.
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.20}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.28}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.26}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.26}}@{}}
+\toprule\noalign{}
+\textbf{System} & \textbf{Core approach} & \textbf{Ranking} & \textbf{Typical footprint} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Mem0 & Drop-in memory API; LLM extraction over a vector store & Embedding + heuristics & Hosted or self-hosted SDK \\
+Zep / Graphiti & Temporal knowledge graph & Graph traversal + hybrid scoring & Graph DB; heavier self-hosting \\
+Letta (MemGPT) & OS-inspired agent runtime (RAM / disk) & Agent-directed paging & Full agent runtime \\
+Aiko (this work) & Formulaic decay/consolidation over SQLite + sqlite-vec + FTS5 & Closed-form RRF + modulators, no learned weights & \(\sim\)13\,MB/year; full edge on 8\,GB device \\
+\end{longtable}
+
+Aiko occupies the niche of hard edge budget + formula-level auditability
+and emotional/psychological realism in retention. It does not claim to
+match graph-reasoning depth (Zep) or self-managing runtime sophistication
+(Letta) on shared benchmarks it has not yet run. The choice among these
+systems remains an architectural commitment, not a checkbox.
+
+\hypertarget{key-engineering-decisions-trade-offs}{%
+\section{\texorpdfstring{\textbf{9. Key Engineering Decisions \&
+Trade-offs}}{9. Key Engineering Decisions \& Trade-offs}}\label{key-engineering-decisions-trade-offs}}
+
+\begin{itemize}
+\item \textbf{No learned ranking.} Formulas stay inside the 8\,GB budget,
+  need no training pipeline, and remain inspectable. Trade-off: possible
+  sub-optimality on edge cases versus a well-trained re-ranker.
+\item \textbf{Supersession instead of deletion.} Preserves belief history
+  for audit without an LLM contradiction pass. Trade-off: modest extra
+  store growth; superseded rows excluded from normal recall.
+\item \textbf{Entity graph + optional spreading.} Rescues facts that are
+  only findable through relationships. Trade-off: depends on reliable
+  (currently rule-based) entity extraction.
+\item \textbf{Separate monthly consolidation.} Nightly dream handles
+  duplicates and ordinary decay; monthly compression handles volume.
+  Trade-off: monthly facts are lossy by design.
+\item \textbf{Log-compressed access strength.} Prevents heavily-touched
+  memories from becoming effectively immortal while still rewarding
+  spaced retrieval.
+\end{itemize}
+
+\hypertarget{limitations-future-work}{%
+\section{\texorpdfstring{\textbf{10. Limitations \& Future
+Work}}{10. Limitations \& Future Work}}\label{limitations-future-work}}
+
+\begin{itemize}
+\item Entity extraction remains largely rule-based; a lightweight NER or
+  embedding-based linker would raise graph rescue rates.
+\item Valence estimation is heuristic (with optional LLM override); sarcasm
+  and implicit emotion remain imperfect.
+\item Single-user validation (\(N=1\)); multi-user isolation is already
+  implemented, but population-level claims require multi-subject study.
+\item Decay parameters are global defaults; per-user Bayesian tuning is a
+  natural extension.
+\item Aiko has not yet been evaluated on LongMemEval or Deep Memory
+  Retrieval; running those shared benchmarks is the highest-priority next
+  step for quantitative comparison.
+\item Optional neural-net overlay and full spreading activation are
+  present but off or lightly weighted by default; their contribution under
+  sustained multi-year load is still being measured.
+\end{itemize}
+
+\hypertarget{conclusion}{%
+\section{\texorpdfstring{\textbf{11.
+Conclusion}}{11. Conclusion}}\label{conclusion}}
+
+Aiko's memory system turns the theoretical account of Paper I into a
+working, fully auditable pipeline built on SQLite, sqlite-vec and FTS5,
+running comfortably inside an 8\,GB edge-hardware budget. The closed-form
+decay, importance, RRF, emotional, supersession and salience formulas
+work together to give a system that is tunable without retraining,
+explainable at every ranking decision, and lean enough to run indefinitely
+on a single-board computer.
+
+Measured against itself the system meets its design targets:
+\(\sim\)16\,ms per-turn retrieval, \(\sim\)13\,MB/year storage growth, a
+measurable precision gain from multi-signal fusion, and 5.3\(\times\) monthly
+compression without loss of load-bearing facts. Measured against the
+broader 2026 landscape it occupies a distinct niche complementary to
+general-purpose, benchmark-optimized memory services.
+
+\hypertarget{references}{%
+\section{\texorpdfstring{\textbf{References}}{References}}\label{references}}
+
+Cormack, G.\ V., Smucker, M.\ D., \& Clarke, C.\ L. (2009). Efficient and
+effective spam filtering and re-ranking. Proceedings of SIGIR 2009,
+713--714.
+
+Robertson, S., \& Walker, S. (1994). Some simple effective approximations
+to the 2-Poisson model. Proceedings of SIGIR 1994, 232--241.
+
+Packer, C., et al. (2023). MemGPT: Towards LLMs as operating systems.
+arXiv:2310.08560.
+
+Rasmussen, P., et al. (2024--2025). Zep: A temporal knowledge graph
+architecture for agent memory (Graphiti). Zep technical report.
+
+Mem0 project documentation, mem0.ai (accessed 2026).
+
+Letta (formerly MemGPT) project documentation, letta.com (accessed 2026).
+
+Aiko-chan source repository, github.com/OppaAI/Aiko-chan (dev branch,
+August 2026) --- especially \texttt{cognition/memory/\{forget,entity,schema,vecstore,episode\_dream\}.py}.
+
+\hypertarget{appendix-a-configuration-reference}{%
+\section{\texorpdfstring{\textbf{Appendix A: Configuration
+Reference}}{Appendix A: Configuration Reference}}\label{appendix-a-configuration-reference}}
+
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.40}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.14}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.16}}
+  >{\raggedright\arraybackslash}p{(\columnwidth - 6\tabcolsep) * \real{0.30}}@{}}
+\toprule\noalign{}
+\textbf{Parameter} & \textbf{Default} & \textbf{Range / notes} & \textbf{Interpretation} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+FORGET\_HALF\_LIFE\_DAYS & 21.0 & [7, 60] & Base half-life (days) \\
+FORGET\_CLEANUP\_THRESHOLD & 0.02 & [0.01, 0.1] & Score floor for prune \\
+FORGET\_GRACE\_PERIOD\_DAYS & 35 & [14, 60] & Protect new facts \\
+FORGET\_ACCESS\_COUNT\_CAP & 255 & --- & Cap for log1p strength \\
+FORGET\_EMOTION\_GAMMA & 0.5 & [0, 1] & Valence stretch of \(H_{\text{eff}}\) \\
+FORGET\_INTENSITY\_NEG / POS / NEUTRAL & 1.0 / 0.4 / 0.0 & --- & Tag intensities \\
+FORGET\_MOOD\_MATCH\_SLOWDOWN & 1.3 & --- & Match lengthens \(H_{\text{eff}}\) \\
+FORGET\_MOOD\_MISMATCH\_ACCELERATION & 1.3 & --- & Mismatch shortens \(H_{\text{eff}}\) \\
+RRF\_K & 60 & [30, 100] & RRF damping constant \\
+MEMORY\_RANK\_GRAPH\_WEIGHT & 0.6 & [0, 1] & Graph contribution \\
+ENTITY\_IMPORTANCE\_ALPHA & 0.4 & [0.2, 0.6] & Recency vs centrality \\
+MEMORY\_RANK\_ENTITY\_IMPORTANCE\_WEIGHT & 0.008 & --- & Mild recall boost \\
+WRITE\_DEDUP / DREAM\_MERGE thresholds & \(\approx0.95\) / \(0.88\) & --- & Supersede / merge \\
+CONSOLIDATION soft threshold / max month & \(\approx0.4\) / 30 & --- & Monthly gate \\
+EMBED\_DIMS & 640 & --- & Harrier embedding dimension \\
+\end{longtable}
+
+\end{document}
