@@ -761,11 +761,28 @@ def _read_email_messages(max_results: int, folder: str = "inbox", unread: bool =
     """Call the already-registered read_email MCP bridge tool."""
     try:
         from agentic.registry import registry
+        import inspect
+
         spec = registry.get("read_email")
         if spec is None or spec.handler is None:
             log.warning("Lane D email: read_email MCP tool is not registered")
             return []
-        result = spec.handler(max_results=max_results, folder=folder, unread=unread)
+
+        kwargs = dict(max_results=max_results, folder=folder, unread=unread)
+        if inspect.iscoroutinefunction(spec.handler):
+            try:
+                import asyncio
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(lambda: asyncio.run(spec.handler(**kwargs)))
+                    result = future.result(timeout=60)
+            except RuntimeError:
+                import asyncio
+                result = asyncio.run(spec.handler(**kwargs))
+        else:
+            result = spec.handler(**kwargs)
+
         if not isinstance(result, dict) or not result.get("ok"):
             return []
         messages = result.get("messages") or []

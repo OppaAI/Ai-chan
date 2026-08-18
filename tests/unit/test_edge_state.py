@@ -169,3 +169,11 @@ def test_repeated_tool_failure_becomes_a_durable_lesson():
     state.record_tool_outcome("calendar", ok=False, detail="unavailable", error_type="TimeoutError")
     state.record_tool_outcome("calendar", ok=False, detail="still unavailable", error_type="TimeoutError")
     assert any("calendar" in lesson for lesson in state.snapshot()["durable_lessons"])
+
+
+def test_identity_question_creates_grounded_guidance():
+    state = EdgeCognitiveState()
+    state.record("Do you know me?", "")
+    assert state.snapshot()["identity_questions"]
+    guidance = state.identity_guidance()
+    assert "Do not invent recognition" in guidance

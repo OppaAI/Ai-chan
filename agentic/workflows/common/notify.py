@@ -41,7 +41,19 @@ def notify_email(subject: str, body: str, *, to: str | None = None) -> dict[str,
             if to and "to" in params:
                 args["to"] = to
 
-            result = spec.handler(**args)
+            if inspect.iscoroutinefunction(spec.handler):
+                try:
+                    import asyncio
+                    loop = asyncio.get_running_loop()
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(lambda: asyncio.run(spec.handler(**args)))
+                        result = future.result(timeout=60)
+                except RuntimeError:
+                    import asyncio
+                    result = asyncio.run(spec.handler(**args))
+            else:
+                result = spec.handler(**args)
             if isinstance(result, dict):
                 return {"ok": bool(result.get("ok", True)), "tool": name, "result": result}
             return {"ok": True, "tool": name, "result": result}
@@ -92,7 +104,19 @@ def maybe_post_threads(
             elif "message" in params:
                 args["message"] = text
 
-            result = spec.handler(**args)
+            if inspect.iscoroutinefunction(spec.handler):
+                try:
+                    import asyncio
+                    loop = asyncio.get_running_loop()
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(lambda: asyncio.run(spec.handler(**args)))
+                        result = future.result(timeout=60)
+                except RuntimeError:
+                    import asyncio
+                    result = asyncio.run(spec.handler(**args))
+            else:
+                result = spec.handler(**args)
             # Check if handler returned a dict with ok field (Finding 5)
             if isinstance(result, dict):
                 ok = bool(result.get("ok", True))
