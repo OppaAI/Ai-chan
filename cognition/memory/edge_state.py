@@ -32,7 +32,7 @@ _GOAL_RE = re.compile(r"\b(?:i want to|i need to|we need to|let\x27s|lets|goal i
 _DONE_RE = re.compile(r"\b(done|finished|completed|fixed|solved|never mind|forget it)\b", re.I)
 _UNCERTAIN_RE = re.compile(r"\b(i don\x27t know|not sure|unclear|maybe|might|probably|could be|i think)\b", re.I)
 _ENERGY_LOW_RE = re.compile(r"\b(tired|exhausted|sleepy|drained|burned out|can\x27t focus|cannot focus)\b", re.I)
-_OUTCOME_FAIL_RE = re.compile(r"\b(wrong|incorrect|didn.t work|didn.t help|failed|try again|not what i meant|that.s not right)\b", re.I)
+_OUTCOME_FAIL_RE = re.compile(r"\b(wrong|incorrect|didn.t work|didn.t help|failed|try again|not what i meant|that.s not right|too verbose|too long|be concise|shorter)\b", re.I)
 _OUTCOME_OK_RE = re.compile(r"\b(worked|works|fixed|solved|perfect|exactly|that helped|thank you|thanks)\b", re.I)
 _NEGATION_RE = re.compile(r"\b(?:not|no longer|never|dont|don.t|cannot|can.t|isn.t|aren.t|wasn.t|weren.t|changed my mind|instead)\b", re.I)
 _ENERGY_HIGH_RE = re.compile(r"\b(excited|energized|motivated|let\x27s go|can\x27t wait)\b", re.I)
@@ -97,9 +97,9 @@ class EdgeCognitiveState:
         with self._lock:
             self._detect_contradictions(user)
             if self._events and _OUTCOME_FAIL_RE.search(user):
-                self._add_lesson("Avoid repeating the previous approach: ", self._events[-1].assistant)
+                self._add_lesson("Avoid repeating the previous approach: ", self._events[-1].assistant, user)
             elif self._events and _OUTCOME_OK_RE.search(user):
-                self._add_lesson("The previous approach appeared useful: ", self._events[-1].assistant)
+                self._add_lesson("The previous approach appeared useful: ", self._events[-1].assistant, user)
             self._events.append(_Event(user, assistant, _tokens(user + " " + assistant)))
             combined = user + " " + assistant
             self._affect = max(-1.0, min(1.0, self._affect * 0.7 + _affect(combined) * 0.3))
@@ -138,20 +138,30 @@ class EdgeCognitiveState:
         words = _tokens(user)
         return " ".join(sorted(words, key=lambda w: (-len(w), w))[:6])
 
-    def _add_lesson(self, prefix: str, source: str) -> None:
+    def _add_lesson(self, prefix: str, source: str, feedback: str = "") -> None:
         text = " ".join((source or "").split())[:180]
         if not text:
             return
         lesson = prefix + text
         self._lessons.appendleft(lesson)
-        signature = " ".join(sorted(_tokens(text)))
+        lower_feedback = (feedback or "").casefold()
+        semantic = ""
+        if any(word in lower_feedback for word in ("concise", "short", "brief", "too long", "verbose")):
+            semantic = "Prefer concise responses."
+        elif any(word in lower_feedback for word in ("clarify", "misunderstood", "not what i meant", "wrong")):
+            semantic = "Ask a clarifying question when intent is ambiguous."
+        elif any(word in lower_feedback for word in ("explain", "why", "more detail")):
+            semantic = "Include a brief explanation, not only the conclusion."
+        elif any(word in lower_feedback for word in ("step by step", "steps", "walk me through")):
+            semantic = "Present complex tasks as clear sequential steps."
+        signature = " ".join(sorted(_tokens(semantic or text)))
         if not signature:
             return
         count = self._lesson_counts.get(signature, 0) + 1
         self._lesson_counts[signature] = min(count, 3)
         if count >= 2:
             direction = "Prefer this approach: " if prefix.startswith("The previous approach appeared useful:") else "Avoid repeating: "
-            durable = "Durable interaction rule: " + direction + text
+            durable = "Durable interaction rule: " + (semantic or (direction + text))
             if durable not in self._durable_lessons:
                 self._durable_lessons.appendleft(durable)
 
