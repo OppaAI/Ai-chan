@@ -1394,6 +1394,30 @@ def _job_cache_read_manifest(date_str: str) -> dict[str, Any] | None:
         return None
 
 
+def clear_job_fetch_cache(date_str: str | None = None) -> None:
+    """Delete the day's fetch cache so the next run re-fetches fresh jobs.
+
+    Called by graph_engine after a gen_job_post run completes (success or
+    failure); the fetch cache is a mid-run scratch pad, not a durable store.
+    """
+    date_str = date_str or local_now().strftime("%Y-%m-%d")
+    cache_dir = _job_cache_dir()
+    removed = 0
+    for pattern in (
+        f"fetch_{date_str}_*.jsonl",
+        f"merge_{date_str}.jsonl",
+        f"manifest_{date_str}.json",
+    ):
+        for path in cache_dir.glob(pattern):
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        log.info("[job_hunt] cleared %d job fetch cache file(s) for %s", removed, date_str)
+
+
 # ── STEP 2: Process and merge RSS + email caches into structured output ─────
 
 def process_and_merge_job_cache(date_str: str | None = None, config: dict[str, Any] | None = None) -> str:

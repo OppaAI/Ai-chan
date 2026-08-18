@@ -23,13 +23,13 @@ log = logging.getLogger(__name__)
 
 def _loads(raw: str | dict | list | None, default: Any = None) -> Any:
     if raw is None or raw == "":
-        return default if default is not None else {}
+        return default
     if isinstance(raw, (dict, list)):
         return raw
     try:
         return json.loads(raw)
     except (TypeError, json.JSONDecodeError):
-        return default if default is not None else {}
+        return default
 
 
 def _dumps(obj: Any) -> str:
