@@ -63,3 +63,26 @@ def test_response_review_flags_unverified_current_claim():
     state = EdgeCognitiveState()
     review = state.review_response("What is the latest status?", "It is definitely complete.")
     assert any("verification" in flag for flag in review["flags"])
+
+
+def test_preference_guidance_is_actionable():
+    state = EdgeCognitiveState()
+    state.record("From now on, be concise and ask before using tools", "")
+    guidance = state.preference_guidance()
+    assert "concise" in guidance
+    assert "Ask before consequential external actions" in guidance
+
+
+def test_adaptive_tts_rate_responds_to_voice_cues():
+    state = EdgeCognitiveState()
+    state.record_perception("voice", prosody={"pause_density": 0.8, "words_per_second": 1.2})
+    assert state.adaptive_tts_rate() == 0.9
+
+
+def test_confirmed_memory_conflict_is_consumed_once():
+    state = EdgeCognitiveState()
+    memories = [{"id": "m1", "memory": "User likes tea"}]
+    query = "Actually I no longer like tea"
+    state.situation_context(query, memories)
+    assert state.confirm_memory_update("Yes, that changed")
+    assert state.confirm_memory_update("Yes, that changed") == []
