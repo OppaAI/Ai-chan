@@ -321,6 +321,27 @@ class EdgeCognitiveState:
             status = "empty" if not self._events else "sparse" if population < 0.34 else "active"
             return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
 
+    def evaluation_snapshot(self) -> dict:
+        """Return bounded behavioral metrics for offline brain evaluation."""
+        snap = self.snapshot()
+        health = self.cognitive_health()
+        outcomes = snap.get("tool_outcomes") or []
+        successes = sum(1 for item in outcomes if item.get("ok"))
+        reviews = snap.get("response_reviews") or []
+        high_reviews = sum(1 for item in reviews if item.get("confidence") == "high")
+        return {
+            "state_status": health["status"],
+            "state_population": health["population"],
+            "active_goals": len(snap.get("goals") or []),
+            "open_loops": len(snap.get("open_loops") or []),
+            "durable_lessons": len(snap.get("durable_lessons") or []),
+            "lesson_evidence": len(snap.get("lesson_evidence") or {}),
+            "tool_success_rate": round(successes / len(outcomes), 3) if outcomes else None,
+            "response_review_high_rate": round(high_reviews / len(reviews), 3) if reviews else None,
+            "identity_questions": len(snap.get("identity_questions") or []),
+            "contradictions": len(snap.get("contradictions") or []),
+        }
+
     def identity_guidance(self) -> str:
         """Give grounded guidance for unresolved user-identity questions."""
         with self._lock:

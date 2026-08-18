@@ -185,3 +185,14 @@ def test_successful_assistant_outcome_closes_goal():
     assert state.snapshot()["goals"]
     state.record("Here is the release update", "The release is fixed and completed.")
     assert not state.snapshot()["goals"]
+
+
+def test_evaluation_snapshot_reports_behavioral_metrics():
+    state = EdgeCognitiveState()
+    state.record("I want to finish the release", "")
+    state.record_tool_outcome("repo", ok=True, detail="ok")
+    state.record_tool_outcome("deploy", ok=False, detail="failed", error_type="Timeout")
+    metrics = state.evaluation_snapshot()
+    assert metrics["active_goals"] == 1
+    assert metrics["tool_success_rate"] == 0.5
+    assert metrics["state_status"] != "empty"
