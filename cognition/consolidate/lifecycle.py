@@ -107,6 +107,13 @@ def maybe_run_consolidation(memorize, now: datetime | None = None, user_id: str 
              "_text": f"Interaction lesson: {lesson}", "_cognitive_lesson": True}
             for lesson in cognitive_state.snapshot().get("lessons", []) if lesson
         ]
+        reflection_text = cognitive_state.reflection_summary() if cognitive_state is not None else ""
+        if reflection_text and "No unresolved cognitive issue" not in reflection_text:
+            reflection_row = {"id": None, "memory": f"Cognitive reflection: {reflection_text}", "pinned": 0,
+                              "access_count": 0, "access_day_count": 0, "entities": "[]",
+                              "status": "active", "_store": "cognitive",
+                              "_text": f"Cognitive reflection: {reflection_text}", "_cognitive_reflection": True}
+            memory_day_rows.append(reflection_row)
         if cognitive_lesson_rows:
             memory_day_rows = memory_day_rows + cognitive_lesson_rows
     except Exception as exc:
