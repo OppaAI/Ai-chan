@@ -125,7 +125,29 @@ def ingest_data(
                 })
             except Exception as e:
                 errors.append({"id": sid, "error": str(e)})
-        elif stype in {"rss", "email", "adapter"}:
+        elif stype == "adapter":
+            # Workflow adapters bridge the shared pipeline to domain fetchers.
+            # Lane D uses the existing job_hunt adapter; rejecting it here
+            # silently turns the rest of the workflow into a no-op.
+            if sid != "job_hunt":
+                errors.append({
+                    "id": sid,
+                    "error": f"source_type_{stype}_requires_workflow_adapter",
+                    "hint": "Call workflow-specific ingest until adapter is registered",
+                })
+                continue
+            try:
+                from agentic.workflows.job_hunt.toolset import fetch_rss_and_email_into_state
+
+                fetch_rss_and_email_into_state(json.dumps({"max_results": limit}), state=state)
+                adapter_items = state.data.get("job_all_postings", []) if state is not None else []
+                if isinstance(adapter_items, list):
+                    items.extend(adapter_items)
+                if not adapter_items:
+                    log.warning("job_hunt adapter returned no postings")
+            except Exception as e:
+                errors.append({"id": sid, "error": f"adapter_failed:{e}"})
+        elif stype in {"rss", "email"}:
             errors.append({
                 "id": sid,
                 "error": f"source_type_{stype}_requires_workflow_adapter",

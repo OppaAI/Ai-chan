@@ -844,5 +844,24 @@ def test_graph_node_needs_approval_returns_wait_result():
     assert "graph-r1" in result.content
 
 
+
+def test_shared_ingest_dispatches_job_hunt_adapter(monkeypatch):
+    from types import SimpleNamespace
+    from agentic.workflows.common.execution import ingest_data
+
+    def fake_fetch(plan_json, *, state):
+        state.data["job_all_postings"] = [{"title": "Python Engineer", "url": "job-example-1"}]
+        return "total_found:1"
+
+    monkeypatch.setattr("agentic.workflows.job_hunt.toolset.fetch_rss_and_email_into_state", fake_fetch)
+    state = SimpleNamespace(data={})
+    result = json.loads(ingest_data(
+        sources_json='[{"type":"adapter","id":"job_hunt"}]',
+        max_items="10", config_json='{"workflow_id":"job_hunt"}', state=state))
+
+    assert result["ok"] is True
+    assert result["items"] == [{"title": "Python Engineer", "url": "job-example-1"}]
+    assert state.data["ingest_items"] == result["items"]
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
