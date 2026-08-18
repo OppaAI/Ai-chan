@@ -97,6 +97,7 @@ class EdgeCognitiveState:
         if not user and not assistant:
             return
         with self._lock:
+            self._apply_explicit_preferences(user)
             self._learn_preferences(user)
             self._detect_contradictions(user)
             if self._events and _OUTCOME_FAIL_RE.search(user):
@@ -140,6 +141,30 @@ class EdgeCognitiveState:
     def _attention_for(user: str) -> str:
         words = _tokens(user)
         return " ".join(sorted(words, key=lambda w: (-len(w), w))[:6])
+
+    def _apply_explicit_preferences(self, feedback: str) -> None:
+        lower = (feedback or "").casefold()
+        explicit = "from now on" in lower or "always" in lower or "starting now" in lower
+        if "forget" in lower and "preference" in lower:
+            if "response" in lower or "style" in lower:
+                self._preferences.pop("response_length", None)
+                self._preferences.pop("explanation_depth", None)
+                self._preferences.pop("tone", None)
+            if "action" in lower or "tool" in lower:
+                self._preferences.pop("action_confirmation", None)
+            return
+        if not explicit:
+            return
+        if any(term in lower for term in ("concise", "short", "brief")):
+            self._preferences["response_length"] = "concise"
+        elif any(term in lower for term in ("more detail", "detailed", "step by step")):
+            self._preferences["explanation_depth"] = "detailed"
+        if any(term in lower for term in ("ask before", "ask me first", "with my permission")):
+            self._preferences["action_confirmation"] = "ask_before_acting"
+        if "casual" in lower or "friendly" in lower:
+            self._preferences["tone"] = "casual"
+        elif "formal" in lower or "professional" in lower:
+            self._preferences["tone"] = "formal"
 
     def _learn_preferences(self, feedback: str) -> None:
         lower = (feedback or "").casefold()
