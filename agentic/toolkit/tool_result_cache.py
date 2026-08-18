@@ -369,32 +369,27 @@ def cache_gc(
     workflow: str,
     keep_runs: int = DEFAULT_RETENTION_RUNS,
 ) -> dict[str, Any]:
+    try:
+        keep_runs = int(keep_runs)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("keep_runs must be an integer") from exc
+    if keep_runs < 0:
+        raise ValueError("keep_runs must be non-negative")
+
     workflow = _validate_workflow(workflow)
     d = workflow_dir(workflow)
     files = [p for p in d.glob("*.jsonl") if p.name != "index.jsonl"]
-
-    # Validate and convert keep_runs to int, reject negative values
-    try:
-        keep_runs_int = int(keep_runs)
-        if keep_runs_int < 0:
-            keep_runs_int = 0
-    except (TypeError, ValueError):
-        keep_runs_int = DEFAULT_RETENTION_RUNS
 
     by_run: dict[str, list[Path]] = {}
     for p in files:
         stem = p.stem
         if "_" not in stem:
             continue
-        # Fix: use split to get run_id from the start, not rsplit from the end
-        # Filename format is: {run_id}_{source}.jsonl
-        # e.g., "2024-01-15T120000Z_job_feed.jsonl"
-        # We need to split on the LAST underscore before the source part
         run_id, _src = stem.rsplit("_", 1)
         by_run.setdefault(run_id, []).append(p)
 
     run_ids = sorted(by_run.keys(), reverse=True)
-    drop = run_ids[keep_runs_int:]
+    drop = run_ids[keep_runs:]
     removed = 0
     for rid in drop:
         for p in by_run[rid]:
@@ -406,7 +401,7 @@ def cache_gc(
     return {
         "ok": True,
         "workflow": workflow,
-        "kept_runs": run_ids[:keep_runs_int],
+        "kept_runs": run_ids[:keep_runs],
         "dropped_runs": drop,
         "files_removed": removed,
     }
