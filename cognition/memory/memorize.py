@@ -2833,7 +2833,15 @@ class AikoMemorize:
             pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
         merged = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
         schemas = self._dream_schema(user_id=user_id, dry_run=dry_run)
-        pin_result = self.rebalance_pins(user_id, dry_run=dry_run)
+        try:
+            pin_age = max(1, int(os.getenv("MEMORY_PIN_REBALANCE_AGE_DAYS", "45")))
+        except (TypeError, ValueError):
+            pin_age = 45
+        try:
+            pin_access = max(0, int(os.getenv("MEMORY_PIN_REBALANCE_MIN_ACCESS", "2")))
+        except (TypeError, ValueError):
+            pin_access = 2
+        pin_result = self.rebalance_pins(user_id, max_age_days=pin_age, min_access_count=pin_access, dry_run=dry_run)
         # FIX: dream() previously called cleanup() with no _all_mems, so the
         # "already-fetched memory list is passed through here to avoid a
         # redundant get_all() scan" claim in cleanup()'s docstring was dead —

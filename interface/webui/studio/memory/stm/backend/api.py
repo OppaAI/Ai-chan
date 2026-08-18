@@ -102,6 +102,17 @@ def health():
     }
 
 
+@app.get("/api/cognition")
+def cognition():
+    try:
+        from cognition.memory.edge_state import for_identity
+        from system.userspace import current_user_id
+        state = for_identity(current_user_id())
+        return {"ok": True, "evaluation": state.evaluation_snapshot(), "health": state.cognitive_health()}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 @app.get("/api/state")
 def get_state(mode: str = Query("auto")):
     """mode=auto|live|demo — auto prefers live whenever it is available."""

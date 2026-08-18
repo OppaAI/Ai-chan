@@ -499,11 +499,30 @@ async function runFullDemo() {
 
 /* ---------- API actions ---------- */
 
+async function refreshCognition() {
+  try {
+    const data = await api("/cognition");
+    const e = data.evaluation || {};
+    const panel = $("cognitionPanel");
+    if (panel) panel.textContent = [
+      "state: " + (e.state_status || "unknown"),
+      "population: " + Number(e.state_population || 0).toFixed(2),
+      "goals: " + (e.active_goals || 0) + " · loops: " + (e.open_loops || 0),
+      "lessons: " + (e.durable_lessons || 0),
+      "tool success: " + (e.tool_success_rate == null ? "—" : Math.round(e.tool_success_rate * 100) + "%"),
+    ].join("\n");
+  } catch (err) {
+    const panel = $("cognitionPanel");
+    if (panel) panel.textContent = "Cognitive metrics unavailable";
+  }
+}
+
 async function refresh() {
   if (isAnimating) return;
   isAnimating = true;
   try {
     const data = await api("/state");
+    await refreshCognition();
     await applyState(data, { animateNew: false });
     lastTurnSeen = Number((data.state || data).turn_counter ?? 0);
   } finally {
