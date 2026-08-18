@@ -80,6 +80,7 @@ def cache_write_tool(
         "source": {"type": "string"},
         "run_id": {"type": "string"},
         "keywords": {"type": "array", "items": {"type": "string"}},
+        "keywords_env": {"type": "string", "description": "Environment variable name containing comma-separated keywords"},
         "matched_only": {"type": "boolean"},
         "limit": {"type": "integer"},
         "to_state": {"type": "string"},
@@ -94,16 +95,26 @@ def cache_select_tool(
     source: str | None = None,
     run_id: str | None = None,
     keywords: list | str | None = None,
+    keywords_env: str | None = None,
     matched_only: bool = True,
     limit: int = SELECT_DEFAULT_LIMIT,
     to_state: str = "selection",
     state=None,
 ) -> str:
+    import os
+
+    # Resolve keywords from environment variable if keywords_env is provided
+    resolved_keywords = keywords
+    if keywords_env:
+        env_value = os.getenv(keywords_env, "").strip()
+        if env_value:
+            resolved_keywords = env_value
+
     out = cache_select(
         workflow=workflow,
         source=source,
         run_id=run_id,
-        keywords=keywords,
+        keywords=resolved_keywords,
         matched_only=matched_only,
         limit=limit,
         state=state,

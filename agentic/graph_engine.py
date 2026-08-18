@@ -1514,6 +1514,10 @@ def _condition_actual(cond: dict[str, Any], results: dict[str, NodeResult], stat
         if isinstance(value, (dict, list, tuple)):
             return json.dumps(value, ensure_ascii=False)
         return str(value)
+    if "env_truthy" in cond:
+        env_var = str(cond["env_truthy"])
+        env_value = os.getenv(env_var, "").strip().lower()
+        return env_value
     ref = cond.get("node")
     if ref is not None:
         if ref not in results:
@@ -1530,6 +1534,9 @@ def _check_condition(cond: dict[str, Any], actual: str) -> bool:
         return all(_check_condition(c, actual) for c in cond["and"])
     if "or" in cond:
         return any(_check_condition(c, actual) for c in cond["or"])
+    if "env_truthy" in cond:
+        # Check if environment variable is truthy
+        return actual_lower in {"1", "true", "yes", "on"}
     if "equals" in cond:
         return actual_lower == str(cond["equals"]).strip().lower()
     if "contains" in cond:

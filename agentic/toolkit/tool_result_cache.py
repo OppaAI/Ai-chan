@@ -132,6 +132,18 @@ def normalize_record(
     }
 
 
+def _validate_run_id(run_id: str) -> str:
+    """Validate run_id to prevent path traversal attacks."""
+    rid = (run_id or "").strip()
+    if not rid:
+        raise ValueError("run_id cannot be empty")
+    if "/" in rid or "\\" in rid or rid.startswith("."):
+        raise ValueError(f"run_id contains invalid path separators: {run_id!r}")
+    if rid != os.path.basename(rid):
+        raise ValueError(f"run_id resolves outside intended directory: {run_id!r}")
+    return rid
+
+
 def cache_write(
     items: Iterable[Any] | Any,
     *,
@@ -143,7 +155,7 @@ def cache_write(
 ) -> dict[str, Any]:
     workflow = _validate_workflow(workflow)
     source = _validate_source(source)
-    run_id = run_id or _utc_run_id()
+    run_id = _validate_run_id(run_id or _utc_run_id())
 
     if from_state and state is not None:
         raw = state.get(from_state) if hasattr(state, "get") else None
@@ -154,7 +166,17 @@ def cache_write(
     if items is None:
         items = []
     if isinstance(items, dict):
-        if all(isinstance(v, (dict, str)) for v in items.values()):
+        # Detect if this looks like a single record dict vs a mapping of multiple records
+        # Single record indicators: has common single-record field names
+        single_record_fields = {"subject", "body", "title", "content", "from", "to",
+                               "text", "description", "url", "link", "id", "name"}
+        has_single_record_field = any(k in single_record_fields for k in items.keys())
+
+        # If it looks like a single record, treat it as one record
+        if has_single_record_field:
+            seq = [items]
+        # Otherwise, check if all values are dicts or strings (mapping of records)
+        elif all(isinstance(v, (dict, str)) for v in items.values()):
             seq = list(items.values())
         else:
             seq = [items]
@@ -237,6 +259,8 @@ def cache_read(
     limit: int = 500,
 ) -> dict[str, Any]:
     workflow = _validate_workflow(workflow)
+    if run_id:
+        run_id = _validate_run_id(run_id)
     d = workflow_dir(workflow)
     files = sorted(d.glob("*.jsonl"))
     files = [p for p in files if p.name != "index.jsonl"]
@@ -276,6 +300,8 @@ def cache_select(
     workflow = _validate_workflow(workflow)
     if run_id is None and state is not None and hasattr(state, "get"):
         run_id = state.get("cache_last_run_id") or state.get("run_id")
+    if run_id:
+        run_id = _validate_run_id(run_id)
 
     raw = cache_read(workflow=workflow, source=source, run_id=run_id, limit=2000)
     records = list(raw.get("records") or [])
@@ -346,16 +372,29 @@ def cache_gc(
     workflow = _validate_workflow(workflow)
     d = workflow_dir(workflow)
     files = [p for p in d.glob("*.jsonl") if p.name != "index.jsonl"]
+
+    # Validate and convert keep_runs to int, reject negative values
+    try:
+        keep_runs_int = int(keep_runs)
+        if keep_runs_int < 0:
+            keep_runs_int = 0
+    except (TypeError, ValueError):
+        keep_runs_int = DEFAULT_RETENTION_RUNS
+
     by_run: dict[str, list[Path]] = {}
     for p in files:
         stem = p.stem
         if "_" not in stem:
             continue
+        # Fix: use split to get run_id from the start, not rsplit from the end
+        # Filename format is: {run_id}_{source}.jsonl
+        # e.g., "2024-01-15T120000Z_job_feed.jsonl"
+        # We need to split on the LAST underscore before the source part
         run_id, _src = stem.rsplit("_", 1)
         by_run.setdefault(run_id, []).append(p)
 
     run_ids = sorted(by_run.keys(), reverse=True)
-    drop = run_ids[max(0, int(keep_runs)) :]
+    drop = run_ids[keep_runs_int:]
     removed = 0
     for rid in drop:
         for p in by_run[rid]:
@@ -367,7 +406,7 @@ def cache_gc(
     return {
         "ok": True,
         "workflow": workflow,
-        "kept_runs": run_ids[:keep_runs],
+        "kept_runs": run_ids[:keep_runs_int],
         "dropped_runs": drop,
         "files_removed": removed,
     }
