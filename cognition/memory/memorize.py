@@ -3492,6 +3492,21 @@ class AikoMemorize:
                 self._conn.commit()
         return {"unpinned": 0 if dry_run else len(candidates), "candidates": candidates, "protected": True}
 
+    def memory_health(self, user_id: str | None = None, *, max_age_days: int = 45, min_access_count: int = 2) -> dict:
+        """Return retention diagnostics without modifying memory rows."""
+        uid = self._resolve_user_id(user_id)
+        rows = self.get_all(user_id=uid)
+        pinned = sum(1 for row in rows if int(row.get("pinned") or 0))
+        candidates = self.rebalance_pins(uid, max_age_days=max_age_days, min_access_count=min_access_count, dry_run=True)
+        total = len(rows)
+        return {
+            "total": total,
+            "pinned": pinned,
+            "pinned_ratio": round(pinned / total, 3) if total else 0.0,
+            "eligible_for_unpin": len(candidates.get("candidates", [])),
+            "healthy_pin_ratio": pinned == 0 or pinned / max(total, 1) <= 0.25,
+        }
+
     def optimize(self) -> None:
         with self._mem._db_lock:
             try:
