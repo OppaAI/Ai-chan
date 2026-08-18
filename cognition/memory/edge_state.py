@@ -644,7 +644,11 @@ class EdgeCognitiveState:
                     entities.append(value)
         if not facts and not snap["goals"] and not snap["open_loops"]:
             return ""
+        health = self.cognitive_health()
         lines = ["<situation_model>", "Organized from available evidence; treat it as context, not certainty.", f"Current query: {query[:260]}"]
+        lines.append(f"Cognitive state: {health["status"]}; population={health["population"]}")
+        if health["status"] == "empty":
+            lines.append("Memory discipline: do not imply personal recall without evidence; ask for the missing context.")
         if entities:
             lines.append("Relevant entities: " + ", ".join(entities[:12]))
         if facts:
