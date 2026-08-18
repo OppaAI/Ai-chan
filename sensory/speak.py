@@ -320,6 +320,8 @@ class AikoSpeak:
         self._first_audio_callback = None
         self._first_audio_fired = threading.Event()
         self._speech_rate = 1.0
+        self._speech_volume = 1.0
+        self._speech_pitch = 0.0
 
         # When enabled, streamed TTS drives the UI token callback word-by-word
         # against real WAV duration, instead of letting LLM tokens paint early.
@@ -350,6 +352,15 @@ class AikoSpeak:
             self._speech_rate = max(0.85, min(1.15, float(rate)))
         except (TypeError, ValueError):
             self._speech_rate = 1.0
+
+    def set_expression(self, rate: float = 1.0, volume: float = 1.0, pitch: float = 0.0) -> None:
+        """Set bounded optional per-utterance expressive controls."""
+        try:
+            self._speech_rate = max(0.85, min(1.15, float(rate)))
+            self._speech_volume = max(0.75, min(1.15, float(volume)))
+            self._speech_pitch = max(-0.15, min(0.15, float(pitch)))
+        except (TypeError, ValueError):
+            self._speech_rate, self._speech_volume, self._speech_pitch = 1.0, 1.0, 0.0
 
     def set_first_audio_callback(self, callback) -> None:
         """Register a callback invoked when the next utterance starts playback."""
@@ -470,6 +481,11 @@ class AikoSpeak:
         }
         if abs(self._speech_rate - 1.0) > 0.01:
             payload_data["speed"] = round(self._speech_rate, 3)
+        if os.getenv("MIOTTS_EXPRESSIVE_CONTROLS", "0").lower() in {"1", "true", "yes", "on"}:
+            if abs(self._speech_volume - 1.0) > 0.01:
+                payload_data["volume"] = round(self._speech_volume, 3)
+            if abs(self._speech_pitch) > 0.01:
+                payload_data["pitch"] = round(self._speech_pitch, 3)
         payload = json.dumps(payload_data).encode()
         
         req = urllib.request.Request(

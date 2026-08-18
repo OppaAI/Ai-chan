@@ -1468,7 +1468,13 @@ class AikoThink:
         try:
             from cognition.memory.edge_state import for_identity
             speak = self._get_speak()
-            if speak is not None and hasattr(speak, "set_speech_rate"):
+            if speak is not None and hasattr(speak, "set_expression"):
+                snap = for_identity(current_user_id()).snapshot()
+                affect = float(snap.get("affect", 0.0))
+                volume = 1.05 if affect > 0.25 else 0.9 if affect < -0.25 else 1.0
+                pitch = 0.05 if affect > 0.25 else -0.05 if affect < -0.25 else 0.0
+                speak.set_expression(for_identity(current_user_id()).adaptive_tts_rate(), volume, pitch)
+            elif speak is not None and hasattr(speak, "set_speech_rate"):
                 speak.set_speech_rate(for_identity(current_user_id()).adaptive_tts_rate())
         except Exception:
             pass
