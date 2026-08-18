@@ -1065,8 +1065,8 @@ class AikoThink:
         }
         
         # Stream response
-        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
-        self._review_response(user_input, raw_response)
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=False)
+        raw_response = self._finalize_response(user_input, raw_response, token_callback)
         
         # Store in history
         with self._history_lock:
@@ -1097,8 +1097,8 @@ class AikoThink:
                     f"Write only the message Aiko should say to {display_name} now."
                 ),
             }]
-            response = self._stream_response(messages, system=system, token_callback=None)
-            self._review_response(prompt_hint, response)
+            response = self._stream_response(messages, system=system, token_callback=None, emit=False)
+            response = self._finalize_response(prompt_hint, response, None)
             return response
         finally:
             with self._active_users_lock:
@@ -1194,8 +1194,8 @@ class AikoThink:
         _dump_full_prompt(self.last_prompt_debug)
     
         # Stream response
-        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback)
-        self._review_response(user_input, raw_response)
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=False)
+        raw_response = self._finalize_response(user_input, raw_response, token_callback)
         
         # Store
         with self._history_lock:
@@ -1338,7 +1338,7 @@ class AikoThink:
             speak.feed(text)
             speak.play_async()
 
-    def _stream_response(self, messages: list[dict], system: str = "", token_callback=None) -> str:
+    def _stream_response(self, messages: list[dict], system: str = "", token_callback=None, emit: bool = True) -> str:
         full_response = []
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
         all_messages = [{"role": "system", "content": system}] + messages if system else messages
@@ -1354,10 +1354,10 @@ class AikoThink:
                                      # producing inconsistent behavior across the checks below
     
         karaoke_text = bool(
-            speak and token_callback and getattr(speak, "karaoke_text", False)
+            emit and speak and token_callback and getattr(speak, "karaoke_text", False)
             and not self._reasoning
         )
-        if speak:
+        if speak and emit:
             speak.start_speech_stream(token_callback if karaoke_text else None)
     
         sentence_buffer = ""
@@ -1380,12 +1380,12 @@ class AikoThink:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
     
-                if token_callback and token and not karaoke_text:
+                if emit and token_callback and token and not karaoke_text:
                     token_callback(token)
     
                 full_response.append(token)
     
-                if speak and token:
+                if emit and speak and token:
                     sentence_buffer += token
                     sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
                     for sentence in sentences:
@@ -1395,12 +1395,12 @@ class AikoThink:
             if text:
                 self.last_usage["completion_text"] = text
                 stream_success = True
-                if speak and sentence_buffer.strip():
+                if emit and speak and sentence_buffer.strip():
                     speak.feed_speech_stream(sentence_buffer)
         except Exception as e:
             log.error(f"LLM stream failed: {e}")
         finally:
-            if speak:
+            if speak and emit:
                 speak.stop_speech_stream()
     
         if stream_success:
@@ -1411,7 +1411,8 @@ class AikoThink:
             max_tokens,
             "LLM stream failed or completed without content",
         )
-        self._emit(fallback_text, token_callback=token_callback)
+        if emit:
+            self._emit(fallback_text, token_callback=token_callback)
         return fallback_text
 
     def _fallback_completion(self, messages: list[dict], max_tokens: int, reason: str) -> str:
@@ -1454,14 +1455,45 @@ class AikoThink:
         while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
 
-    def _review_response(self, user_input: str, response_text: str) -> None:
+    def _finalize_response(self, user_input: str, draft: str, token_callback=None) -> str:
+        review = self._review_response(user_input, draft)
+        response = self._correct_response(user_input, draft, review)
+        if response != draft:
+            self._review_response(user_input, response)
+        self._emit(response, token_callback=token_callback)
+        return response
+
+    def _correct_response(self, user_input: str, draft: str, review: dict | None) -> str:
+        """Repair only high-risk drafts, keeping the correction bounded."""
+        if not review or len(review.get("flags", [])) < 2 or not draft.strip():
+            return draft
+        system = (
+            f"{self._current_system_prompt()}\n\n"
+            "You are Aiko's final response editor. Rewrite the draft only to fix the listed reliability issues. "
+            "Preserve the user's intent, do not invent facts, and return only the corrected answer. "
+            "If information is uncertain, say so plainly. Keep the original tone and length when possible."
+        )
+        prompt = (
+            f"User request:\n{user_input[:1200]}\n\n"
+            f"Draft:\n{draft[:3000]}\n\n"
+            f"Warnings:\n- " + "\n- ".join(review.get("flags", [])[:4])
+        )
+        corrected = self._fallback_completion(
+            [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            min(600, _BASE_PREDICT),
+            "metacognitive response correction",
+        )
+        return draft if not corrected.strip() or corrected.startswith("[LLM error]") else corrected.strip()
+
+    def _review_response(self, user_input: str, response_text: str) -> dict:
         try:
             from cognition.memory.edge_state import for_identity
             state = for_identity(current_user_id())
-            state.review_response(user_input, response_text)
+            review = state.review_response(user_input, response_text)
             state.persist()
+            return review
         except Exception:
-            pass
+            return {}
     def _store_async(self, user_input: str, response_text: str) -> None:
         """Queue a fire-and-forget memory write. The actual queue/worker
         thread now lives on AikoMemorize (cognition.memory.memorize); this just wires
