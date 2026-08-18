@@ -21,7 +21,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "requests>=2.34.2",
     "scipy<1.18.0",
-    "sherpa-onnx>=1.13.3",
+    "sherpa-onnx==1.13.4",
     "sounddevice>=0.5.5",
     "soundfile>=0.14.0",
     "sqlite-vec>=0.1.9",

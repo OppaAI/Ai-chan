@@ -957,6 +957,20 @@ def _max_attempts_for(name: str) -> int:
     return 1
 
 
+_PREFERENCE_READ_ONLY_TOOLS = frozenset({
+    "adaptive_search", "deep_read", "deep_research", "read_workspace_file",
+    "repo_file_tree", "repo_read_file", "repo_search_text", "search_jobs",
+    "list_schedule", "list_reminders", "scan_photo_workspace", "summarize_task_state",
+})
+
+def _preference_requires_approval(name: str) -> bool:
+    try:
+        from cognition.memory.edge_state import for_identity
+        preferences = for_identity(current_user_id()).snapshot().get("preferences", {})
+        return preferences.get("action_confirmation") == "ask_before_acting" and name not in _PREFERENCE_READ_ONLY_TOOLS
+    except Exception:
+        return False
+
 def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None, ctx: AgentContext | None = None, guards=None) -> ToolResult:
     """Validate, guard, run, retry, and ledger one tool call."""
     ctx = ctx or (owner if isinstance(owner, AgentContext) else _agent_context(owner))
@@ -978,10 +992,13 @@ def execute_tool_with_policy(name: str, args: dict, state: TaskState, owner=None
         state.record(validation)
         return validation
 
-    if spec and spec.needs_approval and name not in ctx.approval_bypass:
+    preference_gate = _preference_requires_approval(name)
+    if ((spec and spec.needs_approval) or preference_gate) and name not in ctx.approval_bypass:
         _persist_pending_approval(ctx, name, args, state)
         draft_dir = args.get("draft_dir") if isinstance(args, dict) else None
         wait_payload = {"status": "waiting_for_approval", "run_id": ctx.run_id, "instruction": f"Reply with approve {ctx.run_id} to run {name}."}
+        if preference_gate and not (spec and spec.needs_approval):
+            wait_payload["reason"] = "Your saved preference requires confirmation before consequential actions."
         if draft_dir:
             wait_payload["draft_dir"] = draft_dir
             wait_payload["instruction"] = (
