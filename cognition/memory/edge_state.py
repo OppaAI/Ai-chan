@@ -337,6 +337,27 @@ class EdgeCognitiveState:
             self._pending_memory_conflicts.clear()
         return pending
 
+    def reflection_summary(self) -> str:
+        """Summarize bounded internal state for continuity and self-correction."""
+        snap = self.snapshot()
+        lines = []
+        if snap.get("goals"):
+            lines.append("Active priority: " + snap["goals"][0])
+        if snap.get("open_loops"):
+            lines.append("Unresolved thread: " + snap["open_loops"][0])
+        if snap.get("contradictions"):
+            lines.append("Belief requiring care: recent statements conflict")
+        if snap.get("durable_lessons"):
+            lines.append("Behavioral lesson: " + snap["durable_lessons"][0])
+        failed_tools = [item for item in snap.get("tool_outcomes", [])[:3] if not item.get("ok")]
+        if failed_tools:
+            lines.append("Recent limitation: a tool attempt failed; disclose this if relevant")
+        if snap.get("response_reviews") and snap["response_reviews"][0].get("flags"):
+            lines.append("Last self-check: " + "; ".join(snap["response_reviews"][0]["flags"][:2]))
+        if not lines:
+            lines.append("No unresolved cognitive issue is currently salient")
+        return "<self_reflection>\n" + "\n".join("- " + line for line in lines[:5]) + "\n</self_reflection>"
+
     def adaptive_response_guidance(self) -> str:
         """Render bounded behavior guidance from current affect and prosody."""
         snap = self.snapshot()

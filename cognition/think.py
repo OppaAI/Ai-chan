@@ -461,6 +461,7 @@ class AikoThink:
             )
             base += "\n\n" + grounded
             base += "\n\n" + state_obj.adaptive_response_guidance()
+            base += "\n\n" + state_obj.reflection_summary()
             base += "\n\n" + state_obj.adaptive_response_guidance()
         except Exception:
             pass
