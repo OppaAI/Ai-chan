@@ -295,6 +295,22 @@ class EdgeCognitiveState:
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [row for _, _, row in scored]
 
+    def memory_conflicts(self, query: str, memories: list[dict] | None = None) -> list[dict]:
+        """Find conservative conflicts between a new statement and recalled facts."""
+        query_tokens = _tokens(query)
+        if len(query_tokens) < 2:
+            return []
+        query_negated = bool(_NEGATION_RE.search(query))
+        conflicts = []
+        for row in (memories or [])[:8]:
+            text = str(row.get("memory") or row.get("text") or row.get("trace") or "").strip()
+            words = _tokens(text)
+            overlap = query_tokens & words
+            if len(overlap) < 2 or query_negated == bool(_NEGATION_RE.search(text)):
+                continue
+            conflicts.append({"memory_id": row.get("id"), "current": query[:220], "remembered": text[:240], "shared_terms": sorted(overlap)[:8], "status": str(row.get("status") or "active")})
+        return conflicts[:3]
+
     def adaptive_response_guidance(self) -> str:
         """Render bounded behavior guidance from current affect and prosody."""
         snap = self.snapshot()
@@ -423,6 +439,9 @@ class EdgeCognitiveState:
             lines.append("Open loops: " + " | ".join(snap["open_loops"][:4]))
         if snap.get("contradictions"):
             lines.append("Possible contradictions to clarify: " + " | ".join(snap["contradictions"][:2]))
+        conflicts = self.memory_conflicts(query, memories)
+        if conflicts:
+            lines.append("Long-term memory conflicts requiring clarification: " + " | ".join(c["remembered"] for c in conflicts[:2]))
         if snap["lessons"]:
             lines.append("Lessons from outcomes: " + " | ".join(snap["lessons"][:3]))
         if snap.get("durable_lessons"):
@@ -450,6 +469,8 @@ class EdgeCognitiveState:
             flags.append("recent statements may conflict; clarify before relying on them")
         if "superseded" in statuses:
             flags.append("some retrieved memory may be outdated")
+        if self.memory_conflicts(query, rows):
+            flags.append("new statement conflicts with retrieved memory; clarify before updating belief")
         if temporal:
             flags.append("query may require current external information")
         confidence = "low" if len(flags) >= 2 or not evidence else "moderate"
