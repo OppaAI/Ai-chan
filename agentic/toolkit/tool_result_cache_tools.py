@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from agentic.registry import tool
@@ -14,10 +15,21 @@ from agentic.toolkit.tool_result_cache import (
     cache_gc,
 )
 
+# Match the graph node result limit to prevent exceeding substitution size
+GRAPH_NODE_RESULT_MAX_CHARS = int(os.getenv("GRAPH_NODE_RESULT_MAX_CHARS", "20000"))
+
 
 def _selection_to_evidence(selection: list[dict[str, Any]]) -> str:
-    """Format compact selection as plain text for synthesize_report evidence."""
+    """Format compact selection as plain text for synthesize_report evidence.
+
+    Tracks cumulative character budget and only includes whole records that fit
+    within GRAPH_NODE_RESULT_MAX_CHARS to prevent exceeding graph substitution limit.
+    Preserves record boundaries and ranking order.
+    """
     blocks: list[str] = []
+    total_chars = 0
+    separator_chars = 2  # "\n\n" between blocks
+
     for i, r in enumerate(selection or [], 1):
         title = (r.get("title") or "").strip()
         body = (r.get("body") or "").strip()
@@ -28,7 +40,21 @@ def _selection_to_evidence(selection: list[dict[str, Any]]) -> str:
             parts.append(body)
         if url:
             parts.append(url)
-        blocks.append("\n".join(parts))
+
+        # Build the complete record block
+        block = "\n".join(parts)
+        block_chars = len(block)
+
+        # Check if adding this whole record would exceed the budget
+        # (account for separator unless this is the first block)
+        needed_chars = block_chars + (separator_chars if blocks else 0)
+        if total_chars + needed_chars > GRAPH_NODE_RESULT_MAX_CHARS:
+            # Stop here - don't include partial records
+            break
+
+        blocks.append(block)
+        total_chars += needed_chars
+
     return "\n\n".join(blocks)
 
 
