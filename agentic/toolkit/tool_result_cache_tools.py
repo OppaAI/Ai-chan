@@ -1,6 +1,9 @@
 """Graph-registered wrappers for unified tool-result cache."""
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from agentic.registry import tool
 from agentic.toolkit.tool_result_cache import (
     SELECT_DEFAULT_LIMIT,
@@ -12,17 +15,34 @@ from agentic.toolkit.tool_result_cache import (
 )
 
 
+def _selection_to_evidence(selection: list[dict[str, Any]]) -> str:
+    """Format compact selection as plain text for synthesize_report evidence."""
+    blocks: list[str] = []
+    for i, r in enumerate(selection or [], 1):
+        title = (r.get("title") or "").strip()
+        body = (r.get("body") or "").strip()
+        url = (r.get("url") or "").strip()
+        head = f"{i}. {title}" if title else f"{i}."
+        parts = [head]
+        if body:
+            parts.append(body)
+        if url:
+            parts.append(url)
+        blocks.append("\n".join(parts))
+    return "\n\n".join(blocks)
+
+
 @tool(
     "cache_write",
     description=(
         "Append tool results to the unified on-disk JSONL tool-result cache. "
         "Use after fetch/search so full payloads stay out of the LLM context. "
-        "Pass items directly or from_state to read a GraphState key."
+        "Pass items (string or list) or from_state to read a GraphState key."
     ),
     props={
-        "items": {"type": "array", "description": "List of result objects or strings"},
-        "workflow": {"type": "string", "description": "Workflow id, e.g. lane_d_job_hunt"},
-        "source": {"type": "string", "description": "rss|email|web|tool"},
+        "items": {"description": "Result object(s) or text from prior node ($result:...)"},
+        "workflow": {"type": "string", "description": "Workflow id, e.g. research_and_report"},
+        "source": {"type": "string", "description": "rss|email|web|kb|tool"},
         "run_id": {"type": "string"},
         "from_state": {"type": "string", "description": "GraphState key holding items"},
     },
@@ -53,7 +73,7 @@ def cache_write_tool(
     "cache_select",
     description=(
         "Select a compact ranked subset from the tool-result cache for LLM synthesis. "
-        "Only this slice should enter context — not the full JSONL."
+        "Returns plain-text evidence (not full JSONL) for synthesize_report."
     ),
     props={
         "workflow": {"type": "string"},
@@ -78,8 +98,8 @@ def cache_select_tool(
     limit: int = SELECT_DEFAULT_LIMIT,
     to_state: str = "selection",
     state=None,
-) -> dict:
-    return cache_select(
+) -> str:
+    out = cache_select(
         workflow=workflow,
         source=source,
         run_id=run_id,
@@ -89,6 +109,7 @@ def cache_select_tool(
         state=state,
         to_state=to_state,
     )
+    return _selection_to_evidence(list(out.get("selection") or []))
 
 
 @tool(
@@ -110,8 +131,9 @@ def cache_read_tool(
     source: str | None = None,
     run_id: str | None = None,
     limit: int = 500,
-) -> dict:
-    return cache_read(workflow=workflow, source=source, run_id=run_id, limit=limit)
+) -> str:
+    out = cache_read(workflow=workflow, source=source, run_id=run_id, limit=limit)
+    return json.dumps({"count": out.get("count"), "records": out.get("records")}, ensure_ascii=False)
 
 
 @tool(
@@ -126,5 +148,6 @@ def cache_read_tool(
     react=False,
     graph=True,
 )
-def cache_gc_tool(workflow: str, keep_runs: int = DEFAULT_RETENTION_RUNS) -> dict:
-    return cache_gc(workflow=workflow, keep_runs=keep_runs)
+def cache_gc_tool(workflow: str, keep_runs: int = DEFAULT_RETENTION_RUNS) -> str:
+    out = cache_gc(workflow=workflow, keep_runs=keep_runs)
+    return json.dumps(out, ensure_ascii=False)
