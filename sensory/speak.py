@@ -319,6 +319,7 @@ class AikoSpeak:
         self._streaming_active = False
         self._first_audio_callback = None
         self._first_audio_fired = threading.Event()
+        self._speech_rate = 1.0
 
         # When enabled, streamed TTS drives the UI token callback word-by-word
         # against real WAV duration, instead of letting LLM tokens paint early.
@@ -342,6 +343,13 @@ class AikoSpeak:
 
         if not silent:
             log.info(f"[speak] MioTTS ready | url: {MIOTTS_API_URL} | preset: {MIOTTS_PRESET}")
+
+    def set_speech_rate(self, rate: float) -> None:
+        """Set a bounded optional synthesis speed for the next utterances."""
+        try:
+            self._speech_rate = max(0.85, min(1.15, float(rate)))
+        except (TypeError, ValueError):
+            self._speech_rate = 1.0
 
     def set_first_audio_callback(self, callback) -> None:
         """Register a callback invoked when the next utterance starts playback."""
@@ -452,14 +460,17 @@ class AikoSpeak:
             log.warning(f"[speak] truncating oversized TTS chunk: {len(text)} chars")
             text = text[:300]
         
-        payload = json.dumps({
+        payload_data = {
             "text": text,
             "reference_key": MIOTTS_PRESET,
             "temp": MIOTTS_TEMPERATURE,
             "top_p": MIOTTS_TOP_P,
             "n_predict": MIOTTS_MAX_TOKENS,
             "repeat_penalty": MIOTTS_REPETITION_PENALTY,
-        }).encode()
+        }
+        if abs(self._speech_rate - 1.0) > 0.01:
+            payload_data["speed"] = round(self._speech_rate, 3)
+        payload = json.dumps(payload_data).encode()
         
         req = urllib.request.Request(
             f"{MIOTTS_API_URL}/mio/tts",

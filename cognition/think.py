@@ -1465,6 +1465,13 @@ class AikoThink:
         response = self._correct_response(user_input, draft, review)
         if response != draft:
             self._review_response(user_input, response)
+        try:
+            from cognition.memory.edge_state import for_identity
+            speak = self._get_speak()
+            if speak is not None and hasattr(speak, "set_speech_rate"):
+                speak.set_speech_rate(for_identity(current_user_id()).adaptive_tts_rate())
+        except Exception:
+            pass
         self._emit(response, token_callback=token_callback)
         return response
 

@@ -368,6 +368,17 @@ class EdgeCognitiveState:
             lines.append("No unresolved cognitive issue is currently salient")
         return "<self_reflection>\n" + "\n".join("- " + line for line in lines[:5]) + "\n</self_reflection>"
 
+    def adaptive_tts_rate(self) -> float:
+        """Choose a conservative speech rate from recent voice cues."""
+        latest = (self.snapshot().get("perceptions") or [{}])[0]
+        if isinstance(latest.get("words_per_second"), (int, float)) and latest["words_per_second"] > 4.5:
+            return 1.05
+        if (isinstance(latest.get("pause_density"), (int, float)) and latest["pause_density"] > 0.55) or self.snapshot().get("uncertainty", 0.0) > 0.35:
+            return 0.9
+        if self.snapshot().get("affect", 0.0) < -0.25:
+            return 0.92
+        return 1.0
+
     def adaptive_response_guidance(self) -> str:
         """Render bounded behavior guidance from current affect and prosody."""
         snap = self.snapshot()
