@@ -85,6 +85,8 @@ class EdgeCognitiveState:
         self._response_reviews: deque[dict] = deque(maxlen=4)
         self._contradictions: deque[str] = deque(maxlen=4)
         self._pending_memory_conflicts: deque[dict] = deque(maxlen=3)
+        self._preferences: dict[str, str] = {}
+        self._preference_counts: dict[str, int] = {}
         self._lock = threading.RLock()
 
     def record(self, user: str, assistant: str) -> None:
@@ -95,6 +97,7 @@ class EdgeCognitiveState:
         if not user and not assistant:
             return
         with self._lock:
+            self._learn_preferences(user)
             self._detect_contradictions(user)
             if self._events and _OUTCOME_FAIL_RE.search(user):
                 self._add_lesson("Avoid repeating the previous approach: ", self._events[-1].assistant, user)
@@ -137,6 +140,26 @@ class EdgeCognitiveState:
     def _attention_for(user: str) -> str:
         words = _tokens(user)
         return " ".join(sorted(words, key=lambda w: (-len(w), w))[:6])
+
+    def _learn_preferences(self, feedback: str) -> None:
+        lower = (feedback or "").casefold()
+        candidates = []
+        if any(term in lower for term in ("concise", "short", "brief", "too long", "verbose")):
+            candidates.append(("response_length", "concise"))
+        if any(term in lower for term in ("more detail", "explain", "step by step", "walk me through")):
+            candidates.append(("explanation_depth", "detailed"))
+        if any(term in lower for term in ("ask before", "ask me first", "with my permission")):
+            candidates.append(("action_confirmation", "ask_before_acting"))
+        if any(term in lower for term in ("casual", "friendly", "less formal")):
+            candidates.append(("tone", "casual"))
+        if any(term in lower for term in ("formal", "professional")):
+            candidates.append(("tone", "formal"))
+        for key, value in candidates:
+            signature = key + "=" + value
+            count = self._preference_counts.get(signature, 0) + 1
+            self._preference_counts[signature] = min(count, 3)
+            if count >= 2:
+                self._preferences[key] = value
 
     def _add_lesson(self, prefix: str, source: str, feedback: str = "") -> None:
         text = " ".join((source or "").split())[:180]
@@ -209,7 +232,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons)}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "preferences": dict(self._preferences)}
 
     def consume_lessons(self) -> list[str]:
         """Return current outcome lessons for successful background consolidation."""
@@ -238,6 +261,7 @@ class EdgeCognitiveState:
                 self._lessons = deque(data.get("lessons", [])[:5], maxlen=5)
                 self._contradictions = deque(data.get("contradictions", [])[:4], maxlen=4)
                 self._durable_lessons = deque(data.get("durable_lessons", [])[:5], maxlen=5)
+                self._preferences = {str(k): str(v) for k, v in (data.get("preferences") or {}).items()}
                 self._activity = str(data.get("activity") or "")
                 self._affect = float(data.get("affect") or 0.0)
                 self._energy = float(data.get("energy") or 0.5)
@@ -254,7 +278,7 @@ class EdgeCognitiveState:
         try:
             from cognition.memory.vecstore import connect_sqlite_db
             with self._lock:
-                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
+                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "preferences": dict(self._preferences), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
             conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
             conn.execute("CREATE TABLE IF NOT EXISTS cognitive_state (user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
             conn.execute("INSERT INTO cognitive_state(user_id, state_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP", (self._identity, json.dumps(data, ensure_ascii=False, separators=(",", ":"))))
@@ -520,6 +544,8 @@ class EdgeCognitiveState:
             lines.append("Lessons from outcomes: " + " | ".join(snap["lessons"][:3]))
         if snap.get("durable_lessons"):
             lines.append("Durable interaction rules: " + " | ".join(snap["durable_lessons"][:3]))
+        if snap.get("preferences"):
+            lines.append("Stable interaction preferences: " + " | ".join(f"{key}={value}" for key, value in snap["preferences"].items()))
         energy = "low" if snap["energy"] < 0.35 else "high" if snap["energy"] > 0.65 else "steady"
         uncertainty = "elevated" if snap["uncertainty"] > 0.35 else "ordinary"
         lines.append(f"Internal cues: mood={snap["mood"]}, energy={energy}, uncertainty={uncertainty}")
