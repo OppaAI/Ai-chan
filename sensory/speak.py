@@ -507,7 +507,6 @@ class AikoSpeak:
                     wav_bytes = f.read()
                 # Clean up temp file
                 try:
-                    import os
                     os.remove(wav_path)
                 except Exception as e:
                     log.warning(f"[speak] failed to delete temp file {wav_path}: {e}")
