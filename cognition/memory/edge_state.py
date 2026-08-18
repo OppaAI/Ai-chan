@@ -84,6 +84,7 @@ class EdgeCognitiveState:
         self._activity: str = ""
         self._response_reviews: deque[dict] = deque(maxlen=4)
         self._contradictions: deque[str] = deque(maxlen=4)
+        self._pending_memory_conflicts: deque[dict] = deque(maxlen=3)
         self._lock = threading.RLock()
 
     def record(self, user: str, assistant: str) -> None:
@@ -306,10 +307,23 @@ class EdgeCognitiveState:
             text = str(row.get("memory") or row.get("text") or row.get("trace") or "").strip()
             words = _tokens(text)
             overlap = query_tokens & words
-            if len(overlap) < 2 or query_negated == bool(_NEGATION_RE.search(text)):
+            if len(overlap) < 1 or query_negated == bool(_NEGATION_RE.search(text)):
                 continue
             conflicts.append({"memory_id": row.get("id"), "current": query[:220], "remembered": text[:240], "shared_terms": sorted(overlap)[:8], "status": str(row.get("status") or "active")})
         return conflicts[:3]
+
+    def memory_resolution_guidance(self, query: str, memories: list[dict] | None = None) -> str:
+        """Describe a safe clarification/update path without mutating memory."""
+        conflicts = self.memory_conflicts(query, memories)
+        if not conflicts:
+            return ""
+        lower = (query or "").casefold()
+        explicit_update = any(term in lower for term in ("actually", "changed", "no longer", "anymore", "from now on", "update that"))
+        if explicit_update:
+            action = "Treat this as a candidate correction, but require explicit confirmation before superseding the remembered fact."
+        else:
+            action = "Ask which fact is current before writing or superseding either memory."
+        return "<memory_conflict_resolution>\n" + action + "\n" + "\n".join("- remembered: " + c["remembered"] for c in conflicts[:2]) + "\n</memory_conflict_resolution>"
 
     def adaptive_response_guidance(self) -> str:
         """Render bounded behavior guidance from current affect and prosody."""
@@ -442,6 +456,9 @@ class EdgeCognitiveState:
         conflicts = self.memory_conflicts(query, memories)
         if conflicts:
             lines.append("Long-term memory conflicts requiring clarification: " + " | ".join(c["remembered"] for c in conflicts[:2]))
+        resolution = self.memory_resolution_guidance(query, memories)
+        if resolution:
+            lines.append(resolution)
         if snap["lessons"]:
             lines.append("Lessons from outcomes: " + " | ".join(snap["lessons"][:3]))
         if snap.get("durable_lessons"):
@@ -471,6 +488,8 @@ class EdgeCognitiveState:
             flags.append("some retrieved memory may be outdated")
         if self.memory_conflicts(query, rows):
             flags.append("new statement conflicts with retrieved memory; clarify before updating belief")
+        if self.memory_resolution_guidance(query, rows):
+            flags.append("memory conflict requires explicit confirmation before supersession")
         if temporal:
             flags.append("query may require current external information")
         confidence = "low" if len(flags) >= 2 or not evidence else "moderate"
