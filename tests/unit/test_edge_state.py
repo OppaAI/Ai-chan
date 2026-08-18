@@ -162,3 +162,10 @@ def test_tool_outcomes_are_bounded_and_visible():
     assert outcomes[0]["tool"] == "write_report"
     assert outcomes[0]["ok"] is False
     assert outcomes[0]["error_type"] == "OSError"
+
+
+def test_repeated_tool_failure_becomes_a_durable_lesson():
+    state = EdgeCognitiveState()
+    state.record_tool_outcome("calendar", ok=False, detail="unavailable", error_type="TimeoutError")
+    state.record_tool_outcome("calendar", ok=False, detail="still unavailable", error_type="TimeoutError")
+    assert any("calendar" in lesson for lesson in state.snapshot()["durable_lessons"])

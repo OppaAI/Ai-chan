@@ -322,6 +322,9 @@ class EdgeCognitiveState:
             item["error_type"] = str(error_type)[:48]
         with self._lock:
             self._tool_outcomes.appendleft(item)
+            if not ok:
+                failure_key = str(error_type or "tool_error")
+                self._add_lesson("Tool limitation: ", f"{tool} ({failure_key})", "tool failed")
 
     def lesson_guidance(self) -> str:
         """Render only repeatedly evidenced lessons as behavior guidance."""
