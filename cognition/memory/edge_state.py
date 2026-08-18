@@ -268,6 +268,28 @@ class EdgeCognitiveState:
         with self._lock:
             self._perceptions.appendleft(item)
 
+    def adaptive_response_guidance(self) -> str:
+        """Render bounded behavior guidance from current affect and prosody."""
+        snap = self.snapshot()
+        latest = (snap.get("perceptions") or [{}])[0]
+        rules = []
+        rms = latest.get("rms")
+        pace = latest.get("words_per_second")
+        pauses = latest.get("pause_density")
+        if snap.get("energy", 0.5) < 0.35 or (isinstance(rms, (int, float)) and rms < 0.2):
+            rules.append("use a calm, gentle tone and keep the response manageable")
+        if isinstance(pace, (int, float)) and pace > 4.5:
+            rules.append("be concise and avoid unnecessary preamble")
+        if snap.get("uncertainty", 0.0) > 0.35 or (isinstance(pauses, (int, float)) and pauses > 0.55):
+            rules.append("slow down, clarify ambiguity, and avoid overconfident assumptions")
+        if snap.get("affect", 0.0) < -0.25:
+            rules.append("acknowledge possible frustration before problem-solving")
+        elif snap.get("affect", 0.0) > 0.25:
+            rules.append("match positive energy without becoming excessive")
+        if not rules:
+            rules.append("keep the response natural, proportionate, and attentive")
+        return "<adaptive_response_guidance>\n" + "\n".join("- " + rule for rule in rules[:4]) + "\n</adaptive_response_guidance>"
+
     def review_response(self, query: str, response: str) -> dict:
         """Audit a completed draft for bounded metacognitive warning signs."""
         q = (query or "").casefold()
