@@ -102,3 +102,16 @@ def test_completed_task_closes_matching_open_loop_and_goal():
     snap = state.snapshot()
     assert not snap["goals"]
     assert not snap["open_loops"]
+
+
+def test_reconstructive_recall_uses_active_context_and_reports_confidence():
+    state = EdgeCognitiveState()
+    state.record("I want to finish the release", "")
+    rows = [
+        {"memory": "The release checklist is ready", "valence_score": 1},
+        {"memory": "A recipe for soup", "valence_score": 1},
+    ]
+    ranked = state.prioritize_memories("what is next", rows)
+    assert ranked[0]["memory"] == "The release checklist is ready"
+    assert ranked[0]["_reconstruction_confidence"] in {"moderate", "high"}
+    assert "_reconstruction_confidence" not in rows[0]

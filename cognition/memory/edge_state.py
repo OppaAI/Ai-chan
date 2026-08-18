@@ -354,29 +354,54 @@ class EdgeCognitiveState:
             self._perceptions.appendleft(item)
 
     def prioritize_memories(self, query: str, memories: list[dict] | None) -> list[dict]:
-        """Rank retrieved memories with bounded cognitive relevance boosts."""
+        """Rank memories as a bounded reconstruction with confidence cues."""
         rows = list(memories or [])
-        if len(rows) < 2:
-            return rows
-        query_words = _tokens(query)
+        if not rows:
+            return []
         snap = self.snapshot()
+        query_words = _tokens(query)
+        context_words = _tokens(" ".join([snap.get("attention", ""), " ".join(snap.get("goals", [])), " ".join(snap.get("open_loops", []))]))
         goal_words = _tokens(" ".join(snap.get("goals", [])))
+        current_affect = float(snap.get("affect") or 0.0)
         scored = []
         for index, row in enumerate(rows):
             text = str(row.get("memory") or row.get("text") or row.get("trace") or "")
             words = _tokens(text)
-            score = len(words & query_words) * 2.0 + len(words & goal_words) * 1.5
+            query_overlap = len(words & query_words)
+            context_overlap = len(words & context_words)
+            goal_overlap = len(words & goal_words)
+            score = query_overlap * 2.0 + context_overlap * 0.7 + goal_overlap * 1.5
+            basis = []
+            if query_overlap: basis.append("query")
+            if context_overlap: basis.append("active_context")
+            if goal_overlap: basis.append("goal")
             if row.get("pinned"):
                 score += 1.5
+                basis.append("pinned")
             if row.get("salience_hit"):
                 score += 0.8
+                basis.append("salient")
             try:
-                score += min(1.0, max(0.0, float(row.get("access_count") or 0)) * 0.1)
+                accesses = max(0.0, float(row.get("access_count") or 0))
+                score += min(1.0, accesses * 0.1)
+                if accesses >= 2: basis.append("recalled_before")
+            except (TypeError, ValueError):
+                pass
+            try:
+                valence = float(row.get("valence_score") or 0.0)
+                if current_affect and valence and current_affect * valence > 0:
+                    score += 0.35
+                    basis.append("affective_resonance")
             except (TypeError, ValueError):
                 pass
             if str(row.get("status") or "").casefold() == "superseded":
                 score -= 2.0
-            scored.append((score, -index, row))
+                basis.append("superseded")
+            confidence = "high" if score >= 4.0 and (query_overlap or context_overlap) else "moderate" if score >= 2.0 else "low"
+            reconstructed = dict(row)
+            reconstructed["_reconstruction_confidence"] = confidence
+            reconstructed["_reconstruction_basis"] = basis or ["weak_match"]
+            scored.append((score, -index, reconstructed))
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         return [row for _, _, row in scored]
 
