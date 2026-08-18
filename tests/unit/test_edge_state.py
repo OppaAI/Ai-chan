@@ -216,3 +216,11 @@ def test_priming_context_is_query_relevant():
     unrelated = state.priming_context("weather forecast")
     assert "release" in related
     assert unrelated == ""
+
+
+def test_identity_priming_leaks_into_identity_query():
+    state = EdgeCognitiveState()
+    state.record("Do you know me?", "")
+    priming = state.priming_context("What is my name?")
+    assert "identity thread" in priming
+    assert "do not infer" in priming

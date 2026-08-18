@@ -363,9 +363,12 @@ class EdgeCognitiveState:
         snap = self.snapshot()
         related_goals = [item for item in snap.get("goals", []) if not query_words or _tokens(item) & query_words]
         related_loops = [item for item in snap.get("open_loops", []) if not query_words or _tokens(item) & query_words]
+        identity_query = bool(_IDENTITY_QUERY_RE.search(query or ""))
         lines = []
         if related_goals:
             lines.append("Relevant active goal: " + related_goals[0][:180])
+        if identity_query and snap.get("identity_questions"):
+            lines.append("Relevant identity thread: answer from retrieved identity evidence; do not infer missing facts.")
         if related_loops:
             lines.append("Relevant open loop: " + related_loops[0][:180])
         if snap.get("uncertainty", 0.0) > 0.35 and (related_goals or related_loops):
