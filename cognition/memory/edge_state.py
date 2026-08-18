@@ -291,6 +291,30 @@ class EdgeCognitiveState:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
             return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "preferences": dict(self._preferences)}
 
+    def cognitive_health(self) -> dict:
+        """Return bounded metrics showing whether cognitive state is usable.
+
+        This is diagnostic state only: it contains counts and labels, not new
+        memory content.  A sparse score distinguishes an empty/stale snapshot
+        from a functioning but quiet mind.
+        """
+        with self._lock:
+            active_goals = sum(1 for goal in self._goals if goal.progress == "active")
+            attention_words = len(_tokens(self._attention))
+            components = {
+                "working_memory": len(self._events),
+                "attention": attention_words,
+                "goals": active_goals,
+                "open_loops": len(self._open_loops),
+                "lessons": len(self._lessons) + len(self._durable_lessons),
+                "preferences": len(self._preferences),
+                "contradictions": len(self._contradictions),
+            }
+            populated = sum(1 for key, value in components.items() if value > 0 and key != "contradictions")
+            population = round(populated / 6.0, 3)
+            status = "empty" if not self._events else "sparse" if population < 0.34 else "active"
+            return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
+
     def consume_lessons(self) -> list[str]:
         """Return current outcome lessons for successful background consolidation."""
         with self._lock:

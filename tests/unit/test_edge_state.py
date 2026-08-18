@@ -127,3 +127,17 @@ def test_direct_request_becomes_goal_but_identity_question_stays_open_loop():
     snap = state.snapshot()
     assert any("know me" in loop for loop in snap["open_loops"])
     assert not any("know me" in goal for goal in snap["goals"])
+
+
+def test_cognitive_health_detects_empty_and_active_state():
+    empty = EdgeCognitiveState().cognitive_health()
+    assert empty["status"] == "empty"
+    assert empty["population"] == 0.0
+
+    state = EdgeCognitiveState()
+    state.record("Can you do todays job post?", "")
+    state.record("From now on, be concise", "")
+    health = state.cognitive_health()
+    assert health["status"] in {"sparse", "active"}
+    assert health["components"]["working_memory"] == 2
+    assert health["attention_valid"] is True
