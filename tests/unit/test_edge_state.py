@@ -206,3 +206,13 @@ def test_subconscious_guidance_is_tentative_and_grounded():
     guidance = state.subconscious_guidance()
     assert "tentative hypothesis" in guidance
     assert "never as facts" in guidance
+
+
+def test_priming_context_is_query_relevant():
+    state = EdgeCognitiveState()
+    state.record("I want to finish the release", "")
+    state.record("Can you review the garden?", "")
+    related = state.priming_context("release status")
+    unrelated = state.priming_context("weather forecast")
+    assert "release" in related
+    assert unrelated == ""

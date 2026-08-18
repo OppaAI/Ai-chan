@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 import threading
+import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 
@@ -92,6 +93,7 @@ class EdgeCognitiveState:
         self._intuitions: deque[str] = deque(maxlen=4)
         self._preference_counts: dict[str, int] = {}
         self._lock = threading.RLock()
+        self._last_tick = time.monotonic()
 
     def record(self, user: str, assistant: str) -> None:
         if not EDGE_COGNITION_ENABLED:
@@ -299,6 +301,17 @@ class EdgeCognitiveState:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
             return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "identity_questions": list(self._identity_questions), "intuitions": list(self._intuitions)}
 
+    def continuous_tick(self) -> dict:
+        """Apply bounded low-cost decay between conversational turns."""
+        now = time.monotonic()
+        with self._lock:
+            elapsed = max(0.0, min(3600.0, now - self._last_tick))
+            self._last_tick = now
+            steps = elapsed / 3600.0
+            self._uncertainty = max(0.0, self._uncertainty * max(0.0, 1.0 - 0.18 * steps))
+            self._energy += (0.5 - self._energy) * min(1.0, 0.12 * steps)
+            return {"elapsed_s": round(elapsed, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3)}
+
     def cognitive_health(self) -> dict:
         """Return bounded metrics showing whether cognitive state is usable.
 
@@ -343,6 +356,25 @@ class EdgeCognitiveState:
             for intuition in candidates:
                 if intuition not in self._intuitions:
                     self._intuitions.appendleft(intuition)
+
+    def priming_context(self, query: str = "") -> str:
+        """Inject only subconscious signals related to the current query."""
+        query_words = _tokens(query)
+        snap = self.snapshot()
+        related_goals = [item for item in snap.get("goals", []) if not query_words or _tokens(item) & query_words]
+        related_loops = [item for item in snap.get("open_loops", []) if not query_words or _tokens(item) & query_words]
+        lines = []
+        if related_goals:
+            lines.append("Relevant active goal: " + related_goals[0][:180])
+        if related_loops:
+            lines.append("Relevant open loop: " + related_loops[0][:180])
+        if snap.get("uncertainty", 0.0) > 0.35 and (related_goals or related_loops):
+            lines.append("Relevant uncertainty is elevated; verify assumptions.")
+        if abs(float(snap.get("affect") or 0.0)) > 0.25 and (related_goals or related_loops):
+            lines.append("Recent emotional context may affect interpretation; respond proportionately.")
+        if not lines:
+            return ""
+        return "<subconscious_priming>\n" + "\n".join("- " + line for line in lines) + "\n</subconscious_priming>"
 
     def subconscious_guidance(self) -> str:
         """Expose subconscious signals as hypotheses for conscious review."""

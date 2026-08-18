@@ -460,6 +460,7 @@ class AikoThink:
             from cognition.memory.edge_state import for_identity
             state_obj = for_identity(current_user_id())
             state_obj.record_activity(os.getenv("AIKO_ACTIVITY", ""))
+            state_obj.continuous_tick()
             state_obj.persist()
             state_obj.persist()
             state = state_obj.context(user_input)
@@ -494,6 +495,9 @@ class AikoThink:
             base += "\n\n" + state_obj.lesson_guidance()
             base += "\n\n" + state_obj.identity_guidance()
             base += "\n\n" + state_obj.subconscious_guidance()
+            priming = state_obj.priming_context(user_input)
+            if priming:
+                base += "\n\n" + priming
             base += "\n\n" + state_obj.subconscious_guidance()
         except Exception:
             pass
