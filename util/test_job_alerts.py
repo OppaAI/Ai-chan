@@ -173,6 +173,27 @@ def run_pipeline_steps(args) -> int:
         progress(f"ERROR: failed to import job_hunt toolset: {exc}")
         return 1
 
+    # Try to create LLM client for enrichment
+    llm_client = None
+    llm_model = None
+    try:
+        import os
+        from openai import OpenAI
+        llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:8080/v1")
+        llm_client = OpenAI(base_url=llm_base_url, api_key="not-needed")
+        # Try to get model name from server
+        try:
+            models = llm_client.models.list()
+            if models.data:
+                llm_model = models.data[0].id
+                progress(f"LLM client connected: {llm_base_url}, model: {llm_model}")
+            else:
+                progress(f"LLM client connected but no models listed: {llm_base_url}")
+        except Exception as e:
+            progress(f"LLM client created but model discovery failed: {e}")
+    except Exception as e:
+        progress(f"LLM client not available (set LLM_BASE_URL to enable enrichment): {e}")
+
     state = DebugState()
 
     progress("=== PIPELINE NODE: fetch_rss_and_email_into_state ===")
@@ -237,7 +258,7 @@ def run_pipeline_steps(args) -> int:
 
         draft_start = time.time()
         draft_result = json.loads(
-            jh.draft_single_job(json.dumps({"job": job}), "", client=None, model=None, state=state)
+            jh.draft_single_job(json.dumps({"job": job}), "", client=llm_client, model=llm_model, state=state)
         )
         draft_elapsed = time.time() - draft_start
         
@@ -293,7 +314,7 @@ async def main():
                               "(fetch_rss_and_email_into_state -> get_next_job -> draft_single_job -> "
                               "save_single_job_draft -> report_job_run) with 'senior' highlighting")
     parser.add_argument("--max-jobs", type=int, default=None, help="Cap jobs walked in --pipeline mode")
-    parser.add_argument("--save-drafts", action="store_true", help="In --pipeline mode, actually persist drafts to disk")
+    parser.add_argument("--save-drafts", action="store_true", default=True, help="In --pipeline mode, actually persist drafts to disk (default: True)")
     parser.add_argument("--context", type=int, default=80, help="Chars of context shown around a 'senior' match")
     args = parser.parse_args()
     

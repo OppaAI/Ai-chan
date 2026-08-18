@@ -1329,6 +1329,14 @@ def _emit_file_artifacts(token_callback, state: "TaskState") -> None:
     token_callback("__FILES__:" + _json.dumps(files, ensure_ascii=False) + "\n")
 
 
+def _finalize_agentic_answer(owner, user_input: str, draft: str, token_callback=None) -> str:
+    """Audit and, when needed, repair the final answer before delivery."""
+    finalize = getattr(owner, "_finalize_response", None)
+    if callable(finalize):
+        return finalize(user_input, draft, token_callback)
+    owner._emit(draft, token_callback=token_callback)
+    return draft
+
 def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None, cap_vec: np.ndarray | None = None, output_model: Any | None = None) -> str:
     """Run task mode using the owning AikoThink instance for model/memory/output.
 
@@ -1472,14 +1480,14 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "total_tokens": None,
                 }
                 _emit_file_artifacts(token_callback, graph_state)
-                owner._emit(graph_result.final_answer, token_callback=token_callback)
+                final_text = _finalize_agentic_answer(owner, user_input, graph_result.final_answer, token_callback=token_callback)
                 with owner._history_lock:
                     owner._history.append({"role": "user", "content": user_input})
-                    owner._history.append({"role": "assistant", "content": graph_result.final_answer})
+                    owner._history.append({"role": "assistant", "content": final_text})
                     if len(owner._history) > AGENT_HISTORY_TURNS * 10:
                         owner._history = owner._history[-(AGENT_HISTORY_TURNS * 10):]
-                owner._store_async(user_input, graph_result.final_answer)
-                return graph_result.final_answer
+                owner._store_async(user_input, final_text)
+                return final_text
 
             # Graph produced an untrustworthy result (a node failed, and/or
             # the verifier rejected it). Record it as a failed/partial
@@ -1514,7 +1522,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                     "total_tokens": None,
                 }
                 _emit_file_artifacts(token_callback, graph_state)
-                owner._emit(final_text, token_callback=token_callback)
+                final_text = _finalize_agentic_answer(owner, user_input, final_text, token_callback=token_callback)
                 with owner._history_lock:
                     owner._history.append({"role": "user", "content": user_input})
                     owner._history.append({"role": "assistant", "content": final_text})
@@ -1534,7 +1542,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
                 "and AGENT_EXECUTOR_MODE=graph disables the ReAct fallback. "
                 "Run practice.py or switch to AGENT_EXECUTOR_MODE=hybrid to learn it once."
             )
-            owner._emit(final_text, token_callback=token_callback)
+            final_text = _finalize_agentic_answer(owner, user_input, final_text, token_callback=token_callback)
             owner.last_usage = {
                 "prompt_messages": [{"role": "user", "content": user_input}],
                 "completion_text": final_text,
@@ -1853,7 +1861,7 @@ def run_agentic_chat(owner, user_input: str, token_callback=None, mem_kb_future=
         verified_ok=exp_verified_ok, score=exp_score, user_id=trace_ctx.user_id,
     )
     _emit_file_artifacts(token_callback, state)
-    owner._emit(final_text, token_callback=token_callback)
+    final_text = _finalize_agentic_answer(owner, user_input, final_text, token_callback=token_callback)
 
     with owner._history_lock:
         owner._history.append({"role": "user", "content": user_input})

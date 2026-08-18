@@ -105,6 +105,22 @@ _BOILERPLATE = {
     "your job alert", "jobs you may be interested in",
 }
 
+# Generic category labels from LinkedIn/Indeed recommendation emails
+# These are section headers, not actual job titles
+_GENERIC_CATEGORIES = {
+    "gen ai jobs", "gen ai job", "ai jobs", "ai job",
+    "research & development jobs", "research and development jobs",
+    "software engineering jobs", "software engineer jobs",
+    "data science jobs", "data scientist jobs",
+    "machine learning jobs", "ml jobs",
+    "devops jobs", "cloud jobs",
+    "frontend jobs", "backend jobs", "full stack jobs",
+    "remote jobs", "hybrid jobs", "onsite jobs",
+    "entry level jobs", "senior jobs", "lead jobs",
+    "recommended jobs", "suggested jobs", "similar jobs",
+    "jobs you may like", "jobs for you", "more jobs",
+}
+
 
 def _user_skillsets_dir() -> Path:
     """Per-user skillsets folder: USER_SKILLSETS_PATH or <user_state>/skillsets."""
@@ -800,6 +816,9 @@ def _looks_like_job_title(line: str) -> bool:
         return False
     if _is_boilerplate_line(line):
         return False
+    # Reject generic category labels (LinkedIn recommendation email sections)
+    if line.casefold().strip() in _GENERIC_CATEGORIES:
+        return False
     # Prefer lines with role keywords or title-case multi-word
     role_kw = re.compile(
         r"\b(engineer|developer|architect|manager|analyst|specialist|"
@@ -813,6 +832,11 @@ def _looks_like_job_title(line: str) -> bool:
     if re.match(r"^[A-Z][\w\s/\-&+]{8,}", line) and line.count(".") <= 1:
         return True
     return False
+
+
+def _is_generic_category(label: str) -> bool:
+    """Check if a label is a generic category (not a specific job title)."""
+    return label.casefold().strip() in _GENERIC_CATEGORIES
 
 
 def _extract_jobs_from_cleaned_email(
@@ -904,7 +928,9 @@ def _extract_jobs_from_cleaned_email(
         # One posting per distinct job URL when possible
         for idx, (label, url) in enumerate(urls):
             title = ""
-            if label and _looks_like_job_title(label):
+            label_is_generic = label and _is_generic_category(label)
+            
+            if label and _looks_like_job_title(label) and not label_is_generic:
                 title = label
             elif idx < len(title_candidates):
                 title = title_candidates[idx]
@@ -912,6 +938,28 @@ def _extract_jobs_from_cleaned_email(
                 title = title_candidates[0]
             else:
                 title = subject or f"Job listing {idx + 1}"
+
+            # If we ended up with a generic category as title, try to extract
+            # a more specific title from the snippet around the URL
+            if _is_generic_category(title):
+                pos = cleaned.find(url)
+                if pos >= 0:
+                    start = max(0, pos - 300)
+                    end = min(len(cleaned), pos + 500)
+                    snippet = cleaned[start:end]
+                    # Look for a more specific title in the snippet
+                    snippet_lines = [ln.strip() for ln in snippet.splitlines() if ln.strip()]
+                    for ln in snippet_lines:
+                        candidate = _MD_LINK_RE.sub(r"\1", ln).strip()
+                        candidate = re.sub(r"https?://\S+", "", candidate).strip()
+                        candidate = re.sub(r"^[\*\-\#\d\.\)\s]+", "", candidate).strip()
+                        if _looks_like_job_title(candidate) and not _is_generic_category(candidate):
+                            title = candidate[:200]
+                            break
+                # If still generic, skip this posting (it's a category header, not a job)
+                if _is_generic_category(title):
+                    log.debug("[job_hunt] skipping generic category posting: %s", title)
+                    continue
 
             org = ""
             if idx < len(company_from_star):
@@ -957,6 +1005,9 @@ def _extract_jobs_from_cleaned_email(
     else:
         # No job-board URL found — still emit one posting from best title + body
         title = title_candidates[0] if title_candidates else (subject or "Job alert")
+        if _is_generic_category(title):
+            log.debug("[job_hunt] skipping generic category posting (no URL): %s", title)
+            return []
         org = company_from_star[0].strip() if company_from_star else (sender or "")
         jobs.append({
             "title": title[:200],
