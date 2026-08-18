@@ -15,20 +15,24 @@ from agentic.toolkit.tool_result_cache import (
     cache_gc,
 )
 
-# Match the graph node result limit to prevent exceeding substitution size
-GRAPH_NODE_RESULT_MAX_CHARS = int(os.getenv("GRAPH_NODE_RESULT_MAX_CHARS", "20000"))
+# Must stay <= graph_engine._substitute $result: slice (currently 4000).
+# Prefer a shared env so both sides can be raised together later.
+GRAPH_RESULT_SUBSTITUTE_MAX_CHARS = int(
+    os.getenv("GRAPH_RESULT_SUBSTITUTE_MAX_CHARS", "4000")
+)
 
 
 def _selection_to_evidence(selection: list[dict[str, Any]]) -> str:
     """Format compact selection as plain text for synthesize_report evidence.
 
     Tracks cumulative character budget and only includes whole records that fit
-    within GRAPH_NODE_RESULT_MAX_CHARS to prevent exceeding graph substitution limit.
-    Preserves record boundaries and ranking order.
+    within GRAPH_RESULT_SUBSTITUTE_MAX_CHARS so graph_engine._substitute does not
+    silently truncate mid-set. Preserves record boundaries and ranking order.
     """
     blocks: list[str] = []
     total_chars = 0
     separator_chars = 2  # "\n\n" between blocks
+    budget = max(1, GRAPH_RESULT_SUBSTITUTE_MAX_CHARS)
 
     for i, r in enumerate(selection or [], 1):
         title = (r.get("title") or "").strip()
@@ -41,15 +45,10 @@ def _selection_to_evidence(selection: list[dict[str, Any]]) -> str:
         if url:
             parts.append(url)
 
-        # Build the complete record block
         block = "\n".join(parts)
         block_chars = len(block)
-
-        # Check if adding this whole record would exceed the budget
-        # (account for separator unless this is the first block)
         needed_chars = block_chars + (separator_chars if blocks else 0)
-        if total_chars + needed_chars > GRAPH_NODE_RESULT_MAX_CHARS:
-            # Stop here - don't include partial records
+        if total_chars + needed_chars > budget:
             break
 
         blocks.append(block)
@@ -127,8 +126,6 @@ def cache_select_tool(
     to_state: str = "selection",
     state=None,
 ) -> str:
-    import os
-
     # Resolve keywords from environment variable if keywords_env is provided
     resolved_keywords = keywords
     if keywords_env:
