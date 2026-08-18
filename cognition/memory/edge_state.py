@@ -403,6 +403,24 @@ class EdgeCognitiveState:
             return 0.92
         return 1.0
 
+    def preference_guidance(self) -> str:
+        """Turn learned preferences into explicit response behavior rules."""
+        preferences = self.snapshot().get("preferences", {})
+        if not preferences:
+            return "<preference_guidance>\nNo stable interaction preferences yet.\n</preference_guidance>"
+        rules = []
+        if preferences.get("response_length") == "concise":
+            rules.append("Prefer concise answers unless the user asks for detail.")
+        if preferences.get("explanation_depth") == "detailed":
+            rules.append("Include useful reasoning or steps when the task is complex.")
+        if preferences.get("action_confirmation") == "ask_before_acting":
+            rules.append("Ask before consequential external actions; reading and drafting remain allowed.")
+        if preferences.get("tone") == "casual":
+            rules.append("Use a friendly, less formal tone.")
+        elif preferences.get("tone") == "formal":
+            rules.append("Use a professional, more formal tone.")
+        return "<preference_guidance>\n" + "\n".join("- " + rule for rule in rules) + "\n</preference_guidance>"
+
     def adaptive_response_guidance(self) -> str:
         """Render bounded behavior guidance from current affect and prosody."""
         snap = self.snapshot()
