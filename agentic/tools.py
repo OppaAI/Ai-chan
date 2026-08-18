@@ -30,6 +30,7 @@ from agentic.toolkit import photography  # noqa: F401
 from agentic.toolkit import self_improve  # noqa: F401
 from agentic.toolkit import reports  # noqa: F401
 from agentic.toolkit import research  # noqa: F401
+from agentic.toolkit import tool_result_cache  # noqa: F401  # unified DAG tool-result cache
 from agentic.workflows.job_hunt import toolset  # noqa: F401
 from agentic.toolkit import social  # noqa: F401
 
