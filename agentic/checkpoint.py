@@ -119,8 +119,7 @@ def load_checkpoint(run_id: str, node_result_cls) -> list:
     for r in rows:
         node_id, tool, ok, content, args_json, error_type, state_json = r
         nr = node_result_cls(node_id=node_id, tool=tool, ok=bool(ok), content=content,
-                              args=json.loads(args_json), error_type=error_type)
-        nr._checkpoint_state = state_json
+                              args=json.loads(args_json), error_type=error_type, checkpoint_state=state_json)
         out.append(nr)
     return out
 

@@ -215,6 +215,7 @@ class NodeResult:
     args: dict[str, Any] = field(default_factory=dict)
     error_type: str | None = None
     usage: dict[str, int] | None = None
+    checkpoint_state: str = "{}"
 
     def summary(self, max_chars: int = 700) -> str:
         status = "ok" if self.ok else self.error_type or "failed"
@@ -1627,7 +1628,7 @@ def _execute_graph_inner(graph: PlanGraph, embedder=None, llm_client=None,
         for prior in checkpoint_results:
             if prior.node_id == "__graph_state__":
                 continue
-            restored_state = getattr(prior, "_checkpoint_state", None)
+            restored_state = getattr(prior, "checkpoint_state", "{}")
             if restored_state and restored_state != "{}":
                 try:
                     state.data.update(json.loads(restored_state))
