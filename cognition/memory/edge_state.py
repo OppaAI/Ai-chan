@@ -89,6 +89,7 @@ class EdgeCognitiveState:
         self._pending_memory_conflicts: deque[dict] = deque(maxlen=3)
         self._preferences: dict[str, str] = {}
         self._identity_questions: deque[str] = deque(maxlen=3)
+        self._intuitions: deque[str] = deque(maxlen=4)
         self._preference_counts: dict[str, int] = {}
         self._lock = threading.RLock()
 
@@ -120,6 +121,7 @@ class EdgeCognitiveState:
                 if loop and loop not in self._open_loops:
                     self._open_loops.appendleft(loop)
             self._capture_goal(user)
+            self._refresh_subconscious(user)
             if _DONE_RE.search(user):
                 self._close_matching_goal(user)
                 self._close_matching_loop(user)
@@ -295,7 +297,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "identity_questions": list(self._identity_questions)}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "identity_questions": list(self._identity_questions), "intuitions": list(self._intuitions)}
 
     def cognitive_health(self) -> dict:
         """Return bounded metrics showing whether cognitive state is usable.
@@ -320,6 +322,37 @@ class EdgeCognitiveState:
             population = round(populated / 6.0, 3)
             status = "empty" if not self._events else "sparse" if population < 0.34 else "active"
             return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
+
+    def _refresh_subconscious(self, user: str) -> None:
+        """Derive tentative, non-authoritative intuitions from bounded state."""
+        candidates = []
+        snap = self.snapshot()
+        if snap.get("contradictions"):
+            candidates.append("Possible unresolved belief conflict; verify before asserting.")
+        if snap.get("goals") and snap.get("open_loops"):
+            candidates.append("An active goal may be connected to an unresolved thread.")
+        if len(self._events) >= 3:
+            recent = [_tokens(event.user) for event in list(self._events)[-3:]]
+            recurring = set.intersection(*recent) if recent else set()
+            recurring -= {"can", "could", "please", "today"}
+            if recurring:
+                candidates.append("Recurring focus detected: " + " ".join(sorted(recurring)[:4]) + ".")
+        if snap.get("durable_lessons"):
+            candidates.append("A learned interaction pattern may apply here; check the current request first.")
+        with self._lock:
+            for intuition in candidates:
+                if intuition not in self._intuitions:
+                    self._intuitions.appendleft(intuition)
+
+    def subconscious_guidance(self) -> str:
+        """Expose subconscious signals as hypotheses for conscious review."""
+        with self._lock:
+            intuitions = list(self._intuitions)
+        if not intuitions:
+            return "<subconscious_guidance>\nNo tentative intuition currently salient.\n</subconscious_guidance>"
+        lines = ["- tentative hypothesis: " + item for item in intuitions[:3]]
+        lines.append("Treat these as associations to verify, never as facts.")
+        return "<subconscious_guidance>\n" + "\n".join(lines) + "\n</subconscious_guidance>"
 
     def evaluation_snapshot(self) -> dict:
         """Return bounded behavioral metrics for offline brain evaluation."""
@@ -401,6 +434,7 @@ class EdgeCognitiveState:
                 self._lesson_counts = {str(k): min(3, int(v)) for k, v in (data.get("lesson_evidence") or {}).items() if str(k) and str(v).isdigit()}
                 self._preferences = {str(k): str(v) for k, v in (data.get("preferences") or {}).items()}
                 self._identity_questions = deque(data.get("identity_questions", [])[:3], maxlen=3)
+                self._intuitions = deque(data.get("intuitions", [])[:4], maxlen=4)
                 self._activity = str(data.get("activity") or "")
                 self._affect = float(data.get("affect") or 0.0)
                 self._energy = float(data.get("energy") or 0.5)

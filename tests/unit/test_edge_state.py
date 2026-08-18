@@ -196,3 +196,13 @@ def test_evaluation_snapshot_reports_behavioral_metrics():
     assert metrics["active_goals"] == 1
     assert metrics["tool_success_rate"] == 0.5
     assert metrics["state_status"] != "empty"
+
+
+def test_subconscious_guidance_is_tentative_and_grounded():
+    state = EdgeCognitiveState()
+    state.record("I want to finish the release", "")
+    state.record("Can you check the release?", "")
+    state.record("The release is still blocked", "")
+    guidance = state.subconscious_guidance()
+    assert "tentative hypothesis" in guidance
+    assert "never as facts" in guidance
