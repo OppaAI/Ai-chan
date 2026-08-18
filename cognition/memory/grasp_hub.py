@@ -314,7 +314,7 @@ def install_into_think(think: Any) -> bool:
             except Exception:
                 pass
 
-        def _stream_response(messages: list, system: str = "", token_callback=None) -> str:
+        def _stream_response(messages: list, system: str = "", token_callback=None, emit: bool = True) -> str:
             try:
                 ident = _resolve_identity(None)
                 block = get_context_block(max_tokens=1200, touch=True, identity=ident)
@@ -322,7 +322,7 @@ def install_into_think(think: Any) -> bool:
                     system = f"{system}\n\n{block}" if system else block
             except Exception:
                 pass
-            return orig_stream(messages, system=system, token_callback=token_callback)
+            return orig_stream(messages, system=system, token_callback=token_callback, emit=emit)
 
         think._store_async = _store_async  # type: ignore[method-assign]
         think.reset_context = _reset_context  # type: ignore[method-assign]
