@@ -50,7 +50,7 @@ from agentic.wiki import wiki_knowledge_context_for
 from cognition.knowledge import knowledge_context_for
 from cognition import CONTEXT_POOL
 from system.log      import get_logger
-from system.schedule import DueJob, register_system_handler
+from system.schedule import DueJob, register_system_handler, schedule_job_record, list_schedule_records, cancel_schedule_record
 from system.userspace import current_user_id, current_display_name, user_profile_path
 from system import bioclock
 from agentic.toolkit.social import run_scheduled_weekly_social
@@ -59,6 +59,34 @@ from cognition.memory import learn
 
 log = get_logger(__name__)
 register_system_handler("weekly_social", run_scheduled_weekly_social)
+
+_GOAL_REVIEW_TITLE = "[Aiko] Goal review"
+
+def _sync_goal_review_schedule(state) -> None:
+    """Keep one gentle recurring review reminder in sync with cognitive state."""
+    try:
+        uid = current_user_id()
+        snap = state.snapshot()
+        active = bool(snap.get("goals") or snap.get("open_loops"))
+        jobs = list_schedule_records(include_disabled=True, user_id=uid)
+        existing = [job for job in jobs if job.get("title") == _GOAL_REVIEW_TITLE]
+        if active and not any(job.get("enabled", True) for job in existing):
+            now = bioclock.local_now()
+            schedule_job_record(
+                _GOAL_REVIEW_TITLE,
+                "Review Aiko\x27s active goals and unresolved threads; ask the user before taking consequential action.",
+                now.strftime("%H:%M"),
+                frequency="interval",
+                interval_seconds=21600,
+                action="announce",
+                user_id=uid,
+            )
+        elif not active:
+            for job in existing:
+                if job.get("enabled", True):
+                    cancel_schedule_record(str(job.get("id")), user_id=uid)
+    except Exception as exc:
+        log.debug("Goal review schedule sync skipped: %s", exc)
 
 # ── boot labels ───────────────────────────────────────────────────────────────
 
@@ -1538,6 +1566,7 @@ class AikoThink:
                     if conflict.get("memory_id") and memorize is not None:
                         memorize.supersede_exact(conflict["memory_id"], conflict.get("current", user_input), current_user_id())
             state.record(user_input, response_text)
+            _sync_goal_review_schedule(state)
             state.persist()
             cognitive_state = for_identity(current_user_id()).snapshot()
         except Exception:
