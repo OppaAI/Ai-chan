@@ -152,3 +152,13 @@ def test_lesson_evidence_is_visible_and_actionable():
     assert snap["lesson_evidence"]
     assert "lesson_guidance" in state.lesson_guidance()
     assert "Prefer concise responses." in state.lesson_guidance()
+
+
+def test_tool_outcomes_are_bounded_and_visible():
+    state = EdgeCognitiveState()
+    state.record_tool_outcome("search_jobs", ok=True, detail="1 result")
+    state.record_tool_outcome("write_report", ok=False, detail="permission denied", error_type="OSError")
+    outcomes = state.snapshot()["tool_outcomes"]
+    assert outcomes[0]["tool"] == "write_report"
+    assert outcomes[0]["ok"] is False
+    assert outcomes[0]["error_type"] == "OSError"

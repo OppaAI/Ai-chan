@@ -315,6 +315,14 @@ class EdgeCognitiveState:
             status = "empty" if not self._events else "sparse" if population < 0.34 else "active"
             return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
 
+    def record_tool_outcome(self, tool: str, *, ok: bool, detail: str = "", error_type: str = "") -> None:
+        """Record a compact tool outcome for disclosure and future learning."""
+        item = {"tool": str(tool or "tool")[:48], "ok": bool(ok), "detail": str(detail or "")[:240]}
+        if error_type:
+            item["error_type"] = str(error_type)[:48]
+        with self._lock:
+            self._tool_outcomes.appendleft(item)
+
     def lesson_guidance(self) -> str:
         """Render only repeatedly evidenced lessons as behavior guidance."""
         snap = self.snapshot()

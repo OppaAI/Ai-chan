@@ -832,7 +832,7 @@ def _classify_result(name: str, args: dict, content: str, attempts: int = 1) -> 
     return ToolResult(ok=True, tool=name, args=args, content=text, attempts=attempts)
 
 
-def dispatch_tool(name: str, args: dict, owner=None) -> str:
+def _dispatch_tool_impl(name: str, args: dict, owner=None) -> str:
     """Run one named tool with already-decoded JSON args.
 
     ``owner`` is the AikoThink instance driving this agentic turn.
@@ -927,6 +927,34 @@ def dispatch_tool(name: str, args: dict, owner=None) -> str:
     except TypeError:
         return handler(args)
 
+
+def dispatch_tool(name: str, args: dict, owner=None) -> str:
+    """Dispatch a tool and record its bounded outcome in cognitive state."""
+    try:
+        result = _dispatch_tool_impl(name, args, owner=owner)
+        parsed = result if isinstance(result, dict) else None
+        if parsed is None and isinstance(result, str) and result.lstrip().startswith("{"):
+            try:
+                parsed = json.loads(result)
+            except Exception:
+                parsed = None
+        ok = not (isinstance(result, str) and result.startswith("[unknown tool:"))
+        if isinstance(parsed, dict) and parsed.get("ok") is False:
+            ok = False
+        detail = str(result)[:240]
+        error_type = "tool_error" if not ok else ""
+    except Exception as exc:
+        result = f"[tool error: {exc}]"
+        ok = False
+        detail = str(exc)[:240]
+        error_type = type(exc).__name__
+    try:
+        from cognition.memory.edge_state import for_identity
+        from system.userspace import current_user_id
+        for_identity(current_user_id()).record_tool_outcome(name, ok=ok, detail=detail, error_type=error_type)
+    except Exception:
+        pass
+    return result
 
 def dispatch_tool_checked(name: str, args: dict, owner=None) -> ToolResult:
     """Run a tool and return a structured result, catching unexpected exceptions."""
