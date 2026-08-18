@@ -86,3 +86,19 @@ def test_confirmed_memory_conflict_is_consumed_once():
     state.situation_context(query, memories)
     assert state.confirm_memory_update("Yes, that changed")
     assert state.confirm_memory_update("Yes, that changed") == []
+
+
+def test_attention_keeps_a_readable_focus_phrase():
+    state = EdgeCognitiveState()
+    state.record("Can you do todays job post?", "")
+    assert state.snapshot()["attention"] == "job post"
+
+
+def test_completed_task_closes_matching_open_loop_and_goal():
+    state = EdgeCognitiveState()
+    state.record("I need to finish the release", "")
+    state.record("Can you check the release?", "")
+    state.record("The release is completed", "")
+    snap = state.snapshot()
+    assert not snap["goals"]
+    assert not snap["open_loops"]

@@ -36,7 +36,7 @@ _OUTCOME_FAIL_RE = re.compile(r"\b(wrong|incorrect|didn.t work|didn.t help|faile
 _OUTCOME_OK_RE = re.compile(r"\b(worked|works|fixed|solved|perfect|exactly|that helped|thank you|thanks)\b", re.I)
 _NEGATION_RE = re.compile(r"\b(?:not|no longer|never|dont|don.t|cannot|can.t|isn.t|aren.t|wasn.t|weren.t|changed my mind|instead)\b", re.I)
 _ENERGY_HIGH_RE = re.compile(r"\b(excited|energized|motivated|let\x27s go|can\x27t wait)\b", re.I)
-_STOP = {"the", "and", "that", "this", "with", "you", "are", "for", "have", "from", "about"}
+_STOP = {"the", "and", "that", "this", "with", "you", "are", "for", "have", "from", "about", "can", "could", "would", "should", "please", "today", "tell", "me", "do", "does", "did", "want", "need", "help"}
 
 
 @dataclass(slots=True)
@@ -117,6 +117,7 @@ class EdgeCognitiveState:
             self._capture_goal(user)
             if _DONE_RE.search(user):
                 self._close_matching_goal(user)
+                self._close_matching_loop(user)
 
     def clear(self) -> None:
         with self._lock:
@@ -139,8 +140,18 @@ class EdgeCognitiveState:
 
     @staticmethod
     def _attention_for(user: str) -> str:
+        """Build a readable focus phrase while preserving word order."""
         words = _tokens(user)
-        return " ".join(sorted(words, key=lambda w: (-len(w), w))[:6])
+        if not words:
+            return ""
+        ordered = []
+        for word in _WORD_RE.findall((user or "").lower()):
+            if word in _STOP or word not in words or word in ordered or word == "todays":
+                continue
+            ordered.append(word)
+            if len(ordered) >= 8:
+                break
+        return " ".join(ordered)
 
     def _apply_explicit_preferences(self, feedback: str) -> None:
         lower = (feedback or "").casefold()
@@ -228,8 +239,22 @@ class EdgeCognitiveState:
         for goal in self._goals:
             goal_words = _tokens(goal.text)
             overlap = len(words & goal_words)
-            if overlap >= 2 or (goal_words and overlap / len(goal_words) >= 0.6):
+            if overlap >= 1 and (goal_words and overlap / len(goal_words) >= 0.2):
                 goal.progress = "completed"
+
+
+    def _close_matching_loop(self, user: str) -> None:
+        """Remove an explicitly completed question or task from open loops."""
+        words = _tokens(user)
+        if not words:
+            return
+        remaining = deque(maxlen=EDGE_COGNITION_MAX_OPEN_LOOPS)
+        for loop in self._open_loops:
+            loop_words = _tokens(loop)
+            overlap = len(words & loop_words)
+            if not (overlap >= 1 and (loop_words and overlap / len(loop_words) >= 0.2)):
+                remaining.append(loop)
+        self._open_loops = remaining
 
 
     def _detect_contradictions(self, user: str) -> None:
