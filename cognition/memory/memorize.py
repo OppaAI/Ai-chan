@@ -789,6 +789,33 @@ class _MemoryBackend:
                 log.debug("post-write vector backfill skipped: %s", e)
         return mem_id
 
+    def supersede_exact(self, memory_id: str, replacement: str, user_id: str) -> str | None:
+        """Write a confirmed replacement linked to one exact memory row."""
+        text = (replacement or "").strip()
+        if not memory_id or not text or not user_id:
+            return None
+        try:
+            vector = self._embed(text)
+        except Exception as exc:
+            log.warning("Confirmed supersession embedding failed: %s", exc)
+            vector = None
+        with self._db_lock:
+            try:
+                row = self._conn.execute("SELECT id, pinned, user_id, status FROM memories WHERE id = ? AND user_id = ?", (memory_id, user_id)).fetchone()
+                if not row or str(row[3] or "active") == STATUS_SUPERSEDED:
+                    return None
+                cols = existing_columns(self._conn)
+                if "status" in cols:
+                    self._conn.execute("UPDATE memories SET status = ? WHERE id = ? AND user_id = ?", (STATUS_SUPERSEDED, memory_id, user_id))
+                new_id = str(uuid.uuid4())
+                self._insert_row(mem_id=new_id, user_id=user_id, text=text, now=datetime.now(timezone.utc).isoformat(), vector=vector, pinned=int(row[1] or 0), source=SOURCE_CHAT, supersedes_id=memory_id)
+                self._conn.commit()
+                return new_id
+            except Exception as exc:
+                log.warning("Confirmed memory supersession failed: %s", exc)
+                self._conn.rollback()
+                return None
+
     # ── vector backfill ────────────────────────────────────────────────────────
     # Rows persisted while the embedder was down have no memories_vec entry
     # (see _insert_row's optional vector). These are FTS-searchable but
@@ -3419,6 +3446,15 @@ class AikoMemorize:
             self._maybe_clear_search_cache()
             self._mem._invalidate_entity_importance(user_id)
         return mem_id
+
+    def supersede_exact(self, memory_id: str, replacement: str, user_id: str | None = None) -> str | None:
+        """Supersede exactly one confirmed memory row and preserve lineage."""
+        uid = self._resolve_user_id(user_id)
+        new_id = self._mem.supersede_exact(memory_id, replacement, uid)
+        if new_id:
+            self._clear_search_cache()
+            self._mem._invalidate_entity_importance(uid)
+        return new_id
 
     def backfill_missing_vectors(self, user_id: str | None = None, *, limit: int | None = None) -> int:
         """Re-embed any memories rows persisted without a vector (embedder

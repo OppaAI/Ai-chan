@@ -1514,7 +1514,14 @@ class AikoThink:
         cognitive_state = None
         try:
             from cognition.memory.edge_state import for_identity
-            for_identity(current_user_id()).record(user_input, response_text)
+            state = for_identity(current_user_id())
+            confirmed = state.confirm_memory_update(user_input)
+            if confirmed:
+                memorize = self._get_memorize()
+                for conflict in confirmed:
+                    if conflict.get("memory_id") and memorize is not None:
+                        memorize.supersede_exact(conflict["memory_id"], conflict.get("current", user_input), current_user_id())
+            state.record(user_input, response_text)
             cognitive_state = for_identity(current_user_id()).snapshot()
         except Exception:
             pass

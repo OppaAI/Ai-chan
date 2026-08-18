@@ -325,6 +325,18 @@ class EdgeCognitiveState:
             action = "Ask which fact is current before writing or superseding either memory."
         return "<memory_conflict_resolution>\n" + action + "\n" + "\n".join("- remembered: " + c["remembered"] for c in conflicts[:2]) + "\n</memory_conflict_resolution>"
 
+    def confirm_memory_update(self, statement: str) -> list[dict]:
+        """Consume pending conflicts only after an explicit confirmation."""
+        lower = (statement or "").casefold()
+        confirmation = any(term in lower for term in ("yes", "correct", "confirmed", "that changed", "that is right", "thats right"))
+        denial = any(term in lower for term in ("no", "not correct", "still", "keep the old", "that is wrong"))
+        if not confirmation or denial:
+            return []
+        with self._lock:
+            pending = list(self._pending_memory_conflicts)
+            self._pending_memory_conflicts.clear()
+        return pending
+
     def adaptive_response_guidance(self) -> str:
         """Render bounded behavior guidance from current affect and prosody."""
         snap = self.snapshot()
@@ -455,6 +467,9 @@ class EdgeCognitiveState:
             lines.append("Possible contradictions to clarify: " + " | ".join(snap["contradictions"][:2]))
         conflicts = self.memory_conflicts(query, memories)
         if conflicts:
+            with self._lock:
+                self._pending_memory_conflicts.clear()
+                self._pending_memory_conflicts.extend(conflicts[:3])
             lines.append("Long-term memory conflicts requiring clarification: " + " | ".join(c["remembered"] for c in conflicts[:2]))
         resolution = self.memory_resolution_guidance(query, memories)
         if resolution:
