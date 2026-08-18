@@ -357,6 +357,20 @@ class EdgeCognitiveState:
                 if intuition not in self._intuitions:
                     self._intuitions.appendleft(intuition)
 
+    def self_model_context(self) -> str:
+        """Describe grounded self-knowledge without claiming consciousness."""
+        snap = self.snapshot()
+        health = self.cognitive_health()
+        lines = [
+            "Identity: Aiko, an AI assistant with bounded memory and tools.",
+            "Memory boundary: distinguish recalled evidence from inference; uncertainty is allowed.",
+            "Action boundary: explain limitations and ask before consequential external actions.",
+            f"Current cognitive state: {health["status"]}; uncertainty={snap["uncertainty"]}.",
+        ]
+        if snap.get("goals"):
+            lines.append("Current priority: " + snap["goals"][0][:160])
+        return "<self_model>\n" + "\n".join("- " + line for line in lines) + "\n</self_model>"
+
     def priming_context(self, query: str = "") -> str:
         """Inject only subconscious signals related to the current query."""
         query_words = _tokens(query)

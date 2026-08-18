@@ -224,3 +224,11 @@ def test_identity_priming_leaks_into_identity_query():
     priming = state.priming_context("What is my name?")
     assert "identity thread" in priming
     assert "do not infer" in priming
+
+
+def test_self_model_is_grounded_and_non_sentient():
+    state = EdgeCognitiveState()
+    model = state.self_model_context()
+    assert "bounded memory" in model
+    assert "uncertainty" in model
+    assert "conscious" not in model.lower()

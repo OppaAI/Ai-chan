@@ -494,6 +494,7 @@ class AikoThink:
             base += "\n\n" + state_obj.preference_guidance()
             base += "\n\n" + state_obj.lesson_guidance()
             base += "\n\n" + state_obj.identity_guidance()
+            base += "\n\n" + state_obj.self_model_context()
             base += "\n\n" + state_obj.subconscious_guidance()
             priming = state_obj.priming_context(user_input)
             if priming:
