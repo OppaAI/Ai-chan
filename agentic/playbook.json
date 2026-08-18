@@ -1,0 +1,183 @@
+[
+  {
+    "id": "research_and_report",
+    "name": "Deep research, combine, synthesize, and write a report",
+    "capabilities": ["research"],
+    "nodes": [
+      {"id": "web", "tool": "deep_research", "args": {"query": "$prompt"}},
+      {"id": "cache_web", "tool": "cache_write", "depends_on": ["web"],
+       "args": {"workflow": "research_and_report", "source": "web", "items": "$result:web", "run_id": "run"}},
+      {"id": "kb", "tool": "kb_search", "depends_on": ["web"], "args": {"query": "$prompt"}},
+      {"id": "cache_kb", "tool": "cache_write", "depends_on": ["kb"],
+       "args": {"workflow": "research_and_report", "source": "kb", "items": "$result:kb", "run_id": "run"}},
+      {"id": "select", "tool": "cache_select", "depends_on": ["cache_web", "cache_kb"],
+       "args": {"workflow": "research_and_report", "run_id": "run", "limit": 12, "keywords": "$prompt"}},
+      {"id": "draft", "tool": "synthesize_report", "depends_on": ["select"],
+       "args": {"evidence": "$result:select", "prompt": "$prompt", "style": "auto"}},
+      {"id": "report", "tool": "write_report", "depends_on": ["draft"],
+       "args": {"title": "$title", "content": "$result:draft", "report_dir": "reports"}},
+      {"id": "learn", "tool": "learn_report", "depends_on": ["report"],
+       "args": {"title": "$title", "text": "$result:draft", "kind": "self_learned"}},
+      {"id": "gc", "tool": "cache_gc", "depends_on": ["learn"],
+       "args": {"workflow": "research_and_report", "keep_runs": 14}}
+    ]
+  },
+  {
+    "id": "search_kb_and_report",
+    "name": "Quick search, combine with KB, synthesize, and write a report",
+    "capabilities": ["research"],
+    "nodes": [
+      {"id": "web", "tool": "adaptive_search", "args": {"query": "$prompt"}},
+      {"id": "cache_web", "tool": "cache_write", "depends_on": ["web"],
+       "args": {"workflow": "search_kb_and_report", "source": "web", "items": "$result:web", "run_id": "run"}},
+      {"id": "kb", "tool": "kb_search", "depends_on": ["web"], "args": {"query": "$prompt"}},
+      {"id": "cache_kb", "tool": "cache_write", "depends_on": ["kb"],
+       "args": {"workflow": "search_kb_and_report", "source": "kb", "items": "$result:kb", "run_id": "run"}},
+      {"id": "select", "tool": "cache_select", "depends_on": ["cache_web", "cache_kb"],
+       "args": {"workflow": "search_kb_and_report", "run_id": "run", "limit": 10, "keywords": "$prompt"}},
+      {"id": "draft", "tool": "synthesize_report", "depends_on": ["select"],
+       "args": {"evidence": "$result:select", "prompt": "$prompt", "style": "auto"}},
+      {"id": "report", "tool": "write_report", "depends_on": ["draft"],
+       "args": {"title": "$title", "content": "$result:draft", "report_dir": "reports"}},
+      {"id": "learn", "tool": "learn_report", "depends_on": ["report"],
+       "args": {"title": "$title", "text": "$result:draft", "kind": "self_learned"}}
+    ]
+  },
+  {
+    "id": "compare_and_report",
+    "name": "Compare two subjects with parallel research, then synthesize",
+    "capabilities": ["research"],
+    "nodes": [
+      {"id": "web_a", "tool": "deep_research", "args": {"query": "$compare_left"}},
+      {"id": "web_b", "tool": "deep_research", "args": {"query": "$compare_right"}},
+      {"id": "cache_a", "tool": "cache_write", "depends_on": ["web_a"],
+       "args": {"workflow": "compare_and_report", "source": "web_a", "items": "$result:web_a", "run_id": "run"}},
+      {"id": "cache_b", "tool": "cache_write", "depends_on": ["web_b"],
+       "args": {"workflow": "compare_and_report", "source": "web_b", "items": "$result:web_b", "run_id": "run"}},
+      {"id": "kb", "tool": "kb_search", "depends_on": ["web_a", "web_b"], "args": {"query": "$prompt"}},
+      {"id": "cache_kb", "tool": "cache_write", "depends_on": ["kb"],
+       "args": {"workflow": "compare_and_report", "source": "kb", "items": "$result:kb", "run_id": "run"}},
+      {"id": "select", "tool": "cache_select", "depends_on": ["cache_a", "cache_b", "cache_kb"],
+       "args": {"workflow": "compare_and_report", "run_id": "run", "limit": 14, "keywords": "$prompt"}},
+      {"id": "draft", "tool": "synthesize_report", "depends_on": ["select"],
+       "args": {"evidence": "$result:select", "prompt": "$prompt", "style": "auto", "comparison_subjects": "$compare_subjects"}},
+      {"id": "report", "tool": "write_report", "depends_on": ["draft"],
+       "args": {"title": "$title", "content": "$result:draft", "report_dir": "reports"}},
+      {"id": "learn", "tool": "learn_report", "depends_on": ["report"],
+       "args": {"title": "$title", "text": "$result:draft", "kind": "self_learned"}}
+    ]
+  },
+  {
+    "id": "parallel_fanout_fanin",
+    "name": "Parallel fan-out research then fan-in synthesis",
+    "capabilities": ["research"],
+    "nodes": [
+      {"id": "web_1", "tool": "deep_research", "args": {"query": "angle 1: technical deep-dive on $prompt"}},
+      {"id": "web_2", "tool": "deep_research", "args": {"query": "angle 2: practical applications of $prompt"}},
+      {"id": "web_3", "tool": "deep_research", "args": {"query": "angle 3: limitations and criticisms of $prompt"}},
+      {"id": "cache_1", "tool": "cache_write", "depends_on": ["web_1"],
+       "args": {"workflow": "parallel_fanout_fanin", "source": "web_1", "items": "$result:web_1", "run_id": "run"}},
+      {"id": "cache_2", "tool": "cache_write", "depends_on": ["web_2"],
+       "args": {"workflow": "parallel_fanout_fanin", "source": "web_2", "items": "$result:web_2", "run_id": "run"}},
+      {"id": "cache_3", "tool": "cache_write", "depends_on": ["web_3"],
+       "args": {"workflow": "parallel_fanout_fanin", "source": "web_3", "items": "$result:web_3", "run_id": "run"}},
+      {"id": "select", "tool": "cache_select", "depends_on": ["cache_1", "cache_2", "cache_3"],
+       "args": {"workflow": "parallel_fanout_fanin", "run_id": "run", "limit": 15, "keywords": "$prompt"}},
+      {"id": "synthesize", "tool": "synthesize_report", "depends_on": ["select"],
+       "args": {"evidence": "$result:select", "prompt": "$prompt", "style": "professional"}},
+      {"id": "report", "tool": "write_report", "depends_on": ["synthesize"],
+       "args": {"title": "$title", "content": "$result:synthesize", "report_dir": "reports"}},
+      {"id": "learn", "tool": "learn_report", "depends_on": ["report"],
+       "args": {"title": "$title", "text": "$result:synthesize", "kind": "self_learned"}}
+    ]
+  },
+  {
+    "id": "orchestrator_workers",
+    "name": "Orchestrator + workers with cached evidence",
+    "capabilities": ["research", "repo"],
+    "nodes": [
+      {"id": "decompose", "tool": "make_plan", "args": {"goal": "$prompt", "max_steps": 8}},
+      {"id": "worker_1", "tool": "deep_research", "depends_on": ["decompose"], "args": {"query": "Subtask 1 of: $prompt"}},
+      {"id": "worker_2", "tool": "repo_search_text", "depends_on": ["decompose"], "args": {"query": "Subtask 2 of: $prompt", "limit": 20}},
+      {"id": "worker_3", "tool": "kb_search", "depends_on": ["decompose"], "args": {"query": "Subtask 3 of: $prompt"}},
+      {"id": "cache_1", "tool": "cache_write", "depends_on": ["worker_1"],
+       "args": {"workflow": "orchestrator_workers", "source": "worker_1", "items": "$result:worker_1", "run_id": "run"}},
+      {"id": "cache_2", "tool": "cache_write", "depends_on": ["worker_2"],
+       "args": {"workflow": "orchestrator_workers", "source": "worker_2", "items": "$result:worker_2", "run_id": "run"}},
+      {"id": "cache_3", "tool": "cache_write", "depends_on": ["worker_3"],
+       "args": {"workflow": "orchestrator_workers", "source": "worker_3", "items": "$result:worker_3", "run_id": "run"}},
+      {"id": "select", "tool": "cache_select", "depends_on": ["cache_1", "cache_2", "cache_3"],
+       "args": {"workflow": "orchestrator_workers", "run_id": "run", "limit": 14, "keywords": "$prompt"}},
+      {"id": "final", "tool": "synthesize_report", "depends_on": ["select"],
+       "args": {"evidence": "$result:select", "prompt": "Final integrated answer: $prompt", "style": "professional"}},
+      {"id": "report", "tool": "write_report", "depends_on": ["final"],
+       "args": {"title": "$title", "content": "$result:final", "report_dir": "reports"}},
+      {"id": "learn", "tool": "learn_report", "depends_on": ["report"],
+       "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}}
+    ]
+  },
+  {
+    "id": "planning_and_execution",
+    "name": "Plan then execute with cached step evidence",
+    "capabilities": ["research", "repo"],
+    "nodes": [
+      {"id": "plan", "tool": "make_plan", "args": {"goal": "$prompt", "max_steps": 6}},
+      {"id": "step_1", "tool": "deep_research", "depends_on": ["plan"], "args": {"query": "Step 1 execution for: $prompt"}},
+      {"id": "step_2", "tool": "deep_research", "depends_on": ["plan"], "args": {"query": "Step 2 execution for: $prompt"}},
+      {"id": "cache_1", "tool": "cache_write", "depends_on": ["step_1"],
+       "args": {"workflow": "planning_and_execution", "source": "step_1", "items": "$result:step_1", "run_id": "run"}},
+      {"id": "cache_2", "tool": "cache_write", "depends_on": ["step_2"],
+       "args": {"workflow": "planning_and_execution", "source": "step_2", "items": "$result:step_2", "run_id": "run"}},
+      {"id": "select", "tool": "cache_select", "depends_on": ["cache_1", "cache_2"],
+       "args": {"workflow": "planning_and_execution", "run_id": "run", "limit": 12, "keywords": "$prompt"}},
+      {"id": "final", "tool": "synthesize_report", "depends_on": ["select"],
+       "args": {"evidence": "$result:select", "prompt": "$prompt", "style": "professional"}},
+      {"id": "report", "tool": "write_report", "depends_on": ["final"],
+       "args": {"title": "$title", "content": "$result:final", "report_dir": "reports"}},
+      {"id": "learn", "tool": "learn_report", "depends_on": ["report"],
+       "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}}
+    ]
+  },
+  {
+    "id": "multi_agent_collab",
+    "name": "Multi-role collaboration with cached researcher evidence",
+    "capabilities": ["research", "reports"],
+    "nodes": [
+      {"id": "researcher", "tool": "deep_research", "args": {"query": "$prompt"}},
+      {"id": "cache_r", "tool": "cache_write", "depends_on": ["researcher"],
+       "args": {"workflow": "multi_agent_collab", "source": "researcher", "items": "$result:researcher", "run_id": "run"}},
+      {"id": "select", "tool": "cache_select", "depends_on": ["cache_r"],
+       "args": {"workflow": "multi_agent_collab", "run_id": "run", "limit": 12, "keywords": "$prompt"}},
+      {"id": "analyst", "tool": "synthesize_report", "depends_on": ["select"],
+       "args": {"evidence": "$result:select", "prompt": "Analyst role: structure findings for: $prompt", "style": "auto"}},
+      {"id": "writer", "tool": "synthesize_report", "depends_on": ["analyst"],
+       "args": {"evidence": "$result:analyst", "prompt": "Writer role: report for: $prompt", "style": "professional"}},
+      {"id": "reviewer", "tool": "synthesize_report", "depends_on": ["writer"],
+       "args": {"evidence": "$result:writer", "prompt": "Reviewer role: critique the draft", "style": "plain"}},
+      {"id": "final", "tool": "synthesize_report", "depends_on": ["writer", "reviewer"],
+       "args": {"evidence": "$result:writer\n\nReview:\n$result:reviewer", "prompt": "Final deliverable", "style": "professional"}},
+      {"id": "report", "tool": "write_report", "depends_on": ["final"],
+       "args": {"title": "$title", "content": "$result:final", "report_dir": "reports"}},
+      {"id": "learn", "tool": "learn_report", "depends_on": ["report"],
+       "args": {"title": "$title", "text": "$result:final", "kind": "self_learned"}}
+    ]
+  },
+  {
+    "id": "lane_d_job_hunt",
+    "name": "Lane D — nightly tech job teaser (cache-first)",
+    "capabilities": ["research", "job_hunt"],
+    "nodes": [
+      {"id": "fetch_rss", "tool": "search_jobs", "args": {"query": "$prompt"}, "timeout_seconds": 120},
+      {"id": "cache_rss", "tool": "cache_write", "depends_on": ["fetch_rss"],
+       "args": {"workflow": "lane_d_job_hunt", "source": "rss", "items": "$result:fetch_rss", "run_id": "run"}},
+      {"id": "select_jobs", "tool": "cache_select", "depends_on": ["cache_rss"],
+       "args": {"workflow": "lane_d_job_hunt", "run_id": "run", "matched_only": true, "limit": 10}},
+      {"id": "draft_teaser", "tool": "draft_job_post_social", "depends_on": ["select_jobs"],
+       "args": {"platform": "threads"}, "timeout_seconds": 90},
+      {"id": "save_draft", "tool": "write_report", "depends_on": ["draft_teaser"],
+       "args": {"title": "Lane D job teaser", "content": "$result:draft_teaser", "report_dir": "reports/job_hunt"}},
+      {"id": "gc", "tool": "cache_gc", "depends_on": ["save_draft"],
+       "args": {"workflow": "lane_d_job_hunt", "keep_runs": 14}}
+    ]
+  }
+]
