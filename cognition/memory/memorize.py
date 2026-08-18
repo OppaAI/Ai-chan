@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections import OrderedDict
 from typing import Any
 import queue
@@ -2832,6 +2833,7 @@ class AikoMemorize:
             pinned_ids = _sqlite_pinned_ids(self._conn, mem_ids)
         merged = self._dream_merge(mem_ids, user_id=user_id, threshold=threshold, pinned_ids=pinned_ids, dry_run=dry_run)
         schemas = self._dream_schema(user_id=user_id, dry_run=dry_run)
+        pin_result = self.rebalance_pins(user_id, dry_run=dry_run)
         # FIX: dream() previously called cleanup() with no _all_mems, so the
         # "already-fetched memory list is passed through here to avoid a
         # redundant get_all() scan" claim in cleanup()'s docstring was dead —
@@ -2848,7 +2850,7 @@ class AikoMemorize:
             f"Done — boosted={boosted}, merged={merged}, schemas={schemas}, pruned={pruned}, "
             f"duration={duration}s"
         )
-        return {"boosted": boosted, "merged": merged, "schemas": schemas, "pruned": pruned, "duration_s": duration}
+        return {"boosted": boosted, "merged": merged, "schemas": schemas, "pruned": pruned, "unpinned": pin_result.get("unpinned", 0), "duration_s": duration}
 
     def _dream_boost(
         self,
@@ -3420,6 +3422,75 @@ class AikoMemorize:
 
         candidates.sort(key=lambda x: x["weighted_score"])
         return kept, candidates
+
+    def rebalance_pins(
+        self,
+        user_id: str,
+        *,
+        max_age_days: int = 45,
+        min_access_count: int = 2,
+        dry_run: bool = False,
+    ) -> dict:
+        """Make ordinary pinned memories forgettable without deleting them.
+
+        Pins are a preservation hint, not a guarantee of eternal storage.
+        Identity, safety, and explicit durable rules stay pinned; old rows
+        that have never (or barely) been recalled are simply unpinned so the
+        normal decay/cleanup path can evaluate them later.
+        """
+        uid = str(user_id or "")
+        try:
+            age_days = max(1, int(max_age_days))
+        except (TypeError, ValueError):
+            age_days = 45
+        try:
+            access_floor = max(0, int(min_access_count))
+        except (TypeError, ValueError):
+            access_floor = 2
+        now = datetime.now(timezone.utc)
+        protected = re.compile(
+            r"\b(my name|i am|i\x27m|birthday|allerg|medical|safety|emergency|"
+            r"from now on|always|never|do not forget|don\x27t forget|remember this)\b",
+            re.IGNORECASE,
+        )
+        candidates: list[dict] = []
+        for row in self.get_all(user_id=uid):
+            if not int(row.get("pinned") or 0):
+                continue
+            text = str(row.get("memory") or "")
+            if protected.search(text):
+                continue
+            if str(row.get("status") or "active").casefold() not in {"", "active"}:
+                continue
+            try:
+                accesses = int(row.get("access_count") or 0)
+            except (TypeError, ValueError):
+                accesses = 0
+            if accesses >= access_floor:
+                continue
+            stamp = row.get("last_accessed_at") or row.get("created_at") or ""
+            if str(stamp).casefold() == "never":
+                stamp = row.get("created_at") or ""
+            try:
+                touched = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+                if touched.tzinfo is None:
+                    touched = touched.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if (now - touched).total_seconds() < age_days * 86400:
+                continue
+            candidates.append({"id": str(row.get("id") or ""), "memory": text[:120], "age_days": round((now - touched).total_seconds() / 86400, 1), "access_count": accesses})
+
+        if not dry_run and candidates:
+            ids = [item["id"] for item in candidates if item["id"]]
+            placeholders = ",".join("?" for _ in ids)
+            with self._mem._db_lock:
+                self._conn.execute(
+                    f"UPDATE memories SET pinned = 0 WHERE user_id = ? AND id IN ({placeholders})",
+                    [uid, *ids],
+                )
+                self._conn.commit()
+        return {"unpinned": 0 if dry_run else len(candidates), "candidates": candidates, "protected": True}
 
     def optimize(self) -> None:
         with self._mem._db_lock:

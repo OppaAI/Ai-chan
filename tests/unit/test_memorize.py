@@ -1090,3 +1090,18 @@ class TestCrossStoreUserScoping:
         # With different user_id should return empty (separate DB)
         hits2 = search_experience("user1 task", limit=5, embedder=fe, user_id="user2")
         assert hits2 == []
+
+
+def test_rebalance_pins_unpins_old_ordinary_rows_but_protects_identity(backend):
+    memo = _bare_memo(backend)
+    old = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    _insert_row(backend._conn, "old_note", "u1", "A meeting happened", old, pinned=1)
+    _insert_row(backend._conn, "identity", "u1", "My name is Oppa", old, pinned=1)
+    backend._conn.commit()
+
+    result = memo.rebalance_pins("u1", max_age_days=45)
+    rows = {row["id"]: row for row in backend.get_all(user_id="u1")}
+
+    assert result["unpinned"] == 1
+    assert rows["old_note"]["pinned"] == 0
+    assert rows["identity"]["pinned"] == 1
