@@ -115,3 +115,15 @@ def test_reconstructive_recall_uses_active_context_and_reports_confidence():
     assert ranked[0]["memory"] == "The release checklist is ready"
     assert ranked[0]["_reconstruction_confidence"] in {"moderate", "high"}
     assert "_reconstruction_confidence" not in rows[0]
+
+
+def test_direct_request_becomes_goal_but_identity_question_stays_open_loop():
+    state = EdgeCognitiveState()
+    state.record("Can you do todays job post?", "")
+    snap = state.snapshot()
+    assert snap["goals"] == ["job post"]
+
+    state.record("Do you know me?", "")
+    snap = state.snapshot()
+    assert any("know me" in loop for loop in snap["open_loops"])
+    assert not any("know me" in goal for goal in snap["goals"])

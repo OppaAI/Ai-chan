@@ -28,6 +28,8 @@ EDGE_COGNITION_MAX_IDENTITIES = max(1, env_int("EDGE_COGNITION_MAX_IDENTITIES", 
 _WORD_RE = re.compile(r"[a-z0-9_]{3,}")
 _QUESTION_RE = re.compile(r"\?|\b(what|why|how|when|where|who|which|remember|can you|could you|need to|todo)\b", re.I)
 _COMMITMENT_RE = re.compile(r"\b(i will|i'll|we will|we'll|need to|remember to|don't forget|next step|todo)\b", re.I)
+_TASK_RE = re.compile(r"\b(?:can you|could you|please|do|check|find|make|fix|write|create|build|draft|show me)\b", re.I)
+_IDENTITY_QUERY_RE = re.compile(r"\b(?:do you know me|who am i|what is my name|what\x27s my name|remember me)\b", re.I)
 _GOAL_RE = re.compile(r"\b(?:i want to|i need to|we need to|let\x27s|lets|goal is to|trying to|working on)\s+(.{3,180})", re.I)
 _DONE_RE = re.compile(r"\b(done|finished|completed|fixed|solved|never mind|forget it)\b", re.I)
 _UNCERTAIN_RE = re.compile(r"\b(i don\x27t know|not sure|unclear|maybe|might|probably|could be|i think)\b", re.I)
@@ -226,9 +228,14 @@ class EdgeCognitiveState:
 
     def _capture_goal(self, user: str) -> None:
         match = _GOAL_RE.search(user)
-        if not match: return
-        text = " ".join(match.group(1).split()).rstrip(".!?")
-        if not text: return
+        if match:
+            text = " ".join(match.group(1).split()).rstrip(".?!")
+        elif _TASK_RE.search(user) and not _IDENTITY_QUERY_RE.search(user):
+            text = self._attention_for(user)
+        else:
+            return
+        if not text or len(_tokens(text)) < 2:
+            return
         self._goals = deque((g for g in self._goals if g.text.casefold() != text.casefold()), maxlen=EDGE_COGNITION_MAX_GOALS)
         self._goals.appendleft(_Goal(text=text))
 
