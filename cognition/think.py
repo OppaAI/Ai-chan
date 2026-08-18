@@ -930,6 +930,7 @@ class AikoThink:
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
+        memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
         memory_block = self._get_memorize().format_for_context(
           memories, query=user_input, query_vector=query_vec
         )
@@ -1124,7 +1125,9 @@ class AikoThink:
             # Memory + KB — either resolved from route()'s post-intent future,
             # or fetched directly if this was called standalone.
             memorize = self._get_memorize()
+            from cognition.memory.edge_state import for_identity
             memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
+            memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
             memory_block = memorize.format_for_context(
               memories, query=user_input, query_vector=query_vec
             ) if memorize is not None else ""

@@ -268,6 +268,33 @@ class EdgeCognitiveState:
         with self._lock:
             self._perceptions.appendleft(item)
 
+    def prioritize_memories(self, query: str, memories: list[dict] | None) -> list[dict]:
+        """Rank retrieved memories with bounded cognitive relevance boosts."""
+        rows = list(memories or [])
+        if len(rows) < 2:
+            return rows
+        query_words = _tokens(query)
+        snap = self.snapshot()
+        goal_words = _tokens(" ".join(snap.get("goals", [])))
+        scored = []
+        for index, row in enumerate(rows):
+            text = str(row.get("memory") or row.get("text") or row.get("trace") or "")
+            words = _tokens(text)
+            score = len(words & query_words) * 2.0 + len(words & goal_words) * 1.5
+            if row.get("pinned"):
+                score += 1.5
+            if row.get("salience_hit"):
+                score += 0.8
+            try:
+                score += min(1.0, max(0.0, float(row.get("access_count") or 0)) * 0.1)
+            except (TypeError, ValueError):
+                pass
+            if str(row.get("status") or "").casefold() == "superseded":
+                score -= 2.0
+            scored.append((score, -index, row))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [row for _, _, row in scored]
+
     def adaptive_response_guidance(self) -> str:
         """Render bounded behavior guidance from current affect and prosody."""
         snap = self.snapshot()
