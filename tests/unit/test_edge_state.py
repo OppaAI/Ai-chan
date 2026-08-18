@@ -141,3 +141,14 @@ def test_cognitive_health_detects_empty_and_active_state():
     assert health["status"] in {"sparse", "active"}
     assert health["components"]["working_memory"] == 2
     assert health["attention_valid"] is True
+
+
+def test_lesson_evidence_is_visible_and_actionable():
+    state = EdgeCognitiveState()
+    state.record("Please explain this", "Long answer")
+    state.record("This is too verbose", "Short answer")
+    state.record("That was too long, be concise", "Short answer")
+    snap = state.snapshot()
+    assert snap["lesson_evidence"]
+    assert "lesson_guidance" in state.lesson_guidance()
+    assert "Prefer concise responses." in state.lesson_guidance()

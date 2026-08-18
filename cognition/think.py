@@ -463,6 +463,7 @@ class AikoThink:
             base += "\n\n" + state_obj.adaptive_response_guidance()
             base += "\n\n" + state_obj.reflection_summary()
             base += "\n\n" + state_obj.preference_guidance()
+            base += "\n\n" + state_obj.lesson_guidance()
         except Exception:
             pass
         return base + _conditional_persona_blocks(user_input)

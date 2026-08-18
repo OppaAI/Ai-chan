@@ -289,7 +289,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "preferences": dict(self._preferences)}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences)}
 
     def cognitive_health(self) -> dict:
         """Return bounded metrics showing whether cognitive state is usable.
@@ -314,6 +314,15 @@ class EdgeCognitiveState:
             population = round(populated / 6.0, 3)
             status = "empty" if not self._events else "sparse" if population < 0.34 else "active"
             return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
+
+    def lesson_guidance(self) -> str:
+        """Render only repeatedly evidenced lessons as behavior guidance."""
+        snap = self.snapshot()
+        durable = snap.get("durable_lessons") or []
+        if not durable:
+            return "<lesson_guidance>\nNo repeatedly confirmed lessons yet.\n</lesson_guidance>"
+        lines = [f"- {lesson}" for lesson in durable[:3]]
+        return "<lesson_guidance>\n" + "\n".join(lines) + "\n</lesson_guidance>"
 
     def consume_lessons(self) -> list[str]:
         """Return current outcome lessons for successful background consolidation."""
@@ -342,6 +351,7 @@ class EdgeCognitiveState:
                 self._lessons = deque(data.get("lessons", [])[:5], maxlen=5)
                 self._contradictions = deque(data.get("contradictions", [])[:4], maxlen=4)
                 self._durable_lessons = deque(data.get("durable_lessons", [])[:5], maxlen=5)
+                self._lesson_counts = {str(k): min(3, int(v)) for k, v in (data.get("lesson_evidence") or {}).items() if str(k) and str(v).isdigit()}
                 self._preferences = {str(k): str(v) for k, v in (data.get("preferences") or {}).items()}
                 self._activity = str(data.get("activity") or "")
                 self._affect = float(data.get("affect") or 0.0)
@@ -359,7 +369,7 @@ class EdgeCognitiveState:
         try:
             from cognition.memory.vecstore import connect_sqlite_db
             with self._lock:
-                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "preferences": dict(self._preferences), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
+                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
             conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
             conn.execute("CREATE TABLE IF NOT EXISTS cognitive_state (user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
             conn.execute("INSERT INTO cognitive_state(user_id, state_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP", (self._identity, json.dumps(data, ensure_ascii=False, separators=(",", ":"))))
