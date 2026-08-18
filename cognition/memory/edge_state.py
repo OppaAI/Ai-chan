@@ -360,6 +360,7 @@ class EdgeCognitiveState:
                 self._open_loops = deque(data.get("open_loops", [])[:EDGE_COGNITION_MAX_OPEN_LOOPS], maxlen=EDGE_COGNITION_MAX_OPEN_LOOPS)
                 self._goals = deque((_Goal(text=str(text)) for text in data.get("goals", []) if text), maxlen=EDGE_COGNITION_MAX_GOALS)
                 self._lessons = deque(data.get("lessons", [])[:5], maxlen=5)
+                self._tool_outcomes = deque([item for item in data.get("tool_outcomes", []) if isinstance(item, dict)][:6], maxlen=6)
                 self._contradictions = deque(data.get("contradictions", [])[:4], maxlen=4)
                 self._durable_lessons = deque(data.get("durable_lessons", [])[:5], maxlen=5)
                 self._lesson_counts = {str(k): min(3, int(v)) for k, v in (data.get("lesson_evidence") or {}).items() if str(k) and str(v).isdigit()}
@@ -368,7 +369,8 @@ class EdgeCognitiveState:
                 self._affect = float(data.get("affect") or 0.0)
                 self._energy = float(data.get("energy") or 0.5)
                 self._uncertainty = float(data.get("uncertainty") or 0.0)
-                self._attention = str(data.get("attention") or "")
+                loaded_attention = str(data.get("attention") or "")
+                self._attention = loaded_attention if len(_tokens(loaded_attention)) >= 2 else ""
         except Exception:
             return
         finally:
@@ -380,7 +382,7 @@ class EdgeCognitiveState:
         try:
             from cognition.memory.vecstore import connect_sqlite_db
             with self._lock:
-                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
+                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
             conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
             conn.execute("CREATE TABLE IF NOT EXISTS cognitive_state (user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
             conn.execute("INSERT INTO cognitive_state(user_id, state_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP", (self._identity, json.dumps(data, ensure_ascii=False, separators=(",", ":"))))

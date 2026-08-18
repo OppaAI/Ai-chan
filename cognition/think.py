@@ -1537,6 +1537,7 @@ class AikoThink:
                     if conflict.get("memory_id") and memorize is not None:
                         memorize.supersede_exact(conflict["memory_id"], conflict.get("current", user_input), current_user_id())
             state.record(user_input, response_text)
+            state.persist()
             cognitive_state = for_identity(current_user_id()).snapshot()
         except Exception:
             pass
