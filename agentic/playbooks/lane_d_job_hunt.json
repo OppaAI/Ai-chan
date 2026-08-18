@@ -1,0 +1,122 @@
+{
+  "id": "lane_d_job_hunt",
+  "name": "Lane D \u2014 nightly tech job teaser",
+  "summary": "Fetch RSS (+ optional email), cache full results, select a small matched set, draft Threads teaser. Tool outputs never enter LLM ctx in bulk.",
+  "triggers": [
+    "tech jobs today",
+    "job hunt lane d",
+    "civicjobs lower mainland",
+    "draft job teaser threads"
+  ],
+  "semantic_triggers": [
+    "list today's tech jobs from configured RSS feeds and draft a short social teaser"
+  ],
+  "nodes": [
+    {
+      "id": "init_run",
+      "tool": "set_state",
+      "args": {
+        "run_id": "${utc_run_id}",
+        "workflow": "lane_d_job_hunt"
+      },
+      "depends_on": []
+    },
+    {
+      "id": "fetch_rss",
+      "tool": "search_jobs",
+      "args": {
+        "feeds": "civicjobs_lower_mainland,job_bank_canada_tech",
+        "keywords_env": "TECH_JOB_KEYWORDS",
+        "to_state": "rss_raw"
+      },
+      "depends_on": ["init_run"],
+      "timeout_seconds": 120,
+      "max_retries": 1
+    },
+    {
+      "id": "cache_rss",
+      "tool": "cache_write",
+      "args": {
+        "workflow": "lane_d_job_hunt",
+        "source": "rss",
+        "from_state": "rss_raw",
+        "run_id": "${run_id}"
+      },
+      "depends_on": ["fetch_rss"]
+    },
+    {
+      "id": "fetch_email",
+      "tool": "fetch_job_emails",
+      "args": {
+        "mailbox": "job_alerts",
+        "to_state": "email_raw"
+      },
+      "depends_on": ["init_run"],
+      "timeout_seconds": 120,
+      "max_retries": 1,
+      "run_if": { "env_truthy": "LANE_D_EMAIL_ENABLED" }
+    },
+    {
+      "id": "cache_email",
+      "tool": "cache_write",
+      "args": {
+        "workflow": "lane_d_job_hunt",
+        "source": "email",
+        "from_state": "email_raw",
+        "run_id": "${run_id}"
+      },
+      "depends_on": ["fetch_email"],
+      "run_if": { "env_truthy": "LANE_D_EMAIL_ENABLED" }
+    },
+    {
+      "id": "select_jobs",
+      "tool": "cache_select",
+      "args": {
+        "workflow": "lane_d_job_hunt",
+        "run_id": "${run_id}",
+        "matched_only": true,
+        "limit": 10,
+        "keywords_env": "TECH_JOB_KEYWORDS",
+        "to_state": "selection"
+      },
+      "depends_on": ["cache_rss", "cache_email"]
+    },
+    {
+      "id": "draft_teaser",
+      "tool": "draft_job_post_social",
+      "args": {
+        "platform": "threads",
+        "from_state": "selection",
+        "style": "concise_teaser_list",
+        "to_state": "draft"
+      },
+      "depends_on": ["select_jobs"],
+      "timeout_seconds": 90
+    },
+    {
+      "id": "save_draft",
+      "tool": "write_report",
+      "args": {
+        "from_state": "draft",
+        "path": "agentic/workflows/job_hunt/drafts/${run_id}_threads.md",
+        "kind": "social_draft"
+      },
+      "depends_on": ["draft_teaser"]
+    },
+    {
+      "id": "cache_gc",
+      "tool": "cache_gc",
+      "args": {
+        "workflow": "lane_d_job_hunt",
+        "keep_runs": 14
+      },
+      "depends_on": ["save_draft"]
+    }
+  ],
+  "notes": [
+    "cache_write stores full RSS/email rows on disk (JSONL).",
+    "cache_select puts only ~10 compact rows on state.selection for the LLM.",
+    "Do not ADD raw job rows into long-term memories; optional later promote of 'posted teaser for date X' only.",
+    "fetch_email is optional via LANE_D_EMAIL_ENABLED; depends_on list still allows select after rss-only runs if graph treats missing optional branch as satisfied \u2014 adjust executor if needed to depend_on cache_rss only when email disabled."
+  ]
+}
