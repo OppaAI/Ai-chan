@@ -27,7 +27,7 @@ from system.userspace import current_display_name, current_user_id
 import sqlite_vec
 from openai import OpenAI
 
-from cognition.memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD
+from cognition.memory.forget import ACCESS_COUNT_CAP, compute_weighted_score, should_cleanup, CLEANUP_THRESHOLD, negative_recall_penalty, salience_score, resolve_ambient_valence
 # Frozen relative-time / date-check facts (see imprint.py) are dropped from
 # recalled context in format_for_context — they would otherwise masquerade
 # as the current date and contaminate Aiko's sense of "now". The
@@ -57,7 +57,6 @@ from .schema import (
     MEMORY_LIFECYCLE_BATCH_SIZE,
     MEMORY_NEG_RECALL_AVOID,
     MEMORY_NEG_RECALL_AVOID_EXCEPT,
-    MEMORY_NEG_RECALL_AVOID_WEIGHT,
     MEMORY_RANK_ACCESS_WEIGHT,
     MEMORY_RANK_GRAPH_WEIGHT,
     MEMORY_RANK_PINNED_WEIGHT,
@@ -1656,22 +1655,16 @@ class _MemoryBackend:
         if MEMORY_NEG_RECALL_AVOID and results:
             relax = MEMORY_NEG_RECALL_AVOID_EXCEPT and query_wants_emotion(query or "")
             if not relax:
-                w = MEMORY_NEG_RECALL_AVOID_WEIGHT
+                from cognition.memory.forget import negative_recall_penalty
                 for r in results:
                     if r.get("pinned"):
                         continue
-                    tag = (str(r.get("valence_tag") or "")).strip().lower()
-                    vs = r.get("valence_score")
-                    is_neg = tag == "neg"
-                    if not is_neg and vs is not None and str(vs).strip() != "":
-                        try:
-                            is_neg = int(vs) <= -1
-                        except (TypeError, ValueError):
-                            pass
-                    if is_neg:
-                        # use the same score key you sort on
-                        key = "_recall_score"  # or "score" — match your pipeline
-                        r[key] = float(r.get(key) or 0.0) - w
+                    pen = negative_recall_penalty(
+                        valence_tag=r.get("valence_tag"),
+                        valence_score=r.get("valence_score"),
+                    )
+                    if pen > 0:
+                        r["_recall_score"] = float(r.get("_recall_score") or 0.0) - pen
                 results.sort(key=lambda x: float(x.get("_recall_score") or x.get("score") or 0.0), reverse=True)
   
         # Phase 19: sticky-neg not volunteered unless query engages them
@@ -2843,10 +2836,28 @@ class AikoMemorize:
         Returns count of memories boosted.
 
         Phase 5: prefers stored salience_hit / non-neutral valence_tag when set.
+        Uses composite salience_score (incl. access_day_count spacing) so
+        dream-boost is no longer a blunt boolean OR of heuristics.
         """
         now     = datetime.now(timezone.utc)
         boost_ids: list[str] = []
         pinned_ids = pinned_ids or set()
+
+        # Optional day-count map so spaced-repetition signal reaches salience_score.
+        mem_ids = [str(m.get("id", "")) for m in all_mems if m.get("id")]
+        day_map: dict[str, int] = {}
+        try:
+            with self._mem._db_lock:
+                cols = existing_columns(self._conn)
+                if "access_day_count" in cols and mem_ids:
+                    ph = ",".join("?" * len(mem_ids))
+                    for row in self._conn.execute(
+                        f"SELECT id, access_day_count FROM memories WHERE id IN ({ph})",
+                        mem_ids,
+                    ).fetchall():
+                        day_map[str(row["id"])] = int(row["access_day_count"] or 0)
+        except Exception:
+            day_map = {}
 
         for m in all_mems:
             mem_id = str(m.get("id", ""))
@@ -2881,15 +2892,39 @@ class AikoMemorize:
                 except Exception:
                     pass
 
-            is_salient = (
-                stored_salient
-                or emotional
-                or bool(_SALIENCE_RE.search(text))
-                or ac >= 3
-                or is_recent
-            )
+            # Composite salience (0..1) instead of pure boolean OR of heuristics.
+            age_days = None
+            if created_at:
+                try:
+                    ts = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    age_days = max(0.0, (now - ts).total_seconds() / 86400.0)
+                except Exception:
+                    age_days = 7.0 if is_recent else None
 
-            if not is_salient:
+            day_n = day_map.get(mem_id)
+            if day_n is None:
+                try:
+                    day_n = int(m.get("access_day_count") or 0)
+                except (TypeError, ValueError):
+                    day_n = 0
+
+            try:
+                from cognition.memory.forget import salience_score
+                s_score = salience_score(
+                    text=text,
+                    access_count=ac,
+                    access_day_count=day_n,
+                    valence_tag=m.get("valence_tag"),
+                    valence_score=m.get("valence_score"),
+                    salience_hit=1 if stored_salient else (m.get("salience_hit") or 0),
+                    age_days=age_days,
+                )
+            except Exception:
+                s_score = 1.0 if (stored_salient or emotional or bool(_SALIENCE_RE.search(text)) or ac >= 3 or is_recent) else 0.0
+
+            if s_score < 0.35:
                 continue
 
             boost_ids.append(mem_id)
@@ -3291,6 +3326,28 @@ class AikoMemorize:
         except Exception:
             lineage_ids = set()
 
+        # Ambient mood for offline cleanup so mood-dependent forgetting is live.
+        ambient_valence = None
+        try:
+            ambient_valence = resolve_ambient_valence(self.get_user_id())
+        except Exception:
+            ambient_valence = None
+
+        # Optional day-count map when column exists.
+        day_map: dict[str, int] = {}
+        try:
+            with self._mem._db_lock:
+                cols = existing_columns(self._conn)
+                if "access_day_count" in cols and mem_ids:
+                    ph = ",".join("?" * len(mem_ids))
+                    for row in self._conn.execute(
+                        f"SELECT id, access_day_count FROM memories WHERE id IN ({ph})",
+                        mem_ids,
+                    ).fetchall():
+                        day_map[str(row["id"])] = int(row["access_day_count"] or 0)
+        except Exception:
+            day_map = {}
+
         for m in all_mems:
             mem_id     = str(m.get("id", ""))
             ac, la     = payload_map.get(mem_id, (0, "never"))
@@ -3306,8 +3363,24 @@ class AikoMemorize:
 
             v_tag = m.get("valence_tag")
             v_score = m.get("valence_score")
-            if should_cleanup(ac, la, created_at, valence_tag=v_tag, valence_score=v_score):
-                w = compute_weighted_score(ac, la, valence_tag=v_tag, valence_score=v_score)
+            day_n = day_map.get(mem_id)
+            if day_n is None:
+                try:
+                    day_n = int(m.get("access_day_count") or 0)
+                except (TypeError, ValueError):
+                    day_n = 0
+            if should_cleanup(
+                ac, la, created_at,
+                valence_tag=v_tag, valence_score=v_score,
+                query_valence=ambient_valence,
+                access_day_count=day_n,
+            ):
+                w = compute_weighted_score(
+                    ac, la,
+                    valence_tag=v_tag, valence_score=v_score,
+                    query_valence=ambient_valence,
+                    access_day_count=day_n,
+                )
                 candidates.append({
                     "id":               mem_id,
                     "memory":           m.get("memory", "")[:120],
@@ -3446,3 +3519,4 @@ __all__ = [
     "upsert_co_mentions",
     "vacuum_memory_db",
 ]
+
