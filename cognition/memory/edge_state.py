@@ -123,6 +123,9 @@ class EdgeCognitiveState:
             if _DONE_RE.search(user):
                 self._close_matching_goal(user)
                 self._close_matching_loop(user)
+            elif _DONE_RE.search(assistant) and not _OUTCOME_FAIL_RE.search(assistant):
+                self._close_matching_goal(assistant)
+                self._close_matching_loop(assistant)
 
     def clear(self) -> None:
         with self._lock:

@@ -177,3 +177,11 @@ def test_identity_question_creates_grounded_guidance():
     assert state.snapshot()["identity_questions"]
     guidance = state.identity_guidance()
     assert "Do not invent recognition" in guidance
+
+
+def test_successful_assistant_outcome_closes_goal():
+    state = EdgeCognitiveState()
+    state.record("Can you fix the release?", "")
+    assert state.snapshot()["goals"]
+    state.record("Here is the release update", "The release is fixed and completed.")
+    assert not state.snapshot()["goals"]
