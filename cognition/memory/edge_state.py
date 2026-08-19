@@ -132,6 +132,8 @@ class EdgeCognitiveState:
         self._self_preference_counts: dict[str, int] = {}
         self._self_preferences: dict[str, str] = {}
         self._self_notes: deque[str] = deque(maxlen=5)
+        # Recent turn wall-clock seconds (bounded) for coarse "running hot".
+        self._turn_latencies: deque[float] = deque(maxlen=5)
         self._lock = threading.RLock()
         self._last_tick = time.monotonic()
 
@@ -174,7 +176,7 @@ class EdgeCognitiveState:
 
     def clear(self) -> None:
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._self_decisions.clear(); self._self_preference_counts.clear(); self._self_preferences.clear(); self._self_notes.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._self_decisions.clear(); self._self_preference_counts.clear(); self._self_preferences.clear(); self._self_notes.clear(); self._turn_latencies.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
 
     @staticmethod
@@ -540,6 +542,33 @@ class EdgeCognitiveState:
         from cognition.memory.attempt_gate import is_critical_task as _crit
         return _crit(user_input)
 
+    def record_turn_latency(self, seconds: float) -> None:
+        """Record one turn's wall-clock duration for coarse load sensing."""
+        if not EDGE_COGNITION_ENABLED:
+            return
+        try:
+            s = float(seconds)
+        except (TypeError, ValueError):
+            return
+        if s < 0:
+            return
+        with self._lock:
+            self._turn_latencies.appendleft(min(s, 120.0))
+
+    def load_signal(self) -> float:
+        """Coarse 0..1 load from recent turn latencies (not a full metrics stack).
+
+        ~median of last few turns: <4s → 0, ~12s → ~0.5, >=20s → 1.
+        """
+        with self._lock:
+            samples = list(self._turn_latencies)
+        if not samples:
+            return 0.0
+        ordered = sorted(samples)
+        mid = ordered[len(ordered) // 2]
+        # Map 4s..20s → 0..1
+        return max(0.0, min(1.0, (mid - 4.0) / 16.0))
+
     def should_attempt(self, user_input: str, *, mode: str = "agentic") -> tuple[bool, str, str]:
         """Decide whether to commit to a heavier execution path.
 
@@ -556,6 +585,7 @@ class EdgeCognitiveState:
             energy=float(snap.get("energy") or 0.5),
             uncertainty=float(snap.get("uncertainty") or 0.0),
             tool_outcomes=list(snap.get("tool_outcomes") or []),
+            load=self.load_signal(),
             enabled=env_flag("EDGE_ATTEMPT_GATE", "1"),
         )
 
@@ -902,10 +932,32 @@ class EdgeCognitiveState:
             flags.append("draft may not answer the user question")
         if snap.get("contradictions"):
             flags.append("recent user statements conflict; clarification may be needed")
+        # Light self-consistency: only recent Aiko lines, not SOUL.md.
+        self_flag = self._self_consistency_flag(text)
+        if self_flag:
+            flags.append(self_flag)
         review = {"flags": flags, "confidence": "low" if len(flags) >= 2 else "moderate" if flags else "high", "response_chars": len(text)}
         with self._lock:
             self._response_reviews.appendleft(review)
         return review
+
+    def _self_consistency_flag(self, response: str) -> str:
+        """Flag possible self-contradiction vs the last 1–2 Aiko replies only."""
+        draft_tokens = _tokens(response)
+        if len(draft_tokens) < 4:
+            return ""
+        draft_neg = bool(_NEGATION_RE.search(response or ""))
+        with self._lock:
+            recent = [e.assistant for e in list(self._events)[-2:] if e.assistant]
+        for prior in recent:
+            prior_tokens = _tokens(prior)
+            overlap = draft_tokens & prior_tokens
+            if len(overlap) < 3:
+                continue
+            prior_neg = bool(_NEGATION_RE.search(prior))
+            if draft_neg != prior_neg:
+                return "draft may conflict with a recent self-statement"
+        return ""
 
     def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None, project_signals: list[str] | None = None) -> str:
         """Render bounded real-world signals, including known scheduled work."""
