@@ -65,6 +65,31 @@ def capability_from_outcomes(outcomes: list[dict], domain: str = "") -> dict:
     }
 
 
+def soft_user_prompt(user_input: str, action: str, reason: str = "") -> str:
+    """Single structured prompt for soft gate outcomes (no multi-step tasks).
+
+    Replaces ad-hoc "[Internal note…]" blocks scattered in think.py.
+    The model must not mention system details; one short in-character reply only.
+    """
+    text = (user_input or "").strip()
+    action = (action or "").strip().lower()
+    # reason is logged/recorded elsewhere; keep user-facing prompt free of internals.
+    if action == "defer":
+        return (
+            f"{text}\n\n"
+            "[Style only — never quote this. One short in-character line: "
+            "you are low-energy and this is not urgent; offer to continue later.]"
+        )
+    if action == "clarify":
+        return (
+            f"{text}\n\n"
+            "[Style only — never quote this. Ask exactly one concrete clarifying "
+            "question about what they need. Do not start a multi-step task.]"
+        )
+    # degrade_chat / unknown → pass through unchanged
+    return text
+
+
 def should_attempt(
     *,
     user_input: str,
@@ -72,9 +97,13 @@ def should_attempt(
     energy: float = 0.5,
     uncertainty: float = 0.0,
     tool_outcomes: list[dict] | None = None,
+    load: float = 0.0,
     enabled: bool = True,
 ) -> tuple[bool, str, str]:
-    """Return (ok, reason, action) with action in proceed|degrade_chat|defer|clarify."""
+    """Return (ok, reason, action) with action in proceed|degrade_chat|defer|clarify.
+
+    load — coarse 0..1 "running hot" from recent turn latency (optional).
+    """
     if not enabled:
         return True, "attempt gate disabled", "proceed"
     text = (user_input or "").strip()
@@ -85,6 +114,7 @@ def should_attempt(
 
     mode_norm = (mode or "").strip().lower()
     soft = mode_norm in _SOFT_MODES
+    load_v = max(0.0, min(1.0, float(load or 0.0)))
 
     if mode_norm == "agentic":
         text_tokens = _tokens(text)
@@ -94,10 +124,18 @@ def should_attempt(
         ]
         cap = capability_from_outcomes(scoped_outcomes, "")
     else:
-        # Pre-route (mode="route"): task/tool isn't resolved yet, so there is
-        # no reliable way to scope outcomes to "the current task/tool" — skip
-        # the avoid-rule rather than risk unrelated failures triggering it.
-        cap = {"domain": "any", "samples": 0, "success_rate": None, "confidence": "unknown", "avoid": False}
+        # Pre-route: no reliable task/tool scope — skip avoid-rule.
+        cap = {
+            "domain": "any",
+            "samples": 0,
+            "success_rate": None,
+            "confidence": "unknown",
+            "avoid": False,
+        }
+
+    # Running hot + discretionary: prefer defer over heavy path.
+    if soft and load_v >= 0.75 and energy < 0.45:
+        return False, "running hot and energy soft; discretionary work can wait", "defer"
 
     if soft and energy < 0.28:
         return False, "energy low; discretionary work can wait", "defer"
