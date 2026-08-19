@@ -23,7 +23,7 @@ sys.path.insert(0, "/home/oppa-ai/jetson")
 from system.config import load_config
 load_config()
 
-from agentic import schema
+from agentic import graph_engine as schema
 from agentic.agentic import run_agentic_chat
 from agentic.toolkit.synthesize import synthesize_report, kb_search, learn_report
 from agentic.toolkit.research import deep_research
@@ -233,17 +233,17 @@ class TestSynthesisIntegration:
 
     def test_kb_search_integration(self):
         """kb_search calls knowledge_context_for and strips XML."""
-        with patch("agentic.toolkit.synthesize.knowledge_context_for") as mock_kb:
+        with patch("cognition.knowledge.knowledge_context_for") as mock_kb:
             mock_kb.return_value = """<knowledge_context>
 <knowledge_chunk doc_id="1" title="Test" kind="ingested" source="test" score="0.9">Test content</knowledge_chunk>
 </knowledge_context>"""
-            result = kb_search("test query", embedder=FakeEmbedder())
+            result = kb_search("test query", embedder=FakeEmbedder(), user_id="test")
             assert "Test content" in result
             assert "<knowledge_context>" not in result
 
     def test_learn_report_integration(self):
         """learn_report calls ingest_text."""
-        with patch("agentic.toolkit.synthesize.ingest_text") as mock_ingest:
+        with patch("cognition.knowledge.ingest_text") as mock_ingest:
             mock_ingest.return_value = "doc-456"
             result = learn_report("Report Title", "Report content", embedder=FakeEmbedder())
             assert result == "doc-456"
@@ -261,8 +261,9 @@ class TestToolDispatchIntegration:
         owner._memorize._mem._embedder = FakeEmbedder()
 
         with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
-            result = dispatch_tool("deep_research", {"query": "test"}, owner=owner)
-            assert "Deep research" in result
+            with patch("agentic.agentic.deep_research", return_value="Deep research results"):
+                result = dispatch_tool("deep_research", {"query": "test"}, owner=owner)
+                assert "Deep research" in result
 
     def test_adaptive_search_dispatch(self):
         from agentic.agentic import dispatch_tool
@@ -271,7 +272,7 @@ class TestToolDispatchIntegration:
         owner._memorize._mem._embedder = FakeEmbedder()
 
         with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
-            with patch("agentic.toolkit.research.adaptive_search") as mock_as:
+            with patch("agentic.agentic.adaptive_search") as mock_as:
                 mock_as.return_value = "Search results from adaptive_search"
                 result = dispatch_tool("adaptive_search", {"query": "test"}, owner)
                 assert "Search results" in result

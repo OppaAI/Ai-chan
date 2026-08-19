@@ -11,10 +11,10 @@ from agentic.agentic import (
     TaskState,
     ToolResult,
     _build_incomplete_task_answer,
-    _compact_processed_research_context,
-    _has_successful_tool_call,
+    _compact_processed_tool_context,
     _sanitize_user_facing_tool_detail,
 )
+from agentic.guardrails import _successful_tools
 
 
 def test_incomplete_task_answer_reports_successful_evidence_without_lost_apology():
@@ -83,18 +83,18 @@ def test_processed_deep_search_context_is_compacted_after_use():
         {"role": "assistant", "content": "I processed the evidence and will save a note."},
     ]
 
-    _compact_processed_research_context(messages)
+    _compact_processed_tool_context(messages, preview_chars=600)
 
     assert len(messages[0]["content"]) < 800
-    assert "research_context_compacted" in messages[0]["content"]
+    assert "context_compacted" in messages[0]["content"]
 
 
 def test_deep_search_limit_only_counts_successful_calls():
     state = TaskState(goal="research with one successful deep search")
     state.record(ToolResult(ok=False, tool="adaptive_search", args={"query": "bad"}, content="[search failed: timeout]"))
 
-    assert not _has_successful_tool_call(state, "adaptive_search")
+    assert "adaptive_search" not in _successful_tools(state)
 
     state.record(ToolResult(ok=True, tool="adaptive_search", args={"query": "good"}, content="[Web search results]"))
 
-    assert _has_successful_tool_call(state, "adaptive_search")
+    assert "adaptive_search" in _successful_tools(state)
