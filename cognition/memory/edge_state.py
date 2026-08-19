@@ -479,7 +479,7 @@ class EdgeCognitiveState:
             candidates.append("An active goal may be connected to an unresolved thread.")
         if len(self._events) >= 3:
             recent = [_tokens(event.user) for event in list(self._events)[-3:]]
-            recurring = set.intersection(*(set(r) for r in recent)) if recent else set()
+            recurring = set.intersection(*recent) if recent else set()
             recurring -= {"can", "could", "please", "today"}
             if recurring:
                 candidates.append("Recurring focus detected: " + " ".join(sorted(recurring)[:4]) + ".")
