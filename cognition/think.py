@@ -1027,6 +1027,7 @@ class AikoThink:
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
+        from cognition.memory.edge_state import for_identity
         memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
         memory_block = self._get_memorize().format_for_context(
           memories, query=user_input, query_vector=query_vec
@@ -1035,7 +1036,6 @@ class AikoThink:
         situation_block = ""
         metacognitive_block = ""
         try:
-            from cognition.memory.edge_state import for_identity
             state = for_identity(current_user_id())
             situation_block = state.situation_context(user_input, memories, knowledge_block)
             metacognitive_block = state.metacognitive_context(user_input, memories)
