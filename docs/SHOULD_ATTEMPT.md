@@ -1,6 +1,12 @@
 # should_attempt — execution gate
 
-State used to only shape prompts. This gate lets Aiko **branch** before the agentic tool loop.
+State used to only shape prompts. This gate lets Aiko **branch** on her own energy / uncertainty / tool health.
+
+## Placement (current)
+
+1. **Early in `route()`** — *before* quaternary semantic routing (`mode="route"`).
+   Soft outcomes apply to **every** turn, including ones that would have been localchat.
+2. **Again in `agentic_chat()`** — for direct entry (scheduled jobs, approval resume paths) (`mode="agentic"`).
 
 ## Module
 
@@ -11,10 +17,14 @@ State used to only shape prompts. This gate lets Aiko **branch** before the agen
 - `capability_from_outcomes` — coarse reliability from recent tool outcomes
 - `is_critical_task` — urgent/safety/approval paths skip soft gates
 
-## Wire-up (required)
+## Soft actions
 
-1. **edge_state.py** — thin wrappers (see PR discussion / local patches)
-2. **think.py `agentic_chat`** — call gate before `run_agentic_chat`
+| action | Effect |
+|--------|--------|
+| `proceed` | Continue to normal routing / agentic |
+| `defer` | Short in-character “later” via `chat()` |
+| `clarify` | One clarifying question via `chat()` |
+| `degrade_chat` | Force localchat-style `chat()` (no tool loop) |
 
 Disable: `EDGE_ATTEMPT_GATE=0`
 
