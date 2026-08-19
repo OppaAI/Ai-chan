@@ -481,7 +481,7 @@ class EdgeCognitiveState:
             candidates.append("An active goal may be connected to an unresolved thread.")
         if len(self._events) >= 3:
             recent = [_tokens(event.user) for event in list(self._events)[-3:]]
-            recurring = set.intersection(*recent) if recent else set()
+            recurring = set(recent[0]).intersection(*recent[1:]) if recent else set()
             recurring -= {"can", "could", "please", "today"}
             if recurring:
                 candidates.append("Recurring focus detected: " + " ".join(sorted(recurring)[:4]) + ".")
@@ -985,9 +985,9 @@ class EdgeCognitiveState:
             duration = latest.get("duration_s")
             lines.append("Recent perception: " + str(latest.get("source", "unknown")) + (f" utterance={duration}s" if duration is not None else ""))
             cues = []
-            if latest.get("words_per_second") is not None: cues.append(f"pace={latest["words_per_second"]}wps")
-            if latest.get("pause_density") is not None: cues.append(f"pauses={latest["pause_density"]}")
-            if latest.get("rms") is not None: cues.append(f"energy={latest["rms"]}")
+            if latest.get("words_per_second") is not None: cues.append(f"pace={latest.get('words_per_second')}wps")
+            if latest.get("pause_density") is not None: cues.append(f"pauses={latest.get('pause_density')}")
+            if latest.get("rms") is not None: cues.append(f"energy={latest.get('rms')}")
             if cues: lines.append("Voice cues: " + ", ".join(cues))
         if outcomes:
             rendered = []
@@ -1035,7 +1035,7 @@ class EdgeCognitiveState:
             return ""
         health = self.cognitive_health()
         lines = ["<situation_model>", "Organized from available evidence; treat it as context, not certainty.", f"Current query: {query[:260]}"]
-        lines.append(f"Cognitive state: {health["status"]}; population={health["population"]}")
+        lines.append(f"Cognitive state: {health.get('status')}; population={health.get('population')}")
         if health["status"] == "empty":
             lines.append("Memory discipline: do not imply personal recall without evidence; ask for the missing context.")
         if entities:
@@ -1065,7 +1065,7 @@ class EdgeCognitiveState:
             lines.append("Stable interaction preferences: " + " | ".join(f"{key}={value}" for key, value in snap["preferences"].items()))
         energy = "low" if snap["energy"] < 0.35 else "high" if snap["energy"] > 0.65 else "steady"
         uncertainty = "elevated" if snap["uncertainty"] > 0.35 else "ordinary"
-        lines.append(f"Internal cues: mood={snap["mood"]}, energy={energy}, uncertainty={uncertainty}")
+        lines.append(f"Internal cues: mood={snap.get('mood')}, energy={energy}, uncertainty={uncertainty}")
         lines.append("Evidence confidence: " + ("moderate" if facts else "low"))
         return "\n".join(lines) + "\n</situation_model>"
 
