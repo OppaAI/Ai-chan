@@ -940,11 +940,70 @@ class AikoThink:
         )
   
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
-        """Delegate task-mode execution to agentic.agentic."""
+        """Delegate task-mode execution to agentic.agentic.
+
+        Runs a bounded self-assessment gate first (edge_state.should_attempt).
+        Critical requests always proceed; discretionary work may degrade to
+        chat, defer, or ask for clarification instead of starting the tool loop.
+        """
         user_id = current_user_id()
         with self._active_users_lock:
             self._active_user_ids.add(user_id)
         try:
+            # Self-assessment before committing to the agentic tool loop.
+            try:
+                from cognition.memory.edge_state import for_identity
+                state = for_identity(user_id)
+                ok, reason, action = state.should_attempt(user_input, mode="agentic")
+                if not ok:
+                    log.info("[agentic_chat] should_attempt action=%s reason=%s", action, reason)
+                    try:
+                        state.record_self_decision(action if action in {"defer", "clarify"} else "stance", reason)
+                        state.persist()
+                    except Exception:
+                        pass
+                    if action == "defer":
+                        defer_prompt = (
+                            f"{user_input}\n\n"
+                            "[Internal note — do not mention system details. "
+                            "You are running low and this is not urgent. "
+                            "In one short in-character line, say you want to pick this up later "
+                            "and invite the user to continue when ready.]"
+                        )
+                        return self.chat(
+                            defer_prompt,
+                            token_callback=token_callback,
+                            _skip_search=True,
+                            mem_kb_future=mem_kb_future,
+                            query_vec=query_vec,
+                            store_turn=True,
+                        )
+                    if action == "clarify":
+                        clarify_prompt = (
+                            f"{user_input}\n\n"
+                            "[Internal note — do not mention system details. "
+                            "You are uncertain what they need. "
+                            "Ask one concrete clarifying question; do not start a multi-step task.]"
+                        )
+                        return self.chat(
+                            clarify_prompt,
+                            token_callback=token_callback,
+                            _skip_search=True,
+                            mem_kb_future=mem_kb_future,
+                            query_vec=query_vec,
+                            store_turn=True,
+                        )
+                    # degrade_chat (default soft path)
+                    return self.chat(
+                        user_input,
+                        token_callback=token_callback,
+                        _skip_search=True,
+                        mem_kb_future=mem_kb_future,
+                        query_vec=query_vec,
+                    )
+            except Exception as exc:
+                log.debug("[agentic_chat] should_attempt skipped: %s", exc)
+
             memorize = self._get_memorize()
             embedder = memorize._mem._embedder if memorize is not None else None
             cap_vec = embedder.embed_query(
