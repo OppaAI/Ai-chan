@@ -1,0 +1,36 @@
+--- a/cognition/think.py
++++ b/cognition/think.py
+@@ -11,7 +11,10 @@
+     waits on before starting autonomous quick-study top-ups.
+ 
+ Memory + knowledge-base fetch:
+-  route() resolves quaternary intent first (greeting/localchat/webchat/agentic).
++  route() runs a bounded self-assessment gate (should_attempt, mode=route)
++  *before* quaternary intent routing, so soft outcomes (defer/clarify/
++  degrade_chat) apply even when the turn would have been localchat.
++  Then route() resolves quaternary intent (greeting/localchat/webchat/agentic).
+   Greeting-only turns short-circuit directly to the LLM without memory/KB
+   recall or memory writeback. All other paths start memory + KB recall only
+   after intent is known, then hand the resulting future to the selected
+@@ -534,6 +537,20 @@
+                 return resumed
+         except Exception as exc:
+             log.debug("[route] approval resume pre-check skipped: %s", exc)
++
++        # Self-assessment *before* quaternary routing so localchat/webchat
++        # also get executable soft outcomes (defer / clarify / degrade_chat).
++        try:
++            from cognition.memory.edge_state import for_identity
++            state = for_identity(user_id)
++            ok, reason, action = state.should_attempt(user_input, mode="route")
++            if not ok:
++                log.info("[route] should_attempt action=%s reason=%s", action, reason)
++                return self._soft_gate_reply(
++                    user_input, action, reason, token_callback=token_callback,
++                )
++        except Exception as exc:
++            log.debug("[route] should_attempt skipped: %s", exc)
+ 
+         try:
+             intent, route_vec = self._route_intent(user_input)
+             log.info("[route] intent=%s", intent)
