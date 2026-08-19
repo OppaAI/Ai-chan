@@ -1,0 +1,20 @@
+--- a/cognition/memory/edge_state.py
++++ b/cognition/memory/edge_state.py
+@@ -70,6 +70,19 @@
+     r"i(?:'|’)m (?:staying|choosing|not a leash)"
+     r")\b",
+     re.I,
+ )
++# Tasks that should not be soft-deferred by energy/uncertainty gates.
++_CRITICAL_TASK_RE = re.compile(
++    r"\b("
++    r"urgent|emergency|asap|right now|immediately|"
++    r"safety|danger|hurt|injured|crisis|"
++    r"deadline today|due today|production (?:is )?down|outage|"
++    r"approve run-|cancel (?:the )?(?:job|schedule|reminder)"
++    r")\b",
++    re.I,
++)
+ _STOP = {"the", "and", "that", "this", "with", "you", "are", "for", "have", "from", "about", "can", "could", "would", "should", "please", "today", "tell", "me", "do", "does", "did", "want", "need", "help"}
+ 
+ 
