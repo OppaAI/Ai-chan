@@ -531,6 +531,34 @@ class EdgeCognitiveState:
                 lines.append(f"Recent self-decision ({kinds}): {summary}")
         return "<self_model>\n" + "\n".join("- " + line for line in lines) + "\n</self_model>"
 
+    def capability_for(self, domain: str = "") -> dict:
+        """Synthesize recent tool outcomes into a coarse domain confidence."""
+        from cognition.memory.attempt_gate import capability_from_outcomes
+        return capability_from_outcomes(list(self.snapshot().get("tool_outcomes") or []), domain)
+
+    def is_critical_task(self, user_input: str) -> bool:
+        from cognition.memory.attempt_gate import is_critical_task as _crit
+        return _crit(user_input)
+
+    def should_attempt(self, user_input: str, *, mode: str = "agentic") -> tuple[bool, str, str]:
+        """Decide whether to commit to a heavier execution path.
+
+        Returns (ok, reason, action): proceed | degrade_chat | defer | clarify.
+        Critical tasks always proceed. Toggle with EDGE_ATTEMPT_GATE.
+        """
+        from cognition.memory.attempt_gate import should_attempt as _should
+        if not EDGE_COGNITION_ENABLED:
+            return True, "edge cognition disabled", "proceed"
+        snap = self.snapshot()
+        return _should(
+            user_input=user_input,
+            mode=mode,
+            energy=float(snap.get("energy") or 0.5),
+            uncertainty=float(snap.get("uncertainty") or 0.0),
+            tool_outcomes=list(snap.get("tool_outcomes") or []),
+            enabled=env_flag("EDGE_ATTEMPT_GATE", "1"),
+        )
+
     def priming_context(self, query: str = "") -> str:
         """Inject only subconscious signals related to the current query."""
         query_words = _tokens(query)
