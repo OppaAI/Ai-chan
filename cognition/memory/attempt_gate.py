@@ -1,7 +1,12 @@
-"""Bounded self-assessment gate for agentic execution.
+"""Bounded self-assessment gate for execution paths.
 
-Used by EdgeCognitiveState.should_attempt and AikoThink.agentic_chat.
+Used by EdgeCognitiveState.should_attempt and AikoThink.route / agentic_chat.
 Keeps thresholds conservative: critical work always proceeds.
+
+mode:
+  - agentic — gate before the tool loop (legacy path; also used for direct agentic entry)
+  - route   — gate *before* quaternary semantic routing so localchat/webchat
+              also get executable soft outcomes (defer / clarify / degrade_chat)
 """
 from __future__ import annotations
 
@@ -17,6 +22,8 @@ _CRITICAL_TASK_RE = re.compile(
     re.I,
 )
 _WORD_RE = re.compile(r"[a-z0-9_]{3,}")
+# Modes where soft opt-out (defer/clarify/degrade) is allowed.
+_SOFT_MODES = frozenset({"agentic", "route"})
 
 
 def _tokens(text: str) -> set[str]:
@@ -77,16 +84,17 @@ def should_attempt(
         return True, "critical or time-sensitive request", "proceed"
 
     cap = capability_from_outcomes(tool_outcomes or [], "")
+    soft = (mode or "").strip().lower() in _SOFT_MODES
 
-    if mode == "agentic" and energy < 0.28:
-        return False, "energy low; discretionary agentic work can wait", "defer"
+    if soft and energy < 0.28:
+        return False, "energy low; discretionary work can wait", "defer"
 
-    if mode == "agentic" and uncertainty > 0.62:
+    if soft and uncertainty > 0.62:
         if len(text) < 80 and ("?" in text or len(_tokens(text)) <= 6):
             return False, "uncertainty elevated; need a clearer ask", "clarify"
-        return False, "uncertainty elevated; prefer chat over agentic loop", "degrade_chat"
+        return False, "uncertainty elevated; prefer lighter chat path", "degrade_chat"
 
-    if mode == "agentic" and cap.get("avoid") and (cap.get("samples") or 0) >= 3:
+    if soft and cap.get("avoid") and (cap.get("samples") or 0) >= 3:
         return False, "recent tool outcomes are weak; prefer lighter path", "degrade_chat"
 
     return True, "self-assessment clear", "proceed"
