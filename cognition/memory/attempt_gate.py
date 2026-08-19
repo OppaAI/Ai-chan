@@ -83,8 +83,21 @@ def should_attempt(
     if is_critical_task(text):
         return True, "critical or time-sensitive request", "proceed"
 
-    cap = capability_from_outcomes(tool_outcomes or [], "")
-    soft = (mode or "").strip().lower() in _SOFT_MODES
+    mode_norm = (mode or "").strip().lower()
+    soft = mode_norm in _SOFT_MODES
+
+    if mode_norm == "agentic":
+        text_tokens = _tokens(text)
+        scoped_outcomes = [
+            o for o in (tool_outcomes or [])
+            if text_tokens & _tokens(f"{o.get('tool') or ''} {o.get('detail') or ''}")
+        ]
+        cap = capability_from_outcomes(scoped_outcomes, "")
+    else:
+        # Pre-route (mode="route"): task/tool isn't resolved yet, so there is
+        # no reliable way to scope outcomes to "the current task/tool" — skip
+        # the avoid-rule rather than risk unrelated failures triggering it.
+        cap = {"domain": "any", "samples": 0, "success_rate": None, "confidence": "unknown", "avoid": False}
 
     if soft and energy < 0.28:
         return False, "energy low; discretionary work can wait", "defer"
