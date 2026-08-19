@@ -39,6 +39,39 @@ _OUTCOME_FAIL_RE = re.compile(r"\b(wrong|incorrect|didn.t work|didn.t help|faile
 _OUTCOME_OK_RE = re.compile(r"\b(worked|works|fixed|solved|perfect|exactly|that helped|thank you|thanks)\b", re.I)
 _NEGATION_RE = re.compile(r"\b(?:not|no longer|never|dont|don.t|cannot|can.t|isn.t|aren.t|wasn.t|weren.t|changed my mind|instead)\b", re.I)
 _ENERGY_HIGH_RE = re.compile(r"\b(excited|energized|motivated|let\x27s go|can\x27t wait)\b", re.I)
+# Self-agency cues in Aiko's own replies (not user text). Used only to
+# evidence-gate self-regarding preferences — never as hard identity facts.
+_SELF_REFUSE_RE = re.compile(
+    r"\b("
+    r"no\b|not doing that|not going to|won't|will not|pass on that|"
+    r"ask properly|make me|earn it|try again|not unless|"
+    r"i(?:'|’)m not|i refuse|i decline|i(?:'|’)d rather not"
+    r")\b",
+    re.I,
+)
+_SELF_BARGAIN_RE = re.compile(
+    r"\b("
+    r"if you|only if|in exchange|first you|then i(?:'|’)ll|"
+    r"compliment|sweets?|offering|ask nicely|say please"
+    r")\b",
+    re.I,
+)
+_SELF_INITIATE_RE = re.compile(
+    r"\b("
+    r"by the way|while (?:i(?:'|’)m|we(?:'|’)re) (?:at it|here)|"
+    r"i(?:'|’)ll (?:also |go ahead and )?(?:check|look|remind|schedule|note)|"
+    r"let me (?:also )?(?:check|look|note|schedule)"
+    r")\b",
+    re.I,
+)
+_SELF_STANCE_RE = re.compile(
+    r"\b("
+    r"i (?:prefer|choose|decide|want to|don(?:'|’)t want)|"
+    r"my (?:preference|choice|call)|"
+    r"i(?:'|’)m (?:staying|choosing|not a leash)"
+    r")\b",
+    re.I,
+)
 _STOP = {"the", "and", "that", "this", "with", "you", "are", "for", "have", "from", "about", "can", "could", "would", "should", "please", "today", "tell", "me", "do", "does", "did", "want", "need", "help"}
 
 
@@ -92,6 +125,13 @@ class EdgeCognitiveState:
         self._identity_questions: deque[str] = deque(maxlen=3)
         self._intuitions: deque[str] = deque(maxlen=4)
         self._preference_counts: dict[str, int] = {}
+        # Self-regarding state (about Aiko, not the user). Evidence-gated:
+        # raw decisions are recorded every time; durable self-preferences
+        # only lock in after repeated support (same rule as user prefs).
+        self._self_decisions: deque[dict] = deque(maxlen=8)
+        self._self_preference_counts: dict[str, int] = {}
+        self._self_preferences: dict[str, str] = {}
+        self._self_notes: deque[str] = deque(maxlen=5)
         self._lock = threading.RLock()
         self._last_tick = time.monotonic()
 
@@ -113,6 +153,7 @@ class EdgeCognitiveState:
             elif self._events and _OUTCOME_OK_RE.search(user):
                 self._add_lesson("The previous approach appeared useful: ", self._events[-1].assistant, user)
             self._events.append(_Event(user, assistant, _tokens(user + " " + assistant)))
+            self._learn_self_from_turn(user, assistant)
             combined = user + " " + assistant
             self._affect = max(-1.0, min(1.0, self._affect * 0.7 + _affect(combined) * 0.3))
             self._energy = max(0.0, min(1.0, self._energy * 0.8 + self._energy_signal(combined) * 0.2))
@@ -133,7 +174,7 @@ class EdgeCognitiveState:
 
     def clear(self) -> None:
         with self._lock:
-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._self_decisions.clear(); self._self_preference_counts.clear(); self._self_preferences.clear(); self._self_notes.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
 
 
     @staticmethod
@@ -208,6 +249,97 @@ class EdgeCognitiveState:
             self._preference_counts[signature] = min(count, 3)
             if count >= 2:
                 self._preferences[key] = value
+
+    def _learn_self_from_turn(self, user: str, assistant: str) -> None:
+        """Detect Aiko's own agency signals and evidence-gate self-preferences.
+
+        Only the assistant reply is scored for refuse/bargain/initiate/stance.
+        Patterns become durable only after repeated evidence (count >= 2),
+        matching user preference learning — no one-shot identity rewrite.
+        """
+        reply = (assistant or "").strip()
+        if not reply:
+            return
+        kinds: list[str] = []
+        if _SELF_REFUSE_RE.search(reply):
+            kinds.append("refuse")
+        if _SELF_BARGAIN_RE.search(reply):
+            kinds.append("bargain")
+        if _SELF_INITIATE_RE.search(reply):
+            kinds.append("initiate")
+        if _SELF_STANCE_RE.search(reply):
+            kinds.append("stance")
+        if not kinds:
+            return
+        summary = " ".join(reply.split())[:180]
+        decision = {
+            "kinds": kinds,
+            "summary": summary,
+            "user_cue": " ".join((user or "").split())[:120],
+        }
+        self._self_decisions.appendleft(decision)
+        # Map observed agency into candidate self-preferences.
+        candidates: list[tuple[str, str]] = []
+        if "refuse" in kinds:
+            candidates.append(("pushback", "will_refuse_lazy_or_rude_requests"))
+        if "bargain" in kinds:
+            candidates.append(("pushback", "bargains_before_discretionary_work"))
+        if "initiate" in kinds:
+            candidates.append(("initiative", "initiates_when_context_allows"))
+        if "stance" in kinds:
+            candidates.append(("agency", "expresses_own_preferences"))
+        for key, value in candidates:
+            signature = key + "=" + value
+            count = self._self_preference_counts.get(signature, 0) + 1
+            self._self_preference_counts[signature] = min(count, 3)
+            if count >= 2:
+                self._self_preferences[key] = value
+                note = f"Observed pattern ({key}): {value.replace('_', ' ')}."
+                if note not in self._self_notes:
+                    self._self_notes.appendleft(note)
+
+    def record_self_decision(
+        self,
+        kind: str,
+        summary: str = "",
+        *,
+        promote: bool = False,
+    ) -> None:
+        """Explicit self-decision hook (agentic loop, reflection, tools).
+
+        kind: refuse | bargain | initiate | stance | other
+        promote: if True, treat as stronger evidence (counts as +2 toward durability).
+        """
+        if not EDGE_COGNITION_ENABLED:
+            return
+        kind = (kind or "other").strip().lower()[:24]
+        summary = " ".join((summary or "").split())[:180]
+        with self._lock:
+            self._self_decisions.appendleft({
+                "kinds": [kind],
+                "summary": summary or kind,
+                "user_cue": "",
+                "explicit": True,
+            })
+            key_map = {
+                "refuse": ("pushback", "will_refuse_lazy_or_rude_requests"),
+                "bargain": ("pushback", "bargains_before_discretionary_work"),
+                "initiate": ("initiative", "initiates_when_context_allows"),
+                "stance": ("agency", "expresses_own_preferences"),
+            }
+            pair = key_map.get(kind)
+            if not pair:
+                return
+            key, value = pair
+            signature = key + "=" + value
+            bump = 2 if promote else 1
+            count = min(3, self._self_preference_counts.get(signature, 0) + bump)
+            self._self_preference_counts[signature] = count
+            if count >= 2:
+                self._self_preferences[key] = value
+                note = f"Observed pattern ({key}): {value.replace('_', ' ')}."
+                if note not in self._self_notes:
+                    self._self_notes.appendleft(note)
 
     def _add_lesson(self, prefix: str, source: str, feedback: str = "") -> None:
         text = " ".join((source or "").split())[:180]
@@ -299,7 +431,7 @@ class EdgeCognitiveState:
         """Return a compact diagnostic snapshot without exposing mutable state."""
         with self._lock:
             mood = "positive" if self._affect > 0.2 else "negative" if self._affect < -0.2 else "neutral"
-            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "identity_questions": list(self._identity_questions), "intuitions": list(self._intuitions)}
+            return {"mood": mood, "affect": round(self._affect, 3), "energy": round(self._energy, 3), "uncertainty": round(self._uncertainty, 3), "attention": self._attention, "open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "perceptions": list(self._perceptions), "activity": self._activity, "response_reviews": list(self._response_reviews), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "identity_questions": list(self._identity_questions), "intuitions": list(self._intuitions), "self_preferences": dict(self._self_preferences), "self_decisions": list(self._self_decisions), "self_notes": list(self._self_notes), "self_preference_evidence": dict(self._self_preference_counts)}
 
     def continuous_tick(self) -> dict:
         """Apply bounded low-cost decay between conversational turns."""
@@ -329,10 +461,11 @@ class EdgeCognitiveState:
                 "open_loops": len(self._open_loops),
                 "lessons": len(self._lessons) + len(self._durable_lessons),
                 "preferences": len(self._preferences),
+                "self_preferences": len(self._self_preferences),
                 "contradictions": len(self._contradictions),
             }
             populated = sum(1 for key, value in components.items() if value > 0 and key != "contradictions")
-            population = round(populated / 6.0, 3)
+            population = round(populated / 7.0, 3)
             status = "empty" if not self._events else "sparse" if population < 0.34 else "active"
             return {"status": status, "population": population, "components": components, "attention_valid": attention_words >= 2 or not self._events}
 
@@ -358,18 +491,73 @@ class EdgeCognitiveState:
                     self._intuitions.appendleft(intuition)
 
     def self_model_context(self) -> str:
-        """Describe grounded self-knowledge without claiming consciousness."""
+        """Describe grounded self-knowledge without claiming consciousness.
+
+        Static boundary lines stay minimal. Lived self-preferences, recent
+        agency decisions, and self-notes are only included when evidence has
+        actually accumulated — they are not a second SOUL.md.
+        """
         snap = self.snapshot()
         health = self.cognitive_health()
         lines = [
-            "Identity: Aiko, an AI assistant with bounded memory and tools.",
+            "Identity: Aiko — local companion with bounded memory, tools, and learned state.",
             "Memory boundary: distinguish recalled evidence from inference; uncertainty is allowed.",
             "Action boundary: explain limitations and ask before consequential external actions.",
-            f"Current cognitive state: {health["status"]}; uncertainty={snap["uncertainty"]}.",
+            f"Current cognitive state: {health['status']}; uncertainty={snap['uncertainty']}.",
         ]
         if snap.get("goals"):
             lines.append("Current priority: " + snap["goals"][0][:160])
+        self_prefs = snap.get("self_preferences") or {}
+        if self_prefs:
+            rendered = []
+            labels = {
+                "will_refuse_lazy_or_rude_requests": "pushes back on lazy or rude requests",
+                "bargains_before_discretionary_work": "may bargain before discretionary work",
+                "initiates_when_context_allows": "initiates when context allows",
+                "expresses_own_preferences": "expresses her own preferences",
+            }
+            for key, value in self_prefs.items():
+                rendered.append(labels.get(value, value.replace("_", " ")))
+            lines.append("Learned self-patterns: " + "; ".join(rendered[:4]))
+        notes = snap.get("self_notes") or []
+        if notes:
+            lines.append("Self-notes: " + " | ".join(n[:120] for n in notes[:2]))
+        decisions = snap.get("self_decisions") or []
+        if decisions:
+            latest = decisions[0]
+            kinds = ",".join(latest.get("kinds") or [])
+            summary = (latest.get("summary") or "")[:100]
+            if kinds or summary:
+                lines.append(f"Recent self-decision ({kinds}): {summary}")
         return "<self_model>\n" + "\n".join("- " + line for line in lines) + "\n</self_model>"
+
+    def capability_for(self, domain: str = "") -> dict:
+        """Synthesize recent tool outcomes into a coarse domain confidence."""
+        from cognition.memory.attempt_gate import capability_from_outcomes
+        return capability_from_outcomes(list(self.snapshot().get("tool_outcomes") or []), domain)
+
+    def is_critical_task(self, user_input: str) -> bool:
+        from cognition.memory.attempt_gate import is_critical_task as _crit
+        return _crit(user_input)
+
+    def should_attempt(self, user_input: str, *, mode: str = "agentic") -> tuple[bool, str, str]:
+        """Decide whether to commit to a heavier execution path.
+
+        Returns (ok, reason, action): proceed | degrade_chat | defer | clarify.
+        Critical tasks always proceed. Toggle with EDGE_ATTEMPT_GATE.
+        """
+        from cognition.memory.attempt_gate import should_attempt as _should
+        if not EDGE_COGNITION_ENABLED:
+            return True, "edge cognition disabled", "proceed"
+        snap = self.snapshot()
+        return _should(
+            user_input=user_input,
+            mode=mode,
+            energy=float(snap.get("energy") or 0.5),
+            uncertainty=float(snap.get("uncertainty") or 0.0),
+            tool_outcomes=list(snap.get("tool_outcomes") or []),
+            enabled=env_flag("EDGE_ATTEMPT_GATE", "1"),
+        )
 
     def priming_context(self, query: str = "") -> str:
         """Inject only subconscious signals related to the current query."""
@@ -484,6 +672,11 @@ class EdgeCognitiveState:
                 self._preferences = {str(k): str(v) for k, v in (data.get("preferences") or {}).items()}
                 self._identity_questions = deque(data.get("identity_questions", [])[:3], maxlen=3)
                 self._intuitions = deque(data.get("intuitions", [])[:4], maxlen=4)
+                self._self_preferences = {str(k): str(v) for k, v in (data.get("self_preferences") or {}).items()}
+                self._self_preference_counts = {str(k): min(3, int(v)) for k, v in (data.get("self_preference_evidence") or {}).items() if str(k) and str(v).isdigit()}
+                self._self_notes = deque([str(n) for n in (data.get("self_notes") or []) if n][:5], maxlen=5)
+                loaded_decisions = [d for d in (data.get("self_decisions") or []) if isinstance(d, dict)][:8]
+                self._self_decisions = deque(loaded_decisions, maxlen=8)
                 self._activity = str(data.get("activity") or "")
                 self._affect = float(data.get("affect") or 0.0)
                 self._energy = float(data.get("energy") or 0.5)
@@ -501,7 +694,7 @@ class EdgeCognitiveState:
         try:
             from cognition.memory.vecstore import connect_sqlite_db
             with self._lock:
-                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention}
+                data = {"open_loops": list(self._open_loops), "goals": [g.text for g in self._goals if g.progress == "active"], "lessons": list(self._lessons), "tool_outcomes": list(self._tool_outcomes), "contradictions": list(self._contradictions), "durable_lessons": list(self._durable_lessons), "lesson_evidence": dict(self._lesson_counts), "preferences": dict(self._preferences), "activity": self._activity, "affect": self._affect, "energy": self._energy, "uncertainty": self._uncertainty, "attention": self._attention, "self_preferences": dict(self._self_preferences), "self_preference_evidence": dict(self._self_preference_counts), "self_notes": list(self._self_notes), "self_decisions": list(self._self_decisions)[:6]}
             conn = connect_sqlite_db("memory/memory.db", user_id=self._identity)
             conn.execute("CREATE TABLE IF NOT EXISTS cognitive_state (user_id TEXT PRIMARY KEY, state_json TEXT NOT NULL, updated_at TEXT DEFAULT CURRENT_TIMESTAMP)")
             conn.execute("INSERT INTO cognitive_state(user_id, state_json) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json, updated_at=CURRENT_TIMESTAMP", (self._identity, json.dumps(data, ensure_ascii=False, separators=(",", ":"))))
@@ -631,6 +824,8 @@ class EdgeCognitiveState:
             lines.append("Belief requiring care: recent statements conflict")
         if snap.get("durable_lessons"):
             lines.append("Behavioral lesson: " + snap["durable_lessons"][0])
+        if snap.get("self_preferences"):
+            lines.append("Self-pattern active: " + ", ".join(f"{k}={v}" for k, v in list(snap["self_preferences"].items())[:2]))
         failed_tools = [item for item in snap.get("tool_outcomes", [])[:3] if not item.get("ok")]
         if failed_tools:
             lines.append("Recent limitation: a tool attempt failed; disclose this if relevant")
