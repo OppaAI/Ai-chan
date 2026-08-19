@@ -1,31 +1,21 @@
 # should_attempt — execution gate
 
-After PR self-preferences, Aiko’s state could shape prompts but not whether agentic work ran.
+State used to only shape prompts. This gate lets Aiko **branch** before the agentic tool loop.
 
-## What this adds
+## Module
 
-### `EdgeCognitiveState.should_attempt(user_input, mode="agentic")`
-Returns `(ok, reason, action)` where action is:
-- `proceed` — run agentic as usual
-- `degrade_chat` — use normal chat instead of the tool loop
-- `defer` — short in-character “later” (non-critical, low energy)
-- `clarify` — one clarifying question (high uncertainty, short/ambiguous ask)
+`cognition/memory/attempt_gate.py`
 
-Also:
-- `capability_for(domain)` — coarse success rate from recent tool outcomes
-- `is_critical_task(text)` — urgent/safety/approval paths skip soft gates
+- `should_attempt(...)` → `(ok, reason, action)`
+  - `proceed` | `degrade_chat` | `defer` | `clarify`
+- `capability_from_outcomes` — coarse reliability from recent tool outcomes
+- `is_critical_task` — urgent/safety/approval paths skip soft gates
 
-### `AikoThink.agentic_chat`
-Calls `should_attempt` **before** `run_agentic_chat`. Soft actions are logged, recorded via `record_self_decision`, and branch to `chat()` instead of the agent loop.
+## Wire-up (required)
 
-## Safety / conservatism
-- Critical requests always `proceed`
-- Gate can be disabled with `EDGE_ATTEMPT_GATE=0`
-- Existing tool guardrails and human approval are unchanged
+1. **edge_state.py** — thin wrappers (see PR discussion / local patches)
+2. **think.py `agentic_chat`** — call gate before `run_agentic_chat`
 
-## Apply patches (if source files not yet updated on this branch)
+Disable: `EDGE_ATTEMPT_GATE=0`
 
-```bash
-patch -p1 < patches/should_attempt_edge_state.patch
-patch -p1 < patches/should_attempt_think.patch
-```
+Critical requests always proceed. Existing tool guardrails unchanged.
