@@ -1,0 +1,179 @@
+diff --git a/cognition/memory/edge_state.py b/cognition/memory/edge_state.py
+index 3dc6554..3255cfb 100644
+--- a/cognition/memory/edge_state.py
++++ b/cognition/memory/edge_state.py
+@@ -132,6 +132,8 @@ class EdgeCognitiveState:
+         self._self_preference_counts: dict[str, int] = {}
+         self._self_preferences: dict[str, str] = {}
+         self._self_notes: deque[str] = deque(maxlen=5)
++        # Recent turn wall-clock seconds (bounded) for coarse "running hot".
++        self._turn_latencies: deque[float] = deque(maxlen=5)
+         self._lock = threading.RLock()
+         self._last_tick = time.monotonic()
+ 
+@@ -174,7 +176,7 @@ class EdgeCognitiveState:
+ 
+     def clear(self) -> None:
+         with self._lock:
+-            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._self_decisions.clear(); self._self_preference_counts.clear(); self._self_preferences.clear(); self._self_notes.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
++            self._events.clear(); self._open_loops.clear(); self._goals.clear(); self._lessons.clear(); self._tool_outcomes.clear(); self._perceptions.clear(); self._activity = ""; self._response_reviews.clear(); self._contradictions.clear(); self._durable_lessons.clear(); self._lesson_counts.clear(); self._self_decisions.clear(); self._self_preference_counts.clear(); self._self_preferences.clear(); self._self_notes.clear(); self._turn_latencies.clear(); self._affect = 0.0; self._energy = 0.5; self._uncertainty = 0.0; self._attention = ""
+ 
+ 
+     @staticmethod
+@@ -540,6 +542,33 @@ class EdgeCognitiveState:
+         from cognition.memory.attempt_gate import is_critical_task as _crit
+         return _crit(user_input)
+ 
++    def record_turn_latency(self, seconds: float) -> None:
++        """Record one turn's wall-clock duration for coarse load sensing."""
++        if not EDGE_COGNITION_ENABLED:
++            return
++        try:
++            s = float(seconds)
++        except (TypeError, ValueError):
++            return
++        if s < 0:
++            return
++        with self._lock:
++            self._turn_latencies.appendleft(min(s, 120.0))
++
++    def load_signal(self) -> float:
++        """Coarse 0..1 load from recent turn latencies (not a full metrics stack).
++
++        ~median of last few turns: <4s → 0, ~12s → ~0.5, >=20s → 1.
++        """
++        with self._lock:
++            samples = list(self._turn_latencies)
++        if not samples:
++            return 0.0
++        ordered = sorted(samples)
++        mid = ordered[len(ordered) // 2]
++        # Map 4s..20s → 0..1
++        return max(0.0, min(1.0, (mid - 4.0) / 16.0))
++
+     def should_attempt(self, user_input: str, *, mode: str = "agentic") -> tuple[bool, str, str]:
+         """Decide whether to commit to a heavier execution path.
+ 
+@@ -556,6 +585,7 @@ class EdgeCognitiveState:
+             energy=float(snap.get("energy") or 0.5),
+             uncertainty=float(snap.get("uncertainty") or 0.0),
+             tool_outcomes=list(snap.get("tool_outcomes") or []),
++            load=self.load_signal(),
+             enabled=env_flag("EDGE_ATTEMPT_GATE", "1"),
+         )
+ 
+@@ -902,11 +932,33 @@ class EdgeCognitiveState:
+             flags.append("draft may not answer the user question")
+         if snap.get("contradictions"):
+             flags.append("recent user statements conflict; clarification may be needed")
++        # Light self-consistency: only recent Aiko lines, not SOUL.md.
++        self_flag = self._self_consistency_flag(text)
++        if self_flag:
++            flags.append(self_flag)
+         review = {"flags": flags, "confidence": "low" if len(flags) >= 2 else "moderate" if flags else "high", "response_chars": len(text)}
+         with self._lock:
+             self._response_reviews.appendleft(review)
+         return review
+ 
++    def _self_consistency_flag(self, response: str) -> str:
++        """Flag possible self-contradiction vs the last 1–2 Aiko replies only."""
++        draft_tokens = _tokens(response)
++        if len(draft_tokens) < 4:
++            return ""
++        draft_neg = bool(_NEGATION_RE.search(response or ""))
++        with self._lock:
++            recent = [e.assistant for e in list(self._events)[-2:] if e.assistant]
++        for prior in recent:
++            prior_tokens = _tokens(prior)
++            overlap = draft_tokens & prior_tokens
++            if len(overlap) < 3:
++                continue
++            prior_neg = bool(_NEGATION_RE.search(prior))
++            if draft_neg != prior_neg:
++                return "draft may conflict with a recent self-statement"
++        return ""
++
+     def grounded_context(self, now=None, idle_seconds: float = 0.0, resting: bool = False, scheduled_jobs: list[dict] | None = None, project_signals: list[str] | None = None) -> str:
+         """Render bounded real-world signals, including known scheduled work."""
+         if now is None:
+diff --git a/cognition/think.py b/cognition/think.py
+index e74eceb..83b8c74 100644
+--- a/cognition/think.py
++++ b/cognition/think.py
+@@ -526,6 +526,7 @@ class AikoThink:
+         with self._active_users_lock:
+             self._active_user_ids.add(user_id)
+         self._note_user_activity()
++        _route_t0 = time.monotonic()
+         # Approval commands ("approve run-<id>", "yes") must be handled
+         # BEFORE intent classification — the quaternary intent LLM labels
+         # terse commands like "Approve run-…" as chat, which would skip
+@@ -582,6 +583,11 @@ class AikoThink:
+                 return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
+             return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future, query_vec=query_vec)
+         finally:
++            try:
++                from cognition.memory.edge_state import for_identity
++                for_identity(user_id).record_turn_latency(time.monotonic() - _route_t0)
++            except Exception:
++                pass
+             with self._active_users_lock:
+                 self._active_user_ids.discard(user_id)
+                 if not self._active_user_ids:
+@@ -968,6 +974,7 @@ class AikoThink:
+         """Handle defer / clarify / degrade_chat without starting agentic tools.
+ 
+         Used by route() (pre-routing) and agentic_chat() (direct agentic entry).
++        Prompts come from attempt_gate.soft_user_prompt (one short reply only).
+         """
+         try:
+             from cognition.memory.edge_state import for_identity
+@@ -977,44 +984,15 @@ class AikoThink:
+             state.persist()
+         except Exception:
+             pass
+-        if action == "defer":
+-            defer_prompt = (
+-                f"{user_input}\n\n"
+-                "[Internal note — do not mention system details. "
+-                "You are running low and this is not urgent. "
+-                "In one short in-character line, say you want to pick this up later "
+-                "and invite the user to continue when ready.]"
+-            )
+-            return self.chat(
+-                defer_prompt,
+-                token_callback=token_callback,
+-                _skip_search=True,
+-                mem_kb_future=mem_kb_future,
+-                query_vec=query_vec,
+-                store_turn=True,
+-            )
+-        if action == "clarify":
+-            clarify_prompt = (
+-                f"{user_input}\n\n"
+-                "[Internal note — do not mention system details. "
+-                "You are uncertain what they need. "
+-                "Ask one concrete clarifying question; do not start a multi-step task.]"
+-            )
+-            return self.chat(
+-                clarify_prompt,
+-                token_callback=token_callback,
+-                _skip_search=True,
+-                mem_kb_future=mem_kb_future,
+-                query_vec=query_vec,
+-                store_turn=True,
+-            )
+-        # degrade_chat (default soft path) — localchat, no tool loop
++        from cognition.memory.attempt_gate import soft_user_prompt
++        prompt = soft_user_prompt(user_input, action, reason)
+         return self.chat(
+-            user_input,
++            prompt,
+             token_callback=token_callback,
+             _skip_search=True,
+             mem_kb_future=mem_kb_future,
+             query_vec=query_vec,
++            store_turn=True,
+         )
+ 
+     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
