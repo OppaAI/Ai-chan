@@ -8,6 +8,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 THINK = ROOT / "cognition" / "think.py"
 
+
+def _excerpt(text: str, needle: str, radius: int = 3) -> str:
+    """Return a small context window around needle, or a head/tail sample."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if needle in line:
+            start = max(0, i - radius)
+            end = min(len(lines), i + radius + 1)
+            numbered = [f"{j + 1:>5}| {lines[j]}" for j in range(start, end)]
+            return "\n".join(numbered)
+    head = "\n".join(f"{j + 1:>5}| {lines[j]}" for j in range(min(8, len(lines))))
+    return f"(needle {needle!r} not found)\n{head}"
+
+
 def main() -> int:
     r = subprocess.run(
         ["git", "show", "origin/dev:cognition/think.py"],
@@ -19,7 +33,11 @@ def main() -> int:
             cwd=ROOT, capture_output=True, text=True, check=False,
         )
     if r.returncode != 0 or not r.stdout.strip():
-        print("Could not load cognition/think.py from origin/dev or dev", file=sys.stderr)
+        print(
+            "Could not load cognition/think.py from origin/dev or dev: "
+            f"{(r.stderr or '').strip()}",
+            file=sys.stderr,
+        )
         return 1
     text = r.stdout
 
@@ -53,6 +71,7 @@ def main() -> int:
 '''
     if old_route_mid not in text:
         print("route insert point not found", file=sys.stderr)
+        print(_excerpt(text, "_route_intent"), file=sys.stderr)
         return 1
     text = text.replace(old_route_mid, new_route_mid, 1)
 
@@ -136,6 +155,7 @@ def main() -> int:
 '''
     if old_agentic_start not in text:
         print("agentic_chat header not found", file=sys.stderr)
+        print(_excerpt(text, "def agentic_chat"), file=sys.stderr)
         return 1
     text = text.replace(old_agentic_start, helper, 1)
 
@@ -214,6 +234,7 @@ def main() -> int:
 '''
     if old_gate not in text:
         print("agentic gate body not found", file=sys.stderr)
+        print(_excerpt(text, "should_attempt"), file=sys.stderr)
         return 1
     text = text.replace(old_gate, new_gate, 1)
 
