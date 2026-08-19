@@ -535,6 +535,20 @@ class AikoThink:
         except Exception as exc:
             log.debug("[route] approval resume pre-check skipped: %s", exc)
 
+        # Self-assessment *before* quaternary routing so localchat/webchat
+        # also get executable soft outcomes (defer / clarify / degrade_chat).
+        try:
+            from cognition.memory.edge_state import for_identity
+            state = for_identity(user_id)
+            ok, reason, action = state.should_attempt(user_input, mode="route")
+            if not ok:
+                log.info("[route] should_attempt action=%s reason=%s", action, reason)
+                return self._soft_gate_reply(
+                    user_input, action, reason, token_callback=token_callback,
+                )
+        except Exception as exc:
+            log.debug("[route] should_attempt skipped: %s", exc)
+
         try:
             intent, route_vec = self._route_intent(user_input)
             log.info("[route] intent=%s", intent)
@@ -939,65 +953,92 @@ class AikoThink:
             log_name="Ternary",
         )
   
+    def _soft_gate_reply(
+        self,
+        user_input: str,
+        action: str,
+        reason: str,
+        token_callback=None,
+        mem_kb_future=None,
+        query_vec: np.ndarray | None = None,
+    ) -> str:
+        """Handle defer / clarify / degrade_chat without starting agentic tools.
+
+        Used by route() (pre-routing) and agentic_chat() (direct agentic entry).
+        """
+        try:
+            from cognition.memory.edge_state import for_identity
+            state = for_identity(current_user_id())
+            kind = action if action in {"defer", "clarify"} else "stance"
+            state.record_self_decision(kind, reason)
+            state.persist()
+        except Exception:
+            pass
+        if action == "defer":
+            defer_prompt = (
+                f"{user_input}\n\n"
+                "[Internal note — do not mention system details. "
+                "You are running low and this is not urgent. "
+                "In one short in-character line, say you want to pick this up later "
+                "and invite the user to continue when ready.]"
+            )
+            return self.chat(
+                defer_prompt,
+                token_callback=token_callback,
+                _skip_search=True,
+                mem_kb_future=mem_kb_future,
+                query_vec=query_vec,
+                store_turn=True,
+            )
+        if action == "clarify":
+            clarify_prompt = (
+                f"{user_input}\n\n"
+                "[Internal note — do not mention system details. "
+                "You are uncertain what they need. "
+                "Ask one concrete clarifying question; do not start a multi-step task.]"
+            )
+            return self.chat(
+                clarify_prompt,
+                token_callback=token_callback,
+                _skip_search=True,
+                mem_kb_future=mem_kb_future,
+                query_vec=query_vec,
+                store_turn=True,
+            )
+        return self.chat(
+            user_input,
+            token_callback=token_callback,
+            _skip_search=True,
+            mem_kb_future=mem_kb_future,
+            query_vec=query_vec,
+        )
+
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Delegate task-mode execution to agentic.agentic.
 
         Runs a bounded self-assessment gate first (edge_state.should_attempt).
         Critical requests always proceed; discretionary work may degrade to
         chat, defer, or ask for clarification instead of starting the tool loop.
+        Direct entry (scheduled jobs) still gates here; normal turns are gated
+        earlier in route() with mode=route.
         """
         user_id = current_user_id()
         with self._active_users_lock:
             self._active_user_ids.add(user_id)
         try:
-            # Self-assessment before committing to the agentic tool loop.
+            # Self-assessment before committing to the agentic tool loop
+            # (covers scheduled/direct agentic entry; normal turns already gated in route).
             try:
                 from cognition.memory.edge_state import for_identity
                 state = for_identity(user_id)
                 ok, reason, action = state.should_attempt(user_input, mode="agentic")
                 if not ok:
                     log.info("[agentic_chat] should_attempt action=%s reason=%s", action, reason)
-                    try:
-                        state.record_self_decision(action if action in {"defer", "clarify"} else "stance", reason)
-                        state.persist()
-                    except Exception:
-                        pass
-                    if action == "defer":
-                        defer_prompt = (
-                            f"{user_input}\n\n"
-                            "[Internal note — do not mention system details. "
-                            "You are running low and this is not urgent. "
-                            "In one short in-character line, say you want to pick this up later "
-                            "and invite the user to continue when ready.]"
-                        )
-                        return self.chat(
-                            defer_prompt,
-                            token_callback=token_callback,
-                            _skip_search=True,
-                            mem_kb_future=mem_kb_future,
-                            query_vec=query_vec,
-                            store_turn=True,
-                        )
-                    if action == "clarify":
-                        clarify_prompt = (
-                            f"{user_input}\n\n"
-                            "[Internal note — do not mention system details. "
-                            "You are uncertain what they need. "
-                            "Ask one concrete clarifying question; do not start a multi-step task.]"
-                        )
-                        return self.chat(
-                            clarify_prompt,
-                            token_callback=token_callback,
-                            _skip_search=True,
-                            mem_kb_future=mem_kb_future,
-                            query_vec=query_vec,
-                            store_turn=True,
-                        )
-                    # degrade_chat (default soft path)
-                    return self.chat(
+                    return self._soft_gate_reply(
                         user_input,
+                        action,
+                        reason,
                         token_callback=token_callback,
-                        _skip_search=True,
                         mem_kb_future=mem_kb_future,
                         query_vec=query_vec,
                     )
@@ -1027,7 +1068,6 @@ class AikoThink:
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
-        from cognition.memory.edge_state import for_identity
         memories = for_identity(current_user_id()).prioritize_memories(user_input, memories)
         memory_block = self._get_memorize().format_for_context(
           memories, query=user_input, query_vector=query_vec
@@ -1036,6 +1076,7 @@ class AikoThink:
         situation_block = ""
         metacognitive_block = ""
         try:
+            from cognition.memory.edge_state import for_identity
             state = for_identity(current_user_id())
             situation_block = state.situation_context(user_input, memories, knowledge_block)
             metacognitive_block = state.metacognitive_context(user_input, memories)
