@@ -526,6 +526,7 @@ class AikoThink:
         with self._active_users_lock:
             self._active_user_ids.add(user_id)
         self._note_user_activity()
+        _route_t0 = time.monotonic()
         # Approval commands ("approve run-<id>", "yes") must be handled
         # BEFORE intent classification — the quaternary intent LLM labels
         # terse commands like "Approve run-…" as chat, which would skip
@@ -582,6 +583,11 @@ class AikoThink:
                 return self.webchat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
             return self.chat(user_input, token_callback=token_callback, _skip_search=True, mem_kb_future=mem_kb_future, query_vec=query_vec)
         finally:
+            try:
+                from cognition.memory.edge_state import for_identity
+                for_identity(user_id).record_turn_latency(time.monotonic() - _route_t0)
+            except Exception:
+                pass
             with self._active_users_lock:
                 self._active_user_ids.discard(user_id)
                 if not self._active_user_ids:
@@ -968,6 +974,7 @@ class AikoThink:
         """Handle defer / clarify / degrade_chat without starting agentic tools.
 
         Used by route() (pre-routing) and agentic_chat() (direct agentic entry).
+        Prompts come from attempt_gate.soft_user_prompt (one short reply only).
         """
         try:
             from cognition.memory.edge_state import for_identity
@@ -977,44 +984,15 @@ class AikoThink:
             state.persist()
         except Exception:
             pass
-        if action == "defer":
-            defer_prompt = (
-                f"{user_input}\n\n"
-                "[Internal note — do not mention system details. "
-                "You are running low and this is not urgent. "
-                "In one short in-character line, say you want to pick this up later "
-                "and invite the user to continue when ready.]"
-            )
-            return self.chat(
-                defer_prompt,
-                token_callback=token_callback,
-                _skip_search=True,
-                mem_kb_future=mem_kb_future,
-                query_vec=query_vec,
-                store_turn=True,
-            )
-        if action == "clarify":
-            clarify_prompt = (
-                f"{user_input}\n\n"
-                "[Internal note — do not mention system details. "
-                "You are uncertain what they need. "
-                "Ask one concrete clarifying question; do not start a multi-step task.]"
-            )
-            return self.chat(
-                clarify_prompt,
-                token_callback=token_callback,
-                _skip_search=True,
-                mem_kb_future=mem_kb_future,
-                query_vec=query_vec,
-                store_turn=True,
-            )
-        # degrade_chat (default soft path) — localchat, no tool loop
+        from cognition.memory.attempt_gate import soft_user_prompt
+        prompt = soft_user_prompt(user_input, action, reason)
         return self.chat(
-            user_input,
+            prompt,
             token_callback=token_callback,
             _skip_search=True,
             mem_kb_future=mem_kb_future,
             query_vec=query_vec,
+            store_turn=True,
         )
 
     def agentic_chat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
