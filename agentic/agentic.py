@@ -755,6 +755,21 @@ def _required_args_for(name: str) -> list[str]:
     return list(entry[0].get("function", {}).get("parameters", {}).get("required", []))
 
 
+def _json_safe(value):
+    """Recursively coerce a value to JSON-serializable primitives."""
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, Exception):
+        return str(value)
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return value
+
+
 def _validate_args(name: str, args: object) -> ToolResult | None:
     """Return a validation error result, or None when args are safe to dispatch."""
     if name == "final_answer":
@@ -771,7 +786,7 @@ def _validate_args(name: str, args: object) -> ToolResult | None:
             coerced = spec.validate_args(args)
         except Exception as exc:
             if ValidationError is not None and isinstance(exc, ValidationError):
-                detail = exc.errors(include_url=False)
+                detail = _json_safe(exc.errors(include_url=False))
             else:
                 detail = str(exc)
             return ToolResult(

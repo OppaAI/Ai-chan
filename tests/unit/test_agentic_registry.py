@@ -55,6 +55,7 @@ def test_tool_decorator():
         props={"query": {"type": "string"}},
         required=["query"],
         domain="custom_domain",
+        graph=True,
     )
     def my_func(query: str) -> str:
         return f"processed: {query}"
@@ -66,8 +67,8 @@ def test_tool_decorator():
 
 def test_capability_integration():
     @tool(
-        name="capability_registered_tool",
-        description="Tool tested for capability routing",
+        "capability_registered_tool",
+        "Tool tested for capability routing",
         props={"param": {"type": "string"}},
         domain="repo",
     )
@@ -85,9 +86,10 @@ def test_capability_integration():
 
 def test_graph_engine_integration():
     @tool(
-        name="graph_dynamic_tool",
-        description="Dynamic graph tool test",
+        "graph_dynamic_tool",
+        "Dynamic graph tool test",
         props={},
+        graph=True,
     )
     def dynamic_graph_fn() -> str:
         return "graph_ok"

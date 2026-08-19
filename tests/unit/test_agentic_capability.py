@@ -81,10 +81,10 @@ class TestCapabilityStructure:
         assert "reports" in cap.tool_domains
 
     def test_always_on_tools_comprehensive(self):
-        """ALWAYS_ON_TOOLS should include base tools every turn needs."""
+        """Always-on tools should include base tools every turn needs."""
         expected = {"make_plan", "create_checklist", "save_note", "read_workspace_file",
                     "summarize_task_state", "list_playbooks", "run_playbook", "final_answer"}
-        assert expected.issubset(ALWAYS_ON_TOOLS)
+        assert expected.issubset(registry.get_always_on_tools())
 
 
 class TestTriggerEmbeddingCache:
@@ -95,12 +95,14 @@ class TestTriggerEmbeddingCache:
         cap = CAPABILITIES["research"]
         _trigger_embed_cache.clear()
 
-        vec1 = _get_trigger_embedding(cap, embedder)
-        assert embedder.call_count == 1
+        # Bypass the on-disk vector cache so the in-memory cache is exercised.
+        with patch("agentic.capability._capability_vector_cache_path", return_value=None):
+            vec1 = _get_trigger_embedding(cap, embedder)
+            assert embedder.call_count == 1
 
-        vec2 = _get_trigger_embedding(cap, embedder)
-        assert embedder.call_count == 1  # Cached, no new call
-        assert np.array_equal(vec1, vec2)
+            vec2 = _get_trigger_embedding(cap, embedder)
+            assert embedder.call_count == 1  # Cached, no new call
+            assert np.array_equal(vec1, vec2)
 
     def test_different_capabilities_different_vectors(self):
         embedder = FakeEmbedder()

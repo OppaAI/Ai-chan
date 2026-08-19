@@ -327,6 +327,9 @@ def synthesize_report(
     if not evidence:
         return f"[no evidence gathered for: {prompt}]"
 
+    if style == "auto":
+        style = detect_style(prompt)
+
     if len(evidence) > DEFAULT_MAX_INPUT_CHARS:
         condensed = condense_text(evidence, prompt or "summary", embedder)
         if condensed:

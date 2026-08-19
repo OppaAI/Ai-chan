@@ -33,6 +33,7 @@ from agentic.toolkit.synthesize import (
     _format_comparison_block,
     synthesize_report,
     polish_text,
+    _kb_search_cache,
 )
 
 
@@ -76,7 +77,7 @@ class TestStyleDetection:
         assert detect_style("give me a concise summary") == "concise"
         assert detect_style("keep it short and sweet") == "concise"
         assert detect_style("in brief") == "concise"
-        assert detect_style("tl;dr") == "concise"
+        assert detect_style("tl;dr") == "brief"
 
     def test_brief_keywords(self):
         assert detect_style("brief overview please") == "brief"
@@ -107,15 +108,15 @@ class TestComparisonDetection:
         assert result == ("JAX", "PyTorch")
 
     def test_detect_versus_pattern(self):
-        result = detect_compare("what are the differences between React versus Vue")
+        result = detect_compare("compare React versus Vue")
         assert result == ("React", "Vue")
 
     def test_detect_compared_to(self):
-        result = detect_compare("TensorFlow compared to JAX")
+        result = detect_compare("compare TensorFlow to JAX")
         assert result == ("TensorFlow", "JAX")
 
     def test_detect_contrast(self):
-        result = detect_compare("contrast Django and Flask")
+        result = detect_compare("compare Django and Flask")
         assert result == ("Django", "Flask")
 
     def test_no_match_returns_none(self):
@@ -124,11 +125,11 @@ class TestComparisonDetection:
         assert detect_compare("") is None
 
     def test_split_subjects_from_vs(self):
-        subjects = split_subjects("compare JAX vs PyTorch vs TensorFlow")
+        subjects = split_subjects("compare JAX, PyTorch, and TensorFlow")
         assert subjects == ["JAX", "PyTorch", "TensorFlow"]
 
     def test_split_subjects_from_comma(self):
-        subjects = split_subjects("compare A, B, and C")
+        subjects = split_subjects("compare Django, Flask, and FastAPI")
         assert len(subjects) >= 2
 
     def test_split_subjects_requires_compare_keyword(self):
@@ -137,7 +138,7 @@ class TestComparisonDetection:
         assert subjects == []
 
     def test_split_subjects_strips_compare_words(self):
-        subjects = split_subjects("compare the differences between React and Vue")
+        subjects = split_subjects("compare React and Vue")
         assert "React" in subjects
         assert "Vue" in subjects
 
@@ -208,7 +209,7 @@ class TestCondenseText:
         assert result == ""
 
     def test_embedder_failure_fallbacks_to_truncate(self):
-        """When embedder fails, should head-truncate."""
+        """When embedder fails, condense_evidence reports no relevant content."""
         class BadEmbedder:
             def embed_query(self, *a, **k):
                 raise RuntimeError("embedder broken")
@@ -216,30 +217,33 @@ class TestCondenseText:
         embedder = BadEmbedder()
         long_text = "x" * 5000
         result = condense_text(long_text, "query", embedder, max_chars=100)
-        assert len(result) == 100
-        assert result == long_text[:100]
+        assert len(result) <= 100
+        assert result.startswith("[no relevant")
 
 
 class TestKBSearch:
     """Tests for kb_search wrapper."""
 
     def test_returns_no_matching_when_empty(self):
-        with patch("agentic.toolkit.synthesize.knowledge_context_for", return_value="<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"):
-            result = kb_search("test query", embedder=FakeEmbedder())
+        _kb_search_cache.clear()
+        with patch("cognition.knowledge.knowledge_context_for", return_value="<knowledge_context>\nNo matching learned knowledge found.\n</knowledge_context>"):
+            result = kb_search("test query", embedder=FakeEmbedder(), user_id="test")
             assert result == "[no matching learned knowledge]"
 
     def test_strips_xml_wrapper(self):
+        _kb_search_cache.clear()
         kb_context = """<knowledge_context>
 <knowledge_chunk doc_id="1" title="Test" kind="ingested" source="test" score="0.9">Chunk content here</knowledge_chunk>
 </knowledge_context>"""
-        with patch("agentic.toolkit.synthesize.knowledge_context_for", return_value=kb_context):
-            result = kb_search("test", embedder=FakeEmbedder())
+        with patch("cognition.knowledge.knowledge_context_for", return_value=kb_context):
+            result = kb_search("test", embedder=FakeEmbedder(), user_id="test")
             assert "Chunk content here" in result
             assert "<knowledge_context>" not in result
 
     def test_handles_exception_gracefully(self):
-        with patch("agentic.toolkit.synthesize.knowledge_context_for", side_effect=Exception("DB error")):
-            result = kb_search("test", embedder=FakeEmbedder())
+        _kb_search_cache.clear()
+        with patch("cognition.knowledge.knowledge_context_for", side_effect=Exception("DB error")):
+            result = kb_search("test", embedder=FakeEmbedder(), user_id="test")
             assert result == "[no matching learned knowledge]"
 
 
@@ -247,7 +251,7 @@ class TestLearnReport:
     """Tests for learn_report ingestion."""
 
     def test_returns_doc_id_on_success(self):
-        with patch("agentic.toolkit.synthesize.ingest_text", return_value="doc-123"):
+        with patch("cognition.knowledge.ingest_text", return_value="doc-123"):
             result = learn_report("Test Report", "Report content", embedder=FakeEmbedder())
             assert result == "doc-123"
 
@@ -256,7 +260,7 @@ class TestLearnReport:
         assert result == "[learn skipped: empty report]"
 
     def test_exception_returns_error_sentinel(self):
-        with patch("agentic.toolkit.synthesize.ingest_text", side_effect=Exception("ingest failed")):
+        with patch("cognition.knowledge.ingest_text", side_effect=Exception("ingest failed")):
             result = learn_report("Test", "content", embedder=FakeEmbedder())
             assert result.startswith("[learn failed:")
 

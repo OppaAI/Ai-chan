@@ -209,7 +209,9 @@ class TestPlanScoring:
             "capabilities": ["research"],
         }
         score = _score_plan(plan, "just chatting about weather", ["research"])
-        assert score == 3  # capability match only
+        # A plan is only eligible when a REAL trigger matched — capability
+        # alone no longer scores.
+        assert score == 0
 
     def test_capability_boost(self):
         plan = {
@@ -217,8 +219,8 @@ class TestPlanScoring:
             "requires_any": [],
             "capabilities": ["research"],
         }
-        score = _score_plan(plan, "anything", ["research"])
-        assert score == 3  # 3 (trigger) + 3 (capability)
+        score = _score_plan(plan, "research anything", ["research"])
+        assert score == 6  # 3 (trigger) + 3 (capability)
 
     def test_semantic_match_with_embedder(self):
         plan = {

@@ -162,15 +162,19 @@ def seeded_knowledge_db(tmp_path, fake_embedder):
 @pytest.fixture(autouse=True)
 def mock_external_services():
     """Auto-mock external services to prevent network calls in tests."""
-    # Mock requests module at the system level so any import gets the mock
-    import requests
+    # Mock requests module at the system level so any import gets the mock,
+    # while keeping the real exceptions namespace (raising/catching
+    # requests.exceptions.* in retry logic requires real BaseException classes).
+    import requests as _real_requests
     import sys
     original_requests = sys.modules.get('requests')
-    sys.modules['requests'] = MagicMock()
-    sys.modules['requests'].get.return_value = MagicMock(
+    mock_requests = MagicMock()
+    mock_requests.exceptions = _real_requests.exceptions
+    mock_requests.get.return_value = MagicMock(
         status_code=200,
         json=lambda: {"results": [{"title": "Test", "url": "https://example.com", "content": "Test"}]}
     )
+    sys.modules['requests'] = mock_requests
     yield
     if original_requests:
         sys.modules['requests'] = original_requests

@@ -77,7 +77,7 @@ from agentic import graph_engine as schema
 from agentic.toolkit.plan import save_note, create_checklist, make_plan
 from agentic.toolkit.reports import write_report
 from agentic.toolkit.research import deep_research
-from agentic.capability import match_capabilities, filtered_tool_schemas, ALWAYS_ON_TOOLS
+from agentic.capability import match_capabilities, filtered_tool_schemas
 
 
 class FakeEmbedder:
@@ -138,9 +138,9 @@ class TestToolRegistration:
     def test_all_core_tools_registered(self):
         expected_tools = {
             "make_plan", "create_checklist", "save_note", "read_workspace_file",
-            "summarize_task_state", "adaptive_search", "deep_research", "read_paper_url",
+            "summarize_task_state", "adaptive_search", "deep_research", "fetch_from_url",
             "write_report", "learn_knowledge", "run_playbook", "list_playbooks",
-            "search_jobs", "draft_photo_social", "post_photo_social",
+            "draft_photo_social", "post_photo_social",
             "draft_video_social", "post_video_social", "final_answer",
         }
         for tool in expected_tools:
@@ -151,7 +151,7 @@ class TestToolRegistration:
             assert "function" in schema
             assert schema["function"]["name"] == name
             assert "parameters" in schema["function"]
-            assert "required" in schema["function"]["parameters"]
+            assert schema["function"]["parameters"]["type"] == "object"
 
     def test_social_post_tools_identified(self):
         assert "post_photo_social" in _SOCIAL_POST_TOOLS
@@ -175,20 +175,20 @@ class TestRequiredArgs:
         assert "title" in _required_args_for("write_report")
         assert "title" in _required_args_for("learn_knowledge")
         assert "task" in _required_args_for("run_playbook")
-        assert "draft_dir" in _required_args_for("post_photo_social")
+        assert "url" in _required_args_for("fetch_from_url")
 
     def test_validate_args_missing_required(self):
         result = _validate_args("save_note", {"title": "test"})
         assert result is not None
         assert result.ok is False
-        assert result.error_type == "missing_args"
+        assert result.error_type == "schema_validation_failed"
         assert "content" in result.content
 
     def test_validate_args_empty_query_for_adaptive_search(self):
         result = _validate_args("adaptive_search", {"query": ""})
         assert result is not None
         assert result.ok is False
-        assert result.error_type == "missing_args"
+        assert result.error_type == "schema_validation_failed"
 
     def test_validate_args_learn_knowledge_needs_text_or_path(self):
         result = _validate_args("learn_knowledge", {"title": "test"})
@@ -196,11 +196,9 @@ class TestRequiredArgs:
         assert result.ok is False
         assert "text or relative_path" in result.content
 
-    def test_validate_args_social_post_needs_draft_dir(self):
+    def test_validate_args_social_post_passes_without_draft_dir(self):
         result = _validate_args("post_photo_social", {})
-        assert result is not None
-        assert result.ok is False
-        assert "draft_dir" in result.content
+        assert result is None  # draft_dir is optional at schema level
 
     def test_validate_args_passes_valid(self):
         result = _validate_args("save_note", {"title": "t", "content": "c"})
@@ -259,14 +257,20 @@ class TestDispatchTool:
         owner._client = MockLLMClient("Research result")
         owner._llm_model = "test-model"
 
-        result = dispatch_tool("deep_research", {"query": "test query"}, owner=owner)
+        with patch("agentic.agentic.deep_research", return_value="Research result") as mock_deep:
+            result = dispatch_tool("deep_research", {"query": "test query"}, owner=owner)
         assert "Research result" in result
-        assert owner._client.call_count == 1
+        mock_deep.assert_called_once_with(
+            "test query", client=owner._client, model="test-model", embedder=owner._memorize._mem._embedder,
+        )
 
     def test_deep_search_uses_embedder(self):
         owner = MockOwner()
-        result = dispatch_tool("adaptive_search", {"query": "test query"}, owner=owner)
-        assert "Web search results" in result or "no results found" in result.lower()
+        with patch("agentic.agentic.adaptive_search", return_value="Web search results: xyz") as mock_search:
+            result = dispatch_tool("adaptive_search", {"query": "test query"}, owner=owner)
+        assert "Web search results" in result
+        _, kwargs = mock_search.call_args
+        assert kwargs["embedder"] is not None
 
     def test_run_playbook_passes_embedder(self):
         owner = MockOwner()
@@ -291,14 +295,13 @@ class TestDispatchTool:
             assert "doc-456" in result
             mock_ingest.assert_called_once()
 
-    def test_read_paper_url_passes_embedder(self):
+    def test_fetch_from_url_passes_url(self):
         owner = MockOwner()
-        with patch("agentic.agentic.read_paper_url") as mock_read:
-            mock_read.return_value = "Paper content"
-            result = dispatch_tool("read_paper_url", {"url": "http://example.com", "query": "test"}, owner=owner)
-            mock_read.assert_called_once()
-            args, kwargs = mock_read.call_args
-            assert kwargs["embedder"] is not None
+        spec = registry.get("fetch_from_url")
+        with patch.object(spec, "handler", return_value="Paper content") as mock_read:
+            result = dispatch_tool("fetch_from_url", {"url": "http://example.com"}, owner=owner)
+        assert "Paper content" in result
+        mock_read.assert_called_once_with(url="http://example.com")
 
     def test_write_report_passes_all_args(self):
         owner = MockOwner()
@@ -310,8 +313,8 @@ class TestDispatchTool:
             }, owner=owner)
             mock_write.assert_called_once()
             args, kwargs = mock_write.call_args
-            assert kwargs["title"] == "Test"
-            assert kwargs["arxiv_style"] is True
+            assert args[0] == "Test"
+            assert args[3] is True
 
     def test_unknown_tool_returns_error(self):
         result = dispatch_tool("nonexistent_tool", {}, owner=MockOwner())
@@ -332,11 +335,11 @@ class TestDispatchToolChecked:
     def test_catches_exception_returns_failed(self):
         owner = MockOwner()
         owner._client = MockLLMClient()
-        owner._client.chat_completions_create = MagicMock(side_effect=Exception("boom"))
-        result = dispatch_tool_checked("deep_research", {"query": "test"}, owner=owner)
+        with patch("agentic.agentic.deep_research", side_effect=Exception("boom")):
+            result = dispatch_tool_checked("deep_research", {"query": "test"}, owner=owner)
         assert isinstance(result, ToolResult)
         assert result.ok is False
-        assert result.error_type == "tool_exception"
+        assert result.error_type == "tool_error"
 
 
 class TestMaxAttempts:
@@ -344,11 +347,7 @@ class TestMaxAttempts:
 
     def test_deep_research_respects_env(self):
         with patch.dict(os.environ, {"AGENT_DEEP_RESEARCH_ATTEMPTS": "3"}):
-            # Reimport to pick up env
-            from importlib import reload
-            import agentic.agentic as agentic_module
-            reload(agentic_module)
-            assert agentic_module._max_attempts_for("deep_research") == 3
+            assert _max_attempts_for("deep_research") == 3
 
     def test_other_tools_default_1(self):
         # deep_search removed; adaptive_search uses default attempts=1
@@ -356,24 +355,20 @@ class TestMaxAttempts:
 
 
 class TestResearchCallBudget:
-    """Tests for AGENT_RESEARCH_MAX_CALLS budget enforcement."""
+    """Tests for the research call budget enforcement."""
 
     def test_research_calls_limited_per_turn(self):
-        owner = MockOwner()
-        owner._client = MockLLMClient("Result")
-        owner._llm_model = "test"
+        from agentic.guardrails import research_budget_guard
+        state = TaskState("goal")
+        guard = research_budget_guard(AGENT_RESEARCH_MAX_CALLS)
 
-        # Reset counter
-        import agentic.agentic as agentic_module
-        agentic_module._research_call_count = 0
+        assert guard("adaptive_search", {"query": "q1"}, state) is None
+        state.record(ToolResult(True, "adaptive_search", {"query": "q1"}, "ok"))
+        assert _research_call_count(state) == 1
 
-        # First call should succeed
-        dispatch_tool("deep_research", {"query": "q1"}, owner=owner)
-        assert agentic_module._research_call_count == 1
-
-        # Second call should be blocked by budget
-        result = dispatch_tool("deep_research", {"query": "q2"}, owner=owner)
-        assert "research call budget exhausted" in result.lower() or "budget" in result.lower()
+        verdict = guard("deep_research", {"query": "q2"}, state)
+        assert verdict is not None
+        assert verdict.error_type == "research_limit_reached"
 
 
 class TestCapabilityMatching:
@@ -401,7 +396,7 @@ class TestCapabilityMatching:
         # Should have research tools
         assert "adaptive_search" in tool_names
         assert "deep_research" in tool_names
-        assert "read_paper_url" in tool_names
+        assert "fetch_from_url" in tool_names
         assert "write_report" in tool_names
         assert "learn_knowledge" in tool_names
         # Should have always_on
@@ -425,16 +420,18 @@ class TestTaskState:
         state = TaskState("test goal")
         state.record(ToolResult(True, "tool1", {}, "output"))
         state.record(ToolResult(False, "tool2", {}, "error", error_type="execution_error"))
-        assert len(state.tools) == 2
-        assert state.tools[0].ok is True
-        assert state.tools[1].ok is False
+        assert len(state.steps) == 2
+        assert state.steps[0]["ok"] is True
+        assert state.steps[1]["ok"] is False
+        assert state.evidence[0] == "tool1: output"
+        assert state.failures[0].tool == "tool2"
 
     def test_last_tool_result(self):
         state = TaskState("goal")
         state.record(ToolResult(True, "a", {}, "1"))
         state.record(ToolResult(True, "b", {}, "2"))
-        assert state.last_tool_result.tool == "b"
-        assert state.last_tool_result.content == "2"
+        assert state.steps[-1]["tool"] == "b"
+        assert state.steps[-1]["content"] == "2"
 
 
 class TestVerifyFinalAnswer:
@@ -447,12 +444,13 @@ class TestVerifyFinalAnswer:
         result = _verify_final_answer(owner, "", "any answer", state)
         assert isinstance(result, VerificationResult)
 
-    def test_no_client_returns_none(self):
+    def test_no_client_returns_deterministic_pass(self):
         state = TaskState("goal")
         owner = MockOwner()
         owner._client = None
         result = _verify_final_answer(owner, "goal", "answer", state)
-        assert result is None
+        assert isinstance(result, VerificationResult)
+        assert result.ok is True
 
 
 class TestGraphExecutorIntegration:
@@ -499,7 +497,7 @@ class TestRunAgenticChatSmoke:
                 owner._client = MockLLMClient()
 
                 with patch("agentic.agentic._owner_embedder", return_value=FakeEmbedder()):
-                    result = run_agentic_chat("test", owner)
+                    result = run_agentic_chat(owner, "test")
                     assert result == "Graph answer"
 
     def test_hybrid_fallbacks_to_react_on_untrustworthy(self):
