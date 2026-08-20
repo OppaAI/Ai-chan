@@ -49,12 +49,28 @@ def err(provider: str, message: str) -> dict:
 
 def load_tools(mcp):
     """Register multipost tool with MCP."""
-    
+    import inspect
+
+    async def _invoke_platform(tool_obj, **kwargs) -> dict:
+        """Call a registered platform tool; await if guards made it async.
+
+        wrap_tool() always returns an async wrapper, so tool_obj.fn(...) is a
+        coroutine. Calling it without await produced:
+          RuntimeWarning: coroutine 'post_threads' was never awaited
+          error='coroutine' object has no attribute 'get'
+        """
+        out = tool_obj.fn(**kwargs)
+        if inspect.isawaitable(out):
+            out = await out
+        if not isinstance(out, dict):
+            return {"ok": False, "error": f"tool returned non-dict: {type(out).__name__}"}
+        return out
+
     @mcp.tool(
         name="post_social",
         description="Post one payload to selected social services: x, threads, bluesky, mastodon, youtube, pixelfed, discord.",
     )
-    def post_social(
+    async def post_social(
         services: str,
         text: str = "",
         image_path: Optional[str] = None,
@@ -78,32 +94,37 @@ def load_tools(mcp):
         tool_registry = mcp._tool_manager._tools
 
         for service in _split_services(services):
-            # Get pre-registered tool from MCP (already wrapped with middleware)
             tool_obj = tool_registry.get(f"post_{service}")
             
             if not tool_obj:
                 result = {"ok": False, "provider": service, "error": "unsupported service"}
             else:
-                # Call the tool directly (middleware already applied during registration)
                 try:
                     if service == "x":
-                        result = tool_obj.fn(text=text, image_path=image_path)
+                        result = await _invoke_platform(tool_obj, text=text, image_path=image_path)
                     elif service == "threads":
-                        result = tool_obj.fn(text=text, image_path=image_path, topic_tag=topic_tag)
+                        result = await _invoke_platform(
+                            tool_obj, text=text, image_path=image_path, topic_tag=topic_tag
+                        )
                     elif service == "bluesky":
-                        result = tool_obj.fn(text=text, image_path=image_path)
+                        result = await _invoke_platform(tool_obj, text=text, image_path=image_path)
                     elif service == "mastodon":
-                        result = tool_obj.fn(text=text, image_path=image_path)
+                        result = await _invoke_platform(tool_obj, text=text, image_path=image_path)
                     elif service == "youtube":
-                        result = tool_obj.fn(
+                        result = await _invoke_platform(
+                            tool_obj,
                             video_path=video_path or image_path or "",
                             title=title or text[:90],
                             description=description or text,
                         )
                     elif service == "pixelfed":
-                        result = tool_obj.fn(image_path=image_path or "", caption=text)
+                        result = await _invoke_platform(
+                            tool_obj, image_path=image_path or "", caption=text
+                        )
                     elif service == "discord":
-                        result = tool_obj.fn(text=text, image_path=image_path, channel_id=channel)
+                        result = await _invoke_platform(
+                            tool_obj, text=text, image_path=image_path, channel_id=channel
+                        )
                     else:
                         result = {"ok": False, "provider": service, "error": "unsupported service"}
                 except Exception as e:
@@ -111,4 +132,7 @@ def load_tools(mcp):
             
             results.append(result)
 
-        return {"ok": all(r.get("ok") for r in results) if results else False, "results": results}
+        return {
+            "ok": all(isinstance(r, dict) and r.get("ok") for r in results) if results else False,
+            "results": results,
+        }
