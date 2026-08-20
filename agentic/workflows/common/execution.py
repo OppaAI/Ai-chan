@@ -55,6 +55,30 @@ def _merge_config(config_json: str = "", state=None) -> dict[str, Any]:
     return cfg
 
 
+def _job_cfg_override(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Re-resolve job_hunt config at runtime so per-user config wins.
+
+    The PlanGraph baked ``config_json`` at build time (usually the repo
+    config.json). For job_hunt the per-user config (<USER_SPACE>/<user_id>/
+    agentic/workflows/job_hunt/config.json) must take priority; ``_job_config()``
+    already implements user-first with repo fallback, so merge it over the
+    baked values here.
+    """
+    if not (cfg.get("post_fields") or cfg.get("workflow_id") == "job_hunt"):
+        return cfg
+    try:
+        from agentic.workflows.job_hunt.toolset import _job_config
+
+        runtime = _job_config()
+    except Exception:
+        return cfg
+    if not isinstance(runtime, dict) or not runtime:
+        return cfg
+    merged = dict(cfg)
+    merged.update(runtime)
+    return merged
+
+
 # ── Node 1: ingest_data ───────────────────────────────
 
 def ingest_data(
@@ -277,7 +301,7 @@ def synthesis_data(
     state=None,
 ) -> str:
     """Fill a template from items; job_hunt uses post_fields when present."""
-    cfg = _merge_config(config_json, state)
+    cfg = _job_cfg_override(_merge_config(config_json, state))
     items = _loads(items_json, None)
     if items is None and state is not None and hasattr(state, "data"):
         items = state.data.get("ingest_items") or load_records(
@@ -363,7 +387,7 @@ def verify_results(
     state=None,
 ) -> str:
     """Mark results verified or pending human review; HITL saves job drafts."""
-    cfg = _merge_config(config_json, state)
+    cfg = _job_cfg_override(_merge_config(config_json, state))
     results = _loads(results_json, None)
     if results is None and state is not None and hasattr(state, "data"):
         results = state.data.get("synth_results")
@@ -492,7 +516,7 @@ def output_user_results(
     *,
     state=None,
 ) -> str:
-    cfg = _merge_config(config_json, state)
+    cfg = _job_cfg_override(_merge_config(config_json, state))
     results = _loads(results_json, None)
     if results is None and state is not None and hasattr(state, "data"):
         results = state.data.get("verified_results") or state.data.get("synth_results")

@@ -59,6 +59,20 @@ _LLM_FILLABLE_KEYS = frozenset({
     "salary", "experience", "close_date",
 })
 
+# Sender-derived org placeholders (noreply/job-alert digests, etc.) that must
+# never be trusted as the real employer — treat them as missing so the LLM
+# refines the organization from the linked job page.
+_SENDER_PLACEHOLDER_ORG_RE = re.compile(
+    r"(?:noreply|no[-_]?reply|do[-_]?not[-_]?reply|job[-_]?alert|jobalerts?"
+    r"|alerts?|notification|careers?[-_]?(?:alert|noreply)|jobs?[-_]?(?:alert|noreply|digest))",
+    re.IGNORECASE,
+)
+
+
+def _is_sender_placeholder_org(org: str) -> bool:
+    return bool(_SENDER_PLACEHOLDER_ORG_RE.search(str(org or "")))
+
+
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
 
@@ -518,8 +532,14 @@ def _missing_fillable(posting: dict, keys: list[str]) -> list[str]:
     for k in keys:
         if k not in _LLM_FILLABLE_KEYS:
             continue
-        if not str(posting.get(k, "") or "").strip():
-            out.append(k)
+        val = str(posting.get(k, "") or "").strip()
+        if val:
+            # Non-empty but a sender-derived placeholder (e.g. "jobalerts-noreply")
+            # still needs LLM refinement from the linked job page.
+            if k == "organization" and _is_sender_placeholder_org(val):
+                out.append(k)
+            continue
+        out.append(k)
     return out
 
 
@@ -989,6 +1009,10 @@ def _extract_jobs_from_cleaned_email(
                     title = title[: m.start()].strip(" -–|") or title
             if not org:
                 org = sender.split("@")[0] if "@" in sender else (sender or "")
+                if _is_sender_placeholder_org(org):
+                    # Digest/alert sender is not the employer — leave empty so the
+                    # LLM fills the real organization from the linked job page.
+                    org = ""
 
             loc = location_hits[idx % len(location_hits)] if location_hits else ""
             sal = salary_matches[idx % len(salary_matches)] if salary_matches else ""
@@ -1026,6 +1050,8 @@ def _extract_jobs_from_cleaned_email(
             log.debug("[job_hunt] skipping generic category posting (no URL): %s", title)
             return []
         org = company_from_star[0].strip() if company_from_star else (sender or "")
+        if _is_sender_placeholder_org(org):
+            org = ""
         jobs.append({
             "title": title[:200],
             "organization": org[:120],

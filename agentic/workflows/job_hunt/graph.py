@@ -121,7 +121,17 @@ def build_gen_job_post_graph(
             spec = WorkflowSpec(**{**spec.to_dict(), "goal": goal})
         return build_plan_graph(spec, goal=goal)
 
-    cfg = load_workflow_config(workflow_dir)
+    # Prefer the per-user config (<USER_SPACE>/<user_id>/.../job_hunt/config.json)
+    # when present; fall back to the repo workflow config.json. _job_config()
+    # already implements that user-first priority with repo fallback.
+    try:
+        from agentic.workflows.job_hunt.toolset import _job_config
+
+        cfg = _job_config() or {}
+    except Exception:
+        cfg = {}
+    if not cfg:
+        cfg = load_workflow_config(workflow_dir)
     # Defaults matching Layer 2 behavior when keys are absent (config fallback only)
     if "sources" not in cfg:
         cfg = {
