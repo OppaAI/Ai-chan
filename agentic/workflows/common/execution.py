@@ -126,9 +126,6 @@ def ingest_data(
             except Exception as e:
                 errors.append({"id": sid, "error": str(e)})
         elif stype == "adapter":
-            # Workflow adapters bridge the shared pipeline to domain fetchers.
-            # Lane D uses the existing job_hunt adapter; rejecting it here
-            # silently turns the rest of the workflow into a no-op.
             if sid != "job_hunt":
                 errors.append({
                     "id": sid,
@@ -400,8 +397,6 @@ def verify_results(
                         drafts = state.data.get("job_drafts_list")
                         if not isinstance(drafts, list):
                             drafts = []
-                        # Unique category per job so save_single_job_draft cannot
-                        # overwrite earlier drafts under the same date/post dir.
                         slug_src = str(
                             item.get("title") or item.get("id") or item.get("url") or "job"
                         )
@@ -423,8 +418,19 @@ def verify_results(
                         state.data["job_drafts_list"] = drafts
                         save_raw = save_single_job_draft(auto_post="false", state=state)
                         draft_paths.append(str(save_raw)[:200])
+                        try:
+                            parsed = json.loads(save_raw) if isinstance(save_raw, str) else save_raw
+                            if isinstance(parsed, dict) and not parsed.get("success", True):
+                                log.warning("verify HITL draft save returned failure: %s", parsed)
+                            else:
+                                log.info(
+                                    "verify HITL draft saved: %s",
+                                    (parsed or {}).get("draft_dir") if isinstance(parsed, dict) else str(save_raw)[:120],
+                                )
+                        except Exception:
+                            log.info("verify HITL draft save result: %s", str(save_raw)[:200])
                 except Exception as exc:
-                    log.debug("verify HITL draft save skipped: %s", exc)
+                    log.warning("verify HITL draft save skipped: %s", exc)
         else:
             ok = True
             if rule:
