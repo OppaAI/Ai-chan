@@ -63,7 +63,10 @@ def _scan_all_drafts() -> list[dict]:
     drafts = []
 
     def _collect(base: Path, is_rejected: bool, skip_top: set[str] = frozenset()) -> None:
-        for meta_path in list(base.glob("*/*/draft.json")) + list(base.glob("*/draft.json")):
+        # Lane D / save_single_job_draft writes:
+        #   <root>/<date>/<category>/<slug>/draft.json  (3 levels)
+        # Older layouts may use 1–2 levels. rglob covers all of them.
+        for meta_path in base.rglob("draft.json"):
             if skip_top and meta_path.relative_to(base).parts[0] in skip_top:
                 continue  # e.g. root's own rejected/ subtree, collected separately below
             try:
@@ -77,11 +80,26 @@ def _scan_all_drafts() -> list[dict]:
             if draft_post_path.exists():
                 draft_text = draft_post_path.read_text(encoding="utf-8").strip()
 
+            # Derive date and category from path if not in metadata (Lane D layout)
+            date_val = meta.get("date", "")
+            category_val = meta.get("category", "")
+            if not date_val or not category_val:
+                rel_parts = draft_dir.relative_to(base).parts
+                # Lane D: <date>/<category>/<slug> (3 levels)
+                # Older: <category>/<slug> (2 levels) or <slug> (1 level)
+                if len(rel_parts) >= 3 and not date_val:
+                    # Assume first part is date in YYYY-MM-DD format
+                    if rel_parts[0] and len(rel_parts[0]) == 10 and rel_parts[0][4] == "-" and rel_parts[0][7] == "-":
+                        date_val = rel_parts[0]
+                if len(rel_parts) >= 2 and not category_val:
+                    # Second part for 3-level, first part for 2-level
+                    category_val = rel_parts[1] if len(rel_parts) >= 3 else rel_parts[0]
+
             drafts.append({
                 "draft_dir": str(draft_dir),
                 "relative_path": str(draft_dir.relative_to(root)),
-                "date": meta.get("date", ""),
-                "category": meta.get("category", ""),
+                "date": date_val,
+                "category": category_val,
                 "human_approved": meta.get("human_approved", False),
                 "posted": meta.get("posted", False),
                 "rejected": is_rejected,

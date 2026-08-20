@@ -1973,6 +1973,8 @@ def save_single_job_draft(auto_post: str = "false", *, state=None) -> str:
     meta = {
         "success": True,
         "draft_dir": str(draft_dir),
+        "date": date_str,
+        "category": cat,
         "provider": "threads",
         "posting": posting_meta,
         "postings": postings_meta,

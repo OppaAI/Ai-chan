@@ -126,9 +126,6 @@ def ingest_data(
             except Exception as e:
                 errors.append({"id": sid, "error": str(e)})
         elif stype == "adapter":
-            # Workflow adapters bridge the shared pipeline to domain fetchers.
-            # Lane D uses the existing job_hunt adapter; rejecting it here
-            # silently turns the rest of the workflow into a no-op.
             if sid != "job_hunt":
                 errors.append({
                     "id": sid,
@@ -390,8 +387,6 @@ def verify_results(
         row = dict(r)
         item = row.get("item") if isinstance(row.get("item"), dict) else row
         if hitl:
-            row["status"] = "pending_approval"
-            row["verified"] = False
             if row.get("text") or item.get("title"):
                 try:
                     import re as _re
@@ -400,8 +395,6 @@ def verify_results(
                         drafts = state.data.get("job_drafts_list")
                         if not isinstance(drafts, list):
                             drafts = []
-                        # Unique category per job so save_single_job_draft cannot
-                        # overwrite earlier drafts under the same date/post dir.
                         slug_src = str(
                             item.get("title") or item.get("id") or item.get("url") or "job"
                         )
@@ -409,7 +402,7 @@ def verify_results(
                             _re.sub(r"[^a-z0-9]+", "_", slug_src.casefold()).strip("_")[:48]
                             or f"job_{len(drafts) + 1}"
                         )
-                        drafts.append({
+                        draft_obj = {
                             "text": row.get("text") or "",
                             "posting": item,
                             "postings": [item],
@@ -419,12 +412,43 @@ def verify_results(
                             "source_name": str(item.get("source") or ""),
                             "source_type": str(item.get("type") or "job"),
                             "llm_enriched": bool(row.get("llm_enriched")),
-                        })
+                        }
+                        drafts.append(draft_obj)
                         state.data["job_drafts_list"] = drafts
                         save_raw = save_single_job_draft(auto_post="false", state=state)
                         draft_paths.append(str(save_raw)[:200])
+                        # Parse and check for failure
+                        parsed = json.loads(save_raw) if isinstance(save_raw, str) else save_raw
+                        if isinstance(parsed, dict) and not parsed.get("success", True):
+                            # Save failed; roll back appended draft
+                            drafts.pop()
+                            state.data["job_drafts_list"] = drafts
+                            row["status"] = "failed"
+                            row["verified"] = False
+                            row["error"] = f"draft_save_failed: {parsed.get('reason', 'unknown')}"
+                            log.warning("verify HITL draft save returned failure: %s", parsed)
+                        else:
+                            row["status"] = "pending_approval"
+                            row["verified"] = False
+                            log.info(
+                                "verify HITL draft saved: %s",
+                                (parsed or {}).get("draft_dir") if isinstance(parsed, dict) else str(save_raw)[:120],
+                            )
                 except Exception as exc:
-                    log.debug("verify HITL draft save skipped: %s", exc)
+                    # Exception raised; roll back appended draft
+                    log.warning("verify HITL draft save raised exception: %s", exc)
+                    if state is not None and hasattr(state, "data") and isinstance(state.data, dict):
+                        drafts = state.data.get("job_drafts_list")
+                        if isinstance(drafts, list) and drafts:
+                            drafts.pop()
+                            state.data["job_drafts_list"] = drafts
+                    row["status"] = "failed"
+                    row["verified"] = False
+                    row["error"] = f"draft_save_exception: {exc}"
+            else:
+                # No content to save, still mark as pending
+                row["status"] = "pending_approval"
+                row["verified"] = False
         else:
             ok = True
             if rule:
