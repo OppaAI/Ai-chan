@@ -116,6 +116,7 @@ function switchToChat() {
 // ── chat rendering ────────────────────────────────────────────────────────
 let streamDiv = null;
 let streamRawText = '';
+let streamExprApplied = null;  // expression name applied once per stream turn
 let sourcesRow = null;
 let filesRow = null;
 
@@ -243,8 +244,26 @@ function parseMarkdown(text) {
   return safe;
 }
 
-function parseAikoMessage(rawText) {
-  let text = rawText || '';
+function isControlTokenChunk(s) {
+  // Server status/search/source control lines must not enter the bubble.
+  return /^\s*__(?:STATUS|SEARCHING|RETRYING|SOURCES|REPLACE)(?:__:|\b)/.test(s || '');
+}
+
+function stripControlLines(text) {
+  return (text || '')
+    .split('\n')
+    .filter((line) => !isControlTokenChunk(line) && !/^\s*__\w+__/.test(line))
+    .join('\n');
+}
+
+/**
+ * Parse Aiko message structure.
+ * soft=true (while streaming): keep body as dialogue only — no *()[] / ACTION
+ * split that causes half-sentence / colour-box flicker mid-token.
+ * soft=false (commit / final): full parse for non-verbal + action boxes.
+ */
+function parseAikoMessage(rawText, soft = false) {
+  let text = stripControlLines(rawText || '');
   let emoji = null;
   let action = null;
 
@@ -265,11 +284,13 @@ function parseAikoMessage(rawText) {
     }
   }
 
-  // 2. Parse ACTION: line (e.g., "ACTION: waves hand")
-  const actionMatch = text.match(/(?:^|\n|\s*)ACTION:\s*([^\n]+)/i);
-  if (actionMatch) {
-    action = actionMatch[1].trim();
-    text = text.replace(/(?:^|\n|\s*)ACTION:\s*[^\n]+\n?/i, '\n');
+  // 2. Parse ACTION: only when complete (not soft / mid-stream)
+  if (!soft) {
+    const actionMatch = text.match(/(?:^|\n|\s*)ACTION:\s*([^\n]+)/i);
+    if (actionMatch) {
+      action = actionMatch[1].trim();
+      text = text.replace(/(?:^|\n|\s*)ACTION:\s*[^\n]+\n?/i, '\n');
+    }
   }
 
   // 3. Check for emoji header format (e.g., "😊: hello") if emoji not set yet
@@ -282,27 +303,36 @@ function parseAikoMessage(rawText) {
 
   const nonVerbalParts = [];
 
-  text = text.replace(/\*([^*]+)\*/g, (m, p1) => {
-    nonVerbalParts.push(`*${p1.trim()}*`);
-    return '';
-  });
+  if (!soft) {
+    text = text.replace(/\*([^*]+)\*/g, (m, p1) => {
+      nonVerbalParts.push(`*${p1.trim()}*`);
+      return '';
+    });
 
-  text = text.replace(/\(([^)]+)\)/g, (m, p1) => {
-    nonVerbalParts.push(`(${p1.trim()})`);
-    return '';
-  });
+    text = text.replace(/\(([^)]+)\)/g, (m, p1) => {
+      nonVerbalParts.push(`(${p1.trim()})`);
+      return '';
+    });
 
-  text = text.replace(/\[([^\]]+)\]/g, (m, p1) => {
-    nonVerbalParts.push(`[${p1.trim()}]`);
-    return '';
-  });
+    text = text.replace(/\[([^\]]+)\]/g, (m, p1) => {
+      // keep markdown links [text](url) — only strip bare [stage directions]
+      return m;
+    });
+    // Bare [direction] without following (
+    text = text.replace(/\[([^\]\n]+)\](?!\()/g, (m, p1) => {
+      nonVerbalParts.push(`[${p1.trim()}]`);
+      return '';
+    });
+  }
 
   // Ensure all --- lines and multiple blank lines are removed
   text = text.replace(/^---+\s*$/gm, '');
   text = text.replace(/\n{3,}/g, '\n\n').trim();
 
-  const nonVerbalText = nonVerbalParts.join(' ').trim();
-  const dialogueText = text.replace(/\s{2,}/g, ' ').trim();
+  const nonVerbalText = soft ? '' : nonVerbalParts.join(' ').trim();
+  const dialogueText = soft
+    ? text.replace(/\s{2,}/g, ' ').trim()
+    : text.replace(/\s{2,}/g, ' ').trim();
 
   return { emoji, action, nonVerbalText, dialogueText };
 }
@@ -366,17 +396,25 @@ function addMessage(sender, text) {
 }
 
 function appendToken(text) {
+  if (text == null || text === '') return;
+  // Drop pure control chunks (status/search) so they never typewrite into the bubble.
+  if (isControlTokenChunk(text) && !streamRawText) return;
   if (!streamDiv) {
     streamDiv = document.createElement('div');
     streamDiv.className = 'msg msg-aiko';
     streamRawText = '';
+    streamExprApplied = null;
     chatPanel.insertBefore(streamDiv, toolStatus);
   }
   streamRawText += text;
-  const parsed = parseAikoMessage(streamRawText);
+  // Soft parse while streaming: single dialogue line + cursor, no action/nv boxes.
+  const parsed = parseAikoMessage(streamRawText, true);
   if (parsed.emoji && window.aikoSetExpression) {
     const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || parsed.emoji;
-    window.aikoSetExpression(exprName, 1.0);
+    if (exprName && exprName !== streamExprApplied) {
+      streamExprApplied = exprName;
+      window.aikoSetExpression(exprName, 1.0);
+    }
   }
   renderAikoContent(streamDiv, parsed, true);
   scrollBottom();
@@ -384,10 +422,19 @@ function appendToken(text) {
 
 function flushStream() {
   if (streamDiv) {
-    const parsed = parseAikoMessage(streamRawText);
+    // Full parse only when the turn is complete.
+    const parsed = parseAikoMessage(streamRawText, false);
+    if (parsed.emoji && window.aikoSetExpression) {
+      const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || parsed.emoji;
+      if (exprName && exprName !== streamExprApplied) {
+        streamExprApplied = exprName;
+        window.aikoSetExpression(exprName, 1.0);
+      }
+    }
     renderAikoContent(streamDiv, parsed, false);
     streamDiv = null;
     streamRawText = '';
+    streamExprApplied = null;
   }
   toolStatus.textContent = '';
 }
