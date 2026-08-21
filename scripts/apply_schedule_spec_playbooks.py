@@ -44,8 +44,7 @@ def patch_schedule() -> tuple[Path, str] | None:
         text = text.replace(old_goal, new_goal, 1)
         changed = True
 
-    # Skip message transformation removed: current message correctly describes
-    # the valid-node check without claiming "no registered Spec graph"
+    # Skip message left accurate: node-list path only reports invalid nodes
 
     if "def disable_legacy_job_post_tool_jobs" not in text:
         marker = "def ensure_weekly_social_job"
@@ -136,7 +135,7 @@ def patch_graph_engine() -> tuple[Path, str] | None:
         text = text.replace(needle, insert, 1)
         changed = True
 
-    if "list_graphs" not in text or "Ensure every registered Spec" not in text:
+    if "Ensure every registered Spec" not in text:
         old = '''def load_playbooks() -> list[dict[str, Any]]:
     by_id: dict[str, dict[str, Any]] = {}
     for p in _default_playbooks():
@@ -171,7 +170,7 @@ def patch_graph_engine() -> tuple[Path, str] | None:
                 "capabilities": [],
             }
     except Exception:
-        pass
+        log.debug("Could not merge registered Spec graphs into playbooks", exc_info=True)
 '''
         if old not in text:
             raise SystemExit("load_playbooks header not found")
@@ -236,6 +235,7 @@ def patch_social() -> tuple[Path, str] | None:
         from agentic.workflows.common.graphs import get_graph
         graph = get_graph("gen_job_post")
     except Exception:
+        log.debug("gen_job_post registry lookup failed; trying playbook nodes", exc_info=True)
         graph = None
 
     if graph is None:
@@ -300,23 +300,23 @@ def main() -> int:
         result = patch_schedule()
         if result:
             patches.append(result)
-            print(f"schedule.py: changes needed")
+            print("schedule.py: changes needed")
         else:
-            print(f"schedule.py: already patched")
+            print("schedule.py: already patched")
 
         result = patch_graph_engine()
         if result:
             patches.append(result)
-            print(f"graph_engine.py: changes needed")
+            print("graph_engine.py: changes needed")
         else:
-            print(f"graph_engine.py: already patched")
+            print("graph_engine.py: already patched")
 
         result = patch_social()
         if result:
             patches.append(result)
-            print(f"social.py: changes needed")
+            print("social.py: changes needed")
         else:
-            print(f"social.py: already patched")
+            print("social.py: already patched")
     except SystemExit as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -331,7 +331,6 @@ def main() -> int:
             print(f"  {path.relative_to(ROOT)}")
         return 0
 
-    # Write all patches
     for path, text in patches:
         path.write_text(text, encoding="utf-8")
         print(f"Wrote {path.relative_to(ROOT)}")
