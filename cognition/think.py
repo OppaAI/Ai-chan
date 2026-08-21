@@ -1490,17 +1490,19 @@ class AikoThink:
             "completion_tokens": None,
             "total_tokens": None,
         }
-    
+
         speak = self._get_speak()   # single snapshot for this call — avoids a toggle mid-stream
                                      # producing inconsistent behavior across the checks below
-    
+
         karaoke_text = bool(
             emit and speak and token_callback and getattr(speak, "karaoke_text", False)
             and not self._reasoning
         )
-        if speak and emit:
-            speak.start_speech_stream(token_callback if karaoke_text else None)
-    
+
+        # Buffer tokens and TTS output until stream success is confirmed
+        token_buffer = []
+        tts_buffer = []
+
         sentence_buffer = ""
         stream_success = False
         try:
@@ -1520,33 +1522,40 @@ class AikoThink:
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
-    
+
                 if emit and token_callback and token and not karaoke_text:
-                    token_callback(token)
-    
+                    token_buffer.append(token)
+
                 full_response.append(token)
-    
+
                 if emit and speak and token:
                     sentence_buffer += token
                     sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
                     for sentence in sentences:
-                        speak.feed_speech_stream(sentence)
-    
+                        tts_buffer.append(sentence)
+
             text = "".join(full_response).strip()
             if text:
                 self.last_usage["completion_text"] = text
                 stream_success = True
                 if emit and speak and sentence_buffer.strip():
-                    speak.feed_speech_stream(sentence_buffer)
+                    tts_buffer.append(sentence_buffer)
         except Exception as e:
             log.error(f"LLM stream failed: {e}")
-        finally:
-            if speak and emit:
-                speak.stop_speech_stream()
-    
+
+        # Emit buffered content only after confirming stream success
         if stream_success:
+            if emit and token_callback and token_buffer:
+                for token in token_buffer:
+                    token_callback(token)
+            if emit and speak and tts_buffer:
+                speak.start_speech_stream(token_callback if karaoke_text else None)
+                for sentence in tts_buffer:
+                    speak.feed_speech_stream(sentence)
+                speak.stop_speech_stream()
             return text
-    
+
+        # Stream failed: emit complete fallback response without partial tokens
         fallback_text = self._fallback_completion(
             all_messages,
             max_tokens,
@@ -1616,8 +1625,15 @@ class AikoThink:
             pass
         # Live stream already drove typewriter + karaoke TTS. Only re-emit when
         # metacognitive correction rewrote the draft, or when stream emit was off.
-        if (not already_emitted) or (response != draft):
+        if not already_emitted:
+            # Normal path: streaming was disabled, emit the final response
             self._emit(response, token_callback=token_callback)
+        elif response != draft:
+            # Metacognitive correction: signal replacement to supersede the streamed draft
+            if token_callback:
+                token_callback("__REPLACE__\n")
+            self._emit(response, token_callback=token_callback)
+        # else: draft was streamed and no correction occurred, nothing more to emit
         return response
 
     def _correct_response(self, user_input: str, draft: str, review: dict | None) -> str:
