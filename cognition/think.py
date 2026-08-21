@@ -1503,6 +1503,10 @@ class AikoThink:
 
         sentence_buffer = ""
         stream_success = False
+        # Buffer tokens/sentences until stream success to prevent partial emission on failure
+        token_buffer = []
+        tts_sentence_buffer = []
+
         try:
             stream = self._client.chat.completions.create(
                 model=self._llm_model, messages=all_messages, stream=True,
@@ -1521,25 +1525,32 @@ class AikoThink:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
 
-                # Live typewriter: push tokens as they arrive (karaoke path
-                # drives the UI via start_speech_stream's callback instead).
+                # Buffer tokens for emission only after stream success
                 if emit and token_callback and token and not karaoke_text:
-                    token_callback(token)
+                    token_buffer.append(token)
 
                 full_response.append(token)
 
                 if emit and speak and token:
                     sentence_buffer += token
                     sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
-                    for sentence in sentences:
-                        speak.feed_speech_stream(sentence)
+                    # Buffer TTS sentences for feeding only after stream success
+                    tts_sentence_buffer.extend(sentences)
 
             text = "".join(full_response).strip()
             if text:
                 self.last_usage["completion_text"] = text
                 stream_success = True
                 if emit and speak and sentence_buffer.strip():
-                    speak.feed_speech_stream(sentence_buffer)
+                    tts_sentence_buffer.append(sentence_buffer)
+
+                # Stream succeeded: now emit buffered tokens and TTS sentences
+                if emit and token_callback and token_buffer:
+                    for buffered_token in token_buffer:
+                        token_callback(buffered_token)
+                if emit and speak and tts_sentence_buffer:
+                    for sentence in tts_sentence_buffer:
+                        speak.feed_speech_stream(sentence)
         except Exception as e:
             log.error(f"LLM stream failed: {e}")
         finally:
@@ -1549,14 +1560,17 @@ class AikoThink:
         if stream_success:
             return text
 
-        # Stream failed: one complete fallback (no partial live tokens to clean up
-        # beyond whatever already reached the UI — rare).
+        # Stream failed: buffers were never emitted, so no partial output exists.
+        # Send replacement signal before emitting fallback to ensure clean state.
         fallback_text = self._fallback_completion(
             all_messages,
             max_tokens,
             "LLM stream failed or completed without content",
         )
         if emit:
+            # Signal replacement before emitting fallback
+            if token_callback and hasattr(token_callback, "reset"):
+                token_callback.reset()
             self._emit(fallback_text, token_callback=token_callback)
         return fallback_text
 
@@ -1620,17 +1634,17 @@ class AikoThink:
             pass
         # Live stream already drove typewriter + karaoke TTS. CLI/WebUI/adapters
         # do not implement replacement, and TTS cannot retract audio already played.
-        # After a live stream: never re-emit; keep the streamed draft as the turn text
-        # even if a soft correction would have rewritten it.
+        # After a live stream: never re-emit to UI/TTS, but DO persist the corrected
+        # response to chat/webchat history so the stored turn reflects the correction.
         if already_emitted:
             if response != draft:
                 log.info(
-                    "[finalize] soft-correction skipped after live stream "
-                    "(UI/TTS keep draft; corrected len=%d draft len=%d)",
+                    "[finalize] soft-correction applied to persisted turn after live stream "
+                    "(UI/TTS kept draft; persisting corrected len=%d draft len=%d)",
                     len(response or ""),
                     len(draft or ""),
                 )
-            return draft
+            return response
         self._emit(response, token_callback=token_callback)
         return response
 
