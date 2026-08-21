@@ -198,8 +198,8 @@ def trace_ternary_stage(
     best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
     gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
     
-    agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
-    webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+    agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
+    webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
     
     if not quiet:
         print(f"\n  {BOLD}Ternary Routing Trace{RESET}")
@@ -283,8 +283,8 @@ def trace_ternary(user_input: str) -> tuple[str, dict]:
     best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
     gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
     
-    agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
-    webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+    agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
+    webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
     
     print(f"\n  {BOLD}Ternary Routing Trace{RESET}")
     print(f"  {'label':<12} {'score':<8}  bar")
@@ -334,9 +334,9 @@ def _compute_route(prompt: str, result: RouteResult | None, quiet: bool) -> str:
         agentic_score = label_scores.get("agentic", 0.0)
         webchat_score = label_scores.get("webchat", 0.0)
         localchat_score = label_scores.get("localchat", 0.0)
-        
-        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
-        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+
+        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
+        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
         
         is_agentic = (best_label == "agentic" and 
                       agentic_score >= agentic_threshold and 

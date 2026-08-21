@@ -146,12 +146,16 @@ if _ROUTE_MODE not in _ROUTE_VALID_MODES:
 # is excluded from scoring AND from any LLM tie-break/classify, in every
 # ROUTE_MODE, so requests degrade to webchat/localchat instead.
 _AGENTIC_MODE_ON = os.getenv("AGENTIC_MODE_ON", "1").lower() in {"1", "true", "yes", "on"}
+# Local chat/webchat: stream tokens + TTS karaoke when True (default).
+# Set CHAT_STREAM_EMIT=0 to restore old batch _emit-after-finalize behaviour.
+_CHAT_STREAM_EMIT = os.getenv("CHAT_STREAM_EMIT", "1").lower() in {"1", "true", "yes", "on"}
+
 
 # Three separate instruct strings, one per embedding context
 _ROUTE_INSTRUCT_QUATERNARY = "What kind of task or question is this?"  # used by route() for quaternary intent routing
 _ROUTE_INSTRUCT_TERNARY = _ROUTE_INSTRUCT_QUATERNARY  # backwards-compatible alias for wakeup/tests
 
-_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
+_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.12"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 _ROUTE_VECTOR_CACHE_DIR = os.getenv("ROUTE_VECTOR_CACHE_DIR", "route_vectors")
 
@@ -730,8 +734,8 @@ class AikoThink:
         best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
         gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
     
-        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
-        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
+        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
+        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
         greeting_threshold = float(os.getenv("ROUTE_GREETING_THRESHOLD", "0.60"))
     
         log.debug(
@@ -1200,8 +1204,8 @@ class AikoThink:
         }
         
         # Stream response
-        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=False)
-        raw_response = self._finalize_response(user_input, raw_response, token_callback)
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=_CHAT_STREAM_EMIT)
+        raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
         
         # Store in history
         with self._history_lock:
@@ -1331,8 +1335,8 @@ class AikoThink:
         _dump_full_prompt(self.last_prompt_debug)
     
         # Stream response
-        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=False)
-        raw_response = self._finalize_response(user_input, raw_response, token_callback)
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=_CHAT_STREAM_EMIT)
+        raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
         
         # Store
         with self._history_lock:
@@ -1486,19 +1490,23 @@ class AikoThink:
             "completion_tokens": None,
             "total_tokens": None,
         }
-    
+
         speak = self._get_speak()   # single snapshot for this call — avoids a toggle mid-stream
                                      # producing inconsistent behavior across the checks below
-    
+
         karaoke_text = bool(
             emit and speak and token_callback and getattr(speak, "karaoke_text", False)
             and not self._reasoning
         )
         if speak and emit:
             speak.start_speech_stream(token_callback if karaoke_text else None)
-    
+
         sentence_buffer = ""
         stream_success = False
+        # Buffer tokens/sentences until stream success to prevent partial emission on failure
+        token_buffer = []
+        tts_sentence_buffer = []
+
         try:
             stream = self._client.chat.completions.create(
                 model=self._llm_model, messages=all_messages, stream=True,
@@ -1516,39 +1524,53 @@ class AikoThink:
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
-    
+
+                # Buffer tokens for emission only after stream success
                 if emit and token_callback and token and not karaoke_text:
-                    token_callback(token)
-    
+                    token_buffer.append(token)
+
                 full_response.append(token)
-    
+
                 if emit and speak and token:
                     sentence_buffer += token
                     sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
-                    for sentence in sentences:
-                        speak.feed_speech_stream(sentence)
-    
+                    # Buffer TTS sentences for feeding only after stream success
+                    tts_sentence_buffer.extend(sentences)
+
             text = "".join(full_response).strip()
             if text:
                 self.last_usage["completion_text"] = text
                 stream_success = True
                 if emit and speak and sentence_buffer.strip():
-                    speak.feed_speech_stream(sentence_buffer)
+                    tts_sentence_buffer.append(sentence_buffer)
+
+                # Stream succeeded: now emit buffered tokens and TTS sentences
+                if emit and token_callback and token_buffer:
+                    for buffered_token in token_buffer:
+                        token_callback(buffered_token)
+                if emit and speak and tts_sentence_buffer:
+                    for sentence in tts_sentence_buffer:
+                        speak.feed_speech_stream(sentence)
         except Exception as e:
             log.error(f"LLM stream failed: {e}")
         finally:
             if speak and emit:
                 speak.stop_speech_stream()
-    
+
         if stream_success:
             return text
-    
+
+        # Stream failed: buffers were never emitted, so no partial output exists.
+        # Send replacement signal before emitting fallback to ensure clean state.
         fallback_text = self._fallback_completion(
             all_messages,
             max_tokens,
             "LLM stream failed or completed without content",
         )
         if emit:
+            # Signal replacement before emitting fallback
+            if token_callback and hasattr(token_callback, "reset"):
+                token_callback.reset()
             self._emit(fallback_text, token_callback=token_callback)
         return fallback_text
 
@@ -1592,7 +1614,7 @@ class AikoThink:
         while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
 
-    def _finalize_response(self, user_input: str, draft: str, token_callback=None) -> str:
+    def _finalize_response(self, user_input: str, draft: str, token_callback=None, *, already_emitted: bool = False) -> str:
         review = self._review_response(user_input, draft)
         response = self._correct_response(user_input, draft, review)
         if response != draft:
@@ -1610,6 +1632,19 @@ class AikoThink:
                 speak.set_speech_rate(for_identity(current_user_id()).adaptive_tts_rate())
         except Exception:
             pass
+        # Live stream already drove typewriter + karaoke TTS. CLI/WebUI/adapters
+        # do not implement replacement, and TTS cannot retract audio already played.
+        # After a live stream: never re-emit to UI/TTS, but DO persist the corrected
+        # response to chat/webchat history so the stored turn reflects the correction.
+        if already_emitted:
+            if response != draft:
+                log.info(
+                    "[finalize] soft-correction applied to persisted turn after live stream "
+                    "(UI/TTS kept draft; persisting corrected len=%d draft len=%d)",
+                    len(response or ""),
+                    len(draft or ""),
+                )
+            return response
         self._emit(response, token_callback=token_callback)
         return response
 
