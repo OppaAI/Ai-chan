@@ -9,15 +9,32 @@ from typing import Any
 
 
 def load_workflow_config(workflow_dir: Path, filename: str = "config.json") -> dict[str, Any]:
-    """Load workflow config.json from the workflow package directory."""
-    path = workflow_dir / filename
-    if not path.is_file():
-        return {}
+    """Load workflow config.json.
+
+    Preference order:
+      1. ``<user_state>/agentic/workflows/<name>/config.json`` when present
+      2. Package directory ``workflow_dir/config.json``
+    """
+    candidates: list[Path] = []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+        from system.userspace import user_state_dir
+        name = workflow_dir.name
+        user_path = user_state_dir() / "agentic" / "workflows" / name / filename
+        candidates.append(user_path)
+    except Exception:
+        pass
+    candidates.append(workflow_dir / filename)
+
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
 
 
 def resolve_config_value(
