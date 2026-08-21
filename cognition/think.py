@@ -1498,10 +1498,8 @@ class AikoThink:
             emit and speak and token_callback and getattr(speak, "karaoke_text", False)
             and not self._reasoning
         )
-
-        # Buffer tokens and TTS output until stream success is confirmed
-        token_buffer = []
-        tts_buffer = []
+        if speak and emit:
+            speak.start_speech_stream(token_callback if karaoke_text else None)
 
         sentence_buffer = ""
         stream_success = False
@@ -1523,8 +1521,10 @@ class AikoThink:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
 
+                # Live typewriter: push tokens as they arrive (karaoke path
+                # drives the UI via start_speech_stream's callback instead).
                 if emit and token_callback and token and not karaoke_text:
-                    token_buffer.append(token)
+                    token_callback(token)
 
                 full_response.append(token)
 
@@ -1532,30 +1532,25 @@ class AikoThink:
                     sentence_buffer += token
                     sentences, sentence_buffer = split_stream_sentences(sentence_buffer)
                     for sentence in sentences:
-                        tts_buffer.append(sentence)
+                        speak.feed_speech_stream(sentence)
 
             text = "".join(full_response).strip()
             if text:
                 self.last_usage["completion_text"] = text
                 stream_success = True
                 if emit and speak and sentence_buffer.strip():
-                    tts_buffer.append(sentence_buffer)
+                    speak.feed_speech_stream(sentence_buffer)
         except Exception as e:
             log.error(f"LLM stream failed: {e}")
-
-        # Emit buffered content only after confirming stream success
-        if stream_success:
-            if emit and token_callback and token_buffer:
-                for token in token_buffer:
-                    token_callback(token)
-            if emit and speak and tts_buffer:
-                speak.start_speech_stream(token_callback if karaoke_text else None)
-                for sentence in tts_buffer:
-                    speak.feed_speech_stream(sentence)
+        finally:
+            if speak and emit:
                 speak.stop_speech_stream()
+
+        if stream_success:
             return text
 
-        # Stream failed: emit complete fallback response without partial tokens
+        # Stream failed: one complete fallback (no partial live tokens to clean up
+        # beyond whatever already reached the UI — rare).
         fallback_text = self._fallback_completion(
             all_messages,
             max_tokens,
