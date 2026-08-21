@@ -55,3 +55,34 @@ def test_post_social_routes_known_services_only():
     assert [name for name, _ in calls] == ["x", "bluesky", "pixelfed"]
     pixelfed_kwargs = dict(calls)["pixelfed"]
     assert pixelfed_kwargs == {"image_path": "img.png", "caption": "hello"}
+
+
+def test_lane_d_surfaces_nested_threads_failure(tmp_path, monkeypatch):
+    social = importlib.import_module("agentic.toolkit.social")
+    monkeypatch.setenv("JOB_POST_SOCIAL_ROOT", str(tmp_path))
+    draft_dir = tmp_path / "2026-08-20" / "tech" / "draft"
+    draft_dir.mkdir(parents=True)
+    (draft_dir / "draft_post.txt").write_text("A job post", encoding="utf-8")
+    (draft_dir / "draft.json").write_text(
+        '{"human_approved": true, "posted": false}', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        social,
+        "_call_social_mcp",
+        lambda *args, **kwargs: {
+            "ok": False,
+            "results": [{
+                "ok": False,
+                "provider": "threads",
+                "stage": "create",
+                "status_code": 403,
+                "response": '{"error":{"message":"token expired"}}',
+            }],
+        },
+    )
+
+    result = social.post_job_post_draft(draft_dir)
+
+    assert result["posted"] is False
+    assert "threads: create: HTTP 403" in result["error"]
+    assert "token expired" in result["error"]

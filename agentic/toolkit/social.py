@@ -1252,12 +1252,25 @@ def post_job_post_draft(draft_dir: str | Path) -> dict[str, Any]:
     result = _call_social_mcp("post_social", services="threads", text=text, topic_tag=topic_tag or None)
     log.info("Lane D: Threads result — ok=%s, error=%s", result.get("ok"), result.get("error"))
 
-    # Extract the actual error from nested results array
-    actual_error = None
-    if result.get("results") and isinstance(result["results"], list) and len(result["results"]) > 0:
-        actual_error = result["results"][0].get("error")
-
-    post_meta = {"posted": bool(result.get("ok")), "posted_at": datetime.now(timezone.utc).isoformat(), "results": [result]}
+    posted = bool(result.get("ok"))
+    post_meta = {"posted": posted, "posted_at": datetime.now(timezone.utc).isoformat(), "results": [result]}
+    if not posted:
+        # post_social is a fan-out wrapper, so provider failures are nested
+        # under results[0]. Preserve the useful Meta/API details for Approval
+        # Studio instead of reducing every failure to "Failed to post".
+        failure = result.get("error")
+        nested = result.get("results")
+        if not failure and isinstance(nested, list) and nested:
+            item = nested[0] if isinstance(nested[0], dict) else {}
+            failure = item.get("error")
+            if not failure:
+                parts = [item.get("provider"), item.get("stage")]
+                if item.get("status_code") is not None:
+                    parts.append(f"HTTP {item['status_code']}")
+                if item.get("response"):
+                    parts.append(str(item["response"])[:2000])
+                failure = ": ".join(str(part) for part in parts if part)
+        post_meta["error"] = failure or "Threads provider returned an unsuccessful result"
     (path / "posted.json").write_text(json.dumps(post_meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     meta_path = path / "draft.json"
     if meta_path.exists():
