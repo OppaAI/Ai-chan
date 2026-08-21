@@ -121,6 +121,25 @@ class MCPDatabase:
             CREATE INDEX IF NOT EXISTS idx_tool_log_created ON tool_log(created_at);
         """)
         self._commit()
+        self._clear_failed_post_cache()
+
+    def _clear_failed_post_cache(self) -> None:
+        """Drop stale failed publish results after a service fix/restart."""
+        rows = self._conn.execute(
+            "SELECT request_hash, result FROM idempotency WHERE tool LIKE 'post_%'"
+        ).fetchall()
+        stale = []
+        for row in rows:
+            try:
+                if not json.loads(row["result"]).get("ok", True):
+                    stale.append((row["request_hash"],))
+            except (TypeError, json.JSONDecodeError):
+                stale.append((row["request_hash"],))
+        if stale:
+            self._conn.executemany(
+                "DELETE FROM idempotency WHERE request_hash = ?", stale
+            )
+            self._commit()
 
     def _commit(self) -> None:
         """Commit unless inside a transaction() batch (caller commits once)."""

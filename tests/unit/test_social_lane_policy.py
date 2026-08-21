@@ -108,3 +108,9 @@ def test_social_db_token_cache_can_be_used_from_mcp_worker_thread(tmp_path):
     thread.join()
     db.close()
     assert errors == []
+
+
+def test_failed_post_results_are_not_idempotency_cached():
+    from interface.mcp_server.social.guards import _SKIP_IDEMPOTENCY
+
+    assert "post_social" not in _SKIP_IDEMPOTENCY

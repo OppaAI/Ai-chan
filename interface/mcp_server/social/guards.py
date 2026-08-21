@@ -115,8 +115,10 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
                     db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=24)
             else:
                 # Failure: cache for shorter time (1 hour) to allow retry
-                # Read/search tools: skip failure cache too (let them retry immediately)
-                if tool_name not in _SKIP_IDEMPOTENCY:
+                # Never cache failed posting attempts. A transient provider,
+                # connection, or worker error must be retryable immediately;
+                # replaying it can hide a repaired service for an hour.
+                if tool_name not in _SKIP_IDEMPOTENCY and not tool_name.startswith("post_"):
                     db.set_idempotent_result(tool_name, kwargs, result, ttl_hours=1)
 
         return result

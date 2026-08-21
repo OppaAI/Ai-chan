@@ -67,7 +67,7 @@ DEEP_STUDY_SYNTHESIS_MAX_TOKENS: "900"  # Token budget for the final distillatio
 
 # -- Storage and embedding endpoint --
 EDGE_COGNITION_ENABLED: "1"  # Bounded process-local focus/open-loop state; no I/O or model call.
-EDGE_COGNITION_MAX_TURNS: "7"  # Human-like working set, hard bounded per user.
+EDGE_COGNITION_MAX_TURNS: "10"  # Human-like working set, hard bounded per user.
 EDGE_COGNITION_MAX_CHARS: "1200"  # Prompt budget for the fast cognitive state.
 EDGE_COGNITION_MAX_OPEN_LOOPS: "3"  # Pending questions/tasks carried forward.
 EDGE_COGNITION_MAX_GOALS: "5"  # Active intentions carried forward in the fast state.
@@ -309,11 +309,11 @@ EMC_FLUSH_ON_STAGING: "24"    # Flush when staging count reaches this
 
 # EMC-3: episodic recall + joint EM+SM context budget
 EMC_RECALL_ENABLED: "1"       # Inject <episodic_context> into format_for_context
-EMC_RECALL_LIMIT: "2"         # Max episodes injected per turn
+EMC_RECALL_LIMIT: "4"         # Max episodes injected per turn
 EMC_KNN_LIMIT: "12"           # Vector candidates before RRF
 EMC_FTS_LIMIT: "12"           # Lexical candidates before RRF
 EMC_RRF_K: "60"               # Reciprocal Rank Fusion constant
-EMC_CONTEXT_CHARS: "600"      # Soft char budget for the whole episodic block
+EMC_CONTEXT_CHARS: "900"      # Soft char budget for the whole episodic block
 EMC_CONTEXT_EPISODE_CHARS: "280"  # Max chars per episode snippet
 EMC_JOINT_BUDGET: "1"         # Shrink SM so EM+SM stay under MEMORY_CONTEXT_TOTAL_CHARS
 EMC_RECALL_CACHE_SIZE: "128"  # Max entries in the episodic recall result cache
@@ -321,7 +321,7 @@ EMC_RECALL_CACHE_TTL: "20"    # Seconds a recall result stays cached before refr
 
 # EMC-4: dream distillation EM → SM
 EMC_DREAM_ENABLED: "1"        # Run episodic→fact distillation inside dream()
-EMC_DREAM_LIMIT: "12"         # Max undistrilled episodes considered per dream
+EMC_DREAM_LIMIT: "16"         # Max undistrilled episodes considered per dream
 EMC_DREAM_BATCH: "4"          # Episodes per LLM extract call
 EMC_DREAM_MIN_CHARS: "60"     # Skip short traces
 EMC_DREAM_MAX_TOKENS: "256"   # Token budget for the distill LLM call
