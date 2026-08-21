@@ -1198,23 +1198,35 @@ def _run_gen_job_post_playbook(
     client=None,
     model: str | None = None,
 ) -> dict[str, Any]:
-    """Load and execute the gen_job_post playbook from the shared playbook system."""
+    """Execute Lane D via the registered Spec/shared_5 gen_job_post graph."""
     from agentic.graph_engine import get_playbook_by_id, PlanNode, PlanGraph, execute_graph
-    playbook = get_playbook_by_id("gen_job_post")
-    if playbook is None:
-        return {"success": False, "error": "gen_job_post playbook not found"}
-    nodes = []
-    for raw in playbook.get("nodes", []):
-        if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
-            nodes.append(PlanNode(
-                id=str(raw["id"]), tool=str(raw["tool"]),
-                args=dict(raw.get("args", {})),
-                depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
-            ))
-    graph = PlanGraph(
-        id="gen_job_post", name=playbook.get("name", "Job Post"),
-        goal="Draft job posts from config", nodes=tuple(nodes),
-    )
+
+    graph = None
+    try:
+        from agentic.workflows.common.graphs import get_graph
+        graph = get_graph("gen_job_post")
+    except Exception:
+        log.debug("gen_job_post registry lookup failed; trying playbook nodes", exc_info=True)
+        graph = None
+
+    if graph is None:
+        playbook = get_playbook_by_id("gen_job_post")
+        if playbook is None:
+            return {"success": False, "error": "gen_job_post playbook/graph not found"}
+        nodes = []
+        for raw in playbook.get("nodes", []):
+            if isinstance(raw, dict) and raw.get("id") and raw.get("tool"):
+                nodes.append(PlanNode(
+                    id=str(raw["id"]), tool=str(raw["tool"]),
+                    args=dict(raw.get("args", {})),
+                    depends_on=tuple(str(d) for d in raw.get("depends_on", [])),
+                ))
+        if not nodes:
+            return {"success": False, "error": "gen_job_post has no registered graph and no nodes"}
+        graph = PlanGraph(
+            id="gen_job_post", name=playbook.get("name", "Job Post"),
+            goal="Draft job posts from config", nodes=tuple(nodes),
+        )
     try:
         result = execute_graph(graph, llm_client=client, llm_model=model)
         return {
@@ -1329,6 +1341,12 @@ def _resolve_contained_draft_dir(draft_dir: str | Path, allowed_root: Path) -> P
 
 
 from agentic.registry import TOOLS, tool
+
+
+@tool("run_job_post_playbook")
+def run_job_post_playbook(*, client=None, model: str | None = None) -> dict[str, Any]:
+    """Legacy schedule tool name → Spec gen_job_post graph."""
+    return _run_gen_job_post_playbook(client=client, model=model)
 
 
 @tool(TOOLS["draft_job_post_social"])

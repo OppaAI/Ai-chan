@@ -823,6 +823,37 @@ def _ensure_job_post_config_marker(user_id: str | None = None) -> None:
         log.exception("Failed to seed job-post config marker in schedule.json")
 
 
+# PATCHED: disable_legacy_job_post_tool_jobs
+def disable_legacy_job_post_tool_jobs(user_id: str | None = None) -> None:
+    """Disable schedule.json tool jobs that call run_job_post_playbook."""
+    path = schedule_path(user_id=user_id)
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, list):
+        return
+    changed = False
+    for job in data:
+        if not isinstance(job, dict):
+            continue
+        tc = job.get("tool_call") or {}
+        name = str(tc.get("name") or "").strip()
+        if name != "run_job_post_playbook":
+            continue
+        if job.get("enabled", True):
+            job["enabled"] = False
+            changed = True
+            log.info(
+                "Disabled legacy schedule tool job %r (use schedule_graphs gen_job_post instead)",
+                job.get("id") or job.get("title"),
+            )
+    if changed:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + chr(10), encoding="utf-8")
+
+
 def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
     """Idempotently seed the weekly Patreon dev-post syndication job (Lane A1).
 
@@ -977,6 +1008,7 @@ def register_social_handlers(timezone: str | None = None, user_id: str | None = 
     # schedule.json one lane at a time.  Currently seeds Lane D only.
     ensure_schedule_graphs(user_id=user_id)
 
+    disable_legacy_job_post_tool_jobs(user_id=user_id)
     log.info("Registered social handlers and seeded social jobs; Lane D uses schedule_graphs.json.")
 
 
@@ -1646,10 +1678,7 @@ class ScheduleRunner:
         from agentic.graph_engine import PlanGraph, execute_graph, get_playbook_by_id
 
         graph_id = graph_def.get("graph_id") or graph_def.get("id", "")
-        playbook = get_playbook_by_id(graph_id)
-        if playbook is None:
-            log.warning("Schedule graph %r references unknown playbook %r — skipping", graph_def.get("id"), graph_id)
-            return
+        playbook = get_playbook_by_id(graph_id) or {}
 
         # Resolve PlanGraph from the shared workflow registry (job_hunt, aurora, …)
         registered_graph = None
@@ -1664,7 +1693,7 @@ class ScheduleRunner:
             graph = PlanGraph(
                 id=registered_graph.id,
                 name=registered_graph.name,
-                goal=playbook.get("goal", f"Scheduled run: {graph_id}"),
+                goal=playbook.get("goal") or registered_graph.goal or f"Scheduled run: {graph_id}",
                 nodes=registered_graph.nodes,
                 source=registered_graph.source,
                 reducers=registered_graph.reducers,
