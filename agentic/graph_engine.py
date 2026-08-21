@@ -815,6 +815,25 @@ def _default_playbooks() -> list[dict[str, Any]]:
             "capabilities": ["research", "job_hunt"],
             "max_workers": 2,
             "graph_id": "gen_job_post",
+            "pipeline": "shared_5",
+            "nodes": [],
+        },
+        {
+            # PATCHED: aurora_forecast + Spec fallback
+            "id": "aurora_forecast",
+            "name": "Hourly aurora visibility forecast (NOAA + Kp + clouds)",
+            "triggers": [
+                "aurora", "northern lights", "aurora forecast", "kp index", "aurora alert",
+            ],
+            "semantic_triggers": [
+                "check if the aurora is visible tonight",
+                "aurora forecast and cloud cover",
+                "northern lights probability",
+            ],
+            "requires_any": ["aurora", "northern", "kp", "geomagnetic"],
+            "capabilities": ["weather", "research"],
+            "graph_id": "aurora_forecast",
+            "pipeline": "shared_5",
             "nodes": [],
         },
     ]
@@ -840,6 +859,28 @@ def load_playbooks() -> list[dict[str, Any]]:
         pid = p.get("id")
         if isinstance(p, dict) and pid:
             by_id[str(pid)] = dict(p)
+
+    # Ensure every registered Spec/shared_5 PlanGraph is visible as a playbook
+    try:
+        from agentic.workflows.common.graphs import list_graphs, get_graph
+        for gid in list_graphs():
+            if gid in by_id:
+                continue
+            g = get_graph(gid)
+            if g is None:
+                continue
+            by_id[gid] = {
+                "id": gid,
+                "name": g.name or gid,
+                "goal": g.goal or "",
+                "graph_id": gid,
+                "pipeline": "shared_5",
+                "nodes": [],
+                "triggers": [],
+                "capabilities": [],
+            }
+    except Exception:
+        log.debug("Could not merge registered Spec graphs into playbooks", exc_info=True)
 
     path = _playbook_file()
     if path.exists():
