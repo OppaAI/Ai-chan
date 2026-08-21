@@ -1623,17 +1623,20 @@ class AikoThink:
                 speak.set_speech_rate(for_identity(current_user_id()).adaptive_tts_rate())
         except Exception:
             pass
-        # Live stream already drove typewriter + karaoke TTS. Only re-emit when
-        # metacognitive correction rewrote the draft, or when stream emit was off.
-        if not already_emitted:
-            # Normal path: streaming was disabled, emit the final response
-            self._emit(response, token_callback=token_callback)
-        elif response != draft:
-            # Metacognitive correction: signal replacement to supersede the streamed draft
-            if token_callback:
-                token_callback("__REPLACE__\n")
-            self._emit(response, token_callback=token_callback)
-        # else: draft was streamed and no correction occurred, nothing more to emit
+        # Live stream already drove typewriter + karaoke TTS. CLI/WebUI/adapters
+        # do not implement replacement, and TTS cannot retract audio already played.
+        # After a live stream: never re-emit; keep the streamed draft as the turn text
+        # even if a soft correction would have rewritten it.
+        if already_emitted:
+            if response != draft:
+                log.info(
+                    "[finalize] soft-correction skipped after live stream "
+                    "(UI/TTS keep draft; corrected len=%d draft len=%d)",
+                    len(response or ""),
+                    len(draft or ""),
+                )
+            return draft
+        self._emit(response, token_callback=token_callback)
         return response
 
     def _correct_response(self, user_input: str, draft: str, review: dict | None) -> str:
