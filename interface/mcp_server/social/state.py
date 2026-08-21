@@ -54,16 +54,31 @@ class MCPDatabase:
 
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn: sqlite3.Connection | None = None
+        self._local = threading.local()
+        self._connections: list[sqlite3.Connection] = []
+        self._connections_lock = threading.RLock()
         self._in_transaction = False
         self._connect()
 
+    @property
+    def _conn(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            self._connect()
+            conn = self._local.conn
+        return conn
+
+    @_conn.setter
+    def _conn(self, value: sqlite3.Connection | None) -> None:
+        self._local.conn = value
+
     def _connect(self):
-        # The MCP server initializes the shared DB on its bootstrap thread,
-        # while tool calls (including Threads token refreshes) run on worker
-        # threads. SQLite otherwise rejects this legitimate hand-off with
-        # "objects created in a thread can only be used in that same thread".
-        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
+        # FastMCP may execute tools on worker threads. Keep one connection
+        # per thread so SQLite never sees a connection cross its owner thread.
+        conn = sqlite3.connect(str(self._path))
+        with self._connections_lock:
+            self._connections.append(conn)
+        self._local.conn = conn
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA synchronous = NORMAL")
         self._conn.row_factory = sqlite3.Row
@@ -235,7 +250,14 @@ class MCPDatabase:
         self._commit()
 
     def close(self):
-        if self._conn:
+        if getattr(self._local, "conn", None):
             self.cleanup()
-            self._conn.close()
-            self._conn = None
+        with self._connections_lock:
+            connections = list(self._connections)
+            self._connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        self._local.conn = None
