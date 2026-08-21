@@ -3,6 +3,7 @@
 
 Run from repo root on branch fix/schedule-spec-playbooks or after pull:
   python3 scripts/apply_schedule_spec_playbooks.py
+  python3 scripts/apply_schedule_spec_playbooks.py --check  # validate only
 """
 from __future__ import annotations
 
@@ -11,10 +12,19 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Patch markers to prevent reapplication
+SCHEDULE_MARKER = "# PATCHED: disable_legacy_job_post_tool_jobs"
+GRAPH_ENGINE_MARKER = "# PATCHED: aurora_forecast + Spec fallback"
 
-def patch_schedule() -> None:
+
+def patch_schedule() -> tuple[Path, str] | None:
+    """Return (path, patched_text) if changes needed, else None."""
     path = ROOT / "system/schedule.py"
     text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    if SCHEDULE_MARKER in text:
+        return None
+
     changed = False
 
     old = (
@@ -34,20 +44,12 @@ def patch_schedule() -> None:
         text = text.replace(old_goal, new_goal, 1)
         changed = True
 
-    old_skip = 'log.warning("Playbook %r has no valid nodes — skipping", graph_id)'
-    new_skip = (
-        'log.warning(\n'
-        '                    "Playbook %r has no valid nodes and no registered Spec graph — skipping",\n'
-        '                    graph_id,\n'
-        '                )'
-    )
-    if old_skip in text:
-        text = text.replace(old_skip, new_skip, 1)
-        changed = True
+    # Skip message transformation removed: current message correctly describes
+    # the valid-node check without claiming "no registered Spec graph"
 
     if "def disable_legacy_job_post_tool_jobs" not in text:
         marker = "def ensure_weekly_social_job"
-        helper = '''
+        helper = SCHEDULE_MARKER + '''
 def disable_legacy_job_post_tool_jobs(user_id: str | None = None) -> None:
     """Disable schedule.json tool jobs that call run_job_post_playbook."""
     path = schedule_path(user_id=user_id)
@@ -90,24 +92,28 @@ def disable_legacy_job_post_tool_jobs(user_id: str | None = None) -> None:
         changed = True
 
     if changed:
-        path.write_text(text, encoding="utf-8")
-        print("patched", path)
-    else:
-        print("schedule already patched or patterns missing")
+        return (path, text)
+    return None
 
 
-def patch_graph_engine() -> None:
+def patch_graph_engine() -> tuple[Path, str] | None:
+    """Return (path, patched_text) if changes needed, else None."""
     path = ROOT / "agentic/graph_engine.py"
     text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+
+    if GRAPH_ENGINE_MARKER in text:
+        return None
+
     changed = False
 
     if '"id": "aurora_forecast"' not in text:
         needle = '            "graph_id": "gen_job_post",\n            "nodes": [],\n        },\n    ]'
-        insert = '''            "graph_id": "gen_job_post",
+        insert = f'''            "graph_id": "gen_job_post",
             "pipeline": "shared_5",
             "nodes": [],
-        },
-        {
+        }},
+        {{
+            {GRAPH_ENGINE_MARKER}
             "id": "aurora_forecast",
             "name": "Hourly aurora visibility forecast (NOAA + Kp + clouds)",
             "triggers": [
@@ -123,7 +129,7 @@ def patch_graph_engine() -> None:
             "graph_id": "aurora_forecast",
             "pipeline": "shared_5",
             "nodes": [],
-        },
+        }},
     ]'''
         if needle not in text:
             raise SystemExit("gen_job_post tail not found in graph_engine")
@@ -173,13 +179,12 @@ def patch_graph_engine() -> None:
         changed = True
 
     if changed:
-        path.write_text(text, encoding="utf-8")
-        print("patched", path)
-    else:
-        print("graph_engine already patched")
+        return (path, text)
+    return None
 
 
-def patch_social() -> None:
+def patch_social() -> tuple[Path, str] | None:
+    """Return (path, patched_text) if changes needed, else None."""
     path = ROOT / "agentic/toolkit/social.py"
     text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
     changed = False
@@ -282,17 +287,56 @@ def run_job_post_playbook(*, client=None, model: str | None = None) -> dict[str,
         changed = True
 
     if changed:
-        path.write_text(text, encoding="utf-8")
-        print("patched", path)
-    else:
-        print("social already patched")
+        return (path, text)
+    return None
 
 
 def main() -> int:
-    patch_schedule()
-    patch_graph_engine()
-    patch_social()
-    print("done")
+    dry_run = "--check" in sys.argv or "--dry-run" in sys.argv
+
+    # Compute all patches before writing any files
+    patches: list[tuple[Path, str]] = []
+    try:
+        result = patch_schedule()
+        if result:
+            patches.append(result)
+            print(f"schedule.py: changes needed")
+        else:
+            print(f"schedule.py: already patched")
+
+        result = patch_graph_engine()
+        if result:
+            patches.append(result)
+            print(f"graph_engine.py: changes needed")
+        else:
+            print(f"graph_engine.py: already patched")
+
+        result = patch_social()
+        if result:
+            patches.append(result)
+            print(f"social.py: changes needed")
+        else:
+            print(f"social.py: already patched")
+    except SystemExit as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    if not patches:
+        print("All files already patched")
+        return 0
+
+    if dry_run:
+        print(f"\n--check mode: {len(patches)} file(s) would be modified")
+        for path, _ in patches:
+            print(f"  {path.relative_to(ROOT)}")
+        return 0
+
+    # Write all patches
+    for path, text in patches:
+        path.write_text(text, encoding="utf-8")
+        print(f"Wrote {path.relative_to(ROOT)}")
+
+    print("Done")
     return 0
 
 

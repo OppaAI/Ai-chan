@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 
 def load_workflow_config(workflow_dir: Path, filename: str = "config.json") -> dict[str, Any]:
@@ -21,8 +24,9 @@ def load_workflow_config(workflow_dir: Path, filename: str = "config.json") -> d
         name = workflow_dir.name
         user_path = user_state_dir() / "agentic" / "workflows" / name / filename
         candidates.append(user_path)
-    except Exception:
-        pass
+    except Exception as e:
+        # Failed to determine user config path; fall back to package config
+        log.debug("Could not construct user config path: %s", e)
     candidates.append(workflow_dir / filename)
 
     for path in candidates:
@@ -30,7 +34,9 @@ def load_workflow_config(workflow_dir: Path, filename: str = "config.json") -> d
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+            # Invalid UTF-8 or malformed JSON; try next candidate
+            log.debug("Could not read config from %s: %s", path, e)
             continue
         if isinstance(data, dict):
             return data
