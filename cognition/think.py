@@ -146,16 +146,12 @@ if _ROUTE_MODE not in _ROUTE_VALID_MODES:
 # is excluded from scoring AND from any LLM tie-break/classify, in every
 # ROUTE_MODE, so requests degrade to webchat/localchat instead.
 _AGENTIC_MODE_ON = os.getenv("AGENTIC_MODE_ON", "1").lower() in {"1", "true", "yes", "on"}
-# Local chat/webchat: stream tokens + TTS karaoke when True (default).
-# Set CHAT_STREAM_EMIT=0 to restore old batch _emit-after-finalize behaviour.
-_CHAT_STREAM_EMIT = os.getenv("CHAT_STREAM_EMIT", "1").lower() in {"1", "true", "yes", "on"}
-
 
 # Three separate instruct strings, one per embedding context
 _ROUTE_INSTRUCT_QUATERNARY = "What kind of task or question is this?"  # used by route() for quaternary intent routing
 _ROUTE_INSTRUCT_TERNARY = _ROUTE_INSTRUCT_QUATERNARY  # backwards-compatible alias for wakeup/tests
 
-_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.12"))
+_SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.10"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 _ROUTE_VECTOR_CACHE_DIR = os.getenv("ROUTE_VECTOR_CACHE_DIR", "route_vectors")
 
@@ -734,8 +730,8 @@ class AikoThink:
         best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
         gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
     
-        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
-        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
+        agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.65"))
+        webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.60"))
         greeting_threshold = float(os.getenv("ROUTE_GREETING_THRESHOLD", "0.60"))
     
         log.debug(
@@ -1204,8 +1200,8 @@ class AikoThink:
         }
         
         # Stream response
-        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=_CHAT_STREAM_EMIT)
-        raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=False)
+        raw_response = self._finalize_response(user_input, raw_response, token_callback)
         
         # Store in history
         with self._history_lock:
@@ -1335,8 +1331,8 @@ class AikoThink:
         _dump_full_prompt(self.last_prompt_debug)
     
         # Stream response
-        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=_CHAT_STREAM_EMIT)
-        raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
+        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=False)
+        raw_response = self._finalize_response(user_input, raw_response, token_callback)
         
         # Store
         with self._history_lock:
@@ -1596,7 +1592,7 @@ class AikoThink:
         while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
         return sanitized
 
-    def _finalize_response(self, user_input: str, draft: str, token_callback=None, *, already_emitted: bool = False) -> str:
+    def _finalize_response(self, user_input: str, draft: str, token_callback=None) -> str:
         review = self._review_response(user_input, draft)
         response = self._correct_response(user_input, draft, review)
         if response != draft:
@@ -1614,10 +1610,7 @@ class AikoThink:
                 speak.set_speech_rate(for_identity(current_user_id()).adaptive_tts_rate())
         except Exception:
             pass
-        # Live stream already drove typewriter + karaoke TTS. Only re-emit when
-        # metacognitive correction rewrote the draft, or when stream emit was off.
-        if (not already_emitted) or (response != draft):
-            self._emit(response, token_callback=token_callback)
+        self._emit(response, token_callback=token_callback)
         return response
 
     def _correct_response(self, user_input: str, draft: str, review: dict | None) -> str:
