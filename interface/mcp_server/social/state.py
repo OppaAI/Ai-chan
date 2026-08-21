@@ -59,7 +59,11 @@ class MCPDatabase:
         self._connect()
 
     def _connect(self):
-        self._conn = sqlite3.connect(str(self._path))
+        # The MCP server initializes the shared DB on its bootstrap thread,
+        # while tool calls (including Threads token refreshes) run on worker
+        # threads. SQLite otherwise rejects this legitimate hand-off with
+        # "objects created in a thread can only be used in that same thread".
+        self._conn = sqlite3.connect(str(self._path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.execute("PRAGMA synchronous = NORMAL")
         self._conn.row_factory = sqlite3.Row

@@ -86,3 +86,25 @@ def test_lane_d_surfaces_nested_threads_failure(tmp_path, monkeypatch):
     assert result["posted"] is False
     assert "threads: create: HTTP 403" in result["error"]
     assert "token expired" in result["error"]
+
+
+def test_social_db_token_cache_can_be_used_from_mcp_worker_thread(tmp_path):
+    import threading
+    from interface.mcp_server.social.state import MCPDatabase
+
+    db = MCPDatabase(str(tmp_path / "social.db"))
+    db.migrate()
+    errors = []
+
+    def worker():
+        try:
+            db.set_cached_token("threads", "token", 3600)
+            assert db.get_cached_token("threads") == "token"
+        except Exception as exc:  # pragma: no cover - assertion detail
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    thread.join()
+    db.close()
+    assert errors == []
