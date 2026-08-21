@@ -457,39 +457,75 @@ const SIDE = 60;
             const panel = document.getElementById('details-panel');
             const content = document.getElementById('details-content');
             panel.style.display = 'block';
-
-            const deps = selectedPlaybook?.edges
-                ?.filter(e => {
-                    const tid = typeof e.target === 'string' ? e.target : e.target?.id;
-                    return tid === node.id;
-                }) || [];
-            const dependents = selectedPlaybook?.edges
-                ?.filter(e => {
-                    const sid = typeof e.source === 'string' ? e.source : e.source?.id;
-                    return sid === node.id;
-                }) || [];
-
+            const deps = selectedPlaybook?.edges?.filter(e => {
+                const tid = typeof e.target === 'string' ? e.target : e.target?.id;
+                return tid === node.id;
+            }) || [];
+            const dependents = selectedPlaybook?.edges?.filter(e => {
+                const sid = typeof e.source === 'string' ? e.source : e.source?.id;
+                return sid === node.id;
+            }) || [];
             content.innerHTML = `
-                <div class="details-panel-header">
-                    <h3>Node Details</h3>
-                    <button class="details-close" onclick="document.getElementById('details-panel').style.display='none'">×</button>
-                </div>
-                <div class="detail-row"><div class="detail-label">Tool</div><div class="detail-value"><code>${escapeHTML(node.tool || '—')}</code></div></div>
-                <div class="detail-row"><div class="detail-label">ID</div><div class="detail-value"><code>${escapeHTML(node.id)}</code></div></div>
-                ${node.args ? `<div class="detail-row"><div class="detail-label">Args</div><div class="detail-value"><pre class="text-xs" style="max-height:100px;overflow:auto;background:rgba(255,255,255,0.03);padding:4px;border-radius:3px">${escapeHTML(JSON.stringify(node.args, null, 2))}</pre></div></div>` : ''}
-                ${node.run_if ? `<div class="detail-row"><div class="detail-label">Run If</div><div class="detail-value"><pre class="text-xs" style="max-height:80px;overflow:auto;background:rgba(255,255,255,0.03);padding:4px;border-radius:3px">${escapeHTML(JSON.stringify(node.run_if, null, 2))}</pre></div></div>` : ''}
-                ${node.loop_to ? `<div class="detail-row"><div class="detail-label">Loop To</div><div class="detail-value" style="color:var(--pink)">${escapeHTML(node.loop_to)}</div></div>` : ''}
-                ${node.fallback_to ? `<div class="detail-row"><div class="detail-label">Fallback To</div><div class="detail-value" style="color:#e8843a">${escapeHTML(node.fallback_to)}</div></div>` : ''}
-                ${node.max_visits ? `<div class="detail-row"><div class="detail-label">Max Visits</div><div class="detail-value">${node.max_visits}</div></div>` : ''}
-                <div class="detail-row"><div class="detail-label">Inputs (${deps.length})</div><div class="detail-value">${deps.map(d => {
-                    const sid = typeof d.source === 'string' ? d.source : d.source?.id;
-                    return `<code>${escapeHTML(sid)}</code>`;
-                }).join(', ') || '—'}</div></div>
-                <div class="detail-row"><div class="detail-label">Outputs (${dependents.length})</div><div class="detail-value">${dependents.map(d => {
-                    const tid = typeof d.target === 'string' ? d.target : d.target?.id;
-                    return `<code>${escapeHTML(tid)}</code>`;
-                }).join(', ') || '—'}</div></div>
+                <div class="details-panel-header"><h3>Node Spec</h3><button class="details-close" onclick="document.getElementById('details-panel').style.display='none'">×</button></div>
+                <div class="detail-row"><div class="detail-label">ID</div><input class="detail-input" id="edit-node-id" value="${escapeHTML(node.id)}"></div>
+                <div class="detail-row"><div class="detail-label">Tool</div><input class="detail-input" id="edit-node-tool" value="${escapeHTML(node.tool || '')}"></div>
+                <div class="detail-row"><div class="detail-label">Args (JSON)</div><textarea class="detail-textarea" id="edit-node-args">${escapeHTML(JSON.stringify(node.args || {}, null, 2))}</textarea></div>
+                <div class="detail-row"><div class="detail-label">Run If (JSON)</div><textarea class="detail-textarea" id="edit-node-runif" placeholder="optional condition">${escapeHTML(node.run_if ? JSON.stringify(node.run_if, null, 2) : '')}</textarea></div>
+                <div class="detail-row"><div class="detail-label">When (JSON)</div><textarea class="detail-textarea" id="edit-node-when" placeholder="optional condition">${escapeHTML(node.when ? JSON.stringify(node.when, null, 2) : '')}</textarea></div>
+                <div class="detail-row"><div class="detail-label">Loop To</div><input class="detail-input" id="edit-node-loop" value="${escapeHTML(node.loop_to || '')}"></div>
+                <div class="detail-row"><div class="detail-label">Loop Condition</div><textarea class="detail-textarea" id="edit-node-loopcondition" placeholder="optional condition">${escapeHTML(node.loop_condition ? JSON.stringify(node.loop_condition, null, 2) : '')}</textarea></div>
+                <div class="detail-row"><div class="detail-label">Fallback To</div><input class="detail-input" id="edit-node-fallback" value="${escapeHTML(node.fallback_to || '')}"></div>
+                <div class="detail-row"><div class="detail-label">Max Visits</div><input class="detail-input" id="edit-node-maxvisits" type="number" min="1" value="${node.max_visits ?? ''}"></div>
+                <div class="detail-row"><div class="detail-label">Timeout (s)</div><input class="detail-input" id="edit-node-timeout" type="number" min="0" step="0.1" value="${node.timeout_seconds ?? ''}"></div>
+                <div class="detail-row"><div class="detail-label">Max Retries</div><input class="detail-input" id="edit-node-retries" type="number" min="0" value="${node.max_retries ?? 0}"></div>
+                <div class="detail-row"><div class="detail-label">Backoff (s)</div><input class="detail-input" id="edit-node-backoff" type="number" min="0" step="0.1" value="${node.retry_backoff_seconds ?? 1}"></div>
+                <div class="detail-row"><div class="detail-label">Interrupt</div><input id="edit-node-interrupt" type="checkbox" ${node.interrupt ? 'checked' : ''}></div>
+                <div class="detail-row"><div class="detail-label">Needs Approval</div><input id="edit-node-approval" type="checkbox" ${node.needs_approval ? 'checked' : ''}></div>
+                <div style="display:flex;gap:6px;margin-top:12px"><button class="btn btn-primary" onclick="saveNodeChanges('${escapeHTML(node.id)}')">Apply</button></div>
+                <div class="detail-row"><div class="detail-label">Inputs (${deps.length})</div><div class="detail-value">${deps.map(d => `<code>${escapeHTML(typeof d.source === 'string' ? d.source : d.source?.id)}</code>`).join(', ') || '—'}</div></div>
+                <div class="detail-row"><div class="detail-label">Outputs (${dependents.length})</div><div class="detail-value">${dependents.map(d => `<code>${escapeHTML(typeof d.target === 'string' ? d.target : d.target?.id)}</code>`).join(', ') || '—'}</div></div>
             `;
+        }
+
+        function parseOptionalJSON(id, label) {
+            const value = document.getElementById(id).value.trim();
+            if (!value) return null;
+            try { return JSON.parse(value); } catch { throw new Error(`Invalid JSON in ${label}`); }
+        }
+
+        function saveNodeChanges(oldId) {
+            const node = selectedPlaybook.nodes.find(n => n.id === oldId);
+            if (!node) return;
+            const newId = document.getElementById('edit-node-id').value.trim();
+            if (!newId || (!node.id && !newId)) return alert('Node ID is required');
+            if (newId !== oldId && selectedPlaybook.nodes.some(n => n.id === newId)) return alert('Node ID already exists');
+            try {
+                node.tool = document.getElementById('edit-node-tool').value.trim();
+                if (!node.tool) throw new Error('Tool is required');
+                node.args = JSON.parse(document.getElementById('edit-node-args').value || '{}');
+                const runIf = parseOptionalJSON('edit-node-runif', 'Run If');
+                const when = parseOptionalJSON('edit-node-when', 'When');
+                const loopCondition = parseOptionalJSON('edit-node-loopcondition', 'Loop Condition');
+                if (runIf) node.run_if = runIf; else delete node.run_if;
+                if (when) node.when = when; else delete node.when;
+                if (loopCondition) node.loop_condition = loopCondition; else delete node.loop_condition;
+            } catch (err) { return alert(err.message || 'Invalid node spec'); }
+            if (newId !== oldId) {
+                selectedPlaybook.edges.forEach(e => {
+                    if (e.source === oldId) e.source = newId;
+                    if (e.target === oldId) e.target = newId;
+                });
+                node.id = newId;
+            }
+            const textFields = [['loop_to', 'edit-node-loop'], ['fallback_to', 'edit-node-fallback']];
+            textFields.forEach(([field, id]) => { const value = document.getElementById(id).value.trim(); if (value) node[field] = value; else delete node[field]; });
+            const numericFields = [['max_visits', 'edit-node-maxvisits', parseInt], ['timeout_seconds', 'edit-node-timeout', parseFloat], ['max_retries', 'edit-node-retries', parseInt], ['retry_backoff_seconds', 'edit-node-backoff', parseFloat]];
+            numericFields.forEach(([field, id, parser]) => { const value = document.getElementById(id).value.trim(); if (value) node[field] = parser(value); else delete node[field]; });
+            node.interrupt = document.getElementById('edit-node-interrupt').checked;
+            node.needs_approval = document.getElementById('edit-node-approval').checked;
+            selectedNodeId = node.id;
+            renderGraph(selectedPlaybook);
+            showNodeDetails(node);
         }
 
         function showEdgeDetails(edge, src, tgt) {
@@ -525,6 +561,36 @@ const SIDE = 60;
         });
 
         document.getElementById('refresh-btn').addEventListener('click', fetchPlaybooks);
+        document.getElementById('save-btn').addEventListener('click', savePlaybook);
+
+        function syncEdgesToNodes() {
+            selectedPlaybook.nodes.forEach(node => { node.depends_on = []; delete node.loop_to; delete node.fallback_to; });
+            (selectedPlaybook.edges || []).forEach(edge => {
+                const source = typeof edge.source === 'string' ? edge.source : edge.source?.id;
+                const target = typeof edge.target === 'string' ? edge.target : edge.target?.id;
+                const targetNode = selectedPlaybook.nodes.find(node => node.id === target);
+                const sourceNode = selectedPlaybook.nodes.find(node => node.id === source);
+                if (!targetNode || !sourceNode) return;
+                if ((edge.type || 'depends_on') === 'depends_on') targetNode.depends_on.push(source);
+                if (edge.type === 'loop_to') sourceNode.loop_to = target;
+                if (edge.type === 'fallback_to') sourceNode.fallback_to = target;
+            });
+        }
+
+        async function savePlaybook() {
+            if (!selectedPlaybook) return;
+            syncEdgesToNodes();
+            try {
+                const resp = await fetch(`${API_BASE}/playbooks/${encodeURIComponent(selectedPlaybook.id)}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(selectedPlaybook) });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data.detail || resp.statusText);
+                selectedPlaybook = data.playbook;
+                document.getElementById('header-status').textContent = 'Saved';
+                renderGraph(selectedPlaybook);
+                const node = selectedPlaybook.nodes.find(n => n.id === selectedNodeId);
+                if (node) showNodeDetails(node);
+            } catch (err) { alert(`Could not save playbook: ${err.message || err}`); }
+        }
         document.getElementById('export-btn').addEventListener('click', () => {
             if (!selectedPlaybook) return;
             const pb = currentPlaybooks.find(p => p.id === selectedPlaybook.id);

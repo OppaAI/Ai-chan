@@ -1181,6 +1181,7 @@ def plan_from_master(user_input: str, cap_ids: list[str] | None = None, embedder
             max_retries=int(raw.get("max_retries", 0) or 0),
             retry_backoff_seconds=float(raw.get("retry_backoff_seconds", 1.0) or 1.0),
             fallback_to=str(raw["fallback_to"]) if raw.get("fallback_to") else None,
+            needs_approval=bool(raw.get("needs_approval", False)),
         ))        
     if not nodes:
         return None
@@ -1230,6 +1231,7 @@ def run_subgraph(graph_json: str = "{}", goal: str = "",
             max_retries=int(raw.get("max_retries", 0) or 0),
             retry_backoff_seconds=float(raw.get("retry_backoff_seconds", 1.0) or 1.0),
             fallback_to=str(raw["fallback_to"]) if raw.get("fallback_to") else None,
+            needs_approval=bool(raw.get("needs_approval", False)),
         ))
     if not nodes:
         return "[run_subgraph: empty subgraph]"
@@ -1420,8 +1422,6 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
     tools = _tool_map()
     fn = tools.get(node.tool)
     args = _substitute(node.args, prompt, results, extras)
-    if fn is None:
-        return NodeResult(node.id, node.tool, False, f"unknown graph tool: {node.tool}", args=args, error_type="unknown_tool")
     try:
         from agentic.registry import registry
         spec = registry.get(node.tool)
@@ -1430,6 +1430,8 @@ def _run_node(node: PlanNode, prompt: str, results: dict[str, NodeResult],
     if node.needs_approval or (spec is not None and getattr(spec, "needs_approval", False)):
         content = json.dumps({"status": "waiting_for_approval", "run_id": run_id, "node_id": node.id, "tool": node.tool}, ensure_ascii=False)
         return NodeResult(node.id, node.tool, False, content, args=args, error_type="needs_approval")
+    if fn is None:
+        return NodeResult(node.id, node.tool, False, f"unknown graph tool: {node.tool}", args=args, error_type="unknown_tool")
     if node.tool == "save_note":
         args["content"] = str(args.get("content", ""))[:AGENT_NOTE_MAX_CHARS]
 
