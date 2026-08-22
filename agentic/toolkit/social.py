@@ -1343,7 +1343,7 @@ def _resolve_contained_draft_dir(draft_dir: str | Path, allowed_root: Path) -> P
 from agentic.registry import TOOLS, tool
 
 
-@tool("run_job_post_playbook")
+@tool("run_job_post_playbook", description="Legacy schedule tool name → Spec gen_job_post graph.")
 def run_job_post_playbook(*, client=None, model: str | None = None) -> dict[str, Any]:
     """Legacy schedule tool name → Spec gen_job_post graph."""
     return _run_gen_job_post_playbook(client=client, model=model)

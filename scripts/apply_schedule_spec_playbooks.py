@@ -274,7 +274,7 @@ def patch_social() -> tuple[Path, str] | None:
 
     if '@tool("run_job_post_playbook")' not in text:
         anchor = '@tool(TOOLS["draft_job_post_social"])\n'
-        extra = '''@tool("run_job_post_playbook")
+        extra = '''@tool("run_job_post_playbook", description="Legacy schedule tool name → Spec gen_job_post graph.")
 def run_job_post_playbook(*, client=None, model: str | None = None) -> dict[str, Any]:
     """Legacy schedule tool name → Spec gen_job_post graph."""
     return _run_gen_job_post_playbook(client=client, model=model)

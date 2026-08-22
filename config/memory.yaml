@@ -335,8 +335,8 @@ EMC_GROUP_MAX_CHARS: "2000"   # max merged trace characters
 # -- Performance optimization flags (Phase 20+) --
 # Set to 0 to disable expensive features for lower latency/RAM on Jetson
 NEURAL_NET_ENABLED: "0"              # Neural activation propagation over entity graph (heavy)
-MEMORY_SPREADING_ENABLED: "0"        # Spreading activation from seed entities (extra DB scans)
-MEMORY_CROSS_STORE_ENABLED: "0"      # Cross-store knowledge/experience attachment (extra searches)
-MEMORY_STATE_TAGS_ENABLED: "0"       # Local-hour state tags on every write (extra column)
+MEMORY_SPREADING_ENABLED: "1"        # Spreading activation from seed entities (extra DB scans)
+MEMORY_CROSS_STORE_ENABLED: "1"      # Cross-store knowledge/experience attachment (extra searches)
+MEMORY_STATE_TAGS_ENABLED: "1"       # Local-hour state tags on every write (extra column)
 MEMORY_NEG_RECALL_AVOID: "0"         # Negative memory avoidance filter (extra scoring)
 MEMORY_RECALL_CONTEXT_MATCH_ENABLED: "0"  # Query valence/arousal matching (extra inference)
