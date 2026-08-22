@@ -580,8 +580,13 @@ class AikoThink:
             # with _QUERY_INSTRUCT. This drops one HTTP embed call per turn.
             query_vec = route_vec
             if query_vec is None:
-                embedder = self._get_memorize()._mem._embedder
-                query_vec = embedder.embed_query(user_input)
+                try:
+                    mem = self._get_memorize()
+                    embedder = getattr(getattr(mem, "_mem", None), "_embedder", None) if mem else None
+                    if embedder is not None and hasattr(embedder, "embed_query"):
+                        query_vec = embedder.embed_query(user_input)
+                except Exception:
+                    query_vec = None
             mem_kb_future = CONTEXT_POOL.submit(
                 self._fetch_memory_and_knowledge, user_input, query_vec
             )
