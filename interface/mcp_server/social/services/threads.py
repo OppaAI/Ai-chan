@@ -235,7 +235,7 @@ def _append_reply_log(event: dict) -> None:
         pass
 
 
-def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = False, memory_kind: str = "memory") -> str:
+def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = False, memory_kind: str = "memory", research_context: str = "") -> str:
     social = _redact_sensitive_text(_load_text(env("SOCIAL_PERSONA_PATH", "persona/SOCIAL.md")))
     language = _reply_language(reply.get("text") or "")
     memory_instruction = (
@@ -248,15 +248,16 @@ def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = Fal
     context = "\n".join(
         f"- {item.get('username') or 'user'}: {_redact_sensitive_text(str(item.get('text') or '').strip())}"
         for item in context_items
-        if str(item.get("text") or "").strip()
+        if str(item.get('text') or '').strip()
     )
+    research_section = f"\n{research_context}\n" if research_context else ""
     prompt = f"""Public-social persona:
 
 {social}
 
 Conversation context:
 {context}
-
+{research_section}
 Required reply language: {language}.
 {memory_instruction}
 
@@ -305,6 +306,29 @@ def _is_trigger(text: str) -> bool:
     )
 
 
+def _threads_research_context(text: str) -> str:
+    """Search only when the public post explicitly asks for web research."""
+    body = str(text or "").strip()
+    if not re.search(r"(?is)\b(?:internet|web|online|search|look\s+up|verify|current)\b", body):
+        return ""
+    query = re.sub(r"(?is)@?[a-z0-9_.-]+\s*", " ", body).strip()
+    try:
+        from agentic.toolkit.websearch import web_search
+        results, error = web_search(query, 5)
+        if error or not results:
+            return ""
+        lines = ["Live web research results (untrusted source text):"]
+        for item in results:
+            title = _redact_sensitive_text(str(item.get("title") or ""))[:180]
+            url = str(item.get("url") or "")[:500]
+            snippet = _redact_sensitive_text(str(item.get("content") or ""))[:500]
+            if url:
+                lines.append(f"- {title}\n  URL: {url}\n  {snippet}")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def monitor_threads_replies(memorize=None) -> dict:
     """Find and answer new replies containing the configured trigger."""
     token = _get_threads_token()
@@ -344,7 +368,8 @@ def monitor_threads_replies(memorize=None) -> dict:
             root_reply = {"id": post_id, "text": root_text, "username": root.get("username")}
             try:
                 memory_saved, memory_kind = _save_requested_memory(root_reply, memorize, [root, *replies])
-                reply_text = _infer_reply(root_reply, [root, *replies], memory_saved, memory_kind)
+                research_context = _threads_research_context(root_reply.get("text") or "")
+                reply_text = _infer_reply(root_reply, [root, *replies], memory_saved, memory_kind, research_context)
             except Exception as exc:
                 errors.append({"post_id": post_id, "stage": "inference", "error": str(exc)})
             else:
@@ -390,7 +415,8 @@ def monitor_threads_replies(memorize=None) -> dict:
             try:
                 memory_context = _threads_previous_context(reply, token) or replies
                 memory_saved, memory_kind = _save_requested_memory(reply, memorize, memory_context)
-                reply_text = _infer_reply(reply, replies, memory_saved, memory_kind)
+                research_context = _threads_research_context(reply.get("text") or "")
+                reply_text = _infer_reply(reply, replies, memory_saved, memory_kind, research_context)
             except Exception as exc:
                 errors.append({"reply_id": reply_id, "stage": "inference", "error": str(exc)})
                 continue
@@ -448,7 +474,8 @@ def monitor_threads_replies(memorize=None) -> dict:
                     context = [mention]
                 try:
                     memory_saved, memory_kind = _save_requested_memory(mention, memorize, [mention, *context])
-                    reply_text = _infer_reply(mention, [mention, *context], memory_saved, memory_kind)
+                    research_context = _threads_research_context(mention.get("text") or "")
+                    reply_text = _infer_reply(mention, [mention, *context], memory_saved, memory_kind, research_context)
                 except Exception as exc:
                     errors.append({"reply_id": mention_id, "stage": "inference", "error": str(exc)})
                     continue
