@@ -688,6 +688,7 @@ class AikoWeb:
 
 def run_webui(args) -> None:
     from system.orchestrate import run_session
+    from interface.mcp_server.social.monitor_daemon import start_threads_monitor_daemon
 
     import socket
     ui = AikoWeb(no_voice=args.text, debug=args.debug)
@@ -695,4 +696,8 @@ def run_webui(args) -> None:
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
     print("  Waiting for login before waking up subsystems...\n")
+    # Start Threads reply monitor immediately — before the login gate —
+    # so Aiko can reply on Threads without anyone logging into the WebUI.
+    # No-op if THREADS_ACCESS_TOKEN / THREADS_USER_ID are not configured.
+    start_threads_monitor_daemon()
     run_session(ui, args)
