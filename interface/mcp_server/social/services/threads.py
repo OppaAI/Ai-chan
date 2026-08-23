@@ -114,6 +114,13 @@ def _save_requested_memory(reply: dict, memorize, context: list[dict] | None = N
                 user_id=user_id,
                 display_name=memorize.get_display_name(),
             ))
+        _append_reply_log({
+            "kind": f"threads_{kind}_{'saved' if saved else 'failed'}",
+            "post_id": str(reply.get("id") or ""),
+            "username": author,
+            "storage": "knowledge.db" if kind == "learn" else "memory.db",
+            "text": memory,
+        })
         return saved, kind
     except Exception:
         return False, kind
