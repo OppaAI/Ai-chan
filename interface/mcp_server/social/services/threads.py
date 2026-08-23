@@ -36,7 +36,7 @@ _EMOJI_ALIASES = {
     "surprised": "😮", "sparkles": "✨",
 }
 _EMOJI_ALIAS_RE = re.compile(r"(?<!\w):([a-z][a-z0-9_+-]*):(?!\w)", re.IGNORECASE)
-_MEMORY_REQUEST_RE = re.compile(r"(?is)\b(?:remember|learn)\s+(?:this|that)\s*[:\-]\s*(.+)$")
+_MEMORY_REQUEST_RE = re.compile(r"(?is)\b(?P<kind>remember|learn)\s+(?:this|that)\s*[:\-]\s*(?P<content>.+)$")
 
 
 def _redact_sensitive_text(text: str) -> str:
@@ -76,38 +76,47 @@ def _reply_language(text: str) -> str:
     return "the same language as the triggering comment"
 
 
-def _requested_memory(text: str, context: list[dict] | None = None) -> str:
+def _requested_memory(text: str, context: list[dict] | None = None) -> tuple[str, str]:
     match = _MEMORY_REQUEST_RE.search(str(text or ""))
     if match:
-        return _redact_sensitive_text(match.group(1).strip())[:2000]
-    if re.search(r"(?is)\b(?:remember|learn)\s+this\s*[.!?]?\s*$", str(text or "")):
+        return match.group("kind").casefold(), _redact_sensitive_text(match.group("content").strip())[:2000]
+    bare = re.search(r"(?is)\b(?P<kind>remember|learn)\s+this\s*[.!?]?\s*$", str(text or ""))
+    if bare:
         previous = [
             str(item.get("text") or "").strip()
             for item in (context or [])
             if str(item.get("text") or "").strip() and str(item.get("text") or "").strip() != str(text or "").strip()
         ]
-        return _redact_sensitive_text("\n".join(previous))[:4000]
-    return ""
+        return bare.group("kind").casefold(), _redact_sensitive_text("\n".join(previous))[:4000]
+    return "", ""
 
 
-def _save_requested_memory(reply: dict, memorize, context: list[dict] | None = None) -> bool:
+def _save_requested_memory(reply: dict, memorize, context: list[dict] | None = None) -> tuple[bool, str]:
     if memorize is None or env("THREADS_MEMORY_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
-        return False
+        return False, ""
     author = str(reply.get("username") or "").lstrip("@").casefold()
     owner = env("THREADS_USERNAME", "oppa.ai.bot").lstrip("@").casefold()
     if not author or author != owner:
-        return False
-    memory = _requested_memory(reply.get("text") or "", context)
+        return False, ""
+    kind, memory = _requested_memory(reply.get("text") or "", context)
     if not memory or _contains_sensitive_value(memory):
-        return False
+        return False, kind
     try:
-        return bool(memorize.pin(
-            [{"role": "user", "content": f"Explicit public Threads memory request: {memory}"}],
-            user_id=memorize.get_user_id(),
-            display_name=memorize.get_display_name(),
-        ))
+        user_id = memorize.get_user_id()
+        if kind == "learn":
+            from cognition.knowledge import KnowledgeStore
+            saved = bool(KnowledgeStore(user_id=user_id).ingest_text(
+                "Threads learned content", memory, source="threads", kind="self_learned",
+            ))
+        else:
+            saved = bool(memorize.pin(
+                [{"role": "user", "content": f"Explicit public Threads memory request: {memory}"}],
+                user_id=user_id,
+                display_name=memorize.get_display_name(),
+            ))
+        return saved, kind
     except Exception:
-        return False
+        return False, kind
 
 
 def _beep_on_trigger() -> None:
@@ -174,6 +183,25 @@ def _thread_reference_id(value) -> str:
     return str(value or "")
 
 
+def _threads_previous_context(reply: dict, token: str) -> list[dict]:
+    """Fetch only the immediate parent of a reply for explicit learning."""
+    parent_id = _thread_reference_id(reply.get("replied_to"))
+    if not parent_id and reply.get("id"):
+        detail = _threads_get(
+            str(reply["id"]), token,
+            fields="id,text,timestamp,username,replied_to",
+        )
+        if detail.get("ok"):
+            parent_id = _thread_reference_id(detail.get("data", {}).get("replied_to"))
+    if not parent_id:
+        return []
+    parent = _threads_get(
+        parent_id, token,
+        fields="id,text,timestamp,username,replied_to",
+    )
+    return [parent["data"]] if parent.get("ok") and parent.get("data", {}).get("text") else []
+
+
 def _load_text(path: str, fallback: str = "") -> str:
     try:
         with open(os.path.expanduser(path), "r", encoding="utf-8") as handle:
@@ -200,11 +228,11 @@ def _append_reply_log(event: dict) -> None:
         pass
 
 
-def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = False) -> str:
+def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = False, memory_kind: str = "memory") -> str:
     social = _redact_sensitive_text(_load_text(env("SOCIAL_PERSONA_PATH", "persona/SOCIAL.md")))
     language = _reply_language(reply.get("text") or "")
     memory_instruction = (
-        "The explicit memory request was saved successfully. Briefly acknowledge that you will remember it."
+        f"The explicit {memory_kind} request was saved successfully. Briefly acknowledge that you stored it in the {'knowledge base' if memory_kind == 'learn' else 'memory'}."
         if memory_saved else ""
     )
     # Keep the parent/root plus the newest replies when a thread is large.
@@ -308,8 +336,8 @@ def monitor_threads_replies(memorize=None) -> dict:
                 beeped = True
             root_reply = {"id": post_id, "text": root_text, "username": root.get("username")}
             try:
-                memory_saved = _save_requested_memory(root_reply, memorize, [root, *replies])
-                reply_text = _infer_reply(root_reply, [root, *replies], memory_saved)
+                memory_saved, memory_kind = _save_requested_memory(root_reply, memorize, [root, *replies])
+                reply_text = _infer_reply(root_reply, [root, *replies], memory_saved, memory_kind)
             except Exception as exc:
                 errors.append({"post_id": post_id, "stage": "inference", "error": str(exc)})
             else:
@@ -353,8 +381,9 @@ def monitor_threads_replies(memorize=None) -> dict:
                 _beep_on_trigger()
                 beeped = True
             try:
-                memory_saved = _save_requested_memory(reply, memorize, replies)
-                reply_text = _infer_reply(reply, replies, memory_saved)
+                memory_context = _threads_previous_context(reply, token) or replies
+                memory_saved, memory_kind = _save_requested_memory(reply, memorize, memory_context)
+                reply_text = _infer_reply(reply, replies, memory_saved, memory_kind)
             except Exception as exc:
                 errors.append({"reply_id": reply_id, "stage": "inference", "error": str(exc)})
                 continue
@@ -407,22 +436,12 @@ def monitor_threads_replies(memorize=None) -> dict:
                 if not beeped:
                     _beep_on_trigger()
                     beeped = True
-                root_id = _thread_reference_id(mention.get("root_post"))
-                parent_id = _thread_reference_id(mention.get("replied_to"))
-                if not root_id:
-                    root_id = parent_id or mention_id
-                context = _threads_conversation(mention_id, token, root_id=root_id)
-                if parent_id and not any(str(item.get("id") or "") == parent_id for item in context):
-                    parent_result = _threads_get(
-                        parent_id, token,
-                        fields="id,text,timestamp,username,root_post,replied_to",
-                    )
-                    if parent_result.get("ok"):
-                        parent = parent_result.get("data", {})
-                        context = [parent, *context]
+                context = _threads_previous_context(mention, token)
+                if not context:
+                    context = [mention]
                 try:
-                    memory_saved = _save_requested_memory(mention, memorize, [mention, *context])
-                    reply_text = _infer_reply(mention, [mention, *context], memory_saved)
+                    memory_saved, memory_kind = _save_requested_memory(mention, memorize, [mention, *context])
+                    reply_text = _infer_reply(mention, [mention, *context], memory_saved, memory_kind)
                 except Exception as exc:
                     errors.append({"reply_id": mention_id, "stage": "inference", "error": str(exc)})
                     continue
