@@ -757,6 +757,9 @@ PHOTO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("PHOTO_SOCIAL_SCAN_INTERVAL_S
 VIDEO_SOCIAL_JOB_TITLE = "video_social_scan"
 VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS = int(os.getenv("VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS", str(6 * 60 * 60)))  # 6h default
 
+THREADS_REPLY_MONITOR_JOB_TITLE = "threads_reply_monitor"
+THREADS_REPLY_MONITOR_INTERVAL_SECONDS = int(os.getenv("THREADS_REPLY_MONITOR_INTERVAL_SECONDS", "180"))
+
 JOB_POST_SOCIAL_JOB_TITLE = "daily_job_post_social"
 JOB_POST_SOCIAL_DEFAULT_TIME = "23:00"
 
@@ -968,6 +971,26 @@ def ensure_video_social_job(timezone: str | None = None, user_id: str | None = N
     log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
 
 
+def ensure_threads_reply_monitor_job(timezone: str | None = None, user_id: str | None = None) -> None:
+    """Seed the recurring Threads reply trigger monitor."""
+    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
+    if THREADS_REPLY_MONITOR_JOB_TITLE in existing_titles:
+        return
+    interval = max(60, THREADS_REPLY_MONITOR_INTERVAL_SECONDS)
+    schedule_job_record(
+        title=THREADS_REPLY_MONITOR_JOB_TITLE,
+        task="Check Aiko Threads posts for replies containing Hi Aiko",
+        time_of_day="00:00",
+        frequency="interval",
+        timezone=timezone,
+        action="agentic",
+        handler="threads_reply_monitor",
+        interval_seconds=interval,
+        user_id=user_id,
+    )
+    log.info("Seeded Threads reply monitor every %ss", interval)
+
+
 def register_social_handlers(timezone: str | None = None, user_id: str | None = None) -> None:
     """Register the weekly/photo/video social handlers and seed their jobs.
 
@@ -993,16 +1016,19 @@ def register_social_handlers(timezone: str | None = None, user_id: str | None = 
         run_scheduled_video_social,
         retry_weekly_social_if_needed,
     )
+    from interface.mcp_server.social.services.threads import monitor_threads_replies
 
     register_system_handler("weekly_social", run_scheduled_weekly_social)
     register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
     register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
     register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
+    register_system_handler("threads_reply_monitor", lambda memorize: monitor_threads_replies())
 
     ensure_weekly_social_job(timezone, user_id=user_id)
     ensure_photo_social_job(timezone, user_id=user_id)
     ensure_video_social_job(timezone, user_id=user_id)
     ensure_weekly_social_retry_job(timezone, user_id=user_id)
+    ensure_threads_reply_monitor_job(timezone, user_id=user_id)
 
     # Schedule-graphs (DAG-based scheduled workflows) — migrated out of
     # schedule.json one lane at a time.  Currently seeds Lane D only.

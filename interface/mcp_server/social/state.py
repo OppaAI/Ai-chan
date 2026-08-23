@@ -108,6 +108,24 @@ class MCPDatabase:
                 PRIMARY KEY (service, period)
             );
 
+            CREATE TABLE IF NOT EXISTS threads_posts (
+                post_id TEXT PRIMARY KEY,
+                created_at REAL NOT NULL,
+                last_checked_at REAL
+            );
+
+            CREATE TABLE IF NOT EXISTS threads_processed_replies (
+                reply_id TEXT PRIMARY KEY,
+                post_id TEXT NOT NULL,
+                processed_at REAL NOT NULL,
+                response_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS threads_logged_replies (
+                reply_id TEXT PRIMARY KEY,
+                logged_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS tool_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tool TEXT NOT NULL,
@@ -248,6 +266,53 @@ class MCPDatabase:
                 "ON CONFLICT(service, period) DO UPDATE SET count = count + 1",
                 (service, period),
             )
+        self._commit()
+
+    # ── Threads reply monitoring state ─────────────────────────────────────
+
+    def remember_threads_post(self, post_id: str) -> None:
+        if post_id:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO threads_posts (post_id, created_at) VALUES (?, ?)",
+                (str(post_id), time.time()),
+            )
+            self._commit()
+
+    def list_threads_posts(self) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT post_id FROM threads_posts ORDER BY created_at ASC"
+        ).fetchall()
+        return [str(row["post_id"]) for row in rows]
+
+    def has_processed_threads_reply(self, reply_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM threads_processed_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_processed_threads_reply(
+        self, reply_id: str, post_id: str, response_id: str | None = None
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO threads_processed_replies "
+            "(reply_id, post_id, processed_at, response_id) VALUES (?, ?, ?, ?)",
+            (str(reply_id), str(post_id), time.time(), response_id),
+        )
+        self._commit()
+
+    def has_logged_threads_reply(self, reply_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM threads_logged_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_logged_threads_reply(self, reply_id: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO threads_logged_replies (reply_id, logged_at) VALUES (?, ?)",
+            (str(reply_id), time.time()),
+        )
         self._commit()
 
     # ── Tool log ───────────────────────────────────────────────────────────
