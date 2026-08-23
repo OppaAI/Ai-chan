@@ -210,10 +210,11 @@ def monitor_threads_replies() -> dict:
     errors = []
     for post_id in post_ids:
         result = _threads_get(f"{post_id}/conversation", token, fields="id,text,timestamp,username,is_reply_owned_by_me,root_post,replied_to", reverse="false", limit=50)
-        if not result.get("ok"):
+        if result.get("ok"):
+            replies = result["data"].get("data", [])
+        else:
             errors.append({"post_id": post_id, **result})
-            continue
-        replies = result["data"].get("data", [])
+            replies = []
         root_result = _threads_get(post_id, token, fields="id,text,timestamp,username")
         root = root_result.get("data", {}) if root_result.get("ok") else {}
         root_text = str(root.get("text") or "")
