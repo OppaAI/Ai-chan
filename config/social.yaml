@@ -28,6 +28,9 @@ THREADS_REPLY_MONITOR_INTERVAL_SECONDS: "30"  # Poll interval for replies contai
 THREADS_REPLY_MONITOR_POST_IDS: ""  # Optional comma-separated post IDs; blank discovers own posts.
 THREADS_REPLY_BEEP_ENABLED: "1"  # Play one local notification beep per polling cycle with a trigger.
 THREADS_REPLY_MENTION: "@oppa.ai.bot"  # Mention that triggers Aiko without the phrase trigger.
+THREADS_USERNAME: "oppa.ai.bot"  # Authenticated Threads username, used to ignore self-mentions.
+THREADS_GLOBAL_MENTIONS_ENABLED: "1"  # Poll /me/mentions for mentions on other users posts.
+THREADS_MEMORY_ENABLED: "1"  # Allow only explicit remember this / learn this requests from Threads.
 THREADS_REPLY_LOG_DIR: "logs/threads"  # One redacted JSONL archive per calendar day.
 IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB image upload calls time out.
 

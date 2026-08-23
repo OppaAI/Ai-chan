@@ -1022,7 +1022,7 @@ def register_social_handlers(timezone: str | None = None, user_id: str | None = 
     register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
     register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
     register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
-    register_system_handler("threads_reply_monitor", lambda memorize: monitor_threads_replies())
+    register_system_handler("threads_reply_monitor", lambda memorize: monitor_threads_replies(memorize))
 
     ensure_weekly_social_job(timezone, user_id=user_id)
     ensure_photo_social_job(timezone, user_id=user_id)
