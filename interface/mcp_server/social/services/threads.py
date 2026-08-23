@@ -311,11 +311,22 @@ def _threads_research_context(text: str) -> str:
     body = str(text or "").strip()
     if not re.search(r"(?is)\b(?:internet|web|online|search|look\s+up|verify|current)\b", body):
         return ""
-    query = re.sub(r"(?is)@?[a-z0-9_.-]+\s*", " ", body).strip()
+    # Strip only @mentions (e.g. @oppa.ai.bot), not every word.
+    # The previous regex `@?[a-z0-9_.-]+` matched any alphanumeric sequence,
+    # destroying the entire comment and producing a near-empty query.
+    query = re.sub(r"@[A-Za-z0-9._-]+", " ", body).strip()
+    if not query:
+        return ""
     try:
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
         from agentic.toolkit.websearch import web_search
         results, error = web_search(query, 5)
-        if error or not results:
+        if error:
+            _log.warning("[threads] Web search failed for query %r: %s", query[:120], error)
+            return ""
+        if not results:
+            _log.info("[threads] Web search returned no results for query %r", query[:120])
             return ""
         lines = ["Live web research results (untrusted source text):"]
         for item in results:
@@ -327,6 +338,7 @@ def _threads_research_context(text: str) -> str:
         return "\n".join(lines)
     except Exception:
         return ""
+
 
 
 def monitor_threads_replies(memorize=None) -> dict:
