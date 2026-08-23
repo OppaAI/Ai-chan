@@ -24,7 +24,7 @@ THREADS_REFRESH_BEFORE_EXPIRY_DAYS: "6"  # Days before token expiration to trigg
 THREADS_API_BASE: "https://graph.threads.net/v1.0"  # Base URL for Threads Graph API.
 THREADS_TOPIC_TAG: "AI Threads"  # Default topic tag for Threads posts.
 THREADS_PUBLISH_DELAY_SECONDS: "5"  # Delay between publish requests to avoid rate limits.
-THREADS_REPLY_MONITOR_INTERVAL_SECONDS: "60"  # Poll interval for replies containing "Hi Aiko".
+THREADS_REPLY_MONITOR_INTERVAL_SECONDS: "30"  # Poll interval for replies containing "Hi Aiko".
 THREADS_REPLY_MONITOR_POST_IDS: ""  # Optional comma-separated post IDs; blank discovers own posts.
 THREADS_REPLY_BEEP_ENABLED: "1"  # Play one local notification beep per polling cycle with a trigger.
 THREADS_REPLY_MENTION: "@oppa.ai.bot"  # Mention that triggers Aiko without the phrase trigger.
