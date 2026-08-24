@@ -14,15 +14,25 @@ from typing import Optional
 from openai import OpenAI
 
 try:
-    from social.services import env, int_env, get_session, err
-    from social.state import get_db
+    from social.services.identity import (
+        ai_name,
+        reply_trigger_phrase,
+        platform_username,
+        mention_trigger,
+        owner_display_name,
+        is_trigger as _identity_is_trigger,
+    )
 except ModuleNotFoundError:
-    from ..services import env, int_env, get_session, err
-    from ..state import get_db
+    from .identity import (
+        ai_name,
+        reply_trigger_phrase,
+        platform_username,
+        mention_trigger,
+        owner_display_name,
+        is_trigger as _identity_is_trigger,
+    )
 
 
-THREADS_REPLY_TRIGGER = "Hi Aiko"
-THREADS_REPLY_MENTION = "@oppa.ai.bot"
 _LLM_CLIENT: OpenAI | None = None
 
 _SECRET_ASSIGNMENT_RE = re.compile(
@@ -549,11 +559,10 @@ for example "*Aiko considers the question.*". Do not use XML or colon labels."""
 
 
 def _is_trigger(text: str) -> bool:
-    mention_trigger = env("THREADS_REPLY_MENTION", THREADS_REPLY_MENTION).strip()
-    body = str(text or "")
-    return (
-        THREADS_REPLY_TRIGGER.casefold() in body.casefold()
-        or bool(mention_trigger and mention_trigger.casefold() in body.casefold())
+    return _identity_is_trigger(
+        text,
+        phrase=reply_trigger_phrase("threads"),
+        mention=mention_trigger("THREADS_USERNAME"),
     )
 
 
