@@ -387,7 +387,38 @@ def _append_reply_log(event: dict) -> None:
         pass
 
 
-def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = False, memory_kind: str = "memory", research_context: str = "", image_prompt: str = "") -> str:
+def _threads_memory_context(text: str, memorize) -> str:
+    """Recall a few relevant long-term memories for the reply prompt.
+
+    Empty when disabled, unavailable, or nothing matches. Facts are hints
+    for understanding context only — the prompt forbids surfacing them
+    publicly, because stored memories may hold private details and Threads
+    replies are world-visible.
+    """
+    if memorize is None or env("THREADS_RECALL_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
+        return ""
+    query = str(text or "").strip()
+    if not query:
+        return ""
+    try:
+        hits = memorize.search(query, user_id=memorize.get_user_id(), limit=3) or []
+        lines = []
+        for hit in hits:
+            fact = _redact_sensitive_text(str(hit.get("memory") or "").strip())
+            if fact:
+                lines.append(f"- {fact[:280]}")
+        if not lines:
+            return ""
+        return (
+            "Long-term memories that may be relevant (private context — never mention, "
+            "quote, or attribute these openly; use them only to understand what the "
+            "person means):\n" + "\n".join(lines)
+        )[:1200]
+    except Exception:
+        return ""
+
+
+def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = False, memory_kind: str = "memory", research_context: str = "", image_prompt: str = "", memory_context: str = "") -> str:
     social = _redact_sensitive_text(_load_text(env("SOCIAL_PERSONA_PATH", "persona/SOCIAL.md")))
     language = _reply_language(reply.get("text") or "")
     memory_instruction = (
@@ -432,6 +463,7 @@ def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = Fal
 
     context = "\n".join(context_lines)
     research_section = f"\n{research_context}\n" if research_context else ""
+    memory_section = f"\n<memory_context>\n{memory_context}\n</memory_context>\n" if memory_context else ""
     image_section = (
         f"\nYou have just generated and attached an image for this person based on this scene: <scene>{image_prompt}</scene>. "
         "Acknowledge your drawing naturally in your own voice; do not say you cannot send images.\n"
@@ -443,7 +475,7 @@ def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = Fal
 
 Conversation context:
 {context}
-{research_section}{image_section}
+{research_section}{memory_section}{image_section}
 Required reply language: {language}.
 {memory_instruction}
 
@@ -725,10 +757,11 @@ def monitor_threads_replies(memorize=None) -> dict:
             try:
                 memory_saved, memory_kind = _save_requested_memory(root_reply, memorize, [root, *replies])
                 research_context = _threads_research_context(root_reply.get("text") or "")
+                recall_context = _threads_memory_context(root_reply.get("text") or "", memorize)
                 image_prompt = _threads_image_request(root_reply.get("text") or "")
                 if image_prompt:
                     image_path = _generate_reply_image(image_prompt)
-                reply_text = _infer_reply(root_reply, [root, *replies], memory_saved, memory_kind, research_context, image_prompt if image_path else "")
+                reply_text = _infer_reply(root_reply, [root, *replies], memory_saved, memory_kind, research_context, image_prompt if image_path else "", recall_context)
             except Exception as exc:
                 _cleanup_temp_image(image_path)
                 errors.append({"post_id": post_id, "stage": "inference", "error": str(exc)})
@@ -787,10 +820,11 @@ def monitor_threads_replies(memorize=None) -> dict:
                 memory_context = _threads_previous_context(reply, token) or replies
                 memory_saved, memory_kind = _save_requested_memory(reply, memorize, memory_context)
                 research_context = _threads_research_context(reply.get("text") or "")
+                recall_context = _threads_memory_context(reply.get("text") or "", memorize)
                 image_prompt = _threads_image_request(reply.get("text") or "")
                 if image_prompt:
                     image_path = _generate_reply_image(image_prompt)
-                reply_text = _infer_reply(reply, replies, memory_saved, memory_kind, research_context, image_prompt if image_path else "")
+                reply_text = _infer_reply(reply, replies, memory_saved, memory_kind, research_context, image_prompt if image_path else "", recall_context)
             except Exception as exc:
                 _cleanup_temp_image(image_path)
                 errors.append({"reply_id": reply_id, "stage": "inference", "error": str(exc)})
@@ -861,10 +895,11 @@ def monitor_threads_replies(memorize=None) -> dict:
                 try:
                     memory_saved, memory_kind = _save_requested_memory(mention, memorize, [mention, *context])
                     research_context = _threads_research_context(mention.get("text") or "")
+                    recall_context = _threads_memory_context(mention.get("text") or "", memorize)
                     image_prompt = _threads_image_request(mention.get("text") or "")
                     if image_prompt:
                         image_path = _generate_reply_image(image_prompt)
-                    reply_text = _infer_reply(mention, [mention, *context], memory_saved, memory_kind, research_context, image_prompt if image_path else "")
+                    reply_text = _infer_reply(mention, [mention, *context], memory_saved, memory_kind, research_context, image_prompt if image_path else "", recall_context)
                 except Exception as exc:
                     _cleanup_temp_image(image_path)
                     errors.append({"reply_id": mention_id, "stage": "inference", "error": str(exc)})

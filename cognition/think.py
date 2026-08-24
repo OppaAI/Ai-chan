@@ -479,7 +479,6 @@ class AikoThink:
             state_obj.record_activity(os.getenv("AIKO_ACTIVITY", ""))
             state_obj.continuous_tick()
             state_obj.persist()
-            state_obj.persist()
             state = state_obj.context(user_input)
             if state:
                 base += "\n\n" + state
@@ -516,7 +515,6 @@ class AikoThink:
             priming = state_obj.priming_context(user_input)
             if priming:
                 base += "\n\n" + priming
-            base += "\n\n" + state_obj.subconscious_guidance()
         except Exception:
             pass
         return base + _conditional_persona_blocks(user_input)
