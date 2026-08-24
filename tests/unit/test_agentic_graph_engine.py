@@ -222,6 +222,26 @@ class TestPlanScoring:
         score = _score_plan(plan, "research anything", ["research"])
         assert score == 6  # 3 (trigger) + 3 (capability)
 
+    def test_requires_any_is_a_hard_gate(self):
+        """A playbook whose requires_any tokens never appear must be ineligible,
+        even when keyword triggers and capability bonuses would otherwise win."""
+        plan = {
+            "triggers": ["internet"],
+            "requires_any": ["job", "jobs", "hiring", "career"],
+            "capabilities": ["job_hunt"],
+        }
+        score = _score_plan(plan, "check internet and find out what PNE is", ["job_hunt"])
+        assert score == 0
+
+    def test_requires_any_gate_passes_when_token_present(self):
+        plan = {
+            "triggers": ["internet"],
+            "requires_any": ["job", "jobs", "hiring", "career"],
+            "capabilities": ["job_hunt"],
+        }
+        # 3 (trigger) + 1 (requires_any) + 3 (capability) = 7
+        assert _score_plan(plan, "check internet for job postings", ["job_hunt"]) == 7
+
     def test_semantic_match_with_embedder(self):
         plan = {
             "triggers": ["research"],

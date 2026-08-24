@@ -145,3 +145,29 @@ def test_quaternary_llm_classifier_allows_greeting_label():
     prompt = think._client.chat.completions.last_messages[0]["content"]
     assert "Labels: [greeting, agentic, webchat, chat]" in prompt
     assert "Label: greeting" in prompt
+
+
+def test_ambiguous_semantic_scores_fall_back_to_quaternary_tiebreak(monkeypatch):
+    """Webchat above threshold but inside the gap must be resolved by the
+    quaternary LLM classifier — webchat stays reachable (the old binary
+    agentic-or-chat tie-break collapsed it to localchat)."""
+    think = _bare_think(FakeEmbedder())
+    monkeypatch.setenv("ROUTE_WEBCHAT_THRESHOLD", "0.60")
+    monkeypatch.setattr(think_module, "_SEMANTIC_ROUTE_MIN_GAP", 0.05)
+    monkeypatch.setattr(
+        think, "_semantic_example_vectors",
+        lambda examples, instruct: (["webchat", "agentic"], np.zeros((2, 2), dtype=np.float32)),
+    )
+    monkeypatch.setattr(
+        think_module.reason, "label_scores_topk",
+        lambda *a, **kw: {"webchat": 0.65, "agentic": 0.63, "localchat": 0.10},
+    )
+    tiebreak_calls = []
+    monkeypatch.setattr(
+        think, "_classify_quaternary_intent_llm",
+        lambda text, allow_agentic=True: tiebreak_calls.append(text) or "webchat",
+    )
+
+    intent, _ = think._route_intent("what does PNE stand for")
+    assert tiebreak_calls == ["what does PNE stand for"]
+    assert intent == "webchat"
