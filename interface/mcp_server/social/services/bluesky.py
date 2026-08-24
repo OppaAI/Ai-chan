@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -318,17 +319,35 @@ def monitor_bluesky_replies(memorize=None) -> dict:
     errors: list[dict] = []
 
     try:
-        try:
-            notif_resp = client.app.bsky.notification.list_notifications(
-                params={"limit": 50, "reasons": ["mention", "reply", "quote"]}
-            )
-        except TypeError:
-            notif_resp = client.app.bsky.notification.list_notifications(params={"limit": 50})
-        notifications = list(getattr(notif_resp, "notifications", None) or [])
+        notifications = []
+        cursor = None
+        max_pages = int(env("BLUESKY_NOTIFICATION_MAX_PAGES", "3"))
+        for page_num in range(max_pages):
+            try:
+                params = {"limit": 50}
+                if cursor:
+                    params["cursor"] = cursor
+                try:
+                    notif_resp = client.app.bsky.notification.list_notifications(
+                        params={**params, "reasons": ["mention", "reply", "quote"]}
+                    )
+                except TypeError:
+                    notif_resp = client.app.bsky.notification.list_notifications(params=params)
+                page_notifs = list(getattr(notif_resp, "notifications", None) or [])
+                notifications.extend(page_notifs)
+                cursor = str(getattr(notif_resp, "cursor", None) or "")
+                if not cursor or not page_notifs:
+                    break
+            except Exception:
+                break
     except Exception as e:
         return {"ok": False, "provider": "bluesky", "stage": "list_notifications", "error": str(e)}
 
     own = _bluesky_handle().casefold()
+    worker_id = f"{os.getpid()}-{threading.get_ident()}"
+
+    db.cleanup_stale_bluesky_claims(max_age_seconds=300)
+
     for notif in notifications:
         reply = _notif_to_reply(notif)
         if not reply:
@@ -357,43 +376,54 @@ def monitor_bluesky_replies(memorize=None) -> dict:
             _beep()
             beeped = True
 
-        context = _thread_context(client, reply_id) or [reply]
+        if not db.claim_bluesky_reply(reply_id, worker_id):
+            continue
+
         try:
-            reply_text = _infer_reply(reply, context)
-        except Exception as exc:
-            errors.append({"reply_id": reply_id, "stage": "inference", "error": str(exc)})
-            continue
-
-        parent_cid = str(reply.get("cid") or "")
-        if not parent_cid:
+            context = _thread_context(client, reply_id) or [reply]
             try:
-                posts = client.get_posts([reply_id])
-                posts_list = getattr(posts, "posts", None) or []
-                if posts_list:
-                    parent_cid = str(getattr(posts_list[0], "cid", "") or "")
-            except Exception:
-                pass
-        if not parent_cid:
-            errors.append({"reply_id": reply_id, "stage": "publish", "error": "missing parent cid"})
-            continue
+                reply_text = _infer_reply(reply, context)
+            except Exception as exc:
+                errors.append({"reply_id": reply_id, "stage": "inference", "error": str(exc)})
+                db.release_bluesky_reply_claim(reply_id, success=False)
+                continue
 
-        result = _post_reply(client, reply_text, reply_id, parent_cid)
-        if result.get("ok"):
-            response_uri = str(result.get("uri") or "")
-            db.mark_processed_bluesky_reply(reply_id, reply_id, response_uri)
-            if response_uri:
-                db.mark_processed_bluesky_reply(response_uri, reply_id)
-            _append_log(
-                {
-                    "kind": "aiko_reply",
-                    "reply_id": response_uri,
-                    "in_reply_to": reply_id,
-                    "text": reply_text,
-                }
-            )
-            answered += 1
-        else:
-            errors.append({"reply_id": reply_id, **{k: v for k, v in result.items() if k != "ok"}})
+            parent_cid = str(reply.get("cid") or "")
+            if not parent_cid:
+                try:
+                    posts = client.get_posts([reply_id])
+                    posts_list = getattr(posts, "posts", None) or []
+                    if posts_list:
+                        parent_cid = str(getattr(posts_list[0], "cid", "") or "")
+                except Exception:
+                    pass
+            if not parent_cid:
+                errors.append({"reply_id": reply_id, "stage": "publish", "error": "missing parent cid"})
+                db.release_bluesky_reply_claim(reply_id, success=False)
+                continue
+
+            result = _post_reply(client, reply_text, reply_id, parent_cid)
+            if result.get("ok"):
+                response_uri = str(result.get("uri") or "")
+                db.mark_processed_bluesky_reply(reply_id, reply_id, response_uri)
+                if response_uri:
+                    db.mark_processed_bluesky_reply(response_uri, reply_id)
+                db.release_bluesky_reply_claim(reply_id, success=True)
+                _append_log(
+                    {
+                        "kind": "aiko_reply",
+                        "reply_id": response_uri,
+                        "in_reply_to": reply_id,
+                        "text": reply_text,
+                    }
+                )
+                answered += 1
+            else:
+                errors.append({"reply_id": reply_id, **{k: v for k, v in result.items() if k != "ok"}})
+                db.release_bluesky_reply_claim(reply_id, success=False)
+        except Exception as exc:
+            errors.append({"reply_id": reply_id, "stage": "unexpected", "error": str(exc)})
+            db.release_bluesky_reply_claim(reply_id, success=False)
 
     return {
         "ok": not errors,

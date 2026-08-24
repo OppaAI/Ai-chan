@@ -134,10 +134,17 @@ def start_bluesky_monitor_daemon(interval_seconds: int | None = None) -> threadi
         )
         return None
 
-    interval = interval_seconds or max(
-        60,
-        int(os.getenv("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL))),
-    )
+    try:
+        raw = os.getenv("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL))
+        parsed = int(raw)
+        interval = interval_seconds or max(60, parsed)
+    except ValueError:
+        log.warning(
+            "[bluesky_daemon] Invalid BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS=%r, using default %ds",
+            os.getenv("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS"),
+            _DEFAULT_INTERVAL,
+        )
+        interval = interval_seconds or _DEFAULT_INTERVAL
 
     _BSKY_STOP_EVENT.clear()
     thread = threading.Thread(

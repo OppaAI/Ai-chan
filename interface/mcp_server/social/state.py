@@ -136,6 +136,13 @@ class MCPDatabase:
                 logged_at REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS bluesky_reply_claims (
+                reply_id TEXT PRIMARY KEY,
+                claimed_at REAL NOT NULL,
+                status TEXT NOT NULL,
+                worker_id TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS tool_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tool TEXT NOT NULL,
@@ -345,6 +352,41 @@ class MCPDatabase:
         )
         self._commit()
 
+    def claim_bluesky_reply(self, reply_id: str, worker_id: str = "") -> bool:
+        """Atomically claim a reply for processing. Returns True if claimed, False if already claimed."""
+        try:
+            self._conn.execute(
+                "INSERT INTO bluesky_reply_claims (reply_id, claimed_at, status, worker_id) VALUES (?, ?, ?, ?)",
+                (str(reply_id), time.time(), "in_progress", worker_id),
+            )
+            self._commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def release_bluesky_reply_claim(self, reply_id: str, success: bool = False) -> None:
+        """Release or complete a claim. If success=True, marks as completed; if False, deletes for retry."""
+        if success:
+            self._conn.execute(
+                "UPDATE bluesky_reply_claims SET status = ?, claimed_at = ? WHERE reply_id = ?",
+                ("completed", time.time(), str(reply_id)),
+            )
+        else:
+            self._conn.execute(
+                "DELETE FROM bluesky_reply_claims WHERE reply_id = ?",
+                (str(reply_id),),
+            )
+        self._commit()
+
+    def cleanup_stale_bluesky_claims(self, max_age_seconds: float = 300) -> None:
+        """Remove claims older than max_age_seconds that are still in_progress (stale workers)."""
+        cutoff = time.time() - max_age_seconds
+        self._conn.execute(
+            "DELETE FROM bluesky_reply_claims WHERE status = ? AND claimed_at < ?",
+            ("in_progress", cutoff),
+        )
+        self._commit()
+
     def log_tool_call(self, tool: str, arguments: dict, result: dict, duration_ms: float):
         self._conn.execute(
             "INSERT INTO tool_log (tool, arguments, result, duration_ms, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -357,6 +399,8 @@ class MCPDatabase:
         cutoff = time.time() - 86400 * 30
         self._conn.execute("DELETE FROM tool_log WHERE created_at < ?", (cutoff,))
         self._conn.execute("DELETE FROM access_tokens WHERE expires_at < ?", (time.time(),))
+        self._conn.execute("DELETE FROM bluesky_reply_claims WHERE status = ? AND claimed_at < ?", ("completed", cutoff))
+        self.cleanup_stale_bluesky_claims(max_age_seconds=300)
         self._commit()
 
     def close(self):
