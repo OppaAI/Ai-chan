@@ -135,6 +135,40 @@ def _save_requested_memory(reply: dict, memorize, context: list[dict] | None = N
         return False, kind
 
 
+def _save_interaction_memory(reply: dict, reply_text: str, memorize) -> bool:
+    """Store an owner-account triggered exchange as conversational memory.
+
+    Every triggered comment from the owner account plus Aiko's posted reply
+    goes through the normal fact-extraction write path, so daily life shared
+    on Threads (outings, plans, questions) survives into long-term memory
+    instead of living only in the reply log archive.
+    """
+    if memorize is None or env("THREADS_INTERACTION_MEMORY_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    author = str(reply.get("username") or "").lstrip("@").casefold()
+    owner = env("THREADS_USERNAME", THREADS_REPLY_MENTION.lstrip("@")).lstrip("@").casefold()
+    if not author or author != owner:
+        return False
+    comment = _redact_sensitive_text(str(reply.get("text") or "").strip())
+    response = _redact_sensitive_text(str(reply_text or "").strip())
+    if not comment or not response or _contains_sensitive_value(comment) or _contains_sensitive_value(response):
+        return False
+    try:
+        timestamp = str(reply.get("timestamp") or "")
+        prefix = f"[Threads {timestamp[:10]}] " if timestamp else "[Threads] "
+        memorize.add(
+            [
+                {"role": "user", "content": f"{prefix}{memorize.get_display_name()} said: {comment[:2000]}"},
+                {"role": "assistant", "content": f"Aiko replied: {response[:2000]}"},
+            ],
+            user_id=memorize.get_user_id(),
+            display_name=memorize.get_display_name(),
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _beep_on_trigger() -> None:
     if env("THREADS_REPLY_BEEP_ENABLED", "1").strip().lower() not in {"1", "true", "yes", "on"}:
         return
@@ -710,6 +744,7 @@ def monitor_threads_replies(memorize=None) -> dict:
                     db.mark_processed_threads_reply(root_key, post_id, response_id)
                     if response_id:
                         db.mark_processed_threads_reply(response_id, post_id)
+                    interaction_saved = _save_interaction_memory(root_reply, reply_text, memorize)
                     log_event = {
                         "kind": "aiko_reply",
                         "post_id": post_id,
@@ -719,6 +754,8 @@ def monitor_threads_replies(memorize=None) -> dict:
                     }
                     if image_prompt:
                         log_event.update({"image_generated": True, "image_prompt": image_prompt})
+                    if interaction_saved:
+                        log_event["interaction_memory"] = True
                     _append_reply_log(log_event)
                     answered += 1
                 else:
@@ -767,6 +804,7 @@ def monitor_threads_replies(memorize=None) -> dict:
             if result.get("ok"):
                 response_id = str(result.get("response_id") or "")
                 db.mark_processed_threads_reply(reply_id, post_id, response_id)
+                interaction_saved = _save_interaction_memory(reply, reply_text, memorize)
                 log_event = {
                     "kind": "aiko_reply",
                     "post_id": post_id,
@@ -776,6 +814,8 @@ def monitor_threads_replies(memorize=None) -> dict:
                 }
                 if image_prompt:
                     log_event.update({"image_generated": True, "image_prompt": image_prompt})
+                if interaction_saved:
+                    log_event["interaction_memory"] = True
                 _append_reply_log(log_event)
                 answered += 1
             else:
@@ -840,6 +880,7 @@ def monitor_threads_replies(memorize=None) -> dict:
                     db.mark_processed_threads_reply(mention_id, mention_id, response_id)
                     if response_id:
                         db.mark_processed_threads_reply(response_id, mention_id)
+                    interaction_saved = _save_interaction_memory(mention, reply_text, memorize)
                     log_event = {
                         "kind": "aiko_reply",
                         "post_id": mention_id,
@@ -849,6 +890,8 @@ def monitor_threads_replies(memorize=None) -> dict:
                     }
                     if image_prompt:
                         log_event.update({"image_generated": True, "image_prompt": image_prompt})
+                    if interaction_saved:
+                        log_event["interaction_memory"] = True
                     _append_reply_log(log_event)
                     answered += 1
                 else:

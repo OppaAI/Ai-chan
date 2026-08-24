@@ -933,6 +933,14 @@ def _score_plan(plan: dict[str, Any], prompt: str, cap_ids: list[str] | None = N
     triggers = [str(t).casefold() for t in plan.get("triggers", [])]
     required = [str(t).casefold() for t in plan.get("requires_any", [])]
 
+    # Hard eligibility: a playbook declaring requires_any must see at least
+    # one of those tokens in the prompt. Without this, incidental semantic
+    # (+1 at only 0.35 cosine) and capability (+3) bonuses could select it
+    # for an unrelated request (e.g. gen_job_post winning "check internet
+    # and find out what PNE is", which mentions nothing job-related).
+    if required and not any(t in text for t in required):
+        return 0
+
     # A plan is only eligible when a REAL trigger matched (keyword or semantic).
     # requires_any / capability bonuses alone ("job", "architecture", "posting"
     # appearing incidentally in an unrelated sentence) must NOT select a graph.

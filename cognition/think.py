@@ -159,6 +159,16 @@ _SEMANTIC_ROUTE_MIN_GAP = float(os.getenv("ROUTE_MIN_GAP", "0.12"))
 _SEMANTIC_LABEL_TOP_K = int(os.getenv("ROUTE_LABEL_TOP_K", "3"))
 _ROUTE_VECTOR_CACHE_DIR = os.getenv("ROUTE_VECTOR_CACHE_DIR", "route_vectors")
 
+# Last-resort websearch net for plain chat: when a message explicitly asks
+# for live internet info but semantic routing classified it as localchat,
+# run one lightweight search and offer the results to the persona prompt.
+# Mirrors the Threads monitor's _threads_research_context gate.
+_CHAT_WEBSEARCH_NET_ENABLED = os.getenv("CHAT_WEBSEARCH_NET", "1").lower() in {"1", "true", "yes", "on"}
+_WEBSEARCH_HINT_RE = re.compile(
+    r"\b(?:internet|web|online|search|look\s+up|verify|current)\b",
+    re.IGNORECASE,
+)
+
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "SOUL.md"
 _LOCAL_KNOWLEDGE_RE = re.compile(
     r"\b("
@@ -770,14 +780,15 @@ class AikoThink:
                 return "localchat", query_vec
             if _ROUTE_MODE == "llm":
                 return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), query_vec
-            # "semantic" mode's original binary tie-break. If agentic is
-            # off, there's nothing left for this binary check to decide
-            # (it only ever distinguishes agentic vs chat), so skip the
-            # LLM call entirely rather than spend it on a moot question.
-            if not _AGENTIC_MODE_ON:
-                return "localchat", query_vec
-            llm_label = self._classify_agent_intent(user_input)
-            return ("agentic" if llm_label == "agentic" else "localchat"), query_vec
+            # "semantic" mode tie-break: use the same quaternary classifier
+            # as "llm" mode so webchat stays reachable when embeddings are
+            # torn between labels. The old binary agentic-or-chat check
+            # structurally collapsed every ambiguous webchat candidate into
+            # localchat, where no search code exists.
+            llm_label = self._classify_quaternary_intent_llm(
+                user_input, allow_agentic=_AGENTIC_MODE_ON,
+            )
+            return llm_label, query_vec
 
         if _is_greeting_only(user_input):
             return "greeting", query_vec
@@ -838,50 +849,6 @@ class AikoThink:
             default_dir=_ROUTE_VECTOR_CACHE_DIR,
             per_user=True,
         )
-
-    def _classify_agent_intent(self, user_input: str, skip_regex: bool = False) -> str:
-        """Ask the local model for a compact binary route label when semantics are ambiguous."""
-        if not skip_regex and _AGENTIC_ROUTE_RE.search(user_input):
-            return "agentic"            
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._router_model,
-                messages=[{"role": "user", "content": (
-                    f"Message: {user_input!r}\n\n"
-                    "Output only the route label. No explanation.\n"
-                    "Labels: [agentic, chat]\n\n"
-                    "Message: 'set a reminder for 9pm'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'write an email to my landlord'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'debug why asyncio.run() hangs'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'make a plan to learn Japanese'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'search for latest llama.cpp release and summarize it'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'compare ollama vs llama.cpp and recommend one'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'open SOUL.md and show the persona block'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'continue working on the reflection script'\n"
-                    "Label: agentic\n\n"
-                    "Message: 'what do you think about minimalism'\n"
-                    "Label: chat\n\n"
-                    "Message: 'explain semaphores from memory'\n"
-                    "Label: chat\n\n"
-                    "Message: 'is it weird that I find debugging more satisfying than writing features'\n"
-                    "Label: chat\n\n"
-                    "Label:"
-                )}],
-                stream=False, max_tokens=6, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
-            )
-            label = (resp.choices[0].message.content or "chat").strip().lower()
-            label = re.sub(r"[^a-z_].*$", "", label)
-            return label if label in {"agentic", "chat"} else "chat"
-        except Exception as e:
-            log.warning("Intent routing failed: %s", e)
-            return "chat"
 
     def _intent_llm_prompt_parts(self, *, allow_agentic: bool, include_greeting: bool) -> tuple[str, str, set[str]]:
         labels = []
@@ -1252,7 +1219,39 @@ class AikoThink:
 
     # ── proactive idle check-in loop ──────────────────────────────────────────
 
-    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None, *, skip_memory: bool = False, store_turn: bool = True, query_vec: np.ndarray | None = None) -> str:
+    def _websearch_net_block(self, query: str, token_callback=None) -> str:
+        """One-shot SearXNG lookup for explicit internet asks routed to plain chat.
+
+        Returns an empty string when search is unavailable or finds nothing,
+        so the normal localchat turn proceeds unchanged.
+        """
+        try:
+            max_results = int(os.getenv("SEARXNG_MAX_RESULTS", "3"))
+            from agentic.toolkit.websearch import web_search as _web_search
+            results, err = _web_search(query, max_results)
+            if err:
+                log.warning("[chat] websearch net error: %s", err)
+                return ""
+            lines: list[str] = []
+            sources: list[dict] = []
+            for i, result in enumerate(results or [], 1):
+                title = (result.get("title") or "").strip()
+                url = (result.get("url") or "").strip()
+                content = (result.get("content") or "").strip()
+                if not url:
+                    continue
+                lines.append(f"{i}. {title}\n   {url}\n   {content}")
+                sources.append({"title": title or url, "url": url})
+            if not lines:
+                return ""
+            if token_callback:
+                token_callback("__SOURCES__:" + json.dumps(sources, ensure_ascii=False) + "\n")
+            return "\n\n".join(lines)
+        except Exception as e:
+            log.warning("[chat] websearch net failed: %s", e)
+            return ""
+
+    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None, *, skip_memory: bool = False, store_turn: bool = True, query_vec: np.ndarray | None = None, websearch_net: bool = True) -> str:
         """Standard chat: persona plus optional memory/KB context."""
         speak = self._get_speak()
         if speak and speak.is_playing():
@@ -1312,6 +1311,27 @@ class AikoThink:
                 system = f"{system}\n\n{wiki_context}"
             except Exception as e:
                 log.error("Local wiki-knowledge lookup failed: %s", e)
+
+        # Last-resort websearch net: routing can classify an explicit
+        # ask-the-internet message as localchat when embeddings miss the
+        # phrasing. When the message clearly requests live information,
+        # run one search and offer the results without forcing the reply
+        # to be web-only (unlike webchat, this stays conversational).
+        if (
+            not skip_memory
+            and websearch_net
+            and _CHAT_WEBSEARCH_NET_ENABLED
+            and _WEBSEARCH_HINT_RE.search(user_input)
+        ):
+            net_context = self._websearch_net_block(user_input, token_callback)
+            if net_context:
+                system = (
+                    f"{system}\n\n"
+                    f"<search_results query='{user_input}'>\n"
+                    f"Live web results — use them when they are relevant; do not invent time-sensitive facts:\n\n"
+                    f"{net_context}\n"
+                    f"</search_results>"
+                )
         
         # Build messages
         llm_prompt = user_input
@@ -1359,7 +1379,9 @@ class AikoThink:
             msg = f"[no results for: {query}]"
             if token_callback: token_callback(msg)
             return msg
-        return self.chat(context, token_callback=token_callback, _skip_search=True, _history_label=query)
+        # websearch_net=False — this turn already carries fetched results;
+        # re-triggering the net on the context blob would double-search.
+        return self.chat(context, token_callback=token_callback, _skip_search=True, _history_label=query, websearch_net=False)
 
     def reset_context(self) -> None:
         with self._history_lock:

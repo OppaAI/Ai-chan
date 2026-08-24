@@ -37,6 +37,7 @@ ROUTE_WEBCHAT_THRESHOLD: "0.60"   # Route to webchat if score > this (else local
 ROUTE_LABEL_TOP_K: "3"  # Average each label strongest N examples; higher is smoother but less sharp.
 ROUTE_MIN_GAP: "0.025"  # Required score gap between best and second route labels.
 ROUTER_MODEL: ""  # Small model for LLM routing fallback; only used when ROUTE_MODE needs LLM routing.
+CHAT_WEBSEARCH_NET: "1"  # Last-resort SearXNG lookup when a localchat message explicitly asks for internet info (internet/web/search/look up/verify/current).
 
 # Reflect config
 #
