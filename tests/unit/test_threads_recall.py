@@ -62,6 +62,41 @@ def test_recall_survives_search_failure():
     assert threads._threads_memory_context("hello", Broken()) == ""
 
 
+def _infer_with_client(monkeypatch, capture):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("SOCIAL_PERSONA_PATH", "")
+
+    def fake_create(**kwargs):
+        capture["prompt"] = kwargs["messages"][-1]["content"]
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="🙂 ok."))])
+
+    class C:
+        chat = SimpleNamespace(completions=SimpleNamespace(create=staticmethod(fake_create)))
+
+    monkeypatch.setattr(threads, "_get_llm_client", lambda: C())
+
+
+def test_infer_reply_binds_owner_identity(monkeypatch):
+    capture = {}
+    _infer_with_client(monkeypatch, capture)
+    reply = {"id": "1", "username": "oppa.ai.bot", "text": "what did we do at PNE?"}
+    out = threads._infer_reply(reply, [], memory_context="Long-term memories\n- OppaAI visited PNE with Aiko")
+    assert out == "🙂 ok."
+    prompt = capture["prompt"]
+    assert "is OppaAI — your owner" in prompt
+    assert "<memory_context>" in prompt
+    assert "visited PNE" in prompt
+
+
+def test_infer_reply_no_owner_binding_for_other_users(monkeypatch):
+    capture = {}
+    _infer_with_client(monkeypatch, capture)
+    reply = {"id": "2", "username": "random_visitor", "text": "hi who are you"}
+    threads._infer_reply(reply, [])
+    assert "your owner" not in capture["prompt"]
+
+
 def test_infer_reply_includes_memory_section(monkeypatch):
     from types import SimpleNamespace
 

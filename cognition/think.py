@@ -168,6 +168,27 @@ _WEBSEARCH_HINT_RE = re.compile(
     r"\b(?:internet|web|online|search|look\s+up|verify|current)\b",
     re.IGNORECASE,
 )
+# Personal-experience narration ("We arrived there at 11am by bus... I will
+# tell you more"). These turns need listening + memory writeback, not search;
+# routing can mislabel them webchat because prices/places embedding clusters.
+_SHARING_RE = re.compile(
+    r"\b(?:i|we)\s+(?:was|were|had|went|arrived|bought|paid|saw|ate|visited|rode|watched|walked|took)\b"
+    r"|\b(?:i|we)\s+did\b"
+    r"|\bi(?:'ll| will)\s+(?:tell|share|explain)\b"
+    r"|\blet me tell\b",
+    re.IGNORECASE,
+)
+
+
+def _is_personal_sharing(text: str) -> bool:
+    """True for first-person experience narration with no question and no
+    explicit internet request — these must not be answered from web results."""
+    body = str(text or "")
+    return (
+        "?" not in body
+        and not _WEBSEARCH_HINT_RE.search(body)
+        and bool(_SHARING_RE.search(body))
+    )
 
 _PERSONA_PATH = Path(__file__).resolve().parent.parent / "persona" / "SOUL.md"
 _LOCAL_KNOWLEDGE_RE = re.compile(
@@ -615,6 +636,28 @@ class AikoThink:
                 if not self._active_user_ids:
                     self._last_chat_time = time.time()
 
+    def _recall_query(self, user_input: str) -> str:
+        """Recall query enriched with the tail of recent conversation.
+
+        Pronouns ("we went there yesterday") carry no lexical or embedding
+        overlap with the memories that contain the antecedent, so searching
+        the raw input alone misses them. Folding the last exchange into the
+        query lets KNN/FTS find the row "there" points at.
+        """
+        try:
+            with self._history_lock:
+                recent = [
+                    str(m.get("content") or "")[:200]
+                    for m in self._history[-2:]
+                    if m.get("content")
+                ]
+        except Exception:
+            recent = []
+        tail = " ".join(reversed(recent)).strip()
+        if not tail:
+            return user_input
+        return f"{user_input}\n{tail}"[:600]
+
     def _fetch_memory_and_knowledge(
         self, user_input: str, query_vector: np.ndarray | None = None,
         mem_limit: int = MEMORY_RECALL_LIMIT, know_limit: int = KNOWLEDGE_RECALL_LIMIT,
@@ -638,9 +681,15 @@ class AikoThink:
             log.warning("[think] Memory unavailable — skipping memory/KB recall.")
             return [], ""
         embedder = memorize._mem._embedder
-        mem_future = CONTEXT_POOL.submit(memorize.search, user_input, limit=mem_limit, query_vector=query_vector)
+        # Enriched query resolves pronouns against recent turns; the passed
+        # query_vector embeds only the raw input, so it must be dropped when
+        # the text changed or KNN and FTS would score different queries.
+        recall_query = self._recall_query(user_input)
+        if recall_query != user_input:
+            query_vector = None
+        mem_future = CONTEXT_POOL.submit(memorize.search, recall_query, limit=mem_limit, query_vector=query_vector)
         know_future = CONTEXT_POOL.submit(
-            knowledge_context_for, user_input, limit=know_limit, max_chars=2000, embedder=embedder
+            knowledge_context_for, recall_query, limit=know_limit, max_chars=2000, embedder=embedder
         )
         try:
             memories = mem_future.result(timeout=MEMORY_RECALL_TIMEOUT)
@@ -1030,6 +1079,13 @@ class AikoThink:
               
     def webchat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Web-aware chat: web_search + optional webfetch fallback."""
+        # Guard: experience-sharing narration must never be answered from
+        # search results ("Answer ONLY using these results" would discard
+        # what the user just told us). Fall back to plain chat, which keeps
+        # memory recall and turn writeback intact.
+        if _is_personal_sharing(user_input):
+            log.info("[route] webchat override -> chat (personal sharing)")
+            return self.chat(user_input, token_callback=token_callback, mem_kb_future=mem_kb_future, query_vec=query_vec)
         speak = self._get_speak()
         if speak and speak.is_playing():
             speak.stop()

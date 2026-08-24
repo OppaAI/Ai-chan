@@ -171,3 +171,44 @@ def test_ambiguous_semantic_scores_fall_back_to_quaternary_tiebreak(monkeypatch)
     intent, _ = think._route_intent("what does PNE stand for")
     assert tiebreak_calls == ["what does PNE stand for"]
     assert intent == "webchat"
+
+
+def test_recall_query_resolves_pronouns_from_recent_history():
+    think = _bare_think()
+    think._history_lock = threading.Lock()
+    think._history = [
+        {"role": "user", "content": "Do you know what PNE is?"},
+        {"role": "assistant", "content": "PNE? You mean Playland?"},
+    ]
+    q = think._recall_query("We went there yesterday together. Did you enjoy?")
+    assert "We went there yesterday" in q
+    assert "Playland" in q  # antecedent context folded in
+
+
+def test_recall_query_is_plain_input_with_empty_history():
+    think = _bare_think()
+    assert think._recall_query("hello there") == "hello there"
+
+
+def test_fetch_memory_uses_enriched_query(monkeypatch):
+    think = _bare_think()
+    think._history_lock = threading.Lock()
+    think._history = [
+        {"role": "user", "content": "Do you know what PNE is?"},
+        {"role": "assistant", "content": "PNE? Playland."},
+    ]
+    captured = {}
+
+    class FakeMemorizeWrapper:
+        _mem = SimpleNamespace(_embedder=None)
+
+        def search(self, query, limit=3, query_vector=None, **kw):
+            captured["query"] = query
+            return []
+
+    think._memorize = FakeMemorizeWrapper()
+    monkeypatch.setattr(think_module, "knowledge_context_for", lambda *a, **kw: "")
+
+    memories, kb = think._fetch_memory_and_knowledge("We went there yesterday. Did you enjoy?")
+    assert (memories, kb) == ([], "")
+    assert "PNE? Playland." in captured["query"]

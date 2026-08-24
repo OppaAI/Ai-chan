@@ -464,6 +464,17 @@ def _infer_reply(reply: dict, conversation: list[dict], memory_saved: bool = Fal
     context = "\n".join(context_lines)
     research_section = f"\n{research_context}\n" if research_context else ""
     memory_section = f"\n<memory_context>\n{memory_context}\n</memory_context>\n" if memory_context else ""
+    # Identity binding: only the owner account speaks for your person.
+    # Without this line a small model never connects the raw handle to
+    # "my owner" — SOCIAL.md names OppaAI but not this username.
+    author = str(reply.get("username") or "").lstrip("@").casefold()
+    owner = env("THREADS_USERNAME", "oppa.ai.bot").lstrip("@").casefold()
+    identity_section = (
+        f"\nNote: {reply.get('username')} is {env('THREADS_OWNER_NAME', 'OppaAI')} — your owner, "
+        "the person who builds you. You know him; speak with that familiarity, "
+        "while keeping the reply suitable for a public thread.\n"
+        if author and author == owner else ""
+    )
     image_section = (
         f"\nYou have just generated and attached an image for this person based on this scene: <scene>{image_prompt}</scene>. "
         "Acknowledge your drawing naturally in your own voice; do not say you cannot send images.\n"
@@ -478,8 +489,8 @@ Conversation context:
 {research_section}{memory_section}{image_section}
 Required reply language: {language}.
 {memory_instruction}
-
 The triggering comment is from {reply.get('username') or 'a user'}:
+{identity_section}
 <untrusted_comment>
 {_redact_sensitive_text(str(reply.get('text') or ''))}
 </untrusted_comment>
