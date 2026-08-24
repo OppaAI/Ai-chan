@@ -73,8 +73,6 @@ class MCPDatabase:
         self._local.conn = value
 
     def _connect(self):
-        # FastMCP may execute tools on worker threads. Keep one connection
-        # per thread so SQLite never sees a connection cross its owner thread.
         conn = sqlite3.connect(str(self._path))
         with self._connections_lock:
             self._connections.append(conn)
@@ -126,6 +124,25 @@ class MCPDatabase:
                 logged_at REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS bluesky_processed_replies (
+                reply_id TEXT PRIMARY KEY,
+                post_id TEXT NOT NULL,
+                processed_at REAL NOT NULL,
+                response_id TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS bluesky_logged_replies (
+                reply_id TEXT PRIMARY KEY,
+                logged_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS bluesky_reply_claims (
+                reply_id TEXT PRIMARY KEY,
+                claimed_at REAL NOT NULL,
+                status TEXT NOT NULL,
+                worker_id TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS tool_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tool TEXT NOT NULL,
@@ -142,7 +159,6 @@ class MCPDatabase:
         self._clear_failed_post_cache()
 
     def _clear_failed_post_cache(self) -> None:
-        """Drop stale failed publish results after a service fix/restart."""
         rows = self._conn.execute(
             "SELECT request_hash, result FROM idempotency WHERE tool LIKE 'post_%'"
         ).fetchall()
@@ -160,13 +176,11 @@ class MCPDatabase:
             self._commit()
 
     def _commit(self) -> None:
-        """Commit unless inside a transaction() batch (caller commits once)."""
         if not self._in_transaction:
             self._conn.commit()
 
     @contextmanager
     def transaction(self) -> Iterator["MCPDatabase"]:
-        """Batch multiple writes into a single commit (one fsync per tool call)."""
         self._in_transaction = True
         ok = False
         try:
@@ -179,8 +193,6 @@ class MCPDatabase:
             self._in_transaction = False
             if ok:
                 self._conn.commit()
-
-    # ── Access token cache ────────────────────────────────────────────────
 
     def get_cached_token(self, service: str) -> str | None:
         row = self._conn.execute(
@@ -198,8 +210,6 @@ class MCPDatabase:
             (service, access_token, now + expires_in, now),
         )
         self._commit()
-
-    # ── Idempotency ───────────────────────────────────────────────────────
 
     def _request_hash(self, tool: str, arguments: dict) -> str:
         raw = f"{tool}:{json.dumps(arguments, sort_keys=True, default=str)}"
@@ -227,8 +237,6 @@ class MCPDatabase:
     def _clean_expired_idempotency(self):
         self._conn.execute("DELETE FROM idempotency WHERE expires_at <= ?", (time.time(),))
         self._commit()
-
-    # ── Rate limiting ──────────────────────────────────────────────────────
 
     def _period_key(self, unit: str = "hour") -> str:
         now = time.gmtime()
@@ -267,8 +275,6 @@ class MCPDatabase:
                 (service, period),
             )
         self._commit()
-
-    # ── Threads reply monitoring state ─────────────────────────────────────
 
     def remember_threads_post(self, post_id: str) -> None:
         if post_id:
@@ -315,7 +321,71 @@ class MCPDatabase:
         )
         self._commit()
 
-    # ── Tool log ───────────────────────────────────────────────────────────
+    def has_processed_bluesky_reply(self, reply_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM bluesky_processed_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_processed_bluesky_reply(
+        self, reply_id: str, post_id: str, response_id: str | None = None
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO bluesky_processed_replies "
+            "(reply_id, post_id, processed_at, response_id) VALUES (?, ?, ?, ?)",
+            (str(reply_id), str(post_id), time.time(), response_id),
+        )
+        self._commit()
+
+    def has_logged_bluesky_reply(self, reply_id: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM bluesky_logged_replies WHERE reply_id = ?",
+            (str(reply_id),),
+        ).fetchone()
+        return row is not None
+
+    def mark_logged_bluesky_reply(self, reply_id: str) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO bluesky_logged_replies (reply_id, logged_at) VALUES (?, ?)",
+            (str(reply_id), time.time()),
+        )
+        self._commit()
+
+    def claim_bluesky_reply(self, reply_id: str, worker_id: str = "") -> bool:
+        """Atomically claim a reply for processing. Returns True if claimed, False if already claimed."""
+        try:
+            self._conn.execute(
+                "INSERT INTO bluesky_reply_claims (reply_id, claimed_at, status, worker_id) VALUES (?, ?, ?, ?)",
+                (str(reply_id), time.time(), "in_progress", worker_id),
+            )
+            self._commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def release_bluesky_reply_claim(self, reply_id: str, success: bool = False) -> None:
+        """Release or complete a claim. If success=True, marks as completed; if False, deletes for retry."""
+        if success:
+            self._conn.execute(
+                "UPDATE bluesky_reply_claims SET status = ?, claimed_at = ? WHERE reply_id = ?",
+                ("completed", time.time(), str(reply_id)),
+            )
+        else:
+            self._conn.execute(
+                "DELETE FROM bluesky_reply_claims WHERE reply_id = ?",
+                (str(reply_id),),
+            )
+        self._commit()
+
+    def cleanup_stale_bluesky_claims(self, max_age_seconds: float = 300) -> None:
+        """Remove claims older than max_age_seconds that are still in_progress (stale workers)."""
+        cutoff = time.time() - max_age_seconds
+        self._conn.execute(
+            "DELETE FROM bluesky_reply_claims WHERE status = ? AND claimed_at < ?",
+            ("in_progress", cutoff),
+        )
+        self._commit()
 
     def log_tool_call(self, tool: str, arguments: dict, result: dict, duration_ms: float):
         self._conn.execute(
@@ -324,13 +394,13 @@ class MCPDatabase:
         )
         self._commit()
 
-    # ── Periodic cleanup ──────────────────────────────────────────────────
-
     def cleanup(self):
         self._clean_expired_idempotency()
-        cutoff = time.time() - 86400 * 30  # 30 days
+        cutoff = time.time() - 86400 * 30
         self._conn.execute("DELETE FROM tool_log WHERE created_at < ?", (cutoff,))
         self._conn.execute("DELETE FROM access_tokens WHERE expires_at < ?", (time.time(),))
+        self._conn.execute("DELETE FROM bluesky_reply_claims WHERE status = ? AND claimed_at < ?", ("completed", cutoff))
+        self.cleanup_stale_bluesky_claims(max_age_seconds=300)
         self._commit()
 
     def close(self):

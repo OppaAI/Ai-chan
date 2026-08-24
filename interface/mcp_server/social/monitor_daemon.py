@@ -1,43 +1,25 @@
 """
 interface/mcp_server/social/monitor_daemon.py
 
-Login-independent Threads reply monitor daemon.
+Login-independent social reply monitor daemons (Threads + Bluesky).
 
-Starts a background daemon thread that polls monitor_threads_replies()
-at a fixed interval, completely independent of the WebUI login gate.
-
-This solves the boot-ordering problem where the Threads poller only
-started after a user logged into the WebUI (because the scheduler is
-seeded inside AikoWakeup().boot(), which is deferred until first login).
+Starts background daemon threads that poll monitor_*_replies() at a fixed
+interval, completely independent of the WebUI login gate.
 
 Usage (called once from run_webui() before run_session()):
 
-    from interface.mcp_server.social.monitor_daemon import start_threads_monitor_daemon
+    from interface.mcp_server.social.monitor_daemon import (
+        start_threads_monitor_daemon,
+        start_bluesky_monitor_daemon,
+    )
     start_threads_monitor_daemon()
-
-The daemon:
-  - Only starts if THREADS_ACCESS_TOKEN and THREADS_USER_ID are set
-  - Runs as a daemon thread — auto-killed when the process exits
-  - Uses THREADS_REPLY_MONITOR_INTERVAL_SECONDS (default 180 s)
-  - Passes memorize=None — the monitor handles this gracefully; memory
-    features (pin/learn) won't work pre-login, but replies will
-  - Is idempotent: calling it twice won't start two threads
-  - Coexists safely with the scheduler's own threads_reply_monitor job
-    (post-login); has_processed_threads_reply() in the DB prevents
-    double-replies
-
-Env vars read:
-  THREADS_ACCESS_TOKEN              — required; skip if absent
-  THREADS_USER_ID                   — required; skip if absent
-  THREADS_REPLY_MONITOR_INTERVAL_SECONDS — default 180
-  THREADS_MONITOR_DAEMON_ENABLED    — set to 0/false to disable
+    start_bluesky_monitor_daemon()
 """
 
 from __future__ import annotations
 
 import os
 import threading
-import time
 
 from system.log import get_logger
 
@@ -45,6 +27,9 @@ log = get_logger(__name__)
 
 _DAEMON_THREAD: threading.Thread | None = None
 _STOP_EVENT = threading.Event()
+
+_BSKY_DAEMON_THREAD: threading.Thread | None = None
+_BSKY_STOP_EVENT = threading.Event()
 
 _DEFAULT_INTERVAL = 180  # seconds — same default as scheduler job
 
@@ -70,31 +55,17 @@ def _daemon_loop(interval: int) -> None:
 
 
 def start_threads_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
-    """Start the Threads reply monitor background daemon.
-
-    Safe to call multiple times — only one daemon thread will ever run.
-
-    Args:
-        interval_seconds: Poll interval in seconds. Defaults to
-            THREADS_REPLY_MONITOR_INTERVAL_SECONDS env var (default 180).
-
-    Returns:
-        The daemon Thread if started, or None if skipped (missing env vars
-        or explicitly disabled).
-    """
+    """Start the Threads reply monitor background daemon."""
     global _DAEMON_THREAD
 
-    # Already running — don't start a second thread.
     if _DAEMON_THREAD is not None and _DAEMON_THREAD.is_alive():
         log.debug("[threads_daemon] Already running, skipping duplicate start")
         return _DAEMON_THREAD
 
-    # Explicit opt-out.
     if os.getenv("THREADS_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
         log.info("[threads_daemon] Disabled via THREADS_MONITOR_DAEMON_ENABLED=0, skipping")
         return None
 
-    # Required credentials check — fail fast and silently if not configured.
     if not os.getenv("THREADS_ACCESS_TOKEN") or not os.getenv("THREADS_USER_ID"):
         log.info(
             "[threads_daemon] THREADS_ACCESS_TOKEN or THREADS_USER_ID not set — "
@@ -112,7 +83,7 @@ def start_threads_monitor_daemon(interval_seconds: int | None = None) -> threadi
         target=_daemon_loop,
         args=(interval,),
         name="threads-reply-monitor-daemon",
-        daemon=True,  # auto-killed when the main process exits
+        daemon=True,
     )
     thread.start()
     _DAEMON_THREAD = thread
@@ -120,9 +91,73 @@ def start_threads_monitor_daemon(interval_seconds: int | None = None) -> threadi
 
 
 def stop_threads_monitor_daemon() -> None:
-    """Signal the daemon to stop at the next sleep boundary.
-
-    Normally not needed — daemon threads die with the process. Exposed
-    for testing and graceful shutdown paths.
-    """
+    """Signal the Threads daemon to stop at the next sleep boundary."""
     _STOP_EVENT.set()
+
+
+def _bluesky_daemon_loop(interval: int) -> None:
+    log.info("[bluesky_daemon] Monitor started (interval=%ds)", interval)
+    while not _BSKY_STOP_EVENT.is_set():
+        try:
+            from interface.mcp_server.social.services.bluesky import monitor_bluesky_replies
+
+            result = monitor_bluesky_replies(memorize=None)
+            answered = result.get("answered", 0)
+            matched = result.get("matched", 0)
+            errors = result.get("errors", [])
+            if answered:
+                log.info("[bluesky_daemon] Answered %d / %d matched replies", answered, matched)
+            if errors:
+                log.warning("[bluesky_daemon] %d error(s): %s", len(errors), errors[:3])
+        except Exception:
+            log.exception("[bluesky_daemon] Unexpected error in monitor loop")
+        _BSKY_STOP_EVENT.wait(timeout=interval)
+    log.info("[bluesky_daemon] Monitor stopped")
+
+
+def start_bluesky_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
+    """Start the Bluesky reply monitor background daemon."""
+    global _BSKY_DAEMON_THREAD
+
+    if _BSKY_DAEMON_THREAD is not None and _BSKY_DAEMON_THREAD.is_alive():
+        log.debug("[bluesky_daemon] Already running, skipping duplicate start")
+        return _BSKY_DAEMON_THREAD
+
+    if os.getenv("BLUESKY_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+        log.info("[bluesky_daemon] Disabled via BLUESKY_MONITOR_DAEMON_ENABLED=0, skipping")
+        return None
+
+    if not os.getenv("BLUESKY_HANDLE") or not os.getenv("BLUESKY_APP_PASS"):
+        log.info(
+            "[bluesky_daemon] BLUESKY_HANDLE or BLUESKY_APP_PASS not set — "
+            "Bluesky monitor daemon will not start"
+        )
+        return None
+
+    try:
+        raw = os.getenv("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL))
+        parsed = int(raw)
+        interval = interval_seconds or max(60, parsed)
+    except ValueError:
+        log.warning(
+            "[bluesky_daemon] Invalid BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS=%r, using default %ds",
+            os.getenv("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS"),
+            _DEFAULT_INTERVAL,
+        )
+        interval = interval_seconds or _DEFAULT_INTERVAL
+
+    _BSKY_STOP_EVENT.clear()
+    thread = threading.Thread(
+        target=_bluesky_daemon_loop,
+        args=(interval,),
+        name="bluesky-reply-monitor-daemon",
+        daemon=True,
+    )
+    thread.start()
+    _BSKY_DAEMON_THREAD = thread
+    return thread
+
+
+def stop_bluesky_monitor_daemon() -> None:
+    """Signal the Bluesky daemon to stop at the next sleep boundary."""
+    _BSKY_STOP_EVENT.set()
