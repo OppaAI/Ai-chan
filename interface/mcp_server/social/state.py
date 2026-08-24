@@ -73,8 +73,6 @@ class MCPDatabase:
         self._local.conn = value
 
     def _connect(self):
-        # FastMCP may execute tools on worker threads. Keep one connection
-        # per thread so SQLite never sees a connection cross its owner thread.
         conn = sqlite3.connect(str(self._path))
         with self._connections_lock:
             self._connections.append(conn)
@@ -154,7 +152,6 @@ class MCPDatabase:
         self._clear_failed_post_cache()
 
     def _clear_failed_post_cache(self) -> None:
-        """Drop stale failed publish results after a service fix/restart."""
         rows = self._conn.execute(
             "SELECT request_hash, result FROM idempotency WHERE tool LIKE 'post_%'"
         ).fetchall()
@@ -172,13 +169,11 @@ class MCPDatabase:
             self._commit()
 
     def _commit(self) -> None:
-        """Commit unless inside a transaction() batch (caller commits once)."""
         if not self._in_transaction:
             self._conn.commit()
 
     @contextmanager
     def transaction(self) -> Iterator["MCPDatabase"]:
-        """Batch multiple writes into a single commit (one fsync per tool call)."""
         self._in_transaction = True
         ok = False
         try:
@@ -191,8 +186,6 @@ class MCPDatabase:
             self._in_transaction = False
             if ok:
                 self._conn.commit()
-
-    # ── Access token cache ────────────────────────────────────────────────
 
     def get_cached_token(self, service: str) -> str | None:
         row = self._conn.execute(
@@ -210,8 +203,6 @@ class MCPDatabase:
             (service, access_token, now + expires_in, now),
         )
         self._commit()
-
-    # ── Idempotency ───────────────────────────────────────────────────────
 
     def _request_hash(self, tool: str, arguments: dict) -> str:
         raw = f"{tool}:{json.dumps(arguments, sort_keys=True, default=str)}"
@@ -239,8 +230,6 @@ class MCPDatabase:
     def _clean_expired_idempotency(self):
         self._conn.execute("DELETE FROM idempotency WHERE expires_at <= ?", (time.time(),))
         self._commit()
-
-    # ── Rate limiting ──────────────────────────────────────────────────────
 
     def _period_key(self, unit: str = "hour") -> str:
         now = time.gmtime()
@@ -280,8 +269,6 @@ class MCPDatabase:
             )
         self._commit()
 
-    # ── Threads reply monitoring state ─────────────────────────────────────
-
     def remember_threads_post(self, post_id: str) -> None:
         if post_id:
             self._conn.execute(
@@ -299,7 +286,7 @@ class MCPDatabase:
     def has_processed_threads_reply(self, reply_id: str) -> bool:
         row = self._conn.execute(
             "SELECT 1 FROM threads_processed_replies WHERE reply_id = ?",
-            (str(reply_id),)
+            (str(reply_id),),
         ).fetchone()
         return row is not None
 
@@ -326,8 +313,6 @@ class MCPDatabase:
             (str(reply_id), time.time()),
         )
         self._commit()
-
-    # ── Bluesky reply monitoring state ─────────────────────────────────────
 
     def has_processed_bluesky_reply(self, reply_id: str) -> bool:
         row = self._conn.execute(
@@ -360,8 +345,6 @@ class MCPDatabase:
         )
         self._commit()
 
-    # ── Tool log ───────────────────────────────────────────────────────────
-
     def log_tool_call(self, tool: str, arguments: dict, result: dict, duration_ms: float):
         self._conn.execute(
             "INSERT INTO tool_log (tool, arguments, result, duration_ms, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -369,11 +352,9 @@ class MCPDatabase:
         )
         self._commit()
 
-    # ── Periodic cleanup ──────────────────────────────────────────────────
-
     def cleanup(self):
         self._clean_expired_idempotency()
-        cutoff = time.time() - 86400 * 30  # 30 days
+        cutoff = time.time() - 86400 * 30
         self._conn.execute("DELETE FROM tool_log WHERE created_at < ?", (cutoff,))
         self._conn.execute("DELETE FROM access_tokens WHERE expires_at < ?", (time.time(),))
         self._commit()
