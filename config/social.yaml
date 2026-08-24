@@ -32,6 +32,8 @@ THREADS_USERNAME: "oppa.ai.bot"  # Authenticated Threads username, used to ignor
 THREADS_GLOBAL_MENTIONS_ENABLED: "1"  # Poll /me/mentions for mentions on other users posts.
 THREADS_MEMORY_ENABLED: "1"  # Allow only explicit remember this / learn this requests from Threads.
 THREADS_REPLY_LOG_DIR: "logs/threads"  # One redacted JSONL archive per calendar day.
+THREADS_IMAGEGEN_ENABLED: "1"  # Let Aiko generate and attach an image when a reply explicitly asks her to draw/gen one.
+THREADS_IMAGEGEN_TIMEOUT: "300"  # Seconds before the IMAGEGEN_URL generation call times out (Modal cold starts are slow).
 IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB image upload calls time out.
 
 # -- Photo social (Lane B — Pixelfed) --
