@@ -157,6 +157,29 @@ def user_state_path(filename: str, user_id: str | None = None) -> Path:
     return user_state_dir(user_id) / filename
 
 
+def all_known_user_ids() -> list[str]:
+    """Enumerate every real (non-guest) user_id with a state directory
+    under the resolved USER_SPACE_ROOT.
+
+    Uses the same root resolution as user_state_dir() (USER_SPACE_ROOT /
+    USER_STATE_ROOT / AIKO_USER_STATE_ROOT aliases, falling back to
+    ~/.aiko) so callers that need to iterate all users — e.g. the
+    scheduler daemon checking every user's due jobs each tick — never
+    drift out of sync with wherever user_state_dir() actually resolves to.
+    """
+    root = Path(_user_state_root_value()).expanduser()
+    if not root.exists():
+        return []
+    try:
+        return sorted(
+            p.name for p in root.iterdir()
+            if p.is_dir() and p.name and p.name != _DEFAULT_USER_ID
+        )
+    except OSError:
+        log.warning("userspace: failed to list %s", root)
+        return []
+
+
 def user_workspace_root(user_id: str | None = None) -> Path:
     """Workspace root isolated by user unless WORKSPACE_ROOT explicitly overrides."""
     if os.getenv("WORKSPACE_ROOT"):
