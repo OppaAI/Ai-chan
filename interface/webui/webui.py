@@ -227,9 +227,12 @@ class AikoWeb:
         except Exception:
             log.exception("[aiko-web] scheduler user switch failed for %s", uid)
 
-        if uid == "guest" or uid in self._user_space_ready:
+        if uid == "guest":
             return
-        self._user_space_ready.add(uid)
+        with self._lock:
+            if uid in self._user_space_ready:
+                return
+            self._user_space_ready.add(uid)
         log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
         # Boot skipped memory cleanup for guest — run it now that the real
         # per-user store is open (parity with the old login-gated boot).
@@ -245,7 +248,7 @@ class AikoWeb:
             log.exception("[aiko-web] playbook seeding failed")
         try:
             from system.schedule import bootstrap_non_system_jobs
-            bootstrap_non_system_jobs(think=self._think, memorize=self._memorize, user_id=uid)
+            bootstrap_non_system_jobs(think=self._think, memorize=self._memorize)
         except Exception:
             log.exception("[aiko-web] schedule job bootstrap failed")
 
