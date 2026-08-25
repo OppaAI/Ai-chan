@@ -137,7 +137,7 @@ class AikoWeb:
         self._login_event = threading.Event()
         self._authenticated_uid: str | None = None
         self._authenticated_display_name: str | None = None
-        self._user_space_ready = False   # flipped after first authenticated connect seeds user space
+        self._user_space_ready: set[str] = set()   # users whose deferred user-space seeding has run
 
         self._input_q: queue.Queue[tuple[str, str, str]] = queue.Queue()
 
@@ -227,9 +227,12 @@ class AikoWeb:
         except Exception:
             log.exception("[aiko-web] scheduler user switch failed for %s", uid)
 
-        if self._user_space_ready or uid == "guest":
+        if uid == "guest":
             return
-        self._user_space_ready = True
+        with self._lock:
+            if uid in self._user_space_ready:
+                return
+            self._user_space_ready.add(uid)
         log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
         # Boot skipped memory cleanup for guest — run it now that the real
         # per-user store is open (parity with the old login-gated boot).
@@ -426,14 +429,23 @@ class AikoWeb:
     def broadcast_audio_bytes(self, wav_bytes: bytes) -> None:
         if self._loop is None:
             return
+        uid = current_user_id()
+        target_uid = uid if uid and uid != "guest" else None
         with self._clients_lock:
-            if not self._clients:
+            if target_uid:
+                has_targets = any(owner == target_uid for owner in self._client_users.values())
+            else:
+                has_targets = bool(self._clients)
+            if not has_targets:
                 return
-        asyncio.run_coroutine_threadsafe(self._async_broadcast_bytes(wav_bytes), self._loop)
+        asyncio.run_coroutine_threadsafe(self._async_broadcast_bytes(wav_bytes, user_id=target_uid), self._loop)
 
-    async def _async_broadcast_bytes(self, raw: bytes) -> None:
+    async def _async_broadcast_bytes(self, raw: bytes, *, user_id: str | None = None) -> None:
         with self._clients_lock:
-            targets = list(self._clients)
+            if user_id:
+                targets = [ws for ws in self._clients if self._client_users.get(ws) == user_id]
+            else:
+                targets = list(self._clients)
         if not targets:
             return
         await asyncio.gather(
