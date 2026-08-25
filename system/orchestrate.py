@@ -79,6 +79,7 @@ import time
 
 from system.bioclock import local_now
 from system.log import get_logger
+from system.turngate import AIKO_BUSY_LOCK
 from system.wakeup import AikoWakeup
 from agentic.toolkit.websearch import web_search_context
 from sensory.speak import extract_dialogue_for_tts
@@ -1241,6 +1242,7 @@ def run_session(ui, args) -> None:
     # ── main loop ─────────────────────────────────────────────────────────────
 
     last_turn: tuple[str, str] | None = None
+    last_bound_uid: str | None = None
     while True:
         try:
             voice_info = None
@@ -1476,6 +1478,23 @@ def run_session(ui, args) -> None:
             continue
 
         # ── normal turn ───────────────────────────────────────────────────────
+        # Acquire the shared gate for the rest of this turn — released in the
+        # existing `finally:` below (see system/turngate.py). This blocks the
+        # scheduler daemon from firing a job against the same memorize/think
+        # singletons while this turn is in flight, and blocks a new turn from
+        # starting while a scheduled job is mid-run. Bind memory context to
+        # whichever user this turn belongs to before think.route() runs —
+        # get_input()/get_voice_input() only set the current_user_id
+        # contextvar; AikoMemorize needs the explicit switch_user() call to
+        # actually follow it (see memorize.py get_user_id()/switch_user()).
+        AIKO_BUSY_LOCK.acquire()
+
+        from system.userspace import current_user_id
+        turn_uid = current_user_id()
+        if turn_uid != last_bound_uid:
+            if memorize is not None:
+                memorize.switch_user(turn_uid)
+            last_bound_uid = turn_uid
 
         current_latency = {
             "mode": "voice" if (listen and asr_enabled and voice_info) else "text",
@@ -1662,3 +1681,4 @@ def run_session(ui, args) -> None:
             session_active.clear()
             proactive.touch()
             current_latency = None
+            AIKO_BUSY_LOCK.release()
