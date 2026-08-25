@@ -120,6 +120,18 @@ def main():
         from interface.webui.webui import run_webui     # load WebUI
         run_webui(args)                                 # launch WebUI with set arguments
 
+    # === UPDATED: init-first boot (parallel with WebUI) ===
+    print("[Aiko] Starting init-first boot (background thread)...")
+    wakeup = AikoWakeup()
+    boot_result = wakeup.boot(
+        user_id=0,
+        on_loading=lambda msg: print(f"[Aiko] {msg}"),
+        on_done=lambda: print("[Aiko] Wakeup complete — WebUI ready"),
+        on_skip=lambda: print("[Aiko] Boot skipped"),
+    )
+    
+    # === WEBUI starts FIRST (frontend loads instantly) ===
+    ui = AikoWeb(no_voice=args.text, debug=args.debug, boot_result=boot_result)
 
 if __name__ == "__main__":
     # === UPDATED: init-first boot (runs BEFORE login — now 100% safe) ===
