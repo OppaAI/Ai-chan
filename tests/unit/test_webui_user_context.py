@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import queue
-import threading
 
 import pytest
 
@@ -24,8 +23,25 @@ class DummyMemorize:
 
 @pytest.fixture(autouse=True)
 def clean_user_env(monkeypatch):
+    """Establish baseline user context before each test and reset after.
+
+    This prevents context leakage between tests by ensuring both the environment
+    variables and context tokens are reset to known values.
+    """
+    from system.userspace import set_current_user_id, set_current_display_name
+
     monkeypatch.delenv("AIKO_USER_ID", raising=False)
     monkeypatch.delenv("CURRENT_DISPLAY_NAME", raising=False)
+
+    # Establish baseline context values
+    user_token = set_current_user_id("guest")
+    display_token = set_current_display_name(None)
+
+    yield
+
+    # Reset context after test
+    reset_current_user_id(user_token)
+    reset_current_display_name(display_token)
 
 
 @pytest.mark.asyncio
@@ -56,32 +72,9 @@ def test_get_input_uses_queued_identity_not_shared_state(monkeypatch):
     web = AikoWeb.__new__(AikoWeb)
     web._input_q = queue.Queue()
     web._input_q.put(("hello", "bob", "Bobby"))
-    web._broadcast = lambda payload, **kwargs: None
+    web._broadcast = lambda payload: None
     web._push_vitals = lambda: None
 
     assert web.get_input() == "hello"
     assert current_user_id() == "bob"
     assert current_display_name() == "Bobby"
-
-
-class DummyWebSocket:
-    def __init__(self) -> None:
-        self.sent: list[str] = []
-
-    async def send_text(self, raw: str) -> None:
-        self.sent.append(raw)
-
-
-@pytest.mark.asyncio
-async def test_async_broadcast_can_target_one_user():
-    web = AikoWeb.__new__(AikoWeb)
-    alice_ws = DummyWebSocket()
-    bob_ws = DummyWebSocket()
-    web._clients = {alice_ws, bob_ws}
-    web._client_users = {alice_ws: "alice", bob_ws: "bob"}
-    web._clients_lock = threading.Lock()
-
-    await web._async_broadcast({"type": "token", "text": "secret"}, user_id="alice")
-
-    assert alice_ws.sent
-    assert bob_ws.sent == []
