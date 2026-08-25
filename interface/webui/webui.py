@@ -687,6 +687,12 @@ class AikoWeb:
             done_event.set()
 
         self._mic_active.set()
+
+        # Lazy voice boot: overlap server-side ASR/VAD model load with the
+        # browser's mic-permission/arming UX instead of blocking on it.
+        if listen is not None and hasattr(listen, "ensure_ready"):
+            threading.Thread(target=listen.ensure_ready, daemon=True).start()
+
         self._broadcast({
             "type": "mic",
             "action": "start",

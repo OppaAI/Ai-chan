@@ -112,6 +112,12 @@ LLM_TIMEOUT  = float(os.getenv("LLM_TIMEOUT", 120))
 # keeps the two common EOS tokens and drops [INST]; override per model
 # via LLM_STOP_SEQUENCES (comma-separated) if a different EOS is needed.
 LLM_STOP_SEQUENCES = [s.strip() for s in os.getenv("LLM_STOP_SEQUENCES", "</s>,<|im_end|>").split(",") if s.strip()]
+
+# llama-server KV-cache reuse: re-evaluate the longest common prompt prefix
+# from cache instead of re-prefilling every turn. No-op on backends that
+# ignore the field. Disable with LLM_CACHE_PROMPT=0 if a non-llama proxy
+# rejects unknown body params.
+_LLM_CACHE_PROMPT = os.getenv("LLM_CACHE_PROMPT", "1").strip().lower() not in {"0", "false", "no", "off"}
 CONTEXT_WINDOW_TURNS = int(os.getenv("CONTEXT_WINDOW_TURNS", 8))
 
 # Shared default recall/knowledge depth across all three chat paths
@@ -485,15 +491,32 @@ class AikoThink:
         )
         self._idle_learner_thread.start()
   
-    def _current_system_prompt(self, user_input: str = "") -> str:
-        """Assemble this turn's system prompt: static persona core + fresh
-        per-user context + any conditional overrides this input triggers.
+    def _persona_core(self) -> str:
+        """Stable identity core: persona text + owner block.
 
-        Call only from within a turn where current_user_id()/current_display_name()
-        already resolve to the real caller — never at construction time.
+        Everything that rarely changes within a session lives here so the
+        LLM server's prompt cache (cache_prompt) reuses it across turns —
+        see _current_system_prompt_parts() for the stable/volatile split.
         """
         display_name, user_block = _load_user_context()
-        base = self._persona.replace("USER_ID_HERE", display_name) + user_block
+        return self._persona.replace("USER_ID_HERE", display_name) + user_block
+
+    def _current_system_prompt_parts(self, user_input: str = "") -> tuple[str, str]:
+        """Assemble this turn's system prompt as (stable_core, volatile_tail).
+
+        Same content as _current_system_prompt(), split so chat() can send
+        them as TWO system messages with conversation history in between:
+
+            [system: core] [history...] [system: volatile] [user]
+
+        The volatile tail (time, state ticks, priming, memories) sits right
+        before the newest user turn, leaving the byte-stable core + history
+        prefix intact for llama-server's KV reuse. Call only from within a
+        turn where current_user_id()/current_display_name() already resolve
+        to the real caller — never at construction time.
+        """
+        core = self._persona_core()
+        volatile_parts: list[str] = []
         try:
             from cognition.memory.edge_state import for_identity
             state_obj = for_identity(current_user_id())
@@ -502,7 +525,7 @@ class AikoThink:
             state_obj.persist()
             state = state_obj.context(user_input)
             if state:
-                base += "\n\n" + state
+                volatile_parts.append(state)
             try:
                 from system.schedule import list_schedule_records
                 scheduled_jobs = list_schedule_records(user_id=current_user_id())
@@ -525,20 +548,34 @@ class AikoThink:
                 scheduled_jobs=scheduled_jobs,
                 project_signals=project_signals,
             )
-            base += "\n\n" + grounded
-            base += "\n\n" + state_obj.adaptive_response_guidance()
-            base += "\n\n" + state_obj.reflection_summary()
-            base += "\n\n" + state_obj.preference_guidance()
-            base += "\n\n" + state_obj.lesson_guidance()
-            base += "\n\n" + state_obj.identity_guidance()
-            base += "\n\n" + state_obj.self_model_context()
-            base += "\n\n" + state_obj.subconscious_guidance()
+            volatile_parts.append(grounded)
+            volatile_parts.append(state_obj.adaptive_response_guidance())
+            volatile_parts.append(state_obj.reflection_summary())
+            volatile_parts.append(state_obj.preference_guidance())
+            volatile_parts.append(state_obj.lesson_guidance())
+            volatile_parts.append(state_obj.identity_guidance())
+            volatile_parts.append(state_obj.self_model_context())
+            volatile_parts.append(state_obj.subconscious_guidance())
             priming = state_obj.priming_context(user_input)
             if priming:
-                base += "\n\n" + priming
+                volatile_parts.append(priming)
         except Exception:
             pass
-        return base + _conditional_persona_blocks(user_input)
+        volatile_parts.append(_conditional_persona_blocks(user_input))
+        volatile = "\n\n".join(p for p in volatile_parts if p)
+        return core, volatile
+
+    def _current_system_prompt(self, user_input: str = "") -> str:
+        """Assemble this turn's system prompt: static persona core + fresh
+        per-user context + any conditional overrides this input triggers.
+
+        Single-string convenience wrapper over _current_system_prompt_parts()
+        — byte-identical output to the historical sequential construction.
+        Call only from within a turn where current_user_id()/current_display_name()
+        already resolve to the real caller — never at construction time.
+        """
+        core, volatile = self._current_system_prompt_parts(user_input)
+        return core + ("\n\n" + volatile if volatile else "")
   
     # ── public api ────────────────────────────────────────────────────────────
 
@@ -962,6 +999,7 @@ class AikoThink:
                     "Label:"
                 )}],
                 stream=False, max_tokens=6, temperature=0.0, top_p=1.0, timeout=LLM_TIMEOUT,
+                extra_body={"cache_prompt": _LLM_CACHE_PROMPT},
             )
             label = (resp.choices[0].message.content or "chat").strip().lower()
             label = re.sub(r"[^a-z_].*$", "", label)
@@ -1336,33 +1374,38 @@ class AikoThink:
             except Exception:
                 pass
         
-        system = self._current_system_prompt(user_input)
-        system += "\n\n" + bioclock.current_datetime_block()
+        # Stable/volatile split for prompt-cache reuse: the persona core goes
+        # FIRST in the message array, conversation history next, and all
+        # per-turn context last (right before the user turn) — see
+        # _stream_response() and _current_system_prompt_parts().
+        core_system, volatile_system = self._current_system_prompt_parts(user_input)
         if not skip_memory:
             if persona_block:
-                system = f"{system}\n\n{persona_block}"
+                volatile_system = f"{volatile_system}\n\n{persona_block}"
             if memory_block:
-                system = f"{system}\n\n{memory_block}"
+                volatile_system = f"{volatile_system}\n\n{memory_block}"
             if situation_block:
-                system = f"{system}\n\n{situation_block}"
+                volatile_system = f"{volatile_system}\n\n{situation_block}"
             if metacognitive_block:
-                system = f"{system}\n\n{metacognitive_block}"
+                volatile_system = f"{volatile_system}\n\n{metacognitive_block}"
             if not memory_block:
-                system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
-            system = f"{system}\n\n{knowledge_block}"
-        
+                volatile_system += "\n\n<memory_context>\nNo relevant memories found.\n</memory_context>"
+            if knowledge_block:
+                volatile_system = f"{volatile_system}\n\n{knowledge_block}"
+
         # Additional narrower wiki lookup — only when the user is asking
         # about Aiko's own architecture/docs, distinct from the general KB
         # fetch above. Gated so casual chat doesn't pay for it every turn.
         if not skip_memory and _should_use_local_knowledge(user_input):
             try:
                 memorize = self._get_memorize()
-                embedder = memorize._mem._embedder if memorize is not None else None
+                embedder = memorize.embedder() if memorize is not None else None
                 wiki_context = wiki_knowledge_context_for(
                     user_input, limit=3, max_chars=3000,
                     embedder=embedder,
                 )
-                system = f"{system}\n\n{wiki_context}"
+                if wiki_context:
+                    volatile_system = f"{volatile_system}\n\n{wiki_context}"
             except Exception as e:
                 log.error("Local wiki-knowledge lookup failed: %s", e)
 
@@ -1379,14 +1422,18 @@ class AikoThink:
         ):
             net_context = self._websearch_net_block(user_input, token_callback)
             if net_context:
-                system = (
-                    f"{system}\n\n"
+                volatile_system = (
+                    f"{volatile_system}\n\n"
                     f"<search_results query='{user_input}'>\n"
                     f"Live web results — use them when they are relevant; do not invent time-sensitive facts:\n\n"
                     f"{net_context}\n"
                     f"</search_results>"
                 )
-        
+
+        # Datetime very last: it changes every minute, so keeping it after
+        # everything else maximizes the byte-stable prefix length.
+        volatile_system = f"{volatile_system}\n\n{bioclock.current_datetime_block()}".strip()
+
         # Build messages
         llm_prompt = user_input
         if self._reasoning:
@@ -1405,16 +1452,23 @@ class AikoThink:
         # Log debug
         self.last_prompt_debug = {
             "mode": "greeting" if skip_memory else "localchat",
-            "system_prompt": system,
+            "system_prompt": core_system + ("\n\n" + volatile_system if volatile_system else ""),
             "memory_prompt": memory_block or "<memory_context>\nNo memories.\n</memory_context>",
             "knowledge_prompt": knowledge_block,
             "web_prompt": "",
             "previous_chat_messages": [dict(m) for m in trimmed],
         }
         _dump_full_prompt(self.last_prompt_debug)
-    
-        # Stream response
-        raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=_CHAT_STREAM_EMIT)
+
+        # Stream response — core system message first, history, then the
+        # volatile context system message right before the newest user turn.
+        raw_response = self._stream_response(
+            trimmed,
+            system=core_system,
+            system_tail=volatile_system,
+            token_callback=token_callback,
+            emit=_CHAT_STREAM_EMIT,
+        )
         raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
         
         # Store
@@ -1560,10 +1614,21 @@ class AikoThink:
             speak.feed(text)
             speak.play_async()
 
-    def _stream_response(self, messages: list[dict], system: str = "", token_callback=None, emit: bool = True) -> str:
+    def _stream_response(self, messages: list[dict], system: str = "", token_callback=None, emit: bool = True, system_tail: str = "") -> str:
         full_response = []
         max_tokens = _BASE_PREDICT * _REASONING_SCALE if self._reasoning else _BASE_PREDICT
-        all_messages = [{"role": "system", "content": system}] + messages if system else messages
+
+        # Message layout for llama-server cache_prompt reuse:
+        #   [system core] [history ...] [system volatile tail] [user]
+        # The tail sits right before the newest user turn so the byte-stable
+        # core + history prefix survives across turns; without a tail this
+        # degrades to the classic [system] + messages layout.
+        all_messages = [{"role": "system", "content": system}] + messages if system else list(messages)
+        if system_tail and all_messages and all_messages[-1].get("role") == "user":
+            all_messages = all_messages[:-1] + [{"role": "system", "content": system_tail}, all_messages[-1]]
+        elif system_tail:
+            all_messages = all_messages + [{"role": "system", "content": system_tail}]
+
         self.last_usage = {
             "prompt_messages": all_messages,
             "completion_text": "",
@@ -1597,6 +1662,7 @@ class AikoThink:
                 stop=LLM_STOP_SEQUENCES,
                 timeout=LLM_TIMEOUT,
                 extra_body={
+                    "cache_prompt": _LLM_CACHE_PROMPT,
                     "repeat_penalty": float(os.getenv("REPEAT_PENALTY", 1.15)),
                     "repeat_last_n":  int(os.getenv("REPEAT_LAST_N", 64)),
                     "top_k":          int(os.getenv("TOP_K", 40)),
@@ -1667,6 +1733,7 @@ class AikoThink:
                 top_p=float(os.getenv("TOP_P", 0.90)),
                 stop=LLM_STOP_SEQUENCES,
                 timeout=LLM_TIMEOUT,
+                extra_body={"cache_prompt": _LLM_CACHE_PROMPT},
             )
             text = (resp.choices[0].message.content or "").strip()
             if text:

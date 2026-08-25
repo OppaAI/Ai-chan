@@ -543,6 +543,10 @@ class AikoListen:
         self._wake_model:      object | None = None  # a livekit.wakeword.WakeWordModel, if loaded
         self._wake_model_name: str | None = None
         self._lock        = threading.Lock()
+        # Lazy voice boot (see ensure_ready): models load on first mic arm,
+        # not at app startup — keeps boot fast and RAM low in text mode.
+        self._ensure_lock = threading.Lock()
+        self._ready       = False
         self._warmup_done = threading.Event()
         self._warmup_thread: threading.Thread | None = None
 
@@ -577,6 +581,25 @@ class AikoListen:
         return self._sd
 
     # ── staged init ───────────────────────────────────────────────────────────
+
+    def ensure_ready(self) -> None:
+        """Lazy voice boot: load ASR → VAD → warmup → barge-in monitor once.
+
+        Idempotent and thread-safe. wakeup.boot() no longer runs these steps
+        at startup — the first mic arm (WebUI broadcast or CLI listen call)
+        triggers this instead, overlapping model load with the browser's
+        permission/arming UX. Subsequent calls are no-ops.
+        """
+        if self._ready:
+            return
+        with self._ensure_lock:
+            if self._ready:
+                return
+            self.load_asr()
+            self.load_vad()
+            self.join_warmup()
+            self.start_barge_in_monitor()
+            self._ready = True
 
     def load_asr(self) -> None:
         self._model = _load_sense_voice_recognizer()
@@ -867,6 +890,9 @@ class AikoListen:
         for transcription. Handles speaker verification, wake-word gating, and post-ASR
         corrections based on configuration.
 
+        Lazy voice boot: models are loaded here on first use if ensure_ready()
+        wasn't already triggered by an earlier mic arm.
+
         Args:
             status_callback (callable, optional): Callback(msg: str) invoked with status tokens
                 (__LISTENING__, __TRANSCRIBING__, __IDLE__, etc.) for UI updates.
@@ -915,6 +941,9 @@ class AikoListen:
         elif wait_fn is not None:
             wait_fn()
 
+        # Lazy voice boot: first call pays the model-load cost here (or it
+        # already ran earlier via a mic-arm kick from the WebUI).
+        self.ensure_ready()
         _cb(status_callback, "__LISTENING__")
         listen_started_at = time.monotonic()
         audio, woke_acoustic = self._record(

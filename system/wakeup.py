@@ -360,23 +360,14 @@ class AikoWakeup:
 
         think_ref.set_speak(speak)                                                               # wires in speaking module only once if TTS model is known to be live or not
 
-        # ASR — staged so each step reports independently; non-fatal. Construction
-        # wrapped too, same reasoning as AikoSpeak() above.
-        listen: AikoListen | None = None                                                                     # initiate listening module handle to None
-        try:                                                                                                 # attempt to load listening module
-            listen = AikoListen()                                                                            # load listening module
-        except Exception:                                                                                    # if error,
-            log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")    # log failure
-
-        if listen is not None:                                                                               # gate to skip loading of ASR/VAD model if listening module boot failed
-            try:
-                _boot_step('listen_asr', lambda: listen.load_asr())                                          # load ASR model
-                _boot_step('listen_silero', lambda: listen.load_vad())                                       # load VAD module
-                _boot_step('listen_warmup', lambda: listen.join_warmup())                                    # kick off warmup thread
-                _boot_step('listen_ready', lambda: listen.start_barge_in_monitor())                          # load VAD daemon for barge-in monitor — costs ~0 CPU at idle
-            except Exception:                                                                                # if error,
-                log.exception("[wakeup] ASR/VAD boot failed — Aiko will run without voice input.")           # log failure
-                listen = None                                                                                # set handle to None to indicate error
+        # ASR — construction only; models load lazily on first mic arm via
+        # AikoListen.ensure_ready() (see sensory/listen.py). Keeps boot fast
+        # and text-mode RAM low. Non-fatal, same as before.
+        listen: AikoListen | None = None
+        try:
+            listen = AikoListen()
+        except Exception:
+            log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")
 
         return BootResult(                                                                        # return the results of the bootup of the 4 modules:
             think    = think_ref,                                                                 # cognitive core

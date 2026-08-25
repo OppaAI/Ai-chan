@@ -46,13 +46,27 @@ def set_shared_memorize(memorize) -> None:
     _SHARED_MEMORIZE["ref"] = memorize
 
 
+def _bound_memorize():
+    """Return the shared AikoMemorize only once it holds a REAL user store.
+
+    While nobody has logged in, memorize is still bound to the lazy guest
+    sentinel (no DB open, empty recall). Passing it anyway would materialize
+    the throwaway guest sqlite just to search nothing, and could pin
+    owner-interaction memories into a store that vanishes on restart.
+    Gate on is_open(): True only after switch_user()/boot bound a real
+    per-user store — before that, monitors run recall-free like before.
+    """
+    mem = _SHARED_MEMORIZE["ref"]
+    return mem if mem is not None and mem.is_open() else None
+
+
 def _daemon_loop(interval: int) -> None:
     """Background loop: poll Threads, sleep, repeat."""
     log.info("[threads_daemon] Monitor started (interval=%ds)", interval)
     while not _STOP_EVENT.is_set():
         try:
             from interface.mcp_server.social.services.threads import monitor_threads_replies
-            result = monitor_threads_replies(memorize=_SHARED_MEMORIZE["ref"])
+            result = monitor_threads_replies(memorize=_bound_memorize())
             answered = result.get("answered", 0)
             matched = result.get("matched", 0)
             errors = result.get("errors", [])
@@ -113,7 +127,7 @@ def _bluesky_daemon_loop(interval: int) -> None:
         try:
             from interface.mcp_server.social.services.bluesky import monitor_bluesky_replies
 
-            result = monitor_bluesky_replies(memorize=_SHARED_MEMORIZE["ref"])
+            result = monitor_bluesky_replies(memorize=_bound_memorize())
             answered = result.get("answered", 0)
             matched = result.get("matched", 0)
             errors = result.get("errors", [])
