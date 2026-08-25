@@ -20,6 +20,9 @@ Both front ends converge on the same shared boot/turn-loop logic in
 system/orchestrate.py:run_session(ui, args) — see that module for the
 actual session orchestration (subsystem boot, main loop, commands,
 proactive idle check-ins, karaoke typewriter, latency/debug accounting).
+Boot starts immediately at session start (no login gate — boot is pre-auth
+safe); on WebUI, a user's first browser connection applies their identity
+and triggers any deferred user-scoped seeding asynchronously.
 
 Flow:
 
@@ -28,12 +31,12 @@ Flow:
         ┌────────────────┼────────────────┼─────────────────┐
         ▼                ▼                ▼                 ▼
    --clear-mem       --logout          --cli           (default)
-        │                │              │                 │
-        ▼                ▼              ▼                 ▼
-  AikoMemorize()    handle_logout()  run_cli(args)  run_webui(args)
-     .clear()            │              │                 │
-        │                ▼              ▼                 ▼
-        ▼              sys.exit(0)  → orchestrate.py  → orchestrate.py
+        │                │                │                 │
+        ▼                ▼                ▼                 ▼
+  AikoMemorize()    handle_logout()    run_cli(args)  run_webui(args)
+     .clear()            │                │                 │
+        │                ▼                ▼                 ▼
+        ▼           sys.exit(0)     → orchestrate.py  → orchestrate.py
    sys.exit(0)                         run_session()    run_session()
 
 Front-end imports are deferred into main() rather than done at module load,
@@ -56,13 +59,14 @@ Removed in this pass (dead code found while splitting main.py up):
 """
 from __future__ import annotations            # evaluates type annotations later
 
+import warnings                               # for filtering out the warning messages
+warnings.filterwarnings("ignore")
+
 from system.config import load_config         # load user configs
 load_config()
 
 import argparse                               # for parsing CLI arguments
 import sys                                    # for assigning exit code
-import warnings                               # for filtering out the warning messages
-warnings.filterwarnings("ignore")
 
 from system.log import get_logger                     # assign logging to universal logger
 log = get_logger(__name__)
