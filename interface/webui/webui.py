@@ -803,14 +803,36 @@ class AikoWeb:
         self._push_vitals()
 
 
-def run_webui(args, boot_result: BootResult | None = None) -> None:
+def run_webui(args) -> None:
     from system.orchestrate import run_session
+    from system.wakeup import AikoWakeup
     import socket
+    import threading
 
-    ui = AikoWeb(no_voice=args.text, debug=args.debug, boot_result=boot_result)
+    # Construct AikoWeb with no boot_result yet. __init__ calls
+    # _start_servers() unconditionally, so the HTTP/WS server — and the
+    # frontend — comes up immediately; browsers see "Initializing..."
+    # instead of waiting on subsystem boot to finish.
+    ui = AikoWeb(no_voice=args.text, debug=args.debug)
+
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
     print("  Booting subsystems now — browsers can log in while Aiko wakes up.\n")
+
+    def _boot_in_background() -> None:
+        """Runs subsystem boot off the main thread so the WebUI server and
+        run_session() below aren't blocked on it. Progress is streamed to
+        connected browsers via ui.step_loading/step_done/step_skip; when
+        boot finishes, set_boot_result() broadcasts the "ready" event and
+        flips the UI to chat phase."""
+        result = AikoWakeup().boot(
+            on_loading=ui.step_loading,
+            on_done=ui.step_done,
+            on_skip=ui.step_skip,
+        )
+        ui.set_boot_result(result)
+
+    threading.Thread(target=_boot_in_background, daemon=True, name="aiko-boot").start()
 
     run_session(ui, args)
