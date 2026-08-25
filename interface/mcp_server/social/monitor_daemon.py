@@ -20,19 +20,23 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 
 from system.log import get_logger
 
 log = get_logger(__name__)
 
-_DAEMON_THREAD: threading.Thread | None = None
-_STOP_EVENT = threading.Event()
-
-_BSKY_DAEMON_THREAD: threading.Thread | None = None
-_BSKY_STOP_EVENT = threading.Event()
-
 _DEFAULT_INTERVAL = 180  # seconds — same default as scheduler job
+
+# ── unified poller ────────────────────────────────────────────────────────────
+# One background thread polls BOTH platforms sequentially, each on its own
+# interval. Sequential matters: a reply turn drives LLM inference (+TTS sink),
+# and two platforms answering simultaneously would contend for those. RAM cost
+# of the second thread was never the issue — the concurrent heavy work was.
+_SOCIAL_THREAD: threading.Thread | None = None
+_SOCIAL_STOP_EVENT = threading.Event()
+_DESIRED: dict[str, dict] = {}   # label -> {"interval": s, "fn": callable}
 
 # Late-bound memory handle. Daemons start before wakeup boots the memory
 # subsystem (and before anyone logs in), so they can't receive AikoMemorize
@@ -124,130 +128,182 @@ def _bound_memorize():
     return _fallback_owner_memorize()
 
 
-def _daemon_loop(interval: int) -> None:
-    """Background loop: poll Threads, sleep, repeat."""
-    log.info("[threads_daemon] Monitor started (interval=%ds)", interval)
-    while not _STOP_EVENT.is_set():
+def _poll_threads() -> None:
+    from interface.mcp_server.social.services.threads import monitor_threads_replies
+    result = monitor_threads_replies(memorize=_bound_memorize())
+    answered = result.get("answered", 0)
+    matched = result.get("matched", 0)
+    errors = result.get("errors", [])
+    if answered:
+        log.info("[threads_daemon] Answered %d / %d matched replies", answered, matched)
+    if errors:
+        log.warning("[threads_daemon] %d error(s): %s", len(errors), errors[:3])
+
+
+def _poll_bluesky() -> None:
+    from interface.mcp_server.social.services.bluesky import monitor_bluesky_replies
+
+    result = monitor_bluesky_replies(memorize=_bound_memorize())
+    answered = result.get("answered", 0)
+    matched = result.get("matched", 0)
+    errors = result.get("errors", [])
+    if answered:
+        log.info("[bluesky_daemon] Answered %d / %d matched replies", answered, matched)
+    if errors:
+        log.warning("[bluesky_daemon] %d error(s): %s", len(errors), errors[:3])
+
+
+def _social_loop() -> None:
+    """Single-thread poller: each registered platform fires on its own due time.
+
+    Platforms can be added while running (legacy start_* wrappers merge into
+    the live thread via _DESIRED). A slow poll (e.g. Threads
+    Graph API with a 120s timeout) delays the other platform's next cycle
+    rather than overlapping heavy reply work — deliberate trade-off.
+    """
+    def _labels():
+        return "/".join(_DESIRED.keys()) or "<none>"
+
+    log.info("[social_daemon] Unified monitor started (platforms=%s)", _labels())
+    next_due: dict[str, float] = {}
+    while not _SOCIAL_STOP_EVENT.is_set():
+        now = time.monotonic()
+        for label, cfg in list(_DESIRED.items()):
+            if label not in next_due:
+                # Stagger new entrants 5s apart so platforms never first-fire together.
+                next_due[label] = now + 5.0 * len(next_due)
+                log.info("[%s_daemon] Monitor started (first poll in %.0fs)", label, max(0.0, next_due[label] - now))
+            if now < next_due[label]:
+                continue
+            try:
+                cfg["fn"]()
+            except Exception:
+                log.exception("[%s_daemon] Unexpected error in monitor loop", label)
+            next_due[label] = time.monotonic() + cfg["interval"]
+        pause = max(0.5, min(next_due.values()) - time.monotonic()) if next_due else 1.0
+
+        # Chunked sleep: re-check _DESIRED at most 1s after a new platform
+        # registers, without needing a separate wake-event mechanism.
+        deadline = time.monotonic() + pause
+        while not _SOCIAL_STOP_EVENT.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or _SOCIAL_STOP_EVENT.wait(timeout=min(1.0, max(0.0, remaining))):
+                break
+    log.info("[social_daemon] Monitor stopped (%s)", _labels())
+
+
+def _register_platform(label: str, interval_seconds: int | None, fn) -> bool:
+    """Add a platform to the desired set; True when it was newly added.
+
+    Explicit interval_seconds is honored as-is (old daemons allowed sub-60s
+    values); only the env-derived default carries the 60s floor.
+    """
+    iv = int(interval_seconds) if interval_seconds else _DEFAULT_INTERVAL
+    job = {"interval": iv, "fn": fn}
+    if label in _DESIRED:
+        return False
+    _DESIRED[label] = job
+    return True
+
+
+def start_social_monitor_daemon(interval_seconds: int | None = None, only: str | None = None) -> threading.Thread | None:
+    """Start (or merge into) the unified social reply poller.
+
+    Safe to call repeatedly and per-platform: legacy start_threads/_bluesky
+    wrappers both land here; a second call registers its platform into the
+    live thread instead of skipping. Env enable-checks and credential gates
+    behave exactly like the old separate daemons.
+    """
+    def _interval(env_key: str, label: str) -> int:
         try:
-            from interface.mcp_server.social.services.threads import monitor_threads_replies
-            result = monitor_threads_replies(memorize=_bound_memorize())
-            answered = result.get("answered", 0)
-            matched = result.get("matched", 0)
-            errors = result.get("errors", [])
-            if answered:
-                log.info("[threads_daemon] Answered %d / %d matched replies", answered, matched)
-            if errors:
-                log.warning("[threads_daemon] %d error(s): %s", len(errors), errors[:3])
-        except Exception:
-            log.exception("[threads_daemon] Unexpected error in monitor loop")
-        _STOP_EVENT.wait(timeout=interval)
-    log.info("[threads_daemon] Monitor stopped")
+            return max(60, int(os.getenv(env_key, str(_DEFAULT_INTERVAL))))
+        except ValueError:
+            log.warning(
+                "[%s_daemon] Invalid %s=%r, using default %ds",
+                label, env_key, os.getenv(env_key), _DEFAULT_INTERVAL,
+            )
+            return _DEFAULT_INTERVAL
 
+    # Explicit interval_seconds (legacy wrappers/tests) wins over env default.
+    # Honored as-is (old daemons allowed sub-60s values); only the env-derived
+    # default carries the 60s floor.
+    explicit = int(interval_seconds) if interval_seconds else None
 
-def start_threads_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
-    """Start the Threads reply monitor background daemon."""
-    global _DAEMON_THREAD
+    candidates: list[tuple[str, int, object]] = []  # (label, interval, poll_fn)
 
-    if _DAEMON_THREAD is not None and _DAEMON_THREAD.is_alive():
-        log.debug("[threads_daemon] Already running, skipping duplicate start")
-        return _DAEMON_THREAD
+    if only in (None, "threads"):
+        if os.getenv("THREADS_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+            log.info("[threads_daemon] Disabled via THREADS_MONITOR_DAEMON_ENABLED=0, skipping")
+        elif not os.getenv("THREADS_ACCESS_TOKEN") or not os.getenv("THREADS_USER_ID"):
+            log.info(
+                "[threads_daemon] THREADS_ACCESS_TOKEN or THREADS_USER_ID not set — "
+                "Threads monitor daemon will not start"
+            )
+        else:
+            candidates.append(("threads", explicit or _interval("THREADS_REPLY_MONITOR_INTERVAL_SECONDS", "threads"), _poll_threads))
 
-    if os.getenv("THREADS_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
-        log.info("[threads_daemon] Disabled via THREADS_MONITOR_DAEMON_ENABLED=0, skipping")
+    if only in (None, "bluesky"):
+        if os.getenv("BLUESKY_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
+            log.info("[bluesky_daemon] Disabled via BLUESKY_MONITOR_DAEMON_ENABLED=0, skipping")
+        elif not os.getenv("BLUESKY_HANDLE") or not os.getenv("BLUESKY_APP_PASS"):
+            log.info(
+                "[bluesky_daemon] BLUESKY_HANDLE or BLUESKY_APP_PASS not set — "
+                "Bluesky monitor daemon will not start"
+            )
+        else:
+            candidates.append(("bluesky", explicit or _interval("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS", "bluesky"), _poll_bluesky))
+
+    if not candidates:
         return None
 
-    if not os.getenv("THREADS_ACCESS_TOKEN") or not os.getenv("THREADS_USER_ID"):
-        log.info(
-            "[threads_daemon] THREADS_ACCESS_TOKEN or THREADS_USER_ID not set — "
-            "Threads monitor daemon will not start"
-        )
-        return None
+    newly = False
+    for label, iv, fn in candidates:
+        if _register_platform(label, iv, fn):
+            newly = True
 
-    interval = interval_seconds or max(
-        60,
-        int(os.getenv("THREADS_REPLY_MONITOR_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL))),
-    )
+    global _SOCIAL_THREAD
+    if _SOCIAL_THREAD is not None and _SOCIAL_THREAD.is_alive():
+        # newly-registered platform is picked up within ≤1s by the chunked
+        # sleep in _social_loop — nothing to signal.
+        return _SOCIAL_THREAD
 
-    _STOP_EVENT.clear()
+    _SOCIAL_STOP_EVENT.clear()
     thread = threading.Thread(
-        target=_daemon_loop,
-        args=(interval,),
-        name="threads-reply-monitor-daemon",
+        target=_social_loop,
+        name="social-reply-monitor-daemon",
         daemon=True,
     )
     thread.start()
-    _DAEMON_THREAD = thread
+    _SOCIAL_THREAD = thread
     return thread
+
+
+def stop_social_monitor_daemon() -> None:
+    """Signal the unified poller to stop and forget registered platforms."""
+    _DESIRED.clear()
+    stop_event_was_set = _SOCIAL_STOP_EVENT.is_set()
+    _SOCIAL_STOP_EVENT.set()
+    if not stop_event_was_set:
+        pass  # loop exits on next wake
+
+
+# ── legacy single-platform wrappers (kept so existing callers/tests keep working) ──
+
+def start_threads_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
+    """Deprecated: prefer start_social_monitor_daemon()."""
+    return start_social_monitor_daemon(interval_seconds=interval_seconds, only="threads")
 
 
 def stop_threads_monitor_daemon() -> None:
-    """Signal the Threads daemon to stop at the next sleep boundary."""
-    _STOP_EVENT.set()
-
-
-def _bluesky_daemon_loop(interval: int) -> None:
-    log.info("[bluesky_daemon] Monitor started (interval=%ds)", interval)
-    while not _BSKY_STOP_EVENT.is_set():
-        try:
-            from interface.mcp_server.social.services.bluesky import monitor_bluesky_replies
-
-            result = monitor_bluesky_replies(memorize=_bound_memorize())
-            answered = result.get("answered", 0)
-            matched = result.get("matched", 0)
-            errors = result.get("errors", [])
-            if answered:
-                log.info("[bluesky_daemon] Answered %d / %d matched replies", answered, matched)
-            if errors:
-                log.warning("[bluesky_daemon] %d error(s): %s", len(errors), errors[:3])
-        except Exception:
-            log.exception("[bluesky_daemon] Unexpected error in monitor loop")
-        _BSKY_STOP_EVENT.wait(timeout=interval)
-    log.info("[bluesky_daemon] Monitor stopped")
+    """Deprecated: prefer stop_social_monitor_daemon()."""
+    stop_social_monitor_daemon()
 
 
 def start_bluesky_monitor_daemon(interval_seconds: int | None = None) -> threading.Thread | None:
-    """Start the Bluesky reply monitor background daemon."""
-    global _BSKY_DAEMON_THREAD
-
-    if _BSKY_DAEMON_THREAD is not None and _BSKY_DAEMON_THREAD.is_alive():
-        log.debug("[bluesky_daemon] Already running, skipping duplicate start")
-        return _BSKY_DAEMON_THREAD
-
-    if os.getenv("BLUESKY_MONITOR_DAEMON_ENABLED", "1").strip().lower() in {"0", "false", "no", "off"}:
-        log.info("[bluesky_daemon] Disabled via BLUESKY_MONITOR_DAEMON_ENABLED=0, skipping")
-        return None
-
-    if not os.getenv("BLUESKY_HANDLE") or not os.getenv("BLUESKY_APP_PASS"):
-        log.info(
-            "[bluesky_daemon] BLUESKY_HANDLE or BLUESKY_APP_PASS not set — "
-            "Bluesky monitor daemon will not start"
-        )
-        return None
-
-    try:
-        raw = os.getenv("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL))
-        parsed = int(raw)
-        interval = interval_seconds or max(60, parsed)
-    except ValueError:
-        log.warning(
-            "[bluesky_daemon] Invalid BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS=%r, using default %ds",
-            os.getenv("BLUESKY_REPLY_MONITOR_INTERVAL_SECONDS"),
-            _DEFAULT_INTERVAL,
-        )
-        interval = interval_seconds or _DEFAULT_INTERVAL
-
-    _BSKY_STOP_EVENT.clear()
-    thread = threading.Thread(
-        target=_bluesky_daemon_loop,
-        args=(interval,),
-        name="bluesky-reply-monitor-daemon",
-        daemon=True,
-    )
-    thread.start()
-    _BSKY_DAEMON_THREAD = thread
-    return thread
+    """Deprecated: prefer start_social_monitor_daemon()."""
+    return start_social_monitor_daemon(interval_seconds=interval_seconds, only="bluesky")
 
 
 def stop_bluesky_monitor_daemon() -> None:
-    """Signal the Bluesky daemon to stop at the next sleep boundary."""
-    _BSKY_STOP_EVENT.set()
+    """Deprecated: prefer stop_social_monitor_daemon()."""
+    stop_social_monitor_daemon()

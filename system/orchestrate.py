@@ -962,6 +962,23 @@ def run_session(ui, args) -> None:
     # Boot is pre-auth safe: memory opens on the tempfile-backed guest DB and
     # user-scoped seeding is deferred to the first authenticated WS connect
     # (AikoWeb._on_user_active). Identity (user_id / display name) is applied
+
+    # Social reply daemon — the SINGLE poller for Threads (and Bluesky)
+    # triggers. Started pre-boot so Aiko can reply without anyone logging in;
+    # no-ops itself when credentials are missing or the monitor is disabled
+    # via THREADS_MONITOR_DAEMON_ENABLED / BLUESKY_MONITOR_DAEMON_ENABLED.
+    # The legacy scheduler threads_reply_monitor job is retired on every
+    # social bootstrap — two concurrent pollers answered comments twice.
+    try:
+        from interface.mcp_server.social.monitor_daemon import (
+            start_threads_monitor_daemon,
+            start_bluesky_monitor_daemon,
+        )
+        start_threads_monitor_daemon()
+        start_bluesky_monitor_daemon()
+    except Exception:
+        log.debug("Social reply daemons failed to start", exc_info=True)
+
     # per browser connection inside AikoWeb._ws_handler; the CLI resolves its
     # identity in run_cli() before run_session() is ever called.
 

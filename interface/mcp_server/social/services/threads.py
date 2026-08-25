@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -704,8 +705,27 @@ def _post_threads_reply(token: str, user_id: str, text: str, reply_to_id: str, i
     return {"ok": 200 <= response.status_code < 300, "status_code": response.status_code, "response_id": response_id}
 
 
+_MONITOR_RUN_LOCK = threading.Lock()
+
+
 def monitor_threads_replies(memorize=None) -> dict:
-    """Find and answer new replies containing Hi {AI_NAME} or @{THREADS_USERNAME}."""
+    """Find and answer new replies containing Hi {AI_NAME} or @{THREADS_USERNAME}.
+
+    Guarded by a single in-process run lock: the always-on reply daemon and a
+    legacy scheduler invocation of the same handler must never poll
+    concurrently, or both can pass the has-processed check before either
+    publishes and answer the same comment twice. Overlapping callers skip
+    their cycle instead of queueing behind it.
+    """
+    if not _MONITOR_RUN_LOCK.acquire(blocking=False):
+        return {"ok": True, "provider": "threads", "skipped": "monitor_run_in_progress", "matched": 0, "answered": 0, "errors": []}
+    try:
+        return _monitor_threads_replies_locked(memorize)
+    finally:
+        _MONITOR_RUN_LOCK.release()
+
+
+def _monitor_threads_replies_locked(memorize=None) -> dict:
     token = _get_threads_token()
     if isinstance(token, dict) and not token.get("ok", True):
         return token

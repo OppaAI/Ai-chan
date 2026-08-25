@@ -126,7 +126,10 @@ class AikoWeb:
 
         self._input_q: queue.Queue[tuple[str, str, str]] = queue.Queue()
 
-        self._audio_q: queue.Queue[bytes] = queue.Queue(maxsize=10000)
+        # 4096 frames × 512 samples ≈ 8MB ceiling ≈ 13s of 16kHz mono f32 —
+        # ample headroom for VAD-gated speech bursts; raw-mic mode drops
+        # frames when full instead of ballooning RAM (was 10000 / ~20MB).
+        self._audio_q: queue.Queue[bytes] = queue.Queue(maxsize=4096)
         self._mic_active = threading.Event()
         self._did_barge_in: bool = False
 
@@ -747,10 +750,6 @@ class AikoWeb:
 
 def run_webui(args) -> None:
     from system.orchestrate import run_session
-    from interface.mcp_server.social.monitor_daemon import (
-        start_threads_monitor_daemon,
-        start_bluesky_monitor_daemon,
-    )
 
     import socket
     ui = AikoWeb(no_voice=args.text, debug=args.debug)
@@ -758,9 +757,6 @@ def run_webui(args) -> None:
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
     print("  Booting subsystems now — browsers can log in while Aiko wakes up.\n")
-    # Start social reply monitors immediately — before the login gate —
-    # so Aiko can reply on Threads/Bluesky without anyone logging into the WebUI.
-    # No-op if the matching credentials are not configured.
-    start_threads_monitor_daemon()
-    start_bluesky_monitor_daemon()
+    # Social reply daemons start inside run_session() — the single poller for
+    # Threads/Bluesky, common to the WebUI and CLI front ends.
     run_session(ui, args)

@@ -971,24 +971,38 @@ def ensure_video_social_job(timezone: str | None = None, user_id: str | None = N
     log.info("Seeded video social scan job every %ss", max(60, VIDEO_SOCIAL_SCAN_INTERVAL_SECONDS))
 
 
-def ensure_threads_reply_monitor_job(timezone: str | None = None, user_id: str | None = None) -> None:
-    """Seed the recurring Threads reply trigger monitor."""
-    existing_titles = {job.get("title") for job in _read_all(user_id=user_id)}
-    if THREADS_REPLY_MONITOR_JOB_TITLE in existing_titles:
+def disable_threads_reply_monitor_job(user_id: str | None = None) -> None:
+    """Retire the legacy scheduler threads_reply_monitor job.
+
+    The always-on reply daemon (interface.mcp_server.social.monitor_daemon)
+    is the single Threads poller. Running the scheduler job alongside it made
+    two pollers race past the has-processed check and answer the same comment
+    twice, so any persisted monitor job is disabled on every social bootstrap.
+    """
+    path = schedule_path(user_id=user_id)
+    if not path.exists():
         return
-    interval = max(60, THREADS_REPLY_MONITOR_INTERVAL_SECONDS)
-    schedule_job_record(
-        title=THREADS_REPLY_MONITOR_JOB_TITLE,
-        task="Check Aiko Threads posts for replies containing Hi Aiko",
-        time_of_day="00:00",
-        frequency="interval",
-        timezone=timezone,
-        action="agentic",
-        handler="threads_reply_monitor",
-        interval_seconds=interval,
-        user_id=user_id,
-    )
-    log.info("Seeded Threads reply monitor every %ss", interval)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, list):
+        return
+    changed = False
+    for job in data:
+        if not isinstance(job, dict):
+            continue
+        if job.get("title") != THREADS_REPLY_MONITOR_JOB_TITLE and job.get("handler") != THREADS_REPLY_MONITOR_JOB_TITLE:
+            continue
+        if job.get("enabled", True):
+            job["enabled"] = False
+            changed = True
+            log.info(
+                "Disabled scheduler Threads reply monitor job %r (reply daemon is the single poller)",
+                job.get("id") or job.get("title"),
+            )
+    if changed:
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + chr(10), encoding="utf-8")
 
 
 def register_social_handlers(
@@ -1020,13 +1034,11 @@ def register_social_handlers(
         run_scheduled_video_social,
         retry_weekly_social_if_needed,
     )
-    from interface.mcp_server.social.services.threads import monitor_threads_replies
 
     register_system_handler("weekly_social", run_scheduled_weekly_social)
     register_system_handler("photo_social", lambda memorize: run_scheduled_photo_social())
     register_system_handler("video_social", lambda memorize: run_scheduled_video_social())
     register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
-    register_system_handler("threads_reply_monitor", lambda memorize: monitor_threads_replies(memorize))
 
     if not seed_jobs:
         # Pre-auth registration — job seeding writes into the user's
@@ -1039,7 +1051,7 @@ def register_social_handlers(
     ensure_photo_social_job(timezone, user_id=user_id)
     ensure_video_social_job(timezone, user_id=user_id)
     ensure_weekly_social_retry_job(timezone, user_id=user_id)
-    ensure_threads_reply_monitor_job(timezone, user_id=user_id)
+    disable_threads_reply_monitor_job(user_id=user_id)
 
     # Schedule-graphs (DAG-based scheduled workflows) — migrated out of
     # schedule.json one lane at a time.  Currently seeds Lane D only.
@@ -1116,9 +1128,8 @@ def register_system_handlers_only(
 
     Guest-safe subset of bootstrap_non_system_jobs(): populates the
     process-global _SYSTEM_HANDLERS registry so scheduled jobs that fire
-    before a real login (e.g. threads_reply_monitor right after a browser
-    connects) find their handlers instead of being skipped. Job seeding,
-    watchers, and anything writing under USER_SPACE_ROOT stay in
+    before a real login find their handlers instead of being skipped. Job
+    seeding, watchers, and anything writing under USER_SPACE_ROOT stay in
     bootstrap_non_system_jobs(), which runs once a real user exists.
     """
     if think is not None:

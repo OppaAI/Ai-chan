@@ -39,6 +39,9 @@ THREADS_REPLY_LOG_DIR: "logs/threads"  # One redacted JSONL archive per calendar
 THREADS_IMAGEGEN_ENABLED: "1"  # Let Aiko generate and attach an image when a reply explicitly asks her to draw/gen one.
 THREADS_IMAGEGEN_TIMEOUT: "300"  # Seconds before the IMAGEGEN_URL generation call times out (Modal cold starts are slow).
 IMGBB_UPLOAD_TIMEOUT: "30"  # Seconds before ImgBB image upload calls time out.
+# THREADS_MONITOR_DAEMON_ENABLED: .env only (default "1"). The reply daemon started by
+# run_session() is the SINGLE Threads poller; the legacy scheduler monitor job is retired
+# on every social bootstrap. Set "0" to stop Threads reply polling entirely.
 
 # -- Bluesky two-way reply monitor --
 # Handle / app password: BLUESKY_HANDLE + BLUESKY_APP_PASS in .env only.
@@ -51,7 +54,7 @@ BLUESKY_RECALL_ENABLED: "1"
 BLUESKY_IMAGEGEN_ENABLED: "1"
 BLUESKY_IMAGEGEN_TIMEOUT: "300"
 BLUESKY_REPLY_LOG_DIR: "logs/bluesky"
-BLUESKY_MONITOR_DAEMON_ENABLED: "1"
+BLUESKY_MONITOR_DAEMON_ENABLED: "1"  # Single Bluesky reply poller, started by run_session(); "0" stops polling.
 
 # -- Photo social (Lane B — Pixelfed) --
 PHOTO_SOCIAL_AUTODRAFT: "0"  # Auto-generate draft photo captions.
