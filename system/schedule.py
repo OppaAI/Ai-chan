@@ -991,7 +991,11 @@ def ensure_threads_reply_monitor_job(timezone: str | None = None, user_id: str |
     log.info("Seeded Threads reply monitor every %ss", interval)
 
 
-def register_social_handlers(timezone: str | None = None, user_id: str | None = None) -> None:
+def register_social_handlers(
+    timezone: str | None = None,
+    user_id: str | None = None,
+    seed_jobs: bool = True,
+) -> None:
     """Register the weekly/photo/video social handlers and seed their jobs.
 
     This is the concrete version of the pattern this module's module-level
@@ -1024,6 +1028,13 @@ def register_social_handlers(timezone: str | None = None, user_id: str | None = 
     register_system_handler("weekly_social_retry", retry_weekly_social_if_needed)
     register_system_handler("threads_reply_monitor", lambda memorize: monitor_threads_replies(memorize))
 
+    if not seed_jobs:
+        # Pre-auth registration — job seeding writes into the user's
+        # schedule.json and must wait for a real identity (see
+        # register_system_handlers_only / bootstrap_non_system_jobs).
+        log.info("Registered social handlers (pre-auth, seeding deferred).")
+        return
+
     ensure_weekly_social_job(timezone, user_id=user_id)
     ensure_photo_social_job(timezone, user_id=user_id)
     ensure_video_social_job(timezone, user_id=user_id)
@@ -1036,6 +1047,103 @@ def register_social_handlers(timezone: str | None = None, user_id: str | None = 
 
     disable_legacy_job_post_tool_jobs(user_id=user_id)
     log.info("Registered social handlers and seeded social jobs; Lane D uses schedule_graphs.json.")
+
+
+def _workspace_scan_handler(_memorize) -> None:
+    """System-handler callable: ingest the workspace knowledge folder.
+
+    Module-level so both pre-auth handler registration
+    (register_system_handlers_only) and post-login bootstrap can bind the
+    same callable; identity is read from _memorize at fire time.
+    """
+    from cognition.knowledge import ingest_workspace_knowledge_folder
+
+    ingest_workspace_knowledge_folder(
+        embedder=_memorize.embedder(),
+        user_id=_memorize.get_user_id(),
+    )
+
+
+def _check_email_handler(_memorize) -> None:
+    """System-handler callable: check ProtonMail for new job-posting emails."""
+    try:
+        from agentic.registry import registry
+        spec = registry.get("read_protonmail")
+        if spec is None or spec.handler is None:
+            log.warning("Email check: read_protonmail MCP tool is not registered")
+            return
+        result = spec.handler(max_results=20, list_only=True)
+        if not isinstance(result, dict) or not result.get("ok"):
+            return
+        messages = result.get("messages") or []
+        if not messages:
+            return
+
+        # Filter for job-related emails
+        job_keywords = ["linkedin", "glassdoor", "indeed", "job alert", "job notification",
+                        "new job", "recommended job", "job match", "career", "hiring",
+                        "software engineer", "developer", "programmer", "devops", "data scientist"]
+        job_alerts = []
+        for msg in messages:
+            subject = str(msg.get("subject") or "").strip()
+            snippet = str(msg.get("snippet") or "").strip()
+            content = f"{subject} {str(msg.get('from') or '')} {snippet}".casefold()
+            if any(kw in content for kw in job_keywords):
+                job_alerts.append(f"📧 {msg.get('from')}: {subject[:80]}")
+
+        if job_alerts:
+            # Use the memorize's think reference to speak
+            think = getattr(_memorize, '_think', None) or getattr(_memorize, '_think_ref', None)
+            if think:
+                speak = think._get_speak()
+                if speak:
+                    speak.speak("New job alerts in email: " + "; ".join(job_alerts))
+                else:
+                    log.info("Email job alerts found: %s", job_alerts)
+            else:
+                log.info("Email job alerts found: %s", job_alerts)
+    except Exception as e:
+        log.warning("Email check handler failed: %s", e)
+
+
+def register_system_handlers_only(
+    *,
+    think: Any | None = None,
+    memorize: Any | None = None,
+    timezone: str | None = None,
+) -> None:
+    """Register every system-handler callable WITHOUT touching user files.
+
+    Guest-safe subset of bootstrap_non_system_jobs(): populates the
+    process-global _SYSTEM_HANDLERS registry so scheduled jobs that fire
+    before a real login (e.g. threads_reply_monitor right after a browser
+    connects) find their handlers instead of being skipped. Job seeding,
+    watchers, and anything writing under USER_SPACE_ROOT stay in
+    bootstrap_non_system_jobs(), which runs once a real user exists.
+    """
+    if think is not None:
+        try:
+            from cognition.memory import learn
+
+            learn.register_deep_study_handlers(
+                client=getattr(think, "_client", None),
+                model=getattr(think, "_llm_model", None),
+                timezone=timezone,
+                seed_jobs=False,
+            )
+        except Exception:
+            log.exception("Failed to register deep-study schedule handlers.")
+
+    try:
+        register_system_handler("workspace_knowledge_scan", _workspace_scan_handler)
+        register_system_handler("check_email", _check_email_handler)
+    except Exception:
+        log.exception("Failed to register knowledge/email schedule handlers.")
+
+    try:
+        register_social_handlers(timezone=timezone, seed_jobs=False)
+    except Exception:
+        log.exception("Failed to register social schedule handlers.")
 
 
 def bootstrap_non_system_jobs(
@@ -1053,77 +1161,23 @@ def bootstrap_non_system_jobs(
       - social jobs, including the daily job-post tool call
     """
     user_id = memorize.get_user_id() if memorize and hasattr(memorize, 'get_user_id') else None
-    
-    if think is not None:
-        try:
-            from cognition.memory import learn
 
-            learn.register_deep_study_handlers(
-                client=getattr(think, "_client", None),
-                model=getattr(think, "_llm_model", None),
-                timezone=timezone,
-                user_id=user_id,
-            )
-        except Exception:
-            log.exception("Failed to bootstrap deep-study schedule jobs.")
+    # Handler registration (process-global dict writes — guest-safe).
+    # Re-registering here on the post-login path is an idempotent overwrite.
+    register_system_handlers_only(think=think, memorize=memorize, timezone=timezone)
+
+    # Deep-study window job seeding (handlers were registered above without
+    # seeding; see learn.register_deep_study_handlers(seed_jobs=False)).
+    try:
+        ensure_deep_study_window_jobs(
+            timezone=timezone or os.getenv("DEEP_STUDY_WINDOW_TIMEZONE", ""),
+            user_id=user_id,
+        )
+    except Exception:
+        log.exception("Failed to seed deep-study window schedule jobs.")
 
     if memorize is not None:
         try:
-            from cognition.knowledge import ingest_workspace_knowledge_folder
-
-            def _scan_knowledge_folder(_memorize) -> None:
-                ingest_workspace_knowledge_folder(
-                    embedder=_memorize._mem._embedder,
-                    user_id=_memorize.get_user_id(),
-                )
-
-            register_system_handler("workspace_knowledge_scan", _scan_knowledge_folder)
-
-            # Email checking handler
-            def _check_email(_memorize) -> None:
-                """Check ProtonMail for new messages and notify about job postings."""
-                try:
-                    from agentic.registry import registry
-                    spec = registry.get("read_protonmail")
-                    if spec is None or spec.handler is None:
-                        log.warning("Email check: read_protonmail MCP tool is not registered")
-                        return
-                    result = spec.handler(max_results=20, list_only=True)
-                    if not isinstance(result, dict) or not result.get("ok"):
-                        return
-                    messages = result.get("messages") or []
-                    if not messages:
-                        return
-                    
-                    # Filter for job-related emails
-                    job_keywords = ["linkedin", "glassdoor", "indeed", "job alert", "job notification", 
-                                   "new job", "recommended job", "job match", "career", "hiring",
-                                   "software engineer", "developer", "programmer", "devops", "data scientist"]
-                    job_alerts = []
-                    for msg in messages:
-                        subject = str(msg.get("subject") or "").strip()
-                        sender = str(msg.get("from") or "").strip()
-                        snippet = str(msg.get("snippet") or "").strip()
-                        content = f"{subject} {sender} {snippet}".casefold()
-                        if any(kw in content for kw in job_keywords):
-                            job_alerts.append(f"📧 {sender}: {subject[:80]}")
-                    
-                    if job_alerts:
-                        # Use the memorize's think reference to speak
-                        think = getattr(_memorize, '_think', None) or getattr(_memorize, '_think_ref', None)
-                        if think:
-                            speak = think._get_speak()
-                            if speak:
-                                speak.speak("New job alerts in email: " + "; ".join(job_alerts))
-                            else:
-                                log.info("Email job alerts found: %s", job_alerts)
-                        else:
-                            log.info("Email job alerts found: %s", job_alerts)
-                except Exception as e:
-                    log.warning("Email check handler failed: %s", e)
-
-            register_system_handler("check_email", _check_email)
-            
             # Seed email checking job (every 30 minutes during day hours).
             # Guard by title like the other seeders — the old seeder appended a
             # fresh record on every boot, producing N duplicate "Check email for
@@ -1153,7 +1207,7 @@ def bootstrap_non_system_jobs(
             if _knowledge_folder_watcher is None:
                 _knowledge_folder_watcher = KnowledgeFolderWatcher(
                     knowledge_dir=KNOWLEDGE_WORKSPACE_DIR,
-                    on_files=lambda files: _scan_knowledge_folder(memorize),
+                    on_files=lambda files: _workspace_scan_handler(memorize),
                 )
             if not _knowledge_folder_watcher.start():
                 # inotify unavailable — keep the interval job as a safety net.
@@ -1164,7 +1218,7 @@ def bootstrap_non_system_jobs(
             log.exception("Failed to bootstrap workspace knowledge schedule job.")
 
     try:
-        register_social_handlers(timezone, user_id=user_id)
+        register_social_handlers(timezone=timezone, user_id=user_id, seed_jobs=True)
     except Exception:
         log.exception("Failed to bootstrap social schedule jobs.")
 

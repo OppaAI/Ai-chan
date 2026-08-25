@@ -33,6 +33,18 @@ _BSKY_STOP_EVENT = threading.Event()
 
 _DEFAULT_INTERVAL = 180  # seconds — same default as scheduler job
 
+# Late-bound memory handle. Daemons start before wakeup boots the memory
+# subsystem (and before anyone logs in), so they can't receive AikoMemorize
+# at construction time. run_session() injects it post-boot via
+# set_shared_memorize(); each poll cycle reads whatever is current, so
+# replies gain long-term recall + memory saving without a restart.
+_SHARED_MEMORIZE: dict = {"ref": None}
+
+
+def set_shared_memorize(memorize) -> None:
+    """Inject the live AikoMemorize instance into both monitor daemons."""
+    _SHARED_MEMORIZE["ref"] = memorize
+
 
 def _daemon_loop(interval: int) -> None:
     """Background loop: poll Threads, sleep, repeat."""
@@ -40,7 +52,7 @@ def _daemon_loop(interval: int) -> None:
     while not _STOP_EVENT.is_set():
         try:
             from interface.mcp_server.social.services.threads import monitor_threads_replies
-            result = monitor_threads_replies(memorize=None)
+            result = monitor_threads_replies(memorize=_SHARED_MEMORIZE["ref"])
             answered = result.get("answered", 0)
             matched = result.get("matched", 0)
             errors = result.get("errors", [])
@@ -101,7 +113,7 @@ def _bluesky_daemon_loop(interval: int) -> None:
         try:
             from interface.mcp_server.social.services.bluesky import monitor_bluesky_replies
 
-            result = monitor_bluesky_replies(memorize=None)
+            result = monitor_bluesky_replies(memorize=_SHARED_MEMORIZE["ref"])
             answered = result.get("answered", 0)
             matched = result.get("matched", 0)
             errors = result.get("errors", [])

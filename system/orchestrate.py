@@ -993,6 +993,14 @@ def run_session(ui, args) -> None:
     if memorize is not None and hasattr(ui, "set_memorize"):
         ui.set_memorize(memorize)
 
+    # Social reply daemons started pre-boot with no memory handle — inject
+    # the live one now so their replies gain long-term recall + saving.
+    try:
+        from interface.mcp_server.social.monitor_daemon import set_shared_memorize
+        set_shared_memorize(memorize)
+    except Exception:
+        log.debug("Social monitor daemon memory injection skipped", exc_info=True)
+
     # If a browser already authenticated while boot was running, its connect-
     # time seeding deferred itself (subsystem refs weren't ready yet) — run
     # the post-login hook now that think/memorize/scheduler are all live.

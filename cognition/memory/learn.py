@@ -868,6 +868,7 @@ def register_deep_study_handlers(
     model=None,
     timezone: str | None = None,
     user_id: str | None = None,
+    seed_jobs: bool = True,
 ) -> None:
     """Call once at app startup to wire deep_studying into the scheduler's
     window (weekdays 05:00-18:00, weekends 05:00-10:00 by default) and seed
@@ -898,8 +899,13 @@ def register_deep_study_handlers(
         functools.partial(deep_study_window_start, client=client, model=model),
     )
     _schedule.register_system_handler("deep_study_stop", deep_study_window_stop)
-    _schedule.ensure_deep_study_window_jobs(
-        timezone=timezone or os.getenv("DEEP_STUDY_WINDOW_TIMEZONE", ""),
-        user_id=user_id,
-    )
-    log.info("[deep_study_window] handlers registered and window jobs ensured.")
+    if seed_jobs:
+        # Seeding writes into the user's schedule.json — skipped when
+        # registering pre-auth (guest has no store; see
+        # system.schedule.register_system_handlers_only).
+        _schedule.ensure_deep_study_window_jobs(
+            timezone=timezone or os.getenv("DEEP_STUDY_WINDOW_TIMEZONE", ""),
+            user_id=user_id,
+        )
+    log.info("[deep_study_window] handlers registered%s.",
+             " and window jobs ensured" if seed_jobs else " (pre-auth, seeding deferred)")
