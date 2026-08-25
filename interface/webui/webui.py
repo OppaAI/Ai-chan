@@ -632,6 +632,8 @@ class AikoWeb:
     def get_voice_input(self, listen, speak=None, wait_fn=None):
         result_holder = [None]
         done_event    = threading.Event()
+        # Track the accepted user identity from the first frame
+        accepted_user = {"uid": None, "display_name": None}
 
         if not self._did_barge_in:
             while True:
@@ -652,6 +654,13 @@ class AikoWeb:
 
             if isinstance(item, tuple):
                 raw, uid, display_name = item
+                # Reject frames from different users once we've accepted one
+                if accepted_user["uid"] is None:
+                    accepted_user["uid"] = uid
+                    accepted_user["display_name"] = display_name
+                elif accepted_user["uid"] != uid:
+                    # Drop frame from different user
+                    return None
                 set_current_user_id(uid)
                 set_current_display_name(display_name)
             else:
@@ -735,6 +744,11 @@ class AikoWeb:
                 set_current_display_name(display_name)
                 return (text, {})
             return (text_input, {})
+
+        # Restore the accepted user identity before returning ASR result
+        if accepted_user["uid"] is not None:
+            set_current_user_id(accepted_user["uid"])
+            set_current_display_name(accepted_user["display_name"])
 
         raw = result_holder[0]
         if isinstance(raw, tuple):
