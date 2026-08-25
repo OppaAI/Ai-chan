@@ -18,7 +18,6 @@ import ssl
 import subprocess
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 from system.config import load_config
@@ -223,11 +222,10 @@ class AikoWeb:
         hostname = socket.gethostname()
         host_ip = socket.gethostbyname(hostname)
         self._ssl_context = _make_ssl_context(hostname, host_ip)
-        scheme = "https" if self._ssl_context else "http"
-
+    
         from interface.webui.auth import app as auth_app
         from starlette.staticfiles import StaticFiles
-
+    
         has_static = False
         for route in auth_app.routes:
             if hasattr(route, "name") and route.name == "static":
@@ -235,14 +233,11 @@ class AikoWeb:
                 break
         if not has_static:
             auth_app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
-
+    
         http_t = threading.Thread(target=self._run_http, daemon=True, name="aiko-http")
         http_t.start()
-
+    
         self._loop_ready.wait(timeout=5)
-
-        if not NO_BROWSER:
-            threading.Timer(0.6, lambda: webbrowser.open(f"{scheme}://{host_ip}:{HTTP_PORT}/")).start()
 
     def _run_http(self) -> None:
         import uvicorn
