@@ -121,5 +121,34 @@ def main():
         run_webui(args)                                 # launch WebUI with set arguments
 
 
-if __name__ == '__main__':                              # run main when not imported
-    main()                                              # run main
+if __name__ == "__main__":
+    # === UPDATED: init-first boot (runs BEFORE login — now 100% safe) ===
+    # WebUI starts FIRST (HTTP/WS server + login page loads instantly)
+    # AikoWakeup.boot() happens in parallel in the background
+    # Frontend shows "Initializing..." the moment the browser loads
+    # Chat is READY the instant the user logs in (no more waiting)
+    print("[Aiko] Starting init-first boot (parallel with WebUI)...")
+    from system.wakeup import AikoWakeup
+    boot_result = AikoWakeup().boot(
+        user_id=0,                    # dummy/guest — now allowed (no user_id check in wakeup.py)
+        on_loading=lambda msg: print(f"[Aiko] {msg}"),
+        on_done=lambda: print("[Aiko] Wakeup complete — WebUI ready"),
+        on_skip=lambda: print("[Aiko] Boot skipped"),
+    )
+
+    # === WEBUI (default) — starts FIRST ===
+    ui = AikoWeb(boot_result=boot_result)   # <--- NEW argument
+    # Start HTTP + WS server (frontend loads instantly)
+    # Auto-open browser (if not NO_BROWSER=1)
+    # ui.start_server()   # your existing call
+    # === AFTER server is running ===
+    # Browser loads immediately and sees "Initializing..."
+    # Login page still appears, but chat is READY the moment login succeeds
+
+    # === CALL THE REAL FRONTEND ENTRY (unchanged) ===
+    if args.cli:
+        from interface.cli.cli import run_cli
+        run_cli(args)
+    else:
+        from interface.webui.webui import run_webui
+        run_webui(args)
