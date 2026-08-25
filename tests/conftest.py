@@ -17,7 +17,7 @@ import pytest
 # Ensure config is loaded before any module imports
 os.environ.setdefault("WORKSPACE_ROOT", "/tmp/aiko_test_workspace")
 
-sys.path.insert(0, "/home/oppa-ai/jetson")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from system.config import load_config
 load_config()
 
