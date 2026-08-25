@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import time
 from functools import wraps
-from typing import Any, Callable
+from typing import Any, Callable, get_type_hints
 
 from social.state import get_db
 
@@ -123,6 +123,27 @@ def wrap_tool(tool_name: str, fn: Callable[..., dict]) -> Callable[..., dict]:
 
         return result
 
-    # Preserve the original function's signature for FastMCP schema introspection
-    wrapped.__signature__ = fn_sig
+    # Preserve the original function's signature for FastMCP schema introspection.
+    # Service modules use `from __future__ import annotations`, so their parameter
+    # annotations are strings ("Optional[str]"). FastMCP evaluates those strings
+    # against the *wrapper's* globals (guards.py), where names like Optional don't
+    # exist — pydantic then fails with "not fully defined". Resolve the hints
+    # against the original function's module globals instead and expose concrete
+    # type objects on the wrapper.
+    try:
+        resolved = get_type_hints(fn)
+    except Exception:
+        resolved = {}
+
+    if resolved:
+        params = [
+            p.replace(annotation=resolved.get(p.name, p.annotation))
+            for p in fn_sig.parameters.values()
+        ]
+        wrapped.__signature__ = fn_sig.replace(
+            parameters=params, return_annotation=resolved.get("return", fn_sig.return_annotation)
+        )
+        wrapped.__annotations__ = resolved
+    else:
+        wrapped.__signature__ = fn_sig
     return wrapped

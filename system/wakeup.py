@@ -5,6 +5,12 @@ Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequenci
 main.py calls AikoWakeup().boot(...) and receives a BootResult with all live
 subsystem references; it never needs to know the startup choreography.
 
+Boot is pre-auth safe: no step here requires a logged-in user. Memory opens on
+the tempfile-backed guest DB until a real user connects (AikoWeb then calls
+switch_user()/set_display_name() per browser session), and user-scoped seeding
+(playbooks, schedule jobs) is deferred to the first authenticated connection —
+see interface/webui/webui.py's _on_user_active().
+
 Progress is reported through three injected callbacks so wakeup.py stays
 completely UI-ignorant:
     on_loading(key)  — subsystem is starting
@@ -88,8 +94,6 @@ from concurrent.futures import ThreadPoolExecutor           # for parallel subsy
 from dataclasses import dataclass                           # for dataclass to hold subsystem references 
 from typing import Any                                      # Any still lives in typing — collections.abc has no equivalent
 import threading                                            # for booting up cognition core and memory system in parallel
-import json                                                 # for reading the persisted OAuth session token
-from pathlib import Path                                    # for locating the stored auth token file
 
 # Must run before the system.* imports below — those modules read secrets
 # from os.environ at import time, and this decrypts .env.age into os.environ.
@@ -132,24 +136,6 @@ class BootResult:
 BootCallback = Callable[[str], None]                        # Callback for boot progress: takes step key (string)
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-def _stored_display_name() -> str | None:
-    """Resolve the display name from the persisted OAuth session
-    (~/.aiko/auth_token.json → user.login) without needing an active
-    login context. Returns None when no usable token is stored.
-
-    Used as a boot-time fallback so memory pins get the human-readable
-    name (e.g. "OppaAI") even before any web session resolves it.
-    """
-    try:
-        token_path = Path.home() / ".aiko" / "auth_token.json"     # persisted OAuth token
-        if not token_path.is_file():                                # no stored session → nothing to resolve
-            return None
-        data = json.loads(token_path.read_text(encoding="utf-8"))   # read token payload
-        user = data.get("user") or {}                               # nested user object
-        return user.get("login") or None                            # e.g. "OppaAI"
-    except Exception:
-        return None                                                 # token unreadable → keep fallback behaviour
 
 def _prewarm_semantic_cache(think) -> None:
     """Warm both semantic caches used by first-turn routing/capability
@@ -273,27 +259,12 @@ class AikoWakeup:
 
         def init_memorize():
             try:
-                memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))         # initiate memory system (with logging off to prevent duplicate)
+                memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))        # initiate memory system (with logging off to prevent duplicate)
 
-                def _set_display_name():
-                    """Pin the resolved display name to the memory backend before
-                    any recall happens, so pinned memories can use a
-                    human-readable name instead of a raw user_id."""
-                    from system.userspace import current_display_name                         # access userspace module
-                    display_name = current_display_name()                                     # get the username resolved from OAuth
-                    if display_name == memorize.get_user_id():                                # fell back to raw user_id — try stored OAuth session
-                        stored = _stored_display_name()
-                        if stored:
-                            display_name = stored
-                    memorize.set_display_name(display_name)                                   # pass the username to memory system
-                    if display_name == memorize.get_user_id():                                # if display name fell back to raw user id, log warning
-                        log.warning(
-                            "[wakeup] No display name for user_id=%s — memory pins "
-                            "will use raw user_id until the user logs in.",
-                            display_name,
-                        )
+                # No user-id work here — boot may run before anyone logs in.
+                # Display-name pinning + per-user store switching happen when a
+                # real identity connects (webui._ws_handler / cli.py).
 
-                _boot_step('mem_display_name', _set_display_name)                             # pass the username to memory system
                 _boot_step('mem_cleanup', lambda: memorize.cleanup())                         # prune decayed memories
                 _boot_step('mem_ready')                                                       # mark the memory system ready
 

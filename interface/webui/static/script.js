@@ -1,5 +1,5 @@
 /**
- * webui.js
+ * script.js
  * Real-time chat UI with WebSocket bridge to Aiko backend.
  * Handles voice I/O (mic capture via pcm-worklet + VAD, TTS playback with mouth sync),
  * WebSocket message routing (chat, token streaming, vitals, expressions, visemes),
@@ -13,6 +13,11 @@
  *
  *      sets AIKO_TTS_STARTED_AT on TTS start + AIKO_BARGE_ECHO_GUARD_MS on mic start
  *      so vad.js can ignore self-echo barge for BARGE_IN_ECHO_GUARD_MS after TTS begins.
+ *
+ * UI extras:
+ *   - theme switch (style.css light ⇄ style-dark.css dark), persisted in localStorage
+ *   - shoujo-mode flourishes: chat bubbles, typing indicator, emotion badge,
+ *     floating emotion particles (hidden by style-dark.css in dark mode)
  */
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
@@ -31,6 +36,10 @@ const wsLabel = document.getElementById('ws-label');
 const vadDot = document.getElementById('vad-dot');
 const vadStatus = document.getElementById('vad-status');
 
+const emotionBadge = document.getElementById('emotion-badge');
+const emotionEmoji = document.getElementById('emotion-emoji');
+const emotionText = document.getElementById('emotion-text');
+
 const bootProgressFill = document.getElementById('boot-progress-fill');
 const bootProgressMsg = document.getElementById('boot-progress-msg');
 
@@ -45,6 +54,46 @@ let autoListenRequested = false;
 
 // Default barge-in off until server mic.start sets it (S0).
 window.AIKO_BARGE_IN_ENABLED = false;
+
+// ── theme switch (style.css light ⇄ style-dark.css dark) ──────────────────
+// index.html's inline <head> script has already applied the saved choice to
+// the <link disabled> flags to avoid a flash; here we just keep the toggle
+// button icon in sync and handle clicks.
+const THEME_KEY = 'aiko-theme';
+const themeToggleBtn = document.getElementById('theme-toggle');
+
+function applyTheme(theme) {
+  const dark = theme === 'dark';
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  const lightLink = document.getElementById('theme-style-light');
+  const darkLink = document.getElementById('theme-style-dark');
+  if (lightLink && darkLink) {
+    lightLink.disabled = dark;
+    darkLink.disabled = !dark;
+  }
+  if (themeToggleBtn) {
+    const sunIcon = themeToggleBtn.querySelector('.icon-sun');
+    const moonIcon = themeToggleBtn.querySelector('.icon-moon');
+    if (sunIcon) sunIcon.style.display = dark ? '' : 'none';
+    if (moonIcon) moonIcon.style.display = dark ? 'none' : '';
+    themeToggleBtn.title = dark ? 'Switch to light mode' : 'Switch to dark mode';
+  }
+}
+
+function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch (_) { /* storage blocked */ }
+  applyTheme(saved === 'dark' ? 'dark' : 'light');
+}
+
+function toggleTheme() {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem(THEME_KEY, next); } catch (_) { /* storage blocked */ }
+  applyTheme(next);
+}
+
+initTheme();
+if (themeToggleBtn) themeToggleBtn.addEventListener('click', toggleTheme);
 
 // ── viewport height fix (mobile browser toolbar collapse/expand) ─────────
 function setAppHeight() {
@@ -119,6 +168,96 @@ let streamRawText = '';
 let streamExprApplied = null;  // expression name applied once per stream turn
 let sourcesRow = null;
 let filesRow = null;
+let typingIndicator = null;
+
+// ── Emotion Particles (shoujo mode; hidden by style-dark.css) ────────────
+const EMOJI_PARTICLES = {
+  happy:    ['🌸', '✨', '💗', '💖', '🌟'],
+  angry:    ['💢', '🔥', '⚡', '💥'],
+  sorrow:   ['💧', '😢', '💔', '🌧️'],
+  surprised:['❗', '✨', '💫', '🌟'],
+  fun:      ['🎉', '🎈', '✨', '🌈', '🎀'],
+  neutral:  ['💭', '✦', '·'],
+};
+
+function spawnEmotionParticles(exprName) {
+  const particles = EMOJI_PARTICLES[exprName] || EMOJI_PARTICLES.neutral;
+  const count = Math.min(6, particles.length);
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.textContent = particles[i % particles.length];
+    el.style.cssText = `
+      position: fixed;
+      pointer-events: none;
+      font-size: ${14 + Math.random() * 10}px;
+      z-index: 100;
+      left: ${20 + Math.random() * 60}%;
+      top: ${20 + Math.random() * 40}%;
+      opacity: 0;
+      animation: emotionParticle 1.5s ease-out forwards;
+      animation-delay: ${i * 0.1}s;
+    `;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2000);
+  }
+}
+
+// Inject keyframes if not present
+if (!document.getElementById('shoujo-animations')) {
+  const style = document.createElement('style');
+  style.id = 'shoujo-animations';
+  style.textContent = `
+    @keyframes emotionParticle {
+      0% { opacity: 0; transform: translateY(0) scale(0.5); }
+      30% { opacity: 0.8; transform: translateY(-20px) scale(1.1); }
+      100% { opacity: 0; transform: translateY(-60px) scale(0.8); }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function updateEmotionBadge(exprName) {
+  if (!emotionBadge) return;
+  const emojiMap = {
+    happy: '🌸', angry: '💢', sorrow: '💧', surprised: '✨', fun: '🎀', neutral: '💭'
+  };
+  emotionBadge.style.display = 'flex';
+  emotionEmoji.textContent = emojiMap[exprName] || '💗';
+  emotionText.textContent = exprName;
+}
+
+// ── Typing Indicator ──────────────────────────────────────────────────────
+function showTypingIndicator() {
+  if (typingIndicator) return;
+  const row = document.createElement('div');
+  row.className = 'typing-row';
+  row.id = 'typing-indicator';
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar aiko';
+  avatar.textContent = '🤖';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'typing-bubble';
+  for (let i = 0; i < 3; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'typing-dot';
+    bubble.appendChild(dot);
+  }
+
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+  chatPanel.insertBefore(row, toolStatus);
+  typingIndicator = row;
+  scrollBottom();
+}
+
+function hideTypingIndicator() {
+  if (typingIndicator) {
+    typingIndicator.remove();
+    typingIndicator = null;
+  }
+}
 
 function ensureAuxRow(kind) {
   let row = kind === 'sources' ? sourcesRow : filesRow;
@@ -373,25 +512,55 @@ function renderAikoContent(container, parsed, showCursor = false) {
   container.appendChild(dialSpan);
 }
 
+// ── Bubble Message Rendering ──────────────────────────────────────────────
+function createMessageRow(sender) {
+  const row = document.createElement('div');
+  row.className = 'msg-row' + (sender === 'you' ? ' user' : '');
+
+  const avatar = document.createElement('div');
+  avatar.className = 'msg-avatar ' + (sender === 'aiko' ? 'aiko' : 'user');
+  avatar.textContent = sender === 'aiko' ? '🤖' : '🌸';
+
+  const bubble = document.createElement('div');
+  bubble.className = 'msg-bubble ' + (sender === 'aiko' ? 'aiko' : 'user');
+
+  row.appendChild(avatar);
+  row.appendChild(bubble);
+  return { row, bubble };
+}
+
 function addMessage(sender, text) {
   flushStream();
-  const div = document.createElement('div');
+  hideTypingIndicator();
+  let insertEl;
   if (sender === 'you') {
-    div.className = 'msg msg-you';
-    div.innerHTML = `<span class="msg-prefix">${esc(window.currentUsername || 'You')}: </span>${esc(text)}`;
+    const { row, bubble } = createMessageRow('you');
+    const prefix = document.createElement('span');
+    prefix.className = 'msg-prefix';
+    prefix.textContent = window.currentUsername || 'You';
+    bubble.appendChild(prefix);
+    const body = document.createElement('div');
+    body.innerHTML = esc(text).replace(/\n/g, '<br>');
+    bubble.appendChild(body);
+    insertEl = row;
   } else if (sender === 'aiko') {
-    div.className = 'msg msg-aiko';
+    const { row, bubble } = createMessageRow('aiko');
     const parsed = parseAikoMessage(text);
     if (parsed.emoji && window.aikoSetExpression) {
       const exprName = EMOJI_EXPRESSIONS[parsed.emoji] || parsed.emoji;
       window.aikoSetExpression(exprName, 1.0);
+      spawnEmotionParticles(exprName);
+      updateEmotionBadge(exprName);
     }
-    renderAikoContent(div, parsed, false);
+    renderAikoContent(bubble, parsed, false);
+    insertEl = row;
   } else {
+    const div = document.createElement('div');
     div.className = 'msg msg-sys';
     div.textContent = `  ◈  ${text}`;
+    insertEl = div;
   }
-  chatPanel.insertBefore(div, toolStatus);
+  chatPanel.insertBefore(insertEl, toolStatus);
   scrollBottom();
 }
 
@@ -400,11 +569,12 @@ function appendToken(text) {
   // Drop pure control chunks (status/search) so they never typewrite into the bubble.
   if (isControlTokenChunk(text) && !streamRawText) return;
   if (!streamDiv) {
-    streamDiv = document.createElement('div');
-    streamDiv.className = 'msg msg-aiko';
+    hideTypingIndicator();
+    const { row, bubble } = createMessageRow('aiko');
+    streamDiv = bubble;
     streamRawText = '';
     streamExprApplied = null;
-    chatPanel.insertBefore(streamDiv, toolStatus);
+    chatPanel.insertBefore(row, toolStatus);
   }
   streamRawText += text;
   // Soft parse while streaming: single dialogue line + cursor, no action/nv boxes.
@@ -465,6 +635,7 @@ const VOICE_LABELS = {
 function applyVoice(status) {
   voiceSt.textContent = VOICE_LABELS[status] ?? '';
   voiceSt.className = status === 'idle' ? '' : status;
+  if (status === 'waiting' && chatPhaseActive) showTypingIndicator();
 }
 
 // ── TTS playback (binary WAV frames from server) ──────────────────────────
@@ -702,6 +873,7 @@ function submitInput() {
   if (!text || !wsReady()) return;
   clearAuxRows();
   flushStream();
+  showTypingIndicator();
   ws.send(JSON.stringify({ type: 'user_input', text }));
   input.value = '';
 }
@@ -787,10 +959,13 @@ function connectWS() {
       case 'files': renderFiles(msg.items || []); break;
       case 'meta':
         if (msg.emotion && window.aikoSetExpression) {
-          window.aikoSetExpression(msg.emotion === 'neutral' ? 'neutral' : msg.emotion, 0.9);
+          const expr = msg.emotion === 'neutral' ? 'neutral' : msg.emotion;
+          window.aikoSetExpression(expr, 0.9);
+          spawnEmotionParticles(expr);
+          updateEmotionBadge(expr);
         }
         break;
-      case 'commit': flushStream(); break;
+      case 'commit': flushStream(); hideTypingIndicator(); break;
       case 'tool': toolStatus.textContent = msg.status ? `  ⚙  ${msg.status}` : ''; break;
       case 'vitals': applyVitals(msg); break;
       case 'voice': applyVoice(msg.status); break;
@@ -819,7 +994,13 @@ function connectWS() {
           vadStatus.className = 'ready';
         }
         break;
-      case 'expression': if (window.aikoSetExpression) window.aikoSetExpression(msg.name, msg.intensity ?? 1.0); break;
+      case 'expression':
+        if (window.aikoSetExpression) {
+          window.aikoSetExpression(msg.name, msg.intensity ?? 1.0);
+          spawnEmotionParticles(msg.name);
+          updateEmotionBadge(msg.name);
+        }
+        break;
       case 'viseme': if (window.aikoSetViseme) window.aikoSetViseme(msg.viseme, msg.weight ?? 1.0); break;
       case 'pose': if (window.aikoSetPose) window.aikoSetPose(msg.name, msg.active); break;
     }

@@ -27,13 +27,13 @@ unload Jetson Silero to save RAM. Full write-up: [`sensory/VAD_POLICY.md`](../se
       `document.getElementById('auth-overlay').classList` in console).
       If OAuth isn't configured, this can sit on top and swallow clicks on
       `micBtn` even though the WS connects fine underneath.
-      → `webui.js`, bottom: `checkAuth()` chain.
+      → `script.js`, bottom: `checkAuth()` chain.
 - [ ] `wsDot` / `wsLabel` show **"ws connected"**, not "ws offline".
 - [ ] You are accessing the page via `https://` or `localhost` — **not**
       plain `http://` over Tailscale/DuckDNS/tunnel. Browsers block mic
       access on insecure origins.
       → confirmed by the exact `sys` chat message wired in
-      `webui.js` → `startMic()`:
+      `script.js` → `startMic()`:
       `'Microphone blocked — browsers only allow mic access on localhost or HTTPS...'`
 
 If any of these fail, fix here first — nothing downstream matters yet.
@@ -42,7 +42,7 @@ If any of these fail, fix here first — nothing downstream matters yet.
 
 ## Step 1 — Auth overlay double-check
 
-**File:** `webui.js` — `checkAuth()` / `authOverlay` block (bottom of file)
+**File:** `script.js` — `checkAuth()` / `authOverlay` block (bottom of file)
 
 - [ ] `fetch('/api/auth/me')` succeeds → overlay hidden → `connectWS()` runs.
 - ❌ If overlay stays visible: fix your OAuth config, or temporarily hardcode
@@ -52,7 +52,7 @@ If any of these fail, fix here first — nothing downstream matters yet.
 
 ## Step 2 — Secure context check
 
-**File:** `webui.js` — `startMic()`, very first lines
+**File:** `script.js` — `startMic()`, very first lines
 
 ```js
 if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
@@ -66,7 +66,7 @@ if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
 
 ## Step 3 — Static asset routing (worklet reachable)
 
-**File:** `webui.js` — `startMic()`:
+**File:** `script.js` — `startMic()`:
 ```js
 await micContext.audioWorklet.addModule('./pcm-worklet.js');
 ```
@@ -94,7 +94,7 @@ if (this._fill === this._FRAME_SAMPLES) {
 }
 ```
 
-Also check the existing log in **`webui.js`** → `startMic()`:
+Also check the existing log in **`script.js`** → `startMic()`:
 ```js
 if (!micFirstFrameSeen) {
     micFirstFrameSeen = true;
@@ -110,11 +110,11 @@ if (!micFirstFrameSeen) {
 
 ## Step 5 — `micStreamingEnabled` gate (the real switch)
 
-**File:** `webui.js` — `onmessage` handler for `micWorklet.port`:
+**File:** `script.js` — `onmessage` handler for `micWorklet.port`:
 ```js
 if (wsReady() && micStreamingEnabled) processVADFrame(new Float32Array(e.data), ws, browserVadGate);
 ```
-**File:** `webui.js` — WS `case 'mic':` handler, where the flag gets set:
+**File:** `script.js` — WS `case 'mic':` handler, where the flag gets set:
 ```js
 if (msg.action === 'start') {
     ...
@@ -162,7 +162,7 @@ console.log('[vad] rms=', rms, '_speaking=', _speaking);
 
 - [ ] Value clearly crosses `ENERGY_START_RMS` / dynamic start threshold when you talk.
 - ❌ Never crosses → mic gain too low. Try setting `autoGainControl: false`
-  in **`webui.js`** → `startMic()`:
+  in **`script.js`** → `startMic()`:
   ```js
   micStream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: false },
@@ -220,7 +220,7 @@ Add temporarily:
   **`webui.py`** → `get_voice_input()`. Check ordering there.
 - ❌ Nothing logs at all → WS not reachable — check port/TLS mismatch
   between `WEBUI_HTTPS` and the `wss://` URL built in
-  **`webui.js`** → `websocketURL()`.
+  **`script.js`** → `websocketURL()`.
 
 ---
 

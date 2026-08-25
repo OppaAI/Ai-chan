@@ -239,6 +239,7 @@ class _MemoryBackend:
         model:           str,
         embed_cache:     str | None = None,
         user_id:         str | None = None,   # NEW
+        embedder:        "HarrierEmbedder | None" = None,  # shared process-wide embedder
     ) -> None:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._db_path  = db_path
@@ -246,7 +247,10 @@ class _MemoryBackend:
         self._llm_base = llm_base_url.rstrip("/")
         self._model    = model
         self._client   = OpenAI(base_url=self._llm_base, api_key="not-needed")
-        self._embedder = HarrierEmbedder(cache_path=embed_cache)
+        # Reuse the owner's shared embedder when given (keeps its TTL cache
+        # warm and avoids re-reading the disk cache on every user switch);
+        # standalone construction still works via embed_cache.
+        self._embedder = embedder or HarrierEmbedder(cache_path=embed_cache)
         # Tri-state: None = not yet probed, True/False = known after the
         # first _extract_facts call. Lets us stop paying for a failed
         # response_format attempt every single turn once we know the
@@ -1928,20 +1932,30 @@ class AikoMemorize:
         self._model = os.getenv("EXTRACT_MODEL") or os.getenv("LLM_MODEL", "ministral")
         self._embed_cache = os.getenv("EMBED_CACHE_PATH") or os.getenv("FASTEMBED_CACHE_PATH")
 
-        # Use a .pending path for pre-auth boot so user-space dirs are never
-        # created before a real user logs in via the web UI.
+        # One shared embedder for the process lifetime. It's a cheap HTTP
+        # client (the model lives in llama-server) and holds the disk-cache
+        # contents — rebuilding it on every switch_user would re-read the
+        # whole EMBED_CACHE_PATH JSONL for nothing.
+        self._embedder = HarrierEmbedder(cache_path=self._embed_cache)
+
+        # Pre-auth boot opens NO sqlite connection at all: guest has no
+        # per-user store, so constructing a backend would just build schema
+        # on a throwaway tempfile DB. The backend is materialized lazily on
+        # first touch (see the _mem property) or explicitly by switch_user()
+        # when a real identity connects.
         uid = current_user_id()
-        db_path = _memory_db_path_for_user(uid)
-        # Guest remains tempfile-backed to avoid unbounded heap growth.
         if not silent:
-            log.info("Opening sqlite-vec memory store for %s ...", uid)
-        self._mem = _MemoryBackend(
-            db_path=db_path,
-            llm_base_url=self._llm_base_url,
-            model=self._model,
-            embed_cache=self._embed_cache,
-            user_id=uid,
-        )
+            log.info("Memory identity at boot: %s%s", uid, " (lazy — no DB until login)" if uid == "guest" else "")
+        if uid == "guest":
+            self._mem_backend: _MemoryBackend | None = None
+        else:
+            self._mem_backend = _MemoryBackend(
+                db_path=_memory_db_path_for_user(uid),
+                llm_base_url=self._llm_base_url,
+                model=self._model,
+                user_id=uid,
+                embedder=self._embedder,
+            )
         self._write_queue: "queue.Queue[tuple]" = queue.Queue()
         self._write_worker = threading.Thread(target=self._write_loop, daemon=True)
         self._write_worker.start()
@@ -1955,6 +1969,34 @@ class AikoMemorize:
         if not silent:
             log.info("Ready.")
 
+    @property
+    def _mem(self) -> _MemoryBackend:
+        """Lazily-materialized memory backend.
+
+        All 150+ internal references to self._mem keep working unchanged:
+        touching it as a real user opens (or returns) that user's store.
+        Touching it while still guest materializes the tempfile-backed
+        guest DB — exactly the old pre-lazy behaviour — so nothing can
+        crash before login; normal flows simply never touch it until
+        switch_user() binds a real identity.
+        """
+        if self._mem_backend is None:
+            self._open()
+        assert self._mem_backend is not None  # _open always assigns
+        return self._mem_backend
+
+    @_mem.setter
+    def _mem(self, backend: _MemoryBackend | None) -> None:
+        self._mem_backend = backend
+
+    def embedder(self) -> HarrierEmbedder:
+        """Shared embedder instance — safe to use before any DB is open."""
+        return self._embedder
+
+    def is_open(self) -> bool:
+        """True once a sqlite backend exists (never true for untouched guest)."""
+        return self._mem_backend is not None
+
     def _open(self, uid: str | None = None) -> None:
         """Open (or reopen) the sqlite-vec store for a given user_id."""
         uid = uid or self._user_id_override or current_user_id()
@@ -1965,8 +2007,8 @@ class AikoMemorize:
             db_path=db_path,
             llm_base_url=self._llm_base_url,
             model=self._model,
-            embed_cache=self._embed_cache,
             user_id=uid,
+            embedder=self._embedder,
         )
         if not self._silent:
             log.info("Memory store ready for %s.", uid)

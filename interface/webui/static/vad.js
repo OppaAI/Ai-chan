@@ -43,7 +43,7 @@ function _echoGuardMs() {
 }
 
 function _inEchoGuard() {
-    // Set by webui.js when TTS playback starts
+    // Set by script.js when TTS playback starts
     const t0 = window.AIKO_TTS_STARTED_AT;
     if (typeof t0 !== "number" || !t0) return false;
     return (performance.now() - t0) < _echoGuardMs();

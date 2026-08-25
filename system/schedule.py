@@ -1210,6 +1210,11 @@ def register_scheduler(scheduler: ScheduleRunner) -> None:
     _scheduler_instance = scheduler
 
 
+def get_scheduler() -> "ScheduleRunner | None":
+    """Return the registered scheduler instance, if one has been started."""
+    return _scheduler_instance
+
+
 def notify_scheduler_new_job() -> None:
     """Notify the scheduler that a new job was added, so it wakes early to pick it up."""
     if _scheduler_instance is not None:
@@ -1579,6 +1584,20 @@ class ScheduleRunner:
 
     # ── user job runner ───────────────────────────────────────────────────────
 
+    def set_user(self, user_id: str) -> None:
+        """Rebind the scheduler to another user's job store (post-login).
+
+        Jobs are re-read from disk every cycle, so flipping _user_id is all
+        that's needed — notify_new_job() just wakes the loop promptly so
+        due-job state for the new store is refreshed. No-op when the id
+        already matches.
+        """
+        if not user_id or user_id == self._user_id:
+            return
+        log.info("[scheduler] job store switched to user %s", user_id)
+        self._user_id = user_id
+        self.notify_new_job()
+
     def _fire_due_user_jobs(self) -> None:
         """Find due user jobs, reschedule recurring ones, disable one-shots.
 
@@ -1774,11 +1793,24 @@ def start_scheduler(
 
     This keeps wakeup.py free of scheduler wiring so it only boots the live
     subsystems and then delegates the rest here.
+
+    Guest-safe: when boot runs pre-login (memorize still bound to the guest
+    sentinel), user-scoped seeding is skipped entirely — playbook.json and
+    schedule jobs live under USER_SPACE_ROOT/<uid>/ and must never be created
+    for guest. The seeding is re-run at first authenticated login instead
+    (see interface/webui/webui.py's _on_user_active()).
     """
     from agentic.graph_engine import ensure_playbooks
     from cognition.consolidate import generate_and_post, maybe_run_consolidation
 
-    ensure_playbooks(user_id=user_id)
+    effective_uid = (
+        user_id
+        or (memorize.get_user_id() if memorize and hasattr(memorize, "get_user_id") else None)
+        or current_user_id()
+    )
+
+    if effective_uid != "guest":
+        ensure_playbooks(user_id=effective_uid)
 
     scheduler = ScheduleRunner(
         on_due=on_due,
@@ -1790,7 +1822,8 @@ def start_scheduler(
         llm_model=getattr(think, "_llm_model", None),
     )
     register_scheduler(scheduler)
-    bootstrap_non_system_jobs(think=think, memorize=memorize, timezone=timezone)
+    if effective_uid != "guest":
+        bootstrap_non_system_jobs(think=think, memorize=memorize, timezone=timezone)
     scheduler.start()
     scheduler.notify_new_job()
     return scheduler

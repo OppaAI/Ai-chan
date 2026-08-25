@@ -122,6 +122,7 @@ class AikoWeb:
         self._login_event = threading.Event()
         self._authenticated_uid: str | None = None
         self._authenticated_display_name: str | None = None
+        self._user_space_ready = False   # flipped after first authenticated connect seeds user space
 
         self._input_q: queue.Queue[tuple[str, str, str]] = queue.Queue()
 
@@ -133,6 +134,7 @@ class AikoWeb:
         self._clients_lock = threading.Lock()
 
         self._memorize = None
+        self._think = None
         self._speak = None
         self._listen = None
 
@@ -160,13 +162,53 @@ class AikoWeb:
     def set_voice_backends(self, speak, listen) -> None:
         self._speak = speak
         self._listen = listen
-    
+
     def set_memorize(self, memorize) -> None:
         self._memorize = memorize
+
+    def set_think(self, think) -> None:
+        self._think = think
 
     def wait_for_first_login(self, timeout: float | None = None) -> str | None:
         self._login_event.wait(timeout)
         return self._authenticated_uid
+
+    def _on_user_active(self, uid: str) -> None:
+        """Post-login hook: rebind user-scoped subsystems and run seeding that
+        boot skipped because it ran pre-auth as guest.
+
+        Called on every authenticated WS connect: the scheduler job store is
+        rebound per-connect (each browser may be a different user), while
+        one-time user-space seeding (playbooks + schedule jobs) runs only once.
+        """
+        try:
+            from system.schedule import get_scheduler
+            sched = get_scheduler()
+            if sched is not None:
+                sched.set_user(uid)
+        except Exception:
+            log.exception("[aiko-web] scheduler user switch failed for %s", uid)
+
+        if self._user_space_ready or uid == "guest":
+            return
+        if self._think is None or self._memorize is None:
+            # Boot hasn't finished yet (browser beat wakeup) — leave the flag
+            # unset so the next connect (or run_session post-boot hook)
+            # retriggers seeding with live subsystem refs.
+            log.info("[aiko-web] subsystems still booting — deferring user-space seeding")
+            return
+        self._user_space_ready = True
+        log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
+        try:
+            from agentic.graph_engine import ensure_playbooks
+            ensure_playbooks(user_id=uid)
+        except Exception:
+            log.exception("[aiko-web] playbook seeding failed")
+        try:
+            from system.schedule import bootstrap_non_system_jobs
+            bootstrap_non_system_jobs(think=self._think, memorize=self._memorize)
+        except Exception:
+            log.exception("[aiko-web] schedule job bootstrap failed")
 
     def _start_servers(self) -> None:
         import socket
@@ -269,6 +311,10 @@ class AikoWeb:
             if self._current_display_name:
                 self._memorize.set_display_name(self._current_display_name)
         await ws.accept()
+
+        # Post-login rebinding/seeding runs in the background so the socket
+        # receive loop starts immediately.
+        asyncio.ensure_future(asyncio.to_thread(self._on_user_active, uid))
 
         with self._clients_lock:
             self._clients.add(ws)
@@ -698,7 +744,7 @@ def run_webui(args) -> None:
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
-    print("  Waiting for login before waking up subsystems...\n")
+    print("  Booting subsystems now — browsers can log in while Aiko wakes up.\n")
     # Start social reply monitors immediately — before the login gate —
     # so Aiko can reply on Threads/Bluesky without anyone logging into the WebUI.
     # No-op if the matching credentials are not configured.

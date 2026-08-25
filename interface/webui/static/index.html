@@ -6,7 +6,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Aiko-chan - AI Waifu · by OppaAI</title>
   <link rel="icon" type="image/png" href="/favicon.png">
-  <link rel="stylesheet" href="./webui.css">
+  <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@400;700;800&family=Zen+Maru+Gothic:wght@400;700&display=swap" rel="stylesheet">
+  <!-- Theme skins: exactly one stays enabled. The inline script applies the
+       saved choice before first paint to avoid a flash of the wrong theme. -->
+  <link rel="stylesheet" href="./style-dark.css" id="theme-style-dark">
+  <link rel="stylesheet" href="./style.css" id="theme-style-light">
+  <script>
+    (function () {
+      var dark = false;
+      try { dark = localStorage.getItem('aiko-theme') === 'dark'; } catch (e) { }
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      document.getElementById('theme-style-light').disabled = dark;
+      document.getElementById('theme-style-dark').disabled = !dark;
+    })();
+  </script>
 </head>
 
 <body>
@@ -94,14 +107,29 @@
     <div id="load-msg">loading model…</div>
   </div>
 
+  <!-- ── Floating Particles (shoujo mode; hidden by style-dark.css) ────────── -->
+  <div class="particle" style="top:10%;left:8%;font-size:18px;animation-delay:0s">🌸</div>
+  <div class="particle" style="top:20%;right:12%;font-size:14px;animation-delay:2s">✨</div>
+  <div class="particle" style="top:60%;left:5%;font-size:16px;animation-delay:4s">💫</div>
+  <div class="particle" style="top:75%;right:8%;font-size:12px;animation-delay:1s">⭐</div>
+  <div class="particle" style="top:40%;left:15%;font-size:20px;animation-delay:3s">🌙</div>
+  <div class="particle" style="top:85%;left:25%;font-size:14px;animation-delay:5s">🌸</div>
+  <div class="particle" style="top:30%;right:20%;font-size:16px;animation-delay:1.5s">✨</div>
+
   <!-- ── VRM side ─────────────────────────────────────────────────────────── -->
   <div id="vrm-side">
     <canvas id="canvas"></canvas>
+
+    <div class="avatar-glow"></div>
 
     <div id="vrm-hud">
       <div id="vrm-title">AI Waifu: <span id="vrm-ai-name">Aiko</span></div>
       <div id="vrm-user-line">User: <span id="vrm-user-name">Guest</span></div>
       <div id="vrm-emotion">—</div>
+    </div>
+
+    <div class="emotion-badge" id="emotion-badge" style="display:none;">
+      <span id="emotion-emoji">💗</span> <span id="emotion-text">happy</span>
     </div>
 
     <div id="ws-dots">
@@ -120,23 +148,27 @@
   <!-- ── right panel ──────────────────────────────────────────────────────── -->
   <div id="panel">
 
-<!-- Studio Toolbar -->
-    <div id="studio-toolbar" style="display: flex; gap: 6px; padding: 4px 12px; background: linear-gradient(180deg, var(--bg2) 0%, rgba(14,14,23,0.95) 100%); border-bottom: 1px solid var(--border); justify-content: flex-start;">
-      <a href="/studio/memory/stm/" target="_blank" class="studio-btn" title="Memory Studio (STM · LTM · KB)" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: var(--dimmer); border: 1px solid var(--dim); border-radius: 4px; color: var(--dim); text-decoration: none; transition: all 0.2s;">
+    <!-- Studio Toolbar -->
+    <div id="studio-toolbar">
+      <a href="/studio/memory/stm/" target="_blank" class="studio-btn" title="Memory Studio (STM · LTM · KB)">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"></circle><circle cx="5" cy="18" r="2"></circle><circle cx="19" cy="18" r="2"></circle><path d="M12 15v-3M7 17l3.2-3.2M16.8 13.8L20 17M4 7h16M7 4h10"></path></svg>
       </a>
-      <a href="/studio/spec/" target="_blank" class="studio-btn" title="Spec Studio" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: var(--dimmer); border: 1px solid var(--dim); border-radius: 4px; color: var(--dim); text-decoration: none; transition: all 0.2s;">
+      <a href="/studio/spec/" target="_blank" class="studio-btn" title="Spec Studio">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"></rect><rect x="14" y="3" width="7" height="7" rx="1"></rect><rect x="3" y="14" width="7" height="7" rx="1"></rect><rect x="14" y="14" width="7" height="7" rx="1"></rect><path d="M10 10h4M10 10v4"></path></svg>
       </a>
-      <a href="/studio/mcp/" target="_blank" class="studio-btn" title="MCP Server Status" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: var(--dimmer); border: 1px solid var(--dim); border-radius: 4px; color: var(--dim); text-decoration: none; transition: all 0.2s;">
+      <a href="/studio/mcp/" target="_blank" class="studio-btn" title="MCP Server Status">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="20" height="20" rx="2"></rect><path d="M7 12l3 3 7-7"></path><circle cx="12" cy="12" r="1"></circle></svg>
       </a>
-      <a href="/studio/approval/" target="_blank" class="studio-btn" title="Approval Studio" style="display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: var(--dimmer); border: 1px solid var(--dim); border-radius: 4px; color: var(--dim); text-decoration: none; transition: all 0.2s;">
+      <a href="/studio/approval/" target="_blank" class="studio-btn" title="Approval Studio">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 12l2 2 4-4"></path><path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z"></path></svg>
       </a>
+      <button type="button" id="theme-toggle" class="studio-btn" title="Switch to dark mode">
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"></path></svg>
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>
+      </button>
     </div>
 
-    <div id="panel-header" style="padding: 4px 16px;">
+    <div id="panel-header">
       <div id="panel-title">Chat Interface</div>
       <div id="panel-clock">—</div>
     </div>
@@ -170,7 +202,7 @@
 
     <div id="input-row">
       <span id="prompt-label">❯</span>
-      <input id="user-input" type="text" autocomplete="off" spellcheck="false" placeholder="type a message…">
+      <input id="user-input" type="text" autocomplete="off" spellcheck="false" placeholder="type a message to Aiko-chan…">
       <button id="mic-btn" class="input-btn" title="Microphone auto-starts when available">🎤</button>
       <button id="send-btn" class="input-btn">send</button>
     </div>
@@ -184,7 +216,6 @@
     </div>
 
   </div><!-- #panel -->
-
 
   <!-- ── Energy VAD processor (backend Silero is authoritative) ─────────── -->
   <script src="./vad.js"></script>
@@ -203,7 +234,7 @@
   <script type="module" src="./vrm.js"></script>
 
   <!-- ── Chat UI + WebSocket ─────────────────────────────────────────────── -->
-  <script src="./webui.js"></script>
+  <script src="./script.js"></script>
 
 </body>
 

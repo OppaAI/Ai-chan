@@ -12,12 +12,12 @@ subsystem boot through the main input -> inference -> render loop is identical
 regardless of transport.
 
 Responsibilities:
-    - Block (WebUI only) until the first authenticated browser session logs
-      in, then boot all subsystems via system.wakeup.AikoWakeup
+    - Boot all subsystems via system.wakeup.AikoWakeup immediately at session
+      start — no login gate; boot is pre-auth safe
     - Drive the UI init phase and transition to active chat
     - Run the main input -> inference -> render loop
     - Handle commands (/quit, /reset, /memory, /clear, /remember, /think,
-                       /voice, /listen, /web, /proactive, /karaoke, /help)
+                        /voice, /listen, /web, /proactive, /karaoke, /help)
     - Fuzzy-match spoken voice commands to slash equivalents in ASR mode
     - Reveal the streamed reply text in sync with TTS playback (karaoke
       typewriter) instead of dumping it the instant tokens arrive
@@ -26,17 +26,17 @@ Responsibilities:
     - Run the proactive idle check-in daemon
     - Clean shutdown on Ctrl-C / Ctrl-D (raised by the UI's get_input)
 
-Boot ordering note (login-gated wakeup):
-    For the WebUI path, AikoWakeup().boot() is deferred until the first
-    authenticated browser session connects (see AikoWeb.wait_for_first_login()
-    in interface/webui/webui.py). This guarantees system.userspace.current_user_id()
-    already resolves to a real, logged-in user_id by the time AikoMemorize,
-    schedule.json seeding, and the ScheduleRunner are constructed inside
-    boot() — no subsystem ever touches USER_SPACE_ROOT/guest/ on disk. The
-    CLI path already resolves a real USER_ID via GitHub OAuth in
-    interface/cli/cli.py's run_cli() before run_session() is ever called, so
-    it needs no change here — run_session() only checks hasattr(ui,
-    "wait_for_first_login"), which AikoSimpleCLI simply doesn't define.
+Boot ordering note (pre-auth wakeup):
+    AikoWakeup().boot() runs as soon as run_session starts, before anyone has
+    logged in. This is safe because nothing in boot requires a real user:
+    AikoMemorize opens the tempfile-backed guest DB (no USER_SPACE_ROOT dirs
+    are created), and user-scoped seeding (playbook.json, schedule jobs) is
+    skipped for guest and deferred to the first authenticated browser
+    connection — see AikoWeb._on_user_active() in interface/webui/webui.py,
+    which also rebinds memory (switch_user) and the scheduler job store per
+    connecting user. The CLI path resolves a real USER_ID via GitHub OAuth
+    in interface/cli/cli.py's run_cli() before run_session() is ever called,
+    so its boot binds to the right user straight away.
 
 Status-marker handling (fix, see interface/cli/cli.py docstring too):
     cognition/think.py streams special "__MARKER__" or "__MARKER__:payload"
@@ -958,18 +958,12 @@ def run_session(ui, args) -> None:
             ui._draw(buf=[])
             last_stream_draw = now
 
-    # ── login gate (WebUI only) ─────────────────────────────────────────────
-    if hasattr(ui, "wait_for_first_login"):
-        uid = ui.wait_for_first_login()
-        if uid:
-            from system.userspace import set_current_user_id, set_current_display_name
-            set_current_user_id(uid)
-            os.environ["AIKO_USER_ID"] = uid
-            display_name = getattr(ui, "_authenticated_display_name", None) or uid
-            set_current_display_name(display_name)
-            log.info("First login received (user_id=%s, display=%s) — starting subsystem boot.", uid, display_name)            
-        else:
-            log.warning("wait_for_first_login() returned no uid — proceeding with default identity.")
+    # ── boot immediately — no login gate ─────────────────────────────────────
+    # Boot is pre-auth safe: memory opens on the tempfile-backed guest DB and
+    # user-scoped seeding is deferred to the first authenticated WS connect
+    # (AikoWeb._on_user_active). Identity (user_id / display name) is applied
+    # per browser connection inside AikoWeb._ws_handler; the CLI resolves its
+    # identity in run_cli() before run_session() is ever called.
 
     # ── init spin ─────────────────────────────────────────────────────────────
 
@@ -992,9 +986,20 @@ def run_session(ui, args) -> None:
 
     if hasattr(ui, "set_voice_backends"):
         ui.set_voice_backends(speak, listen)
-        
+
+    if hasattr(ui, "set_think"):
+        ui.set_think(think)
+
     if memorize is not None and hasattr(ui, "set_memorize"):
         ui.set_memorize(memorize)
+
+    # If a browser already authenticated while boot was running, its connect-
+    # time seeding deferred itself (subsystem refs weren't ready yet) — run
+    # the post-login hook now that think/memorize/scheduler are all live.
+    if hasattr(ui, "_on_user_active"):
+        authed_uid = getattr(ui, "_authenticated_uid", None)
+        if authed_uid:
+            ui._on_user_active(authed_uid)
 
     if memorize is None:
         ui.add_message('sys', '⚠️ Memory backend failed to load — check logs. Running without persistent memory this session.')
