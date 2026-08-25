@@ -44,12 +44,19 @@ def _patch_memorize() -> None:
 
     if not hasattr(AikoMemorize, "queue_episode"):
 
-        def queue_episode(self, user_input: str, response_text: str, cognitive_state: dict | None = None) -> None:
+        def queue_episode(
+            self,
+            user_input: str,
+            response_text: str,
+            cognitive_state: dict | None = None,
+            user_id: str | None = None,
+        ) -> None:
             try:
-                store = self._get_episode_store()
+                uid = self._resolve_user_id(user_id)
+                store = self._get_episode_store(user_id=uid)
                 if store is None:
                     return
-                store.ingest_turn(user_input, response_text, user_id=self.get_user_id(), cognitive_state=cognitive_state)
+                store.ingest_turn(user_input, response_text, user_id=uid, cognitive_state=cognitive_state)
             except Exception as e:
                 log.debug("queue_episode skipped: %s", e)
 
@@ -58,20 +65,26 @@ def _patch_memorize() -> None:
     if not hasattr(AikoMemorize, "_get_episode_store"):
 
         def _get_episode_store(self, user_id=None):
-            if getattr(self, "_episode_store", None) is not None:
-                return self._episode_store
             try:
                 from cognition.memory.episode import EpisodicStore, EMC_ENABLED
                 if not EMC_ENABLED:
                     return None
                 from cognition.memory.schema import _memory_db_path_for_user
                 uid = user_id or self.get_user_id()
-                self._episode_store = EpisodicStore(
+                stores = getattr(self, "_episode_stores", None)
+                if stores is None:
+                    stores = {}
+                    self._episode_stores = stores
+                if uid in stores:
+                    return stores[uid]
+                store = EpisodicStore(
                     _memory_db_path_for_user(uid),
                     user_id=uid,
                     embedder=self._mem._embedder,
                 )
-                return self._episode_store
+                stores[uid] = store
+                self._episode_store = store
+                return store
             except Exception as e:
                 log.debug("episode store init failed: %s", e)
                 return None
@@ -82,7 +95,17 @@ def _patch_memorize() -> None:
         _orig_switch = AikoMemorize.switch_user
 
         def switch_user(self, user_id: str) -> None:
-            if getattr(self, "_episode_store", None) is not None:
+            stores = getattr(self, "_episode_stores", None)
+            if stores:
+                for store in list(stores.values()):
+                    try:
+                        store.flush_all()
+                        store.close()
+                    except Exception:
+                        log.debug("episode store flush on switch_user failed")
+                stores.clear()
+                self._episode_store = None
+            elif getattr(self, "_episode_store", None) is not None:
                 try:
                     self._episode_store.flush_all()
                     self._episode_store.close()
