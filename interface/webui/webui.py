@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from system.wakeup import BootResult
     
 from system.config import load_config
-from system.userspace import reset_current_display_name, reset_current_user_id, set_current_user_id, set_current_display_name
+from system.userspace import current_user_id, reset_current_display_name, reset_current_user_id, set_current_user_id, set_current_display_name
 load_config()
 
 from system import bioclock
@@ -134,9 +134,6 @@ class AikoWeb:
         self._ts           = time.time()
         self._lock         = threading.Lock()
 
-        self._current_user_id: str = "guest"
-        self._current_display_name: str = "Guest"
-
         self._login_event = threading.Event()
         self._authenticated_uid: str | None = None
         self._authenticated_display_name: str | None = None
@@ -147,11 +144,12 @@ class AikoWeb:
         # 4096 frames × 512 samples ≈ 8MB ceiling ≈ 13s of 16kHz mono f32 —
         # ample headroom for VAD-gated speech bursts; raw-mic mode drops
         # frames when full instead of ballooning RAM (was 10000 / ~20MB).
-        self._audio_q: queue.Queue[bytes] = queue.Queue(maxsize=4096)
+        self._audio_q: queue.Queue[bytes | tuple[bytes, str, str]] = queue.Queue(maxsize=4096)
         self._mic_active = threading.Event()
         self._did_barge_in: bool = False
 
         self._clients: set = set()
+        self._client_users: dict[object, str] = {}
         self._clients_lock = threading.Lock()
 
         self._memorize = None
@@ -198,22 +196,20 @@ class AikoWeb:
         self._think = think
 
     async def _bind_user_context(self, uid: str, session: dict) -> tuple:
-        """Resolve display name and bind uid/display-name to this event-loop's
-        context vars + AIKO_USER_ID + memorize's active user. Shared by the
-        WebSocket connect handshake and every user_input message, since both
-        need the exact same resolution + switch sequence."""
+        """Resolve display name and bind uid/display-name to this WebSocket task.
+
+        WebUI can serve multiple browsers concurrently, so per-connection
+        identity must stay local to the handler task. Do not mirror it into
+        process-wide environment variables or a shared AikoMemorize instance;
+        downstream turn code receives the uid/display name explicitly via the
+        input queue and contextvars.
+        """
         stored_name = _load_stored_display_name(uid)
         session_name = session.get("username") or ""
-        self._current_user_id = uid
-        self._current_display_name = stored_name or session_name or uid
+        display_name = stored_name or session_name or uid
         user_token = set_current_user_id(uid)
-        display_token = set_current_display_name(self._current_display_name)
-        os.environ["AIKO_USER_ID"] = uid
-        if self._memorize:
-            await asyncio.to_thread(self._memorize.switch_user, uid)
-            if self._current_display_name:
-                self._memorize.set_display_name(self._current_display_name)
-        return user_token, display_token
+        display_token = set_current_display_name(display_name)
+        return user_token, display_token, display_name
             
     def _on_user_active(self, uid: str) -> None:
         """Post-login hook: rebind user-scoped subsystems and run seeding that
@@ -324,11 +320,11 @@ class AikoWeb:
             return
 
         uid = str(session["user_id"])
-        user_context_token, display_context_token = await self._bind_user_context(uid, session)
+        user_context_token, display_context_token, display_name = await self._bind_user_context(uid, session)
         
         if not self._login_event.is_set():
             self._authenticated_uid = uid
-            self._authenticated_display_name = self._current_display_name
+            self._authenticated_display_name = display_name
             self._login_event.set()
         
         await ws.accept()
@@ -339,6 +335,7 @@ class AikoWeb:
 
         with self._clients_lock:
             self._clients.add(ws)
+            self._client_users[ws] = uid
         log.info("[aiko-web] browser connected  (total=%d)", len(self._clients))
         try:
             while True:
@@ -349,7 +346,7 @@ class AikoWeb:
                 if raw_bytes is not None:
                     if self._mic_active.is_set():
                         try:
-                            self._audio_q.put_nowait(raw_bytes)
+                            self._audio_q.put_nowait((raw_bytes, uid, display_name))
                         except queue.Full:
                             log.debug("webui: audio queue full, dropping frame")
                     continue
@@ -366,18 +363,16 @@ class AikoWeb:
                     if mtype == "user_input":
                         text = (msg.get("text") or "").strip()
                         if text:
-                            uid = str(session["user_id"])
-                            await self._bind_user_context(uid, session)
-                            self._input_q.put((text, uid, self._current_display_name))
+                            self._input_q.put((text, uid, display_name))
 
                     elif mtype == "vad":
                         event = msg.get("event")
                         if event == "start":
-                            self._broadcast({"type": "voice", "status": "listening"})
+                            self._broadcast({"type": "voice", "status": "listening"}, user_id=uid)
                         elif event == "end":
-                            self._broadcast({"type": "voice", "status": "transcribing"})
+                            self._broadcast({"type": "voice", "status": "transcribing"}, user_id=uid)
                             if WEBUI_BROWSER_VAD_GATE and self._mic_active.is_set():
-                                self._audio_q.put(b"")
+                                self._audio_q.put((b"", uid, display_name))
                                 
                     elif mtype == "barge_in":
                         # S0: master switch — ignore browser barge when disabled
@@ -400,19 +395,27 @@ class AikoWeb:
             reset_current_user_id(user_context_token)
             with self._clients_lock:
                 self._clients.discard(ws)
+                self._client_users.pop(ws, None)
             log.info("[aiko-web] browser disconnected (total=%d)", len(self._clients))
             if not self._clients:
                 self._did_barge_in = False
 
-    def _broadcast(self, payload: dict) -> None:
+    def _broadcast(self, payload: dict, *, user_id: str | None = None) -> None:
         if self._loop is None:
             return
-        asyncio.run_coroutine_threadsafe(self._async_broadcast(payload), self._loop)
+        asyncio.run_coroutine_threadsafe(self._async_broadcast(payload, user_id=user_id), self._loop)
 
-    async def _async_broadcast(self, payload: dict) -> None:
+    def _broadcast_to_current_user(self, payload: dict) -> None:
+        uid = current_user_id()
+        self._broadcast(payload, user_id=uid if uid and uid != "guest" else None)
+
+    async def _async_broadcast(self, payload: dict, *, user_id: str | None = None) -> None:
         raw = json.dumps(payload, ensure_ascii=False)
         with self._clients_lock:
-            targets = list(self._clients)
+            if user_id:
+                targets = [ws for ws in self._clients if self._client_users.get(ws) == user_id]
+            else:
+                targets = list(self._clients)
         if not targets:
             return
         await asyncio.gather(
@@ -490,16 +493,16 @@ class AikoWeb:
         self._broadcast({"type": "phase", "value": "chat"})
 
     def add_message(self, sender: str, text: str) -> None:
-        self._broadcast({"type": "chat", "sender": sender, "text": text})
+        self._broadcast_to_current_user({"type": "chat", "sender": sender, "text": text})
 
     def stream_token(self, token: str) -> None:
         if token.startswith("__THINKING__"):
-            self._broadcast({"type": "tool", "status": "thinking…"})
-            self._broadcast({"type": "pose", "name": "thinking", "active": True})
+            self._broadcast_to_current_user({"type": "tool", "status": "thinking…"})
+            self._broadcast_to_current_user({"type": "pose", "name": "thinking", "active": True})
             return
         if token.startswith("__TOOL__:"):
             name = token[len("__TOOL__:"):].split("(", 1)[0].strip()
-            self._broadcast({"type": "tool", "status": f"using {name}"})
+            self._broadcast_to_current_user({"type": "tool", "status": f"using {name}"})
             return
         if token.startswith("__STATUS__:"):
             status = token[len("__STATUS__:"):].strip().split("\n", 1)[0].strip()
@@ -513,14 +516,14 @@ class AikoWeb:
                 label = f"using {status[5:].strip()}"
             else:
                 label = labels.get(status, status)
-            self._broadcast({"type": "tool", "status": label})
+            self._broadcast_to_current_user({"type": "tool", "status": label})
             return
         if token.startswith("__SEARCHING__:"):
             query = token[len("__SEARCHING__:"):].strip()
-            self._broadcast({"type": "tool", "status": f"searching: {query}"})
+            self._broadcast_to_current_user({"type": "tool", "status": f"searching: {query}"})
             return
         if token.startswith("__RETRYING__"):
-            self._broadcast({"type": "tool", "status": "line’s quiet — trying again…"})
+            self._broadcast_to_current_user({"type": "tool", "status": "line’s quiet — trying again…"})
             return
         if token.startswith("__SOURCES__:"):
             raw = token[len("__SOURCES__:"):].strip()
@@ -529,7 +532,7 @@ class AikoWeb:
                 items = _json.loads(raw)
             except Exception:
                 items = []
-            self._broadcast({"type": "sources", "items": items})
+            self._broadcast_to_current_user({"type": "sources", "items": items})
             return
         if token.startswith("__FILES__:"):
             raw = token[len("__FILES__:"):].strip()
@@ -538,7 +541,7 @@ class AikoWeb:
                 items = _json.loads(raw)
             except Exception:
                 items = []
-            self._broadcast({"type": "files", "items": items})
+            self._broadcast_to_current_user({"type": "files", "items": items})
             return
         if token.startswith("__META__:"):
             # emotion|action — optional UI hook; never show in bubble
@@ -546,7 +549,7 @@ class AikoWeb:
             parts = meta.split("|", 1)
             emotion = (parts[0] or "neutral").strip()
             action = (parts[1] if len(parts) > 1 else "none").strip()
-            self._broadcast({"type": "meta", "emotion": emotion, "action": action})
+            self._broadcast_to_current_user({"type": "meta", "emotion": emotion, "action": action})
             return
         # Never paint raw JSON tool observations or bracketed system notices
         stripped = token.strip()
@@ -561,8 +564,8 @@ class AikoWeb:
             if self._stats["turn_start"] is None:
                 self._stats["turn_start"] = time.time()
 
-        self._broadcast({"type": "pose", "name": "thinking", "active": False})
-        self._broadcast({"type": "token", "text": token})
+        self._broadcast_to_current_user({"type": "pose", "name": "thinking", "active": False})
+        self._broadcast_to_current_user({"type": "token", "text": token})
 
     def stream_commit(self) -> None:
         with self._lock:
@@ -575,15 +578,15 @@ class AikoWeb:
             self._stats["turn_start"] = None
             self._streaming           = ""
 
-        self._broadcast({"type": "pose", "name": "thinking", "active": False})
-        self._broadcast({"type": "commit"})
+        self._broadcast_to_current_user({"type": "pose", "name": "thinking", "active": False})
+        self._broadcast_to_current_user({"type": "commit"})
         self._push_vitals()
 
     def turn_start(self) -> None:
         with self._lock:
             self._stats["turn_start"] = time.time()
             self._stats["turn_tok"]   = 0
-        self._broadcast({"type": "pose", "name": "thinking", "active": True})
+        self._broadcast_to_current_user({"type": "pose", "name": "thinking", "active": True})
 
     def _push_vitals(self) -> None:
         try:
@@ -613,13 +616,13 @@ class AikoWeb:
         self._push_vitals()
 
     def set_expression(self, name: str, intensity: float = 1.0) -> None:
-        self._broadcast({"type": "expression", "name": name, "intensity": intensity})
+        self._broadcast_to_current_user({"type": "expression", "name": name, "intensity": intensity})
 
     def set_viseme(self, viseme: str, weight: float = 1.0) -> None:
-        self._broadcast({"type": "viseme", "viseme": viseme, "weight": weight})
+        self._broadcast_to_current_user({"type": "viseme", "viseme": viseme, "weight": weight})
 
     def get_input(self) -> str:
-        self._broadcast({"type": "voice", "status": "idle"})
+        self._broadcast_to_current_user({"type": "voice", "status": "idle"})
         idle_ticks = 0
         while True:
             try:
@@ -627,7 +630,7 @@ class AikoWeb:
                 if isinstance(item, tuple):
                     text, uid, display_name = item
                 else:
-                    text, uid, display_name = item, self._current_user_id, self._current_display_name
+                    text, uid, display_name = item, "guest", "Guest"
                 set_current_user_id(uid)
                 set_current_display_name(display_name)
                 return text
@@ -653,9 +656,16 @@ class AikoWeb:
 
         def _chunk_source(n: int):
             try:
-                raw = self._audio_q.get(timeout=FRAME_TIMEOUT_S)
+                item = self._audio_q.get(timeout=FRAME_TIMEOUT_S)
             except queue.Empty:
                 return None
+
+            if isinstance(item, tuple):
+                raw, uid, display_name = item
+                set_current_user_id(uid)
+                set_current_display_name(display_name)
+            else:
+                raw = item
 
             if raw == b"":
                 return None
@@ -672,12 +682,9 @@ class AikoWeb:
                 "__IDLE__":         "idle",
             }
             status = mapping.get(token, "idle")
-            self._broadcast({"type": "voice", "status": status})
+            self._broadcast_to_current_user({"type": "voice", "status": status})
 
         def _run() -> None:
-            set_current_user_id(self._current_user_id)
-            set_current_display_name(self._current_display_name)
-            os.environ["AIKO_USER_ID"] = self._current_user_id
             # Call listen() with WebUI chunk source. See sensory.listen.AikoListen.listen()
             # docstring for full parameter contract. Key points:
             #   - vad_presegmented parameter was removed (no longer supported)
@@ -723,7 +730,7 @@ class AikoWeb:
                     log.debug("webui: voice input queue empty, retrying")
         finally:
             self._mic_active.clear()
-            self._broadcast({"type": "voice", "status": "idle"})
+            self._broadcast_to_current_user({"type": "voice", "status": "idle"})
 
         if text_input is None:
             try:
