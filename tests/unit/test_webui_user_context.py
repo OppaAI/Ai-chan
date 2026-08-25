@@ -23,8 +23,25 @@ class DummyMemorize:
 
 @pytest.fixture(autouse=True)
 def clean_user_env(monkeypatch):
+    """Establish baseline user context before each test and reset after.
+
+    This prevents context leakage between tests by ensuring both the environment
+    variables and context tokens are reset to known values.
+    """
+    from system.userspace import set_current_user_id, set_current_display_name
+
     monkeypatch.delenv("AIKO_USER_ID", raising=False)
     monkeypatch.delenv("CURRENT_DISPLAY_NAME", raising=False)
+
+    # Establish baseline context values
+    user_token = set_current_user_id("guest")
+    display_token = set_current_display_name(None)
+
+    yield
+
+    # Reset context after test
+    reset_current_user_id(user_token)
+    reset_current_display_name(display_token)
 
 
 @pytest.mark.asyncio
