@@ -89,6 +89,7 @@ from typing import Any, Callable
 
 from system import bioclock
 from system.log import get_logger
+from system.turngate import AIKO_BUSY_LOCK
 from system.userspace import current_user_id, user_state_path, user_workspace_root
 
 log = get_logger(__name__)
@@ -105,6 +106,27 @@ def user_state_root() -> Path:
     """Resolve the active user state root lazily."""
     override = os.getenv("USER_SPACE_ROOT")
     return (Path(override).expanduser() if override else Path.home() / ".aiko").resolve()
+
+
+def all_user_ids() -> list[str]:
+    """Enumerate every user_id with a state directory under USER_SPACE_ROOT.
+
+    Used by ScheduleRunner._run() to check every user's due jobs each tick
+    instead of only whichever single user_id the runner happens to be
+    bound to. "guest" is excluded — guest never has a persistent job store
+    (see AikoMemorize's pre-auth lazy-guest-DB note in memorize.py).
+    """
+    root = user_state_root()
+    if not root.exists():
+        return []
+    try:
+        return sorted(
+            p.name for p in root.iterdir()
+            if p.is_dir() and p.name and p.name != "guest"
+        )
+    except Exception:
+        log.exception("all_user_ids: failed to list %s", root)
+        return []
 
 
 def schedule_path(user_id: str | None = None) -> Path:
@@ -1401,7 +1423,13 @@ class ScheduleRunner:
         self._consolidate_fn       = consolidate_fn
         self._llm_client           = llm_client
         self._llm_model            = llm_model
-        self._user_id              = user_id or (memorize.get_user_id() if memorize and memorize.get_user_id() else None) or current_user_id()
+        self._user_id               = user_id or (memorize.get_user_id() if memorize and memorize.get_user_id() else None) or current_user_id()
+        # _owner_user_id is fixed at construction: the identity the
+        # hardcoded system jobs (daily reflect+dream, monthly consolidate —
+        # both single-stream, not per-connected-user) always run as.
+        # _user_id, by contrast, is now a transient pointer that _run()
+        # flips per due job while iterating all_user_ids() — see _run().
+        self._owner_user_id        = self._user_id
         self._wakeup               = threading.Event()
         self._stop                 = threading.Event()
         self._thread: threading.Thread | None = None
@@ -1515,6 +1543,12 @@ class ScheduleRunner:
             now = bioclock.local_now()
 
             # ── fire overdue system jobs ──────────────────────────────────────
+            # Always run as self._owner_user_id (the identity this runner was
+            # constructed for) — daily reflect/dream and monthly consolidate
+            # are a single process-level stream (one GitHub reflection post),
+            # not per-connected-user. Rebind explicitly before running since
+            # self._user_id may have been left pointing at whichever user's
+            # job fired last in the per-user loop below.
             system_due = sorted(
                 [(t, name) for t, name in [
                     (self._next_daily, "daily"),
@@ -1523,31 +1557,51 @@ class ScheduleRunner:
                 key=lambda x: x[0],
             )
             for _target, name in system_due:
-                if name == "daily":
-                    self._run_daily_reflect_and_dream()
-                    self._next_daily = _next_daily_reflect_and_dream()
-                else:
-                    self._run_monthly_consolidate()
-                    self._next_monthly = _next_monthly_consolidate()
+                with AIKO_BUSY_LOCK:
+                    self.set_user(self._owner_user_id)
+                    if self._memorize is not None:
+                        self._memorize.switch_user(self._owner_user_id)
+                    if name == "daily":
+                        self._run_daily_reflect_and_dream()
+                        self._next_daily = _next_daily_reflect_and_dream()
+                    else:
+                        self._run_monthly_consolidate()
+                        self._next_monthly = _next_monthly_consolidate()
 
-            # ── fire overdue user jobs ────────────────────────────────────────
-            self._fire_due_user_jobs()
+            # ── fire overdue jobs/graphs for EVERY user ───────────────────────
+            # Not just self._user_id: a scheduler bound to whoever last
+            # connected would silently stop firing every other user's
+            # reminders and scheduled graphs. Checking due-ness (a cheap
+            # JSON read) is unlocked; only the actual run — which needs the
+            # memory/think singletons bound to that user's identity — takes
+            # the shared gate.
+            for uid in all_user_ids():
+                due_user_jobs = self._due_user_jobs(uid)
+                due_graphs    = self._due_schedule_graphs(uid)
+                if not due_user_jobs and not due_graphs:
+                    continue
+                with AIKO_BUSY_LOCK:
+                    self.set_user(uid)
+                    if self._memorize is not None:
+                        self._memorize.switch_user(uid)
+                    if due_user_jobs:
+                        self._fire_due_user_jobs(uid)
+                    if due_graphs:
+                        self._fire_due_schedule_graphs(uid)
 
-            # ── fire overdue schedule graphs ──────────────────────────────────
-            self._fire_due_schedule_graphs()
-
-            # ── sleep until soonest next target ──────────────────────────────
-            user_jobs = [
-                datetime.fromisoformat(j["next_due"])
-                for j in _read_all(user_id=self._user_id)
-                if j.get("enabled", True) and j.get("next_due")
-            ]
-            graph_times = [
-                datetime.fromisoformat(g["next_due"])
-                for g in _read_schedule_graphs(user_id=self._user_id)
-                if g.get("enabled", True) and g.get("next_due")
-            ]
-            candidates = [self._next_daily, self._next_monthly, *user_jobs, *graph_times]
+            # ── sleep until soonest next target across all users ──────────────
+            candidates = [self._next_daily, self._next_monthly]
+            for uid in all_user_ids():
+                candidates.extend(
+                    datetime.fromisoformat(j["next_due"])
+                    for j in _read_all(user_id=uid)
+                    if j.get("enabled", True) and j.get("next_due")
+                )
+                candidates.extend(
+                    datetime.fromisoformat(g["next_due"])
+                    for g in _read_schedule_graphs(user_id=uid)
+                    if g.get("enabled", True) and g.get("next_due")
+                )
             next_target = min(candidates)
 
             delta = (next_target - bioclock.local_now()).total_seconds()
@@ -1650,27 +1704,73 @@ class ScheduleRunner:
     # ── user job runner ───────────────────────────────────────────────────────
 
     def set_user(self, user_id: str) -> None:
-        """Rebind the scheduler to another user's job store (post-login).
+        """Point self._user_id at another user's job store.
 
-        Jobs are re-read from disk every cycle, so flipping _user_id is all
-        that's needed — notify_new_job() just wakes the loop promptly so
-        due-job state for the new store is refreshed. No-op when the id
-        already matches.
+        Formerly called externally (post-login, once per WebSocket
+        connect) to pick which single user's jobs the scheduler watched.
+        Now _run() calls this itself, per due job, while iterating
+        all_user_ids() — every user's jobs are checked every tick (see
+        _due_user_jobs / _due_schedule_graphs below), so this just flips
+        the pointer immediately before firing that user's due jobs rather
+        than sticking on whichever user connected most recently.
+        Callers should hold AIKO_BUSY_LOCK when this changes which
+        identity self._memorize/self._on_due will act as. No-op when the
+        id already matches.
         """
         if not user_id or user_id == self._user_id:
             return
-        log.info("[scheduler] job store switched to user %s", user_id)
+        log.debug("[scheduler] job store switched to user %s", user_id)
         self._user_id = user_id
         self.notify_new_job()
 
-    def _fire_due_user_jobs(self) -> None:
+    def _due_user_jobs(self, user_id: str) -> bool:
+        """Cheap unlocked check: does this user have any enabled job whose
+        next_due has passed? Used by _run() to decide, per user per tick,
+        whether it's worth taking AIKO_BUSY_LOCK and actually switching
+        context at all."""
+        for job in _read_all(user_id=user_id):
+            if not job.get("enabled", True) or not job.get("next_due"):
+                continue
+            tz_name = bioclock.timezone_name(job.get("timezone"))
+            try:
+                due = datetime.fromisoformat(job["next_due"])
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=bioclock.get_timezone(tz_name))
+            except Exception:
+                return True  # malformed next_due — let _fire_due_user_jobs fix it up
+            if due <= bioclock.local_now(tz_name):
+                return True
+        return False
+
+    def _due_schedule_graphs(self, user_id: str) -> bool:
+        """Cheap unlocked check mirroring _due_user_jobs, for schedule graphs."""
+        for g in _read_schedule_graphs(user_id=user_id):
+            if not g.get("enabled", True) or not g.get("next_due"):
+                continue
+            tz_name = bioclock.timezone_name(g.get("trigger", {}).get("timezone"))
+            try:
+                due = datetime.fromisoformat(g["next_due"])
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=bioclock.get_timezone(tz_name))
+            except Exception:
+                return True
+            if due <= bioclock.local_now(tz_name):
+                return True
+        return False
+
+    def _fire_due_user_jobs(self, user_id: str | None = None) -> None:
         """Find due user jobs, reschedule recurring ones, disable one-shots.
 
         Jobs whose "handler" (or legacy "kind": "system_weekly_social") names
         a registered system handler call directly into that Python function
         instead of going through on_due/chat.
+
+        user_id defaults to self._user_id for backward compatibility, but
+        _run() now always passes it explicitly right after set_user(uid),
+        so callers should not rely on the implicit fallback going forward.
         """
-        jobs = _read_all(user_id=self._user_id)
+        user_id = user_id or self._user_id
+        jobs = _read_all(user_id=user_id)
         changed = False
         due_events: list[DueJob] = []
 
@@ -1728,7 +1828,7 @@ class ScheduleRunner:
                 changed = True
 
         if changed:
-            _write_all(jobs, user_id=self._user_id)
+            _write_all(jobs, user_id=user_id)
 
         # fire sequentially — preserves order and avoids concurrent job side effects
         for event in due_events:
@@ -1740,15 +1840,16 @@ class ScheduleRunner:
 
     # ── schedule-graph runner ───────────────────────────────────────────────────
 
-    def _fire_due_schedule_graphs(self) -> None:
-        graphs = _read_schedule_graphs(user_id=self._user_id)
+    def _fire_due_schedule_graphs(self, user_id: str | None = None) -> None:
+        user_id = user_id or self._user_id
+        graphs = _read_schedule_graphs(user_id=user_id)
         changed = False
         now = bioclock.local_now()
 
         # Keep the daily_job_post_social config in sync with
         # the user's editable schedule.json so timing, graph_id,
         # and enabled changes take effect on the next fire cycle.
-        cfg = _job_post_social_config(self._user_id)
+        cfg = _job_post_social_config(user_id)
         for g in graphs:
             if g.get("id") == JOB_POST_SOCIAL_JOB_TITLE or g.get("graph_id") == "gen_job_post":
                 if g.get("trigger", {}).get("time") != cfg["time"]:
@@ -1782,7 +1883,7 @@ class ScheduleRunner:
                 changed = True
 
         if changed:
-            _write_schedule_graphs(graphs, user_id=self._user_id)
+            _write_schedule_graphs(graphs, user_id=user_id)
 
     def _run_schedule_graph(self, graph_def: dict) -> None:
         from agentic.graph_engine import PlanGraph, execute_graph, get_playbook_by_id
@@ -1892,6 +1993,5 @@ def start_scheduler(
     scheduler.start()
     scheduler.notify_new_job()
     return scheduler
-
 
 ReminderScheduler = ScheduleRunner
