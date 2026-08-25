@@ -90,7 +90,7 @@ from typing import Any, Callable
 from system import bioclock
 from system.log import get_logger
 from system.turngate import AIKO_BUSY_LOCK
-from system.userspace import current_user_id, user_state_path, user_workspace_root
+from system.userspace import all_known_user_ids, current_user_id, user_state_path, user_workspace_root
 
 log = get_logger(__name__)
 
@@ -109,24 +109,20 @@ def user_state_root() -> Path:
 
 
 def all_user_ids() -> list[str]:
-    """Enumerate every user_id with a state directory under USER_SPACE_ROOT.
+    """Enumerate every user_id with a state directory under user space.
+
+    Thin wrapper over userspace.all_known_user_ids() — that's the single
+    source of truth for root resolution (it also honors the
+    USER_STATE_ROOT / AIKO_USER_STATE_ROOT aliases that this module's own
+    user_state_root() above does NOT check, so the two must not drift:
+    always resolve enumeration through userspace, never re-derive it here).
 
     Used by ScheduleRunner._run() to check every user's due jobs each tick
     instead of only whichever single user_id the runner happens to be
     bound to. "guest" is excluded — guest never has a persistent job store
     (see AikoMemorize's pre-auth lazy-guest-DB note in memorize.py).
     """
-    root = user_state_root()
-    if not root.exists():
-        return []
-    try:
-        return sorted(
-            p.name for p in root.iterdir()
-            if p.is_dir() and p.name and p.name != "guest"
-        )
-    except Exception:
-        log.exception("all_user_ids: failed to list %s", root)
-        return []
+    return all_known_user_ids()
 
 
 def schedule_path(user_id: str | None = None) -> Path:
@@ -1993,5 +1989,6 @@ def start_scheduler(
     scheduler.start()
     scheduler.notify_new_job()
     return scheduler
+
 
 ReminderScheduler = ScheduleRunner
