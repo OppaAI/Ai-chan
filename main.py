@@ -73,6 +73,7 @@ log = get_logger(__name__)
 
 from cognition.memory.memorize import AikoMemorize                # load memory system for --clear-mem
 
+
 def parse_args():
     """Parse and return the CLI argument namespace for Aiko-chan's launch options."""
     p = argparse.ArgumentParser(description="Aiko-chan")          # create argument object for declaring arguments
