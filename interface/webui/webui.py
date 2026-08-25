@@ -134,9 +134,6 @@ class AikoWeb:
         self._ts           = time.time()
         self._lock         = threading.Lock()
 
-        self._current_user_id: str = "guest"
-        self._current_display_name: str = "Guest"
-
         self._login_event = threading.Event()
         self._authenticated_uid: str | None = None
         self._authenticated_display_name: str | None = None
@@ -147,7 +144,7 @@ class AikoWeb:
         # 4096 frames × 512 samples ≈ 8MB ceiling ≈ 13s of 16kHz mono f32 —
         # ample headroom for VAD-gated speech bursts; raw-mic mode drops
         # frames when full instead of ballooning RAM (was 10000 / ~20MB).
-        self._audio_q: queue.Queue[bytes] = queue.Queue(maxsize=4096)
+        self._audio_q: queue.Queue[bytes | tuple[bytes, str, str]] = queue.Queue(maxsize=4096)
         self._mic_active = threading.Event()
         self._did_barge_in: bool = False
 
@@ -198,22 +195,20 @@ class AikoWeb:
         self._think = think
 
     async def _bind_user_context(self, uid: str, session: dict) -> tuple:
-        """Resolve display name and bind uid/display-name to this event-loop's
-        context vars + AIKO_USER_ID + memorize's active user. Shared by the
-        WebSocket connect handshake and every user_input message, since both
-        need the exact same resolution + switch sequence."""
+        """Resolve display name and bind uid/display-name to this WebSocket task.
+
+        WebUI can serve multiple browsers concurrently, so per-connection
+        identity must stay local to the handler task. Do not mirror it into
+        process-wide environment variables or a shared AikoMemorize instance;
+        downstream turn code receives the uid/display name explicitly via the
+        input queue and contextvars.
+        """
         stored_name = _load_stored_display_name(uid)
         session_name = session.get("username") or ""
-        self._current_user_id = uid
-        self._current_display_name = stored_name or session_name or uid
+        display_name = stored_name or session_name or uid
         user_token = set_current_user_id(uid)
-        display_token = set_current_display_name(self._current_display_name)
-        os.environ["AIKO_USER_ID"] = uid
-        if self._memorize:
-            await asyncio.to_thread(self._memorize.switch_user, uid)
-            if self._current_display_name:
-                self._memorize.set_display_name(self._current_display_name)
-        return user_token, display_token
+        display_token = set_current_display_name(display_name)
+        return user_token, display_token, display_name
             
     def _on_user_active(self, uid: str) -> None:
         """Post-login hook: rebind user-scoped subsystems and run seeding that
@@ -324,11 +319,11 @@ class AikoWeb:
             return
 
         uid = str(session["user_id"])
-        user_context_token, display_context_token = await self._bind_user_context(uid, session)
+        user_context_token, display_context_token, display_name = await self._bind_user_context(uid, session)
         
         if not self._login_event.is_set():
             self._authenticated_uid = uid
-            self._authenticated_display_name = self._current_display_name
+            self._authenticated_display_name = display_name
             self._login_event.set()
         
         await ws.accept()
@@ -349,7 +344,7 @@ class AikoWeb:
                 if raw_bytes is not None:
                     if self._mic_active.is_set():
                         try:
-                            self._audio_q.put_nowait(raw_bytes)
+                            self._audio_q.put_nowait((raw_bytes, uid, display_name))
                         except queue.Full:
                             log.debug("webui: audio queue full, dropping frame")
                     continue
@@ -366,9 +361,7 @@ class AikoWeb:
                     if mtype == "user_input":
                         text = (msg.get("text") or "").strip()
                         if text:
-                            uid = str(session["user_id"])
-                            await self._bind_user_context(uid, session)
-                            self._input_q.put((text, uid, self._current_display_name))
+                            self._input_q.put((text, uid, display_name))
 
                     elif mtype == "vad":
                         event = msg.get("event")
@@ -377,7 +370,7 @@ class AikoWeb:
                         elif event == "end":
                             self._broadcast({"type": "voice", "status": "transcribing"})
                             if WEBUI_BROWSER_VAD_GATE and self._mic_active.is_set():
-                                self._audio_q.put(b"")
+                                self._audio_q.put((b"", uid, display_name))
                                 
                     elif mtype == "barge_in":
                         # S0: master switch — ignore browser barge when disabled
@@ -627,7 +620,7 @@ class AikoWeb:
                 if isinstance(item, tuple):
                     text, uid, display_name = item
                 else:
-                    text, uid, display_name = item, self._current_user_id, self._current_display_name
+                    text, uid, display_name = item, "guest", "Guest"
                 set_current_user_id(uid)
                 set_current_display_name(display_name)
                 return text
@@ -639,6 +632,8 @@ class AikoWeb:
     def get_voice_input(self, listen, speak=None, wait_fn=None):
         result_holder = [None]
         done_event    = threading.Event()
+        # Track the accepted user identity from the first frame
+        accepted_user = {"uid": None, "display_name": None}
 
         if not self._did_barge_in:
             while True:
@@ -653,9 +648,23 @@ class AikoWeb:
 
         def _chunk_source(n: int):
             try:
-                raw = self._audio_q.get(timeout=FRAME_TIMEOUT_S)
+                item = self._audio_q.get(timeout=FRAME_TIMEOUT_S)
             except queue.Empty:
                 return None
+
+            if isinstance(item, tuple):
+                raw, uid, display_name = item
+                # Reject frames from different users once we've accepted one
+                if accepted_user["uid"] is None:
+                    accepted_user["uid"] = uid
+                    accepted_user["display_name"] = display_name
+                elif accepted_user["uid"] != uid:
+                    # Drop frame from different user
+                    return None
+                set_current_user_id(uid)
+                set_current_display_name(display_name)
+            else:
+                raw = item
 
             if raw == b"":
                 return None
@@ -675,9 +684,6 @@ class AikoWeb:
             self._broadcast({"type": "voice", "status": status})
 
         def _run() -> None:
-            set_current_user_id(self._current_user_id)
-            set_current_display_name(self._current_display_name)
-            os.environ["AIKO_USER_ID"] = self._current_user_id
             # Call listen() with WebUI chunk source. See sensory.listen.AikoListen.listen()
             # docstring for full parameter contract. Key points:
             #   - vad_presegmented parameter was removed (no longer supported)
@@ -738,6 +744,11 @@ class AikoWeb:
                 set_current_display_name(display_name)
                 return (text, {})
             return (text_input, {})
+
+        # Restore the accepted user identity before returning ASR result
+        if accepted_user["uid"] is not None:
+            set_current_user_id(accepted_user["uid"])
+            set_current_display_name(accepted_user["display_name"])
 
         raw = result_holder[0]
         if isinstance(raw, tuple):
