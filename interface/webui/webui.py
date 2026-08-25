@@ -111,10 +111,11 @@ def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
 
 class AikoWeb:
     def __init__(self, no_voice: bool = False, debug: bool = False):
-        self._no_voice = no_voice
-        self._debug    = debug
-        self._ts       = time.time()
-        self._lock     = threading.Lock()
+        self._no_voice     = no_voice
+        self._debug        = debug
+        self._boot_result  = boot_result
+        self._ts           = time.time()
+        self._lock         = threading.Lock()
 
         self._current_user_id: str = "guest"
         self._current_display_name: str = "Guest"
@@ -161,7 +162,14 @@ class AikoWeb:
         interface.webui.auth.aiko_web_instance = self
 
         self._start_servers()
-
+        
+    def set_boot_result(self, result: BootResult):
+        """Called by main.py AFTER wakeup.boot() finishes (now before login)."""
+        self._boot_result = result
+        if result:
+            self.status_finish()   # broadcasts the "phase: chat" event
+            self._broadcast({"type": "status_finish", "ready": True, "message": "Aiko fully initialized — log in now"})
+            
     def set_voice_backends(self, speak, listen) -> None:
         self._speak = speak
         self._listen = listen
@@ -171,10 +179,6 @@ class AikoWeb:
 
     def set_think(self, think) -> None:
         self._think = think
-
-    def wait_for_first_login(self, timeout: float | None = None) -> str | None:
-        self._login_event.wait(timeout)
-        return self._authenticated_uid
 
     def _on_user_active(self, uid: str) -> None:
         """Post-login hook: rebind user-scoped subsystems and run seeding that
@@ -193,12 +197,6 @@ class AikoWeb:
             log.exception("[aiko-web] scheduler user switch failed for %s", uid)
 
         if self._user_space_ready or uid == "guest":
-            return
-        if self._think is None or self._memorize is None:
-            # Boot hasn't finished yet (browser beat wakeup) — leave the flag
-            # unset so the next connect (or run_session post-boot hook)
-            # retriggers seeding with live subsystem refs.
-            log.info("[aiko-web] subsystems still booting — deferring user-space seeding")
             return
         self._user_space_ready = True
         log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
@@ -757,6 +755,11 @@ def run_webui(args) -> None:
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
     print("  Booting subsystems now — browsers can log in while Aiko wakes up.\n")
+
+    # NEW: boot happened in main.py BEFORE run_webui(), so we pass the result
+    # (this triggers frontend "Initializing..." + "ready" status immediately)
+    ui = AikoWeb(no_voice=args.text, debug=args.debug, boot_result=boot_result)
+
     # Social reply daemons start inside run_session() — the single poller for
     # Threads/Bluesky, common to the WebUI and CLI front ends.
     run_session(ui, args)
