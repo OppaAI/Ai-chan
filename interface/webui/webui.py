@@ -34,7 +34,7 @@ import ssl
 import subprocess
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import ClassVar, TYPE_CHECKING
 if TYPE_CHECKING:
     from system.wakeup import BootResult
     
@@ -262,11 +262,7 @@ class AikoWeb:
         from interface.webui.auth import app as auth_app
         from starlette.staticfiles import StaticFiles
     
-        has_static = False
-        for route in auth_app.routes:
-            if hasattr(route, "name") and route.name == "static":
-                has_static = True
-                break
+        has_static = any(getattr(route, "name", None) == "static" for route in auth_app.routes)
         if not has_static:
             auth_app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
     
@@ -457,12 +453,15 @@ class AikoWeb:
             log.warning("webui: failed to send ws message")
 
     def _draw(self, buf=None) -> None:
+        # No-op: preserves AikoTUI's draw interface so orchestrate.run_session()
+        # can call ui._draw() polymorphically regardless of TUI vs WebUI backend.
         pass
-
+    
     def _draw_clock_only(self) -> None:
+        # Same rationale as _draw(); WebUI pushes vitals instead of redrawing.
         self._push_vitals()
 
-    _BOOT_LABELS: dict[str, str] | None = None
+    _BOOT_LABELS: ClassVar[dict[str, str] | None] = None
 
     @classmethod
     def _ensure_boot_labels(cls) -> dict[str, str]:
