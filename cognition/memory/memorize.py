@@ -2060,7 +2060,10 @@ class AikoMemorize:
 
         self._user_id_override = user_id
         self._display_name = None
-        if self._conn:
+        if self._mem_backend is not None:
+            # Read _mem_backend directly — going through the self._mem
+            # property here would lazily materialize a backend just to
+            # close it (defeating lazy guest boot).
             with self._mem._db_lock:
                 try:
                     self._conn.execute("PRAGMA optimize")
@@ -2075,7 +2078,11 @@ class AikoMemorize:
 
     def get_user_id(self) -> str:
         """Return the user_id this instance is currently opened for."""
-        return self._user_id_override or self._mem._user_id
+        if self._user_id_override:
+            return self._user_id_override
+        if self._mem_backend is not None:
+            return self._mem_backend._user_id
+        return current_user_id()
 
     def set_display_name(self, name: str) -> None:
         """Set the display name for this user (e.g. GitHub login)."""
@@ -3316,6 +3323,11 @@ class AikoMemorize:
         _all_mems: list[dict] | None = None,
         _pinned_ids: set[str] | None = None,
     ) -> dict:
+        # Lazy guest boot: pruning a throwaway tempfile DB that was never
+        # written to is pure waste — and touching self._mem here would
+        # materialize it. No backend open yet + guest identity → no-op.
+        if self._mem_backend is None and (user_id or self.get_user_id()) == "guest":
+            return {"pruned": 0, "skipped": "guest (no store open)"}
         """
         Prune decayed memories below threshold score.
         Grace period (default 35 days) protects newly created memories.

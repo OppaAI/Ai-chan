@@ -199,6 +199,13 @@ class AikoWeb:
             return
         self._user_space_ready = True
         log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
+        # Boot skipped memory cleanup for guest — run it now that the real
+        # per-user store is open (parity with the old login-gated boot).
+        try:
+            if self._memorize is not None:
+                self._memorize.cleanup()
+        except Exception:
+            log.exception("[aiko-web] post-login memory cleanup failed")
         try:
             from agentic.graph_engine import ensure_playbooks
             ensure_playbooks(user_id=uid)

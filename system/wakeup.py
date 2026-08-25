@@ -169,7 +169,7 @@ def _prewarm_semantic_cache(think) -> None:
 
         # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
         from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
-        embedder = think._get_memorize()._mem._embedder                                # load the pre-embedded semantic vectors from npz files
+        embedder = think._get_memorize().embedder()                                    # shared embedder — no DB needed, works pre-login
         for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
             _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
 
@@ -263,9 +263,19 @@ class AikoWakeup:
 
                 # No user-id work here — boot may run before anyone logs in.
                 # Display-name pinning + per-user store switching happen when a
-                # real identity connects (webui._ws_handler / cli.py).
+                # real identity connects (webui._ws_handler / cli.py); cleanup
+                # for the real user runs in webui's post-login hook.
 
-                _boot_step('mem_cleanup', lambda: memorize.cleanup())                         # prune decayed memories
+                def _mem_cleanup_if_real_user():
+                    """Pruning a throwaway guest tempfile DB that was never
+                    written to is pure waste — skip it until a real identity
+                    is bound (cleanup() itself no-ops too)."""
+                    if memorize.get_user_id() == "guest":
+                        log.info("[wakeup] Skipping memory cleanup — guest boot.")
+                        return
+                    memorize.cleanup()
+
+                _boot_step('mem_cleanup', _mem_cleanup_if_real_user)
                 _boot_step('mem_ready')                                                       # mark the memory system ready
 
                 return memorize                                                               # return the live AikoMemorize object
