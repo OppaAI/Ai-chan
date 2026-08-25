@@ -2199,6 +2199,8 @@ class AikoMemorize:
         user_input: str,
         response_text: str,
         *,
+        user_id: str | None = None,
+        display_name: str | None = None,
         is_active_turn=None,
         idle_since=None,
     ) -> None:
@@ -2213,8 +2215,8 @@ class AikoMemorize:
         state. If either is omitted, the write runs as soon as it's
         dequeued with no idle wait.
         """
-        user_id = self.get_user_id()  # resolved here, on the caller's thread — not in _write_loop
-        display_name = current_display_name()
+        user_id = self._resolve_user_id(user_id)  # resolved here, on the caller's thread — not in _write_loop
+        display_name = display_name or current_display_name()
         self._write_queue.put((user_input, response_text, user_id, display_name, is_active_turn, idle_since))
 
     def _write_loop(self) -> None:
