@@ -68,10 +68,10 @@ load_config()
 import argparse                               # for parsing CLI arguments
 import sys                                    # for assigning exit code
 
-from system.log import get_logger                     # assign logging to universal logger
+from system.log import get_logger             # assign logging to universal logger
 log = get_logger(__name__)
 
-from cognition.memory.memorize import AikoMemorize             # load memory system for --clear-mem
+from cognition.memory.memorize import AikoMemorize  # load memory system for --clear-mem
 
 
 def parse_args():
@@ -87,15 +87,15 @@ def parse_args():
                    help="use the plain no-curses CLI instead of the WebUI — for local testing only")
     p.add_argument("--clear-mem", action="store_true",            # wipe out all memory and exit
                    help="WARNING: irreversibly wipes all stored memories, then exits")
-    p.add_argument("--logout",   action="store_true",             # logout user session
+    p.add_argument("--logout",    action="store_true",            # logout user session
                    help="clear stored CLI auth token and exit")
-    p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
+    p.add_argument("--name",      type=str, default="",           # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
     return p.parse_args()                                         # return namespace of the arguments
 
 
 def main():
-    """Primary entry point for the Aiko-chan CLI."""
+    """Primary entry point for the Aiko-chan application."""
     args = parse_args()                                 # assign argument namespace to check which ones are set
     
     if args.clear_mem:                                  # if clear memory argument set
@@ -109,58 +109,30 @@ def main():
         sys.exit(0)                                     # exit code 0
         
     if args.logout:                                     # if logout argument set
-        from interface.cli.cli import handle_logout     # load CLI
+        from interface.cli.cli import handle_logout     # load CLI logout handler
         handle_logout()                                 # logout user session
         sys.exit(0)                                     # exit code 0
 
-    if args.cli:                                       # if CLI argument set
-        from interface.cli.cli import run_cli           # load CLI with set arguments
-        run_cli(args)                                   # launch CLI 
-    else:                                               # otherwise,
-        from interface.webui.webui import run_webui     # load WebUI
-        run_webui(args)                                 # launch WebUI with set arguments
-
-    # === UPDATED: init-first boot (parallel with WebUI) ===
-    print("[Aiko] Starting init-first boot (background thread)...")
+    # === Init-first boot (parallel with WebUI) ===
+    log.info("Starting init-first boot (background thread)...")
+    from system.wakeup import AikoWakeup               # import wakeup system
+    
     wakeup = AikoWakeup()
     boot_result = wakeup.boot(
-        user_id=0,
-        on_loading=lambda msg: print(f"[Aiko] {msg}"),
-        on_done=lambda: print("[Aiko] Wakeup complete — WebUI ready"),
-        on_skip=lambda: print("[Aiko] Boot skipped"),
+        user_id=0,                                      # dummy/guest user
+        on_loading=lambda msg: log.info(f"[Boot] {msg}"),
+        on_done=lambda: log.info("[Boot] Wakeup complete — ready for UI"),
+        on_skip=lambda: log.info("[Boot] Boot skipped"),
     )
-    
-    # === WEBUI starts FIRST (frontend loads instantly) ===
-    ui = AikoWeb(no_voice=args.text, debug=args.debug, boot_result=boot_result)
+
+    # === Dispatch to appropriate frontend ===
+    if args.cli:                                        # if CLI argument set
+        from interface.cli.cli import run_cli           # load CLI with set arguments
+        run_cli(args)                                   # launch CLI 
+    else:                                               # otherwise, launch WebUI
+        from interface.webui.webui import run_webui     # load WebUI
+        run_webui(args, boot_result=boot_result)        # launch WebUI with boot result
+
 
 if __name__ == "__main__":
-    # === UPDATED: init-first boot (runs BEFORE login — now 100% safe) ===
-    # WebUI starts FIRST (HTTP/WS server + login page loads instantly)
-    # AikoWakeup.boot() happens in parallel in the background
-    # Frontend shows "Initializing..." the moment the browser loads
-    # Chat is READY the instant the user logs in (no more waiting)
-    print("[Aiko] Starting init-first boot (parallel with WebUI)...")
-    from system.wakeup import AikoWakeup
-    boot_result = AikoWakeup().boot(
-        user_id=0,                    # dummy/guest — now allowed (no user_id check in wakeup.py)
-        on_loading=lambda msg: print(f"[Aiko] {msg}"),
-        on_done=lambda: print("[Aiko] Wakeup complete — WebUI ready"),
-        on_skip=lambda: print("[Aiko] Boot skipped"),
-    )
-
-    # === WEBUI (default) — starts FIRST ===
-    ui = AikoWeb(boot_result=boot_result)   # <--- NEW argument
-    # Start HTTP + WS server (frontend loads instantly)
-    # Auto-open browser (if not NO_BROWSER=1)
-    # ui.start_server()   # your existing call
-    # === AFTER server is running ===
-    # Browser loads immediately and sees "Initializing..."
-    # Login page still appears, but chat is READY the moment login succeeds
-
-    # === CALL THE REAL FRONTEND ENTRY (unchanged) ===
-    if args.cli:
-        from interface.cli.cli import run_cli
-        run_cli(args)
-    else:
-        from interface.webui.webui import run_webui
-        run_webui(args)
+    main()
