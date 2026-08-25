@@ -1870,7 +1870,12 @@ class AikoThink:
             idle_since=lambda: self._last_chat_time,
         )
         try:
-            mem.queue_episode(user_input, response_text, cognitive_state=cognitive_state)
+            mem.queue_episode(
+                user_input,
+                response_text,
+                cognitive_state=cognitive_state,
+                user_id=current_user_id(),
+            )
         except Exception:
             pass
 
