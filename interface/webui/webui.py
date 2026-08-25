@@ -152,6 +152,13 @@ class AikoWeb:
         self._client_users: dict[object, str] = {}
         self._clients_lock = threading.Lock()
 
+        # Whichever user's turn (or background scheduled job — see
+        # system/turngate.py) currently holds AIKO_BUSY_LOCK. Used only to
+        # tell OTHER users why nothing is happening yet; the actual
+        # serialization is the shared lock + single-threaded main loop, not
+        # this flag — this is display state, not a gate.
+        self._active_uid: str | None = None
+
         self._memorize = None
         self._think = None
         self._speak = None
@@ -212,21 +219,17 @@ class AikoWeb:
         return user_token, display_token, display_name
             
     def _on_user_active(self, uid: str) -> None:
-        """Post-login hook: rebind user-scoped subsystems and run seeding that
-        boot skipped because it ran pre-auth as guest.
+        """Post-login hook: run one-time user-space seeding that boot skipped
+        because it ran pre-auth as guest.
 
-        Called on every authenticated WS connect: the scheduler job store is
-        rebound per-connect (each browser may be a different user), while
-        one-time user-space seeding (playbooks + schedule jobs) runs only once.
+        Called on every authenticated WS connect. Scheduler binding used to
+        happen here too (sched.set_user(uid)) — that was a bug for multi-user:
+        it stuck the scheduler on whichever user connected most recently, so
+        every other user's due jobs silently stopped firing. The scheduler
+        now watches every user's job store itself each tick (see
+        ScheduleRunner._run() / all_user_ids() in system/schedule.py), so this
+        hook only needs to handle one-time seeding.
         """
-        try:
-            from system.schedule import get_scheduler
-            sched = get_scheduler()
-            if sched is not None:
-                sched.set_user(uid)
-        except Exception:
-            log.exception("[aiko-web] scheduler user switch failed for %s", uid)
-
         if uid == "guest":
             return
         with self._lock:
@@ -366,6 +369,19 @@ class AikoWeb:
                     if mtype == "user_input":
                         text = (msg.get("text") or "").strip()
                         if text:
+                            with self._lock:
+                                busy_with_other = (
+                                    self._active_uid is not None
+                                    and self._active_uid != uid
+                                )
+                            if busy_with_other:
+                                # Message is still enqueued below and will be
+                                # served in order — this is just feedback so
+                                # the browser doesn't look frozen while it waits.
+                                self._broadcast(
+                                    {"type": "busy", "message": "Aiko is with someone else right now — you're next."},
+                                    user_id=uid,
+                                )
                             self._input_q.put((text, uid, display_name))
 
                     elif mtype == "vad":
@@ -589,15 +605,18 @@ class AikoWeb:
             self._stats["turn_tok"]   = 0
             self._stats["turn_start"] = None
             self._streaming           = ""
+            self._active_uid          = None
 
         self._broadcast_to_current_user({"type": "pose", "name": "thinking", "active": False})
         self._broadcast_to_current_user({"type": "commit"})
         self._push_vitals()
 
     def turn_start(self) -> None:
+        uid = current_user_id()
         with self._lock:
             self._stats["turn_start"] = time.time()
             self._stats["turn_tok"]   = 0
+            self._active_uid          = uid if uid and uid != "guest" else None
         self._broadcast_to_current_user({"type": "pose", "name": "thinking", "active": True})
 
     def _push_vitals(self) -> None:
