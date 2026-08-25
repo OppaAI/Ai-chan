@@ -1864,6 +1864,8 @@ class AikoThink:
         mem.queue_write(
             user_input,
             response_text,
+            user_id=current_user_id(),
+            display_name=current_display_name(),
             is_active_turn=_is_any_active,
             idle_since=lambda: self._last_chat_time,
         )
