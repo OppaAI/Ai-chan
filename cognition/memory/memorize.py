@@ -1957,6 +1957,7 @@ class AikoMemorize:
                 embedder=self._embedder,
             )
         self._write_queue: "queue.Queue[tuple]" = queue.Queue()
+        self._user_switch_lock = threading.RLock()
         self._write_worker = threading.Thread(target=self._write_loop, daemon=True)
         self._write_worker.start()
         self._last_cache_clear_time: float = 0.0
@@ -2043,38 +2044,39 @@ class AikoMemorize:
         self._conn.commit()
 
     def switch_user(self, user_id: str) -> None:
-        # Drain any pending writes first. If a write is still in flight when
-        # we close the connection and reassign self._mem below, the
-        # write-worker thread's in-progress self.add() call can end up
-        # operating on a closed connection (or, worse, silently switch to
-        # the *new* user's connection mid-write). Bail out rather than risk
-        # cross-user data corruption; the caller can retry the switch once
-        # the write actually finishes.
-        if not self.wait_for_writes(timeout=5.0):
-            log.error(
-                f"switch_user({user_id!r}): pending write(s) did not finish "
-                "within 5s — aborting user switch to avoid writing to the "
-                "wrong connection. Try again shortly."
-            )
-            return
+        with self._user_switch_lock:
+            # Drain any pending writes first. If a write is still in flight when
+            # we close the connection and reassign self._mem below, the
+            # write-worker thread's in-progress self.add() call can end up
+            # operating on a closed connection (or, worse, silently switch to
+            # the *new* user's connection mid-write). Bail out rather than risk
+            # cross-user data corruption; the caller can retry the switch once
+            # the write actually finishes.
+            if not self.wait_for_writes(timeout=5.0):
+                log.error(
+                    f"switch_user({user_id!r}): pending write(s) did not finish "
+                    "within 5s — aborting user switch to avoid writing to the "
+                    "wrong connection. Try again shortly."
+                )
+                return
 
-        self._user_id_override = user_id
-        self._display_name = None
-        if self._mem_backend is not None:
-            # Read _mem_backend directly — going through the self._mem
-            # property here would lazily materialize a backend just to
-            # close it (defeating lazy guest boot).
-            with self._mem._db_lock:
-                try:
-                    self._conn.execute("PRAGMA optimize")
-                    self._conn.commit()
-                except Exception:
-                    log.warning("memorize: PRAGMA optimize failed")
-                try:
-                    self._conn.close()
-                except Exception:
-                    log.warning("memorize: closing old connection failed")
-        self._open(user_id)
+            self._user_id_override = user_id
+            self._display_name = None
+            if self._mem_backend is not None:
+                # Read _mem_backend directly — going through the self._mem
+                # property here would lazily materialize a backend just to
+                # close it (defeating lazy guest boot).
+                with self._mem._db_lock:
+                    try:
+                        self._conn.execute("PRAGMA optimize")
+                        self._conn.commit()
+                    except Exception:
+                        log.warning("memorize: PRAGMA optimize failed")
+                    try:
+                        self._conn.close()
+                    except Exception:
+                        log.warning("memorize: closing old connection failed")
+            self._open(user_id)
 
     def get_user_id(self) -> str:
         """Return the user_id this instance is currently opened for."""
@@ -2215,9 +2217,10 @@ class AikoMemorize:
         state. If either is omitted, the write runs as soon as it's
         dequeued with no idle wait.
         """
-        user_id = self._resolve_user_id(user_id)  # resolved here, on the caller's thread — not in _write_loop
-        display_name = display_name or current_display_name()
-        self._write_queue.put((user_input, response_text, user_id, display_name, is_active_turn, idle_since))
+        with self._user_switch_lock:
+            user_id = self._resolve_user_id(user_id)  # resolved here, on the caller's thread — not in _write_loop
+            display_name = display_name or current_display_name()
+            self._write_queue.put((user_input, response_text, user_id, display_name, is_active_turn, idle_since))
 
     def _write_loop(self) -> None:
         while True:
