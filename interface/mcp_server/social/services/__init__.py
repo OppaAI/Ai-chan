@@ -12,6 +12,29 @@ _session: requests.Session | None = None
 _session_lock = threading.Lock()
 
 
+class _CASelfHealingAdapter(HTTPAdapter):
+    """HTTPAdapter that survives transient CA-bundle unavailability.
+
+    When the venv-backed certifi bundle can't be stat'd mid-flight (removable
+    storage hiccup), requests raises OSError before any bytes hit the wire.
+    Re-resolve a bundle that exists right now and retry once — verification is
+    re-pointed, never disabled.
+    """
+
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):
+        try:
+            return super().send(request, stream=stream, timeout=timeout, verify=verify, cert=cert, proxies=proxies)
+        except OSError as exc:
+            from system.tls import heal_verify, is_ca_bundle_error
+
+            if not is_ca_bundle_error(exc):
+                raise
+            healed = heal_verify(verify)
+            if not healed:
+                raise
+            return super().send(request, stream=stream, timeout=timeout, verify=healed, cert=cert, proxies=proxies)
+
+
 def get_session() -> requests.Session:
     """Get shared requests Session with connection pooling and retries."""
     global _session
@@ -19,7 +42,7 @@ def get_session() -> requests.Session:
         with _session_lock:
             if _session is None:
                 _session = requests.Session()
-                adapter = HTTPAdapter(
+                adapter = _CASelfHealingAdapter(
                     pool_connections=10,
                     pool_maxsize=20,
                     max_retries=Retry(

@@ -118,6 +118,50 @@ def test_generate_reply_image_requires_endpoint(monkeypatch):
     assert threads._generate_reply_image("a cat") is None
 
 
+def test_generate_reply_image_sends_reference_images(monkeypatch):
+    png_b64 = base64.b64encode(b"\x89PNG-fake-bytes").decode()
+    monkeypatch.setenv("IMAGEGEN_URL", "https://imggen.example")
+    monkeypatch.setenv("THREADS_IMAGEGEN_TIMEOUT", "5")
+    session = FakeSession([FakeResponse({"image_b64": png_b64})])
+    monkeypatch.setattr(threads, "get_session", lambda: session)
+    monkeypatch.setattr(threads, "_load_reference_images", lambda: ["ref-aiko", "ref-user"])
+
+    path = threads._generate_reply_image("me and Aiko watching the stars")
+
+    assert path is not None
+    _, _, kwargs = session.calls[0]
+    assert kwargs["json"]["reference_images"] == ["ref-aiko", "ref-user"]
+    threads._cleanup_temp_image(path)
+
+
+def test_generate_reply_image_without_reference_files_skips_refs(monkeypatch):
+    png_b64 = base64.b64encode(b"\x89PNG-fake-bytes").decode()
+    monkeypatch.setenv("IMAGEGEN_URL", "https://imggen.example")
+    session = FakeSession([FakeResponse({"image_b64": png_b64})])
+    monkeypatch.setattr(threads, "get_session", lambda: session)
+    monkeypatch.setattr(threads, "_load_reference_images", lambda: [])
+
+    path = threads._generate_reply_image("a cat")
+
+    assert path is not None
+    _, _, kwargs = session.calls[0]
+    assert "reference_images" not in kwargs["json"]
+    threads._cleanup_temp_image(path)
+
+
+def test_load_reference_images_degrades_to_empty_on_import_failure(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def _fail_cognition(name, *args, **kwargs):
+        if name.startswith("cognition"):
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fail_cognition)
+    assert threads._load_reference_images() == []
+
+
 def test_generate_reply_image_writes_and_cleans_temp_png(monkeypatch):
     png_b64 = base64.b64encode(b"\x89PNG-fake-bytes").decode()
     monkeypatch.setenv("IMAGEGEN_URL", "https://imggen.example")

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import threading
+from pathlib import Path
 
 from system.log import get_logger
 
@@ -40,24 +41,87 @@ _DEFAULT_INTERVAL = 180  # seconds — same default as scheduler job
 # replies gain long-term recall + memory saving without a restart.
 _SHARED_MEMORIZE: dict = {"ref": None}
 
+# Dedicated fallback handle for headless periods: while nobody has logged
+# into the WebUI since boot, the shared instance is still a lazy guest with
+# no store open, and passing it (or None) made every Threads/Bluesky reply
+# run without recall and without interaction-memory saving — even though the
+# owner's memory.db sits right there on disk. The fallback binds its own
+# AikoMemorize to that store once, then both daemons reuse it.
+_FALLBACK_MEMORIZE: dict = {"ref": None}
+_FALLBACK_LOCK = threading.Lock()
+
 
 def set_shared_memorize(memorize) -> None:
     """Inject the live AikoMemorize instance into both monitor daemons."""
     _SHARED_MEMORIZE["ref"] = memorize
 
 
-def _bound_memorize():
-    """Return the shared AikoMemorize only once it holds a REAL user store.
+def _owner_user_id() -> str | None:
+    """Resolve the owner's user_id without requiring a browser login.
 
-    While nobody has logged in, memorize is still bound to the lazy guest
-    sentinel (no DB open, empty recall). Passing it anyway would materialize
-    the throwaway guest sqlite just to search nothing, and could pin
-    owner-interaction memories into a store that vanishes on restart.
-    Gate on is_open(): True only after switch_user()/boot bound a real
-    per-user store — before that, monitors run recall-free like before.
+    Order: explicit AIKO_USER_ID env override, else the unique non-guest
+    user directory under USER_SPACE_ROOT that has both a memory store and a
+    profile. Ambiguous multi-user layouts return None (recall stays off
+    rather than guessing and reading/writing the wrong person's memories).
+    """
+    override = os.getenv("AIKO_USER_ID", "").strip()
+    if override:
+        return override
+    try:
+        from system.userspace import _user_state_root_value
+
+        root = Path(_user_state_root_value()).expanduser()
+        candidates = []
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name == "guest":
+                continue
+            if (child / "memory" / "memory.db").is_file() and (
+                child / "profile" / "USER.md"
+            ).is_file():
+                candidates.append(child.name)
+    except Exception:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _fallback_owner_memorize():
+    """Return a monitor-owned AikoMemorize bound to the owner's store.
+
+    Built lazily on first headless poll and cached; returns None when no
+    unambiguous owner identity can be resolved on disk.
+    """
+    with _FALLBACK_LOCK:
+        mem = _FALLBACK_MEMORIZE["ref"]
+        if mem is not None:
+            return mem
+        uid = _owner_user_id()
+        if not uid:
+            return None
+        try:
+            from cognition.memory.memorize import AikoMemorize
+
+            mem = AikoMemorize(silent=True)
+            mem.switch_user(uid)
+        except Exception:
+            log.exception("[monitor_daemon] Owner-store fallback bind failed for %s", uid)
+            return None
+        _FALLBACK_MEMORIZE["ref"] = mem
+        log.info("[monitor_daemon] Headless recall bound to owner store %s", uid)
+        return mem
+
+
+def _bound_memorize():
+    """Return the best available AikoMemorize for social reply monitors.
+
+    Preference order: the shared live instance once wakeup boot + login have
+    bound a REAL per-user store (is_open()), else the dedicated owner-store
+    fallback for headless operation. Before either exists, monitors run
+    recall-free like before.
     """
     mem = _SHARED_MEMORIZE["ref"]
-    return mem if mem is not None and mem.is_open() else None
+    if mem is not None and mem.is_open():
+        return mem
+    return _fallback_owner_memorize()
 
 
 def _daemon_loop(interval: int) -> None:

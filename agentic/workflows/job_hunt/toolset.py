@@ -53,6 +53,27 @@ from system.log import get_logger
 
 log = get_logger(__name__)
 
+
+def _http_get_with_tls_fallback(url: str, *, timeout: float, headers: dict | None = None):
+    """GET that survives transient CA-bundle loss on the venv filesystem.
+
+    When requests raises its missing-CA-bundle OSError (removable-storage
+    hiccup under .venv), retry once against a CA store that verifiably exists
+    right now (see system.tls). Verification is re-pointed, never disabled.
+    """
+    try:
+        return requests.get(url, timeout=timeout, headers=headers)
+    except OSError as exc:
+        from system.tls import heal_verify, is_ca_bundle_error
+
+        if not is_ca_bundle_error(exc):
+            raise
+        healed = heal_verify(None)
+        if not healed:
+            raise
+        log.warning("TLS CA bundle transiently unavailable — retrying %s with %s", url, healed)
+        return requests.get(url, timeout=timeout, headers=headers, verify=healed)
+
 # Keys the LLM is allowed to fill. Never invent; only extract from source text.
 _LLM_FILLABLE_KEYS = frozenset({
     "organization", "title", "employment_type", "location",
@@ -459,10 +480,10 @@ def _fetch_job_page_text(url: str, timeout: float = 10.0, max_chars: int | None 
     if not url:
         return ""
     try:
-        resp = requests.get(
+        resp = _http_get_with_tls_fallback(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (Aiko-Chan/1.0 job-post enrichment)"},
             timeout=timeout,
+            headers={"User-Agent": "Mozilla/5.0 (Aiko-Chan/1.0 job-post enrichment)"},
         )
         if not (200 <= resp.status_code < 300):
             return ""
@@ -704,7 +725,9 @@ def fetch_today_jobs_from_rss(config: dict[str, Any] | None = None, filter_keywo
         resp = None
         for attempt in range(3):
             try:
-                resp = requests.get(feed_url, timeout=30, headers={"User-Agent": "Aiko-chan job RSS/1.0"})
+                resp = _http_get_with_tls_fallback(
+                    feed_url, timeout=30, headers={"User-Agent": "Aiko-chan job RSS/1.0"}
+                )
                 resp.raise_for_status()
                 break
             except Exception as e:

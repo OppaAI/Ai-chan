@@ -598,24 +598,43 @@ def _threads_image_request(text: str) -> str:
     return _extract_image_request_prompt(body)
 
 
+def _load_reference_images() -> list[str]:
+    """Load the predefined Aiko + user identity images as base64 strings.
+
+    Delegates to the shared loader behind the daily-reflection imagegen
+    (cognition.consolidate.dream) so generated images draw Aiko and the
+    owner from the same reference files. Missing files degrade to an
+    empty list (plain text-to-image).
+    """
+    try:
+        from cognition.consolidate.dream import _load_reference_images as _shared_load
+        return _shared_load()
+    except Exception:
+        return []
+
+
 def _generate_reply_image(scene_prompt: str) -> Optional[str]:
     base = env("IMAGEGEN_URL", "").rstrip("/")
     if not base or not scene_prompt:
         return None
     try:
+        payload = {
+            "prompt": (
+                f"{scene_prompt}, anime illustration, manga style, clean lineart, flat color, "
+                "no text, no speech bubbles"
+            ),
+            "width": 1024,
+            "height": 1024,
+            "steps": 4,
+            "guidance_scale": 1.0,
+            "seed": -1,
+        }
+        ref_images = _load_reference_images()
+        if ref_images:
+            payload["reference_images"] = ref_images
         resp = get_session().post(
             f"{base}/generate",
-            json={
-                "prompt": (
-                    f"{scene_prompt}, anime illustration, manga style, clean lineart, flat color, "
-                    "no text, no speech bubbles"
-                ),
-                "width": 1024,
-                "height": 1024,
-                "steps": 4,
-                "guidance_scale": 1.0,
-                "seed": -1,
-            },
+            json=payload,
             timeout=int_env("THREADS_IMAGEGEN_TIMEOUT", 300),
         )
         resp.raise_for_status()
