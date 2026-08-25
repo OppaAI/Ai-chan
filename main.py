@@ -55,47 +55,23 @@ Front-end imports are deferred into main() rather than done at module load,
 so that --clear-mem and --logout (which don't need FastAPI, uvicorn,
 websockets, or any voice subsystem) stay fast and don't require those
 dependencies to be installed at all.
-
-Removed in this pass (dead code found while splitting main.py up):
-    The old main.py built a second, never-served `FastAPI()` +
-    `app.include_router(auth_app.router)` at module level. AikoWeb._run_http
-    (interface/webui/webui.py) always serves `auth_app` directly via its own
-    uvicorn.Config — that wrapper object was never mounted, never passed to
-    uvicorn, and never reachable. If some external deploy script runs
-    `uvicorn main:app`, it was already pointing at a dead app with no
-    routes actually serving traffic; that call needs to target
-    `interface.webui.auth:app` (or wherever the live app now lives) instead.
-    Flagging this explicitly since it's an external-facing assumption I
-    can't verify from here — please check your deploy config before pulling
-    this in.
-
-    Also removed: a stray, unreachable second copy of the boot/dispatch
-    logic that lived under `if __name__ == "__main__":` and duplicated (and
-    diverged from) main()'s body — main() itself was never actually called.
-    That copy referenced `args`, `AikoWakeup`, and `AikoWeb` without
-    importing or defining them, and called `wakeup.boot()` with plain
-    print() lambdas directly in main.py, which — for the WebUI path — would
-    have fully finished booting before AikoWeb was even constructed,
-    defeating the "frontend loads instantly" goal that AikoWeb.
-    set_boot_result() was actually built to support. That responsibility
-    now lives in run_webui() itself (see interface/webui/webui.py).
 """
 from __future__ import annotations            # evaluates type annotations later
 
+# Public libraries
 import warnings                               # for filtering out the warning messages
-warnings.filterwarnings("ignore")
-
-from system.config import load_config         # load user configs
-load_config()
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
 
 import argparse                               # for parsing CLI arguments
 import sys                                    # for assigning exit code
 
+# Aiko's components
+from system.config import load_config                             # load user configs
+load_config()
 from system.log import get_logger                                 # assign logging to universal logger
 log = get_logger(__name__)
 
 from cognition.memory.memorize import AikoMemorize                # load memory system for --clear-mem
-
 
 def parse_args():
     """Parse and return the CLI argument namespace for Aiko-chan's launch options."""
