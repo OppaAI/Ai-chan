@@ -1,10 +1,25 @@
 """
-webui/webui.py
-Aiko-chan's browser-based UI backend — drop-in replacement for AikoTUI.
+webui/webui.py — Aiko-chan's browser-based UI backend.
 
-(S0: barge_in WebSocket messages are ignored when BARGE_IN_ENABLED is off;
-mic start payload includes barge_in_enabled for the browser.)
-(S3: mic start also includes echo_guard_ms for browser barge echo guard.)
+Serves the WebUI over HTTP(S) + WebSocket so any device on the LAN (PC,
+phone, tablet) can connect — drop-in replacement for AikoTUI when running
+headless (e.g. on Jetson).
+
+Sections:
+    Config          — env-driven ports, HTTPS, VAD-gate toggles (module level)
+    TLS setup       — self-signed cert generation for LAN HTTPS/mic access
+    AikoWeb         — server lifecycle, per-connection auth, chat/voice I/O
+        .connection   — WebSocket auth handshake, per-user context binding
+        .broadcast    — fan-out of chat tokens, tool status, vitals, poses
+        .boot-report  — step_loading/step_done/... boot progress events
+        .voice I/O    — mic audio queue, barge-in, VAD status relay
+    run_webui()     — entry point called from main.py after boot
+
+Notes:
+    - barge_in WebSocket messages are ignored when BARGE_IN_ENABLED is off.
+    - mic start payload includes echo_guard_ms for browser barge echo guard.
+    - No local browser auto-launch: this runs headless (e.g. Jetson) and is
+      always accessed remotely, so webbrowser/xdg-open is intentionally not used.
 """
 
 from __future__ import annotations
@@ -13,13 +28,16 @@ import asyncio
 import json
 import logging
 import os
+from pathlib import Path
 import queue
 import ssl
 import subprocess
 import threading
 import time
-from pathlib import Path
-
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from system.wakeup import BootResult
+    
 from system.config import load_config
 from system.userspace import reset_current_display_name, reset_current_user_id, set_current_user_id, set_current_display_name
 load_config()
@@ -109,7 +127,7 @@ def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
 
 
 class AikoWeb:
-    def __init__(self, no_voice: bool = False, debug: bool = False):
+    def __init__(self, no_voice: bool = False, debug: bool = False, boot_result: BootResult | None = None):
         self._no_voice     = no_voice
         self._debug        = debug
         self._boot_result  = boot_result
@@ -179,6 +197,24 @@ class AikoWeb:
     def set_think(self, think) -> None:
         self._think = think
 
+    async def _bind_user_context(self, uid: str, session: dict) -> tuple:
+        """Resolve display name and bind uid/display-name to this event-loop's
+        context vars + AIKO_USER_ID + memorize's active user. Shared by the
+        WebSocket connect handshake and every user_input message, since both
+        need the exact same resolution + switch sequence."""
+        stored_name = _load_stored_display_name(uid)
+        session_name = session.get("username") or ""
+        self._current_user_id = uid
+        self._current_display_name = stored_name or session_name or uid
+        user_token = set_current_user_id(uid)
+        display_token = set_current_display_name(self._current_display_name)
+        os.environ["AIKO_USER_ID"] = uid
+        if self._memorize:
+            await asyncio.to_thread(self._memorize.switch_user, uid)
+            if self._current_display_name:
+                self._memorize.set_display_name(self._current_display_name)
+        return user_token, display_token
+            
     def _on_user_active(self, uid: str) -> None:
         """Post-login hook: rebind user-scoped subsystems and run seeding that
         boot skipped because it ran pre-auth as guest.
@@ -292,27 +328,13 @@ class AikoWeb:
             return
 
         uid = str(session["user_id"])
-
-        self._current_user_id = uid
-
-        stored_name = _load_stored_display_name(uid)
-        session_name = (session.get("username") or "")
-        self._current_display_name = stored_name or session_name or uid
-
+        user_context_token, display_context_token = await self._bind_user_context(uid, session)
+        
         if not self._login_event.is_set():
             self._authenticated_uid = uid
             self._authenticated_display_name = self._current_display_name
             self._login_event.set()
-        user_context_token = set_current_user_id(uid)
-        display_context_token = set_current_display_name(self._current_display_name)
-        os.environ["AIKO_USER_ID"] = uid
-        if self._memorize:
-            # switch_user can block on pending SQLite writes + connection
-            # reopen — offload so the event loop stays responsive for other
-            # browsers while a slow write drains.
-            await asyncio.to_thread(self._memorize.switch_user, uid)
-            if self._current_display_name:
-                self._memorize.set_display_name(self._current_display_name)
+        
         await ws.accept()
 
         # Post-login rebinding/seeding runs in the background so the socket
@@ -349,18 +371,7 @@ class AikoWeb:
                         text = (msg.get("text") or "").strip()
                         if text:
                             uid = str(session["user_id"])
-                            self._current_user_id = uid
-                            stored_name = _load_stored_display_name(uid)
-                            session_name = (session.get("username") or "")
-                            self._current_display_name = stored_name or session_name or uid
-                            set_current_user_id(uid)
-                            set_current_display_name(self._current_display_name)
-                            os.environ["AIKO_USER_ID"] = uid
-                            if self._memorize:
-                                # same blocking concern as connect-time switch_user
-                                await asyncio.to_thread(self._memorize.switch_user, uid)
-                                if self._current_display_name:
-                                    self._memorize.set_display_name(self._current_display_name)
+                            await self._bind_user_context(uid, session)
                             self._input_q.put((text, uid, self._current_display_name))
 
                     elif mtype == "vad":
@@ -741,20 +752,14 @@ class AikoWeb:
         self._push_vitals()
 
 
-def run_webui(args) -> None:
+def run_webui(args, boot_result: BootResult | None = None) -> None:
     from system.orchestrate import run_session
-
     import socket
-    ui = AikoWeb(no_voice=args.text, debug=args.debug)
+
+    ui = AikoWeb(no_voice=args.text, debug=args.debug, boot_result=boot_result)
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
     print("  Booting subsystems now — browsers can log in while Aiko wakes up.\n")
 
-    # NEW: boot happened in main.py BEFORE run_webui(), so we pass the result
-    # (this triggers frontend "Initializing..." + "ready" status immediately)
-    ui = AikoWeb(no_voice=args.text, debug=args.debug, boot_result=boot_result)
-
-    # Social reply daemons start inside run_session() — the single poller for
-    # Threads/Bluesky, common to the WebUI and CLI front ends.
     run_session(ui, args)
