@@ -91,10 +91,10 @@ load_config()
 import argparse                               # for parsing CLI arguments
 import sys                                    # for assigning exit code
 
-from system.log import get_logger                     # assign logging to universal logger
+from system.log import get_logger                                 # assign logging to universal logger
 log = get_logger(__name__)
 
-from cognition.memory.memorize import AikoMemorize             # load memory system for --clear-mem
+from cognition.memory.memorize import AikoMemorize                # load memory system for --clear-mem
 
 
 def parse_args():
@@ -115,7 +115,6 @@ def parse_args():
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
                    help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
     return p.parse_args()                                         # return namespace of the arguments
-
 
 def main():
     """Primary entry point for the Aiko-chan application."""
@@ -143,6 +142,5 @@ def main():
         from interface.webui.webui import run_webui     # load WebUI
         run_webui(args)                                 # launch WebUI — server starts instantly, boots in background
 
-
 if __name__ == "__main__":
-    main()
+    main()                                              # start the entry point
