@@ -246,12 +246,12 @@ class AikoWeb:
             if uid in self._user_space_ready:
                 return
             self._user_space_ready.add(uid)
-        log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
-        try:
-            from system.prepare import run_post_auth
-            run_post_auth(uid, memorize=self._memorize, think=self._think)
-        except Exception:
-            log.exception("[aiko-web] post-auth initialization failed")
+            log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
+            try:
+                from system.prepare import run_post_auth
+                run_post_auth(uid, memorize=self._memorize, think=self._think)
+            except Exception:
+                log.exception("[aiko-web] post-auth initialization failed")
 
     def _start_servers(self) -> None:
         import socket

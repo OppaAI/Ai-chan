@@ -26,12 +26,29 @@ from system.userspace import (
 log = get_logger(__name__)
 
 
+def _relative_path(scope: dict) -> str:
+    """Return the path relative to a mounted studio app's root path."""
+    path = scope.get("path", "")
+    root_path = scope.get("root_path", "")
+    return path.removeprefix(root_path) if root_path else path
+
+
 def bind_login_session(app: FastAPI) -> None:
-    """Install login-session identity binding on a studio sub-app."""
+    """Install login-session identity binding on a studio sub-app.
+
+    The session identity is deliberately the only identity source for studio
+    API routes.  In particular, callers must not be able to select a
+    different store by appending ``?user_id=...`` to a request URL.
+    """
 
     @app.middleware("http")
     async def _bind_session_user(request: Request, call_next):
-        if not request.url.path.startswith("/api"):
+        # Mounted ASGI sub-apps retain the public path in ``scope["path"]``
+        # (for example ``/studio/memory/ltm/api/graph``).  Their mount prefix
+        # is recorded separately in ``scope["root_path"]``.  Checking
+        # request.url.path here therefore skipped every mounted studio API and
+        # left current_user_id() at its guest/env fallback.
+        if not _relative_path(request.scope).startswith("/api"):
             return await call_next(request)
         from interface.webui.auth import require_session
 

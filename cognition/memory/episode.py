@@ -655,6 +655,13 @@ class EpisodicStore:
             self.flush_all()
         except Exception as e:
             log.debug("EMC flush_all on close: %s", e)
+        # Stop the embed worker thread if it's running
+        if self._embed_worker is not None and self._embed_worker.is_alive():
+            try:
+                self._embed_queue.put(None)
+                self._embed_worker.join(timeout=2.0)
+            except Exception as e:
+                log.debug("EMC embed worker shutdown: %s", e)
         with self._lock:
             try:
                 self._conn.close()

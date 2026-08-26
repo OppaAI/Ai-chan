@@ -82,6 +82,7 @@ import json
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -100,6 +101,25 @@ from system.userspace import (
 log = get_logger(__name__)
 
 _knowledge_folder_watcher = None  # KnowledgeFolderWatcher instance (lazy)
+
+
+@contextmanager
+def _scheduler_run_lock(user_id: str, name: str):
+    """Serialize one scheduler stream across processes sharing user state."""
+    path = user_state_path(f".locks/scheduler-{name}.lock", user_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 def workspace_root() -> Path:
     """Resolve the active user workspace root lazily."""
@@ -1434,6 +1454,7 @@ class ScheduleRunner:
         self._wakeup               = threading.Event()
         self._stop                 = threading.Event()
         self._thread: threading.Thread | None = None
+        self._catchup_lock          = threading.Lock()
 
         # calculated once at startup, updated after each fire
         self._next_daily   = _next_daily_reflect_and_dream()
@@ -1560,7 +1581,7 @@ class ScheduleRunner:
         self._catchup_dates = self._missing_reflection_dates()
         self._monthly_catchup_needed_flag = self._monthly_catchup_needed()
 
-        if self._catchup_dates and self._memorize and self._generate_and_post_fn:
+        if self._owner_promoted.is_set() and self._catchup_dates and self._memorize and self._generate_and_post_fn:
             log.info(
                 "Scheduler: running %d missed daily reflect+dream job(s) after owner resolution.",
                 len(self._catchup_dates),
@@ -1742,14 +1763,29 @@ class ScheduleRunner:
         belt-and-suspenders check against any window between the pop and
         the fire).
         """
-        while self._catchup_dates:
-            try:
-                date = self._catchup_dates.pop(0)
-            except IndexError:
-                break
-            if _reflection_post_exists(date):
-                continue
-            self._run_daily_reflect_and_dream(for_date=date)
+        if not self._catchup_lock.acquire(blocking=False):
+            log.info("Scheduler: daily catch-up already running — skipping duplicate worker.")
+            return
+        try:
+            while self._catchup_dates:
+                try:
+                    date = self._catchup_dates.pop(0)
+                except IndexError:
+                    break
+                with AIKO_BUSY_LOCK:
+                    uid = self._resolve_owner()
+                    if not uid or uid == "guest":
+                        return
+                    token = set_current_user_id(uid)
+                    try:
+                        self.set_user(uid)
+                        if self._memorize is not None:
+                            self._memorize.switch_user(uid)
+                        self._run_daily_reflect_and_dream(for_date=date)
+                    finally:
+                        reset_current_user_id(token)
+        finally:
+            self._catchup_lock.release()
 
     def _run_daily_reflect_and_dream(self, for_date: datetime | None = None) -> None:
         """
@@ -1806,7 +1842,7 @@ class ScheduleRunner:
             # per date wins; losers skip instead of double-posting.
             lock_path = user_state_path(
                 f".locks/reflect-{target_local.strftime('%Y-%m-%d')}.lock",
-                self._memorize.get_user_id(),
+                self._owner_user_id,
             )
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -1819,33 +1855,43 @@ class ScheduleRunner:
                     target_local.strftime("%Y-%m-%d"),
                 )
                 return
+            try:
+                # Re-check after taking the lock. A catch-up worker and the
+                # midnight runner can both observe a missing post before one
+                # of them acquires the per-date lock.
+                already_reflected = _reflection_post_exists(target_local)
+                if already_reflected:
+                    log.info("daily_reflect_and_dream: reflection already exists for %s — skipping post.", target_local.date())
+                else:
+                    from cognition.consolidate.reflect import REFLECT_MAX_MEMS, filter_reflect_snippets
+                    memories = self._memorize.get_between(
+                        query_start, query_end, user_id=self._memorize.get_user_id()
+                    )
+                    memories = filter_reflect_snippets(memories, target_local)
+                    reflect_result = self._generate_and_post_fn(
+                        memories[:REFLECT_MAX_MEMS],
+                        date=target_local,
+                        memorize=self._memorize,
+                        display_name=self._memorize.get_display_name() if self._memorize else None,
+                    )
+                    if isinstance(reflect_result, dict) and not reflect_result.get("success", False):
+                        log.error(
+                            "daily_reflect_and_dream: reflect FAILED for %s — error=%s",
+                            target_local.date(), reflect_result.get("error", "unknown"),
+                        )
+                    else:
+                        log.info(
+                            "daily_reflect_and_dream: reflect done for %s — %s",
+                            target_local.date(), reflect_result,
+                        )
 
-            from cognition.consolidate.reflect import REFLECT_MAX_MEMS, filter_reflect_snippets
-            memories = self._memorize.get_between(
-                query_start, query_end, user_id=self._memorize.get_user_id()
-            )
-            memories = filter_reflect_snippets(memories, target_local)
-            reflect_result = self._generate_and_post_fn(
-                memories[:REFLECT_MAX_MEMS],
-                date=target_local,
-                memorize=self._memorize,
-                display_name=self._memorize.get_display_name() if self._memorize else None,
-            )
-            if isinstance(reflect_result, dict) and not reflect_result.get("success", False):
-                log.error(
-                    "daily_reflect_and_dream: reflect FAILED for %s — error=%s",
-                    target_local.date(), reflect_result.get("error", "unknown"),
-                )
-            else:
-                log.info(
-                    "daily_reflect_and_dream: reflect done for %s — %s",
-                    target_local.date(), reflect_result,
-                )
-
-            if for_date is None:
-                log.info("daily_reflect_and_dream: running dream...")
-                result = self._memorize.dream()
-                log.info("daily_reflect_and_dream: dream done — %s", result)
+                if for_date is None:
+                    log.info("daily_reflect_and_dream: running dream...")
+                    result = self._memorize.dream()
+                    log.info("daily_reflect_and_dream: dream done — %s", result)
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
 
         except Exception as e:
             log.error("daily_reflect_and_dream failed: %s", e)
@@ -1930,6 +1976,16 @@ class ScheduleRunner:
         return False
 
     def _fire_due_user_jobs(self, user_id: str | None = None) -> None:
+        user_id = user_id or self._user_id
+        with _scheduler_run_lock(user_id, "jobs") as acquired:
+            if not acquired:
+                return
+            # A second process may have advanced next_due while this runner
+            # waited for the lock, so discard its in-process JSON cache.
+            _invalidate_cache(user_id)
+            self._fire_due_user_jobs_locked(user_id)
+
+    def _fire_due_user_jobs_locked(self, user_id: str) -> None:
         """Find due user jobs, reschedule recurring ones, disable one-shots.
 
         Jobs whose "handler" (or legacy "kind": "system_weekly_social") names
@@ -1940,7 +1996,6 @@ class ScheduleRunner:
         _run() now always passes it explicitly right after set_user(uid),
         so callers should not rely on the implicit fallback going forward.
         """
-        user_id = user_id or self._user_id
         jobs = _read_all(user_id=user_id)
         changed = False
         due_events: list[DueJob] = []
@@ -2013,6 +2068,13 @@ class ScheduleRunner:
 
     def _fire_due_schedule_graphs(self, user_id: str | None = None) -> None:
         user_id = user_id or self._user_id
+        with _scheduler_run_lock(user_id, "graphs") as acquired:
+            if not acquired:
+                return
+            _invalidate_graphs_cache(user_id)
+            self._fire_due_schedule_graphs_locked(user_id)
+
+    def _fire_due_schedule_graphs_locked(self, user_id: str) -> None:
         graphs = _read_schedule_graphs(user_id=user_id)
         changed = False
         now = bioclock.local_now()

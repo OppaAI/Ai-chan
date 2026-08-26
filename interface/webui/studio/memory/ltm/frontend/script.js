@@ -22,8 +22,6 @@ async function getCurrentUser() {
 
 function qs() {
   const p = new URLSearchParams();
-  const uid = document.getElementById('user-id').value.trim();
-  if (uid) p.set('user_id', uid);
   p.set('limit', document.getElementById('limit').value || '200');
   p.set('include_history', document.getElementById('include-history').checked);
   p.set('include_entities', document.getElementById('include-entities').checked);

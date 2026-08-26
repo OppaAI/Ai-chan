@@ -18,7 +18,6 @@ def health():
     return {"ok": True, "studio": "knowledge-graph"}
 @app.get("/api/graph")
 def api_graph(
-    user_id: str | None = Query(None, description="User id (default: current_user_id)"),
     limit: int = Query(200, ge=1, le=1000),
     include_history: bool = Query(True, description="Include superseded/archived knowledge"),
     include_entities: bool = Query(True, description="Add entity hub nodes"),
@@ -28,7 +27,8 @@ def api_graph(
     from .graph_export import export_knowledge_graph
     from system.userspace import current_user_id
     
-    uid = (user_id or "").strip() or current_user_id()
+    # The authenticated session bound by studio middleware is authoritative.
+    uid = current_user_id()
     try:
         return export_knowledge_graph(
             user_id=uid,

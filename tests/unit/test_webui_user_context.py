@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 import queue
+import threading
 
 import pytest
 
 from interface.webui.webui import AikoWeb
+from interface.webui.studio.session_binding import _relative_path
+from system.prepare import run_post_auth
 from system.userspace import current_display_name, current_user_id, reset_current_display_name, reset_current_user_id
 
 
@@ -78,3 +81,118 @@ def test_get_input_uses_queued_identity_not_shared_state(monkeypatch):
     assert web.get_input() == "hello"
     assert current_user_id() == "bob"
     assert current_display_name() == "Bobby"
+
+
+def test_studio_api_path_is_relative_to_its_mount():
+    """Mounted studio middleware must recognize its /api routes."""
+    assert _relative_path({
+        "path": "/studio/memory/ltm/api/graph",
+        "root_path": "/studio/memory/ltm",
+    }) == "/api/graph"
+    assert _relative_path({"path": "/api/graph", "root_path": ""}) == "/api/graph"
+
+
+def test_post_auth_binds_memory_to_logged_in_user():
+    class Memorize:
+        def __init__(self):
+            self.switched_to = []
+            self.cleanup_user = None
+
+        def switch_user(self, uid):
+            self.switched_to.append(uid)
+
+        def cleanup(self):
+            self.cleanup_user = current_user_id()
+
+        def persona_context(self):
+            return ""
+
+        def get_all(self):
+            return []
+
+    memorize = Memorize()
+    run_post_auth("github_alice", memorize=memorize)
+
+    assert memorize.switched_to == ["github_alice"]
+    assert memorize.cleanup_user == "github_alice"
+    assert current_user_id() == "guest"
+
+
+def test_concurrent_user_active_calls_run_post_auth_once(monkeypatch):
+    """Two concurrent _on_user_active calls for the same user should only run post-auth once."""
+    class Memorize:
+        def __init__(self):
+            self.switch_calls = []
+            self.cleanup_calls = 0
+
+        def switch_user(self, uid):
+            self.switch_calls.append(uid)
+
+        def cleanup(self):
+            self.cleanup_calls += 1
+
+        def persona_context(self):
+            return ""
+
+        def get_all(self):
+            return []
+
+    memorize = Memorize()
+    from system.wakeup import BootResult
+    boot_result = BootResult(memorize=memorize, think=None, speak=None, perceive=None, observe=None, navigate=None)
+    web = AikoWeb(boot_result=boot_result, defer_servers=True)
+
+    barrier = threading.Barrier(2)
+    def active_with_barrier(uid):
+        barrier.wait()
+        web._on_user_active(uid)
+
+    t1 = threading.Thread(target=active_with_barrier, args=("github_alice",))
+    t2 = threading.Thread(target=active_with_barrier, args=("github_alice",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert memorize.switch_calls == ["github_alice"]
+    assert memorize.cleanup_calls == 1
+
+
+def test_concurrent_user_active_different_users(monkeypatch):
+    """Two concurrent _on_user_active calls for different users should both run post-auth."""
+    class Memorize:
+        def __init__(self):
+            self.switch_calls = []
+            self.cleanup_calls = 0
+
+        def switch_user(self, uid):
+            self.switch_calls.append(uid)
+
+        def cleanup(self):
+            self.cleanup_calls += 1
+
+        def persona_context(self):
+            return ""
+
+        def get_all(self):
+            return []
+
+    memorize = Memorize()
+    from system.wakeup import BootResult
+    boot_result = BootResult(memorize=memorize, think=None, speak=None, perceive=None, observe=None, navigate=None)
+    web = AikoWeb(boot_result=boot_result, defer_servers=True)
+
+    barrier = threading.Barrier(2)
+    def active_with_barrier(uid):
+        barrier.wait()
+        web._on_user_active(uid)
+
+    t1 = threading.Thread(target=active_with_barrier, args=("github_alice",))
+    t2 = threading.Thread(target=active_with_barrier, args=("github_bob",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert set(memorize.switch_calls) == {"github_alice", "github_bob"}
+    assert memorize.cleanup_calls == 2
