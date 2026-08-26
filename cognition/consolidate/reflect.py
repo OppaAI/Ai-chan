@@ -275,7 +275,7 @@ def _generate_daily_facts(
             },
         },
     )
-    raw = re.sub(r"", "", raw, flags=re.DOTALL).strip()
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
     log.debug(f"Raw daily-facts response for {date.strftime('%Y-%m-%d')}: {raw}")
 
