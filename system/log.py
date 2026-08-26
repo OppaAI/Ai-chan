@@ -41,7 +41,7 @@ _VALID_LEVELS = logging.getLevelNamesMapping()  # py3.11+
 def _resolve_log_level() -> str:
     raw = os.getenv("LOG_LEVEL", "INFO").upper()
     if raw not in _VALID_LEVELS:
-        print(f"[log] invalid LOG_LEVEL={raw!r}, defaulting to INFO")
+        print(f"[log] invalid LOG_LEVEL={raw!r}, defaulting to INFO", file=sys.stderr)
         return "INFO"
     return raw
 
