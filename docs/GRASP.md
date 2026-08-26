@@ -2,10 +2,11 @@
 
 > Hold the current conversational focus for a few turns, then let go.
 
-Status: **wired into the cognitive core** — `system/wakeup.py` installs the
-live hub on `AikoThink` via `cognition.memory.grasp_hub.install_into_think()`
-(non-fatal if Grasp is missing or disabled). The studio polls `grasp_hub`'s
-live snapshot.  
+Status: **owned by memory** — everything lives in `cognition/memory/grasp.py`
+(buffer core + live per-identity hub). `AikoMemorize` exposes the WM API
+(`wm_record_turn` / `wm_context_block` / `wm_reset` / `wm_studio_state`) and
+`think.py` calls it explicitly — no monkeypatching. The studio polls grasp's
+live snapshot.
 Branch: `feat/working-memory-cortex`
 
 Pairs with: `memorize` / `forget` / `imprint` / `learn`.
@@ -90,8 +91,10 @@ uv run python -m interface.webui.studio.memory.stm.backend.api
 
 ## Integration
 
-1. One `GraspBuffer` per session — installed on `AikoThink` at boot by
-   `grasp_hub.install_into_think()` (see `system/wakeup.py`)
+1. One `GraspBuffer` per identity — created lazily by the live hub in
+   `cognition/memory/grasp.py`; recorded via `memorize.wm_record_turn()`
+   inside `think._store_async()` and injected via `memorize.wm_context_block()`
+   in `think.chat()/webchat()`. No boot-time install step.
 2. Pass real `user_ts` from inbound message
 3. Nightly: `load_journal_day()` → reflect / dream
 4. Pins + consolidate stay on existing memory DB

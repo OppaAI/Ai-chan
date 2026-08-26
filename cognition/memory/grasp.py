@@ -50,7 +50,11 @@ _CHARS_PER_TOKEN = 4.0
 
 _POS_WORDS = re.compile(r"\b(love|great|awesome|amazing|happy|glad|thanks|thank you|yay|nice|good|wonderful|excellent|perfect)\b", re.I)
 _NEG_WORDS = re.compile(r"\b(hate|awful|terrible|sad|angry|mad|upset|annoyed|frustrated|bad|worst|sucks|furious)\b", re.I)
-_IMPORTANCE_RE = re.compile(r"\b(remember|pin|important|always|never|prefer|favorite|favourite|my name|i am|i'm|birthday|allergy|allergic|don't forget|do not forget|please note|key point|from now on)\b", re.I)
+_IMPORTANCE_RE = re.compile(
+    r"\b(remember|pin|important|always|never|prefer|favorite|favourite|my name|i am|i'm|birthday|allergy|"
+    r"allergic|don't forget|do not forget|please note|key point|from now on)\b",
+    re.I,
+)
 _QUESTION_RE = re.compile(r"\?|\b(what|why|how|when|where|who|which|can you|could you|would you|do you|is there)\b", re.I)
 _NAME_LIKE_RE = re.compile(r"\b[A-Z][a-z]{2,}\b")
 _NUMBER_RE = re.compile(r"\b\d+(?:[.:]\d+)?\b")

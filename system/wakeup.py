@@ -212,7 +212,9 @@ class AikoWakeup:
             _boot_step('think_warmup', lambda: (think.start_warmup(), think.join_warmup()))   # start warmup thread, then block until it finishes
             _boot_step('think_mem_wait', lambda: mem_ready_evt.wait())                        # block until memorize thread finishes
             _boot_step('think_inject', lambda: (think.set_memorize(memorize_getter()), think.start_idle_learner()))  # inject memory backend + start idle learner (no-ops if memorize is None)
-            _boot_step('think_prewarm', lambda: think.prewarm_caches())                       # load embed exemplars while booting
+            # NOTE: semantic-cache prewarm moved to system/prepare.run_post_auth() —
+            # as guest it couldn't persist per-user npz caches anyway, and post-login
+            # it loads the real user's existing disk cache instead of recomputing.
             return think                                                                      # return the live AikoThink object
 
         def init_memorize():
@@ -278,14 +280,10 @@ class AikoWakeup:
             )
             raise RuntimeError("AikoThink boot failed") from think_exc                        # chain from previous error point so callers/tracebacks still see the root cause
 
-        # Live Grasp working-memory hub — records turns for studio + WM scoring.
-        # Non-fatal: Aiko continues if grasp is missing or disabled.
-        try:
-            from cognition.memory.grasp_hub import install_into_think
-            if install_into_think(think_ref):
-                log.info("[wakeup] Grasp live hub installed on AikoThink")
-        except Exception:
-            log.debug("[wakeup] Grasp live hub not installed", exc_info=True)
+        # Live Grasp working-memory hub: now owned by AikoMemorize (wm_* API)
+        # — no boot-time install step. think.py injects/records via memorize
+        # directly, so the old grasp_hub.install_into_think() monkeypatch
+        # (and its signature-drift crash class) is gone entirely.
 
         # speak has no boot-time dependency on think or memorize, and nothing
         # inside init_think touches it — safe to construct after the parallel

@@ -98,7 +98,8 @@ BOOT_LABELS = {
     'think_start':    'Loading llama.cpp client + persona...',
     'think_warmup':   'Warming up language model...',
     'think_mem_wait': 'Waiting on memory system...',
-    'think_prewarm':  'Warming semantic caches...',
+    # 'think_prewarm' removed — prewarm moved to system/prepare (post-auth),
+    # so the label would count a step that never fires and skew boot %.
 }
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -1269,6 +1270,17 @@ class AikoThink:
             "previous_chat_messages": [dict(m) for m in trimmed],
         }
         
+        # Live working-memory (<grasp>) block — same explicit injection as
+        # chat(); replaces the old grasp_hub _stream_response wrapper.
+        try:
+            _wm_mem = self._get_memorize()
+            if _wm_mem is not None:
+                _wm_block = _wm_mem.wm_context_block()
+                if _wm_block:
+                    system = f"{system}\n\n{_wm_block}"
+        except Exception:
+            pass
+
         # Stream response
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=_CHAT_STREAM_EMIT)
         raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
@@ -1433,6 +1445,18 @@ class AikoThink:
                     f"</search_results>"
                 )
 
+        # Live working-memory (<grasp>) block — explicit injection replacing
+        # the old grasp_hub monkeypatch wrapper. Sits in the volatile tail so
+        # the byte-stable core prefix keeps its prompt-cache reuse.
+        _wm_mem = self._get_memorize()
+        if _wm_mem is not None:
+            try:
+                _wm_block = _wm_mem.wm_context_block()
+                if _wm_block:
+                    volatile_system = f"{volatile_system}\n\n{_wm_block}"
+            except Exception:
+                pass
+
         # Datetime very last: it changes every minute, so keeping it after
         # everything else maximizes the byte-stable prefix length.
         volatile_system = f"{volatile_system}\n\n{bioclock.current_datetime_block()}".strip()
@@ -1500,6 +1524,12 @@ class AikoThink:
     def reset_context(self) -> None:
         with self._history_lock:
             self._history.clear()
+        try:
+            _wm_mem = self._get_memorize()
+            if _wm_mem is not None:
+                _wm_mem.wm_reset()
+        except Exception:
+            pass
 
     def last_turn(self) -> tuple[str, str] | None:
         with self._history_lock:
@@ -1927,6 +1957,14 @@ class AikoThink:
                 cognitive_state=cognitive_state,
                 user_id=current_user_id(),
             )
+        except Exception:
+            pass
+
+        # Working memory (Grasp) — replaces the old grasp_hub wrapper around
+        # this method; same call timing (completed turns only, greeting turns
+        # with store_turn=False were never recorded and still aren't).
+        try:
+            mem.wm_record_turn(user_input, response_text)
         except Exception:
             pass
 

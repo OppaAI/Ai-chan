@@ -2119,6 +2119,13 @@ def start_scheduler(
     if effective_uid != "guest":
         ensure_playbooks(user_id=effective_uid)
 
+    # Guest-safe handler registration BEFORE the runner starts ticking —
+    # due jobs that fire pre-login must find their callables. Without this,
+    # every boot logged a burst of "job references unregistered handler —
+    # skipping fire" warnings and silently dropped those runs. Job DATA
+    # seeding still waits for a real identity (see bootstrap_non_system_jobs).
+    register_system_handlers_only(think=think, memorize=memorize, timezone=timezone)
+
     scheduler = ScheduleRunner(
         on_due=on_due,
         memorize=memorize,

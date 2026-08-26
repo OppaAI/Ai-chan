@@ -20,12 +20,11 @@ This module only parses arguments and dispatches to the right front end:
 
 main.py does NOT call AikoWakeup().boot() itself — each front end owns its
 own boot timing, because the two have genuinely different requirements:
-    - WebUI (interface/webui/webui.py, run_webui()): AikoWeb's __init__
-      starts the HTTP/WS server immediately (frontend loads and shows
-      "Initializing..." right away), then boot runs on a background thread;
-      AikoWeb.set_boot_result() broadcasts a "ready" event to connected
-      browsers once it finishes. Login is gated on that event, not on
-      main.py's control flow.
+    - WebUI (interface/webui/webui.py, run_webui()): boot runs to completion
+      BEFORE the HTTP/WS server opens (constructed with defer_servers=True),
+      so browsers never see a half-booted Aiko. Post-login work (memory
+      cleanup, playbook/social seeding) runs in PARALLEL after the first
+      authenticated connect via system/prepare.run_post_auth().
     - CLI (interface/cli/cli.py, run_cli()): boot happens inside
       system/orchestrate.py's run_session(ui, args), using AikoSimpleCLI's
       own step_loading/step_done/step_skip methods as the boot callbacks —
@@ -47,10 +46,10 @@ Flow:
   AikoMemorize()    handle_logout()    run_cli(args)  run_webui(args)
      .clear()            │                │                 │
         │                ▼                ▼                 ▼
-        ▼           sys.exit(0)   boot inside      AikoWeb() starts server
-   sys.exit(0)                    run_session(),    instantly; boot runs on
-                                   then turn loop    a background thread,
-                                                      then turn loop
+        ▼           sys.exit(0)   boot inside      AikoWeb(defer_servers=True)
+   sys.exit(0)                    run_session(),    boot runs to completion,
+                                    then turn loop    THEN server opens; post-auth
+                                                      init via system/prepare.py
 
 Front-end imports are deferred into main() rather than done at module load,
 so that --clear-mem and --logout (which don't need FastAPI, uvicorn,

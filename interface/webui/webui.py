@@ -37,7 +37,7 @@ import time
 from typing import ClassVar, TYPE_CHECKING
 if TYPE_CHECKING:
     from system.wakeup import BootResult
-    
+
 from system.config import load_config
 from system.userspace import current_user_id, reset_current_display_name, reset_current_user_id, set_current_user_id, set_current_display_name
 load_config()
@@ -127,7 +127,7 @@ def _make_ssl_context(hostname: str, host_ip: str) -> ssl.SSLContext | None:
 
 
 class AikoWeb:
-    def __init__(self, no_voice: bool = False, debug: bool = False, boot_result: BootResult | None = None):
+    def __init__(self, no_voice: bool = False, debug: bool = False, boot_result: BootResult | None = None, defer_servers: bool = False):
         self._no_voice     = no_voice
         self._debug        = debug
         self._boot_result  = boot_result
@@ -183,15 +183,28 @@ class AikoWeb:
         import interface.webui.auth
         interface.webui.auth.aiko_web_instance = self
 
+        self._servers_started = False                 # start_servers() idempotence guard
+        if not defer_servers:                         # default: server up immediately (old behaviour);
+            self.start_servers()                      # run_webui now passes defer_servers=True so boot
+                                                      # finishes BEFORE the first socket opens.
+
+    def start_servers(self) -> None:
+        """Open the HTTP/WS listener. Idempotent; called by __init__ unless
+        constructed with defer_servers=True (then run_webui calls it after
+        wakeup.boot() completes — browsers never see a half-booted Aiko)."""
+        with self._lock:
+            if self._servers_started:
+                return
+            self._servers_started = True
         self._start_servers()
-        
+
     def set_boot_result(self, result: BootResult):
         """Called by main.py AFTER wakeup.boot() finishes (now before login)."""
         self._boot_result = result
         if result:
             self.status_finish()   # broadcasts the "phase: chat" event
             self._broadcast({"type": "status_finish", "ready": True, "message": "Aiko fully initialized — log in now"})
-            
+
     def set_voice_backends(self, speak, listen) -> None:
         self._speak = speak
         self._listen = listen
@@ -217,18 +230,15 @@ class AikoWeb:
         user_token = set_current_user_id(uid)
         display_token = set_current_display_name(display_name)
         return user_token, display_token, display_name
-            
-    def _on_user_active(self, uid: str) -> None:
-        """Post-login hook: run one-time user-space seeding that boot skipped
-        because it ran pre-auth as guest.
 
-        Called on every authenticated WS connect. Scheduler binding used to
-        happen here too (sched.set_user(uid)) — that was a bug for multi-user:
-        it stuck the scheduler on whichever user connected most recently, so
-        every other user's due jobs silently stopped firing. The scheduler
-        now watches every user's job store itself each tick (see
-        ScheduleRunner._run() / all_user_ids() in system/schedule.py), so this
-        hook only needs to handle one-time seeding.
+    def _on_user_active(self, uid: str) -> None:
+        """Post-login hook: run one-time user-space initialization that boot
+        skipped because it ran pre-auth as guest.
+
+        The actual work lives in system/prepare.run_post_auth() so CLI and
+        messenger adapters can reuse the same sequence. This wrapper only
+        enforces the once-per-uid guard; it runs off the event loop (see
+        _ws_handler's asyncio.to_thread call), so login never blocks on it.
         """
         if uid == "guest":
             return
@@ -237,40 +247,28 @@ class AikoWeb:
                 return
             self._user_space_ready.add(uid)
         log.info("[aiko-web] first authenticated user (%s) — running deferred user-space seeding", uid)
-        # Boot skipped memory cleanup for guest — run it now that the real
-        # per-user store is open (parity with the old login-gated boot).
         try:
-            if self._memorize is not None:
-                self._memorize.cleanup()
+            from system.prepare import run_post_auth
+            run_post_auth(uid, memorize=self._memorize, think=self._think)
         except Exception:
-            log.exception("[aiko-web] post-login memory cleanup failed")
-        try:
-            from agentic.graph_engine import ensure_playbooks
-            ensure_playbooks(user_id=uid)
-        except Exception:
-            log.exception("[aiko-web] playbook seeding failed")
-        try:
-            from system.schedule import bootstrap_non_system_jobs
-            bootstrap_non_system_jobs(think=self._think, memorize=self._memorize)
-        except Exception:
-            log.exception("[aiko-web] schedule job bootstrap failed")
+            log.exception("[aiko-web] post-auth initialization failed")
 
     def _start_servers(self) -> None:
         import socket
         hostname = socket.gethostname()
         host_ip = socket.gethostbyname(hostname)
         self._ssl_context = _make_ssl_context(hostname, host_ip)
-    
+
         from interface.webui.auth import app as auth_app
         from starlette.staticfiles import StaticFiles
-    
+
         has_static = any(getattr(route, "name", None) == "static" for route in auth_app.routes)
         if not has_static:
             auth_app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
-    
+
         http_t = threading.Thread(target=self._run_http, daemon=True, name="aiko-http")
         http_t.start()
-    
+
         self._loop_ready.wait(timeout=5)
 
     def _run_http(self) -> None:
@@ -327,12 +325,12 @@ class AikoWeb:
 
         uid = str(session["user_id"])
         user_context_token, display_context_token, display_name = await self._bind_user_context(uid, session)
-        
+
         if not self._login_event.is_set():
             self._authenticated_uid = uid
             self._authenticated_display_name = display_name
             self._login_event.set()
-        
+
         await ws.accept()
 
         # Post-login rebinding/seeding runs in the background so the socket
@@ -392,7 +390,7 @@ class AikoWeb:
                             self._broadcast({"type": "voice", "status": "transcribing"}, user_id=uid)
                             if WEBUI_BROWSER_VAD_GATE and self._mic_active.is_set():
                                 self._audio_q.put((b"", uid, display_name))
-                                
+
                     elif mtype == "barge_in":
                         # S0: master switch — ignore browser barge when disabled
                         if not _barge_in_enabled():
@@ -406,7 +404,7 @@ class AikoWeb:
                             # run it off the event loop so a long TTS playback
                             # doesn't freeze every other browser/request.
                             await asyncio.to_thread(self._speak.stop)
-        
+
         except Exception:
             log.exception("[aiko-web] error in WebSocket loop")
         finally:
@@ -487,7 +485,7 @@ class AikoWeb:
         # No-op: preserves AikoTUI's draw interface so orchestrate.run_session()
         # can call ui._draw() polymorphically regardless of TUI vs WebUI backend.
         pass
-    
+
     def _draw_clock_only(self) -> None:
         # Same rationale as _draw(); WebUI pushes vitals instead of redrawing.
         self._push_vitals()
@@ -804,35 +802,41 @@ class AikoWeb:
 
 
 def run_webui(args) -> None:
+    """Launch Aiko with the browser WebUI.
+
+    Boot order (changed from the old parallel-boot design): wakeup.boot()
+    runs to completion BEFORE the HTTP/WS server opens its first socket, so
+    browsers never connect to a half-booted Aiko. Post-login work (memory
+    cleanup, playbook/social seeding) runs in PARALLEL after the first
+    authenticated connect via system/prepare.run_post_auth()."""
     from system.orchestrate import run_session
     from system.wakeup import AikoWakeup
     import socket
-    import threading
 
-    # Construct AikoWeb with no boot_result yet. __init__ calls
-    # _start_servers() unconditionally, so the HTTP/WS server — and the
-    # frontend — comes up immediately; browsers see "Initializing..."
-    # instead of waiting on subsystem boot to finish.
-    ui = AikoWeb(no_voice=args.text, debug=args.debug)
+    # Construct AikoWeb with servers deferred — no socket until boot finishes.
+    ui = AikoWeb(no_voice=args.text, debug=args.debug, defer_servers=True)
 
     host_ip = socket.gethostbyname(socket.gethostname())
     scheme = "https" if WEBUI_HTTPS else "http"
+
+    # Boot progress on stdout — no browsers connected yet to stream it to.
+    labels = AikoWakeup.ALL_BOOT_LABELS
+    def _on_loading(key: str) -> None:
+        print(f"  · {labels.get(key, key)} ...", flush=True)
+    def _on_done(key: str) -> None:
+        print("    ✓", flush=True)
+    def _on_skip(key: str) -> None:
+        print("    – skipped", flush=True)
+
+    print("\n  🌸 Aiko-chan is waking up — WebUI starts when boot finishes.\n")
+    result = AikoWakeup().boot(
+        on_loading=_on_loading,
+        on_done=_on_done,
+        on_skip=_on_skip,
+    )
+    ui.set_boot_result(result)
+
+    ui.start_servers()                                # idempotent — opens HTTP/WS now that all subsystems are live
     print(f"\n  🌸 Aiko-chan is ready → {scheme}://{host_ip}:{HTTP_PORT}/\n")
-    print("  Booting subsystems now — browsers can log in while Aiko wakes up.\n")
-
-    def _boot_in_background() -> None:
-        """Runs subsystem boot off the main thread so the WebUI server and
-        run_session() below aren't blocked on it. Progress is streamed to
-        connected browsers via ui.step_loading/step_done/step_skip; when
-        boot finishes, set_boot_result() broadcasts the "ready" event and
-        flips the UI to chat phase."""
-        result = AikoWakeup().boot(
-            on_loading=ui.step_loading,
-            on_done=ui.step_done,
-            on_skip=ui.step_skip,
-        )
-        ui.set_boot_result(result)
-
-    threading.Thread(target=_boot_in_background, daemon=True, name="aiko-boot").start()
 
     run_session(ui, args)

@@ -3318,6 +3318,40 @@ class AikoMemorize:
             log.warning(f"Merge delete failed for {loser}: {e}")
             return False
 
+    # ── working memory (Grasp live hub) ───────────────────────────────────────
+    # Thin delegates to cognition.memory.grasp's per-identity buffer. Memorize
+    # owns the WM surface so think.py never needs grasp-specific imports or
+    # monkeypatched methods — see the old install_into_think() history.
+
+    def wm_record_turn(self, user_input: str, response_text: str) -> None:
+        """Fill the current identity's working-memory buffer after a completed turn."""
+        try:
+            from cognition.memory.grasp import record_turn
+            record_turn(user_input, response_text)
+        except Exception:
+            pass
+
+    def wm_context_block(self) -> str:
+        """Scored <grasp> block for system-prompt injection ('' when empty/disabled)."""
+        try:
+            from cognition.memory.grasp import get_context_block
+            return get_context_block()
+        except Exception:
+            return ""
+
+    def wm_reset(self) -> None:
+        """Clear the current identity's working-memory buffer (/reset)."""
+        try:
+            from cognition.memory.grasp import clear_live
+            clear_live()
+        except Exception:
+            pass
+
+    def wm_studio_state(self) -> dict:
+        """Live WM state for Grasp Studio (current identity)."""
+        from cognition.memory.grasp import live_studio_state
+        return live_studio_state()
+
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def cleanup(

@@ -1,7 +1,7 @@
 """cognition/memory/env.py - shared environment-variable helpers.
 
 Before this module, each of grasp.py / schema.py / entity.py (and later
-grasp_hub.py / session_anchor.py / cross_store.py) re-implemented the same
+session_anchor.py / cross_store.py) re-implemented the same
 small parse helpers with subtly diverged semantics. Keep ONE canonical set
 here and import it everywhere.
 
