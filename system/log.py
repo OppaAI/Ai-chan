@@ -53,7 +53,7 @@ def _int_env(name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
-        print(f"[log] invalid {name}={raw!r}, using default {default}")
+        print(f"[log] invalid {name}={raw!r}, using default {default}", file=sys.stderr)
         return default
 
 
