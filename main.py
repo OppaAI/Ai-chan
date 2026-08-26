@@ -9,7 +9,7 @@ Usage:
     python main.py --no-asr      # WebUI, keyboard input but keep TTS on
     python main.py --cli         # plain no-curses CLI, for local testing only
     # Two-way messenger adapters run beside WebUI/CLI when AIKO_MESSENGER_ADAPTERS is set.
-    python main.py --debug       # show memory debug info each turn
+    python main.py --debug       # show memory debug info each turn + verbose console logging
     python main.py --clear-mem   # wipe all stored memories and exit
     python main.py --logout      # clear stored CLI (GitHub OAuth) auth token and exit
     python main.py --name <name> # set CLI display name (only when GitHub OAuth isn't configured)
@@ -57,6 +57,12 @@ websockets, or any voice subsystem) stay fast and don't require those
 dependencies to be installed at all. The heavy AikoMemorize memory stack is
 likewise deferred into the --clear-mem branch only, so normal WebUI/CLI
 launches never pay for it at import time.
+
+Argument parsing happens BEFORE logging setup (not after) specifically so
+--debug can flip LOG_CONSOLE/LOG_LEVEL in the environment before
+system.log's root-logger configuration runs — see the --debug handling
+in main() below and system/log.py's module docstring for why import-time
+resolution would be too late here.
 """
 from __future__ import annotations            # evaluates type annotations later
 
@@ -107,7 +113,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-asr",    action="store_true",            # disable ASR
                    help="keyboard input but keep TTS on; ASR still loads for /listen")
     p.add_argument("--debug",     action="store_true",            # debug mode
-                   help="show memory hits each turn")
+                   help="show memory hits each turn, and enable verbose console logging (sets LOG_CONSOLE=1, LOG_LEVEL=DEBUG)")
     p.add_argument("--cli",       action="store_true",            # launch in CLI
                    help="use the plain no-curses CLI instead of the WebUI — for local testing only")
     p.add_argument("--clear-mem", action="store_true",            # wipe out all memory and exit
@@ -121,16 +127,24 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     """Primary entry point for the Aiko-chan application."""
+    # Parse args FIRST — --debug needs to set LOG_CONSOLE/LOG_LEVEL in the
+    # environment before system.log's root logger is configured below.
+    # (system.log resolves its config on the first get_logger() call, not
+    # at import time, precisely so this ordering works.)
+    args = parse_args()
+
     # Load config early, before any subsystem init (but after filters, before logging setup)
     from system.config import load_config
     load_config()
+
+    if args.debug:                                      # explicit CLI flag overrides whatever .env set
+        _os.environ["LOG_CONSOLE"] = "1"
+        _os.environ["LOG_LEVEL"] = "DEBUG"
 
     # Set up logging and exit tracing
     from system.log import get_logger
     log = get_logger(__name__)
     _setup_exit_logging(log)
-
-    args = parse_args()                                 # assign argument namespace to check which ones are set
 
     if args.clear_mem:                                  # if clear memory argument set
         try:
