@@ -66,26 +66,27 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
 
 import argparse                               # for parsing CLI arguments
 import sys                                    # for assigning exit code
+import os as _os                              # for intercepting hard exits
+import traceback as _tb                       # for logging exit origins
 
-# Aiko's components
-from system.config import load_config                             # load user configs
-load_config()
-from system.log import get_logger                                 # assign logging to universal logger
-log = get_logger(__name__)
-
-import os as _os                                                  # for intercepting hard exits
-import traceback as _tb                                           # for logging exit origins
-
-_real_os_exit = _os._exit                                         # keep the real hard-exit handle
+_real_os_exit = _os._exit                     # keep the real hard-exit handle
 
 
-def _logged_os_exit(code):                                        # os._exit() cannot be caught by try/except,
-    log.error("[main] os._exit(%s) called from:\n%s",             # so wrap it to log WHO called it before dying
-              code, "".join(_tb.format_stack()))
-    _real_os_exit(code)                                           # then still perform the hard exit
+def _setup_exit_logging(log):
+    """Apply os._exit() wrapper for diagnostic logging (only if AIKO_TRACE_EXIT=1)."""
+    if _os.environ.get("AIKO_TRACE_EXIT") != "1":
+        return
 
+    def _logged_os_exit(code):                # os._exit() cannot be caught by try/except,
+        try:
+            log.error("[main] os._exit(%s) called from:\n%s",  # so wrap it to log WHO called it before dying
+                      code, "".join(_tb.format_stack()))
+        except Exception:                     # if logging itself fails (e.g., during shutdown),
+            pass                              # don't let traceback formatting block the actual exit
+        finally:
+            _real_os_exit(code)               # then still perform the hard exit
 
-_os._exit = _logged_os_exit                                       # deliberate diagnostic patch (kept: caught today's crash class)
+    _os._exit = _logged_os_exit               # patch applied; any code saving _os._exit before this bypasses logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -104,28 +105,42 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--logout",   action="store_true",             # logout user session
                    help="clear stored CLI auth token and exit")
     p.add_argument("--name",     type=str, default="",            # for use in CLI mode without OAuth setup
-                   help="set your display name for CLI mode (only used when GitHub OAuth isn't configured)")
+                   help="set display name (CLI mode only, ignored with GitHub OAuth)")
     return p.parse_args()                                         # return namespace of the arguments
 
 
 def main():
     """Primary entry point for the Aiko-chan application."""
+    # Load config early, before any subsystem init (but after filters, before logging setup)
+    from system.config import load_config
+    load_config()
+
+    # Set up logging and exit tracing
+    from system.log import get_logger
+    log = get_logger(__name__)
+    _setup_exit_logging(log)
+
     args = parse_args()                                 # assign argument namespace to check which ones are set
 
     if args.clear_mem:                                  # if clear memory argument set
         confirm = input("WARNING: This will permanently erase all memories. Continue? [y/N]: ").strip().lower()  # prompt for user confirm memory wiping
         if confirm != "y":                              # anything other than explicit 'y' aborts
-            log.info("Aborted memory clear.")           # log abort info
-            sys.exit(1)                                 # exit code 1 (aborted, not an error but not success either)
+            print("Aborted memory clear.")              # user-facing message (before logging exists)
+            sys.exit(0)                                 # exit code 0 (user chose to abort, not an error)
         log.info("Clearing all memories...")            # log success info
         from cognition.memory.memorize import AikoMemorize  # deferred — heavy memory stack, only needed for --clear-mem
         mem = AikoMemorize()                            # load memory system
         mem.clear()                                     # wipe out memory
+        log.info("Memory cleared.")                     # log completion
         sys.exit(0)                                     # exit code 0
 
     if args.logout:                                     # if logout argument set
-        from interface.cli.cli import handle_logout     # load CLI logout handler
-        handle_logout()                                 # logout user session
+        try:
+            from interface.cli.cli import handle_logout  # load CLI logout handler (may fail if CLI deps missing)
+            handle_logout()                              # logout user session
+        except ImportError as e:
+            log.error("Could not load CLI logout handler (missing dependencies?): %s", e)
+            sys.exit(1)
         sys.exit(0)                                     # exit code 0
 
     try:                                                # one shared fatal-error trap for both front ends:
@@ -138,7 +153,10 @@ def main():
     except SystemExit:                                  # silent-killer trap: SystemExit in the main thread
         log.exception("[main] SystemExit escaped the session loop")  # logs WHO raised it, full origin traceback
         raise                                           # preserve original exit behavior
-    except BaseException:                               # any other fatal escape
+    except KeyboardInterrupt:                           # graceful interrupt handling
+        log.info("[main] KeyboardInterrupt")
+        raise
+    except Exception:                                   # any other fatal error (not BaseException to avoid catching asyncio cancels)
         log.exception("[main] fatal error escaped the session loop")  # full traceback to aiko.log
         raise                                           # re-raise after logging
 
