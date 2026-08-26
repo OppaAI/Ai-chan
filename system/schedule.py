@@ -1842,7 +1842,7 @@ class ScheduleRunner:
             # per date wins; losers skip instead of double-posting.
             lock_path = user_state_path(
                 f".locks/reflect-{target_local.strftime('%Y-%m-%d')}.lock",
-                self._memorize.get_user_id(),
+                self._owner_user_id,
             )
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
