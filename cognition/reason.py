@@ -97,7 +97,7 @@ def block_relevance_score(embedder, query: str, text: str, instruct: str | None 
         return 0.0
     try:
         q_vec = cached_embed_query(embedder, query, instruct=instruct or "")
-        b_vec = cached_embed_query(embedder, text[:1500], instruct=instruct or "")        
+        b_vec = cached_embed_query(embedder, text[:1500], instruct=instruct or "")
     except Exception:
         return 0.0
     return cosine_similarity(q_vec, b_vec)
@@ -361,7 +361,14 @@ def cache_vector_path(
         raw_dir = Path(os.environ.get(cache_dir_env, default_dir)).expanduser()
         if per_user and not raw_dir.is_absolute():
             from system.userspace import current_user_id, user_state_dir
-            base = user_state_dir(current_user_id()) / raw_dir
+            uid = current_user_id()
+            if uid == "guest":
+                # Guest sentinel: return None so callers skip persistence.
+                # Writing here would materialize ~/.aiko/guest/ at pre-auth
+                # boot (e.g. wakeup's cache prewarm) with throwaway vectors
+                # that are rebuilt under the real user dir after login.
+                return None
+            base = user_state_dir(uid) / raw_dir
         else:
             base = raw_dir
         return base / f"{digest}.npz"

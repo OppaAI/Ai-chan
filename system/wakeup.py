@@ -93,7 +93,7 @@ from __future__ import annotations                          # evaluates type ann
 
 from collections.abc import Callable                        # for defining boot functions
 from concurrent.futures import ThreadPoolExecutor           # for parallel subsystem boot
-from dataclasses import dataclass                           # for dataclass to hold subsystem references 
+from dataclasses import dataclass                           # for dataclass to hold subsystem refs
 from typing import Any                                      # Any still lives in typing — collections.abc has no equivalent
 import threading                                            # for booting up cognition core and memory system in parallel
 
@@ -108,7 +108,7 @@ from system.log import get_logger                           # pass the logging t
 log = get_logger(__name__)
 
 from cognition.think import BOOT_LABELS as _THINK_LABELS    # for the booting status of cognition core
-from cognition.memory.memorize import BOOT_LABELS as _MEM_LABELS      # for the booting status of memory system
+from cognition.memory.memorize import BOOT_LABELS as _MEM_LABELS      # for booting status of memory
 from sensory.speak   import BOOT_LABELS as _SPEAK_LABELS    # for the booting status of speaking module
 from sensory.listen  import BOOT_LABELS as _LISTEN_LABELS   # for the booting status of listening module
 
@@ -203,17 +203,17 @@ class AikoWakeup:
             on_done(key)                                                # announce boot step finishes
             return result                                               # return results of boot step function
 
-        def init_think(memorize_getter):
+        def init_think(memorize_getter: Callable[[], Any]):
             """memorize_getter is a zero-arg callable so init_think can pull
             the memorize result lazily, after mem_ready_evt fires — avoids needing
             the memorize future to exist before this closure is defined."""
 
             think = _boot_step('think_start', lambda: AikoThink())                            # initiate cognitive core
-            _boot_step('think_warmup', lambda: (think.start_warmup(), think.join_warmup()))   # start warmup background thread
+            _boot_step('think_warmup', lambda: (think.start_warmup(), think.join_warmup()))   # start warmup thread, then block until it finishes
             _boot_step('think_mem_wait', lambda: mem_ready_evt.wait())                        # block until memorize thread finishes
-            _boot_step('think_inject', lambda: (think.set_memorize(memorize_getter()), think.start_idle_learner()))  # inject memory backend to cognitive core and start idle learner thread (no-ops cleanly if memorize is None)
+            _boot_step('think_inject', lambda: (think.set_memorize(memorize_getter()), think.start_idle_learner()))  # inject memory backend + start idle learner (no-ops if memorize is None)
             _boot_step('think_prewarm', lambda: think.prewarm_caches())                       # load embed exemplars while booting
-            return think                                                                      # return the live AutoThink object
+            return think                                                                      # return the live AikoThink object
 
         def init_memorize():
             try:
