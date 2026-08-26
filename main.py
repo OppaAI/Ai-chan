@@ -62,6 +62,7 @@ from __future__ import annotations            # evaluates type annotations later
 
 # Public libraries
 import warnings                               # for filtering out the warning messages
+# Suppress transformers FutureWarning unconditionally; cheap global call, acceptable even with deferred imports
 warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
 
 import argparse                               # for parsing CLI arguments
@@ -87,6 +88,15 @@ def _setup_exit_logging(log):
             _real_os_exit(code)               # then still perform the hard exit
 
     _os._exit = _logged_os_exit               # patch applied; any code saving _os._exit before this bypasses logging
+
+
+def _run_trapped(log, label, fn):
+    """Run a function with fatal-error logging; re-raise on exception."""
+    try:
+        fn()
+    except Exception:
+        log.exception("[main] fatal error in %s", label)
+        raise
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,24 +133,32 @@ def main():
     args = parse_args()                                 # assign argument namespace to check which ones are set
 
     if args.clear_mem:                                  # if clear memory argument set
-        confirm = input("WARNING: This will permanently erase all memories. Continue? [y/N]: ").strip().lower()  # prompt for user confirm memory wiping
+        try:
+            confirm = input("WARNING: This will permanently erase all memories. Continue? [y/N]: ").strip().lower()  # prompt for user confirm memory wiping
+        except (EOFError, KeyboardInterrupt):           # Ctrl-D or Ctrl-C during prompt
+            print("\nAborted.")                         # quiet abort message
+            sys.exit(0)                                 # exit code 0
         if confirm != "y":                              # anything other than explicit 'y' aborts
-            print("Aborted memory clear.")              # user-facing message (before logging exists)
+            print("Aborted memory clear.")              # user-facing message
             sys.exit(0)                                 # exit code 0 (user chose to abort, not an error)
         log.info("Clearing all memories...")            # log success info
         from cognition.memory.memorize import AikoMemorize  # deferred — heavy memory stack, only needed for --clear-mem
-        mem = AikoMemorize()                            # load memory system
-        mem.clear()                                     # wipe out memory
-        log.info("Memory cleared.")                     # log completion
+        
+        def do_clear():
+            mem = AikoMemorize()                        # load memory system
+            mem.clear()                                 # wipe out memory
+            log.info("Memory cleared.")                 # log completion
+        
+        _run_trapped(log, "AikoMemorize.clear()", do_clear)
         sys.exit(0)                                     # exit code 0
 
     if args.logout:                                     # if logout argument set
         try:
             from interface.cli.cli import handle_logout  # load CLI logout handler (may fail if CLI deps missing)
-            handle_logout()                              # logout user session
         except ImportError as e:
             log.error("Could not load CLI logout handler (missing dependencies?): %s", e)
             sys.exit(1)
+        _run_trapped(log, "handle_logout()", handle_logout)
         sys.exit(0)                                     # exit code 0
 
     try:                                                # one shared fatal-error trap for both front ends:
@@ -150,8 +168,11 @@ def main():
         else:
             from interface.webui.webui import run_webui
             run_webui(args)
-    except SystemExit:                                  # silent-killer trap: SystemExit in the main thread
-        log.exception("[main] SystemExit escaped the session loop")  # logs WHO raised it, full origin traceback
+    except SystemExit as e:                             # silent-killer trap: SystemExit in the main thread
+        if e.code not in (0, None):                     # non-zero exit = abnormal shutdown
+            log.exception("[main] SystemExit(%r) escaped the session loop", e.code)
+        else:                                           # exit(0) or exit() = clean shutdown
+            log.info("[main] clean exit")
         raise                                           # preserve original exit behavior
     except KeyboardInterrupt:                           # graceful interrupt handling
         log.info("[main] KeyboardInterrupt")
