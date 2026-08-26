@@ -42,6 +42,7 @@ from datetime import datetime
 from openai import OpenAI
 from pathlib import Path
 import re
+import contextvars
 import threading
 import time
 import unicodedata
@@ -1568,10 +1569,16 @@ class AikoThink:
             else:
                 log.info(f"Aiko scheduled job: {text}")
             return
+        # A plain threading.Thread starts with a fresh contextvars context,
+        # not the caller's — so without copying it here, current_user_id()
+        # (read throughout this class) would fall back to its default on
+        # this worker thread even though ScheduleRunner._run() correctly
+        # set it for whichever user's job this is.
+        ctx = contextvars.copy_context()
         if job.action == "tool":
-            threading.Thread(target=self._run_scheduled_tool_job, args=(job,), daemon=True).start()
+            threading.Thread(target=ctx.run, args=(self._run_scheduled_tool_job, job), daemon=True).start()
             return
-        threading.Thread(target=self._run_scheduled_agentic_job, args=(job,), daemon=True).start()
+        threading.Thread(target=ctx.run, args=(self._run_scheduled_agentic_job, job), daemon=True).start()
 
     def _run_scheduled_tool_job(self, job: DueJob) -> None:
         """Invoke one registered agentic tool from a schedule.json record."""
