@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import os
+import re
 import textwrap
 import time
 from datetime import datetime
@@ -77,6 +78,12 @@ REFERENCE_IMAGE  = os.path.expanduser(os.getenv("REFERENCE_IMAGE", os.path.join(
 
 _GITHUB_API = "https://api.github.com"
 
+def _strip_think(raw: str) -> str:
+    """Remove reasoning-model <think> blocks and code fences from LLM output."""
+    raw = re.sub(r"<think>.*?</think>", "", raw or "", flags=re.DOTALL)
+    raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE)
+    return raw.strip()
+
 def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float = 0.75, response_format: dict | None = None) -> str:
     kwargs = {}
     if response_format is not None:
@@ -93,7 +100,7 @@ def _llm_chat(system: str, user: str, max_tokens: int = 400, temperature: float 
         timeout=120,
         **kwargs,
     )
-    return (resp.choices[0].message.content or "").strip()
+    return _strip_think(resp.choices[0].message.content or "")
 
 def _load_soul() -> str:
     """Re-export from reflect for standalone use."""
@@ -178,6 +185,12 @@ def _generate_image(prose: str) -> str | None:
     try:
         scene_prompt = _generate_image_prompt(prose)
         log.info(f"Image prompt: {scene_prompt}")
+        if not scene_prompt:
+            # An empty scene with reference images attached makes the
+            # image model reproduce ref[0] verbatim — skip rather than
+            # publish a clone of the identity image.
+            log.warning("Empty image prompt from LLM — skipping reflection image.")
+            return None
 
         ref_images = _load_reference_images()
 
@@ -382,6 +395,13 @@ def dream_and_post(
     t_start = time.perf_counter()
     local_tz   = datetime.now().astimezone().tzinfo
     write_time = datetime.now(local_tz)
+
+    prose = (prose or "").strip()
+    if not prose:
+        # Never publish an empty day — usually means the LLM returned an
+        # empty/think-wrapped response upstream.
+        log.error("Empty reflection prose — skipping dream/post for %s.", date.strftime("%Y-%m-%d"))
+        return {"success": False, "error": "empty_prose", "word_count": 0}
 
     if display_name is None:
         display_name = current_display_name()
