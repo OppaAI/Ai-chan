@@ -126,7 +126,7 @@ def _user_reference_image_path() -> str:
     override = os.getenv("USER_REFERENCE_IMAGE")
     if override:
         return os.path.expanduser(override)
-    from system.userspace import current_user_id, _user_state_root_value
+    from system.userspace import current_user_id
     uid = current_user_id()
     root = os.path.expanduser(os.getenv("USER_SPACE_ROOT") or _USER_SPACE_ROOT)
     path = os.path.join(root, uid, "profile", "user.png")
