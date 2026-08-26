@@ -38,7 +38,6 @@ Flow:
     │ boot + warmup            │   │ set mem_ready_evt  │
     │ wait mem_ready_evt       │   └─────────┬──────────┘
     │ set_memorize + idle_lrn  │             │
-    │ prewarm semantic cache   │             │
     └───────────┬──────────────┘             │
                 └───────────┬────────────────┘
                             ▼
@@ -56,14 +55,14 @@ Flow:
                             │
                             ▼
                   return BootResult
+                  (semantic route/capability cache prewarming deferred to post-auth)
 
 - Parallel phase — init_think and init_memorize run on separate threads at the same time.
 - think is constructed with no arguments; memorize and speak both start as None and are
   injected later via set_memorize()/set_speak() once each is actually ready.
 - think boots AikoThink, runs warmup, then blocks on mem_ready_evt.wait() until memory is
-  done — then injects memory (set_memorize, may be None on failure), starts the idle
-  learner (no-ops if memory is None), and prewarms the semantic route/capability caches
-  before returning.
+  done — then injects memory (set_memorize, may be None on failure) and starts the idle
+  learner (no-ops if memory is None) before returning.
 - memorize sets up sqlite-vec, runs cleanup, then always signals mem_ready_evt.set() in a
   finally — so think never hangs even if memory boot fails.
 - Join point — main thread waits for both think_future/mem_future to finish.
@@ -219,7 +218,7 @@ class AikoWakeup:
 
         def init_memorize():
             try:
-                memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))        # initiate memory system (with logging off to prevent duplicate)
+                memorize = _boot_step('mem_embed', lambda: AikoMemorize(silent=True))        # initialize memory system (with logging suppressed to prevent duplicate)
 
                 # No user-id work here — boot may run before anyone logs in.
                 # Display-name pinning + per-user store switching happen when a
@@ -244,20 +243,20 @@ class AikoWakeup:
                 on_skip('mem_ready')                                                          # resolve the marker step so the UI doesn't hang on it
                 return None                                                                   # return None to indicate failure
             finally:                                                                          # whether success or failure,
-                mem_ready_evt.set()                                                           # set memory ready flag to True to trigger any blocked thread
+                mem_ready_evt.set()                                                           # signal memory ready; wake any waiting thread
 
-        with ThreadPoolExecutor(max_workers=2) as ex:                                         # start thread pool with 2 worker threads (for loading memory system and cognitive core concurrently)
-            mem_future = ex.submit(init_memorize)                                             # start memory system boots on thread 1
-            think_future = ex.submit(init_think, lambda: mem_future.result())                 # start cognitive core boots on thread 2
+        with ThreadPoolExecutor(max_workers=2) as ex:                                         # parallel memory and cognition boot
+            mem_future = ex.submit(init_memorize)                                             # memory boot on thread 1
+            think_future = ex.submit(init_think, lambda: mem_future.result())                 # cognitive core boot on thread 2 (waits for memory)
 
             # memorize's .result() never raises — init_memorize() always returns something
             # (None on failure, logged internally), so no try/except needed here.
             # think's .result() DOES re-raise on failure — caught below so we can still
             # drain mem_future before deciding whether boot failed.
-            think_ref: AikoThink | None = None                                                # initiate AikoThink object
-            think_exc: Exception | None = None                                                # hold exception of cognitive core for chaining
-            try:                                                                              # attempt to initiate cognitive core
-                think_ref = think_future.result()                                             # block until finishes initiation of cognitive core
+            think_ref: AikoThink | None = None                                                # will hold AikoThink reference
+            think_exc: Exception | None = None                                                # holds exception from cognitive core initialization for error chaining
+            try:                                                                              # retrieve cognitive core initialization result
+                think_ref = think_future.result()                                             # block until cognitive core initialization completes
             except Exception as exc:                                                          # if error,
                 think_exc = exc                                                               # logged once and chained into the raise later
             memorize = mem_future.result()                                                    # grab the results of memory system
@@ -273,7 +272,7 @@ class AikoWakeup:
             # _boot_step already fired on_loading -> on_skip internally
             # before re-raising — nothing further to signal here.
 
-        if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
+        if think_ref is None:                                                                 # if cognitive core initialization failed (returned None)
             log.critical(                                                                     # single log point: critical severity + full traceback in one line
                 "[wakeup] AikoThink boot failed — cannot continue without cognition core.",
                 exc_info=think_exc,
@@ -307,15 +306,15 @@ class AikoWakeup:
 
         # TTS — non-fatal: Aiko can run text-only if this fails. Gated on speak
         # not already being None (construction above may have failed).
-        if speak is not None:                                                                    # gate to skip warmup of TTS model if speaking module boot failed
-            try:                                                                                 # attempt the warmup of TTS model
-                _boot_step('speak_miotts', lambda: speak.warmup())                               # load/prime the TTS model
-                _boot_step('speak_ready')                                                        # log success
-            except Exception:                                                                    # if error,
+        if speak is not None:                                                                    # skip if AikoSpeak construction failed
+            try:                                                                                 # warm up TTS model
+                _boot_step('speak_miotts', lambda: speak.warmup())                               # load/cache TTS model
+                _boot_step('speak_ready')                                                        # mark ready
+            except Exception:                                                                    # if warmup failed,
                 log.exception("[wakeup] TTS boot failed — Aiko will run without voice output.")  # log failure
                 speak = None                                                                     # set handle to None to indicate error
 
-        think_ref.set_speak(speak)                                                               # wires in speaking module only once if TTS model is known to be live or not
+        think_ref.set_speak(speak)                                                               # inject speak (may be None if TTS boot failed)
 
         # ASR — construction only; models load lazily on first mic arm via
         # AikoListen.ensure_ready() (see sensory/listen.py). Keeps boot fast
@@ -326,9 +325,9 @@ class AikoWakeup:
         except Exception:
             log.exception("[wakeup] AikoListen construction failed — Aiko will run without voice input.")
 
-        return BootResult(                                                                        # return the results of the bootup of the 4 modules:
-            think    = think_ref,                                                                 # cognitive core
-            memorize = memorize,                                                                  # memory system
-            speak    = speak,                                                                     # speaking module
-            listen   = listen,                                                                    # listening module
+        return BootResult(                                                                        # all four subsystem references
+            think    = think_ref,                                                                 # cognitive core (always live; fatal if None)
+            memorize = memorize,                                                                  # memory system (None on failure)
+            speak    = speak,                                                                     # speech synthesis (None if TTS boot failed)
+            listen   = listen,                                                                    # speech recognition (None if construction failed)
         )
