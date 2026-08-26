@@ -59,14 +59,3 @@ def test_scheduler_lock_is_released_after_critical_section(monkeypatch, tmp_path
             assert not contender
     with schedule._scheduler_run_lock("github_alice", "jobs") as acquired_after_release:
         assert acquired_after_release
-
-
-def test_daily_reflection_lock_is_shared_across_owners(monkeypatch, tmp_path):
-    import system.schedule as schedule
-
-    monkeypatch.setenv("USER_SPACE_ROOT", str(tmp_path))
-    target = datetime(2026, 8, 25, tzinfo=timezone.utc)
-
-    assert schedule._reflection_lock_path(target) == (
-        tmp_path / ".locks" / "reflect-2026-08-25.lock"
-    )

@@ -2224,8 +2224,12 @@ class AikoMemorize:
 
     def _write_loop(self) -> None:
         while True:
-            user_input, response_text, user_id, display_name, is_active_turn, idle_since = self._write_queue.get()
+            item = self._write_queue.get()
             try:
+                if item is None:
+                    self._write_queue.task_done()
+                    return
+                user_input, response_text, user_id, display_name, is_active_turn, idle_since = item
                 self._wait_for_write_window(is_active_turn, idle_since)
                 self.add([
                     {"role": "user", "content": user_input[:500]},
@@ -2274,6 +2278,27 @@ class AikoMemorize:
                     return False
                 self._write_queue.all_tasks_done.wait(remaining)
         return True
+
+    def close(self) -> None:
+        """Stop the write-worker thread and close the sqlite connection."""
+        try:
+            if not self.wait_for_writes(timeout=5.0):
+                log.warning("AikoMemorize.close(): pending writes did not finish within 5s")
+        except Exception as e:
+            log.debug("AikoMemorize.close(): wait_for_writes: %s", e)
+        # Stop the write-worker thread if it's running
+        if self._write_worker is not None and self._write_worker.is_alive():
+            try:
+                self._write_queue.put(None)
+                self._write_worker.join(timeout=2.0)
+            except Exception as e:
+                log.debug("AikoMemorize.close(): write worker shutdown: %s", e)
+        if self._mem_backend is not None:
+            with self._mem._db_lock:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
 
     # ── read ──────────────────────────────────────────────────────────────────
 

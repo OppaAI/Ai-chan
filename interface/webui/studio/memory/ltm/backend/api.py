@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+from collections import OrderedDict
 from pathlib import Path
 
 from fastapi import FastAPI, Query
@@ -35,9 +36,12 @@ app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="st
 
 # AikoMemorize __init__ opens a sqlite-vec connection AND spawns a daemon
 # write-worker thread. Constructing one per request leaks a connection +
-# thread for the lifetime of the process, so cache a single shared instance.
-_memorize_by_user: dict[str, object] = {}
+# thread for the lifetime of the process, so cache per-user instances with
+# bounded LRU eviction (max 10 users; oldest entry is closed + evicted when
+# capacity is reached and a new user arrives).
+_memorize_by_user: "OrderedDict[str, object]" = OrderedDict()
 _memorize_lock = threading.Lock()
+_MEMORIZE_CACHE_MAX = 10
 
 
 def _get_memorize(user_id: str):
@@ -49,12 +53,24 @@ def _get_memorize(user_id: str):
             if memorize is None:
                 from cognition.memory.memorize import AikoMemorize
 
+                # Evict oldest entry if at capacity
+                if len(_memorize_by_user) >= _MEMORIZE_CACHE_MAX:
+                    evict_user, evict_mem = _memorize_by_user.popitem(last=False)
+                    try:
+                        evict_mem.close()
+                    except Exception:
+                        pass
+
                 memorize = AikoMemorize(silent=True)
                 # The facade opens its database during construction, so it
                 # must be explicitly bound instead of inheriting a later
                 # request's contextvar.
                 memorize.switch_user(user_id)
                 _memorize_by_user[user_id] = memorize
+    else:
+        # Move to end (LRU: mark as recently used)
+        with _memorize_lock:
+            _memorize_by_user.move_to_end(user_id)
     return memorize
 
 

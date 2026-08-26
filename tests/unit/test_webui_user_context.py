@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import threading
 
 import pytest
 
@@ -115,3 +116,83 @@ def test_post_auth_binds_memory_to_logged_in_user():
     assert memorize.switched_to == ["github_alice"]
     assert memorize.cleanup_user == "github_alice"
     assert current_user_id() == "guest"
+
+
+def test_concurrent_user_active_calls_run_post_auth_once(monkeypatch):
+    """Two concurrent _on_user_active calls for the same user should only run post-auth once."""
+    class Memorize:
+        def __init__(self):
+            self.switch_calls = []
+            self.cleanup_calls = 0
+
+        def switch_user(self, uid):
+            self.switch_calls.append(uid)
+
+        def cleanup(self):
+            self.cleanup_calls += 1
+
+        def persona_context(self):
+            return ""
+
+        def get_all(self):
+            return []
+
+    memorize = Memorize()
+    from system.wakeup import BootResult
+    boot_result = BootResult(memorize=memorize, think=None, speak=None, perceive=None, observe=None, navigate=None)
+    web = AikoWeb(boot_result=boot_result, defer_servers=True)
+
+    barrier = threading.Barrier(2)
+    def active_with_barrier(uid):
+        barrier.wait()
+        web._on_user_active(uid)
+
+    t1 = threading.Thread(target=active_with_barrier, args=("github_alice",))
+    t2 = threading.Thread(target=active_with_barrier, args=("github_alice",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert memorize.switch_calls == ["github_alice"]
+    assert memorize.cleanup_calls == 1
+
+
+def test_concurrent_user_active_different_users(monkeypatch):
+    """Two concurrent _on_user_active calls for different users should both run post-auth."""
+    class Memorize:
+        def __init__(self):
+            self.switch_calls = []
+            self.cleanup_calls = 0
+
+        def switch_user(self, uid):
+            self.switch_calls.append(uid)
+
+        def cleanup(self):
+            self.cleanup_calls += 1
+
+        def persona_context(self):
+            return ""
+
+        def get_all(self):
+            return []
+
+    memorize = Memorize()
+    from system.wakeup import BootResult
+    boot_result = BootResult(memorize=memorize, think=None, speak=None, perceive=None, observe=None, navigate=None)
+    web = AikoWeb(boot_result=boot_result, defer_servers=True)
+
+    barrier = threading.Barrier(2)
+    def active_with_barrier(uid):
+        barrier.wait()
+        web._on_user_active(uid)
+
+    t1 = threading.Thread(target=active_with_barrier, args=("github_alice",))
+    t2 = threading.Thread(target=active_with_barrier, args=("github_bob",))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert set(memorize.switch_calls) == {"github_alice", "github_bob"}
+    assert memorize.cleanup_calls == 2
