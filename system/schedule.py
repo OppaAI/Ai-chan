@@ -129,18 +129,28 @@ def workspace_root() -> Path:
 
 def user_state_root() -> Path:
     """Resolve the active user state root lazily."""
-    override = os.getenv("USER_SPACE_ROOT")
+    override = (
+        os.getenv("USER_SPACE_ROOT")
+        or os.getenv("USER_STATE_ROOT")
+        or os.getenv("AIKO_USER_STATE_ROOT")
+    )
     return (Path(override).expanduser() if override else Path.home() / ".aiko").resolve()
+
+
+def _reflection_lock_path(target_date: datetime) -> Path:
+    """Return the process-shared, date-specific reflection lock path.
+
+    Daily reflections publish to one shared GitHub post per date, so their
+    lock must not be placed below an individual owner's user-state folder.
+    """
+    return user_state_root() / ".locks" / f"reflect-{target_date.strftime('%Y-%m-%d')}.lock"
 
 
 def all_user_ids() -> list[str]:
     """Enumerate every user_id with a state directory under user space.
 
-    Thin wrapper over userspace.all_known_user_ids() — that's the single
-    source of truth for root resolution (it also honors the
-    USER_STATE_ROOT / AIKO_USER_STATE_ROOT aliases that this module's own
-    user_state_root() above does NOT check, so the two must not drift:
-    always resolve enumeration through userspace, never re-derive it here).
+    Thin wrapper over userspace.all_known_user_ids(), the single source of
+    truth for discovering users below the configured state root.
 
     Used by ScheduleRunner._run() to check every user's due jobs each tick
     instead of only whichever single user_id the runner happens to be
