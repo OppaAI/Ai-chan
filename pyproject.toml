@@ -73,3 +73,11 @@ override-dependencies = [
 
 [tool.uv.sources]
 onnxruntime-gpu = { path = "/home/oppa-ai/wheels/onnxruntime_gpu-1.27.0-cp312-cp312-linux_aarch64.whl", marker = "platform_machine == 'aarch64'" }
+
+[tool.ruff]
+line-length = 99
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E402"]  # main.py intentionally imports after load_config() runs
