@@ -850,14 +850,8 @@ def _ensure_job_post_config_marker(user_id: str | None = None) -> None:
 # PATCHED: disable_legacy_job_post_tool_jobs
 def disable_legacy_job_post_tool_jobs(user_id: str | None = None) -> None:
     """Disable schedule.json tool jobs that call run_job_post_playbook."""
-    path = schedule_path(user_id=user_id)
-    if not path.exists():
-        return
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    if not isinstance(data, list):
+    data = _read_all(user_id=user_id)
+    if not data:
         return
     changed = False
     for job in data:
@@ -875,7 +869,7 @@ def disable_legacy_job_post_tool_jobs(user_id: str | None = None) -> None:
                 job.get("id") or job.get("title"),
             )
     if changed:
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + chr(10), encoding="utf-8")
+        _write_all(data, user_id=user_id)
 
 
 def ensure_weekly_social_job(timezone: str | None = None, user_id: str | None = None) -> None:
@@ -1000,14 +994,8 @@ def disable_threads_reply_monitor_job(user_id: str | None = None) -> None:
     two pollers race past the has-processed check and answer the same comment
     twice, so any persisted monitor job is disabled on every social bootstrap.
     """
-    path = schedule_path(user_id=user_id)
-    if not path.exists():
-        return
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return
-    if not isinstance(data, list):
+    data = _read_all(user_id=user_id)
+    if not data:
         return
     changed = False
     for job in data:
@@ -1023,7 +1011,7 @@ def disable_threads_reply_monitor_job(user_id: str | None = None) -> None:
                 job.get("id") or job.get("title"),
             )
     if changed:
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + chr(10), encoding="utf-8")
+        _write_all(data, user_id=user_id)
 
 
 def register_social_handlers(
@@ -1470,7 +1458,7 @@ class ScheduleRunner:
         """
         missing: list[datetime] = []
         for offset in range(1, CATCHUP_MAX_LOOKBACK_DAYS + 1):
-            day = (bioclock.utc_now() - timedelta(days=offset)).replace(
+            day = (bioclock.local_now() - timedelta(days=offset)).replace(
                 hour=0, minute=0, second=0, microsecond=0
             )
             if _reflection_post_exists(day):
@@ -1722,14 +1710,43 @@ class ScheduleRunner:
             if delta > 0:
                 log.debug("Scheduler sleeping %.0fs until %s", delta, next_target.isoformat())
                 bioclock.wait_seconds(self._wakeup, delta)
-                self._wakeup.clear()
+            else:
+                # next_target is already due but nothing above consumed it —
+                # a malformed/unfixable next_due, or a stuck candidate whose
+                # due-ness the fire loops above didn't resolve, would
+                # otherwise spin this loop with no sleep at all. Backstop
+                # wait so it always yields instead of busy-looping.
+                log.debug(
+                    "Scheduler: next_target %s already due with nothing to fire — backstop wait.",
+                    next_target.isoformat(),
+                )
+                bioclock.wait_seconds(self._wakeup, 5)
+            self._wakeup.clear()
 
     # ── system job runners ────────────────────────────────────────────────────
 
     def _run_catchup_backfill(self) -> None:
         """Sequentially backfill every date found missing by
-        _missing_reflection_dates(), oldest first."""
-        for date in self._catchup_dates:
+        _missing_reflection_dates(), oldest first.
+
+        Can potentially run concurrently on two threads — the startup
+        catch-up thread from start(), and a late one from
+        _promote_owner() if the owner resolves mid-backfill. Guard against
+        a duplicate post for the same date two ways: pop dates off the
+        shared self._catchup_dates list one at a time (so a date claimed
+        by one thread isn't also picked up by the other), and re-check
+        _reflection_post_exists() immediately before firing (the
+        underlying operation is idempotent by design, so this is a
+        belt-and-suspenders check against any window between the pop and
+        the fire).
+        """
+        while self._catchup_dates:
+            try:
+                date = self._catchup_dates.pop(0)
+            except IndexError:
+                break
+            if _reflection_post_exists(date):
+                continue
             self._run_daily_reflect_and_dream(for_date=date)
 
     def _run_daily_reflect_and_dream(self, for_date: datetime | None = None) -> None:
