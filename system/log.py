@@ -3,15 +3,17 @@ system/log.py
 Central logger for Aiko-chan.
 
 All modules import get_logger() and use it instead of print().
-Output goes to logs/aiko.log only (file). Console output was deliberately
-removed — see LOG_CONSOLE below if you want it back for a given run.
+Output goes to logs/aiko.log only (file) by default. Set LOG_CONSOLE=1
+(e.g. via a --debug flag in main.py, or `LOG_CONSOLE=1 python main.py`)
+to also echo to stdout for a given run.
 A second file, logs/aiko.error.log, mirrors ERROR+ records only, so
 "what broke last night" is a short file instead of a grep through
 megabytes of INFO chatter.
 
-Log level is controllable via LOG_LEVEL in .env. Invalid values fall back
-to INFO with a one-line warning printed to stderr (the logger doesn't
-exist yet at that point).
+Log level is controllable via LOG_LEVEL in .env, or set programmatically
+(e.g. by --debug) before the first get_logger() call. Invalid values fall
+back to INFO with a one-line warning printed to stderr (the logger
+doesn't exist yet at that point).
 
 Usage:
     from system.log import get_logger
@@ -32,10 +34,6 @@ from logging.handlers import RotatingFileHandler
 LOG_DIR        = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
 LOG_FILE       = os.path.join(LOG_DIR, "aiko.log")
 ERROR_LOG_FILE = os.path.join(LOG_DIR, "aiko.error.log")
-
-# Optional: set LOG_CONSOLE=1 to also echo to stdout for a given run
-# (e.g. `LOG_CONSOLE=1 python main.py`) without touching the code.
-LOG_CONSOLE = os.getenv("LOG_CONSOLE", "0") == "1"
 
 _VALID_LEVELS = logging.getLevelNamesMapping()  # py3.11+
 
@@ -59,11 +57,11 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
-LOG_LEVEL = _resolve_log_level()
-
-# Rotate at 5MB, keep 3 backups → aiko.log, aiko.log.1, aiko.log.2
-LOG_MAX_BYTES    = _int_env("LOG_MAX_BYTES",    5 * 1024 * 1024)
-LOG_BACKUP_COUNT = _int_env("LOG_BACKUP_COUNT", 3)
+# NOTE: these are intentionally NOT resolved at import time. main.py may
+# set LOG_LEVEL / LOG_CONSOLE from a --debug flag after other modules have
+# already `import system.log` transitively — resolving here, inside
+# _setup(), means whatever's in os.environ at first get_logger() call wins,
+# regardless of import order.
 
 _FORMAT      = "%(asctime)s.%(msecs)03d  [%(levelname)-8s]  %(name)s — %(message)s"
 _DATE_FMT    = "%Y-%m-%d %H:%M:%S"
@@ -89,12 +87,20 @@ def _setup() -> None:
 
         os.makedirs(LOG_DIR, exist_ok=True)
 
+        # Resolved here (not at import time) so a --debug flag setting
+        # LOG_LEVEL/LOG_CONSOLE in main.py just before the first log call
+        # is always honored — see note above.
+        log_level = _resolve_log_level()
+        log_console = os.getenv("LOG_CONSOLE", "0") == "1"
+        log_max_bytes = _int_env("LOG_MAX_BYTES", 5 * 1024 * 1024)
+        log_backup_count = _int_env("LOG_BACKUP_COUNT", 3)
+
         # Let this module's configured levels decide what gets emitted. A previous
         # process-wide disable() call can otherwise make the file logger look dead.
         logging.disable(logging.NOTSET)
 
         root = logging.getLogger()
-        root.setLevel(LOG_LEVEL)
+        root.setLevel(log_level)
 
         fmt = logging.Formatter(_FORMAT, datefmt=_DATE_FMT)
 
@@ -102,12 +108,12 @@ def _setup() -> None:
         # delay=True: don't create/touch aiko.log until something is actually logged.
         fh = RotatingFileHandler(
             LOG_FILE,
-            maxBytes=LOG_MAX_BYTES,
-            backupCount=LOG_BACKUP_COUNT,
+            maxBytes=log_max_bytes,
+            backupCount=log_backup_count,
             encoding="utf-8",
             delay=True,
         )
-        fh.setLevel(LOG_LEVEL)
+        fh.setLevel(log_level)
         fh.setFormatter(fmt)
         root.addHandler(fh)
 
@@ -123,10 +129,11 @@ def _setup() -> None:
         err_fh.setFormatter(fmt)
         root.addHandler(err_fh)
 
-        # Console handler — opt-in via LOG_CONSOLE=1, off by default.
-        if LOG_CONSOLE:
+        # Console handler — opt-in via LOG_CONSOLE=1 (e.g. set by --debug in
+        # main.py), off by default.
+        if log_console:
             ch = logging.StreamHandler()
-            ch.setLevel(LOG_LEVEL)
+            ch.setLevel(log_level)
             ch.setFormatter(fmt)
             root.addHandler(ch)
 
