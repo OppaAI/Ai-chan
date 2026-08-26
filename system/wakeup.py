@@ -52,7 +52,7 @@ Flow:
                   hand off scheduler startup to system.schedule
                             │
                             ▼
-                  voice pipeline (TTS warmup → think.set_speak(speak) → ASR + VAD staged init)
+                  voice pipeline (TTS warmup → think.set_speak(speak) → construct AikoListen)
                             │
                             ▼
                   return BootResult
@@ -72,7 +72,8 @@ Flow:
 - Wakeup then hands the live refs to `system.schedule.start_scheduler()`, which owns
   the scheduler thread and all seeded jobs.
 - Voice pipeline (sequential) — TTS warmup, then think_ref.set_speak(speak) (or None),
-  then ASR staged init (load model → load VAD → join warmup → start barge-in monitor).
+  then AikoListen() is constructed (non-fatal). ASR/VAD models load lazily on first
+  mic arm via AikoListen.ensure_ready() — not part of boot.
 - Returns BootResult with all four live subsystem refs.
 
 Failure logging policy — one log line per failure, with traceback + context:
@@ -166,7 +167,7 @@ def _prewarm_semantic_cache(think) -> None:
     )
     try:
         # Prewarm intent routing cache
-        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)    # prewarm routing cache in designated npz
+        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)    # prewarm routing cache in on-disk npz
 
         # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
         from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
@@ -174,7 +175,7 @@ def _prewarm_semantic_cache(think) -> None:
         for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
             _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
 
-        log.info("[wakeup] Semantic exemplar cache warmed (intent + capabilities)")    # log sucess
+        log.info("[wakeup] Semantic exemplar cache warmed (intent + capabilities)")    # log success
     except Exception:                                                                  # if error,
         log.exception("[wakeup] Semantic exemplar prewarm failed")                     # log failure — single point, full traceback
 
@@ -209,9 +210,8 @@ class AikoWakeup:
         Execute full boot sequence and return live subsystem references.
 
         Parallel phase: AikoThink + AikoMemorize boot concurrently.
-        Sequential phase: TTS warmup → ASR staged init.
-        Barge-in monitor started as the final ASR step so Silero is already
-        warm and the VAD thread costs nothing before the first turn.
+        Sequential phase: TTS warmup → construct AikoListen (ASR/VAD models
+        themselves load lazily on first mic arm, not here).
         """
         mem_ready_evt  = threading.Event()                           # thread-safe boolean flag for blocking until memory system is ready
 
@@ -234,16 +234,16 @@ class AikoWakeup:
                 knows which subsystem this is and what degraded mode results. Logging
                 here too was the source of the old double/triple-log-per-failure bug.
             """
-            on_loading(key)                                             # annouce boot step starts
+            on_loading(key)                                             # announce boot step starts
             if fn is None:                                              # if marker step — no work, just progress,
-                on_done(key)                                            # annouce the message
+                on_done(key)                                            # announce the message
                 return None                                             # return None for no results
             try:                                                        # attempt to run boot step
                 result = fn()                                           # call boot step function
             except Exception:                                           # if error,
-                on_skip(key)                                            # annouce boot step skips
+                on_skip(key)                                            # announce boot step skips
                 raise                                                   # re-raise for the subsystem-level except to log + handle
-            on_done(key)                                                # annouce boot step finishes
+            on_done(key)                                                # announce boot step finishes
             return result                                               # return results of boot step function
 
         def init_think(memorize_getter):
@@ -358,7 +358,7 @@ class AikoWakeup:
                 _boot_step('speak_ready')                                                        # log success
             except Exception:                                                                    # if error,
                 log.exception("[wakeup] TTS boot failed — Aiko will run without voice output.")  # log failure
-                speak = None                                                                     # set hand;e to None to indicate eror
+                speak = None                                                                     # set handle to None to indicate error
 
         think_ref.set_speak(speak)                                                               # wires in speaking module only once if TTS model is known to be live or not
 
