@@ -8,6 +8,9 @@ from fastapi.staticfiles import StaticFiles
 from system.log import get_logger
 log = get_logger(__name__)
 app = FastAPI(title="Aiko Knowledge Graph Studio", version="1.0")
+
+from interface.webui.studio.session_binding import bind_login_session
+bind_login_session(app)
 _FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 _SHARED = Path(__file__).resolve().parents[3] / "shared"
 @app.get("/api/health")

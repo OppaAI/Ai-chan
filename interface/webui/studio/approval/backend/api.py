@@ -18,6 +18,9 @@ load_config()
 
 app = FastAPI(title="Aiko Approval Studio")
 
+from interface.webui.studio.session_binding import bind_login_session
+bind_login_session(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

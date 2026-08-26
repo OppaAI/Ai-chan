@@ -11,6 +11,9 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="Aiko LTM Graph Studio")
 
+from interface.webui.studio.session_binding import bind_login_session
+bind_login_session(app)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
