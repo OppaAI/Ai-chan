@@ -35,29 +35,33 @@ SHARED_DIR = Path(__file__).resolve().parents[3] / "shared"
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="itm-frontend")
 app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="studio-shared")
 
-_store = None
+_stores_by_user: dict[str, object] = {}
 _store_lock = threading.Lock()
 
 
 def _get_store(user_id: str | None = None):
-    """Reuse a single EpisodicStore for this process (mirrors LTM api.py)."""
-    global _store
-    if _store is None:
+    """Reuse one EpisodicStore per user, never another user's database."""
+    uid = user_id or "guest"
+    store = _stores_by_user.get(uid)
+    if store is None:
         with _store_lock:
-            if _store is None:
+            store = _stores_by_user.get(uid)
+            if store is None:
                 from cognition.memory.episode import EpisodicStore
                 from cognition.memory.schema import _memory_db_path_for_user
                 import os
 
-                uid = user_id or "guest"
                 embed_cache = os.getenv("EMBED_CACHE_PATH") or None
-                _store = EpisodicStore(_memory_db_path_for_user(uid), user_id=uid, embed_cache=embed_cache)
-    return _store
+                store = EpisodicStore(_memory_db_path_for_user(uid), user_id=uid, embed_cache=embed_cache)
+                _stores_by_user[uid] = store
+    return store
 
 
 def _resolve_user_id(user_id: str | None) -> str:
     from system.userspace import current_user_id
-    return (user_id or "").strip() or current_user_id()
+    # Studio identity comes from the authenticated request middleware.  Do
+    # not let a stale browser field or a crafted query override it.
+    return current_user_id()
 
 
 def _parse_entities(raw: Any) -> list[str]:

@@ -27,7 +27,12 @@ log = get_logger(__name__)
 
 
 def bind_login_session(app: FastAPI) -> None:
-    """Install login-session identity binding on a studio sub-app."""
+    """Install login-session identity binding on a studio sub-app.
+
+    The session identity is deliberately the only identity source for studio
+    API routes.  In particular, callers must not be able to select a
+    different store by appending ``?user_id=...`` to a request URL.
+    """
 
     @app.middleware("http")
     async def _bind_session_user(request: Request, call_next):
