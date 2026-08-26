@@ -67,9 +67,9 @@ import sys                                    # for assigning exit code
 
 # Aiko's components
 from system.config import load_config                             # load user configs
-load_config()                                                     # noqa: E402
+load_config()
 from system.log import get_logger                                 # assign logging to universal logger
-log = get_logger(__name__)                                        # noqa: E402
+log = get_logger(__name__)
 
 from cognition.memory.memorize import AikoMemorize                # load memory system for --clear-mem
 
