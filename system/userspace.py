@@ -180,6 +180,34 @@ def all_known_user_ids() -> list[str]:
         return []
 
 
+def resolve_owner_user_id() -> str | None:
+    """Resolve the machine owner's user_id without requiring a login.
+
+    Order: explicit AIKO_USER_ID env override, else the unique non-guest
+    user directory under USER_SPACE_ROOT that has both a memory store and
+    a profile. Returns None when identity is ambiguous (multi-user layout)
+    so callers can skip instead of reading/writing the wrong person's data.
+    """
+    override = os.getenv("AIKO_USER_ID", "").strip()
+    if override:
+        return override
+    try:
+        root = Path(_user_state_root_value()).expanduser()
+        candidates = []
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name == _DEFAULT_USER_ID:
+                continue
+            if (child / "memory" / "memory.db").is_file() and (
+                child / "profile" / "USER.md"
+            ).is_file():
+                candidates.append(child.name)
+    except OSError:
+        return None
+    except Exception:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def user_workspace_root(user_id: str | None = None) -> Path:
     """Workspace root isolated by user unless WORKSPACE_ROOT explicitly overrides."""
     if os.getenv("WORKSPACE_ROOT"):

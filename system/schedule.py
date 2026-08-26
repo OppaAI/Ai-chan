@@ -87,6 +87,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+import fcntl
+
 from system import bioclock
 from system.log import get_logger
 from system.turngate import AIKO_BUSY_LOCK
@@ -1779,6 +1781,44 @@ class ScheduleRunner:
 
             query_start = target_local.astimezone(timezone.utc)
             query_end   = target_end_local.astimezone(timezone.utc)
+
+            # Headless boot binds a guest/tempfile store; get_between() only
+            # filters rows inside whichever DB is open, so reflecting while
+            # guest-bound reads an empty DB and reports 0 memories. Rebind
+            # to the resolved owner store first.
+            if self._memorize.get_user_id() in (None, "", "guest"):
+                from system.userspace import resolve_owner_user_id
+                owner = resolve_owner_user_id()
+                if owner:
+                    try:
+                        self._memorize.switch_user(owner)
+                        log.info("[scheduler] memorize rebound to owner store %s", owner)
+                    except Exception as e:
+                        log.error("[scheduler] memorize rebind to %s failed: %s", owner, e)
+                else:
+                    log.warning(
+                        "[scheduler] could not resolve owner identity for reflection — "
+                        "reflecting against guest store."
+                    )
+
+            # Cross-process guard: two app instances (or a manual rerun) may
+            # share state storage over network mounts. Only one reflection
+            # per date wins; losers skip instead of double-posting.
+            lock_path = user_state_path(
+                f".locks/reflect-{target_local.strftime('%Y-%m-%d')}.lock",
+                self._memorize.get_user_id(),
+            )
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                os.close(lock_fd)
+                log.info(
+                    "daily_reflect_and_dream: another instance is reflecting for %s — skipping.",
+                    target_local.strftime("%Y-%m-%d"),
+                )
+                return
 
             from cognition.consolidate.reflect import REFLECT_MAX_MEMS, filter_reflect_snippets
             memories = self._memorize.get_between(
