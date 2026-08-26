@@ -147,7 +147,7 @@ def main():
         def do_wipe():
             mem = AikoMemorize()                        # load memory system
             mem.clear()                                 # wipe out memory
-        
+
         _run_trapped(log, "memory wipe (--clear-mem)", do_wipe)
         log.info("Memory cleared.")                     # log completion
         sys.exit(0)                                     # exit code 0
