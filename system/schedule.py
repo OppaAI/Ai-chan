@@ -90,7 +90,10 @@ from typing import Any, Callable
 from system import bioclock
 from system.log import get_logger
 from system.turngate import AIKO_BUSY_LOCK
-from system.userspace import all_known_user_ids, current_user_id, user_state_path, user_workspace_root
+from system.userspace import (
+    all_known_user_ids, current_user_id, reset_current_user_id,
+    set_current_user_id, user_state_path, user_workspace_root,
+)
 
 log = get_logger(__name__)
 
@@ -1555,14 +1558,23 @@ class ScheduleRunner:
             for _target, name in system_due:
                 with AIKO_BUSY_LOCK:
                     self.set_user(self._owner_user_id)
-                    if self._memorize is not None:
-                        self._memorize.switch_user(self._owner_user_id)
-                    if name == "daily":
-                        self._run_daily_reflect_and_dream()
-                        self._next_daily = _next_daily_reflect_and_dream()
-                    else:
-                        self._run_monthly_consolidate()
-                        self._next_monthly = _next_monthly_consolidate()
+                    # _run() executes on its own daemon thread, which starts
+                    # with a fresh contextvars context — current_user_id()
+                    # (read throughout think.py) won't see the right user
+                    # unless we set it here, matching self.set_user()/
+                    # memorize.switch_user() below.
+                    uid_token = set_current_user_id(self._owner_user_id)
+                    try:
+                        if self._memorize is not None:
+                            self._memorize.switch_user(self._owner_user_id)
+                        if name == "daily":
+                            self._run_daily_reflect_and_dream()
+                            self._next_daily = _next_daily_reflect_and_dream()
+                        else:
+                            self._run_monthly_consolidate()
+                            self._next_monthly = _next_monthly_consolidate()
+                    finally:
+                        reset_current_user_id(uid_token)
 
             # ── fire overdue jobs/graphs for EVERY user ───────────────────────
             # Not just self._user_id: a scheduler bound to whoever last
@@ -1578,12 +1590,16 @@ class ScheduleRunner:
                     continue
                 with AIKO_BUSY_LOCK:
                     self.set_user(uid)
-                    if self._memorize is not None:
-                        self._memorize.switch_user(uid)
-                    if due_user_jobs:
-                        self._fire_due_user_jobs(uid)
-                    if due_graphs:
-                        self._fire_due_schedule_graphs(uid)
+                    uid_token = set_current_user_id(uid)
+                    try:
+                        if self._memorize is not None:
+                            self._memorize.switch_user(uid)
+                        if due_user_jobs:
+                            self._fire_due_user_jobs(uid)
+                        if due_graphs:
+                            self._fire_due_schedule_graphs(uid)
+                    finally:
+                        reset_current_user_id(uid_token)
 
             # ── sleep until soonest next target across all users ──────────────
             candidates = [self._next_daily, self._next_monthly]
