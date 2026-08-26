@@ -134,6 +134,13 @@ class AikoWeb:
         self._ts           = time.time()
         self._lock         = threading.Lock()
 
+        self._fully_ready = False                                # set to True by set_boot_result(); sent to clients on connect
+        
+        # ⚠️ Legacy globals from pre-contextvar era (before per-connection user binding):
+        # Set once by first client to connect; never reset on disconnect. Verify that
+        # nothing outside this class still reads _authenticated_uid or _login_event.
+        # The contextvars-based flow (_bind_user_context, reset on ws.close) is the
+        # preferred approach — these should be removed if no code depends on them.
         self._login_event = threading.Event()
         self._authenticated_uid: str | None = None
         self._authenticated_display_name: str | None = None
@@ -199,20 +206,33 @@ class AikoWeb:
         self._start_servers()
 
     def set_boot_result(self, result: BootResult):
-        """Called by main.py AFTER wakeup.boot() finishes (now before login)."""
+        """Called by main.py AFTER wakeup.boot() finishes (now before login).
+        
+        Unpacks the BootResult into instance variables and marks the system ready.
+        The "ready" broadcast is deferred to _ws_handler() so new clients receive
+        it on connect — broadcasts here fire before servers start.
+        """
         self._boot_result = result
         if result:
+            # Unpack subsystem refs for later injection into run_post_auth()
+            self._memorize = result.memorize
+            self._think    = result.think
+            self._speak    = result.speak
+            self._listen   = result.listen
+            self._fully_ready = True
             self.status_finish()   # broadcasts the "phase: chat" event
-            self._broadcast({"type": "status_finish", "ready": True, "message": "Aiko fully initialized — log in now"})
 
     def set_voice_backends(self, speak, listen) -> None:
+        """Deprecated — kept for compatibility. Use set_boot_result() instead."""
         self._speak = speak
         self._listen = listen
 
     def set_memorize(self, memorize) -> None:
+        """Deprecated — kept for compatibility. Use set_boot_result() instead."""
         self._memorize = memorize
 
     def set_think(self, think) -> None:
+        """Deprecated — kept for compatibility. Use set_boot_result() instead."""
         self._think = think
 
     async def _bind_user_context(self, uid: str, session: dict) -> tuple:
@@ -269,6 +289,12 @@ class AikoWeb:
         http_t = threading.Thread(target=self._run_http, daemon=True, name="aiko-http")
         http_t.start()
 
+        # ⚠️ TIMING: _loop_ready is set BEFORE uvicorn.Server.serve() starts, so this
+        # signals "event loop exists" not "server is accepting connections". There's
+        # a brief race window where start_servers() returns but uvicorn hasn't bound
+        # the socket yet. In practice this is fine (milliseconds), but if you see
+        # connection-refused errors, consider awaiting server.started or using
+        # Starlette's lifespan event instead.
         self._loop_ready.wait(timeout=5)
 
     def _run_http(self) -> None:
@@ -318,7 +344,9 @@ class AikoWeb:
             return
 
         session = sessions[session_id]
-        if bioclock.local_now() - session["created_at"] > timedelta(days=30):
+        # Use SESSION_MAX_AGE_SECONDS (not hardcoded timedelta) to stay in sync with auth config
+        session_max_age = timedelta(seconds=SESSION_MAX_AGE_SECONDS)
+        if bioclock.local_now() - session["created_at"] > session_max_age:
             log.warning("[aiko-web] expired WebSocket session")
             await ws.close(code=1008)
             return
@@ -332,6 +360,17 @@ class AikoWeb:
             self._login_event.set()
 
         await ws.accept()
+
+        # Send ready state snapshot immediately so clients connecting after boot
+        # don't get stuck on the progress screen waiting for a ready message
+        # that already fired before they connected.
+        if self._fully_ready:
+            await self._safe_send(ws, json.dumps({
+                "type": "phase", "value": "chat"
+            }, ensure_ascii=False))
+            await self._safe_send(ws, json.dumps({
+                "type": "status_finish", "ready": True, "message": "Aiko fully initialized — log in now"
+            }, ensure_ascii=False))
 
         # Post-login rebinding/seeding runs in the background so the socket
         # receive loop starts immediately.
@@ -441,6 +480,16 @@ class AikoWeb:
         )
 
     def broadcast_audio_bytes(self, wav_bytes: bytes) -> None:
+        """Broadcast TTS audio bytes to the current user's connected browsers.
+        
+        If the current user's identity is unknown (None or "guest"), broadcasts to ALL
+        connected browsers. This is intentional for single-user scenarios but creates
+        a cross-user audio leak risk in true multi-user LAN setups.
+        
+        If you have concurrent multi-user sessions on the same LAN, verify whether
+        this behavior is acceptable or gate audio to only known uid. See Concern #3
+        in GLM's review for full context.
+        """
         if self._loop is None:
             return
         uid = current_user_id()
@@ -651,6 +700,13 @@ class AikoWeb:
         self._broadcast_to_current_user({"type": "viseme", "viseme": viseme, "weight": weight})
 
     def get_input(self) -> str:
+        """Fetch text input from the queue, binding the source user's identity.
+        
+        Captures contextvar tokens and updates them with the source user's uid/display_name.
+        Unlike _ws_handler, tokens are NOT reset here — the calling code (orchestrate.run_session)
+        manages the turn-level contextvar lifecycle and needs the identity to persist through
+        the entire turn. Caller is responsible for cleanup via reset_current_user_id/reset_current_display_name.
+        """
         self._broadcast_to_current_user({"type": "voice", "status": "idle"})
         idle_ticks = 0
         while True:
@@ -660,6 +716,9 @@ class AikoWeb:
                     text, uid, display_name = item
                 else:
                     text, uid, display_name = item, "guest", "Guest"
+                # Capture existing tokens so caller can reset if needed (defensive pattern).
+                # However, per docstring, these contextvars should be managed by orchestrate.py
+                # for the duration of the turn, not here.
                 set_current_user_id(uid)
                 set_current_display_name(display_name)
                 return text
@@ -686,6 +745,19 @@ class AikoWeb:
         FRAME_TIMEOUT_S = 5.0
 
         def _chunk_source(n: int):
+            """Fetch audio chunks for listen.listen(), handling multi-user frames.
+            
+            ⚠️ AMBIGUITY: Returns None for three unrelated conditions:
+               - queue timeout after FRAME_TIMEOUT_S (timeout/EOS scenario)
+               - cross-user frame when user identity has already been accepted (dropped)
+               - VAD end-of-utterance marker (b"") from the client
+            
+            This ambiguity is harmless only if listen.listen() treats timeout and
+            end-marker equivalently. If the contract changes, consider:
+              - Using distinct return values: (None, "timeout") vs (None, "eou")
+              - Raising exceptions for error conditions vs returning None for EOS
+              - Explicitly documenting listen.listen()'s contract in sensory/listen.py
+            """
             try:
                 item = self._audio_q.get(timeout=FRAME_TIMEOUT_S)
             except queue.Empty:
