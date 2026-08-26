@@ -137,49 +137,6 @@ class BootResult:
 
 BootCallback = Callable[[str], None]                        # Callback for boot progress: takes step key (string)
 
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-def _prewarm_semantic_cache(think) -> None:
-    """Warm both semantic caches used by first-turn routing/capability
-    matching, so the first real user turn never pays an embedding cost.
-
-    Route exemplars (think._semantic_example_vectors): in-memory cache,
-    then per-user on-disk npz cache (cognition.reason.cache_vector_path),
-    then compute+persist if both miss.
-
-    Capability trigger embeddings (agentic.capability._get_trigger_embedding):
-    same three-tier pattern, sharing the same cache_vector_path helper —
-    in-memory dict first, then on-disk npz, then compute+persist.
-
-    On a warm disk cache, this whole call is disk loads only, no
-    embedding calls. On a cold cache (first boot, or after a trigger/
-    exemplar edit), it pays the full embed cost once and persists it.
-
-    Args:
-       think: AikoThink instance with a booted embedder (via memorize backend).
-    """
-    if think._get_memorize() is None:            # gate to skip semantic cache prewarm if memory system is unavailable
-        log.info("[wakeup] Skipping semantic cache prewarm — no memory backend.")
-        return
-    from cognition.think import (
-        _ROUTE_TERNARY_EXAMPLES,                # for top-level 3-way routing decision (agentic / webchat / localchat)
-        _ROUTE_INSTRUCT_TERNARY,                # the instruction strings of the 3-way routing
-    )
-    try:
-        # Prewarm intent routing cache
-        think._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)    # prewarm routing cache in on-disk npz
-
-        # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
-        from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
-        embedder = think._get_memorize().embedder()                                    # shared embedder — no DB needed, works pre-login
-        for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
-            _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
-
-        log.info("[wakeup] Semantic exemplar cache warmed (intent + capabilities)")    # log success
-    except Exception:                                                                  # if error,
-        log.exception("[wakeup] Semantic exemplar prewarm failed")                     # log failure — single point, full traceback
-
-
 # ── wakeup ────────────────────────────────────────────────────────────────────
 
 class AikoWakeup:
@@ -255,7 +212,7 @@ class AikoWakeup:
             _boot_step('think_warmup', lambda: (think.start_warmup(), think.join_warmup()))   # start warmup background thread
             _boot_step('think_mem_wait', lambda: mem_ready_evt.wait())                        # block until memorize thread finishes
             _boot_step('think_inject', lambda: (think.set_memorize(memorize_getter()), think.start_idle_learner()))  # inject memory backend to cognitive core and start idle learner thread (no-ops cleanly if memorize is None)
-            _boot_step('think_prewarm', lambda: _prewarm_semantic_cache(think))               # load embed exemplars while booting
+            _boot_step('think_prewarm', lambda: think.prewarm_caches())                       # load embed exemplars while booting
             return think                                                                      # return the live AutoThink object
 
         def init_memorize():
