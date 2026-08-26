@@ -143,7 +143,7 @@ def main():
             sys.exit(0)                                 # exit code 0 (user chose to abort, not an error)
         log.info("Clearing all memories...")            # log success info
         from cognition.memory.memorize import AikoMemorize  # deferred — heavy memory stack, only needed for --clear-mem
-        
+
         def do_wipe():
             mem = AikoMemorize()                        # load memory system
             mem.clear()                                 # wipe out memory
