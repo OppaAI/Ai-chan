@@ -507,7 +507,7 @@ for example "*{_ai} considers the question.*". Do not use XML or colon labels.""
             model=env("LLM_MODEL", "ministral"),
             messages=standard_messages,
             temperature=0.7,
-            max_tokens=180,
+            max_tokens=102400,
             timeout=float(env("LLM_TIMEOUT", "30")),
         )
     text = _normalize_public_reply(response.choices[0].message.content or "")

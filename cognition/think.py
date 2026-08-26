@@ -48,21 +48,24 @@ import time
 import unicodedata
 
 from agentic.tools    import web_search_context
-import json as _json
 from agentic.agentic  import run_agentic_chat
 from agentic.wiki import wiki_knowledge_context_for
 from cognition.knowledge import knowledge_context_for
 from cognition import CONTEXT_POOL
 from system.log      import get_logger
-from system.schedule import DueJob, register_system_handler, schedule_job_record, list_schedule_records, cancel_schedule_record
+from system.schedule import DueJob, schedule_job_record, list_schedule_records, cancel_schedule_record
 from system.userspace import current_user_id, current_display_name, user_profile_path
 from system import bioclock
-from agentic.toolkit.social import run_scheduled_weekly_social
 from cognition import reason
 from cognition.memory import learn
 
+# NOTE: weekly_social handler is registered by system.schedule
+# (register_social_handlers via register_system_handlers_only at boot) — do
+# NOT re-register here. Importing agentic.toolkit.social at think-module load
+# dragged the whole social stack (OpenAI clients, requests, vision deps) into
+# every cognition.think import.
+
 log = get_logger(__name__)
-register_system_handler("weekly_social", run_scheduled_weekly_social)
 
 _GOAL_REVIEW_TITLE = "[Aiko] Goal review"
 
@@ -229,6 +232,10 @@ _CODE_TRIGGER_RE = re.compile(
 )
 
 
+_persona_core_cache: str | None = None
+_persona_core_mtime: float | None = None
+
+
 def _load_static_persona() -> str:
     """Read the always-loaded persona core (SOUL.md — no per-user data,
     no conditional overrides).
@@ -237,10 +244,21 @@ def _load_static_persona() -> str:
     for agentic/schedule tokens on every turn. Japanese/coding overrides live
     in separate files and are appended per-turn by _conditional_persona_blocks
     only when triggered — see _current_system_prompt.
+
+    Cached with an mtime check: zero disk reads on turns where SOUL.md hasn't
+    changed, but edits still picked up without a restart.
     """
+    global _persona_core_cache, _persona_core_mtime
     if not _PERSONA_CORE_PATH.exists():
         raise FileNotFoundError(f"SOUL.md not found at {_PERSONA_CORE_PATH}")
-    return _PERSONA_CORE_PATH.read_text(encoding="utf-8").strip()
+    try:
+        mtime = _PERSONA_CORE_PATH.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _persona_core_cache is None or mtime != _persona_core_mtime:
+        _persona_core_cache = _PERSONA_CORE_PATH.read_text(encoding="utf-8").strip()
+        _persona_core_mtime = mtime
+    return _persona_core_cache
 
 
 _persona_jp_cache: str | None = None
@@ -308,7 +326,9 @@ def _load_user_context() -> tuple[str, str]:
 _DEBUG_PROMPT_DUMP_PATH = os.getenv("AIKO_DEBUG_PROMPT_DUMP", "/tmp/aiko_last_prompt.txt")
 
 def _dump_full_prompt(debug: dict) -> None:
-    if os.getenv("AIKO_DEBUG_FULL_PROMPT", "1").lower() not in {"1", "true", "yes", "on"}:
+    # Default OFF: writes the full prompt blob to SD synchronously EVERY turn
+    # (latency + flash wear). Set AIKO_DEBUG_FULL_PROMPT=1 to opt in.
+    if os.getenv("AIKO_DEBUG_FULL_PROMPT", "0").lower() not in {"1", "true", "yes", "on"}:
         return
     try:
         with open(_DEBUG_PROMPT_DUMP_PATH, "w", encoding="utf-8") as f:
@@ -326,7 +346,7 @@ def _dump_full_prompt(debug: dict) -> None:
                 f.write(f"[{m.get('role')}] {m.get('content')}\n")
     except Exception:
         log.exception("Failed to dump full prompt debug")
-        
+
 
 def _should_use_local_knowledge(user_input: str) -> bool:
     """Return True for normal-chat questions about Aiko's local docs/files.
@@ -426,7 +446,7 @@ class AikoThink:
         # Guards self._speak against the toggle-vs-background-thread race.
         # set_speak() is called from the main thread (main.py's /voice
         # toggle). Readers snapshot self._speak under the lock so a toggle
-        # landing mid-read can't produce a stale ref or a None mismatch.      
+        # landing mid-read can't produce a stale ref or a None mismatch.
         self._speak_lock = threading.Lock()
         self._memorize_lock = threading.Lock()
 
@@ -445,10 +465,10 @@ class AikoThink:
         self.last_usage: dict = {}
         self.last_prompt_debug: dict = {}
         self._last_chat_time = time.time()
-      
+
         self._idle_learner_thread: threading.Thread | None = None
         self._warmup_thread: threading.Thread | None = None
-      
+
         # ── rest-signal state for learn.idle_learner_loop ───────────────────
         # The proactive idle check-in state machine lives in main.py's
         # ProactiveIdleRunner. That runner sets this flag via
@@ -457,7 +477,7 @@ class AikoThink:
         # by _note_user_activity() on every normal turn.
         self._proactive_lock = threading.Lock()
         self._proactive_resting = False
-      
+
     def _warmup_llm(self) -> None:
         try:
             self._client.chat.completions.create(
@@ -478,7 +498,7 @@ class AikoThink:
             return
         self._warmup_thread = threading.Thread(target=self._warmup_llm, daemon=True)
         self._warmup_thread.start()
-  
+
     def start_idle_learner(self) -> None:
         """Start the background idle-learning loop. Call only after
         set_memorize() has been called — the loop reads self._memorize
@@ -492,7 +512,7 @@ class AikoThink:
             target=learn.idle_learner_loop, args=(self,), daemon=True
         )
         self._idle_learner_thread.start()
-  
+
     def _persona_core(self) -> str:
         """Stable identity core: persona text + owner block.
 
@@ -578,7 +598,7 @@ class AikoThink:
         """
         core, volatile = self._current_system_prompt_parts(user_input)
         return core + ("\n\n" + volatile if volatile else "")
-  
+
     # ── public api ────────────────────────────────────────────────────────────
 
     def route(self, user_input: str, token_callback=None) -> str:
@@ -635,7 +655,6 @@ class AikoThink:
             log.info("[route] intent=%s", intent)
 
             if intent == "greeting":
-                log.info("[route] greeting dispatch → chat(skip_memory=True)")
                 return self.chat(
                     user_input,
                     token_callback=token_callback,
@@ -806,12 +825,12 @@ class AikoThink:
         returned so route() can reuse it for memory recall instead of paying
         for a second embed of the same text (see route()).
         """
-    
+
         if not _ROUTE_ENABLED:
             return "localchat", None
         if _ROUTE_MODE == "llm_only":
             return self._classify_quaternary_intent_llm(user_input, allow_agentic=_AGENTIC_MODE_ON), None
-    
+
         instruct = _ROUTE_INSTRUCT_QUATERNARY
         memorize = self._get_memorize()
         if memorize is None:
@@ -827,19 +846,19 @@ class AikoThink:
             # existing gap/threshold logic naturally degenerates into a
             # webchat-vs-localchat decision — no separate code path needed.
             scores.pop("agentic", None)
-      
+
         greeting_score = scores.get("greeting", 0.0)
         agentic_score = scores.get("agentic", 0.0)
         webchat_score = scores.get("webchat", 0.0)
-    
+
         ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
         best_label, best_score = ranked[0] if ranked else ("localchat", 0.0)
         gap = best_score - ranked[1][1] if len(ranked) > 1 else 1.0
-    
+
         agentic_threshold = float(os.getenv("ROUTE_AGENTIC_THRESHOLD", "0.78"))
         webchat_threshold = float(os.getenv("ROUTE_WEBCHAT_THRESHOLD", "0.72"))
         greeting_threshold = float(os.getenv("ROUTE_GREETING_THRESHOLD", "0.60"))
-    
+
         log.debug(
             "[route] quaternary scores: greeting=%.3f agentic=%.3f webchat=%.3f best=%s gap=%.3f for: %r",
             greeting_score, agentic_score, webchat_score, best_label, gap, user_input
@@ -847,12 +866,12 @@ class AikoThink:
 
         if best_label == "greeting" and greeting_score >= greeting_threshold and (gap >= _SEMANTIC_ROUTE_MIN_GAP or _is_greeting_only(user_input)):
             return "greeting", query_vec
-    
+
         if best_label == "agentic" and agentic_score >= agentic_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "agentic", query_vec
         if best_label == "webchat" and webchat_score >= webchat_threshold and gap >= _SEMANTIC_ROUTE_MIN_GAP:
             return "webchat", query_vec
-    
+
         # Above threshold but too close to call cleanly.
         ambiguous = (
             (agentic_score >= agentic_threshold or webchat_score >= webchat_threshold or greeting_score >= greeting_threshold)
@@ -879,7 +898,7 @@ class AikoThink:
 
         if _is_greeting_only(user_input):
             return "greeting", query_vec
-    
+
         return "localchat", query_vec
 
     def _semantic_example_vectors(self, examples_by_label: dict, instruct: str) -> tuple[list[str], object]:
@@ -1030,7 +1049,7 @@ class AikoThink:
             include_greeting=False,
             log_name="Ternary",
         )
-  
+
     def _soft_gate_reply(
         self,
         user_input: str,
@@ -1117,7 +1136,7 @@ class AikoThink:
                 self._active_user_ids.discard(user_id)
                 if not self._active_user_ids:
                     self._last_chat_time = time.time()
-              
+
     def webchat(self, user_input: str, token_callback=None, mem_kb_future=None, query_vec: np.ndarray | None = None) -> str:
         """Web-aware chat: web_search + optional webfetch fallback."""
         # Guard: experience-sharing narration must never be answered from
@@ -1130,7 +1149,7 @@ class AikoThink:
         speak = self._get_speak()
         if speak and speak.is_playing():
             speak.stop()
-        
+
         # Memory + KB — either resolved from route()'s pre-intent future,
         # or fetched directly if this was called standalone.
         memories, knowledge_block = self._resolve_mem_kb(user_input, mem_kb_future)
@@ -1161,14 +1180,14 @@ class AikoThink:
         if metacognitive_block:
             system = f"{system}\n\n{metacognitive_block}"
         system = f"{system}\n\n{knowledge_block}"
-        
+
         # Search directly with the raw user input — same approach as /web.
         # No LLM-based query condensation: it adds latency, depends on a
         # small router model that often produces worse queries than the
         # original text, and /web already proves the raw path works.
         display_name = current_display_name()
         if token_callback:
-            token_callback(f"__STATUS__:searching\n")
+            token_callback("__STATUS__:searching\n")
             token_callback(f"__SEARCHING__:{user_input}\n")
 
         max_results = int(os.getenv("SEARXNG_MAX_RESULTS", 3))
@@ -1249,17 +1268,17 @@ class AikoThink:
         llm_prompt = user_input
         if self._reasoning:
             llm_prompt = f"{user_input}\n\nThink through this carefully."
-        
+
         with self._history_lock:
             self._history.append({"role": "user", "content": user_input})
             if len(self._history) > CONTEXT_WINDOW_TURNS * 10:
                 self._history = self._history[-(CONTEXT_WINDOW_TURNS * 10):]
             trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
-        
+
         trimmed = self._sanitize_history(trimmed)
         if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != user_input:
             trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
-        
+
         # Log debug info
         self.last_prompt_debug = {
             "mode": "webchat",
@@ -1269,7 +1288,7 @@ class AikoThink:
             "web_prompt": _extract_search_results_block(system),
             "previous_chat_messages": [dict(m) for m in trimmed],
         }
-        
+
         # Live working-memory (<grasp>) block — same explicit injection as
         # chat(); replaces the old grasp_hub _stream_response wrapper.
         try:
@@ -1284,15 +1303,15 @@ class AikoThink:
         # Stream response
         raw_response = self._stream_response(trimmed, system=system, token_callback=token_callback, emit=_CHAT_STREAM_EMIT)
         raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
-        
+
         # Store in history
         with self._history_lock:
             self._history.append({"role": "assistant", "content": raw_response})
-        
+
         self._store_async(user_input, raw_response)
         self._reasoning = False
         return raw_response
-  
+
     def proactive_checkin(self, prompt_hint: str) -> str:
         """Generate one short proactive check-in without storing it as a user turn."""
         _SENTINEL = "_proactive_"
@@ -1357,13 +1376,24 @@ class AikoThink:
             log.warning("[chat] websearch net failed: %s", e)
             return ""
 
-    def chat(self, user_input: str, token_callback=None, _skip_search: bool = True, _history_label: str | None = None, mem_kb_future=None, *, skip_memory: bool = False, store_turn: bool = True, query_vec: np.ndarray | None = None, websearch_net: bool = True) -> str:
+    def chat(
+        self,
+        user_input: str,
+        token_callback=None,
+        _skip_search: bool = True,
+        _history_label: str | None = None,
+        mem_kb_future=None,
+        *,
+        skip_memory: bool = False,
+        store_turn: bool = True,
+        query_vec: np.ndarray | None = None,
+        websearch_net: bool = True,
+    ) -> str:
         """Standard chat: persona plus optional memory/KB context."""
-        log.info("[chat] enter skip_memory=%s store_turn=%s input=%r", skip_memory, store_turn, user_input[:50])
         speak = self._get_speak()
         if speak and speak.is_playing():
             speak.stop()
-        
+
         if skip_memory:
             memories = []
             knowledge_block = ""
@@ -1388,7 +1418,7 @@ class AikoThink:
                 metacognitive_block = for_identity(current_user_id()).metacognitive_context(user_input, memories)
             except Exception:
                 pass
-        
+
         # Stable/volatile split for prompt-cache reuse: the persona core goes
         # FIRST in the message array, conversation history next, and all
         # per-turn context last (right before the user turn) — see
@@ -1465,17 +1495,17 @@ class AikoThink:
         llm_prompt = user_input
         if self._reasoning:
             llm_prompt = f"{user_input}\n\nThink through this carefully."
-        
+
         with self._history_lock:
             self._history.append({"role": "user", "content": user_input})
             if len(self._history) > CONTEXT_WINDOW_TURNS * 10:
                 self._history = self._history[-(CONTEXT_WINDOW_TURNS * 10):]
             trimmed = self._history[-(CONTEXT_WINDOW_TURNS * 2):]
-        
+
         trimmed = self._sanitize_history(trimmed)
         if trimmed and trimmed[-1]["role"] == "user" and llm_prompt != user_input:
             trimmed = trimmed[:-1] + [{"role": "user", "content": llm_prompt}]
-        
+
         # Log debug
         self.last_prompt_debug = {
             "mode": "greeting" if skip_memory else "localchat",
@@ -1489,7 +1519,6 @@ class AikoThink:
 
         # Stream response — core system message first, history, then the
         # volatile context system message right before the newest user turn.
-        log.info("[chat] calling LLM stream (model=%s)", self._llm_model)
         raw_response = self._stream_response(
             trimmed,
             system=core_system,
@@ -1497,14 +1526,12 @@ class AikoThink:
             token_callback=token_callback,
             emit=_CHAT_STREAM_EMIT,
         )
-        log.info("[chat] stream returned len=%s", len(raw_response or ""))
         raw_response = self._finalize_response(user_input, raw_response, token_callback, already_emitted=_CHAT_STREAM_EMIT)
-        log.info("[chat] finalize done")
-        
+
         # Store
         with self._history_lock:
             self._history.append({"role": "assistant", "content": raw_response})
-        
+
         if store_turn:
             self._store_async(user_input, raw_response)
         self._reasoning = False
@@ -1515,7 +1542,8 @@ class AikoThink:
         context = web_search_context(query)
         if not context or "no results" in context or "failed" in context:
             msg = f"[no results for: {query}]"
-            if token_callback: token_callback(msg)
+            if token_callback:
+                token_callback(msg)
             return msg
         # websearch_net=False — this turn already carries fetched results;
         # re-triggering the net on the context blob would double-search.
@@ -1536,7 +1564,8 @@ class AikoThink:
             history_snapshot = list(self._history)
         users = [m["content"].strip() for m in history_snapshot if m.get("role") == "user" and (m.get("content") or "").strip()]
         assistants = [m["content"].strip() for m in history_snapshot if m.get("role") == "assistant" and (m.get("content") or "").strip()]
-        if not users or not assistants: return None
+        if not users or not assistants:
+            return None
         return users[-1], assistants[-1]
 
     def set_reasoning(self, enabled: bool) -> None: self._reasoning = enabled
@@ -1566,20 +1595,20 @@ class AikoThink:
         if swapped and old is not None and old is not new_value:
             old.stop()
         return swapped
-  
+
     def _get_speak(self):
         with self._speak_lock:
             return self._speak
-          
+
     def set_memorize(self, memorize) -> None:
         """Inject the memory backend after boot. Thread-safe against concurrent reads."""
         with self._memorize_lock:
             self._memorize = memorize
-    
+
     def _get_memorize(self):
         with self._memorize_lock:
             return self._memorize
-  
+
     def wait_for_memory(self, timeout: float | None = None) -> bool:
         """Block until AikoMemorize's async write queue drains, or timeout
         elapses. The queue itself now lives in cognition.memory.memorize; this is a
@@ -1678,15 +1707,16 @@ class AikoThink:
     # ── internal ──────────────────────────────────────────────────────────────
 
     def _emit(self, text: str, token_callback=None) -> None:
-        if not text: return
-    
+        if not text:
+            return
+
         # Always drive the TUI callback directly, regardless of TTS
         if token_callback:
             words = text.split(" ")
             for i, word in enumerate(words):
                 token_callback(word if i == 0 else " " + word)
                 time.sleep(float(os.getenv("EMIT_DELAY", 0.005)))
-    
+
         # TTS runs independently
         speak = self._get_speak()
         if speak:
@@ -1733,7 +1763,6 @@ class AikoThink:
         tts_sentence_buffer = []
 
         try:
-            log.info("[stream] POST %s model=%s", self._client.base_url, self._llm_model)
             stream = self._client.chat.completions.create(
                 model=self._llm_model, messages=all_messages, stream=True,
                 max_tokens=max_tokens,
@@ -1748,7 +1777,6 @@ class AikoThink:
                     "top_k":          int(os.getenv("TOP_K", 40)),
                 },
             )
-            log.info("[stream] connected, consuming chunks")
             for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None
                 token = (delta.content or "") if delta else ""
@@ -1835,12 +1863,16 @@ class AikoThink:
         return f"[LLM error] {reason}"
 
     def _sanitize_history(self, messages: list[dict]) -> list[dict]:
-        if not messages: return []
+        if not messages:
+            return []
         sanitized = [messages[0]]
         for msg in messages[1:]:
-            if msg["role"] == sanitized[-1]["role"]: sanitized[-1] = msg
-            else: sanitized.append(msg)
-        while sanitized and sanitized[0]["role"] != "user": sanitized.pop(0)
+            if msg["role"] == sanitized[-1]["role"]:
+                sanitized[-1] = msg
+            else:
+                sanitized.append(msg)
+        while sanitized and sanitized[0]["role"] != "user":
+            sanitized.pop(0)
         return sanitized
 
     def _finalize_response(self, user_input: str, draft: str, token_callback=None, *, already_emitted: bool = False) -> str:
