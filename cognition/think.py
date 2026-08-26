@@ -1557,6 +1557,43 @@ class AikoThink:
         """
         return self._get_memorize().wait_for_writes(timeout=timeout)
 
+    def prewarm_caches(self) -> None:
+        """Warm both semantic caches used by first-turn routing/capability
+        matching, so the first real user turn never pays an embedding cost.
+
+        Route exemplars (self._semantic_example_vectors): in-memory cache,
+        then per-user on-disk npz cache (cognition.reason.cache_vector_path),
+        then compute+persist if both miss.
+
+        Capability trigger embeddings (agentic.capability._get_trigger_embedding):
+        same three-tier pattern, sharing the same cache_vector_path helper —
+        in-memory dict first, then on-disk npz, then compute+persist.
+
+        On a warm disk cache, this whole call is disk loads only, no
+        embedding calls. On a cold cache (first boot, or after a trigger/
+        exemplar edit), it pays the full embed cost once and persists it.
+
+        No-ops (with a log line) if the memory backend isn't wired up yet —
+        callers don't need to check that themselves. Never raises; boot
+        callers can fire this and move on regardless of outcome.
+        """
+        if self._get_memorize() is None:
+            log.info("[think] Skipping semantic cache prewarm — no memory backend.")
+            return
+        try:
+            # Prewarm intent routing cache
+            self._semantic_example_vectors(_ROUTE_TERNARY_EXAMPLES, _ROUTE_INSTRUCT_TERNARY)    # prewarm routing cache in on-disk npz
+
+            # Prewarm capability trigger embeddings (used by agentic_chat -> match_capabilities)
+            from agentic.capability import CAPABILITIES, _get_trigger_embedding            # for loading intents and tools from Aiko's capabilities
+            embedder = self._get_memorize().embedder()                                    # shared embedder — no DB needed, works pre-login
+            for cap in CAPABILITIES.values():                                              # loop through all Aiko's capabilities
+                _get_trigger_embedding(cap, embedder)                                      # load all the semantic vectors into cache
+
+            log.info("[think] Semantic exemplar cache warmed (intent + capabilities)")    # log success
+        except Exception:                                                                 # if error,
+            log.exception("[think] Semantic exemplar prewarm failed")                     # log failure — single point, full traceback
+
     def handle_scheduled_job(self, job: DueJob) -> None:
         """Announce or execute a due scheduled job without blocking the scheduler."""
         text = f"{job.title}. {job.task}"
