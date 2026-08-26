@@ -2,8 +2,9 @@
 system/wakeup.py
 
 Aiko's boot orchestrator — owns parallel subsystem startup and warmup sequencing.
-main.py calls AikoWakeup().boot(...) and receives a BootResult with all live
-subsystem references; it never needs to know the startup choreography.
+The front end (run_webui()/run_session()) calls AikoWakeup().boot(...) and
+receives a BootResult with all live subsystem references; it never needs to
+know the startup choreography.
 
 Boot is pre-auth safe: no step here requires a logged-in user. Memory opens on
 the tempfile-backed guest DB until a real user connects (AikoWeb then calls
@@ -281,6 +282,7 @@ class AikoWakeup:
                 return memorize                                                               # return the live AikoMemorize object
             except Exception:                                                                 # if error, log failure once — single point, full traceback
                 log.exception("[wakeup] Memory boot failed — Aiko will run without persistent memory.")
+                on_skip('mem_ready')                                                          # resolve the marker step so the UI doesn't hang on it
                 return None                                                                   # return None to indicate failure
             finally:                                                                          # whether success or failure,
                 mem_ready_evt.set()                                                           # set memory ready flag to True to trigger any blocked thread
@@ -294,7 +296,7 @@ class AikoWakeup:
             # think's .result() DOES re-raise on failure — caught below so we can still
             # drain mem_future before deciding whether boot failed.
             think_ref: AikoThink | None = None                                                # initiate AikoThink object
-            think_exc: Exception | None                                                       # hold exception of cognitive core for chaining
+            think_exc: Exception | None = None                                                # hold exception of cognitive core for chaining
             try:                                                                              # attempt to initiate cognitive core
                 think_ref = think_future.result()                                             # block until finishes initiation of cognitive core
             except Exception as exc:                                                          # if error,
@@ -309,8 +311,8 @@ class AikoWakeup:
                 log.info("[wakeup] MCP client skipped or unavailable — Aiko will run without social posting tools.")
         except Exception:
             log.exception("[wakeup] MCP client boot failed")
-            _boot_step("mcp_client", None)  # mark as skip in UI
-            on_skip("mcp_client")
+            # _boot_step already fired on_loading -> on_skip internally
+            # before re-raising — nothing further to signal here.
 
         if think_ref is None:                                                                 # if cognitive core returns None value, log error and raise runtime error
             log.critical(                                                                     # single log point: critical severity + full traceback in one line
