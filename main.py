@@ -12,6 +12,7 @@ Usage:
     python main.py --debug       # show memory debug info each turn
     python main.py --clear-mem   # wipe all stored memories and exit
     python main.py --logout      # clear stored CLI (GitHub OAuth) auth token and exit
+    python main.py --name <name> # set CLI display name (only when GitHub OAuth isn't configured)
 
 This module only parses arguments and dispatches to the right front end:
     - interface/webui/webui.py  -> run_webui(args)   (default)
@@ -54,7 +55,9 @@ Flow:
 Front-end imports are deferred into main() rather than done at module load,
 so that --clear-mem and --logout (which don't need FastAPI, uvicorn,
 websockets, or any voice subsystem) stay fast and don't require those
-dependencies to be installed at all.
+dependencies to be installed at all. The heavy AikoMemorize memory stack is
+likewise deferred into the --clear-mem branch only, so normal WebUI/CLI
+launches never pay for it at import time.
 """
 from __future__ import annotations            # evaluates type annotations later
 
@@ -73,17 +76,20 @@ log = get_logger(__name__)
 
 import os as _os                                                  # for intercepting hard exits
 import traceback as _tb                                           # for logging exit origins
+
 _real_os_exit = _os._exit                                         # keep the real hard-exit handle
+
+
 def _logged_os_exit(code):                                        # os._exit() cannot be caught by try/except,
     log.error("[main] os._exit(%s) called from:\n%s",             # so wrap it to log WHO called it before dying
               code, "".join(_tb.format_stack()))
     _real_os_exit(code)                                           # then still perform the hard exit
-_os._exit = _logged_os_exit                                       # activate interception
-
-from cognition.memory.memorize import AikoMemorize                # load memory system for --clear-mem
 
 
-def parse_args():
+_os._exit = _logged_os_exit                                       # deliberate diagnostic patch (kept: caught today's crash class)
+
+
+def parse_args() -> argparse.Namespace:
     """Parse and return the CLI argument namespace for Aiko-chan's launch options."""
     p = argparse.ArgumentParser(description="Aiko-chan")          # create argument object for declaring arguments
     p.add_argument("--text",      action="store_true",            # text (keyboard) input only
@@ -113,6 +119,7 @@ def main():
             log.info("Aborted memory clear.")           # log abort info
             sys.exit(1)                                 # exit code 1 (aborted, not an error but not success either)
         log.info("Clearing all memories...")            # log success info
+        from cognition.memory.memorize import AikoMemorize  # deferred — heavy memory stack, only needed for --clear-mem
         mem = AikoMemorize()                            # load memory system
         mem.clear()                                     # wipe out memory
         sys.exit(0)                                     # exit code 0
@@ -122,26 +129,19 @@ def main():
         handle_logout()                                 # logout user session
         sys.exit(0)                                     # exit code 0
 
-    if args.cli:                                        # if CLI argument set
-        from interface.cli.cli import run_cli           # load CLI with set arguments
-        try:
-            run_cli(args)                               # launch CLI — boots internally via run_session()
-        except SystemExit:                              # silent-killer trap: SystemExit in the main thread
-            log.exception("[main] SystemExit escaped the session loop")  # logs WHO raised it, full origin traceback
-            raise                                       # preserve original exit behavior
-        except BaseException:                           # any other fatal escape
-            log.exception("[main] fatal error escaped the session loop")  # full traceback to aiko.log
-            raise                                       # re-raise after logging
-    else:                                               # otherwise, launch WebUI
-        from interface.webui.webui import run_webui     # load WebUI
-        try:
-            run_webui(args)                             # launch WebUI — server starts instantly, boots in background
-        except SystemExit:                              # silent-killer trap: SystemExit in the main thread
-            log.exception("[main] SystemExit escaped the session loop")  # logs WHO raised it, full origin traceback
-            raise                                       # preserve original exit behavior
-        except BaseException:                           # any other fatal escape
-            log.exception("[main] fatal error escaped the session loop")  # full traceback to aiko.log
-            raise                                       # re-raise after logging
+    try:                                                # one shared fatal-error trap for both front ends:
+        if args.cli:                                    # SystemExit in the main thread exits SILENTLY (no traceback),
+            from interface.cli.cli import run_cli       # so log WHO escaped before re-raising; BaseException catch-all
+            run_cli(args)                               # covers KeyboardInterrupt and anything else unexpected.
+        else:
+            from interface.webui.webui import run_webui
+            run_webui(args)
+    except SystemExit:                                  # silent-killer trap: SystemExit in the main thread
+        log.exception("[main] SystemExit escaped the session loop")  # logs WHO raised it, full origin traceback
+        raise                                           # preserve original exit behavior
+    except BaseException:                               # any other fatal escape
+        log.exception("[main] fatal error escaped the session loop")  # full traceback to aiko.log
+        raise                                           # re-raise after logging
 
 
 if __name__ == "__main__":
