@@ -100,13 +100,44 @@ def _load_soul() -> str:
     from .reflect import _load_soul as _orig
     return _orig()
 
+def _owner_profile_image_path() -> str | None:
+    """Unique non-guest profile/user.png under the user-space root, if any.
+
+    Mirrors monitor_daemon._owner_user_id(): only resolves when exactly one
+    candidate exists, so ambiguous multi-user layouts degrade gracefully
+    instead of guessing whose face goes into a generated image.
+    """
+    try:
+        from system.userspace import _user_state_root_value
+
+        root = Path(_user_state_root_value()).expanduser()
+        candidates = []
+        for child in sorted(root.iterdir()):
+            if not child.is_dir() or child.name == "guest":
+                continue
+            candidate = child / "profile" / "user.png"
+            if candidate.is_file():
+                candidates.append(candidate)
+        return str(candidates[0]) if len(candidates) == 1 else None
+    except Exception:
+        return None
+
 def _user_reference_image_path() -> str:
     override = os.getenv("USER_REFERENCE_IMAGE")
     if override:
         return os.path.expanduser(override)
+    from system.userspace import current_user_id, _user_state_root_value
+    uid = current_user_id()
     root = os.path.expanduser(os.getenv("USER_SPACE_ROOT") or _USER_SPACE_ROOT)
-    from system.userspace import current_user_id
-    return os.path.join(root, current_user_id(), "profile", "user.png")
+    path = os.path.join(root, uid, "profile", "user.png")
+    if uid == "guest" and not os.path.exists(path):
+        # Headless callers (social reply monitors, cron jobs) have no
+        # session identity bound; resolve the owner's profile image so
+        # generated images still include them.
+        owner = _owner_profile_image_path()
+        if owner:
+            return owner
+    return path
 
 def _reference_image_path() -> str:
     return REFERENCE_IMAGE
