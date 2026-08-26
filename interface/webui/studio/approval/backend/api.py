@@ -126,7 +126,6 @@ def _scan_all_drafts() -> list[dict]:
 
 @app.get("/api/drafts")
 async def get_drafts(
-    user_id: str | None = Query(None, description="User id (default: current_user_id)"),
     status: str | None = Query(None, description="Filter: pending, approved, posted, rejected, all"),
 ):
     """Get all job post drafts for review."""

@@ -44,64 +44,85 @@ def run_post_auth(uid: str, *, memorize=None, think=None) -> None:
         log.debug("[prepare] skipping post-auth init for %r", uid or "empty uid")       # nothing to initialize yet
         return
 
-    # Semantic cache warm under the REAL identity — moved out of wakeup boot:
-    # as guest, per-user npz disk caches can't be read or written (see
-    # reason.cache_vector_path's guest guard), so every boot recomputed from
-    # scratch. Here it loads the user's existing cache files and persists
-    # fresh vectors for the next session.
-    if think is not None:
-        try:
-            think.prewarm_caches()
-        except Exception:
-            log.exception("[prepare] semantic cache prewarm failed")
+    # ``run_post_auth`` runs in a background thread after the WebSocket login
+    # handler returns. ContextVars do not cross that thread boundary, and the
+    # live memory facade was constructed during guest-safe boot. Bind both
+    # explicitly before *any* user-space operation so cleanup, persona reads,
+    # schedules, and cache warmup use USER_SPACE_ROOT/<uid>, not guest.
+    from system.userspace import (
+        reset_current_display_name,
+        reset_current_user_id,
+        set_current_display_name,
+        set_current_user_id,
+    )
 
-    # Memory cleanup — boot skipped it for guest; the real per-user store is
-    # open now (parity with the old login-gated boot behaviour).
+    user_token = set_current_user_id(uid)
+    display_token = set_current_display_name(uid)
     try:
         if memorize is not None:
-            memorize.cleanup()
-    except Exception:
-        log.exception("[prepare] post-login memory cleanup failed")
+            memorize.switch_user(uid)
 
-    # Static anchor for Grasp relevance scoring — persona + pinned memories
-    # become the identity tokens that keep relevant turns resident longer in
-    # working memory (activates the previously-dead relevance factor).
-    if memorize is not None:
+        # Semantic cache warm under the REAL identity — moved out of wakeup boot:
+        # as guest, per-user npz disk caches can't be read or written (see
+        # reason.cache_vector_path's guest guard), so every boot recomputed from
+        # scratch. Here it loads the user's existing cache files and persists
+        # fresh vectors for the next session.
+        if think is not None:
+            try:
+                think.prewarm_caches()
+            except Exception:
+                log.exception("[prepare] semantic cache prewarm failed")
+
+        # Memory cleanup — boot skipped it for guest; the real per-user store is
+        # open now (parity with the old login-gated boot behaviour).
         try:
-            texts: list[str] = []
-            try:
-                texts.append(memorize.persona_context() or "")
-            except Exception:
-                pass
-            try:
-                for m in memorize.get_all():
-                    if m.get("pinned"):
-                        texts.append(m.get("memory") or m.get("text") or "")
-            except Exception:
-                pass
-            from cognition.memory.grasp import build_anchor_tokens, set_static_anchor_tokens
-            anchor = build_anchor_tokens(*texts)
-            if anchor:
-                set_static_anchor_tokens(anchor)
-                log.info("[prepare] Grasp static anchor set (%d tokens)", len(anchor))
-            else:
-                log.info("[prepare] Grasp static anchor empty — no persona/pinned text yet")
+            if memorize is not None:
+                memorize.cleanup()
         except Exception:
-            log.exception("[prepare] failed to set Grasp static anchor")
+            log.exception("[prepare] post-login memory cleanup failed")
 
-    # Playbook seeding — user-scoped playbook definitions under USER_SPACE_ROOT/<uid>/.
-    try:
-        from agentic.graph_engine import ensure_playbooks
-        ensure_playbooks(user_id=uid)
-    except Exception:
-        log.exception("[prepare] playbook seeding failed")
+        # Static anchor for Grasp relevance scoring — persona + pinned memories
+        # become the identity tokens that keep relevant turns resident longer in
+        # working memory (activates the previously-dead relevance factor).
+        if memorize is not None:
+            try:
+                texts: list[str] = []
+                try:
+                    texts.append(memorize.persona_context() or "")
+                except Exception:
+                    pass
+                try:
+                    for m in memorize.get_all():
+                        if m.get("pinned"):
+                            texts.append(m.get("memory") or m.get("text") or "")
+                except Exception:
+                    pass
+                from cognition.memory.grasp import build_anchor_tokens, set_static_anchor_tokens
+                anchor = build_anchor_tokens(*texts)
+                if anchor:
+                    set_static_anchor_tokens(anchor)
+                    log.info("[prepare] Grasp static anchor set (%d tokens)", len(anchor))
+                else:
+                    log.info("[prepare] Grasp static anchor empty — no persona/pinned text yet")
+            except Exception:
+                log.exception("[prepare] failed to set Grasp static anchor")
 
-    # Social schedule jobs (Threads/Bluesky/X/…) + knowledge-folder watcher —
-    # seeded per user only after we know who they are.
-    try:
-        from system.schedule import bootstrap_non_system_jobs
-        bootstrap_non_system_jobs(think=think, memorize=memorize)
-    except Exception:
-        log.exception("[prepare] schedule job bootstrap failed")
+        # Playbook seeding — user-scoped playbook definitions under USER_SPACE_ROOT/<uid>/.
+        try:
+            from agentic.graph_engine import ensure_playbooks
+            ensure_playbooks(user_id=uid)
+        except Exception:
+            log.exception("[prepare] playbook seeding failed")
 
-    log.info("[prepare] post-auth initialization complete for %s", uid)
+        # Social schedule jobs (Threads/Bluesky/X/…) + knowledge-folder watcher —
+        # seeded per user only after we know who they are.
+        try:
+            from system.schedule import bootstrap_non_system_jobs
+            bootstrap_non_system_jobs(think=think, memorize=memorize)
+        except Exception:
+            log.exception("[prepare] schedule job bootstrap failed")
+
+        log.info("[prepare] post-auth initialization complete for %s", uid)
+    finally:
+        reset_current_display_name(display_token)
+        reset_current_user_id(user_token)

@@ -4,8 +4,6 @@ let currentView = 'episodes';
 
 function qs() {
   const p = new URLSearchParams();
-  const uid = document.getElementById('user-id').value.trim();
-  if (uid) p.set('user_id', uid);
   const stage = document.getElementById('stage').value;
   if (stage !== 'all') p.set('stage', stage);
   const df = document.getElementById('date-from').value;
@@ -40,8 +38,6 @@ function valBadge(tag) {
 async function loadPipeline() {
   try {
     const p = new URLSearchParams();
-    const uid = document.getElementById('user-id').value.trim();
-    if (uid) p.set('user_id', uid);
     const r = await fetch(`${API}/pipeline?` + p.toString());
     const d = await r.json();
     if (!d.ok) { return; }

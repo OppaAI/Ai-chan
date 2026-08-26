@@ -36,24 +36,30 @@ app.mount("/shared", StaticFiles(directory=str(SHARED_DIR), html=True), name="st
 # AikoMemorize __init__ opens a sqlite-vec connection AND spawns a daemon
 # write-worker thread. Constructing one per request leaks a connection +
 # thread for the lifetime of the process, so cache a single shared instance.
-_memorize = None
+_memorize_by_user: dict[str, object] = {}
 _memorize_lock = threading.Lock()
 
 
-def _get_memorize():
-    global _memorize
-    if _memorize is None:
+def _get_memorize(user_id: str):
+    """Return a memory facade attached to this user's physical database."""
+    memorize = _memorize_by_user.get(user_id)
+    if memorize is None:
         with _memorize_lock:
-            if _memorize is None:
+            memorize = _memorize_by_user.get(user_id)
+            if memorize is None:
                 from cognition.memory.memorize import AikoMemorize
 
-                _memorize = AikoMemorize(silent=True)
-    return _memorize
+                memorize = AikoMemorize(silent=True)
+                # The facade opens its database during construction, so it
+                # must be explicitly bound instead of inheriting a later
+                # request's contextvar.
+                memorize.switch_user(user_id)
+                _memorize_by_user[user_id] = memorize
+    return memorize
 
 
 @app.get("/api/graph")
 def get_graph(
-    user_id: str | None = Query(None, description="User id (default: current_user_id)"),
     limit: int = Query(200, ge=1, le=2000),
     include_history: bool = Query(True, description="Include superseded memories"),
     include_entities: bool = Query(True, description="Add entity hub nodes"),
@@ -66,7 +72,7 @@ def get_graph(
     from interface.webui.studio.memory.ltm.backend.graph_export import export_memory_graph
     from system.userspace import current_user_id
 
-    uid = (user_id or "").strip() or current_user_id()
+    uid = current_user_id()
     return export_memory_graph(
         user_id=uid,
         limit=limit,
@@ -88,20 +94,19 @@ async def health():
 @app.get("/api/search")
 def search(
     q: str = Query(..., description="Search query across memory + knowledge"),
-    user_id: str | None = Query(None, description="User id (default: current_user_id)"),
     limit: int = Query(10, ge=1, le=100),
     include_history: bool = Query(False, description="Include superseded memories"),
 ):
     from interface.webui.studio.memory.ltm.backend.search_memory import search_memory
     from system.userspace import current_user_id
 
-    uid = (user_id or "").strip() or current_user_id()
+    uid = current_user_id()
     query = (q or "").strip()
     if not query:
         return {"query": "", "hits": [], "meta": {"user_id": uid}}
 
     try:
-        memorize = _get_memorize()
+        memorize = _get_memorize(uid)
     except Exception as e:
         return {"query": query, "hits": [], "meta": {"user_id": uid, "error": str(e)}}
 
@@ -131,12 +136,11 @@ def search(
 @app.get("/api/memory/{mem_id}/lineage")
 def memory_lineage(
     mem_id: str,
-    user_id: str | None = Query(None, description="User id (default: current_user_id)"),
 ):
     from system.userspace import current_user_id
 
-    uid = (user_id or "").strip() or current_user_id()
-    memorize = _get_memorize()
+    uid = current_user_id()
+    memorize = _get_memorize(uid)
     return memorize.get_lineage(mem_id, user_id=uid)
 
 
