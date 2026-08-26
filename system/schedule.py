@@ -1423,12 +1423,24 @@ class ScheduleRunner:
         self._llm_client           = llm_client
         self._llm_model            = llm_model
         self._user_id               = user_id or (memorize.get_user_id() if memorize and memorize.get_user_id() else None) or current_user_id()
-        # _owner_user_id is fixed at construction: the identity the
-        # hardcoded system jobs (daily reflect+dream, monthly consolidate —
-        # both single-stream, not per-connected-user) always run as.
-        # _user_id, by contrast, is now a transient pointer that _run()
+        # _owner_user_id is the identity the hardcoded system jobs (daily
+        # reflect+dream, monthly consolidate — both single-stream, not
+        # per-connected-user) always run as. It used to be frozen at
+        # construction, which meant that if the scheduler was built during
+        # wakeup.py's pre-auth boot (the normal path — see start_scheduler()),
+        # _user_id resolved to "guest" and system jobs were permanently
+        # pinned to guest for the life of the process, even after a real
+        # user logged in. It is now promoted exactly once, away from guest,
+        # either explicitly via set_owner() (called from webui's
+        # _on_user_active() post-login hook — the preferred path) or lazily
+        # via _resolve_owner() (checked at the top of every _run() tick —
+        # the fallback for CLI/headless boots that never fire a login hook).
+        # _user_id, by contrast, remains a transient pointer that _run()
         # flips per due job while iterating all_user_ids() — see _run().
         self._owner_user_id        = self._user_id
+        self._owner_promoted       = threading.Event()
+        if self._owner_user_id and self._owner_user_id != "guest":
+            self._owner_promoted.set()
         self._wakeup               = threading.Event()
         self._stop                 = threading.Event()
         self._thread: threading.Thread | None = None
@@ -1437,7 +1449,12 @@ class ScheduleRunner:
         self._next_daily   = _next_daily_reflect_and_dream()
         self._next_monthly = _next_monthly_consolidate()
 
-        # catch-up state — checked on start()
+        # catch-up state — checked on start(). NOTE: if _owner_user_id is
+        # still "guest" at this point (pre-auth boot), the monthly check
+        # below reads guest's (nonexistent/irrelevant) state file. That's
+        # fine — _promote_owner() recomputes both flags and re-fires
+        # catch-up as soon as a real owner is known, so nothing is lost,
+        # just deferred. See _promote_owner().
         self._catchup_dates = self._missing_reflection_dates()
         self._monthly_catchup_needed_flag = self._monthly_catchup_needed()
 
@@ -1485,7 +1502,7 @@ class ScheduleRunner:
             return False  # job due soon / just ran, nothing to catch up
 
         current_month = now.strftime("%Y-%m")
-        last_run = _read_last_consolidated_month(user_id=self._user_id)
+        last_run = _read_last_consolidated_month(user_id=self._owner_user_id)
         if last_run == current_month:
             return False
 
@@ -1494,6 +1511,85 @@ class ScheduleRunner:
             last_run, current_month,
         )
         return True
+
+    # ── system-job owner resolution ─────────────────────────────────────────
+
+    def set_owner(self, user_id: str) -> None:
+        """Explicitly assign the identity the hardcoded system jobs (daily
+        reflect+dream, monthly consolidate) run as.
+
+        Intended to be called once, from webui's _on_user_active()
+        post-login hook, the first time a real user authenticates after a
+        pre-auth ("guest") boot — see start_scheduler()'s guest-safe boot
+        path. This is the preferred promotion path; _resolve_owner() below
+        is only the lazy fallback for CLI/headless boots that never fire a
+        login hook.
+
+        No-op if the owner has already been promoted away from guest — the
+        system-job stream is single-owner for the life of the process, it
+        does not migrate to whoever happens to log in most recently.
+        """
+        if not user_id or user_id == "guest":
+            return
+        self._promote_owner(user_id)
+
+    def _resolve_owner(self) -> str:
+        """Lazy fallback for set_owner(): called at the top of every _run()
+        tick. If nobody has explicitly promoted an owner yet, re-derive one
+        from all_user_ids() so a CLI/headless boot (no webui login hook)
+        still eventually finds a real owner instead of staying pinned to
+        "guest" — and therefore never firing system jobs at all — for the
+        life of the process."""
+        if not self._owner_promoted.is_set():
+            real = [u for u in all_user_ids() if u != "guest"]
+            if real:
+                self._promote_owner(real[0])
+        return self._owner_user_id
+
+    def _promote_owner(self, user_id: str) -> None:
+        """Common path for set_owner()/_resolve_owner(): assign the
+        system-job owner identity exactly once.
+
+        If the owner was still "guest" when __init__ computed the catch-up
+        flags (see the NOTE above self._catchup_dates), that computation
+        was checked against the wrong identity — recompute both flags now
+        against the real owner and kick off any missed-run backfill
+        immediately, mirroring what start() itself does at boot, so a
+        scheduler that boots pre-login doesn't just silently lose its
+        first catch-up window.
+        """
+        if self._owner_promoted.is_set():
+            return
+        was_guest = self._owner_user_id in (None, "guest")
+        self._owner_user_id = user_id
+        self._owner_promoted.set()
+        log.info("[scheduler] system-job owner resolved to %s", user_id)
+        if not was_guest:
+            return
+
+        self._catchup_dates = self._missing_reflection_dates()
+        self._monthly_catchup_needed_flag = self._monthly_catchup_needed()
+
+        if self._catchup_dates and self._memorize and self._generate_and_post_fn:
+            log.info(
+                "Scheduler: running %d missed daily reflect+dream job(s) after owner resolution.",
+                len(self._catchup_dates),
+            )
+            threading.Thread(
+                target=self._run_catchup_backfill,
+                name="aiko-schedule-catchup-late",
+                daemon=True,
+            ).start()
+
+        if self._monthly_catchup_needed_flag and self._memorize and self._consolidate_fn:
+            log.info("Scheduler: running missed monthly_consolidate after owner resolution.")
+            threading.Thread(
+                target=self._run_monthly_consolidate,
+                name="aiko-schedule-monthly-catchup-late",
+                daemon=True,
+            ).start()
+
+        self.notify_new_job()
 
     def notify_new_job(self) -> None:
         """Interrupt the sleep early so a newly added job is picked up immediately."""
@@ -1542,19 +1638,25 @@ class ScheduleRunner:
             now = bioclock.local_now()
 
             # ── fire overdue system jobs ──────────────────────────────────────
-            # Always run as self._owner_user_id (the identity this runner was
-            # constructed for) — daily reflect/dream and monthly consolidate
-            # are a single process-level stream (one GitHub reflection post),
-            # not per-connected-user. Rebind explicitly before running since
-            # self._user_id may have been left pointing at whichever user's
-            # job fired last in the per-user loop below.
+            # Always run as self._owner_user_id — daily reflect/dream and
+            # monthly consolidate are a single process-level stream (one
+            # GitHub reflection post), not per-connected-user. Resolve/
+            # promote the owner first (lazy fallback for boots that never
+            # call set_owner() explicitly — see _resolve_owner()), and skip
+            # firing entirely while the owner is still unresolved ("guest"):
+            # there's nobody real to run these as yet, and set_owner()/
+            # _resolve_owner() will re-check and backfill as soon as there
+            # is. Rebind self._user_id explicitly before running since it
+            # may have been left pointing at whichever user's job fired
+            # last in the per-user loop below.
+            self._resolve_owner()
             system_due = sorted(
                 [(t, name) for t, name in [
                     (self._next_daily, "daily"),
                     (self._next_monthly, "monthly"),
                 ] if t <= now],
                 key=lambda x: x[0],
-            )
+            ) if self._owner_promoted.is_set() else []
             for _target, name in system_due:
                 with AIKO_BUSY_LOCK:
                     self.set_user(self._owner_user_id)
@@ -1707,9 +1809,9 @@ class ScheduleRunner:
         try:
             log.info("monthly_consolidate: starting.")
             now = bioclock.local_now()
-            result = self._consolidate_fn(self._memorize, now=now, user_id=self._user_id)
+            result = self._consolidate_fn(self._memorize, now=now, user_id=self._owner_user_id)
             log.info("monthly_consolidate: done — %s", result)
-            _write_last_consolidated_month(now.strftime("%Y-%m"), user_id=self._user_id)
+            _write_last_consolidated_month(now.strftime("%Y-%m"), user_id=self._owner_user_id)
         except Exception as e:
             log.error("monthly_consolidate failed: %s", e)
 
@@ -1848,7 +1950,7 @@ class ScheduleRunner:
                 try:
                     self._on_due(event)
                 except Exception:
-                    log.exception("Scheduled job handler failed for %s", event.get("title", event.get("id", "?")))
+                    log.exception("Scheduled job handler failed for %s", event.title or event.id or "?")
 
     # ── schedule-graph runner ───────────────────────────────────────────────────
 
@@ -1898,7 +2000,7 @@ class ScheduleRunner:
             _write_schedule_graphs(graphs, user_id=user_id)
 
     def _run_schedule_graph(self, graph_def: dict) -> None:
-        from agentic.graph_engine import PlanGraph, execute_graph, get_playbook_by_id
+        from agentic.graph_engine import PlanGraph, PlanNode, execute_graph, get_playbook_by_id
 
         graph_id = graph_def.get("graph_id") or graph_def.get("id", "")
         playbook = get_playbook_by_id(graph_id) or {}
@@ -1977,6 +2079,16 @@ def start_scheduler(
     schedule jobs live under USER_SPACE_ROOT/<uid>/ and must never be created
     for guest. The seeding is re-run at first authenticated login instead
     (see interface/webui/webui.py's _on_user_active()).
+
+    The same applies to the hardcoded system-job owner (daily reflect+dream,
+    monthly consolidate — see ScheduleRunner._promote_owner()): if this is
+    called pre-login, effective_uid is "guest" and the scheduler's owner
+    stays unresolved until either _on_user_active() calls
+    scheduler.set_owner(uid) at first login, or the lazy fallback in
+    ScheduleRunner._resolve_owner() finds a real user on its own. If
+    effective_uid is already a real user here (e.g. this is called
+    post-login, or in a single-user CLI/headless setup), the owner is
+    promoted immediately below instead of waiting on either of those.
     """
     from agentic.graph_engine import ensure_playbooks
     from cognition.consolidate import generate_and_post, maybe_run_consolidation
@@ -2001,6 +2113,7 @@ def start_scheduler(
     )
     register_scheduler(scheduler)
     if effective_uid != "guest":
+        scheduler.set_owner(effective_uid)
         bootstrap_non_system_jobs(think=think, memorize=memorize, timezone=timezone)
     scheduler.start()
     scheduler.notify_new_job()
